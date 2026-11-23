@@ -8,6 +8,7 @@ import json
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal, get_args, get_origin
 from urllib.parse import urlsplit
@@ -377,6 +378,39 @@ class IndependentQC(CatalogRecord):
     def _admitted_within_reviewed(self) -> "IndependentQC":
         if self.admitted is not None and self.admitted > self.reviewed:
             raise ValueError(f"admitted {self.admitted} exceeds reviewed {self.reviewed}")
+        return self
+
+
+class SourcePopulation(StrEnum):
+    """Which population of a source a policy reward measurement covers."""
+
+    TRAIN = "train"
+    HOLDOUT = "holdout"
+
+
+class PolicyRewardMeasurement(CatalogRecord):
+    """One policy's measured reward on one source population, with its pinned evidence.
+
+    A measured-limitation receipt, not an exclusion: the source's catalog status and
+    intended use are unchanged, and the measurement documents the reward a specific
+    policy realized so admission, selection and mixture decisions can weigh it.
+    """
+
+    policy_identity: str = Field(min_length=1)
+    population: SourcePopulation
+    reward: float = Field(ge=0.0, le=1.0)
+    # Observations behind ``reward``: graded rollouts for a holdout panel, per-step
+    # domain means for a training run.
+    sample_count: int = Field(ge=1)
+    evidence_url: str = Field(min_length=1)
+    # SHA-256 of the pinned receipt payload, when pinned.
+    sha256: str | None = None
+    measured_at: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _measured_at_is_tz_aware(self) -> "PolicyRewardMeasurement":
+        if datetime.fromisoformat(self.measured_at).tzinfo is None:
+            raise ValueError("measured_at must carry a timezone")
         return self
 
 
@@ -1038,6 +1072,9 @@ class SourceDeclaration(CatalogRecord):
     status: SourceStatus
     pipeline: PipelineReference | None
     independent_qc: IndependentQC | None = None
+    # Measured rewards specific policies realized on this source's populations: a
+    # measured-limitation receipt, not an exclusion.
+    policy_reward_measurements: list[PolicyRewardMeasurement] = Field(default_factory=list)
     # Non-agentic sources never provision Daytona sandboxes; an agentic source stays
     # UNASSESSED until its unique snapshot count is assessed against DAYTONA_SAFE_SNAPSHOT_LIMIT.
     daytona_safety: DaytonaSafety = DaytonaSafety.UNASSESSED

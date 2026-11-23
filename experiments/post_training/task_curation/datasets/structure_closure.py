@@ -13,6 +13,7 @@ repeating conversion. The original converter lives in
 the retained releases' publication evidence.
 """
 
+from finestore.rl.curation import PolicyRewardMeasurement, SourcePopulation
 from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.models import IntendedUse
 
@@ -20,6 +21,40 @@ from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, imp
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 CONVERTER_VERSION = "2026.11.13.1"
+
+# Measured rewards realized by the Mochi .123 starting policy on these populations,
+# recorded as measured-limitation receipts: the source stays Available and Use=train,
+# and the Atlas renders the measurements beside oracle_validation.
+SNOWBALL_POLICY_REWARD_MEASUREMENTS = {
+    "train": [
+        PolicyRewardMeasurement(
+            policy_identity="mochi-long-loop/adopted-sft@2026.11.19.110:b8dde345",
+            population=SourcePopulation.TRAIN,
+            reward=0.2301,
+            sample_count=15,
+            evidence_url=(
+                "s3://marin-us-east-08a/marin/users/benfeuer/smartie-think-control/receipts/"
+                "policy-reward/mochi123-snowball-train-reward.json"
+            ),
+            sha256="24013236e7e8b461422ecae7289ec39b5cac5dd524049ca5f4756b3fb0d73211",
+            measured_at="2026-11-23T16:11:34+00:00",
+        ),
+    ],
+    "validation": [
+        PolicyRewardMeasurement(
+            policy_identity="mochi-long-loop/adopted-sft@2026.11.19.110:b8dde345",
+            population=SourcePopulation.HOLDOUT,
+            reward=0.2841,
+            sample_count=88,
+            evidence_url=(
+                "s3://marin-us-east-08a/marin/users/benfeuer/smartie-think-control/receipts/"
+                "policy-reward/mochi123-snowball-holdout-think-control.jsonl"
+            ),
+            sha256="7122ae7782dd35d01253878b372ce9ecd31c0db1ce5ea5d790fa47c98a835ded",
+            measured_at="2026-11-23T21:37:00+00:00",
+        ),
+    ],
+}
 
 RELEASES = {
     "train": (
@@ -61,6 +96,7 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                 tags=("rlvr", "single-turn", "structural-closure", "assistant-prefill"),
                 task_format=TaskFormat.TASKSPEC,
                 count=rows,
+                policy_reward_measurements=SNOWBALL_POLICY_REWARD_MEASUREMENTS[split],
                 notes=(
                     "Text assistant prefills; validation is a reused development panel. Declared cohort is the "
                     f"{split} retained release published from the Snowball-Smartie-RL-2026.10.15.32-Data "

@@ -15,6 +15,7 @@ from finestore.rl.curation import CurationCatalog
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.count_inputs import parquet_counts
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
+from experiments.post_training.task_curation.datasets.structure_closure import sources as structure_closure_sources
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
@@ -142,3 +143,30 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
     shutil.rmtree(attempt.paths.inputs_root)
     shutil.rmtree(attempt.paths.judgments_root)
     assert CurationCatalog(root).packet(key, items[0].task_id) == packet
+
+
+def test_structure_closure_sources_carry_the_first_policy_reward_measurements():
+    """The Snowball measured-limitation receipts bind to both population declarations:
+    the Atlas renders them beside oracle_validation; the sources stay Available."""
+
+    train, validation = structure_closure_sources()
+    train_measurement = train.info.policy_reward_measurements[0]
+    assert train_measurement.population.value == "train"
+    assert train_measurement.reward == 0.2301
+    assert train_measurement.sample_count == 15
+    validation_measurement = validation.info.policy_reward_measurements[0]
+    assert validation_measurement.population.value == "holdout"
+    assert validation_measurement.reward == 0.2841
+    assert validation_measurement.sample_count == 88
+    for measurement, source_id in (
+        (
+            train_measurement,
+            "s3://marin-us-east-08a/marin/users/benfeuer/smartie-think-control/receipts/policy-reward/mochi123-snowball-train-reward.json",
+        ),
+        (
+            validation_measurement,
+            "s3://marin-us-east-08a/marin/users/benfeuer/smartie-think-control/receipts/policy-reward/mochi123-snowball-holdout-think-control.jsonl",
+        ),
+    ):
+        assert measurement.evidence_url == source_id
+        assert measurement.sha256

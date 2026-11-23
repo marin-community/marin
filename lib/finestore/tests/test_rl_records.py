@@ -10,9 +10,12 @@ from finestore.rl.curation import (
     INVENTORY,
     ITEMS,
     CurationCatalog,
+    PolicyRewardMeasurement,
     QualifiedSourceDeclaration,
     SnapshotSource,
     SourceDeclaration,
+    SourcePopulation,
+    SourceStatus,
     register_catalog,
 )
 from finestore.rl.licenses import (
@@ -252,6 +255,95 @@ def test_require_license_applies_a_registry_ban():
     )
     with pytest.raises(ValueError, match="blocks ingest and admission"):
         require_license(receipt([evidence(("mit",))]), source_id, "math", "rev-1", "ingest", ban=ban)
+
+
+def test_policy_reward_measurement_binds_and_validates():
+    measurement = PolicyRewardMeasurement(
+        policy_identity="mochi-long-loop/adopted-sft@2026.11.19.110:b8dde345",
+        population=SourcePopulation.HOLDOUT,
+        reward=0.2841,
+        sample_count=88,
+        evidence_url="s3://bucket/receipts/holdout.jsonl",
+        sha256="7122ae7782dd35d01253878b372ce9ecd31c0db1ce5ea5d790fa47c98a835ded",
+        measured_at="2026-11-23T21:37:00+00:00",
+    )
+    assert measurement.reward == 0.2841
+    # ISO strings parse; a naive timestamp is refused.
+    assert (
+        PolicyRewardMeasurement(
+            policy_identity="p",
+            population=SourcePopulation.TRAIN,
+            reward=0.0,
+            sample_count=1,
+            evidence_url="s3://bucket/r.json",
+            measured_at="2026-11-23T16:11:34+00:00",
+        ).measured_at
+        == "2026-11-23T16:11:34+00:00"
+    )
+    with pytest.raises(ValueError):
+        PolicyRewardMeasurement(
+            policy_identity="p",
+            population=SourcePopulation.HOLDOUT,
+            reward=1.5,
+            sample_count=1,
+            evidence_url="s3://bucket/r.json",
+            measured_at="2026-11-23T21:37:00+00:00",
+        )
+    with pytest.raises(ValueError, match="timezone"):
+        PolicyRewardMeasurement(
+            policy_identity="p",
+            population=SourcePopulation.HOLDOUT,
+            reward=0.5,
+            sample_count=1,
+            evidence_url="s3://bucket/r.json",
+            measured_at="2026-11-23T21:37:00",
+        )
+    with pytest.raises(ValueError):
+        PolicyRewardMeasurement(
+            policy_identity="p",
+            population=SourcePopulation.HOLDOUT,
+            reward=0.5,
+            sample_count=0,
+            evidence_url="s3://bucket/r.json",
+            measured_at="2026-11-23T21:37:00+00:00",
+        )
+
+
+def test_source_declaration_carries_policy_reward_measurements():
+    measurement = PolicyRewardMeasurement(
+        policy_identity="mochi-long-loop/adopted-sft@2026.11.19.110:b8dde345",
+        population=SourcePopulation.TRAIN,
+        reward=0.2301,
+        sample_count=15,
+        evidence_url="s3://bucket/receipts/train.json",
+        measured_at="2026-11-23T16:11:34+00:00",
+    )
+    declaration = SourceDeclaration(
+        id="OpenAthena:structure-closure",
+        name="snowball-v01-structure-closure-train",
+        display_name="Snowball structural closure",
+        origin="OpenAthena",
+        family="structural",
+        tags=("rlvr",),
+        task_count=57_312,
+        notes="",
+        dataset_id="open-athena/snowballv01-structure-closure-d9e5f81a-retained-20261113-v1",
+        dataset_revision="0062f4f286d4e4f1568436f5e9c7749fcdd8fa69",
+        url=None,
+        type="RLVR",
+        turns="Single-turn",
+        is_benchmark=False,
+        kind="Dataset",
+        status=SourceStatus.AVAILABLE,
+        pipeline=None,
+        policy_reward_measurements=[measurement],
+    )
+    assert declaration.policy_reward_measurements == [measurement]
+    # The field defaults to empty so legacy declarations keep parsing.
+    assert SourceDeclaration.model_fields["policy_reward_measurements"].default_factory is not None
+    # Frozen records reject post-hoc edits, like every other catalog record.
+    with pytest.raises(ValueError):
+        declaration.policy_reward_measurements = ()
 
 
 def test_require_license_fails_closed_on_each_missing_prerequisite():

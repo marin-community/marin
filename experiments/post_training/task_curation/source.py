@@ -29,6 +29,7 @@ from finestore.rl.curation import (
     OversightEvidence,
     OversightLevel,
     PipelineReference,
+    PolicyRewardMeasurement,
     QualityResultFinalization,
     RecipeQAHistoricalNotes,
     RoleExecutionEvidence,
@@ -242,6 +243,15 @@ class SourceInfo:
     ``executed`` runs the shipped oracle solutions; ``verifier_executed`` records
     a negative verdict on an untouched submission without certifying an oracle;
     ``skipped`` certifies neither. The Atlas shows this value beside the catalog.
+    """
+
+    policy_reward_measurements: tuple[PolicyRewardMeasurement, ...] = ()
+    """Measured rewards specific policies realized on this source's populations.
+
+    A measured-limitation receipt, not an exclusion: the source's catalog status and
+    intended use are unchanged, and each measurement pins the policy identity, the
+    population, the realized reward and the evidence receipt behind it. The Atlas
+    shows these beside ``oracle_validation``.
     """
 
     oversight: OversightEvidence | None = None
@@ -763,6 +773,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             pipeline=invocation,
             license_receipt=info.license_receipt,
             independent_qc=info.independent_qc,
+            policy_reward_measurements=list(info.policy_reward_measurements),
             daytona_safety=safety,
             daytona_snapshot_count=info.daytona_snapshot_count,
             daytona_count_basis=info.daytona_count_basis,
