@@ -14,7 +14,11 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import get_secret
 
-from experiments.post_training.task_curation.difficulty.ledger import LEDGER_VERSION, RESULTS_DIRECTORY
+from experiments.post_training.task_curation.difficulty.ledger import (
+    LEDGER_VERSION,
+    RESULTS_DIRECTORY,
+    record_action_failure,
+)
 from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, action_id, load_action
 from experiments.post_training.task_curation.difficulty.remediate import repair_action
 
@@ -83,26 +87,30 @@ def main() -> None:
     configure_coreweave_s3()
     action = load_action(args.manifest)
     key = action_id(action)
-    if isinstance(action, AttemptBatch):
-        output = str(StoragePath(marin_prefix()) / "rl-data" / "atlas" / "difficulty-reconciler" / "runs" / key)
-        # The batch's local root must live on the node's NVMe /cache mount: the
-        # container root and /tmp are memory-backed on CoreWeave bare metal, so
-        # pulled images and sandbox disks there are unreclaimable cgroup memory.
-        local_root = Path("/cache/atlas-difficulty/actions") / key / "runtime"
-        command = attempt_command(
-            action,
-            args.manifest,
-            args.ledger,
-            output,
-            local_root,
-            registry_auth=get_secret(REGISTRY_AUTH_SECRET) is not None,
-            serving_pool=args.serving_pool,
-        )
-        subprocess.run(command, check=True)
-        result = {"status": "completed", "run_root": output, "local_root": str(local_root)}
-    else:
-        with tempfile.TemporaryDirectory(prefix="difficulty-action-") as directory:
-            result = repair_action(action, Path(directory), args.ledger)
+    try:
+        if isinstance(action, AttemptBatch):
+            output = str(StoragePath(marin_prefix()) / "rl-data" / "atlas" / "difficulty-reconciler" / "runs" / key)
+            # The batch's local root must live on the node's NVMe /cache mount: the
+            # container root and /tmp are memory-backed on CoreWeave bare metal, so
+            # pulled images and sandbox disks there are unreclaimable cgroup memory.
+            local_root = Path("/cache/atlas-difficulty/actions") / key / "runtime"
+            command = attempt_command(
+                action,
+                args.manifest,
+                args.ledger,
+                output,
+                local_root,
+                registry_auth=get_secret(REGISTRY_AUTH_SECRET) is not None,
+                serving_pool=args.serving_pool,
+            )
+            subprocess.run(command, check=True)
+            result = {"status": "completed", "run_root": output, "local_root": str(local_root)}
+        else:
+            with tempfile.TemporaryDirectory(prefix="difficulty-action-") as directory:
+                result = repair_action(action, Path(directory), args.ledger)
+    except Exception as error:
+        record_action_failure(args.ledger, args.manifest, error)
+        raise
     target = StoragePath(args.ledger) / LEDGER_VERSION / RESULTS_DIRECTORY / f"{key}.json"
     target.parent.mkdirs()
     if target.exists():

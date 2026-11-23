@@ -369,6 +369,11 @@ REMEDIATIONS: dict[GapReason, Remediation] = {
     GapReason.NETWORK_POLICY_VIOLATION: EscalationRemediation(GapReason.NETWORK_POLICY_VIOLATION),
     GapReason.UNSUPPORTED_COMPOSE_DOCUMENT: EscalationRemediation(GapReason.UNSUPPORTED_COMPOSE_DOCUMENT),
     GapReason.EXECUTABILITY_ADMISSION_PENDING: AdmissionRemediation(),
+    GapReason.SERVING_RELEASE_MISMATCH: EscalationRemediation(GapReason.SERVING_RELEASE_MISMATCH),
+    GapReason.SERVING_PROBE_MISMATCH: EscalationRemediation(GapReason.SERVING_PROBE_MISMATCH),
+    GapReason.SOURCE_QUEUE_VALIDATION_FAILED: EscalationRemediation(GapReason.SOURCE_QUEUE_VALIDATION_FAILED),
+    GapReason.CONTROLLER_ACTION_CANCELLED: EscalationRemediation(GapReason.CONTROLLER_ACTION_CANCELLED),
+    GapReason.CONTROLLER_ACTION_FAILED: EscalationRemediation(GapReason.CONTROLLER_ACTION_FAILED),
 }
 
 

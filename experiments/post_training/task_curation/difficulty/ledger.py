@@ -12,7 +12,14 @@ from functools import lru_cache
 from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.difficulty.state import ArtifactKind, Gap, GapReason, LedgerRow, Outcome
+from experiments.post_training.task_curation.difficulty.state import (
+    ActionFailure,
+    ArtifactKind,
+    Gap,
+    GapReason,
+    LedgerRow,
+    Outcome,
+)
 from infra.marina.apps.rl_data_catalog.release_evidence import json_sha256
 
 LEDGER_VERSION = "v1"
@@ -26,6 +33,22 @@ DEFAULT_LEDGER = "s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger"
 LEDGER_READ_WORKERS = 32
 LEDGER_PARTITION_CACHE_SIZE = 131072
 digest = json_sha256
+
+
+def record_action_failure(ledger: str, manifest_uri: str, error: Exception) -> None:
+    """Persist a child failure without replacing its subprocess's more specific receipt."""
+    target = StoragePath(ledger) / LEDGER_VERSION / RESULTS_DIRECTORY / StoragePath(manifest_uri).name
+    if target.exists():
+        return
+    reason = error.reason if isinstance(error, ActionFailure) else GapReason.CONTROLLER_ACTION_FAILED
+    payload = {
+        "status": "failed",
+        "reason": reason,
+        "error_identity": type(error).__name__,
+        "detail": str(error) if isinstance(error, ActionFailure) else type(error).__name__,
+    }
+    target.parent.mkdirs()
+    target.write_text(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def repair_verification_sources(ledger: str) -> frozenset[str]:

@@ -4,9 +4,11 @@
 """Submission replay, quota admission and completed repair transitions."""
 
 import json
+import subprocess
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
+import pytest
 from finestore.rl.difficulty import Solver
 from iris.resources.state import JobState
 from rigging.filesystem.storage_path import StoragePath
@@ -19,7 +21,7 @@ from experiments.post_training.task_curation.difficulty.executor import (
     collect_finished,
     execute_plan,
 )
-from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows
+from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows, record_action_failure
 from experiments.post_training.task_curation.difficulty.planner import (
     AttemptBatch,
     RebuildEnvironmentArtifact,
@@ -28,6 +30,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     plan,
 )
 from experiments.post_training.task_curation.difficulty.state import (
+    ActionFailure,
     CellStatus,
     CoveragePolicy,
     Gap,
@@ -188,3 +191,42 @@ def test_repair_backlog_preserves_two_attempt_lanes_per_solver(tmp_path):
     assert accepted == {action_id(action) for action in repairs[:8] + attempts}
     assert result["deferred"] == [action_id(repairs[8])]
     assert result["active_job_slots"] == 40
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [GapReason.SERVING_RELEASE_MISMATCH, GapReason.SERVING_PROBE_MISMATCH, GapReason.SOURCE_QUEUE_VALIDATION_FAILED],
+)
+def test_failed_child_preserves_specific_runtime_cause_across_subprocess_boundary(tmp_path, reason):
+    ledger = str(tmp_path / "ledger")
+    actions = plan([cell_state([], SOURCE, Solver.SMALL, CoveragePolicy())], [])
+    backend = JobStore(str(tmp_path / "jobs"))
+    execute_plan(actions, [], [SOURCE], ledger, backend, EscalationLog(ledger))
+    manifest = str(tmp_path / "ledger" / "v1" / "actions" / (action_id(actions[0]) + ".json"))
+    record_action_failure(ledger, manifest, ActionFailure(reason, "original typed failure"))
+    record_action_failure(ledger, manifest, subprocess.CalledProcessError(1, ["python", "runtime"]))
+    backend.existing = [replace(backend.existing[0], state=JobState.FAILED)]
+    additions = collect_finished(read_rows(ledger), backend.jobs(), ledger, EscalationLog(ledger))
+    (failure,) = [row for row in additions if row.outcome == Outcome.ESCALATED]
+    assert (failure.reason, failure.capability, failure.error_identity) == (
+        reason,
+        "original typed failure",
+        "ActionFailure",
+    )
+    assert any(row.outcome == Outcome.FINISHED for row in additions)
+
+
+@pytest.mark.parametrize(
+    "state,reason",
+    [(JobState.KILLED, GapReason.CONTROLLER_ACTION_CANCELLED), (JobState.FAILED, GapReason.CONTROLLER_ACTION_FAILED)],
+)
+def test_unreceipted_child_failure_never_claims_an_admission_receipt_is_missing(tmp_path, state, reason):
+    ledger = str(tmp_path / "ledger")
+    actions = plan([cell_state([], SOURCE, Solver.SMALL, CoveragePolicy())], [])
+    backend = JobStore(str(tmp_path / "jobs"))
+    execute_plan(actions, [], [SOURCE], ledger, backend, EscalationLog(ledger))
+    backend.existing = [replace(backend.existing[0], state=state)]
+    additions = collect_finished(read_rows(ledger), backend.jobs(), ledger, EscalationLog(ledger))
+    (failure,) = [row for row in additions if row.outcome == Outcome.ESCALATED]
+    assert failure.reason == reason
+    assert failure.error_identity == f"iris_child_{state}"

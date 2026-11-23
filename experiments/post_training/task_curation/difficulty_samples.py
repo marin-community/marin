@@ -16,7 +16,7 @@ from finestore.rl.curation import (
     SourceDeclaration,
 )
 from finestore.rl.difficulty import DifficultySample, SampleTask
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -24,6 +24,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import load_oracle_filter
 
+from experiments.post_training.task_curation.difficulty.state import ActionFailure, GapReason
 from experiments.post_training.task_curation.difficulty_contracts import (
     CONTRACT_VINTAGE_ABSENT_OMITTED,
     difficulty_task_contract,
@@ -78,14 +79,17 @@ def load_queue_sources(
     if file_sha256(path) != sources_sha256:
         raise ValueError("Source queue differs from the frozen digest")
     rows = json.loads(path.read_text())
-    sources = [DifficultySource.model_validate(row) for row in rows]
     if source_ids:
-        selected = [source for source in sources if source.declaration.id in source_ids]
-        if {source.declaration.id for source in selected} != set(source_ids):
-            missing = sorted(set(source_ids) - {source.declaration.id for source in sources})
+        rows = [row for row in rows if row["declaration"]["id"] in source_ids]
+        selected_ids = {row["declaration"]["id"] for row in rows}
+        if selected_ids != set(source_ids):
+            missing = sorted(set(source_ids) - selected_ids)
             raise ValueError(f"Requested sources are absent from the frozen selection: {missing}")
-        return selected
-    return sources
+    try:
+        return [DifficultySource.model_validate(row) for row in rows]
+    except ValidationError as error:
+        detail = "; ".join(item["msg"] for item in error.errors(include_input=False))
+        raise ActionFailure(GapReason.SOURCE_QUEUE_VALIDATION_FAILED, detail) from error
 
 
 def sample_oracle_state(inventory: SampleInventory, receipt: ContentEvidenceReference | None) -> dict:

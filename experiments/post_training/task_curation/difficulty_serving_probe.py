@@ -16,6 +16,7 @@ from rolloutengine.chat import chat_template_messages
 from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
+from experiments.post_training.task_curation.difficulty.state import ActionFailure, GapReason
 from experiments.post_training.task_curation.difficulty_config import DECLARED_JUDGE_PINS
 from experiments.post_training.task_curation.difficulty_protocol import PINS
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
@@ -137,10 +138,11 @@ def probe_serving_endpoint(
         completion = probe_response.json()
         served_prompt_tokens = completion["usage"]["prompt_tokens"]
         if served_prompt_tokens != expected_prompt_tokens:
-            raise ValueError(
+            raise ActionFailure(
+                GapReason.SERVING_PROBE_MISMATCH,
                 "Pinned tools/thinking rendering differs from authoritative server usage: "
                 f"pinned rendering is {expected_prompt_tokens} prompt tokens, "
-                f"the server rendered {served_prompt_tokens}"
+                f"the server rendered {served_prompt_tokens}",
             )
     return {
         "advertised_models": models.json(),

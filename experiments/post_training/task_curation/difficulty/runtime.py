@@ -34,6 +34,8 @@ from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOUT
+from experiments.post_training.task_curation.difficulty.ledger import record_action_failure
+from experiments.post_training.task_curation.difficulty.state import ActionFailure, GapReason
 from experiments.post_training.task_curation.difficulty_config import (
     DATA_ACCOUNT,
     DECLARED_JUDGE_PINS,
@@ -458,6 +460,15 @@ def main() -> None:
     parser.add_argument("--action-manifest", required=True)
     args = parser.parse_args()
     configure_coreweave_s3()
+    try:
+        run_batch(args)
+    except Exception as error:
+        record_action_failure(args.ledger, args.action_manifest, error)
+        raise
+
+
+def run_batch(args: argparse.Namespace) -> None:
+    """Run a pinned batch and publish its serving and trial evidence."""
     output = StoragePath(args.output_root)
     if args.local_root.exists() or output.exists():
         raise FileExistsError("Preserve prior campaigns and select a new run version")
@@ -466,7 +477,10 @@ def main() -> None:
     action = json.loads(StoragePath(args.action_manifest).read_text())
     release = VLLM_GPU_RELEASE if args.solver_pool is not None else solver_vllm_release(args.solver)
     if args.solver == Solver.SNOWBALL and action["vllm_release_tag"] != release.release_tag:
-        raise ValueError("Snowball action does not bind its established vLLM GPU release")
+        raise ActionFailure(
+            GapReason.SERVING_RELEASE_MISMATCH,
+            f"Snowball action binds {action['vllm_release_tag']}; serving requires {release.release_tag}",
+        )
     args.local_root.mkdir(parents=True)
     options = worker_limits(args.local_root)
     # Pulled actor images go to the node's NVMe scratch, never the container's

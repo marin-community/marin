@@ -310,6 +310,7 @@ def collect_finished(
             )
         )
         target = StoragePath(ledger) / LEDGER_VERSION / RESULTS_DIRECTORY / f"{row.action_id}.json"
+        error_identity = None
         if job.state == JobState.SUCCEEDED:
             result = json.loads(target.read_text())
             if result["status"] == "completed":
@@ -344,7 +345,18 @@ def collect_finished(
                 LOGGER.info("DIFFICULTY_SOURCE_REPAIR %s", handoff_uri)
                 continue
         else:
-            reason, detail = GapReason.EXECUTABILITY_ADMISSION_PENDING, f"Iris child {row.job_id}: {job.state}"
+            reason = (
+                GapReason.CONTROLLER_ACTION_CANCELLED
+                if job.state == JobState.KILLED
+                else GapReason.CONTROLLER_ACTION_FAILED
+            )
+            detail = f"Iris child {row.job_id}: {job.state}"
+            error_identity = f"iris_child_{job.state}"
+            if target.exists():
+                failure = json.loads(target.read_text())
+                if failure["status"] == "failed":
+                    reason, detail = GapReason(failure["reason"]), failure["detail"]
+                    error_identity = failure["error_identity"]
         key = digest([row.action_id, row.source_id, row.solver, "repair-unavailable"])
         notifications.write(key, f"Difficulty {reason}: {row.source_id} / {row.solver}; {detail}; evidence {target}")
         additions.append(
@@ -363,6 +375,7 @@ def collect_finished(
                 job_id=row.job_id,
                 capability=detail,
                 evidence_uri=str(target),
+                error_identity=error_identity,
             )
         )
     append_rows(ledger, additions)

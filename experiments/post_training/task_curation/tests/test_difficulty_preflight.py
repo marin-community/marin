@@ -77,10 +77,16 @@ def test_preflight_skips_the_hosted_probe_for_local_solvers(monkeypatch):
 def test_load_queue_sources_filters_and_verifies(tmp_path, difficulty_source):
     source = difficulty_source(_task())
     queue_path = tmp_path / "sources.json"
-    queue_path.write_text(json.dumps([source.model_dump(mode="json")]))
+    unrelated = source.model_dump(mode="json")
+    unrelated["declaration"].update(id="Unrelated:source", status="Pending", stage=None)
+    queue_path.write_text(json.dumps([unrelated, source.model_dump(mode="json")]))
     digest = file_sha256(queue_path)
     selected = load_queue_sources(str(queue_path), digest, (source.declaration.id,))
     assert [row.declaration.id for row in selected] == [source.declaration.id]
+    with pytest.raises(ValueError, match="Pending source carries no PendingStage"):
+        load_queue_sources(str(queue_path), digest, ("Unrelated:source",))
+    with pytest.raises(ValueError, match="Pending source carries no PendingStage"):
+        load_queue_sources(str(queue_path), digest, None)
     with pytest.raises(ValueError, match="absent from the frozen selection"):
         load_queue_sources(str(queue_path), digest, ("Other:source",))
     with pytest.raises(ValueError, match="differs from the frozen digest"):

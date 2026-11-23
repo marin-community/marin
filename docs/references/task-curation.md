@@ -2822,6 +2822,13 @@ leaves room for two attempt batches per solver while repairs are backlogged.
 Persistent engine and controller jobs
 are outside this work queue. A cell keeps at most one in-flight batch.
 Serving keeps compilation and CUDA graphs enabled.
+Source selections verify the full frozen queue's digest, then validate only the
+selected declarations. An invalid unselected declaration cannot block another
+source's batch. Child failures publish `status=failed`, `reason`, `error_identity`
+and `detail` in `v1/results/<action_id>.json` before re-raising. The controller
+preserves serving-release, serving-probe and source-queue validation causes;
+unreceipted cancellations and unknown child failures have distinct controller
+causes. They do not imply a missing executability-admission receipt.
 A cell with an attempt batch already in flight defers a second batch, in the
 same pass and across passes. Attempt waves pull declared images through the
 registry credential (`--registry-auth-secret`). A cell named by a recorded
