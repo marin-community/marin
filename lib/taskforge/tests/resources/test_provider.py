@@ -17,6 +17,7 @@ from lib.taskforge.tests.resources.inference_fakes import (
     Fails,
     LoopTime,
     ScriptedProvider,
+    Time,
     chunk,
     report,
     request,
@@ -54,19 +55,6 @@ from taskforge.wiring import provider_policy, solver_turn
 DEFAULTS = Path(__file__).parents[2] / "src/taskforge/policy/defaults"
 TOOL_STALL = Fails(AttemptOutcome.STALLED, (chunk(role="assistant"), chunk(tool_calls=[{"index": 0, "id": "c"}])))
 """A stall after a tool call opened: the server buffers its arguments."""
-
-
-class Time:
-    def __init__(self) -> None:
-        self.now = 0.0
-        self.waits: list[float] = []
-
-    def clock(self) -> float:
-        return self.now
-
-    async def sleep(self, delay: float) -> None:
-        self.waits.append(delay)
-        self.now += delay
 
 
 def client(
@@ -318,6 +306,37 @@ async def test_cancelling_a_solver_rollout_propagates() -> None:
     running.cancel()
     with pytest.raises(asyncio.CancelledError):
         await running
+
+
+class Trickle(httpx.AsyncByteStream):
+    """An error body of seven bytes, each three virtual seconds after the last: 21 seconds in all."""
+
+    def __init__(self, time: LoopTime) -> None:
+        self.time = time
+
+    async def __aiter__(self):  # type: ignore[override]
+        for _ in range(7):
+            await self.time.sleep(3)
+            yield b" "
+
+
+# Review 2026-11-23: the end-to-end trickle test showed a body was cut, but not at which deadline: a hook bound of
+# 750 ms in place of the configured 50 ms still passed. The configured stall timeout bounds the whole body.
+@pytest.mark.parametrize(("stall_timeout", "drained"), [(10.0, False), (150.0, True)])
+async def test_an_error_body_is_read_whole_within_the_configured_stall_timeout(
+    stall_timeout: float, drained: bool
+) -> None:
+    time = LoopTime()
+    source = FixedEndpoint(GlmEndpoint("http://fake/v1", "fake", Pool.HIGH))
+    provider = glm_provider.GlmProvider(source, "glm-5.3", stall_timeout, 1)
+    request = httpx.Request("POST", "http://fake/v1/chat/completions")
+    response = httpx.Response(503, stream=Trickle(time), request=request)
+    if drained:
+        await provider._read_error_body(response)
+        assert response.content == b" " * 7
+    else:
+        with pytest.raises(httpx.ReadTimeout, match=f"error body unread in {stall_timeout}s"):
+            await provider._read_error_body(response)
 
 
 async def test_endpoint_request_body_has_no_client_output_allowance(monkeypatch: pytest.MonkeyPatch) -> None:
