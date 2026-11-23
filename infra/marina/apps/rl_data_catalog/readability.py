@@ -273,6 +273,18 @@ def readability_layout(
             assert rollout_path is not None
             visit(rollout_path, "#content h2")
             capture("difficulty-rollout", focus=True)
+            # The transcript's folds and raw-bytes disclosure are controls a reader uses; audit
+            # them open as well.
+            fold = page.locator(".tr-toggle").first
+            if fold.count():
+                fold.click()
+                capture("difficulty-rollout-expanded", screenshot=False)
+                fold.click()
+            raw = page.locator(".raw-json summary").first
+            if raw.count():
+                raw.click()
+                capture("difficulty-rollout-raw", screenshot=False)
+                raw.click()
     cases = evidence_cases(sources, pending_ids) if scope is BrowserScope.FULL else []
     for index, candidate in enumerate(cases):
         if candidate["id"] == source["id"]:

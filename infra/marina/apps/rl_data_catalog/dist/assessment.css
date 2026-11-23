@@ -70,3 +70,33 @@
 
 .measurement-picker { display: grid; gap: 6px; width: min(100%, 50rem); min-width: 0; }
 .measurement-picker select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
+
+/* The rollout transcript renders through the shared Marina transcript renderer
+   (transcript.js); point its palette at this app's audited tokens instead of
+   restating its rules. */
+.tr-transcript {
+  --tr-surface: var(--surface);
+  --tr-sunken: var(--soft);
+  --tr-border: var(--line);
+  --tr-text: var(--ink);
+  --tr-muted: var(--muted);
+  --tr-accent: var(--green);
+  --tr-success: var(--good-text);
+  --tr-radius: 5px;
+  --tr-prose-size: max(var(--type-min), 14px);
+  --tr-message-size: max(var(--type-min), 14px);
+  --tr-code-size: max(var(--type-min), 13px);
+  --tr-small-size: max(var(--type-min), 12px);
+  --tr-label-size: max(var(--type-min), 11px);
+  max-width: 60rem;
+}
+
+/* The human view keeps the original bytes one click away. */
+.raw-json { margin-top: 10px; }
+.raw-json summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: max(var(--type-min), 13px);
+}
+.raw-json[open] summary { color: var(--ink); }
+.raw-json-view { margin-top: 8px; }

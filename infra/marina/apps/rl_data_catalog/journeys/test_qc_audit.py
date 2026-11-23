@@ -193,6 +193,7 @@ def test_quality_chip_reaches_review_list_and_raw_review(
 
 @pytest.mark.parametrize("entry", ["table", "source"])
 @pytest.mark.parametrize("width,theme", [(1440, "light"), (1440, "dark"), (390, "light"), (390, "dark")])
+@pytest.mark.timeout(600)
 def test_source_solver_links_reach_attempt_and_rollout(journey: Journey, width: int, theme: str, entry: str) -> None:
     page = journey.page
     page.set_viewport_size({"width": width, "height": 1000})
@@ -207,8 +208,41 @@ def test_source_solver_links_reach_attempt_and_rollout(journey: Journey, width: 
     expect(page.get_by_role("heading", name="Difficulty attempts · clean")).to_be_visible()
     page.get_by_role("link", name="0", exact=True).click()
     expect(page.get_by_role("heading", name="Transcript and tool calls")).to_be_visible()
-    expect(page.locator("#content")).to_contain_text("Recorded solver reasoning")
-    expect(page.locator("#content")).to_contain_text("terminal")
+
+    # The conversation renders as role-labeled turns, not raw JSON.
+    transcript = page.locator(".tr-transcript").first
+    expect(transcript.locator(".tr-turn")).to_have_count(6)
+    for label in ("system", "user", "assistant", "tool result"):
+        expect(transcript.locator(".tr-turn-label", has_text=label).first).to_be_visible()
+    expect(transcript.locator(".tr-tool-call", has_text="terminal")).to_have_count(1)
+    expect(transcript.locator(".tr-tool-call", has_text="python")).to_have_count(1)
+
+    # Long text folds: the user turn and the big tool output expand and collapse again.
+    transcript.locator(".tr-toggle", has_text="Show full message").first.click()
+    expect(transcript).to_contain_text("Mention the checksum of the listing explicitly")
+    transcript.locator(".tr-toggle", has_text="Collapse").first.click()
+    expect(transcript).not_to_contain_text("Mention the checksum of the listing explicitly")
+    transcript.locator(".tr-toggle", has_text="Show full output").first.click()
+    expect(transcript.locator(".tr-toggle", has_text="Fold output")).to_have_count(1)
+    transcript.locator(".tr-toggle", has_text="Fold output").first.click()
+    expect(transcript.locator(".tr-toggle", has_text="Show full output")).to_have_count(1)
+
+    # Reasoning rides beside the answer, collapsed until opened.
+    reasoning = transcript.locator(".tr-reasoning").first
+    expect(reasoning.locator("summary")).to_be_visible()
+    expect(reasoning.locator(".tr-reasoning-body")).not_to_be_visible()
+    reasoning.locator("summary").click()
+    expect(reasoning.locator(".tr-reasoning-body")).to_be_visible()
+    reasoning.locator("summary").click()
+
+    # The original bytes stay one click away for both transcript-shaped sections.
+    for section_title in ("Transcript and tool calls", "Model input"):
+        section = page.locator(".assessment-card", has=page.get_by_role("heading", name=section_title)).first
+        summary = section.locator(".raw-json summary")
+        summary.click()
+        expect(section.locator(".raw-json-view")).to_contain_text('"events"')
+        summary.click()
+
     expect(page.get_by_role("heading", name="Verifier output")).to_be_visible()
     expect(page.get_by_role("link", name="Open in Filer ↗")).to_have_count(2)
     page.screenshot(path=str(journey.shots / f"rollout-{entry}-{theme}-{width}.png"))

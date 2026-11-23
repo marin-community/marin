@@ -1,0 +1,183 @@
+/* The chat-transcript styles shared by Marina apps, extracted from EvalDash's sample views.
+ *
+ * Structure and typography live here; colors and sizes come from the `--tr-*` variables below,
+ * which carry EvalDash's values as the defaults. A host app maps them onto its own tokens in
+ * its own stylesheet (EvalDash: `--c-*`; Atlas: the Marina tokens and its 14 px minimum)
+ * instead of restating the rules.
+ */
+
+.tr-transcript {
+  --tr-surface: #fcfbf8;
+  --tr-sunken: #f3f0e9;
+  --tr-border: #e2ded2;
+  --tr-text: #17181c;
+  --tr-muted: #6d6a60;
+  --tr-accent: #1f5c4a;
+  --tr-success: #1f5c4a;
+  --tr-radius: 0.25rem;
+  --tr-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --tr-prose-size: 14px;
+  --tr-message-size: 13px;
+  --tr-code-size: 13px;
+  --tr-small-size: 12px;
+  --tr-label-size: 10px;
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  color: var(--tr-text);
+  font: inherit;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tr-transcript {
+    --tr-surface: #1c1f22;
+    --tr-sunken: #15171a;
+    --tr-border: #2f3336;
+    --tr-text: #ece9e1;
+    --tr-muted: #9a978d;
+    --tr-accent: #6cc4a5;
+    --tr-success: #6cc4a5;
+  }
+}
+
+/* Left-border tone per role or step source. */
+.tr-tone-muted { border-left-color: var(--tr-muted); }
+.tr-tone-accent { border-left-color: var(--tr-accent); }
+.tr-tone-success { border-left-color: var(--tr-success); }
+.tr-tone-neutral { border-left-color: var(--tr-border); }
+
+.tr-turn,
+.tr-step-card {
+  border: 1px solid var(--tr-border);
+  border-left-width: 4px;
+  border-radius: var(--tr-radius);
+  background: var(--tr-sunken);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tr-step-card { background: var(--tr-surface); }
+
+.tr-turn-label,
+.tr-step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--tr-label-size);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--tr-muted);
+}
+
+.tr-step-title { font-weight: 600; }
+
+.tr-step-chip {
+  border-radius: var(--tr-radius);
+  background: var(--tr-sunken);
+  padding: 0.125rem 0.25rem;
+  font-weight: 500;
+}
+
+.tr-step-model,
+.tr-tool-target,
+.tr-tool-id,
+.tr-step-metric,
+.tr-tool-args,
+.tr-tool-output,
+.tr-code {
+  font-family: var(--tr-mono);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.tr-step-model { font-size: var(--tr-small-size); color: var(--tr-text); opacity: 0.75; }
+.tr-step-metric { font-variant-numeric: tabular-nums; }
+
+.tr-message { display: flex; flex-direction: column; gap: 0.25rem; }
+
+.tr-prose { margin: 0; white-space: pre-wrap; font-size: var(--tr-prose-size); }
+/* Inside a labeled turn the message text reads one step smaller, as the chat transcript did. */
+.tr-turn .tr-prose { font-size: var(--tr-message-size); }
+
+.tr-code {
+  margin: 0;
+  border: 1px solid var(--tr-border);
+  border-radius: var(--tr-radius);
+  background: var(--tr-sunken);
+  padding: 0.75rem;
+  font-size: var(--tr-code-size);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tr-toggle {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: var(--tr-small-size);
+  color: var(--tr-accent);
+  cursor: pointer;
+  font-family: inherit;
+}
+.tr-toggle:hover { text-decoration: underline; }
+
+.tr-reasoning { margin: 0; }
+.tr-reasoning-summary {
+  cursor: pointer;
+  font-size: var(--tr-label-size);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--tr-muted);
+}
+.tr-reasoning-body {
+  margin-top: 0.5rem;
+  border-left: 2px solid var(--tr-border);
+  padding-left: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tr-calls { display: flex; flex-direction: column; gap: 0.375rem; }
+
+.tr-tool-call,
+.tr-tool-result {
+  border: 1px solid var(--tr-border);
+  border-radius: var(--tr-radius);
+  background: var(--tr-sunken);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.tr-tool-name, .tr-result-label { display: flex; align-items: baseline; gap: 0.5rem; }
+.tr-tool-label {
+  font-size: var(--tr-label-size);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--tr-muted);
+}
+.tr-tool-target { font-size: var(--tr-small-size); color: var(--tr-accent); }
+.tr-tool-id { font-size: var(--tr-small-size); color: var(--tr-muted); overflow-wrap: anywhere; }
+
+.tr-tool-args,
+.tr-tool-output {
+  margin: 0;
+  font-size: var(--tr-small-size);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tr-tool-output {
+  max-height: 16rem;
+  overflow: auto;
+}
+.tr-tool-output.tr-folded { max-height: 12rem; }

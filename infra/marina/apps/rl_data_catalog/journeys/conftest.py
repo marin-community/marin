@@ -32,6 +32,143 @@ from infra.marina.apps.rl_data_catalog.tests.method_fixtures import sft_variant
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import pending_review_declaration, review_declarations
 
 APP_ID = UUID("fb11c931-5861-4878-8bb5-a964d652b45f")
+
+
+LONG_TOOL_OUTPUT = "\n".join(
+    f"drwxr-xr-x  3 root root  4096 Nov 21 0{index % 10}:12 .cache-{index}" for index in range(120)
+)
+
+
+def rollout_fixtures(solver: str) -> list[tuple[dict, dict]]:
+    """Synthetic attempt evidence: one tool-using trace, one plain chat, one exception.
+
+    The conversation shapes are the ones the difficulty pipeline stages from Harbor
+    trials: typed events (`message`, `assistant_tool_calls`, `tool_result`), not
+    provider messages. Attempt 0 exercises every rendered feature; attempt 1 is the
+    single-turn shape most of the catalog holds today; attempt 2 carries an exception
+    instead of a transcript.
+    """
+    receipt = {"uri": "s3://fixture/attempt.json", "sha256": "a" * 64}
+    archive = {"uri": "s3://fixture/trial.tar.gz", "sha256": "b" * 64}
+
+    def summary(score, status="scored", exception=None):
+        return {
+            "solver": solver,
+            "attempt": "00",
+            "score": score,
+            "status": status,
+            "duration": 2.5,
+            "exception": exception,
+            "reason": None,
+            "has_rollout": True,
+        }
+
+    def base_detail(conversation, exception=None):
+        return {
+            "conversation": conversation,
+            "model_input": {"events": conversation["events"][:2]},
+            "verifier": {"detail": {"expected": "45", "extracted": "45"}},
+            "verifier_result": {"rewards": {"reward": 1.0}, "stderr": None, "stdout": None},
+            "exception": exception,
+            "exception_info": None,
+            "receipt": receipt,
+            "archive": archive,
+        }
+
+    agentic = base_detail(
+        {
+            "events": [
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": "You are a careful solver. Work in /workspace and answer precisely.",
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": (
+                        "## Task\n\nCount the tracked files under /workspace and report the total.\n\n"
+                        "Steps:\n\n1. list the tree\n2. count the entries\n\n"
+                        "Return the count in a fenced block:\n\n```\ncount = <total>\n```\n\n"
+                        "Be careful with hidden directories, and explain your reasoning before the final answer. "
+                        + "The tree is large, so stream the listing rather than buffering it. " * 6
+                        + "Mention the checksum of the listing explicitly in your explanation."
+                    ),
+                },
+                {
+                    "type": "assistant_tool_calls",
+                    "content": "I'll list the workspace tree first.",
+                    "reasoning": (
+                        "The task asks for a file count. Listing the tree is the direct way; "
+                        "I'll count lines afterwards instead of trusting a single tool."
+                    ),
+                    "calls": [
+                        {
+                            "call_id": "call-1",
+                            "name": "terminal",
+                            "arguments": {"command": "find /workspace -type f | head -200"},
+                        },
+                        {"call_id": "call-2", "name": "python", "arguments": {"code": "print(sum(range(10)))"}},
+                    ],
+                },
+                {"type": "tool_result", "call_id": "call-1", "content": LONG_TOOL_OUTPUT},
+                {"type": "tool_result", "call_id": "call-2", "content": "45"},
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": (
+                        "The workspace holds 120 tracked files.\n\n"
+                        "```\ncount = 120\n```\n\n"
+                        "The remaining tool ran the checksum, which agreed with the listing."
+                    ),
+                },
+            ]
+        }
+    )
+    single_turn = base_detail(
+        {
+            "events": [
+                {"type": "message", "role": "system", "content": "Answer the task directly."},
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": (
+                        "Two quantum states have lifetimes $10^{-9}$ s and $10^{-8}$ s. "
+                        "Which energy difference lets them be told apart?"
+                    ),
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": (
+                        "**D. $10^{-4}$ eV**\n\n"
+                        "The energy uncertainty from finite lifetimes is roughly $\\Delta E \\approx \\hbar/\\tau$, "
+                        "and the resolvable splitting is about $1/\\tau_1 - 1/\\tau_2$."
+                    ),
+                },
+            ]
+        }
+    )
+    exception_detail = {
+        "conversation": {"events": []},
+        "model_input": {"events": []},
+        "verifier": None,
+        "verifier_result": None,
+        "exception": "AgentTimeoutError: the solver exceeded its 300-second budget",
+        "exception_info": {"kind": "AgentTimeoutError", "stage": "solve"},
+        "receipt": receipt,
+        "archive": archive,
+    }
+    return [
+        (summary(1.0), agentic),
+        (summary(0.0), single_turn),
+        (
+            summary(None, status="exception", exception="AgentTimeoutError: the solver exceeded its 300-second budget"),
+            exception_detail,
+        ),
+    ]
+
+
 ACTOR_INPUT = {
     "dataset_id": "fixture",
     "dataset_revision": "a" * 40,
@@ -236,35 +373,12 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
         with engine.begin() as connection:
             for measurement in connection.execute(text("SELECT measurement FROM atlas_difficulty")).scalars():
                 identity = measurement["measurement_id"]
-                for index in range(3):
-                    summary = {
-                        "attempt_id": str(index),
-                        "task_id": str(index),
-                        "solver": measurement["solver"],
-                        "attempt": "00",
-                        "trial_id": f"trial-{index}",
-                        "score": 1.0 if index == 0 else 0.0,
-                        "status": "scored",
-                        "duration": 2.5,
-                        "exception": None,
-                        "reason": None,
-                        "has_rollout": True,
-                    }
-                    detail = {
-                        "conversation": [
-                            {
-                                "role": "assistant",
-                                "content": "Recorded solver reasoning",
-                                "tool_calls": [{"name": "terminal", "arguments": "check answer"}],
-                            }
-                        ],
-                        "model_input": {"messages": [{"role": "user", "content": "Solve the frozen task."}]},
-                        "verifier": {"reward": summary["score"]},
-                        "exception": None,
-                        "exception_info": None,
-                        "receipt": {"uri": "s3://fixture/attempt.json", "sha256": "a" * 64},
-                        "archive": {"uri": "s3://fixture/trial.tar.gz", "sha256": "b" * 64},
-                    }
+                solver = measurement["solver"]
+                for index, attempt in enumerate(rollout_fixtures(solver)):
+                    summary, detail = attempt
+                    summary["attempt_id"] = str(index)
+                    summary["task_id"] = str(index)
+                    summary["trial_id"] = f"trial-{index}"
                     connection.execute(
                         text(
                             "INSERT INTO atlas_rollout_attempts VALUES (:id,:attempt,:task,"

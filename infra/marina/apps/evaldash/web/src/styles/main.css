@@ -93,6 +93,17 @@
   --muted: var(--c-text-muted);
   --mark: var(--c-accent);
   --warn: var(--c-status-danger);
+
+  /* The shared transcript renderer's variables, mapped to this app's palette. */
+  --tr-surface: var(--c-surface);
+  --tr-sunken: var(--c-surface-sunken);
+  --tr-border: var(--c-surface-border);
+  --tr-text: var(--c-text);
+  --tr-muted: var(--c-text-muted);
+  --tr-accent: var(--c-accent);
+  --tr-success: var(--c-status-success);
+  --tr-radius: 0.25rem;
+  --tr-mono: 'Noto Sans Mono Variable', 'SF Mono', Menlo, monospace;
 }
 
 body { background: var(--c-page); }

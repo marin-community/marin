@@ -10,6 +10,10 @@ parts.css    the class layer: .scroll .num .chip .pill .facts .record
 Shell.vue    the top bar every app renders inside
 markdown.ts  a Markdown subset, parsed to a tree rather than to HTML
 Prose.vue    that tree, drawn through `{{ }}` so markup stays text
+transcript.js + transcript.css
+             the chat-transcript renderer EvalDash's sample views and Atlas's rollout
+             page draw through: role-labeled turns, fenced code, collapsed reasoning,
+             tool-call and tool-result blocks with folded output
 ```
 
 ## How an app opts in

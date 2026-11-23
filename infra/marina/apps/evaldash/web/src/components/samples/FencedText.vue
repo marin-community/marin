@@ -3,40 +3,26 @@
  * Renders free-form model output that may contain ``` fenced blocks: prose stays as normal
  * wrapped text, fenced segments render as monospace blocks (their language-tag line, if any, is
  * dropped). No markdown parsing beyond fence-splitting — this is enough to make code and math
- * traces readable without a markdown dependency.
+ * traces readable without a markdown dependency. The splitting and drawing are the shared
+ * Marina transcript renderer's.
  */
-import { computed } from 'vue'
+import { onMounted, ref } from 'vue'
+import TranscriptView from '@marina/transcript.js'
 
 const props = defineProps<{ text: string }>()
 
-interface Segment {
-  kind: 'prose' | 'code'
-  text: string
-}
+const container = ref<HTMLElement | null>(null)
 
-function splitFences(text: string): Segment[] {
-  const parts = text.split('```')
-  const segments: Segment[] = []
-  parts.forEach((part, i) => {
-    if (i % 2 === 0) {
-      if (part) segments.push({ kind: 'prose', text: part })
-      return
-    }
-    const newlineIdx = part.indexOf('\n')
-    const body = newlineIdx >= 0 ? part.slice(newlineIdx + 1) : part
-    segments.push({ kind: 'code', text: body.replace(/\n$/, '') })
-  })
-  return segments
-}
-
-const segments = computed(() => splitFences(props.text))
+onMounted(() => {
+  if (container.value) TranscriptView.renderFenced(container.value, props.text)
+})
 </script>
 
 <template>
-  <div class="space-y-2">
-    <template v-for="(seg, i) in segments" :key="i">
-      <p v-if="seg.kind === 'prose'" class="whitespace-pre-wrap text-sm">{{ seg.text }}</p>
-      <pre v-else class="rounded border border-surface-border bg-surface-sunken p-3 text-[13px] font-mono whitespace-pre-wrap overflow-auto">{{ seg.text }}</pre>
-    </template>
-  </div>
+  <div ref="container" class="fenced" />
 </template>
+
+<style scoped>
+/* The shared renderer styles each segment; the wrapper only stacks them. */
+.fenced { display: flex; flex-direction: column; gap: 0.5rem; }
+</style>
