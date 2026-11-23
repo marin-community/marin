@@ -20,7 +20,7 @@ DATA_ADMISSION_COMMAND = (
     "--target",
     DAYTONA_TARGET,
     "--headroom",
-    "0.2",
+    "0.6666666666666667",
 )
 
 

@@ -23,7 +23,13 @@ REGISTRY_AUTH_SECRET = "GHCR_REGISTRY_AUTHFILE"
 
 
 def attempt_command(
-    action: AttemptBatch, manifest: str, ledger: str, output: str, local_root: Path, registry_auth: bool
+    action: AttemptBatch,
+    manifest: str,
+    ledger: str,
+    output: str,
+    local_root: Path,
+    registry_auth: bool,
+    serving_pool: str | None = None,
 ) -> list[str]:
     """The runtime command for one attempt batch, with the batch's registry credential."""
     queues = {(source.queue_uri, source.queue_sha256) for source in action.sources}
@@ -45,9 +51,9 @@ def attempt_command(
         "--local-root",
         str(local_root),
         "--workers",
-        "22",
+        "16",
         "--attempts-per-task",
-        "3",
+        str(max(n for source in action.sources for _, _, n in source.tasks)),
         "--priority",
         "interactive",
         "--daytona-provisioning",
@@ -59,6 +65,8 @@ def attempt_command(
     ]
     for source in action.sources:
         command.extend(["--source-id", source.source_id])
+    if serving_pool is not None:
+        command.extend(["--solver-pool", serving_pool])
     if registry_auth:
         # Private actor pins (ghcr.io/marin-community) need the skopeo authfile;
         # public pulls ignore it, so a bundle without the credential stays anonymous.
@@ -70,6 +78,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--ledger", required=True)
+    parser.add_argument("--serving-pool")
     args = parser.parse_args()
     configure_coreweave_s3()
     action = load_action(args.manifest)
@@ -87,6 +96,7 @@ def main() -> None:
             output,
             local_root,
             registry_auth=get_secret(REGISTRY_AUTH_SECRET) is not None,
+            serving_pool=args.serving_pool,
         )
         subprocess.run(command, check=True)
         result = {"status": "completed", "run_root": output, "local_root": str(local_root)}

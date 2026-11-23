@@ -13,6 +13,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.budget import campaign_budget
 from experiments.post_training.task_curation.difficulty.executor import (
+    CONCURRENT_JOB_CAP,
     EscalationLog,
     Job,
     collect_finished,
@@ -77,7 +78,7 @@ def test_capacity_and_legacy_solver_admission_defer_without_creating_attempts(tm
     ledger = str(tmp_path / "ledger")
     cell = cell_state([], SOURCE, Solver.SMALL, CoveragePolicy())
     actions = plan([cell], [])
-    full = JobStore(str(tmp_path / "jobs"), [Job("/busy", JobState.RUNNING, None, 22)])
+    full = JobStore(str(tmp_path / "jobs"), [Job("/busy", JobState.RUNNING, None, CONCURRENT_JOB_CAP)])
     result = execute_plan(actions, [], [SOURCE], ledger, full, EscalationLog(ledger))
     assert result["submitted"] == [] and result["deferred"] == [action_id(actions[0])]
     legacy = JobStore(str(tmp_path / "jobs"), [Job("/owner/atlas-difficulty-small-v24", JobState.RUNNING, Solver.SMALL)])

@@ -40,6 +40,7 @@ class IrisBackend:
     client: IrisClient
     controller_job: JobName
     ledger: str
+    serving_pool: str | None = None
 
     def jobs(self) -> list[Job]:
         prefix = f"/{self.controller_job.user}/{JOB_NAMESPACE}"
@@ -48,6 +49,10 @@ class IrisBackend:
         grouped: dict[str, list[Job]] = {}
         for status in raw:
             wire = str(status.job_id)
+            if "atlas-difficulty-engines-" in wire or (
+                "atlas-difficulty-reconciler-controller-" in wire and "/" + JOB_COMPONENT not in wire
+            ):
+                continue
             match = re.search(r"atlas-difficulty-(small|large|hosted|snowball)-", wire)
             solver = Solver(match.group(1)) if match else None
             job = Job(wire, status.state, solver)
@@ -57,13 +62,20 @@ class IrisBackend:
                 grouped.setdefault(group, []).append(job)
             else:
                 jobs.append(job)
-        for root, group in grouped.items():
+        for root in grouped:
             prefix = root.rsplit("/", 1)[-1].removeprefix(JOB_COMPONENT)
             matches = (StoragePath(self.ledger) / LEDGER_VERSION / ACTIONS_DIRECTORY / (prefix + "*.json")).glob()
             if len(matches) != 1:
                 raise ValueError(f"Active job has no unique action manifest: {root}")
             action = action_from_payload(json.loads(matches[0].read_text()))
-            jobs.append(Job(root, JobState.RUNNING, None, max(action_job_slots(action), len(group))))
+            jobs.append(
+                Job(
+                    root,
+                    JobState.RUNNING,
+                    action.solver if isinstance(action, AttemptBatch) else None,
+                    action_job_slots(action),
+                )
+            )
         return jobs
 
     def submit(self, action: Action, manifest_uri: str) -> str:
@@ -74,7 +86,7 @@ class IrisBackend:
             if str(job.job_id).endswith("/" + name):
                 return str(job.job_id)
         timeout = int(JOB_TIMEOUT.to_seconds())
-        if isinstance(action, AttemptBatch):
+        if isinstance(action, AttemptBatch) and self.serving_pool is None:
             # Include the largest locally served judge in the reservation bound.
             gpu_count = PINS[action.solver].gpus + MAX_JUDGE_GPUS
             timeout = int(action.max_gpu_hours * 3600 / gpu_count)
@@ -91,10 +103,16 @@ class IrisBackend:
             "--ledger",
             self.ledger,
         ]
+        if self.serving_pool is not None:
+            command.extend(["--serving-pool", self.serving_pool])
         job = self.client.submit(
             entrypoint=Entrypoint.from_command(*command),
             name=name,
-            resources=ResourceSpec(cpu=8, memory="32GB", disk="128GB"),
+            resources=(
+                ResourceSpec(cpu=16, memory="64GB", disk="256GB")
+                if isinstance(action, AttemptBatch)
+                else ResourceSpec(cpu=8, memory="32GB", disk="128GB")
+            ),
             environment=EnvironmentSpec(env_vars={"DAYTONA_API_URL": DAYTONA_API_URL, "DAYTONA_TARGET": DAYTONA_TARGET}),
             priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,

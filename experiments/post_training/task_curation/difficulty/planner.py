@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Protocol
 
+from finestore.rl.curation import SourceUse
 from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Backend
@@ -429,9 +430,11 @@ def plan(
     # recorded repair verification (its escalation landed and its repair is deployed) verifies
     # at the front of its priority band.
     verified = repair_verification_sources(ledger_root) if ledger_root else frozenset()
+    train_sources = {cell.source.source_id for cell in cells if cell.source.intended_use == SourceUse.TRAIN}
     ordered = sorted(
         actions.items(),
         key=lambda item: (
+            0 if any(source_id in train_sources for source_id, _ in action_cells(item[1][1])) else 1,
             gap_priority(item[1][0]),
             0 if repair_verifies(item[1], verified) else 1,
             item[1][0],

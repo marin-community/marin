@@ -83,7 +83,10 @@ def main() -> None:
         if name == "reconcile":
             command.add_argument("--once", action="store_true")
             command.add_argument("--secrets-env", type=Path, help="Load controller credentials from this dotenv file")
-            command.add_argument("--gpu-hour-budget", type=float, required=True)
+            budget = command.add_mutually_exclusive_group(required=True)
+            budget.add_argument("--gpu-hour-budget", type=float)
+            budget.add_argument("--unlimited-gpu-hours", action="store_true")
+            command.add_argument("--serving-pool")
     args = parser.parse_args()
     configure_coreweave_s3()
     if args.command == "record-source-repairs":
@@ -114,7 +117,14 @@ def main() -> None:
     if args.command == "reconcile" and args.queue:
         parser.error("reconcile uses the complete current served catalog")
     if args.command == "reconcile" and get_iris_ctx() is not None:
-        run_controller(args.ledger, args.applet_id, args.once, frozenset(args.provider_available), args.gpu_hour_budget)
+        run_controller(
+            args.ledger,
+            args.applet_id,
+            args.once,
+            frozenset(args.provider_available),
+            args.gpu_hour_budget,
+            args.serving_pool,
+        )
         return
     if bool(args.queue) != bool(args.queue_sha256):
         parser.error("historical mode requires --queue and --queue-sha256")
@@ -143,6 +153,7 @@ def main() -> None:
             digest([action_id(action) for action in actions]),
             args.gpu_hour_budget,
             args.secrets_env,
+            args.serving_pool,
         )
         return
     if args.command == "plan":

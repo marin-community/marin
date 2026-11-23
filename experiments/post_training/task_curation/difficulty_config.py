@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 
 DATA_ACCOUNT = "data"
+SELF_HOSTED_SOLVERS = (Solver.SMALL, Solver.LARGE, Solver.SNOWBALL)
+SOLVER_POOL_GPU_COUNT = 64
 TOGETHER_API_KEY_ENV = "TOGETHER_API_KEY"
 # Provider credential env names a task bundle may resolve from its granted
 # guest environment. Each resolves from the GSM-backed secret bundle at wave

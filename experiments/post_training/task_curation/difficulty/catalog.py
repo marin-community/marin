@@ -5,7 +5,9 @@
 
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 
+from finestore.rl.curation import SourceUse
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.auth import TokenProvider
 from rigging.filesystem.storage_path import StoragePath
@@ -78,7 +80,8 @@ def served_catalog(
     """Keep every served source; unmatched pins need a fresh frozen task panel."""
     query = applet_query(DEFAULT_MARINA_URL, applet_id, token_provider=token_provider)
     declarations = query(
-        "SELECT id, load_id, jsonb_build_object('current_release', declaration->'current_release', "
+        "SELECT id, load_id, declaration->>'intended_use' AS intended_use, "
+        "jsonb_build_object('current_release', declaration->'current_release', "
         "'pipeline', declaration->'pipeline', 'actor_census_input', declaration->'actor_census_input') "
         "AS declaration FROM atlas_sources WHERE load_id = "
         "(SELECT load_id FROM atlas_current WHERE name = 'latest') ORDER BY id",
@@ -102,12 +105,24 @@ def served_catalog(
         revision = declaration_population_revision(declaration)
         match = panels.get((canonical_source_id(row["id"]), revision))
         if match is not None:
-            sources.append(match)
+            sources.append(
+                replace(match, intended_use=SourceUse(row["intended_use"]) if row.get("intended_use") else None)
+            )
             continue
         full = full_declarations[row["id"]]
         if any(full[key] != declaration[key] for key in declaration):
             raise ValueError("Source declaration differs from its frozen population identity")
-        sources.append(CatalogSource(row["id"], revision, (), "", "", json.dumps(full, sort_keys=True)))
+        sources.append(
+            CatalogSource(
+                row["id"],
+                revision,
+                (),
+                "",
+                "",
+                json.dumps(full, sort_keys=True),
+                intended_use=SourceUse(row["intended_use"]) if row.get("intended_use") else None,
+            )
+        )
     if len({canonical_source_id(source.source_id) for source in sources}) != len(sources):
         raise ValueError("Served catalog contains duplicate source identities")
     return sources

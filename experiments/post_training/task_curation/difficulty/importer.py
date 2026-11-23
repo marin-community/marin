@@ -48,6 +48,7 @@ def declaration_population_revision(declaration: dict) -> str:
     )
 
 
+@cache
 def catalog_sources(queue: str, queue_sha256: str) -> list[CatalogSource]:
     path = StoragePath(queue)
     if file_sha256(path) != queue_sha256:

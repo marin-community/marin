@@ -1,0 +1,52 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Failure alerts merge duplicate transport evidence and respect the hourly cooldown."""
+
+import json
+from datetime import UTC, datetime, timedelta
+
+from scripts.ops.difficulty_failure_watch import ledger_outcomes, update_patterns
+from scripts.ops.job_watchdog import JsonlAlertSink
+
+
+def test_pattern_alerts_immediately_then_hourly_with_counts_and_three_real_examples(tmp_path):
+    now = datetime(2026, 11, 23, tzinfo=UTC)
+    patterns, seen = {}, set()
+    first = {
+        "source_id": "source",
+        "outcome": "unscored",
+        "reason": "GRADER_INFRASTRUCTURE_FAILURE",
+        "attempt_id": "attempt-one",
+    }
+    alerts = update_patterns(patterns, seen, [first, first], now)
+    sink = JsonlAlertSink(tmp_path / "alerts.jsonl")
+    sink.deliver(alerts[0])
+    second = {**first, "attempt_id": "attempt-two"}
+    assert update_patterns(patterns, seen, [second], now + timedelta(minutes=10)) == []
+    third = {**first, "attempt_id": "attempt-three", "outcome": "observation"}
+    alerts = update_patterns(patterns, seen, [third], now + timedelta(hours=1))
+    sink.deliver(alerts[0])
+    records = [json.loads(line) for line in (tmp_path / "alerts.jsonl").read_text().splitlines()]
+    assert len(records) == 2
+    assert records[0]["kind"] == "DIFFICULTY_FAILURE_PATTERN"
+    assert records[0]["evidence"]["count"] == 1
+    assert records[1]["evidence"]["count"] == 3
+    assert records[1]["evidence"]["example_attempt_ids"] == ["attempt-one", "attempt-two", "attempt-three"]
+    assert update_patterns(patterns, seen, [first, second, third], now + timedelta(hours=2)) == []
+
+
+def test_ledger_backstop_reads_legacy_failures_without_recounting_partitions(tmp_path):
+    directory = tmp_path / "v1/rows"
+    directory.mkdir(parents=True)
+    row = {
+        "source_id": "source",
+        "outcome": "unscored",
+        "reason": "ENVIRONMENT_START_FAILURE",
+        "attempt_id": "actual-ledger-attempt",
+    }
+    (directory / "partition.jsonl").write_text(json.dumps(row) + "\n")
+    since = datetime.now(UTC) - timedelta(minutes=10)
+    rows, partitions = ledger_outcomes(str(tmp_path), since, set())
+    assert rows == [row]
+    assert ledger_outcomes(str(tmp_path), since, partitions) == ([], set())

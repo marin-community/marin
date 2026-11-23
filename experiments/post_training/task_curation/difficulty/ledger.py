@@ -5,7 +5,9 @@
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from functools import lru_cache
 
 from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
@@ -21,6 +23,8 @@ ESCALATIONS_DIRECTORY = "escalations"
 PANELS_DIRECTORY = "panels"
 REPAIR_VERIFICATIONS_DIRECTORY = "repair-verifications"
 DEFAULT_LEDGER = "s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger"
+LEDGER_READ_WORKERS = 32
+LEDGER_PARTITION_CACHE_SIZE = 131072
 digest = json_sha256
 
 
@@ -63,30 +67,42 @@ def append_rows(root: str, rows: list[LedgerRow]) -> str | None:
     return str(path)
 
 
+@lru_cache(maxsize=LEDGER_PARTITION_CACHE_SIZE)
+def partition_rows(uri: str) -> tuple[LedgerRow, ...]:
+    """Decode one immutable content-addressed partition once per controller process."""
+    path = StoragePath(uri)
+    decoded = []
+    for line in path.read_text().splitlines():
+        value = json.loads(line)
+        value["solver"] = Solver(value["solver"])
+        value["outcome"] = Outcome(value["outcome"])
+        value["reason"] = GapReason(value["reason"]) if value["reason"] else None
+        if value.get("artifact_kind"):
+            value["artifact_kind"] = ArtifactKind(value["artifact_kind"])
+        value["secondary_gaps"] = tuple(
+            Gap(
+                GapReason(gap["reason"]),
+                gap["artifact_uri"],
+                gap["judge_model"],
+                gap["capability"],
+                ArtifactKind(gap["artifact_kind"]) if gap.get("artifact_kind") else None,
+                gap.get("judge_temperature"),
+                gap.get("error_identity"),
+            )
+            for gap in value.get("secondary_gaps", [])
+        )
+        row = LedgerRow(**value)
+        decoded.append(row)
+    return tuple(decoded)
+
+
 def read_rows(root: str) -> list[LedgerRow]:
     rows: dict[str, LedgerRow] = {}
-    for path in sorted((StoragePath(root) / LEDGER_VERSION / "rows" / "*.jsonl").glob(), key=str):
-        for line in path.read_text().splitlines():
-            value = json.loads(line)
-            value["solver"] = Solver(value["solver"])
-            value["outcome"] = Outcome(value["outcome"])
-            value["reason"] = GapReason(value["reason"]) if value["reason"] else None
-            if value.get("artifact_kind"):
-                value["artifact_kind"] = ArtifactKind(value["artifact_kind"])
-            value["secondary_gaps"] = tuple(
-                Gap(
-                    GapReason(gap["reason"]),
-                    gap["artifact_uri"],
-                    gap["judge_model"],
-                    gap["capability"],
-                    ArtifactKind(gap["artifact_kind"]) if gap.get("artifact_kind") else None,
-                    gap.get("judge_temperature"),
-                    gap.get("error_identity"),
-                )
-                for gap in value.get("secondary_gaps", [])
-            )
-            row = LedgerRow(**value)
-            if row.attempt_id in rows and rows[row.attempt_id] != row:
-                raise ValueError(f"Conflicting ledger evidence: {row.attempt_id}")
-            rows[row.attempt_id] = row
+    paths = sorted(str(path) for path in (StoragePath(root) / LEDGER_VERSION / "rows" / "*.jsonl").glob())
+    with ThreadPoolExecutor(max_workers=LEDGER_READ_WORKERS) as pool:
+        for partition in pool.map(partition_rows, paths):
+            for row in partition:
+                if row.attempt_id in rows and rows[row.attempt_id] != row:
+                    raise ValueError(f"Conflicting ledger evidence: {row.attempt_id}")
+                rows[row.attempt_id] = row
     return sorted(rows.values(), key=lambda row: (row.recorded_at, row.attempt_id))

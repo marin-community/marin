@@ -10,14 +10,20 @@ from datetime import UTC, datetime
 
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.difficulty.ledger import ACTIONS_DIRECTORY, LEDGER_VERSION
+from experiments.post_training.task_curation.difficulty.ledger import (
+    ACTIONS_DIRECTORY,
+    LEDGER_VERSION,
+    append_rows,
+    digest,
+)
 from experiments.post_training.task_curation.difficulty.planner import action_from_payload, action_gpu_hour_reservation
 from experiments.post_training.task_curation.difficulty.state import LedgerRow, Outcome
+from experiments.post_training.task_curation.difficulty_config import SELF_HOSTED_SOLVERS
 
 
 @dataclass(frozen=True)
 class GpuBudget:
-    limit_gpu_hours: float
+    limit_gpu_hours: float | None
     started_at: str
 
     def recorded_gpu_hours(self, rows: Sequence[LedgerRow]) -> float:
@@ -33,13 +39,16 @@ class GpuBudget:
         return total
 
 
-def campaign_budget(ledger: str, limit_gpu_hours: float) -> GpuBudget:
+def campaign_budget(ledger: str, limit_gpu_hours: float | None) -> GpuBudget:
     """Bind the budget once under the reconciliation lease; restarts retain spend."""
-    if limit_gpu_hours <= 0:
+    if limit_gpu_hours is not None and limit_gpu_hours <= 0:
         raise ValueError("GPU-hour budget must be positive")
     target = StoragePath(ledger) / LEDGER_VERSION / "budget.json"
     if target.exists():
         budget = GpuBudget(**json.loads(target.read_text()))
+        if limit_gpu_hours is None and budget.limit_gpu_hours is not None:
+            budget = GpuBudget(None, budget.started_at)
+            target.write_text(json.dumps(asdict(budget), sort_keys=True) + "\n")
         if budget.limit_gpu_hours != limit_gpu_hours:
             raise ValueError("Existing campaign budget differs; obtain a new budget ruling")
         return budget
@@ -47,3 +56,37 @@ def campaign_budget(ledger: str, limit_gpu_hours: float) -> GpuBudget:
     target.parent.mkdirs()
     target.write_text(json.dumps(asdict(budget), sort_keys=True) + "\n")
     return budget
+
+
+def record_pool_cost(ledger: str, registry: str, rows: Sequence[LedgerRow]) -> list[LedgerRow]:
+    """Account persistent allocation once, from warm readiness, across overlapping batches and restarts."""
+    now = datetime.now(UTC)
+    additions = []
+    for solver in SELF_HOSTED_SOLVERS:
+        receipt_uri = str(StoragePath(registry) / f"{solver.value}.json")
+        receipt = json.loads(StoragePath(receipt_uri).read_text())
+        source = f"engine-pool:{solver.value}"
+        start = max(
+            (row.recorded_at for row in rows if row.run_id == registry and row.source_id == source),
+            default=receipt["ready_at"],
+        )
+        elapsed = (now - datetime.fromisoformat(start)).total_seconds()
+        if elapsed <= 0:
+            continue
+        additions.append(
+            LedgerRow(
+                receipt["revision"],
+                source,
+                None,
+                solver,
+                digest([registry, solver, start, now.isoformat()]),
+                Outcome.COST,
+                None,
+                registry,
+                receipt["gpu_count"] * elapsed / 3600,
+                now.isoformat(),
+                evidence_uri=receipt_uri,
+            )
+        )
+    append_rows(ledger, additions)
+    return additions

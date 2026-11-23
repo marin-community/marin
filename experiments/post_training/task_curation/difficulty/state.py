@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from finestore.rl.curation import SourceUse
 from finestore.rl.difficulty import Solver
 
 REPAIR_BLOCKED = "blocked"
@@ -117,6 +118,7 @@ class CatalogSource:
     queue_sha256: str
     declaration_json: str | None = None
     backend: str | None = None
+    intended_use: SourceUse | None = None
 
 
 @dataclass(frozen=True)

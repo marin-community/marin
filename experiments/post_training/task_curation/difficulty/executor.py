@@ -6,16 +6,17 @@
 import json
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Protocol
 
 from finestore.rl.difficulty import Solver
 from iris.resources.state import JobState, is_job_finished
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.task_curation.difficulty.budget import GpuBudget, campaign_budget
+from experiments.post_training.task_curation.difficulty.budget import GpuBudget, campaign_budget, record_pool_cost
 from experiments.post_training.task_curation.difficulty.ledger import (
     ACTIONS_DIRECTORY,
     ESCALATIONS_DIRECTORY,
@@ -55,8 +56,9 @@ from experiments.post_training.task_curation.difficulty.state import (
     Outcome,
 )
 
-CONCURRENT_JOB_CAP = 22
-ATTEMPT_JOB_SLOTS = 8
+CONCURRENT_JOB_CAP = 32
+ATTEMPT_JOB_SLOTS = 4
+ATTEMPT_JOBS_PER_SOLVER = 2
 LOGGER = logging.getLogger(__name__)
 
 
@@ -137,7 +139,7 @@ def execute_plan(
     budget: GpuBudget | None = None,
 ) -> dict:
     """Persist submissions after successful submit; a lost reply is recovered by job name."""
-    jobs = backend.jobs()
+    jobs = list(backend.jobs())
     slots = sum(job.slots for job in jobs if job.active)
     recorded = {row.action_id for row in rows if row.action_id}
     submitted, escalated, deferred = [], [], []
@@ -173,6 +175,9 @@ def execute_plan(
             deferred.append(key)
             continue
         if isinstance(action, AttemptBatch):
+            if sum(job.active and job.solver == action.solver for job in jobs) >= ATTEMPT_JOBS_PER_SOLVER:
+                deferred.append(key)
+                continue
             cells = {(source.source_id, action.solver.value) for source in action.sources}
             if cells & claimed:
                 # One in-flight AttemptBatch per cell: concurrent batches would double the
@@ -183,7 +188,12 @@ def execute_plan(
             deferred.append(key)
             continue
         reservation = action_gpu_hour_reservation(action)
-        if budget and reservation and spent + reserved + reservation > budget.limit_gpu_hours:
+        if (
+            budget
+            and budget.limit_gpu_hours is not None
+            and reservation
+            and spent + reserved + reservation > budget.limit_gpu_hours
+        ):
             budget_key = digest([budget.started_at, budget.limit_gpu_hours, "budget-exhausted"])
             if not (StoragePath(ledger) / LEDGER_VERSION / ESCALATIONS_DIRECTORY / f"{budget_key}.json").exists():
                 notifications.write(
@@ -207,6 +217,8 @@ def execute_plan(
             claimed |= {(source.source_id, action.solver.value) for source in action.sources}
         LOGGER.info("DIFFICULTY_SUBMITTED %s", json.dumps({"action_id": key, "job_id": job_id}))
         submitted.append(job_id)
+        if isinstance(action, AttemptBatch):
+            jobs.append(Job(job_id, JobState.PENDING, action.solver, required_slots))
         slots += required_slots
         reserved += reservation
     return {
@@ -229,7 +241,8 @@ def reconcile_once(
     notifications: NotificationSink,
     available_providers: frozenset[Solver],
     available_artifacts: frozenset[str],
-    budget_limit_gpu_hours: float,
+    budget_limit_gpu_hours: float | None,
+    serving_pool: str | None = None,
 ) -> dict:
     """Take one consistent evidence snapshot, execute its plan, then release the lease."""
     if not (StoragePath(ledger) / LEDGER_VERSION / IMPORTS_DIRECTORY / "*.json").glob():
@@ -241,9 +254,19 @@ def reconcile_once(
         with lease_refresh(lease):
             rows = read_rows(ledger)
             rows += collect_finished(rows, backend.jobs(), ledger, notifications)
+            if serving_pool is not None:
+                rows += record_pool_cost(ledger, serving_pool, rows)
             budget = campaign_budget(ledger, budget_limit_gpu_hours)
             cells = cells_for_catalog(rows, catalog, policy)
             actions = plan(cells, rows, available_providers, available_artifacts, ledger_root=ledger)
+            if serving_pool is not None:
+                for index, action in enumerate(actions):
+                    if not isinstance(action, AttemptBatch):
+                        continue
+                    release = (
+                        VLLM_GPU_RELEASE.release_tag if action.solver == Solver.SNOWBALL else action.vllm_release_tag
+                    )
+                    actions[index] = replace(action, max_gpu_hours=0.0, vllm_release_tag=release)
             return execute_plan(actions, rows, catalog, ledger, backend, notifications, budget)
     finally:
         lease.release()

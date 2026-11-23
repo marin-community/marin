@@ -2813,10 +2813,12 @@ probe. The registry schema is documented in
 snapshot every minute. With `--once`, it schedules one plan and stays alive to
 collect those children's terminal results. The lease and content-addressed
 job names prevent duplicate submissions. Repeating an unchanged plan schedules
-nothing. Each attempt batch has at most 20 tasks and a 40 GPU-hour reservation
-bound. The cap is 22 active Difficulty Iris jobs in the owner's namespace, including
-the controller, legacy campaigns and serving children. A candidate or judge
-repair reserves headroom for its serving children before those jobs appear.
+nothing. Each attempt batch has at most 20 tasks. Sources explicitly intended
+for training plan before evaluation and unclassified sources; typed repair
+priority applies within each group. The controller admits at most two attempt
+batches per solver, with sixteen workers per batch. Attempt batches reserve four
+of 32 job slots; CPU repairs reserve one. Persistent engine and controller jobs
+are outside this work queue. A cell keeps at most one in-flight batch.
 Serving keeps compilation and CUDA graphs enabled.
 A cell with an attempt batch already in flight defers a second batch, in the
 same pass and across passes. Attempt waves pull declared images through the
@@ -2828,21 +2830,114 @@ typed error identity.
 Snowball attempt manifests record its established
 `marin-vllm-gpu-20260924-01911be34fac` release tag. The inference launcher selects
 that release's wheel and pins its CUDA Torch ABI independently of the global
-vLLM release. The tag gives corrected Snowball batches new action identities; other
-solver routes retain their existing identities. Controller and child jobs use
+vLLM release. The tag gives corrected standalone Snowball batches new action identities; other
+solver routes retain their existing identities. Persistent GB200 pools use the
+current architecture-qualified Marin GPU wheel and publish their actual engine
+geometry and measurements separately. Controller and child jobs use
 an immutable workspace bundle. A landed runtime fix requires a controller
 replacement. Existing children keep their original code and must finish or be
 replaced separately to use the fix.
 
-`--gpu-hour-budget` is an explicit campaign approval. The first controller binds
+`--gpu-hour-budget` is an explicit finite campaign approval. The first controller binds
 its amount and start time in `v1/budget.json`; controller restarts retain that
 binding. Admission adds recorded GPU-hours since that start to full reservations
 for unfinished GPU actions. It defers a new GPU action if its reservation would
 exceed the budget and emits one retained watchdog escalation. CPU repairs can
 continue. The 800 GPU-hour example is the approved initial candidate budget;
-obtain a new ruling before changing it. Historical costs before the binding do
+obtain a new ruling before changing it. Under the 2026-11-23 Phase 2 ruling,
+`--unlimited-gpu-hours` replaces that finite limit with JSON `null` and preserves
+the accounting start time. It never defers an action for GPU-hour spend.
+Historical costs before the binding do
 not consume the new budget. Estimates exclude hosted API and Daytona charges.
 
+
+### Persistent GB200 solver pools
+
+The Phase 2 allocation is 64 GB200 GPUs on `cw-us-east-08a`, at `INTERACTIVE`
+priority. The checkpoint and tokenizer identities remain those in the
+[protocol pins](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/difficulty_protocol.py). Each engine root stages missing weights through a CPU child in that
+region before reserving accelerator workers. No model weights pass through the
+operator's Mac.
+
+| Solver | GPUs | TP | DP per instance | Pipeline stages | Instances |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| small | 16 | 1 | 4 | 1 | 4 |
+| large | 32 | 2 | 2 | 1 | 8 |
+| snowball | 16 | 1 | 4 | 1 | 4 |
+| hosted (Together GLM-5.3) | 0 | — | — | — | — |
+
+TP means tensor parallelism; DP means data parallelism. The hosted arm stays
+on its Together API model: its HF revision pins a tokenizer, while the served
+weight revision remains opaque. Hosted batches use sixteen workers each, up from the
+previous four-request provider gate.
+
+The initial engines use HBM utilization 0.90, 128 sequences, 16,384 batched
+tokens and prefix caching. Compilation and CUDA graphs remain enabled;
+Snowball uses its ShortConv graph splitting configuration. Before publishing a
+pool receipt, the owner warms the model and measures 128 concurrent requests
+with 256 output tokens. The reported output tokens/s/GPU include prefill and
+HTTP overhead. The CPU-only hosted benchmark uses 32 concurrent requests and
+reports provider output throughput without a GPU denominator. The registry stores the actual geometry, pinned model, endpoint
+name, engine job IDs and warm measurement.
+
+Choose one fresh registry URI for a generation. Launch each self-hosted solver
+root against that same URI, with a unique job name:
+
+```bash
+uv run iris --cluster=marin job run \
+  --job-name atlas-difficulty-engines-small-GENERATION \
+  --target-cluster=cw-us-east-08a --cpu 4 --memory 16GB --disk 64GB \
+  --priority interactive --timeout 259200 --max-retries 0 --no-wait \
+  --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
+  --secret HF_TOKEN env:HF_TOKEN -- python -m \
+  experiments.post_training.task_curation.difficulty.engine_pool \
+  --solver small --registry s3://marin-us-east-08a/marin/rl-data/atlas/difficulty-engine-pools/GENERATION
+```
+
+Repeat for `large` and `snowball`. Running `--solver hosted` instead performs a
+CPU-only provider warm measurement. Give it a unique hosted job name and add
+`--secret TOGETHER_API_KEY gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1`
+to the Iris submission. Then launch the controller:
+
+```bash
+uv run python -m experiments.post_training.task_curation.difficulty reconcile \
+  --unlimited-gpu-hours --serving-pool <registry-uri> \
+  --secrets-env /path/to/private-controller.env
+```
+
+The controller waits for all three
+measured engine receipts, resolves their registered endpoints and reuses them across
+batches. Batch GPU reservations and per-attempt GPU charges are zero for these
+shared engines. The controller records pool allocation cost once, from warm
+readiness; this accounting excludes staging, startup and the warm run.
+`DIFFICULTY_SCORED_RATE` reports scored counts and elapsed-time throughput since
+the controller began dispatching. Workers automatically invoke `python -m shellbox.backends.daytona.usage_cli`
+through `DATA_ADMISSION_COMMAND` in `difficulty/launch.py`; operators do not run
+it separately. It reserves two-thirds of DATA organization capacity as headroom.
+
+Configure launchd to invoke the read-only failure-pattern monitor every ten
+minutes (`StartInterval=600`, `RunAtLoad=true`), from this checkout:
+
+```bash
+uv run --no-sync python -m scripts.ops.difficulty_failure_watch \
+  --ledger s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger \
+  --credentials-env /path/to/private-controller.env
+```
+
+The watchdog root is `~/Documents/experiments/active/job-watchdog/`; alerts
+append to `alerts.jsonl`, and persistent monitor state lives under `state/`.
+The deployed schedule is `~/Library/LaunchAgents/dev.oa.difficulty-failure-patterns.plist`;
+load it with `launchctl bootstrap gui/$(id -u) <plist-path>`.
+
+It merges Finelog `DIFFICULTY_OUTCOME` events with newly published ledger
+partitions, including older workers whose `Recorded` lines omit attempt IDs.
+Any non-scored attempt or typed failure outcome triggers a
+`DIFFICULTY_FAILURE_PATTERN` entry in the watchdog's `alerts.jsonl`. Expected
+control events such as cost accounting and submissions do not trigger alerts.
+Patterns are keyed by source and reason, counted by distinct attempt ID, and
+include up to three real examples. A pattern with more failures re-alerts at
+most hourly. Persistent state under the watchdog's `state/` directory retains
+counts and deduplication across invocations. The monitor never changes jobs.
 
 Difficulty uses the DATA organization (`DAYTONA_DATA_API_KEY`) for declarative
 sandboxes under ruling 71. The launcher forwards that dedicated credential and

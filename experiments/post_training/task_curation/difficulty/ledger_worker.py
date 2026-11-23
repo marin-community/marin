@@ -95,6 +95,20 @@ def record_attempt(
         row.reason or "-",
         hours,
     )
+    LOGGER.info(
+        "DIFFICULTY_OUTCOME %s",
+        json.dumps(
+            {
+                "source_id": row.source_id,
+                "task_id": row.task_id,
+                "attempt_id": row.attempt_id,
+                "outcome": row.outcome,
+                "reason": row.reason,
+                "evidence_uri": row.evidence_uri,
+            },
+            sort_keys=True,
+        ),
+    )
 
 
 def execute_task(

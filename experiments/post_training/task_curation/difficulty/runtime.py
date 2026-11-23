@@ -18,9 +18,11 @@ from types import MappingProxyType
 import httpx
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SamplingSettings, Solver
 from huggingface_hub import hf_hub_download
+from iris.client.client import iris_ctx
 from iris.rpc.proto_display import priority_band_value
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import VllmEngineConfig
 from marin.inference.iris import remote_inference
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -34,6 +36,7 @@ from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOU
 from experiments.post_training.task_curation.difficulty_config import (
     DATA_ACCOUNT,
     DECLARED_JUDGE_PINS,
+    SELF_HOSTED_SOLVERS,
     TASK_PROVIDER_SECRETS,
     TOGETHER_API_KEY_ENV,
     CandidateRun,
@@ -102,10 +105,20 @@ LOGGER = logging.getLogger(__name__)
 PRIORITY_CHOICES = ("production", "interactive", "batch", "system")
 MODEL_CACHE_ROOT = "s3://marin-rno2a"
 NATIVE_CONTEXT_SAFETY_BUFFER = 0
-# A hosted endpoint queues probes behind hosted traffic; a retry succeeds once
-# the queue drains instead of killing the campaign (hosted-v13c died on a
-# single probe ReadTimeout).
+# A hosted endpoint queues probes behind hosted traffic; retry after its queue drains.
 SERVING_PROBE_ATTEMPTS = 3
+
+
+def solver_pool_record(solver: Solver, registry: str) -> dict:
+    record = json.loads((StoragePath(registry) / f"{solver.value}.json").read_text())
+    if record["model"] != SOLVER_MODELS[solver] or record["revision"] != PINS[solver].revision:
+        raise ValueError("Solver pool differs from the protocol's pinned checkpoint")
+    return record
+
+
+def solver_pool_connection(record: dict) -> tuple[str, str, str, list[str]]:
+    address = iris_ctx().client.resolve_endpoint(record["endpoint_name"]).rstrip("/")
+    return address + "/v1", record["model"], "EMPTY", []
 
 
 def probe_with_transient_retries(
@@ -417,6 +430,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--solver", type=Solver, choices=list(Solver), required=True)
+    parser.add_argument("--solver-pool", help="Immutable measured registry for persistent regional engines")
     parser.add_argument("--sources", required=True)
     parser.add_argument("--sources-sha256", required=True)
     parser.add_argument("--source-id", action="append")
@@ -495,10 +509,10 @@ def main() -> None:
     )
     settings = sampling_settings(args.solver, deviations)
     provider_limits = ProviderLimits(
-        max_in_flight=4 if args.solver == Solver.HOSTED else args.workers,
+        max_in_flight=4 if args.solver == Solver.HOSTED and args.solver_pool is None else args.workers,
         attempts=6 if args.solver == Solver.HOSTED else 1,
     )
-    judge_limits = ProviderLimits(max_in_flight=1, attempts=6) if has_judge else None
+    judge_limits = ProviderLimits(max_in_flight=min(8, args.workers), attempts=6) if has_judge else None
     has_daytona = any(task.backend == "daytona" and task.reason is None for source in prepared for task in source.tasks)
     daytona_api_key = None
     if has_daytona:
@@ -517,7 +531,25 @@ def main() -> None:
             )
         daytona_api_key = require_secret("DAYTONA_DATA_API_KEY")
         require_daytona_connection_environment(daytona_api_key)
-    with solver_endpoint(args.solver, settings, priority_band_value(args.priority)) as (
+    pool = (
+        solver_pool_record(args.solver, args.solver_pool)
+        if args.solver_pool is not None and args.solver in SELF_HOSTED_SOLVERS
+        else None
+    )
+    if pool is not None:
+        model_definition = pool["effective_serving"]
+        gpu_release = asdict(VLLM_GPU_RELEASE)
+    elif args.solver in SELF_HOSTED_SOLVERS:
+        model_definition = asdict(serving_model(args.solver, settings.context_tokens))
+        gpu_release = asdict(solver_vllm_release(args.solver))
+    else:
+        model_definition = gpu_release = None
+    route = (
+        nullcontext(solver_pool_connection(pool))
+        if pool is not None
+        else solver_endpoint(args.solver, settings, priority_band_value(args.priority))
+    )
+    with route as (
         endpoint,
         api_model,
         api_key,
@@ -538,7 +570,7 @@ def main() -> None:
             judge_metadata = None
             if has_judge:
                 if judge_tier is None:
-                    if args.solver == Solver.HOSTED:
+                    if args.solver == Solver.HOSTED and shared_judge_model is None and pool is None:
                         judge_probe = probe
                     else:
                         judge_probe = probe_with_transient_retries(
@@ -614,7 +646,11 @@ def main() -> None:
                         "serving_probe": judge_probe,
                     }
             completion = probe["tools_thinking_probe"]["completion"]
-            revision = f"unexposed:{completion['system_fingerprint']}" if args.solver == Solver.HOSTED else pin.revision
+            revision = (
+                f"unexposed:{completion['system_fingerprint']}"
+                if args.solver == Solver.HOSTED and pool is None
+                else pin.revision
+            )
             receipt = write_json_evidence(
                 output / "serving.json",
                 {
@@ -624,17 +660,16 @@ def main() -> None:
                     "requested_revision": pin.revision,
                     "tokenizer_revision": pin.revision,
                     "chat_template_sha256": pin.template_sha256,
-                    "model_definition": (
-                        None
-                        if args.solver == Solver.HOSTED
-                        else asdict(serving_model(args.solver, settings.context_tokens))
-                    ),
+                    "model_definition": model_definition,
                     "serving_jobs": jobs,
+                    "solver_pool": pool,
                     "judge_serving_jobs": judge_jobs,
                     "placement": {
-                        "root_target_cluster": TARGET_CLUSTER,
+                        "root_target_cluster": "cw-us-east-08a" if args.solver_pool is not None else TARGET_CLUSTER,
                         "child_region_constraint": None,
-                        "model_cache_root": MODEL_CACHE_ROOT,
+                        "model_cache_root": (
+                            "s3://marin-us-east-08a" if args.solver_pool is not None else MODEL_CACHE_ROOT
+                        ),
                         "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
                     },
                     "sampling": request_parameters(settings),
@@ -643,9 +678,7 @@ def main() -> None:
                     "judge": judge_metadata,
                     "native_client_context_safety_buffer_tokens": NATIVE_CONTEXT_SAFETY_BUFFER,
                     "compilation_and_cuda_graphs_requested": True,
-                    "vllm_gpu_release": (
-                        None if args.solver == Solver.HOSTED else asdict(solver_vllm_release(args.solver))
-                    ),
+                    "vllm_gpu_release": gpu_release,
                     **probe,
                 },
             )
@@ -667,7 +700,8 @@ def main() -> None:
                 "environment_options": options,
                 "daytona_provisioning": args.daytona_provisioning,
                 "workers": args.workers,
-                "gpu_count": pin.gpus,
+                # Persistent pool allocation is accounted once by its owner, not by every concurrent batch.
+                "gpu_count": 0 if pool is not None else pin.gpus,
                 "attempts_per_task": args.attempts_per_task,
                 "judge": (
                     None
