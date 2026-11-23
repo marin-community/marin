@@ -647,7 +647,7 @@ def settings_config(**settings: object) -> TaskforgeConfig:
 
 def decided(wp: Workpiece, setup: TaskforgeConfig) -> tuple[Decision, Workpiece]:
     decision = default_review(wp, setup.band, setup.budget)
-    return decision, apply_decision(wp, decision, setup.budget, setup.policy)
+    return decision, apply_decision(wp, decision, setup)
 
 
 def reviewed_round(proposal: TaskProposal, setup: TaskforgeConfig) -> Workpiece:
@@ -1064,8 +1064,7 @@ def test_a_restore_reports_the_round_that_ships(proposal: TaskProposal, ending: 
         (
             (1.0, 1.0),
             False,
-            "2 of 2 trials solved: too_easy. Make the task harder while preserving correct controls and grading. "
-            "This is the one hardening attempt.",
+            "2 of 2 trials solved: too_easy. Make the task harder while preserving correct controls and grading.",
         ),
         (
             (0.0, 0.0),

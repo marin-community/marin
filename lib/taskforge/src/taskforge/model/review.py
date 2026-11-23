@@ -480,6 +480,8 @@ class Budget:
     max_validation_retries: int
     max_missing_trials: int
     """Solver slots a round may lack and still be placed over its scored ones; more hold it."""
+    final_revisions: int
+    """Revisions the final review may ask for, outside ``max_modify_rounds``; past them its findings are notes."""
 
 
 VALIDATION_RESULT = TypeAdapter(ValidationResult)

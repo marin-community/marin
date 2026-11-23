@@ -10,6 +10,7 @@
   "budget.max_validation_retries": 2,
   "budget.max_modify_rounds": 2,
   "budget.max_missing_trials": 0,
+  "budget.final_revisions": 1,
   "tools.output_chars": 20000,
   "sandbox.memory_mb": 8192,
   "sandbox.output_budget_mb": 1024,

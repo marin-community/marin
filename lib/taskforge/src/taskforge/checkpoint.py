@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal (format 11; its layout is in the README) under one fenced writer.
+"""Publish a workpiece's journal (format 12; its layout is in the README) under one fenced writer.
 
 Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
 advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.
@@ -32,13 +32,17 @@ from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFail
 from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 
-JOURNAL_FORMAT = 11
-"""Format 11 records a ``schema.author_reference`` row: the TaskSpec and Control schemas a root's author is shown,
+JOURNAL_FORMAT = 12
+"""Format 12 words two author requests otherwise: a final revision's request ends with its ordinal (``This is final
+revision N of M.``), and a too-easy placement's line no longer calls the round the one hardening attempt. Its rows
+decode as format 11's, so the usage report reads every format-8 to format-12 root, but this writer claims only
+format-12 roots: a resumed format-11 author would send requests its recorded calls did not, and buy answers its
+recorded sandbox history refuses.
+Format 11 records a ``schema.author_reference`` row: the TaskSpec and Control schemas a root's author is shown,
 generated once from the installed models and replayed by every later visit and launch. Format-10 readers cannot
-decode that row; at 11 they refuse the root as another format. Every format-8, 9 and 10 row means the same at 11, so
-the usage report reads them, but this writer claims none of those roots: their recorded author calls embedded a
-reference this writer cannot reproduce, so a resumed author would buy different answers that the sandbox history it
-recorded refuses. Such a root stays with its own writer or is rerun at a fresh output prefix.
+decode that row; at 11 they refuse the root as another format. A format-11 writer claimed no earlier root: their
+recorded author calls embedded a reference it cannot reproduce. Such a root stays with its own writer or is rerun at a
+fresh output prefix.
 Format 10 names the role that paid for each physical cached resolution (a row's ``billed``, outside the event), so
 the usage report no longer guesses it from overlapping scopes; request digests and replay keys are unchanged. Every
 format-8 and format-9 row means the same at 10, so a format-10 writer resumed both; the report
@@ -65,7 +69,7 @@ submission named by digest; format 4 hydrated each trial without a detail and re
 Format 4 records adversary findings as a defect direction with observed and deserved grades; format 3 recorded an
 expected reward band, which cannot establish a deserved reward. Format 3 links sandbox rows to their environment
 owners; format 2 replayed them by content, without owners."""
-READABLE = frozenset({8, 9, 10, JOURNAL_FORMAT})
+READABLE = frozenset({8, 9, 10, 11, JOURNAL_FORMAT})
 """The head formats whose rows this code decodes, for the usage report; a writer claims only ``JOURNAL_FORMAT``."""
 FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "workpiece.json"})
 """Format 1 named events by module path and wrote these objects beside its stream; any one marks its root."""

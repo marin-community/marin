@@ -67,12 +67,10 @@ def exhausted_notes(result: ValidationResult) -> tuple[str, ...]:
 
 INSTRUCTIONS = {
     BandOutcome.IN_BAND: "Keep the difficulty.",
-    BandOutcome.TOO_EASY: (
-        "Make the task harder while preserving correct controls and grading. This is the one hardening attempt."
-    ),
+    BandOutcome.TOO_EASY: "Make the task harder while preserving correct controls and grading.",
     BandOutcome.TOO_HARD: "Make the task more tractable while preserving its objective, correct controls and grading.",
 }
-"""What each placement asks of the author, as live Forge words it."""
+"""What each placement asks of the author."""
 
 
 def band_line(result: ValidationResult, band: BandRules) -> tuple[BandOutcome, str]:
@@ -135,13 +133,20 @@ def accepted(decision: Decision, workpiece: Workpiece) -> Decision:
 
 
 def final_revision(workpiece: Workpiece) -> Revise | None:
-    """The final review's revision, once one was asked for: the workpiece then keeps no fallback."""
-    return next((item for item in workpiece.decisions if isinstance(item, Revise)), None)
+    """The latest revision the final review asked for, once one was: the workpiece then keeps no fallback."""
+    return next((item for item in reversed(workpiece.decisions) if isinstance(item, Revise)), None)
 
 
-def unrevised(revise: Revise, why: str, details: Sequence[str] = ()) -> Abandon:
-    """Owner's decisions (a, b), 2026-11-21: a fault in, or the author stopping, the final review's one revision
-    abandons the task; nothing ships against a revise finding. The abandonment keeps why and the finding."""
+def revision_left(workpiece: Workpiece, budget: Budget) -> bool:
+    return sum(isinstance(item, Revise) for item in workpiece.decisions) < budget.final_revisions
+
+
+def unrevised(revise: Revise | None, why: str, details: Sequence[str] = ()) -> Abandon:
+    """A fault in a final revision, a fault or a refused placement in a confirmation with no revision left, or the
+    author stopping a final revision, abandons the task: nothing is kept to restore, and nothing ships against a revise
+    finding. The abandonment keeps why and the finding."""
+    if revise is None:
+        return Abandon((f"{CONFIRMATION_FAILED}: {why}", *details))
     unresolved = (f"Unresolved final-review finding: {finding.description}" for finding in revise.review)
     return Abandon((f"{CONFIRMATION_REVISION_FAILED}: {why}", *details, *revise.findings, *unresolved))
 
@@ -165,20 +170,23 @@ def band_only(decision: Decision) -> bool:
 
 
 def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
-    """Owner's ruling (2026-11-12): placement tags a task and never filters it; live Forge's three decisions, in order.
+    """The decision on a round. Placement in a band the policy accepts (``band.accepted``) tags a task and never
+    filters it, and a band change is never a regression; a refused band is never accepted: it asks for revision
+    rounds within the shared budget, restores an accepted fallback, or is abandoned once the budget is spent.
 
-    A clean revision placed out of its fallback's band is accepted at its own placement, tagged; otherwise an out-of-band
-    task gets one band-only round (``band_only``) within the shared budget and is then accepted tagged. Review findings
-    join a round's modification, or turn its acceptance into one at its placement, while the shared budget has a round
-    left, and are the acceptance's notes after. A faulted revision restores the fallback, named by digest and band.
+    In order: a clean revision placed in an accepted band other than its fallback's is accepted at its own placement,
+    tagged; otherwise an out-of-band task gets one band-only round (``band_only``) within the shared budget and is then
+    accepted tagged. Review findings join a round's modification, or turn its acceptance into one at its placement,
+    while the shared budget has a round left, and are the acceptance's notes after. A faulted revision restores the
+    fallback, named by digest and band.
 
-    After the final review's revision (``Revise``) a clean round is accepted at its placement whatever the band, and
-    goes on to its confirmation; review findings are notes, and a fault abandons the task, as live Forge does: that
-    revision keeps no fallback. A confirmation record is ``confirmation_review``'s.
+    After a final revision (``Revise``) a clean round is accepted at its placement whatever the band, pending the
+    confirmation that places it again; review findings are notes, and a fault abandons the task: a final revision
+    keeps no fallback. A confirmation record is ``confirmation_review``'s.
     """
     result = workpiece.evidence[-1]
     if result.confirms is not None:
-        return confirmation_review(workpiece, band)
+        return confirmation_review(workpiece, band, budget)
     decision = assess(result, band, budget.max_missing_trials)
     if isinstance(decision, Incomplete):
         retryable = [
@@ -226,22 +234,27 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
 
 
 CONFIRMATION_REVISION_FAILED = "Confirmation revision failed"
-"""The first reason of the ``Abandon`` when the final review's one revision has a fault and nothing can be kept."""
+"""The first reason of the ``Abandon`` when a final revision has a fault and nothing can be kept."""
+CONFIRMATION_FAILED = "Confirmation failed"
+"""The first reason of the ``Abandon`` when a confirmation fails and no final revision is left to repair it."""
 
 
-def confirmation_review(workpiece: Workpiece, band: BandRules) -> Decision:
-    """Live Forge's decision on a confirmation record, after the round's own assessment: a fault in the new trials (an
-    invalid task, a grader fault) or an exhausted trial budget is decided as validation decides it, so only valid
-    scores and generation limits are placed; unscored slots are named and excluded (owner's decision e). The placement
-    of the shipped submission over every scored trial re-tags it, accepted whatever the band (decision c).
+def confirmation_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
+    """The decision on a confirmation record, after the round's own assessment: a fault in the new trials (an invalid
+    task, a grader fault) or an exhausted trial budget is decided as validation decides it, so only valid scores and
+    generation limits are placed; unscored slots are named and excluded. The placement of the shipped submission over
+    every scored trial re-tags it.
 
-    The final review's NEW revise findings, or a fault, buy its one revision outside the shared budget (``Revise``,
-    decision d); a finding an earlier review gave counts again only as a failed fix, after the author revised for it.
-    After that revision they are notes. The acceptance ships the record's notes (decision f: every earlier and new
-    note its trials still support, each once) and its missing evidence, each item once: never a hold."""
+    The final review's NEW revise findings, a fault or a placement the policy refuses (``band.accepted``) buy a
+    revision outside the shared budget (``Revise``) while ``budget.final_revisions`` has one left; a finding an earlier
+    review gave counts again only as a failed fix, after the author revised for it. With none left, revise findings are
+    notes, and a fault or a refused placement abandons the task. The acceptance ships the record's notes (every earlier
+    and new note its trials still support, each once) and its missing evidence, each item once: never a hold."""
     result, pending = workpiece.evidence[-1], workpiece.decisions[-1]
-    assert isinstance(pending, Accept), "a confirmation follows the acceptance it confirms"
-    review, revise = result.review, final_revision(workpiece)
+    assert (
+        isinstance(pending, Accept) and result.confirms is not None
+    ), "a confirmation follows the acceptance it confirms"
+    review, revise, left = result.review, final_revision(workpiece), revision_left(workpiece, budget)
     decision = assess(result, band, len(result.solver))  # every unscored slot excluded; held ones held in the batch
     if isinstance(decision, Reject | Incomplete):
         return decision
@@ -250,21 +263,41 @@ def confirmation_review(workpiece: Workpiece, band: BandRules) -> Decision:
     asked = () if review is None else review.findings
     fresh = tuple(f for f in asked if same(f) not in known or same(f) in fixed)
     faults = decision.findings if isinstance(decision, Modify) and decision.placement is None else ()
+    notes = unique((*(f for f in asked if f not in fresh), *(() if review is None else review.notes)))
+    if faults:
+        return Revise(faults, fresh, notes=notes) if left else unrevised(revise, "its confirmation has a fault", faults)
     place, line = band_line(result, band)
-    if faults and revise:
-        return unrevised(revise, "its confirmation has a fault", faults)
-    if (faults or fresh) and not revise:
-        notes = (*(f for f in asked if f not in fresh), *(() if review is None else review.notes))
-        return Revise(faults or (line,), fresh, notes=unique(notes), placement=None if faults else place)
+    if (fresh or place not in band.accepted) and left:
+        return Revise((line,), fresh, notes=notes, placement=place)
+    if place not in band.accepted:
+        return refused_band(workpiece, budget, line, revise, asked)
     reasons = (*tagged(place), f"Confirmation: {line.split('. ')[0]}", *unscored(result))
-    reasons += ("The final review's revision is used: its revise findings are recorded as notes",) * bool(
-        revise and asked
+    reasons += ("No final revision is left: the final review's revise findings are recorded as notes",) * bool(
+        asked and not left
     )
     absent = [trial.trial for trial in result.solver if missing(trial)]
     found = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, "no final review ran"),) if review is None else review.missing
     found += (MissingEvidence(EvidenceKind.CONFIRMATION_TRIALS, f"solver trials {absent} have no score"),) * bool(absent)
     kept = tuple(reason for reason in pending.reasons if reason not in tagged(pending.band))
     return Accept(place, (*reasons, *kept), missing=tuple(dict.fromkeys((*pending.missing, *found))), notes=result.notes)
+
+
+def refused_band(
+    workpiece: Workpiece, budget: Budget, line: str, revise: Revise | None, asked: Sequence[ReviewFinding]
+) -> Abandon:
+    """A confirmation placed in a band the policy refuses, with no final revision left: the abandonment names the
+    placement, the setting and the spent budget. A final revision's finding is unresolved only when this final review
+    reports it again or the author's latest answer to it, on the history a restore kept, declined it."""
+    count, place = line.split(". ")[0].rsplit(": ", 1)
+    setting = "band.accept_too_easy is false" if place == BandOutcome.TOO_EASY else f"the policy refuses {place}"
+    first = CONFIRMATION_FAILED if revise is None else CONFIRMATION_REVISION_FAILED
+    spent = f"budget.final_revisions ({budget.final_revisions}) is spent"
+    why = f"{first}: confirmation placed {place} ({count}); {setting} and {spent}"
+    reported = {same(f) for f in asked}
+    latest = {same(r.finding): r.response for r in workpiece.responses if not r.discarded}  # later answers override
+    declined = {key for key, response in latest.items() if response is Response.DECLINED}
+    unresolved = [f for f in (revise.review if revise else ()) if same(f) in reported | declined]
+    return Abandon((why, *(f"Unresolved final-review finding: {finding.description}" for finding in unresolved)))
 
 
 def failed_fixes(workpiece: Workpiece, shipped: int | None) -> set[tuple[str, str, str]]:
