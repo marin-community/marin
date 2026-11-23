@@ -71,7 +71,13 @@ from experiments.post_training.long_loop.exp4 import (
 )
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_steps
 from experiments.post_training.long_loop.nvl72 import MochiProfile, build_run, validate_model_geometry
-from experiments.post_training.long_loop.openresearcher_service import OpenResearcherService
+from experiments.post_training.long_loop.openresearcher_service import (
+    OpenResearcherService,
+    retrieval_launch,
+    run_with_retrieval,
+    service_execution,
+    service_recipe,
+)
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.rl import curriculum_validation_callbacks
@@ -213,6 +219,8 @@ class RoundRl:
     gpu_variant: str = "GB200"
     draft: str | None = None
     """Registered speculative-decoding draft to serve during rollout; ``None`` keeps plain decoding."""
+    openresearcher_service: OpenResearcherService | None = None
+    """Required when the round's pools carry the OpenResearcher route; binds its retrieval service."""
 
 
 @dataclass(frozen=True)
@@ -459,6 +467,8 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
     rl = spec.rl
     roles = draccus.decode(SkyRLRolePlan, rl.role_plan)
     execution = runtime_execution(rl.execution)
+    if rl.openresearcher_service is not None:
+        execution = service_execution(execution)
     job_limit = 2 * 3600 if smoke else 48 * 3600
     if execution.cluster != spec.cluster or execution.job_timeout_seconds != job_limit:
         raise ValueError("Adopted RL requires the round cluster and a 48-hour job limit (two hours for smoke)")
@@ -516,6 +526,18 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
     if set(declared_routes) != set(pools_manifest["routes"]):
         raise ValueError("Round source routes differ from the pools manifest's teacher-route map")
     recipe["trainer"]["rollout_buffer"]["source_routes"] = routes
+    service = rl.openresearcher_service
+    admission = pools_manifest.get("openresearcher")
+    if (service is None) != (admission is None):
+        raise ValueError(
+            "The round's OpenResearcher service binding must match the pools manifest's openresearcher admission"
+        )
+    if service is not None:
+        for field in ("dataset_id", "dataset_revision", "parquet_sha256"):
+            if admission[field] != getattr(service, field):
+                raise ValueError(f"OpenResearcher service {field} differs from the published pools")
+        machines = service_recipe().to_skyrl()["environment"]["task_sessions"]["task_spec"]["task_machine_by_dataset"]
+        recipe["environment"]["task_sessions"]["task_spec"]["task_machine_by_dataset"] = machines
     for callback in recipe["trainer"]["callbacks"]:
         if callback["type"] == "best_checkpoint":
             callback["expected_tasks"] = curriculum.validation.size
@@ -557,7 +579,20 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
                     raise ValueError(f"Round data changed: {rl.pools['uri']}/{name}")
         return original_build(context)
 
-    return dataclasses.replace(step, build_config=verified_build)
+    step = dataclasses.replace(step, build_config=verified_build)
+    if rl.openresearcher_service is not None:
+        relative_path = "OpenResearcher:OpenResearcher-Dataset/train.parquet"
+        step = dataclasses.replace(
+            step,
+            run=partial(
+                run_with_retrieval,
+                launch=retrieval_launch(rl.openresearcher_service, execution),
+                parquet_relative_path=relative_path,
+                parquet_sha256=pools_manifest["files"][relative_path],
+            ),
+        )
+        step = dataclasses.replace(step, expected_fingerprint=step.fingerprint())
+    return step
 
 
 def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:

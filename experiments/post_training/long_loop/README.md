@@ -1045,6 +1045,16 @@ with an expert-parallel target from the pinned serving wheel
 enabled; verify the serving pin stays consistent with the SkyRL lock
 (`tests/test_serving_pin.py`).
 
+### OpenResearcher pools on adopted RL rounds
+
+An adopted RL round whose pools carry the OpenResearcher route must bind
+`rl.openresearcher_service` (dataset id, revision, regional index URI and the
+pinned Parquet SHA-256). The runner cross-checks the binding against the
+pools manifest's `openresearcher` admission, applies the service's task-machine
+contract, rides the judge credential source, and starts an attempt-owned
+retrieval service around the RL run. A binding without the route — or the
+route without a binding — fails; the resolved plan records the binding.
+
 `rounds/exp4-recovery.yaml` rebuilds the downstream RL recovery graph for version `2026.11.19.82` from a
 hash-pinned plan and completed SFT/handoff records. It preserves the recorded
 72-hour job limit and 12-hour learning budget for historical reproduction.

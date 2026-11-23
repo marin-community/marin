@@ -16,6 +16,7 @@ from marin.rl.curriculum import PoolRow, consumed_route_quotas, validation_paylo
 
 from experiments.post_training.long_loop.archive import assert_best_rl_checkpoint
 from experiments.post_training.long_loop.launch_validation import validate_launch
+from experiments.post_training.long_loop.openresearcher_service import OpenResearcherService, run_with_retrieval
 from experiments.post_training.long_loop.round_runner import (
     DRAFTS,
     adopted_round_resolved_plan,
@@ -438,3 +439,90 @@ def test_round_rejects_a_registered_draft_alongside_an_explicit_block(local_roun
     spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe, draft=_DRAFT_NAME))
     with pytest.raises(ValueError, match="registered draft and an explicit"):
         adopted_round_rl(spec)
+
+
+_OPENRESEARCHER_PATH = "OpenResearcher:OpenResearcher-Dataset/train.parquet"
+
+
+def _exp5_style_pools(root, *, with_openresearcher: bool) -> dict:
+    """Rewrite the fixture pools to the eleven-source Exp5 composition with route metadata."""
+    manifest = json.loads((root / "manifest.json").read_text())
+    label = "OpenResearcher:OpenResearcher-Dataset"
+    content = f"pinned {label} pool".encode()
+    (root / label).mkdir(parents=True, exist_ok=True)
+    (root / label / "train.parquet").write_bytes(content)
+    manifest["files"][f"{label}/train.parquet"] = hashlib.sha256(content).hexdigest()
+    manifest["composition"][label] = 283
+    manifest["routes"][label] = "nonagentic"
+    if with_openresearcher:
+        manifest["openresearcher"] = {
+            "dataset_id": "OpenResearcher/OpenResearcher-Dataset",
+            "dataset_revision": "test-revision",
+            "parquet_sha256": hashlib.sha256(content).hexdigest(),
+        }
+    else:
+        manifest.pop("openresearcher", None)
+    (root / "manifest.json").write_text(json.dumps(manifest))
+    return manifest
+
+
+def _exp5_style_round(round_spec, *, with_openresearcher: bool):
+    """Rewrite the fixture pools to the eleven-source Exp5 composition and declare its routes."""
+    root = Path(round_spec.rl.pools["uri"])
+    manifest = _exp5_style_pools(root, with_openresearcher=with_openresearcher)
+    recipe = copy.deepcopy(round_spec.rl.recipe)
+    recipe["trainer"]["rollout_buffer"]["source_routes"] = dict(manifest["routes"])
+    recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
+    return dataclasses.replace(round_spec, rl=dataclasses.replace(round_spec.rl, recipe=recipe))
+
+
+def _service_binding() -> OpenResearcherService:
+    return OpenResearcherService(
+        dataset_id="OpenResearcher/OpenResearcher-Dataset",
+        dataset_revision="test-revision",
+        index_uri="s3://marin-us-east-08a/marin/users/benfeuer/openresearcher/index",
+        parquet_sha256=hashlib.sha256(b"pinned OpenResearcher:OpenResearcher-Dataset pool").hexdigest(),
+    )
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_requires_openresearcher_service_when_pools_carry_the_route(round_inputs, local_round):
+    spec = _exp5_style_round(local_round, with_openresearcher=True)
+    with pytest.raises(ValueError, match="OpenResearcher service binding"):
+        adopted_round_rl(spec)
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_rejects_a_service_binding_without_openresearcher_pools(round_inputs, local_round):
+    spec = _exp5_style_round(local_round, with_openresearcher=False)
+    spec = dataclasses.replace(spec, rl=dataclasses.replace(spec.rl, openresearcher_service=_service_binding()))
+    with pytest.raises(ValueError, match="OpenResearcher service binding"):
+        adopted_round_rl(spec)
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_openresearcher_binding_matches_the_published_admission(round_inputs, local_round):
+    spec = _exp5_style_round(local_round, with_openresearcher=True)
+    binding = dataclasses.replace(_service_binding(), dataset_revision="other-revision")
+    spec = dataclasses.replace(spec, rl=dataclasses.replace(spec.rl, openresearcher_service=binding))
+    with pytest.raises(ValueError, match="dataset_revision differs from the published pools"):
+        adopted_round_rl(spec)
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_openresearcher_service_wires_machine_contract_and_retrieval_run(round_inputs, local_round, tmp_path):
+    spec = _exp5_style_round(local_round, with_openresearcher=True)
+    spec = dataclasses.replace(
+        spec, rl=dataclasses.replace(spec.rl, openresearcher_service=_service_binding(), max_steps=2)
+    )
+    terminal = adopted_round_rl(spec)
+    assert terminal.run.func is run_with_retrieval
+    assert terminal.run.keywords["parquet_relative_path"] == _OPENRESEARCHER_PATH
+    context = StepContext.for_run(
+        str(tmp_path / "service-run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+    machine = launch["skyrl"]["environment"]["task_sessions"]["task_spec"]["task_machine_by_dataset"]
+    assert machine["OpenResearcher/OpenResearcher-Dataset"]["backend"] == "daytona"
+    buffer = launch["skyrl"]["trainer"]["rollout_buffer"]
+    assert buffer["source_routes"]["OpenResearcher/OpenResearcher-Dataset"] == "nonagentic"
