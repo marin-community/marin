@@ -52,16 +52,17 @@ from experiments.evaluation.knotmeter.workload import check_native_cache, restor
 
 logger = logging.getLogger(__name__)
 
+_PROBE_HTTP_TIMEOUT = 180.0
+
 
 def _request(tokens: list[int], request_id: int, generated: int) -> Request:
     params = dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.int32(len(tokens) + generated))
     return Request(tokens, request_id, params, n_generations=1)
 
 
-def _warmup(server: InferenceServer, capture_routes: bool) -> None:
+def _warmup(server: InferenceServer, capture_routes: bool, filler: int) -> None:
     ctx = server.inference_context
     config = ctx.engine.config
-    filler = ctx.tokenizer.encode(" example", add_special_tokens=False)[0]
     with ctx.model_lock, ctx.config.trainer.use_device_mesh(), hax.axis_mapping(ctx.config.trainer.compute_axis_mapping):
         ctx.engine.generate([_request([filler], 0, 2)], capture_routes=capture_routes)
         for index, lower in enumerate(config.prefill_bucket_sizes):
@@ -89,7 +90,9 @@ def _check_chat_stream(server_url: str, model: str, capture_routes: bool) -> Non
     }
     completed = False
     route_frame = False
-    with httpx.stream("POST", f"{server_url}/v1/chat/completions", json=request, timeout=180.0) as response:
+    with httpx.stream(
+        "POST", f"{server_url}/v1/chat/completions", json=request, timeout=_PROBE_HTTP_TIMEOUT
+    ) as response:
         response.raise_for_status()
         for line in response.iter_lines():
             if not line.startswith("data: "):
@@ -110,7 +113,7 @@ def _check_binary_context_limit(server_url: str, token: int, max_context: int) -
         f"{server_url}{GENERATE_PATH}",
         headers={"content-type": MEDIA_TYPE},
         content=encode_frame({"max_tokens": 1, "temperature": 0}, {PROMPT_TOKEN_IDS: prompt}),
-        timeout=180.0,
+        timeout=_PROBE_HTTP_TIMEOUT,
     )
     response.raise_for_status()
     _, tensors = decode_frame(response.content)
@@ -174,7 +177,8 @@ def main() -> None:
         logger.info("Loaded Snowball and KV in %.1f seconds", time.monotonic() - started)
         try:
             warmup_started = time.monotonic()
-            _warmup(server, args.capture_routes)
+            filler = tokenizer.encode(" example", add_special_tokens=False)[0]
+            _warmup(server, args.capture_routes, filler)
             with bind_serving_socket("127.0.0.1", 0) as sock:
                 server_url = f"http://127.0.0.1:{sock.getsockname()[1]}"
                 command = benchmark_command(series, args.concurrency, server_url, output / "aiperf_artifacts")
@@ -205,7 +209,6 @@ def main() -> None:
                         timeout=series["warmup_grace_period"] + series["duration"] + 300,
                         sample=output / "client-load.jsonl",
                     )
-                    filler = tokenizer.encode(" example", add_special_tokens=False)[0]
                     _check_binary_context_limit(server_url, filler, config.max_seq_len)
                 profile = json.loads((output / PROFILE_EXPORT_RELATIVE_PATH).read_text())
                 if profile.get("was_cancelled") or profile.get("request_count", {}).get("avg", 0) == 0:
