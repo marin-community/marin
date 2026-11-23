@@ -16,6 +16,7 @@ from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import OUT, ArtifactStep, apply, lower
 from marin.execution.step_runner import StepRunner
 from marin.training.drafting.dspark_data import (
+    DraftDataConfig,
     DraftRecipe,
     GrugShape,
     inspect_mix,
@@ -27,6 +28,8 @@ from marin.training.drafting.dspark_distillation import (
     SPECULATORS_REVISION,
     VLLM_SOURCE_COMMIT,
     TrainingProvenance,
+    require_qualified_teacher,
+    require_supported_vllm_release,
     train_and_export,
 )
 from rigging.filesystem.cluster_config import marin_prefix
@@ -83,10 +86,12 @@ class OfflineDSpark:
 
     def training_recipe(self) -> DraftRecipe:
         return DraftRecipe(
-            shape=_SHAPES[self.teacher.family],
+            data=DraftDataConfig(
+                shape=_SHAPES[self.teacher.family],
+                mask_token_id=128004,
+                max_sequence_length=self.max_sequence_length,
+            ),
             feature_taps=_FEATURE_TAPS[self.teacher.family],
-            mask_token_id=128004,
-            max_sequence_length=self.max_sequence_length,
             max_anchors=self.max_anchors,
             max_steps=self.max_steps,
             trainer_ranks=self.trainer_ranks,
@@ -102,6 +107,7 @@ class OfflineDSpark:
 def artifacts(config: OfflineDSpark) -> tuple[ArtifactStep, ArtifactStep]:
     """Bind the prepared dataset and published DSpark draft artifact."""
 
+    require_supported_vllm_release()
     if not config.teacher.identity.strip():
         raise ValueError("Provide the completed SFT export's provenance identity")
     for name, path, digest in (
@@ -122,8 +128,10 @@ def artifacts(config: OfflineDSpark) -> tuple[ArtifactStep, ArtifactStep]:
     )
     mix = ArtifactStep.adopt(f"dspark/mixes/{config.data.manifest_sha256}", _RECIPE_VERSION, config.data.directory)
     provenance = TrainingProvenance(config.teacher.identity, config.teacher.manifest_sha256, config.data.manifest_sha256)
-    data_key = hashlib.sha256(canonical_json((provenance, recipe)).encode()).hexdigest()
-    draft_key = hashlib.sha256(canonical_json((data_key, SPECULATORS_REVISION, VLLM_SOURCE_COMMIT)).encode()).hexdigest()
+    data_key = hashlib.sha256(canonical_json((provenance, recipe.data)).encode()).hexdigest()
+    draft_key = hashlib.sha256(
+        canonical_json((data_key, recipe, SPECULATORS_REVISION, VLLM_SOURCE_COMMIT)).encode()
+    ).hexdigest()
     prepared = apply(
         f"dspark/data/{family}/{data_key}",
         prepare_data,
@@ -134,7 +142,7 @@ def artifacts(config: OfflineDSpark) -> tuple[ArtifactStep, ArtifactStep]:
         teacher_sha256=config.teacher.manifest_sha256,
         mix=mix,
         mix_sha256=config.data.manifest_sha256,
-        recipe=recipe,
+        config=recipe.data,
     )
 
     draft = apply(
@@ -161,20 +169,21 @@ def main(config: str, stage: str) -> None:
         raise click.UsageError("Run the train stage with iris job run on one GPU worker")
     configure_coreweave_s3()
     recipe = draccus.decode(OfflineDSpark, json.loads(StoragePath(config).read_text()))
+    settings = recipe.training_recipe()
     prepared, draft = artifacts(recipe)
     prefix = marin_prefix()
     teacher_root = StoragePath(recipe.teacher.directory)
     manifest = StoragePath(recipe.teacher.manifest_uri)
     mix_root = StoragePath(recipe.data.directory)
     if stage == "train":
+        require_qualified_teacher(settings)
         for location in (teacher_root, manifest, mix_root, StoragePath(prefix)):
             if location.scheme not in ("gs", "s3"):
                 raise click.UsageError(f"Iris training requires a shared gs:// or s3:// location, got {location}")
             if is_cross_region_url(str(location)):
                 raise click.UsageError(f"Iris training requires regional inputs and output, got {location}")
     if stage == "preflight":
-        settings = recipe.training_recipe()
-        decoder = inspect_teacher(teacher_root, manifest, recipe.teacher.manifest_sha256, settings)
+        decoder = inspect_teacher(teacher_root, manifest, recipe.teacher.manifest_sha256, settings.data)
         train, validation = inspect_mix(mix_root, recipe.data.manifest_sha256)
         click.echo(
             json.dumps(
@@ -184,6 +193,7 @@ def main(config: str, stage: str) -> None:
                     "train_shards": len(train),
                     "validation_shards": len(validation),
                     "gpus": settings.teacher_replicas + settings.trainer_ranks,
+                    "training_supported": not settings.data.shape.sconv,
                 },
                 indent=2,
             )

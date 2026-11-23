@@ -19,6 +19,7 @@ from marin.training.drafting.dspark_data import (
     GATE_UP,
     GRUG_MASK_TOKEN,
     LM_HEAD,
+    DraftDataConfig,
     DraftRecipe,
     GrugShape,
     file_sha256,
@@ -38,10 +39,8 @@ from transformers import PreTrainedTokenizerFast
 @pytest.fixture
 def recipe() -> DraftRecipe:
     return DraftRecipe(
-        shape=GrugShape(16, 4, 2, 1, 8, 8),
+        data=DraftDataConfig(shape=GrugShape(16, 4, 2, 1, 8, 8), mask_token_id=7, max_sequence_length=16),
         feature_taps=(1, 3),
-        mask_token_id=7,
-        max_sequence_length=16,
         max_anchors=8,
         max_steps=1,
         trainer_ranks=1,
@@ -147,7 +146,7 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
         teacher_sha256=file_sha256(teacher / "dspark-teacher.json"),
         mix=str(storage / "mix"),
         mix_sha256=file_sha256(mix / "dspark-mix.json"),
-        recipe=recipe,
+        config=recipe.data,
     )
     if overlapping:
         with pytest.raises(DatasetGenerationError):
@@ -181,7 +180,7 @@ def test_completed_teacher_rejects_stale_weight_pin(teacher: Path, tmp_path: Pat
 
 def test_draft_export_uses_feature_taps_and_offset_mapping(tmp_path: Path, teacher: Path, recipe: DraftRecipe) -> None:
     manifest = teacher / "dspark-teacher.json"
-    decoder = inspect_teacher(StoragePath(str(teacher)), StoragePath(str(manifest)), file_sha256(manifest), recipe)
+    decoder = inspect_teacher(StoragePath(str(teacher)), StoragePath(str(manifest)), file_sha256(manifest), recipe.data)
     speculative, _ = extraction_config(recipe, tmp_path / "hidden_states")
     assert speculative["draft_model_config"]["hf_config"]["eagle_aux_hidden_state_layer_ids"] == [1, 3, 4]
     ckpt = tmp_path / "draft"

@@ -7,16 +7,10 @@ import json
 import logging
 import math
 import os
-import signal
 import subprocess
-import time
-from collections.abc import Iterator
-from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
 
 import numpy as np
 from levanter.compat.hf_export import write_export_json
@@ -24,7 +18,8 @@ from rigging.filesystem.storage_path import StoragePath
 from safetensors import safe_open
 
 from marin.external_dependencies import VLLM_GPU_RELEASE
-from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
+from marin.inference.config import InferenceModelConfig
+from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmLauncherWithEnvironment, VllmType
 from marin.training.drafting.dspark_data import (
     ARROW_DATASET_DIR,
     DRAFT_CONFIG_FILE,
@@ -46,7 +41,6 @@ logger = logging.getLogger(__name__)
 SPECULATORS_REPOSITORY = "https://github.com/atutej/speculators.git"
 SPECULATORS_REVISION = "77eaa2390cab54ff7e5315345137394ee44b7a98"
 VLLM_SOURCE_COMMIT = "47a8e415bff17b9376f02d9b92edcc67e962eaee"
-_LOOPBACK_HOST = "127.0.0.1"
 _TEACHER_PORT = 18000
 _EXPORT_RECEIPT = "dspark-export.json"
 _EPOCHS = 1
@@ -54,7 +48,7 @@ _MARKOV_HEAD = "vanilla"
 _LOSS_IMPLEMENTATION = "eager"
 _D2T_FILE = "d2t.npy"
 _T2D_FILE = "t2d.npy"
-_BUILD_VOCAB_MAPPINGS = """
+_PREPARE_TRAINER_INPUTS = """
 import json
 import sys
 from importlib.metadata import version
@@ -62,16 +56,32 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from datasets import load_from_disk
+from speculators.train.distributed_batch_sampler import MultipackDistributedBatchSamplerV2
 from speculators.train.vocab_mapping import build_vocab_mappings_from_distribution
 
-data, d2t_path, t2d_path, draft_size, target_size, ranks = sys.argv[1:]
+(
+    dataset_path, train_rows, seq_len, step_budget, freq_path,
+    d2t_path, t2d_path, draft_size, target_size, ranks,
+) = sys.argv[1:]
 if torch.cuda.device_count() != int(ranks):
     raise RuntimeError("Trainer CUDA devices disagree with the recipe")
-freq = {int(k): v for k, v in json.loads(Path(data).read_text()).items()}
+# Count epoch-zero batches exactly as Speculators does, without starting the teacher.
+lengths = load_from_disk(dataset_path).select(range(int(train_rows))).with_format(None)["seq_len"]
+sampler = MultipackDistributedBatchSamplerV2(
+    batch_max_length=int(seq_len), lengths=list(lengths), num_replicas=int(ranks), rank=0,
+)
+steps = min(len(sampler), int(step_budget))
+if steps == 0:
+    raise RuntimeError("The prepared mix has no packed training batches")
+freq = {int(k): v for k, v in json.loads(Path(freq_path).read_text()).items()}
 d2t, t2d = build_vocab_mappings_from_distribution(freq, int(draft_size), int(target_size))
 np.save(d2t_path, d2t.numpy())
 np.save(t2d_path, t2d.numpy())
-print(json.dumps({name: version(name) for name in ("torch", "transformers", "datasets")}))
+print(json.dumps({
+    "steps": steps,
+    "packages": {name: version(name) for name in ("torch", "transformers", "datasets")},
+}))
 """
 
 
@@ -134,38 +144,16 @@ def _install_speculators(scratch: Path, env: dict[str, str]) -> str:
     return python
 
 
-@contextmanager
-def _teacher_server(command: list[str], env: dict[str, str], port: int) -> Iterator[None]:
-    # FlashInfer's cold-start Ninja builds otherwise size their worker pool
-    # from the node's CPUs, which can exhaust the Iris task's memory limit.
-    env = {"MAX_JOBS": "2", **env}
-    with subprocess.Popen(command, env=env, start_new_session=True) as server:
-        try:
-            deadline = time.monotonic() + 1800
-            while time.monotonic() < deadline:
-                if server.poll() is not None:
-                    raise RuntimeError(f"vLLM hidden-state server exited with status {server.returncode}")
-                try:
-                    with urlopen(f"http://{_LOOPBACK_HOST}:{port}/health", timeout=2) as response:
-                        if response.status == 200:
-                            break
-                except HTTPError:
-                    raise
-                except URLError:
-                    pass
-                time.sleep(2)
-            else:
-                raise TimeoutError("vLLM hidden-state server failed to become ready")
-            yield
-        finally:
-            with suppress(ProcessLookupError):
-                os.killpg(server.pid, signal.SIGTERM)
-            try:
-                server.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                with suppress(ProcessLookupError):
-                    os.killpg(server.pid, signal.SIGKILL)
-                server.wait()
+def require_supported_vllm_release() -> None:
+    """Fail before staging work if the promoted wheel has changed."""
+    if VLLM_GPU_RELEASE.source_commit != VLLM_SOURCE_COMMIT:
+        raise ValueError("Requalify DSpark against the newly promoted vLLM wheel before changing the pin")
+
+
+def require_qualified_teacher(recipe: DraftRecipe) -> None:
+    """Require GPU qualification before training from a ShortConv teacher."""
+    if recipe.data.shape.sconv:
+        raise ValueError("ShortConv DSpark training requires GPU qualification of extraction and serving")
 
 
 def extraction_config(recipe: DraftRecipe, hidden_states: Path) -> tuple[dict, dict]:
@@ -194,7 +182,7 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
         "block_size": recipe.block_size,
         "sample_from_anchor": True,
         "aux_hidden_state_layer_ids": list(recipe.feature_taps),
-        "mask_token_id": recipe.mask_token_id,
+        "mask_token_id": recipe.data.mask_token_id,
         "draft_vocab_size": recipe.draft_vocab_size,
         "markov_rank": recipe.markov_rank,
         "markov_head_type": _MARKOV_HEAD,
@@ -207,20 +195,20 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
     decoder = config["transformer_layer_config"]
     if (
         decoder["model_type"] != "qwen3"
-        or decoder["hidden_size"] != recipe.shape.hidden_size
-        or decoder["vocab_size"] != recipe.shape.vocab_size
-        or decoder["num_hidden_layers"] != recipe.draft_layers
+        or decoder["hidden_size"] != recipe.data.shape.hidden_size
+        or decoder["vocab_size"] != recipe.data.shape.vocab_size
+        or decoder["num_hidden_layers"] != recipe.data.draft_layers
         or config["speculators_config"]["proposal_methods"][0]["speculative_tokens"] != recipe.block_size
     ):
         raise ValueError("DSpark decoder or proposal dimensions disagree with the recipe")
 
     files = tensor_files(checkpoint)
     expected_shapes = {
-        "fc.weight": (recipe.shape.hidden_size, len(recipe.feature_taps) * recipe.shape.hidden_size),
-        LM_HEAD: (recipe.draft_vocab_size, recipe.shape.hidden_size),
-        "markov_head.markov_w1.weight": (recipe.shape.vocab_size, recipe.markov_rank),
+        "fc.weight": (recipe.data.shape.hidden_size, len(recipe.feature_taps) * recipe.data.shape.hidden_size),
+        LM_HEAD: (recipe.draft_vocab_size, recipe.data.shape.hidden_size),
+        "markov_head.markov_w1.weight": (recipe.data.shape.vocab_size, recipe.markov_rank),
         "markov_head.markov_w2.weight": (recipe.draft_vocab_size, recipe.markov_rank),
-        "confidence_head.proj.weight": (1, recipe.shape.hidden_size + recipe.markov_rank),
+        "confidence_head.proj.weight": (1, recipe.data.shape.hidden_size + recipe.markov_rank),
     }
     for name, shape in expected_shapes.items():
         with safe_open(checkpoint / files[name], framework="np") as weights:
@@ -233,7 +221,7 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
         mapping.dtype != np.int64
         or not np.array_equal(mapping, expected_mapping)
         or target_ids[0] < 0
-        or target_ids[-1] >= recipe.shape.vocab_size
+        or target_ids[-1] >= recipe.data.shape.vocab_size
         or not (np.diff(target_ids) > 0).all()
     ):
         raise ValueError("DSpark checkpoint has an invalid draft-to-target vocabulary mapping")
@@ -246,6 +234,7 @@ def _publish_checkpoint(
     training: Path,
     provenance: TrainingProvenance,
     recipe: DraftRecipe,
+    expected_steps: int,
     mapping: np.ndarray,
     packages: dict,
 ) -> None:
@@ -253,7 +242,7 @@ def _publish_checkpoint(
     state = json.loads((checkpoint / "training_state.json").read_text())
     metrics = json.loads((checkpoint / "val_metrics.json").read_text())
     if (
-        state["global_step"] != recipe.max_steps
+        state["global_step"] != expected_steps
         or not all(math.isfinite(value) for value in metrics.values())
         or not math.isfinite(metrics["loss_epoch"])
     ):
@@ -277,6 +266,7 @@ def _publish_checkpoint(
         "vllm_source_commit": VLLM_SOURCE_COMMIT,
         "trainer_packages": packages,
         "loss_implementation": _LOSS_IMPLEMENTATION,
+        "step_budget": recipe.max_steps,
         "steps": state["global_step"],
         "validation": metrics,
         "files": {
@@ -288,41 +278,37 @@ def _publish_checkpoint(
     write_export_json(output / _EXPORT_RECEIPT, receipt)
 
 
-def _teacher_command(teacher: Path, recipe: DraftRecipe, hidden_states: Path) -> list[str]:
-    if VLLM_GPU_RELEASE.source_commit != VLLM_SOURCE_COMMIT:
-        raise ValueError("Requalify DSpark against the newly promoted vLLM wheel before changing the pin")
+def _teacher_environment(teacher: Path, recipe: DraftRecipe, hidden_states: Path, devices: str) -> VllmEnvironment:
     speculative, transfer = extraction_config(recipe, hidden_states)
-    server_options = {
-        "host": _LOOPBACK_HOST,
-        "port": str(_TEACHER_PORT),
-        "dtype": "bfloat16",
-        "tensor-parallel-size": "1",
-        "data-parallel-size": str(recipe.teacher_replicas),
-        "attention-backend": "FLASH_ATTN",
-        "moe-backend": "triton",
-        "max-model-len": str(recipe.max_sequence_length + 1),
-        "speculative-config": json.dumps(speculative),
-        "kv-transfer-config": json.dumps(transfer),
-    }
-    if recipe.shape.sconv:
-        server_options["compilation-config"] = json.dumps(
-            {
-                "mode": 3,
-                "cudagraph_mode": "PIECEWISE",
-                "splitting_ops": [
-                    "vllm::unified_attention_with_output",
-                    "vllm::unified_kv_cache_update",
-                    "vllm::grug_moe_short_conv",
-                ],
-            }
-        )
-    return [
-        *IsolatedCudaVllm(source=VllmType.MARIN_FORK).command(),
-        "serve",
-        str(teacher),
-        "--enable-expert-parallel",
-        *(f"--{key}={value}" for key, value in server_options.items()),
-    ]
+    launcher = VllmLauncherWithEnvironment(
+        IsolatedCudaVllm(source=VllmType.MARIN_FORK),
+        {
+            "CUDA_VISIBLE_DEVICES": devices,
+            "HF_HUB_OFFLINE": "1",
+            "PYTHONPATH": "",
+            # FlashInfer's Ninja builds can otherwise exhaust the Iris task's memory.
+            "MAX_JOBS": os.environ.get("MAX_JOBS", "2"),
+        },
+    )
+    return VllmEnvironment(
+        InferenceModelConfig(
+            name=teacher.name,
+            path=str(teacher),
+            engine_kwargs={"dtype": "bfloat16", "max_model_len": recipe.data.max_sequence_length + 1},
+        ),
+        port=_TEACHER_PORT,
+        timeout_seconds=1800,
+        launcher=launcher,
+        extra_args=[
+            "--enable-expert-parallel",
+            "--tensor-parallel-size=1",
+            f"--data-parallel-size={recipe.teacher_replicas}",
+            "--attention-backend=FLASH_ATTN",
+            "--moe-backend=triton",
+            f"--speculative-config={json.dumps(speculative)}",
+            f"--kv-transfer-config={json.dumps(transfer)}",
+        ],
+    )
 
 
 def _trainer_command(
@@ -333,8 +319,11 @@ def _trainer_command(
     scratch: Path,
     training: Path,
     hidden_states: Path,
+    *,
+    train_ratio: float,
+    steps: int,
+    endpoint: str,
 ) -> list[str]:
-    split = json.loads((data / SPLITS_FILE).read_text())
     train_config = {
         "speculator_type": "dspark",
         "seed": recipe.seed,
@@ -344,21 +333,21 @@ def _trainer_command(
             "draft_vocab_size": recipe.draft_vocab_size,
             "d2t_path": str(scratch / _D2T_FILE),
             "t2d_path": str(scratch / _T2D_FILE),
-            "mask_token_id": recipe.mask_token_id,
+            "mask_token_id": recipe.data.mask_token_id,
             "target_layer_ids": list(recipe.feature_taps),
         },
         "data": {
             "data_path": str(data / ARROW_DATASET_DIR),
-            "train_data_ratio": split["train_ratio"],
+            "train_data_ratio": train_ratio,
             "hidden_states_backend": "file",
-            "total_seq_len": recipe.max_sequence_length,
+            "total_seq_len": recipe.data.max_sequence_length,
             "max_anchors": recipe.max_anchors,
             "num_workers": 2,
             "prefetch_factor": 2,
         },
         "backend": {"hidden_states_path": str(hidden_states)},
         "generation": {
-            "vllm_endpoint": f"http://{_LOOPBACK_HOST}:{_TEACHER_PORT}/v1",
+            "vllm_endpoint": endpoint,
             "on_missing": "generate",
             "on_generate": "delete",
         },
@@ -373,7 +362,7 @@ def _trainer_command(
             "save_path": str(training),
             "no_resume_from_checkpoint": True,
             "epochs": _EPOCHS,
-            "max_steps": recipe.max_steps,
+            "max_steps": steps,
             "gradient_checkpointing": True,
         },
         "dflash": {"block_size": recipe.block_size, "sample_from_anchor": True},
@@ -395,26 +384,31 @@ def _trainer_command(
     return train
 
 
-def _build_vocab_mappings(
-    python: str, data: Path, scratch: Path, recipe: DraftRecipe, env: dict[str, str]
-) -> dict[str, str]:
-    return json.loads(
+def _prepare_trainer_inputs(
+    python: str, data: Path, scratch: Path, recipe: DraftRecipe, train_rows: int, env: dict[str, str]
+) -> tuple[int, dict[str, str]]:
+    result = json.loads(
         subprocess.check_output(
             [
                 python,
                 "-c",
-                _BUILD_VOCAB_MAPPINGS,
+                _PREPARE_TRAINER_INPUTS,
+                str(data / ARROW_DATASET_DIR),
+                str(train_rows),
+                str(recipe.data.max_sequence_length),
+                str(recipe.max_steps),
                 str(data / TOKEN_FREQUENCIES_FILE),
                 str(scratch / _D2T_FILE),
                 str(scratch / _T2D_FILE),
                 str(recipe.draft_vocab_size),
-                str(recipe.shape.vocab_size),
+                str(recipe.data.shape.vocab_size),
                 str(recipe.trainer_ranks),
             ],
             env=env,
             text=True,
         )
     )
+    return result["steps"], result["packages"]
 
 
 def _verify_completed_export(export: StoragePath, provenance: TrainingProvenance) -> bool:
@@ -440,22 +434,25 @@ def train_and_export(
 ) -> None:
     """Stage the pinned inputs, train on an Iris worker, and publish the draft receipt last."""
 
+    require_supported_vllm_release()
+    require_qualified_teacher(recipe)
     export = StoragePath(output) / "hf"
     if _verify_completed_export(export, provenance):
         return
 
-    teacher_devices, trainer_devices = gpu_device_split(_worker_gpu_devices(), recipe)
     source = StoragePath(teacher)
     manifest = StoragePath(teacher_manifest)
-    decoder = inspect_teacher(source, manifest, provenance.teacher_manifest_sha256, recipe)
     prepared_source = StoragePath(prepared) / PREPARED_DIR
+    split = json.loads((prepared_source / SPLITS_FILE).read_text())
+    if min(split["train"], split["validation"]) < recipe.trainer_ranks:
+        raise ValueError("Each prepared split needs at least one usable row per trainer rank")
+    decoder = inspect_teacher(source, manifest, provenance.teacher_manifest_sha256, recipe.data)
     if json.loads((prepared_source / DRAFT_CONFIG_FILE).read_text()) != decoder:
         raise ValueError("Prepared draft config disagrees with the teacher")
 
-    env = {**os.environ, "HF_HUB_OFFLINE": "1"}
-    env.pop("PYTHONPATH", None)
-    vllm_env = {**env, "CUDA_VISIBLE_DEVICES": teacher_devices}
-    trainer_env = {**env, "CUDA_VISIBLE_DEVICES": trainer_devices}
+    teacher_devices, trainer_devices = gpu_device_split(_worker_gpu_devices(), recipe)
+    trainer_env = {**os.environ, "HF_HUB_OFFLINE": "1", "CUDA_VISIBLE_DEVICES": trainer_devices}
+    trainer_env.pop("PYTHONPATH", None)
     with TemporaryDirectory(prefix="marin-dspark-") as directory:
         scratch = Path(directory)
         training = scratch / "checkpoints"
@@ -463,22 +460,33 @@ def train_and_export(
         hidden_states.mkdir()
         teacher_path = scratch / "teacher"
         data = scratch / "data"
+        prepared_source.download_to(str(data), recursive=True, batch_size=8)
         python = _install_speculators(scratch, trainer_env)
+        steps, packages = _prepare_trainer_inputs(python, data, scratch, recipe, split["train"], trainer_env)
 
         logger.info("Staging verified DSpark inputs for %s", provenance.teacher_identity)
         stage_teacher(source, manifest, provenance.teacher_manifest_sha256, teacher_path)
-        prepared_source.download_to(str(data), recursive=True, batch_size=8)
-        packages = _build_vocab_mappings(python, data, scratch, recipe, trainer_env)
-        server = _teacher_command(teacher_path, recipe, hidden_states)
-        train = _trainer_command(teacher_path, recipe, python, data, scratch, training, hidden_states)
-        logger.info("Training DSpark for %s at %s", provenance.teacher_identity, output)
-        with _teacher_server(server, vllm_env, _TEACHER_PORT):
+        logger.info("Training DSpark for %s at %s for %d optimizer steps", provenance.teacher_identity, output, steps)
+        with _teacher_environment(teacher_path, recipe, hidden_states, teacher_devices) as server:
+            train = _trainer_command(
+                teacher_path,
+                recipe,
+                python,
+                data,
+                scratch,
+                training,
+                hidden_states,
+                train_ratio=split["train_ratio"],
+                steps=steps,
+                endpoint=server.server_url,
+            )
             subprocess.run(train, env=trainer_env, check=True)
         _publish_checkpoint(
             output=export,
             training=training,
             provenance=provenance,
             recipe=recipe,
+            expected_steps=steps,
             mapping=np.load(scratch / _D2T_FILE, allow_pickle=False),
             packages=packages,
         )
