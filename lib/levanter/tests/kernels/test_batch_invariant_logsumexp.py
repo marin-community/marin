@@ -47,7 +47,7 @@ def test_stop_logprobs_match_across_row_counts_and_positions():
     expected = np.asarray(normalize(jnp.asarray(STOP_LOGITS)))
     for rows in (1, 4, 7, 8, 9, 128, 129):
         for index in {0, rows - 1}:
-            values = np.random.default_rng(rows).normal(size=(rows, 23)).astype(np.float32)
+            values = np.random.default_rng(rows).normal(size=(rows, STOP_LOGITS.size)).astype(np.float32)
             values[index] = STOP_LOGITS
             actual = np.asarray(normalize(jnp.asarray(values)))[index]
             np.testing.assert_array_equal(actual.view(np.uint32), expected.view(np.uint32))
@@ -82,7 +82,7 @@ def test_normalizer_gathers_vocabulary_and_preserves_row_sharding():
         assert normalizers.sharding.spec == P("data")
 
 
-def test_masked_vocabulary_does_not_change_finite_logprobs():
+def test_logprobs_with_masked_vocabulary_match_reference():
     logits = jnp.array([[2.0, -jnp.inf, 1.0], [-jnp.inf, 0.0, -jnp.inf]])
     actual = jax.jit(batch_invariant_log_softmax)(logits)
     np.testing.assert_allclose(actual, jax.nn.log_softmax(logits), rtol=1e-5, atol=1e-7)
@@ -103,7 +103,7 @@ def test_selected_logprobs_match_separately_normalized_distribution():
 
 
 def test_logprobs_and_derivatives_match_through_nested_vmap():
-    values = np.random.default_rng(129).normal(size=(3, 43, 23)).astype(np.float32)
+    values = np.random.default_rng(129).normal(size=(3, 43, STOP_LOGITS.size)).astype(np.float32)
     values[0, 0] = STOP_LOGITS
     logits = jnp.asarray(values)
     direct = jax.jit(batch_invariant_log_softmax)(logits)

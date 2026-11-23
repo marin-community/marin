@@ -13,18 +13,20 @@ from jax.sharding import NamedSharding, PartitionSpec as P, reshard
 _ROW_TILE = 8
 
 
+def accurate_logsumexp(logits: jax.Array) -> jax.Array:
+    """Reduce the final axis with TPU's highest accuracy exp and log."""
+    maximum = jnp.max(logits, axis=-1)
+    maximum = jax.lax.stop_gradient(jnp.where(jnp.isfinite(maximum), maximum, 0))
+    total = jnp.sum(jax.lax.exp(logits - maximum[..., None], accuracy=jax.lax.AccuracyMode.HIGHEST), axis=-1)
+    return maximum + jax.lax.log(total, accuracy=jax.lax.AccuracyMode.HIGHEST)
+
+
 def _local_logsumexp(logits: jax.Array) -> jax.Array:
     rows = math.prod(logits.shape[:-1])
     flat = logits.reshape((rows, logits.shape[-1]))
     padded = jnp.pad(flat, ((0, (-rows) % _ROW_TILE), (0, 0)))
 
-    def normalize(tile):
-        maximum = jnp.max(tile, axis=-1)
-        maximum = jax.lax.stop_gradient(jnp.where(jnp.isfinite(maximum), maximum, 0))
-        total = jnp.sum(jax.lax.exp(tile - maximum[:, None], accuracy=jax.lax.AccuracyMode.HIGHEST), axis=-1)
-        return maximum + jax.lax.log(total, accuracy=jax.lax.AccuracyMode.HIGHEST)
-
-    normalizers = jax.lax.map(normalize, padded.reshape((-1, _ROW_TILE, flat.shape[-1])))
+    normalizers = jax.lax.map(accurate_logsumexp, padded.reshape((-1, _ROW_TILE, flat.shape[-1])))
     return normalizers.reshape((-1,))[:rows].reshape(logits.shape[:-1])
 
 
@@ -49,8 +51,7 @@ def _mapped_logsumexp(logits: jax.Array) -> jax.Array:
 
 
 @_mapped_logsumexp.def_vmap
-def _logsumexp_vmap(axis_size, in_batched, logits):
-    del axis_size
+def _logsumexp_vmap(_axis_size, in_batched, logits):
     # Re-enter with the physical batch axes visible before choosing row tiles.
     # The engine vmaps its sampler; a default rule would add axes outside them.
     return _mapped_logsumexp(logits), in_batched[0]
@@ -60,11 +61,9 @@ def _logsumexp_vmap(axis_size, in_batched, logits):
 def batch_invariant_logsumexp(logits: jax.Array) -> jax.Array:
     """Reduce the final vocabulary axis using the same FP32 schedule for every row.
 
-    Leading dimensions may vary between sampling and learner batches. Fixed
-    eight-row tiles prevent those dimensions from changing TPU reduction and
-    transcendental layouts. Vocabulary shards are gathered before the local
-    reduction; leading-axis sharding is preserved. The result has the leading
-    shape and is differentiable. Inputs may contain masked negative infinities.
+    The reduction order is independent of the leading dimensions. The
+    differentiable result preserves leading-axis sharding and accepts masked
+    negative infinities in the vocabulary.
     """
     return _mapped_logsumexp(logits)
 
