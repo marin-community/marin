@@ -129,15 +129,9 @@ and agent user. TaskSpec may add `setup_commands` and their setup-only
 
 ## SkyRL reply text
 
-The SkyRL model client returns visible text in `responses` and assistant message
-`content`. When a reply ends its turn with an EOS or chat turn terminator, these
-fields exclude that terminator, even with `skip_special_tokens=False`. A length
-stop does not end its turn, so its text keeps every sampled token, including a
-final terminator. Graders, task steps, and conversation history use this text. The
-chat template adds the history terminator after each assistant turn.
-`skip_special_tokens` controls only the special tokens inside the reply;
-assistant-prefix completions always keep them. Sampled
-`response_ids` keep every token, including the terminator, for training.
+SkyRL reply text (`responses`, assistant content) never includes a trailing EOS or turn
+terminator, even with `skip_special_tokens=False`. `response_ids` keep every sampled
+token, including the terminator.
 
 ## Harnesses
 
