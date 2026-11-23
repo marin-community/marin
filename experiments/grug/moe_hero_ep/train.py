@@ -6,6 +6,7 @@ import functools
 import gc
 import importlib.metadata
 import itertools
+import json
 import logging
 import math
 import os
@@ -55,14 +56,20 @@ from levanter.grug.grug_moe import (
 from levanter.grug.sharding import _axis_names, compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
+from levanter.pipeline import reshape_array_into_microbatches
 from levanter.schedule import BatchSchedule
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
+from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.trainer import TrainerConfig
+from levanter.training_budget import TimeLimitedIterator, TrainingStopReason
 from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
+from marin.training.levanter import _trainer_with_execution_deadline
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.timing import Duration
 
 from experiments.grug.checkpointing import (
     checkpoint_stores_master,
@@ -359,6 +366,7 @@ class GrugTrainerConfig:
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
     max_grad_norm: float | None = None
+    microbatch_size: int | None = None
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
@@ -399,6 +407,15 @@ class GrugTrainerConfig:
             raise ValueError("GC interval must be positive")
         if self.special_tokens is not None and self.master_param_mode != MasterParamMode.DEVICE:
             raise ValueError("special-token reseeding supports only MasterParamMode.DEVICE")
+        if self.microbatch_size is not None:
+            if self.microbatch_size <= 0 or not isinstance(self.trainer.train_batch_size, int):
+                raise ValueError("Microbatch accumulation requires a positive size and constant logical batch")
+            if self.router_bias_mode != RouterBiasMode.FROZEN:
+                raise ValueError("Hero microbatch accumulation requires frozen router bias")
+        if self.trainer.training_budget is not None and (
+            not self.save_checkpoints or self.trainer.native_telemetry_root is None
+        ):
+            raise ValueError("Budgeted hero training requires native telemetry and final checkpointing")
 
 
 def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
@@ -464,6 +481,7 @@ class GrugRunConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    evaluation_data: LmDataConfig | None = None
     # The absolute step the run stops at, while `trainer.num_train_steps` still sizes the learning-rate
     # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
     # long schedule requires the two to differ. Only the optimizer's `ScheduleExtension` allows a stop past
@@ -558,6 +576,7 @@ def build_train_loader(
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
+    allow_nondivisible_batch_size: bool = False,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
@@ -570,7 +589,7 @@ def build_train_loader(
         axis_resources={"__BATCH__": _BATCH_AXES},
         fetch_batch_size=_TRAIN_LOADER_FETCH_BATCH_SIZE,
         batch_axis_name="__BATCH__",
-        allow_nondivisible_batch_size=False,
+        allow_nondivisible_batch_size=allow_nondivisible_batch_size,
     )
 
 
@@ -982,19 +1001,94 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
     )
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
+def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, normalizer=None):
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
-        return compute_params.next_token_loss(
+        result = compute_params.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
-            reduction="mean",
+            reduction="mean" if normalizer is None else "sum",
             logsumexp_weight=z_loss,
             return_router_metrics=True,
         )
+        if normalizer is None:
+            return result
+        loss, metrics = result
+        loss = loss / jnp.maximum(normalizer, 1)
+        return loss, {**metrics, "train/cross_entropy_loss": loss}
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
+
+
+def _merge_microbatch_metrics(left, right, left_count, right_count):
+    merged = {}
+    total = jnp.maximum(left_count + right_count, 1)
+    for name, a in left.items():
+        b = right[name]
+        if a is None:
+            merged[name] = None
+        elif isinstance(a, SummaryStats):
+            assert a.histogram is not None and b.histogram is not None
+            histogram = Histogram(a.histogram.bucket_limits, a.histogram.bucket_counts + b.histogram.bucket_counts)
+            merged[name] = SummaryStats.from_reduced_values(
+                jnp.minimum(jnp.where(a.num > 0, a.min, jnp.inf), jnp.where(b.num > 0, b.min, jnp.inf)),
+                jnp.maximum(jnp.where(a.num > 0, a.max, -jnp.inf), jnp.where(b.num > 0, b.max, -jnp.inf)),
+                a.num + b.num,
+                jnp.count_nonzero(histogram.bucket_counts),
+                a.sum + b.sum,
+                a.sum_squares + b.sum_squares,
+                histogram,
+            )
+        elif jnp.issubdtype(a.dtype, jnp.integer) or name == "train/cross_entropy_loss":
+            merged[name] = a + b
+        elif name.endswith(("/margin_min", "/bias_min")):
+            merged[name] = jnp.minimum(a, b)
+        elif name.endswith(("/margin_max", "/bias_max")):
+            merged[name] = jnp.maximum(a, b)
+        else:
+            merged[name] = (a * left_count + b * right_count) / total
+    return merged
+
+
+def _accumulated_loss_and_grads(params, batch, mp, z_loss, microbatch_size, logical_batch_size):
+    """Accumulate one logical update, excluding loader padding before a single clip/optimizer update."""
+    physical_size = batch.tokens.shape[0]
+    if physical_size % microbatch_size:
+        raise ValueError("Physical batch must divide into complete microbatches")
+    real_rows = jnp.arange(physical_size) < logical_batch_size
+    segments = batch.attn_mask.segment_ids
+    segments = jnp.zeros_like(batch.tokens) if segments is None else segments[0]
+    batch = dataclasses.replace(
+        batch,
+        loss_weight=jnp.where(real_rows[:, None], batch.loss_weight, 0),
+        attn_mask=batch.attn_mask.with_segment_ids(jnp.where(real_rows[:, None], segments, -1)),
+    )
+    normalizer = jnp.sum(batch.loss_weight)
+    batched, shared = eqx.partition(batch, lambda x: eqx.is_array(x) and x.ndim > 0 and x.shape[0] == physical_size)
+    steps = physical_size // microbatch_size
+    batched = jax.tree.map(lambda x: reshape_array_into_microbatches(x, steps), batched)
+
+    def evaluate(piece):
+        piece = eqx.combine(piece, shared)
+        (loss, metrics), grads = _loss_and_grads(params, piece, mp, z_loss, normalizer)
+        count = jnp.sum(piece.attn_mask.segment_ids[0] >= 0)
+        return loss, metrics, grads, count
+
+    initial = evaluate(jax.tree.map(lambda x: x[0], batched))
+
+    def accumulate(carry, piece):
+        loss, metrics, grads, count = carry
+        this_loss, this_metrics, this_grads, this_count = evaluate(piece)
+        return (
+            loss + this_loss,
+            _merge_microbatch_metrics(metrics, this_metrics, count, this_count),
+            jax.tree.map(jnp.add, grads, this_grads),
+            count + this_count,
+        ), None
+
+    (loss, metrics, grads, _), _ = jax.lax.scan(accumulate, initial, jax.tree.map(lambda x: x[1:], batched))
+    return (loss, metrics), grads
 
 
 def _compute_diagnostic_watch_stats(params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig):
@@ -1065,10 +1159,14 @@ def _make_train_step(
     balance_rows: bool = False,
     router_bias_mode: RouterBiasMode = RouterBiasMode.UPDATE,
     special_tokens: SpecialTokenInit | None = None,
+    microbatch_size: int | None = None,
+    logical_batch_size: int | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     frozen_router_bias = router_bias_mode == RouterBiasMode.FROZEN
+    if microbatch_size is not None and logical_batch_size is None:
+        raise ValueError("Microbatch accumulation requires the logical batch size")
 
     def adjust_updates(updates):
         if special_tokens is None:
@@ -1102,7 +1200,13 @@ def _make_train_step(
         if balance_rows:
             # Moves rows between batch shards; see `balance_attention_rows` for its effect on the loss.
             batch = balance_attention_rows(batch)
-        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
+        if microbatch_size is None:
+            (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
+        else:
+            assert logical_batch_size is not None
+            (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
+                qb_params, batch, mp, z_loss, microbatch_size, logical_batch_size
+            )
         metrics = {"train/loss": loss, **summarized_metrics}
         # The watch below reads the unclipped gradients, so grad/norm/* keep their pre-clip meaning.
         raw_grads = grads
@@ -1381,7 +1485,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.tensorstore_cache_bytes is not None:
         set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
 
-    trainer = config.trainer.trainer
+    trainer = _trainer_with_execution_deadline(config.trainer.trainer)
+    config = replace(config, trainer=replace(config.trainer, trainer=trainer))
     trainer.initialize()
     levanter.tracker.log_configuration(config)
 
@@ -1413,6 +1518,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         balance_rows=config.trainer.balance_attention_rows,
         router_bias_mode=config.trainer.router_bias_mode,
         special_tokens=config.trainer.special_tokens,
+        microbatch_size=config.trainer.microbatch_size,
+        logical_batch_size=trainer.train_batch_size if isinstance(trainer.train_batch_size, int) else None,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -1516,6 +1623,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 train_dataset,
                 batch_schedule=batch_schedule,
                 mesh=mesh,
+                allow_nondivisible_batch_size=config.trainer.microbatch_size is not None,
             )
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
@@ -1537,7 +1645,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             dropless = eval_cfg.dropless_eval and mesh.shape["expert"] > 1
             if train_mesh_eval:
                 evaluator = build_tagged_evaluator(
-                    data_config=config.data,
+                    data_config=config.evaluation_data or config.data,
                     max_seq_len=config.model.max_seq_len,
                     mesh=mesh,
                     eval_cfg=eval_cfg,
@@ -1554,7 +1662,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 # eval jit and fail the explicit-mesh check.
                 with set_mesh(dropless_eval_mesh):
                     dropless_evaluator = build_tagged_evaluator(
-                        data_config=config.data,
+                        data_config=config.evaluation_data or config.data,
                         max_seq_len=config.model.max_seq_len,
                         mesh=dropless_eval_mesh,
                         eval_cfg=eval_cfg,
@@ -1590,7 +1698,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             assert train_loader is not None
             batch_source = train_loader.iter_from_step(int(state.step))
-        iterator = LoadingTimeTrackerIterator(batch_source)
+        limited = TimeLimitedIterator(batch_source, trainer.training_budget) if trainer.training_budget else None
+        iterator = LoadingTimeTrackerIterator(limited if limited is not None else batch_source)
 
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
@@ -1708,7 +1817,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.add_hook(gc_hook, every=config.trainer.gc_interval)
                     levanter.tracker.log({GC_TIME_METRIC: time.perf_counter() - gc_start}, step=current_step)
                 with jax.profiler.TraceAnnotation("load_batch"):
-                    batch = next(iterator)
+                    try:
+                        batch = next(iterator)
+                    except StopIteration:
+                        if limited is not None and limited.stop_reason is TrainingStopReason.TIME_BOUND:
+                            break
+                        raise
                 watch_due = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
@@ -1821,8 +1935,35 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ):
                         checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
-                if not preempted:
+                if not preempted and (limited is None or limited.stop_reason is not TrainingStopReason.TIME_BOUND):
                     state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if limited is not None and not preempted and jax.process_index() == 0:
+                assert checkpointer is not None and trainer.native_telemetry_root is not None
+                budget = trainer.training_budget
+                assert budget is not None and budget.deadline_epoch_seconds is not None
+                checkpoint = prefix_join(checkpointer.base_path, f"step-{int(state.step)}")
+                metadata = load_checkpoint_metadata(checkpoint)
+                if (
+                    metadata["step"] != int(state.step)
+                    or metadata["is_temporary"]
+                    or time.time() > budget.deadline_epoch_seconds
+                ):
+                    raise RuntimeError("Budgeted hero training lacks an on-time permanent final checkpoint")
+                (StoragePath(trainer.native_telemetry_root) / "completion.json").write_text(
+                    json.dumps(
+                        {
+                            "restored_step": restored_step,
+                            "final_step": int(state.step),
+                            "maximum_step": stop_step,
+                            "checkpoint": checkpoint,
+                            "stop_reason": limited.stop_reason or TrainingStopReason.MAXIMUM_UPDATES,
+                            "duration_seconds": budget.duration.total_seconds(),
+                            "deadline_epoch_seconds": budget.deadline_epoch_seconds,
+                            "finalized_epoch_seconds": time.time(),
+                        },
+                        indent=2,
+                    )
+                )
         finally:
             preemption.restore()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
@@ -1853,6 +1994,11 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         max_retries_failure=config.max_retries_failure,
         max_task_failures=config.max_task_failures,
+        timeout=(
+            Duration.from_seconds(trainer.training_budget.duration.total_seconds())
+            if trainer.training_budget is not None
+            else None
+        ),
     )
 
 

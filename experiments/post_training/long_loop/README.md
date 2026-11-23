@@ -83,6 +83,41 @@ packed-sequence counts through the completed updates and the unique sequences
 read divided by each source's declared training capacity. An epoch that stops early
 keeps its checkpoint and fails before downstream RL can treat it as complete.
 
+## Native Mochi SFT on sealed V5
+
+`rounds/mochi-sft-exp3-v5-128.yaml` prepares the native hero SFT on Exp3's sealed
+V5 release. It restores the hero's native step 393491, including optimizer state,
+and preserves the step 400407 run's model, tokenizer, MuonH/Adam learning rates,
+global clip, special-token reseeding, expert placement and 262144-token context.
+Two 64-GPU racks use CP4/EP16 per rack. Six 32-sequence microbatches form one
+logical 176-sequence update; 16 padding slots contribute no loss or routing load.
+Gradients share the logical token denominator and are clipped once before one
+optimizer update. Evaluation keeps the hero's Paloma corpus and dropless policy,
+with batch 32 to fit the smaller mesh.
+
+The canonical one-SFT-epoch planner binds every included V5 SFT training pack
+once, with its declared replay share and existing validation reservations.
+The LR schedule keeps the hero's zero warmup, linear 692-update tail and 0.1
+minimum ratio, with its endpoint rebound to the new epoch ceiling. The shared
+20-hour clock can end the epoch early. Actual source coverage and the permanent
+final checkpoint are recorded separately; an early stop does not claim a full
+epoch. Training reads no old hero training caches.
+
+The preflight requires the hash-pinned seal, publisher, current native capacity
+receipt and completed regional initializer-copy inventory. It reads metadata,
+not weight payloads, on the operator host:
+
+```bash
+uv run python -m experiments.post_training.long_loop.round_runner \
+  --round experiments/post_training/long_loop/rounds/mochi-sft-exp3-v5-128.yaml \
+  --version 2026.11.23.127 --through sft \
+  --source-revision "$SOURCE_SHA" --validation-output /tmp/mochi-sft128
+```
+
+Submission requires explicit user approval. After approval, run the same command
+with `--run` from an Iris CPU coordinator on 08a at PRODUCTION priority. Native
+Grug dispatches the 128 GB200 allocation; no separate GPU launcher or smoke is used.
+
 ## Exp5 SFT release
 
 Exp5 setup reuses qualified V7, whose four science components already derive

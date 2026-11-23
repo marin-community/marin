@@ -7,18 +7,40 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import draccus
+import jax
+import jax.numpy as jnp
+import numpy as np
 import pytest
 import yaml
+from fray.types import GpuConfig, ResourceConfig
+from haliax import Axis
 from levanter import training_budget
-from levanter.training_budget import TimeLimitedIterator, TrainingStopReason
+from levanter.data.dataset import ListAsyncDataset
+from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
+from levanter.data.text.examples import GrugLmExample
+from levanter.schedule import BatchSchedule
+from levanter.trainer import TrainerConfig
+from levanter.training_budget import TimeLimitedIterator, TrainingBudgetConfig, TrainingStopReason
+from levanter.utils.thread_utils import blocking_wait
 
+from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
+from experiments.grug.moe_hero_ep.model import GrugModelConfig
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, RouterBiasMode, SpecialTokenInit
 from experiments.post_training.long_loop.execution_policy import (
     SFT_FINALIZATION_RESERVE,
     SFT_TRAINING_DURATION,
     SFT_UPDATE_RESERVE,
 )
+from experiments.post_training.long_loop.mochi_sft import (
+    MochiSftControls,
+    MochiSftInitializer,
+    MochiSftRound,
+    bind_mochi_sft_config,
+)
 from experiments.post_training.long_loop.round_runner import RoundSft, load_round
-from experiments.post_training.long_loop.run_spec import FilePin
+from experiments.post_training.long_loop.run_spec import FilePin, StorageConfig
 from experiments.post_training.long_loop.sft_epoch import (
     MixtureEpochs,
     bind_sft_stopping,
@@ -214,3 +236,74 @@ def test_epoch_completion_accepts_only_coverage_or_certified_time_limit(epoch_in
         return
     validate_epoch_completion(actual)
     assert actual["full_sft_coverage"] == complete
+
+
+def test_native_hero_restore_starts_the_new_epoch_at_its_first_sequence(epoch_inputs):
+    recipe, _, pin = epoch_inputs
+    recipe["batch_size"] = 176
+    recipe["data"]["tokenizer"] = "gpt2"
+    updates = bind_sft_stopping(recipe, MixtureEpochs(), pin)
+    budget = TrainingBudgetConfig(SFT_TRAINING_DURATION, SFT_FINALIZATION_RESERVE, SFT_UPDATE_RESERVE)
+    spec = MochiSftRound(
+        1,
+        "mochi_sft",
+        "mochi/sft",
+        "2026.11.23.127",
+        "mochi-sft",
+        "cw-us-east-08a",
+        StorageConfig("s3://marin-us-east-08a/new", "s3://marin-us-east-08a/tmp"),
+        pin,
+        pin,
+        pin,
+        MochiSftInitializer("base", "s3://marin-us-east-08a/base", pin.path, "0" * 64),
+        MochiSftControls(128, 176, 32, MixtureEpochs(), pin, budget, 72000),
+    )
+    previous = GrugRunConfig(
+        model=GrugModelConfig(vocab_size=64, max_seq_len=16, num_layers=1, num_experts=192),
+        data=LmDataConfig(
+            tokenizer="gpt2",
+            components={"old": DatasetComponent(), "val": DatasetComponent(split="validation")},
+            train_weights=[(0, {"old": 1.0})],
+        ),
+        optimizer=GrugMoeMuonHConfig(),
+        resources=ResourceConfig(device=GpuConfig("GB200", count=4), replicas=176),
+        trainer=GrugTrainerConfig(
+            trainer=TrainerConfig(train_batch_size=176, num_train_steps=140),
+            save_checkpoints=True,
+            router_bias_mode=RouterBiasMode.FROZEN,
+            expert_axis_size=16,
+            context_axis_size=4,
+            replica_axis_size=11,
+            special_tokens=SpecialTokenInit((5,), (1,), 40, 2.0),
+            expert_placement=ExpertPlacement("base", 16, 12, (tuple(range(192)),), "fixture"),
+        ),
+    )
+    reference = {"config": draccus.encode(previous)}
+    reference["config"]["trainer"]["trainer"]["mp"] = {
+        "param_dtype": {"__dtype__": "float32"},
+        "compute_dtype": {"__dtype__": "bfloat16"},
+        "output_dtype": {"__dtype__": "bfloat16"},
+    }
+    config = bind_mochi_sft_config(spec, reference, recipe["data"], updates=updates, output="s3://marin-us-east-08a/new")
+    components = {
+        name: DirectDatasetComponent(
+            datasets={
+                "train": ListAsyncDataset([GrugLmExample(tokens=jnp.full((16,), index), loss_weight=jnp.ones(16))])
+            }
+        )
+        for index, name in enumerate(recipe["data"]["components"])
+    }
+    data = replace(config.data, components=components, cache_catalog=None, shuffle=False)
+    relative = replace(data, mixture_start_step=None)
+    schedule = BatchSchedule(176)
+    native = data.train_mixture(Axis("position", 16), schedule, key=jax.random.PRNGKey(0))
+    expected = relative.train_mixture(Axis("position", 16), schedule, key=jax.random.PRNGKey(0))
+    start = schedule.global_data_offset_by_step(40)
+    actual_batch = blocking_wait(native.get_batch(range(start, start + 176)))
+    expected_batch = blocking_wait(expected.get_batch(range(176)))
+    for actual, wanted in zip(actual_batch, expected_batch, strict=True):
+        np.testing.assert_array_equal(actual.tokens, wanted.tokens)
+    assert native.first_readable_index() == start
+    actual_exposure = step_exposure(recipe, recipe["sft_capacity"]["sources"], updates)
+    assert actual_exposure["full_sft_coverage"]
+    assert set(config.evaluation_data.components) == {"val"}

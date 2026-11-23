@@ -22,6 +22,7 @@ import hashlib
 import json
 import math
 import os
+import sys
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
@@ -36,8 +37,9 @@ import yaml
 from iris.cluster.client.job_info import get_job_info
 from levanter.training_budget import TrainingBudgetConfig, WallClockCooldown
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep
-from marin.rl.cli import rl_build_options
+from marin.execution.lazy import ArtifactStep, StepContext, run
+from marin.experiment.cli import build_options_with_runner
+from marin.rl.cli import submit_or_run
 from marin.rl.curriculum import RlCurriculum, consumed_route_quotas
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, MegatronGeometry, SkyRLRolePlan
 from marin.training.training import LevanterCheckpoint
@@ -79,6 +81,12 @@ from experiments.post_training.long_loop.exp4 import (
     release_artifact,
 )
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_steps
+from experiments.post_training.long_loop.mochi_sft import (
+    MochiSftRound,
+    mochi_sft_step,
+    resolve_mochi_sft,
+    run_mochi_sft,
+)
 from experiments.post_training.long_loop.nvl72 import MochiProfile, build_run, validate_model_geometry
 from experiments.post_training.long_loop.openresearcher_service import (
     OpenResearcherService,
@@ -407,7 +415,7 @@ def _decode_strict(section: dict, target: type, label: str):
     return target(**values)
 
 
-def load_round(path: Path) -> RoundSpec | AdoptedHfRound | AdoptedRlRound | RecoveryRound:
+def load_round(path: Path) -> RoundSpec | AdoptedHfRound | AdoptedRlRound | RecoveryRound | MochiSftRound:
     """Load a round YAML into the strict schema; unknown or mistyped keys fail."""
     document = yaml.safe_load(path.read_text())
     if not isinstance(document, dict):
@@ -421,12 +429,16 @@ def load_round(path: Path) -> RoundSpec | AdoptedHfRound | AdoptedRlRound | Reco
         budget["duration"] = draccus.encode(SFT_TRAINING_DURATION)
         document["sft"].setdefault("task_timeout_seconds", int(SFT_TRAINING_DURATION.total_seconds()))
     target = (
-        RecoveryRound
-        if "resolved_plan" in document
+        MochiSftRound
+        if document.get("format") == "mochi_sft"
         else (
-            AdoptedRlRound
-            if "adopted_model" in document and "rl" in document
-            else AdoptedHfRound if "adopted_model" in document else RoundSpec
+            RecoveryRound
+            if "resolved_plan" in document
+            else (
+                AdoptedRlRound
+                if "adopted_model" in document and "rl" in document
+                else AdoptedHfRound if "adopted_model" in document else RoundSpec
+            )
         )
     )
     spec = _decode_strict(document, target, str(path))
@@ -970,7 +982,9 @@ def exp4_round_pools(prefix: str, version: str) -> RoundPools:
     return RoundPools(pools, curriculum, datasets)
 
 
-def require_permanent_round_storage(round_spec: RoundSpec | AdoptedHfRound | AdoptedRlRound | RecoveryRound) -> None:
+def require_permanent_round_storage(
+    round_spec: RoundSpec | AdoptedHfRound | AdoptedRlRound | RecoveryRound | MochiSftRound,
+) -> None:
     """A round's outputs live at a permanent path, never under a scratch TTL prefix."""
     path = StoragePath(round_spec.storage.output_prefix)
     if PERMANENT_TMP_SEGMENT in path.segments:
@@ -988,13 +1002,28 @@ def require_archive_binds_final_sft_checkpoint(resolved: dict) -> None:
         raise ValueError("Round archive settings must bind the SFT stage's selected.json")
 
 
+def run_round(handles: list[ArtifactStep], max_concurrent: int) -> None:
+    if any(handle.run is run_mochi_sft for handle in handles):
+        if get_job_info() is None:
+            raise click.UsageError("Submit native Mochi SFT through an Iris CPU coordinator on cw-us-east-08a")
+        run(*handles, max_concurrent=max_concurrent)
+        return
+    submit_or_run(
+        "experiments.post_training.long_loop.round_runner",
+        handles,
+        max_concurrent,
+        os.environ,
+        argv=tuple(sys.argv[1:]),
+    )
+
+
 @click.command(help=__doc__)
 @click.option("--round", "round_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--source-revision", required=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
 @click.option("--through", type=click.Choice(["sft", "rl", "eval", "archive"]), default="archive", show_default=True)
 @click.option("--smoke", is_flag=True, help="Use two rollout groups for an adopted RL round with max_steps=2.")
-@rl_build_options
+@partial(build_options_with_runner, runner=run_round)
 def main(round_path: Path, source_revision: str, validation_output: Path, through: str, smoke: bool) -> ArtifactStep:
     configure_coreweave_s3()
     round_spec = load_round(round_path)
@@ -1006,6 +1035,22 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
     require_permanent_round_storage(round_spec)
     if smoke and (not isinstance(round_spec, AdoptedRlRound) or round_spec.rl.max_steps != 2):
         raise click.UsageError("--smoke requires an adopted RL round with rl.max_steps=2")
+    if isinstance(round_spec, MochiSftRound):
+        if through != "sft":
+            raise click.UsageError("A Mochi native SFT round requires --through sft")
+        os.environ.update(
+            MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
+        )
+        reference, data, receipt = resolve_mochi_sft(round_spec)
+        terminal = mochi_sft_step(round_spec, reference, data, receipt)
+        context = StepContext.for_run(terminal.path(round_spec.storage.output_prefix), round_spec.storage.output_prefix)
+        config = terminal.build_config(context)
+        validation_output.mkdir(parents=True, exist_ok=True)
+        (validation_output / "resolved-config.json").write_text(json.dumps(draccus.encode(config.config), indent=2))
+        receipt["source_revision"] = source_revision
+        (validation_output / "receipt.json").write_text(json.dumps(receipt, indent=2))
+        validate_graph(terminal, validation_output, round_spec.storage.output_prefix)
+        return terminal
     if isinstance(round_spec, RecoveryRound):
         if through not in {"rl", "archive"}:
             raise click.UsageError("A recovery round requires --through rl or archive")

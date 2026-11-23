@@ -117,6 +117,15 @@ class TestConvertConstraints:
         assert cluster_constraints[0].values[0].value == "cw-us-east-02a"
 
 
+def test_gpu_nvlink_exclusion_survives_iris_wire_translation():
+    resources = ResourceConfig(device=GpuConfig("GB200", count=4), excluded_nvlink_domains=("faulty-rack",))
+    constraints = [constraint.to_proto() for constraint in convert_constraints(resources)]
+    assert len(constraints) == 1
+    assert constraints[0].key == "nvlink.domain"
+    assert constraints[0].op == job_pb2.CONSTRAINT_OP_NE
+    assert constraints[0].value.string_value == "faulty-rack"
+
+
 class TestConvertConstraintsDeviceAlternatives:
     def test_no_alternatives_produces_no_device_constraint(self):
         resources = ResourceConfig.with_tpu("v5p-8")

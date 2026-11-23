@@ -4,18 +4,33 @@
 import dataclasses
 import json
 import math
+import time
+from datetime import timedelta
+from types import SimpleNamespace
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import levanter.training_budget as training_budget
+import marin.training.levanter as training_runtime
 import numpy as np
 import optax
 import pytest
-from jax.sharding import AxisType, Mesh, reshard
+from fray.types import ResourceConfig
+from jax.sharding import AxisType, Mesh, NamedSharding, reshard
+from jax.sharding import PartitionSpec as P
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint_metadata
+from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
+from levanter.distributed import DistributedConfig
+from levanter.optim.config import AdamConfig
+from levanter.schedule import BatchSchedule
 from levanter.testing.devices import use_test_devices
+from levanter.tracker import NoopConfig, NoopTracker, current_tracker
+from levanter.trainer import TrainerConfig
+from levanter.training_budget import TrainingBudgetConfig
 
 from experiments.grug.moe_hero_ep import model
 from experiments.grug.moe_hero_ep.expert_placement import (
@@ -34,10 +49,17 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
+    GrugRunConfig,
+    GrugTrainerConfig,
     RouterBiasMode,
     SpecialTokenInit,
+    TrainingDataMode,
+    _loss_and_grads,
     _make_train_step,
     _place_restored_experts,
+    _run_grug_local,
+    build_train_loader,
+    grug_trainer_mesh_config,
     initial_state,
     permute_experts,
     reseed_special_token_columns,
@@ -142,6 +164,160 @@ def test_special_token_updates_scale_only_the_listed_rows():
     np.testing.assert_array_equal(embed_scale, expected)
     np.testing.assert_array_equal(head_scale, expected)
     np.testing.assert_array_equal(np.asarray(scaled.stacked_blocks.stacked.mlp.router_bias), 1.0)
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize("devices", [1, 4])
+@pytest.mark.timeout(120)
+def test_176_sequence_update_matches_six_padded_microbatches_with_one_clip_and_update(devices):
+    with use_test_devices(devices) as selected:
+        mesh = Mesh(
+            np.asarray(selected).reshape(1, devices, 1, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        with jax.set_mesh(mesh):
+            optimizer = optax.sgd(1e-2, momentum=0.9)
+            state = initial_state(_tiny_config(), optimizer=optimizer, mp=_FP32, key=jax.random.key(12), ema_beta=None)
+            params = state.params
+            tokens = jnp.arange(176 * 8, dtype=jnp.int32).reshape(176, 8) % 64
+            weights = (jnp.arange(176 * 8).reshape(176, 8) % 3 != 0).astype(jnp.float32)
+            weights = weights.at[:, -1].set(0)
+            batch = GrugLmExample(tokens=tokens, loss_weight=weights)
+            padded = GrugLmExample(
+                tokens=jnp.pad(tokens, ((0, 16), (0, 0)), constant_values=63),
+                # Nonzero garbage in padding must never contribute to the update.
+                loss_weight=jnp.pad(weights, ((0, 16), (0, 0)), constant_values=1),
+            )
+            batch = jax.tree.map(lambda x: jax.device_put(x, NamedSharding(mesh, P("data", None))), batch)
+            padded = jax.tree.map(lambda x: jax.device_put(x, NamedSharding(mesh, P("data", None))), padded)
+            (loss, _), grads = _loss_and_grads(params, batch, _FP32, 1e-4)
+            clipped, _ = optax.clip_by_global_norm(0.01).update(grads, optax.EmptyState())
+            updates, expected_opt_state = optimizer.update(clipped, state.opt_state, params)
+            expected_params = optax.apply_updates(params, updates)
+            step = _make_train_step(
+                optimizer,
+                _FP32,
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                max_grad_norm=0.01,
+                router_bias_mode=RouterBiasMode.FROZEN,
+                microbatch_size=32,
+                logical_batch_size=176,
+            )
+            state, metrics, _ = step(state, padded)
+            assert int(state.step) == 1
+            assert float(metrics["train/grad_clipped"]) == 1.0
+            np.testing.assert_allclose(np.asarray(metrics["train/loss"]), np.asarray(loss), rtol=2e-6, atol=1e-6)
+            for expected, actual in zip(jax.tree.leaves(expected_params), jax.tree.leaves(state.params), strict=True):
+                np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=2e-4, atol=2e-6)
+
+            for expected, actual in zip(
+                jax.tree.leaves(expected_opt_state), jax.tree.leaves(state.opt_state), strict=True
+            ):
+                np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=2e-4, atol=2e-6)
+
+
+@pytest.mark.timeout(120)
+def test_hero_budget_stops_between_updates_and_commits_permanent_checkpoint(tmp_path, monkeypatch):
+    # CPU devices expose no allocator statistics; emulate that hardware I/O boundary.
+    monkeypatch.setattr(
+        type(jax.local_devices()[0]),
+        "memory_stats",
+        lambda _: {
+            "peak_bytes_in_use": 0,
+            "bytes_in_use": 0,
+            "bytes_limit": 1,
+        },
+    )
+    started = time.time()
+    clock = iter([0.0, 0.0, 1000.0])
+    monkeypatch.setattr(training_budget, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(training_budget, "time", lambda: started)
+    context = SimpleNamespace(
+        job_id="cpu-clock-test",
+        client=SimpleNamespace(
+            list_tasks=lambda _: [SimpleNamespace(started_at=SimpleNamespace(epoch_seconds=lambda: started))]
+        ),
+    )
+    monkeypatch.setattr(training_runtime, "iris_ctx", lambda: context)
+    checkpoint = tmp_path / "checkpoints"
+    trainer = TrainerConfig(
+        id="hero-clock-test",
+        train_batch_size=1,
+        num_train_steps=10,
+        mp=_FP32,
+        tracker=NoopConfig(),
+        require_accelerator=False,
+        mesh=grug_trainer_mesh_config(1),
+        distributed=DistributedConfig(initialize_jax_distributed=False),
+        log_jaxprs=False,
+        log_xla_hlo=False,
+        load_checkpoint=False,
+        log_dir=tmp_path / "logs",
+        native_telemetry_root=str(tmp_path / "telemetry"),
+        checkpointer=CheckpointerConfig(
+            base_path=str(checkpoint),
+            temporary_base_path=str(tmp_path / "resume"),
+            append_run_id_to_base_path=False,
+            save_interval=timedelta(hours=2),
+            keep=None,
+        ),
+        training_budget=TrainingBudgetConfig(timedelta(seconds=100), timedelta(seconds=20), timedelta(seconds=20)),
+    )
+    with current_tracker(NoopTracker()):
+        _run_grug_local(
+            GrugRunConfig(
+                model=_tiny_config(),
+                data=LmDataConfig(tokenizer="gpt2", components={}),
+                resources=ResourceConfig(),
+                optimizer=AdamConfig(learning_rate=1e-3, warmup=0),
+                eval=None,
+                trainer=GrugTrainerConfig(
+                    trainer=trainer,
+                    save_checkpoints=True,
+                    training_data_mode=TrainingDataMode.SYNTHETIC,
+                    replica_axis_size=1,
+                ),
+            )
+        )
+    receipt = json.loads((tmp_path / "telemetry" / "completion.json").read_text())
+    assert receipt["stop_reason"] == "time_bound"
+    assert receipt["restored_step"] == 0 and receipt["final_step"] == 1
+    metadata = load_checkpoint_metadata(receipt["checkpoint"])
+    assert metadata["step"] == 1 and not metadata["is_temporary"]
+    assert receipt["finalized_epoch_seconds"] <= receipt["deadline_epoch_seconds"]
+
+
+@pytest.mark.multidevice
+def test_hero_loader_padding_does_not_consume_the_next_logical_batch():
+    with use_test_devices(32) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(2, 1, 16, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        dataset = ListAsyncDataset(
+            [
+                GrugLmExample(tokens=np.full(8, index, dtype=np.int32), loss_weight=np.ones(8, dtype=np.float32))
+                for index in range(352)
+            ]
+        )
+        loader = build_train_loader(
+            dataset,
+            batch_schedule=BatchSchedule(176),
+            mesh=mesh,
+            allow_nondivisible_batch_size=True,
+        )
+        with jax.set_mesh(mesh):
+            iterator = loader.iter_from_step(0)
+            for ordinal in range(2):
+                batch = next(iterator)
+                assert batch.tokens.shape == (192, 8)
+                np.testing.assert_array_equal(
+                    np.asarray(batch.tokens)[:176, 0], np.arange(ordinal * 176, (ordinal + 1) * 176)
+                )
+                np.testing.assert_array_equal(np.asarray(batch.loss_weight)[176:], 0)
 
 
 def test_reseed_copies_anchor_columns_and_zeros_only_their_moments():

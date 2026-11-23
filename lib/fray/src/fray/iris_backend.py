@@ -149,6 +149,10 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
         constraints.append(region_constraint(list(regions)))
     if resources.zone:
         constraints.append(zone_constraint(resources.zone))
+    constraints.extend(
+        Constraint.create(key="nvlink.domain", op=ConstraintOp.NE, value=domain)
+        for domain in resources.excluded_nvlink_domains
+    )
     if resources.target_cluster:
         constraints.append(
             Constraint.create(

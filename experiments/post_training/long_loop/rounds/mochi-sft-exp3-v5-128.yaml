@@ -1,0 +1,36 @@
+# Native hero SFT on the first new long-loop mix: Exp3's sealed V5.
+# Preparation only. Submission requires the user's go and a completed verified initializer copy.
+schema: 1
+format: mochi_sft
+name: long-loop-mochi-sft-exp3-v5-128/sft
+slug: long-loop-mochi-sft-exp3-v5-128
+version: "2026.11.23.127"
+cluster: cw-us-east-08a
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/mochi-long-loop
+  temporary_prefix: s3://marin-us-east-08a/tmp
+hero_reference:
+  path: s3://marin-us-east-02a/marin/grug/hero-sft-fullab-step393k-v2/2026.11.10/.artifact.json
+  sha256: 4481a2b3579203a04ee01bfc6943fe718aa41eed310c54bc036d58f06739d068
+data_release:
+  path: s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/manifest.json
+  sha256: c4c2035e177dff1090b4510f1aa228a676eb753951a10581c7ba4bd853b63b1f
+data_seal:
+  path: s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/release-complete-v5.json
+  sha256: 3e2161945e1adc60c9edcdb6b0d7395946966dc4e0d16b88660fbc38989603f5
+initializer:
+  source: s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491
+  destination: s3://marin-us-east-08a/marin/users/benfeuer/mochi-sft-initializers/hero-base393491-native/step-393491
+  copy_manifest: s3://marin-us-east-08a/marin/users/benfeuer/mochi-sft-initializers/hero-base393491-native/step-393491/.verified-copy-manifest.json
+  metadata_sha256: 07df6c2f942b7f4a86b5d6fc42f1f5f0306a2bb3c3838a0b0616c8297d996267
+sft:
+  gpu_count: 128
+  batch_size: 176
+  microbatch_size: 32
+  stopping: {type: mixture_epochs, count: 1}
+  epoch_capacity:
+    path: s3://marin-us-east-08a/marin/users/benfeuer/mochi-sft-preparation/v5-native-capacity-20261123b/capacity.json
+    sha256: 239a69e07f0dc921daead3adc34c6295cfde966048e510e6b74eec417dfd93fb
+  training_budget:
+    finalization_reserve: 40m
+    update_reserve: 10m
