@@ -129,6 +129,18 @@ evaluations:
       judge_api_key:
       - env:TOGETHER_API_KEY
       - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+  physics-verified:
+    benchmark: physics-verified
+    run:
+      judge:
+        deployment: together
+        models:
+          zai-org/GLM-5.3-Flash: provider-managed:zai-org/GLM-5.3-Flash
+        default_model: zai-org/GLM-5.3-Flash
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key:
+      - env:TOGETHER_API_KEY
+      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
   arc-challenge-10shot:
     benchmark: arc-challenge
     num_fewshot: 10

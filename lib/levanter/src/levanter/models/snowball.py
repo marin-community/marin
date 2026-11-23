@@ -21,7 +21,7 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Optional, Type, cast
+from typing import Any, Literal, NamedTuple, Optional, Type, cast
 
 import equinox as eqx
 import jax
@@ -48,6 +48,7 @@ from levanter.grug.attention import (
     align_kv_heads,
     apply_rotary_embedding,
     attention,
+    ragged_paged_attention,
 )
 from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp
 from levanter.grug.sharding import (
@@ -58,7 +59,9 @@ from levanter.grug.sharding import (
     _mesh_axis_size,
     unshard,
 )
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
+from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
@@ -478,24 +481,7 @@ class SnowballAttention(eqx.Module):
         mask: AttentionMask,
         disable_rope: bool = False,
     ) -> Float[Array, "B S D"]:
-        head_dim = self.cfg.inferred_head_dim
-        seq_len = x.shape[1]
-
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
-
-        q = rms_norm(q)
-        k = rms_norm(k)
-        # Half-RoPE: rotary on the first half of head_dim only (second half is rope-free).
-        if not disable_rope:
-            half = head_dim // 2
-            q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-            )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
-        q = q * self.cfg.qk_mult
+        q, k, v = self._project_qkv(x, disable_rope=disable_rope)
         context = _context_axis()
         local_v = v
         if context is not None:
@@ -508,7 +494,36 @@ class SnowballAttention(eqx.Module):
         attn_out = attention(q, k, v, mask, implementation=implementation)
         if context is not None:
             attn_out = _reshard_sequence(attn_out, context)
-        aligned_v = align_kv_heads(local_v, num_q_heads=attn_out.shape[2])
+        return self._project_output(x, attn_out, local_v)
+
+    def _project_qkv(
+        self, x: jax.Array, *, disable_rope: bool, position_ids: jax.Array | None = None
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        head_dim = self.cfg.inferred_head_dim
+
+        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+
+        q = rms_norm(q)
+        k = rms_norm(k)
+        # Half-RoPE: rotary on the first half of head_dim only (second half is rope-free).
+        if not disable_rope:
+            half = head_dim // 2
+            q_rot, k_rot = apply_rotary_embedding(
+                q[..., :half],
+                k[..., :half],
+                seq_len=x.shape[1],
+                head_dim=half,
+                rope=self.cfg.rope,
+                position_ids=position_ids,
+            )
+            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+        return q * self.cfg.qk_mult, k, v
+
+    def _project_output(self, x: jax.Array, attn_out: jax.Array, v: jax.Array) -> jax.Array:
+        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = _partition_match(aligned_v, attn_out)
         # Exclusive Self-Attention: subtract the component of y parallel to v, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -524,6 +539,39 @@ class SnowballAttention(eqx.Module):
             out_sharding=_activation_spec("model"),
         )
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_activation_spec())
+
+    @named_call
+    def decode(
+        self,
+        x: jax.Array,
+        cache: KvPageCache,
+        batch_info: PageBatchInfo,
+        pos_ids: jax.Array,
+        *,
+        mode: Literal["short", "long"],
+    ) -> tuple[jax.Array, KvPageCache]:
+        """Write the new keys and values, then attend over each request's cached prefix."""
+        cfg = self.cfg
+        head_dim = cfg.inferred_head_dim
+        q, k, v = self._project_qkv(x, disable_rope=mode == "long", position_ids=pos_ids[:, None])
+        token_axis = batch_info.new_token_dests.axes[0]
+        kv_axes = (token_axis, Axis("kv_head", cfg.num_kv_heads), Axis("head_size", head_dim))
+        cache_k = reshard(k[:, 0], P(None, "model", None))
+        cache_v = reshard(v[:, 0], P(None, "model", None))
+        cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
+        q = q.reshape(x.shape[0], cfg.num_kv_heads, cfg.num_heads // cfg.num_kv_heads, head_dim)
+        q = reshard(q, P(None, "model", None, None))
+        out = ragged_paged_attention(
+            q,
+            cache.kv_pages.array,
+            batch_info.seq_lens.array,
+            batch_info.page_indices.array,
+            batch_info.cu_q_lens.array,
+            batch_info.num_seqs,
+            sm_scale=head_dim**-0.5,
+            sliding_window=cfg.sliding_window if mode == "short" else None,
+        ).reshape(x.shape[0], 1, cfg.num_heads, head_dim)
+        return self._project_output(x, out, v), cache
 
 
 def _partition_match(aligned_v: jax.Array, attn_out: jax.Array) -> jax.Array:
@@ -778,10 +826,39 @@ class SnowballBlock(eqx.Module):
             lambda _: self.attn(attn_in, short_mask, disable_rope=False),
             operand=None,
         )
+        return self._after_attention(x, attn_out, return_routes, token_valid, collect_counts=collect_counts)
+
+    def _after_attention(
+        self,
+        x: Array,
+        attn_out: Array,
+        return_routes: bool,
+        token_valid: Array | None = None,
+        *,
+        collect_counts: bool = False,
+    ) -> MoeForwardOutput:
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         routed = self.mlp._forward(mlp_in, return_routes, token_valid, collect_counts=collect_counts)
         return MoeForwardOutput(x + (routed.output + self.shared(mlp_in)), routed.routes, routed.counts)
+
+    def decode(
+        self,
+        x: Array,
+        cache: KvPageCache,
+        batch_info: PageBatchInfo,
+        pos_ids: Array,
+        use_long: Bool[Array, ""],
+        token_valid: Array,
+    ) -> tuple[Array, KvPageCache]:
+        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_out, cache = jax.lax.cond(
+            use_long,
+            lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="long"),
+            lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="short"),
+            operand=None,
+        )
+        return self._after_attention(x, attn_out, return_routes=False, token_valid=token_valid).output, cache
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
@@ -1034,6 +1111,72 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         new_cfg = dataclasses.replace(self._config, vocab_size=new_size)
         new_tf = eqx.tree_at(lambda t: (t.token_embed, t.output_proj, t.config), self.transformer, (te, op, new_cfg))
         return SnowballLMHeadModel(new_tf, new_cfg)
+
+    def initial_cache(self, spec: PageTableSpec, *, dtype: jnp.dtype) -> ListCache[KvPageCache]:
+        """Allocate paged KV state on a serving mesh with context parallelism disabled."""
+        if _context_axis() is not None:
+            raise ValueError("Snowball paged inference requires context_axis_size=1")
+        cfg = self.config
+        kv_heads, head_size = Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim)
+        caches = []
+        for _ in self.transformer.blocks:
+            cache = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype)
+            # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
+            pages = reshard(cache.kv_pages.array, P(None, None, "model", None))
+            caches.append(KvPageCache(hax.named(pages, cache.kv_pages.axes)))
+        return ListCache(tuple(caches))
+
+    @named_call
+    def decode(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        """Prefill or decode packed sequences using absolute positions and paged KV state.
+
+        Tokens occupy a flat position axis, with a valid prefix described by batch_info.
+        Expert assignments are independent of other requests and padding.
+        """
+        if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
+            raise ValueError("Snowball decode requires matching flat token and position arrays")
+        if len(kv_cache) != len(self.transformer.blocks):
+            raise ValueError("Snowball decode requires one KV cache per transformer layer")
+        tokens = reshard(input_ids.array[:, None], P(_BATCH_AXES, None))
+        hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())
+        hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
+        token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
+        stacked = self._stacked_inference_blocks()
+        cache_pages = jnp.stack([cache.kv_pages.array for cache in kv_cache])
+        cache_axes = kv_cache[0].kv_pages.axes
+        long_schedule = long_attention_layer_mask(len(kv_cache))
+
+        def layer_step(x, layer_data):
+            block, pages, use_long = layer_data
+            cache = KvPageCache(hax.named(pages, cache_axes))
+            x, cache = block.decode(x, cache, batch_info, pos_ids.array, use_long, token_valid)
+            return x, cache.kv_pages.array
+
+        hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
+        hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
+        logits = jnp.einsum(
+            "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
+        )
+        caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
+        return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches
+
+    def _stacked_inference_blocks(self) -> SnowballBlock:
+        stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)
+        expert_size = _mesh_axis_size(_current_mesh(), "expert")
+        if expert_size <= 1:
+            return stacked
+        # A receiver can get every sender's assignments. Reserve that worst-case
+        # capacity so expert dispatch cannot drop tokens at serving time.
+        experts = dataclasses.replace(
+            stacked.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
+        )
+        return eqx.tree_at(lambda block: block.mlp.expert_mlp, stacked, experts)
 
     # --- state dict (bidirectional HF serialization) ---
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from harbor.models.job.config import RetryConfig
+from rigging.task_errors import RetrySettings
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import ExceptionInfo, TrialResult
@@ -64,7 +64,7 @@ class TrialQueue:
     def __init__(
         self,
         n_concurrent: int,
-        retry_config: RetryConfig | None = None,
+        retry_config: RetrySettings | None = None,
         hooks: dict[TrialEvent, list[HookCallback]] | None = None,
         release_trial_payloads_in_memory: bool = False,
         planned_attempts: dict[str, int] | None = None,
@@ -80,7 +80,7 @@ class TrialQueue:
         self._n_concurrent = n_concurrent
         self._host_capabilities = host_capabilities
         self._guest_environment = dict(guest_environment)
-        self._retry_config = retry_config if retry_config is not None else RetryConfig()
+        self._retry_config = retry_config if retry_config is not None else RetrySettings()
         self._hooks = hooks
         self._release_trial_payloads_in_memory = release_trial_payloads_in_memory
         self._planned_attempts = planned_attempts or {}
