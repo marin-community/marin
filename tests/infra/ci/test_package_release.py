@@ -24,7 +24,7 @@ from scripts.ci.package_release import (
     latest_native_release_versions,
     latest_supported_version,
     lock_changed_outside,
-    lock_projects,
+    lock_paths_recording,
     next_development_version,
     packages_for_changes,
     python_compatible_version,
@@ -464,7 +464,7 @@ source = {{ registry = "https://pypi.org/simple" }}
     assert not lock_changed_outside(before, bumped, ("marin-iris-native",))
 
 
-def test_lock_projects_include_vendored_locks_that_install_the_owner_locally(tmp_path: Path) -> None:
+def test_lock_paths_include_vendored_locks_that_install_the_owner_locally(tmp_path: Path) -> None:
     lock = """\
 version = 1
 
@@ -480,8 +480,8 @@ source = {{ {source} }}
         (tmp_path / "vendor" / project).mkdir(parents=True)
         (tmp_path / "vendor" / project / "uv.lock").write_text(lock.format(source=source))
 
-    assert lock_projects(tmp_path, "marin-iris") == [Path("."), Path("vendor/skyrl")]
-    assert lock_projects(tmp_path, "marin-dupekit") == [Path(".")]
+    assert lock_paths_recording(tmp_path, "marin-iris") == [tmp_path / "uv.lock", tmp_path / "vendor/skyrl/uv.lock"]
+    assert lock_paths_recording(tmp_path, "marin-dupekit") == [tmp_path / "uv.lock"]
 
 
 def test_vendored_lock_may_record_the_floor_without_the_distribution() -> None:

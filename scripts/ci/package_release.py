@@ -688,17 +688,17 @@ def emit_github_output(path: Path | None, **values: str) -> None:
             output.write(f"{key}={value}\n")
 
 
-def lock_projects(repo_root: Path, owner: str) -> list[Path]:
-    """Return the root project and each vendored project that installs `owner` from a local path.
+def lock_paths_recording(repo_root: Path, owner: str) -> list[Path]:
+    """Return the root uv.lock and each vendored uv.lock that installs `owner` from a local path.
 
     Such a lock records the requirements of `owner`, so a floor raised there makes the lock stale.
     """
-    projects = [Path(".")]
+    lock_paths = [repo_root / "uv.lock"]
     for lock_path in sorted(repo_root.glob(VENDORED_LOCK_GLOB)):
         packages = tomllib.loads(lock_path.read_text()).get("package", [])
         if any(package["name"] == owner and package["source"].keys() & LOCAL_SOURCE_KEYS for package in packages):
-            projects.append(lock_path.parent.relative_to(repo_root))
-    return projects
+            lock_paths.append(lock_path)
+    return lock_paths
 
 
 def _write_texts(texts: Mapping[Path, str]) -> None:
@@ -708,6 +708,21 @@ def _write_texts(texts: Mapping[Path, str]) -> None:
 
 def _uv_lock_returncode(project_dir: Path, *options: str) -> int:
     return subprocess.run(["uv", "lock", *options], cwd=project_dir).returncode
+
+
+def _relock(original_locks: Mapping[Path, str], upgrade: str) -> dict[Path, str]:
+    """Re-lock each project with `upgrade`, retrying while the release reaches the package index."""
+    for delay in LOCK_RETRY_DELAYS:
+        time.sleep(delay)
+        _write_texts(original_locks)
+        relocked = all(
+            _uv_lock_returncode(path.parent, "--upgrade-package", upgrade) == 0
+            and _uv_lock_returncode(path.parent, "--check") == 0
+            for path in original_locks
+        )
+        if relocked:
+            return {path: path.read_text() for path in original_locks}
+    raise RuntimeError(f"`uv lock --upgrade-package {upgrade}` failed after {len(LOCK_RETRY_DELAYS)} attempts")
 
 
 def bump_native_requirement(
@@ -732,45 +747,30 @@ def bump_native_requirement(
     if not changed:
         return FloorUpdate.CURRENT
 
-    lock_paths = [repo_root / project / "uv.lock" for project in lock_projects(repo_root, build.requirement_owner)]
-    original_locks = {path: path.read_text() for path in lock_paths}
-    originals = {requirement_path: original_requirement, **original_locks}
+    original_locks = {path: path.read_text() for path in lock_paths_recording(repo_root, build.requirement_owner)}
     requirement_path.write_text(updated_requirement)
-    upgrade = f"{build.requirement_distribution}=={version}"
-    for attempt, delay in enumerate(LOCK_RETRY_DELAYS, start=1):
-        if delay:
-            time.sleep(delay)
-        _write_texts(original_locks)
-        relocked = all(_uv_lock_returncode(path.parent, "--upgrade-package", upgrade) == 0 for path in lock_paths)
-        if not relocked:
-            if attempt < len(LOCK_RETRY_DELAYS):
-                continue
-            _write_texts(originals)
-            raise RuntimeError(f"`uv lock --upgrade-package {upgrade}` failed after {attempt} attempts")
-        updated_locks = {path: path.read_text() for path in lock_paths}
-        for path in lock_paths:
+    try:
+        updated_locks = _relock(original_locks, f"{build.requirement_distribution}=={version}")
+        for path, updated_lock in updated_locks.items():
             try:
                 validate_targeted_lock_change(
                     original_locks[path],
-                    updated_locks[path],
+                    updated_lock,
                     build.requirement_distribution,
                     version,
                     allowed_packages=(build.requirement_owner,),
                 )
             except ValueError as error:
-                _write_texts(originals)
-                raise ValueError(f"{path.relative_to(repo_root)}: {error}") from error
-        checked = all(_uv_lock_returncode(path.parent, "--check") == 0 for path in lock_paths)
-        if not checked:
-            if attempt < len(LOCK_RETRY_DELAYS):
-                continue
-            _write_texts(originals)
-            raise RuntimeError(f"`uv lock --check` failed after {attempt} attempts")
-        allowed = (build.requirement_distribution, build.requirement_owner)
-        if any(lock_changed_outside(original_locks[path], updated_locks[path], allowed) for path in lock_paths):
-            return FloorUpdate.MARKERS_CHANGED
-        return FloorUpdate.RAISED
-    raise AssertionError("Unreachable lock retry loop")
+                error.add_note(f"Lock file: {path}")
+                raise
+    except (RuntimeError, ValueError):
+        requirement_path.write_text(original_requirement)
+        _write_texts(original_locks)
+        raise
+    allowed = (build.requirement_distribution, build.requirement_owner)
+    if any(lock_changed_outside(original_locks[path], updated_locks[path], allowed) for path in original_locks):
+        return FloorUpdate.MARKERS_CHANGED
+    return FloorUpdate.RAISED
 
 
 def _zig_platform_key() -> str:
