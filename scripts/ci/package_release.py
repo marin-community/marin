@@ -691,7 +691,7 @@ def emit_github_output(path: Path | None, **values: str) -> None:
 def lock_paths_recording(repo_root: Path, owner: str) -> list[Path]:
     """Return the root uv.lock and each vendored uv.lock that installs `owner` from a local path.
 
-    Such a lock records the requirements of `owner`, so a floor raised there makes the lock stale.
+    Such a lock records the requirements of `owner`, so a floor raised in its pyproject.toml makes the lock stale.
     """
     lock_paths = [repo_root / "uv.lock"]
     for lock_path in sorted(repo_root.glob(VENDORED_LOCK_GLOB)):
@@ -712,17 +712,24 @@ def _uv_lock_returncode(project_dir: Path, *options: str) -> int:
 
 def _relock(original_locks: Mapping[Path, str], upgrade: str) -> dict[Path, str]:
     """Re-lock each project with `upgrade`, retrying while the release reaches the package index."""
+    failed: Path | None = None
     for delay in LOCK_RETRY_DELAYS:
         time.sleep(delay)
         _write_texts(original_locks)
-        relocked = all(
-            _uv_lock_returncode(path.parent, "--upgrade-package", upgrade) == 0
-            and _uv_lock_returncode(path.parent, "--check") == 0
-            for path in original_locks
+        failed = next(
+            (
+                path
+                for path in original_locks
+                if _uv_lock_returncode(path.parent, "--upgrade-package", upgrade)
+                or _uv_lock_returncode(path.parent, "--check")
+            ),
+            None,
         )
-        if relocked:
+        if failed is None:
             return {path: path.read_text() for path in original_locks}
-    raise RuntimeError(f"`uv lock --upgrade-package {upgrade}` failed after {len(LOCK_RETRY_DELAYS)} attempts")
+    raise RuntimeError(
+        f"Re-locking {failed} with `--upgrade-package {upgrade}` failed after {len(LOCK_RETRY_DELAYS)} attempts"
+    )
 
 
 def bump_native_requirement(

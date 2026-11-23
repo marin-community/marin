@@ -57,7 +57,7 @@ jobs:
           python scripts/ci/package_release.py latest-native-releases \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Advance compatibility floors and lock
+      - name: Advance compatibility floors and locks
         id: bump
         env:
           VERSIONS: ${{ steps.releases.outputs.versions }}
