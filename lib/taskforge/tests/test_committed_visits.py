@@ -68,6 +68,7 @@ from taskforge.model.review import (
     EvidenceKind,
     Incomplete,
     MissingEvidence,
+    Retry,
     TrialOutcome,
 )
 from taskforge.model.stage import Exit
@@ -741,6 +742,16 @@ async def test_a_time_limited_trial_is_a_typed_failed_trial_no_later_launch_buys
     assert "Counted unsolved without a gradable answer: 1 time_limit" in accepted.reasons
     assert "Confirmation: 4 of 8 trials solved: in_band" in accepted.reasons
     assert trial_outcomes(wp) == {TrialOutcome.GRADED: 7, TrialOutcome.TIME_LIMIT: 1}  # each slot once
+
+
+async def test_a_retry_beside_a_time_limited_trial_records_the_missing_grade_as_its_cause(launches: Driver) -> None:
+    """Slot 0 ran out ``solver.time_limit`` and slot 1 has no grade: the retry is for the missing grade, and the journal
+    says so. A limit is an unsolved trial, never a retry's cause, even when it comes first."""
+    first = launch(Paid(graded((1, 0)), limited={(0, 0)}))
+    assert await launches.run(first, RETRYING) == 0
+    wp = published_workpiece(launches.root)
+    assert wp.decisions[0] == Retry(Cause.NO_GRADE, 1) and kinds(wp) == ["retry", "accept", "accept"]
+    assert wp.evidence[0].solver[0].outcome is TrialOutcome.TIME_LIMIT
 
 
 async def test_an_attempt_cap_slot_is_unscored_and_no_later_launch_buys_it_again(launches: Driver) -> None:
