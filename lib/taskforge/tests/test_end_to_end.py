@@ -781,7 +781,7 @@ def tree(destination: Path) -> dict[Path, bytes]:
     "flag,value",
     [("--glm-relay-job", ""), ("--glm-relay-job", " "), ("--glm-base-url", ""), ("--glm-base-url", "http://glm")],
 )
-async def test_a_blank_or_malformed_gateway_is_a_usage_error_before_any_claim(
+async def test_a_blank_relay_or_a_url_without_v1_is_a_usage_error_before_any_claim(
     driver_args: Namespace,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

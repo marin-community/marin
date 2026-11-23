@@ -13,14 +13,25 @@ import os
 import subprocess
 from collections.abc import Mapping
 
-from taskforge.gateway import add_gateway_flags
-
 BUCKETS = 4096
 """Passed to every driver as ``--buckets``; fixed across relaunches so that each proposal keeps its bucket."""
 SECRETS = ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_API_KEY", "PARALLEL_API_KEY")
 """Read by the driver with rigging.secrets.get_secret; PARALLEL_API_KEY is optional."""
 THREAD_PINS = ("OMP_NUM_THREADS", "RAYON_NUM_THREADS", "CARGO_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL")
 """Pinned to ``--cpu``: CPU is request-only, so a tool sizing itself from ``nproc`` sees the node's cores."""
+
+
+def relay_job(value: str) -> str:
+    """A non-blank relay job, so that a quoted unset variable fails before any job is submitted."""
+    if not value.strip():
+        raise argparse.ArgumentTypeError(f"must name an Iris relay job, got {value!r}")
+    return value
+
+
+def base_url(value: str) -> str:
+    if not value.endswith("/v1"):
+        raise argparse.ArgumentTypeError(f"must be a URL ending in /v1, got {value!r}")
+    return value
 
 
 def parser() -> argparse.ArgumentParser:
@@ -35,7 +46,9 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-cluster", default="cw-rno2a")
     parser.add_argument("--ranks")
     parser.add_argument("--resume-held", action="store_true", help="Resume published held workpieces")
-    add_gateway_flags(parser)
+    gateway = parser.add_mutually_exclusive_group(required=True)
+    gateway.add_argument("--glm-relay-job", type=relay_job, help="The Iris relay job that resolves the GLM gateway")
+    gateway.add_argument("--glm-base-url", type=base_url, help="A direct GLM gateway endpoint ending in /v1")
     return parser
 
 

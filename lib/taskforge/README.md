@@ -58,9 +58,9 @@ The launcher passes the four keys as `--secret NAME env:NAME`, so their values s
 `iris job run` command line; the driver reads them from Iris secret files. The model gateway is a
 driver flag, not a variable: `--glm-relay-job` names the Iris relay job that tunnels to the model
 routers (one relay serves both `glm-5.3` and `deepseek-v4.1-flash`), and `--glm-base-url` names a
-direct endpoint ending in `/v1` instead; pass exactly one. A blank or malformed value is a usage error
-before anything is claimed. Inside an Iris job the driver reaches the controller
-that Iris names in `IRIS_CONTROLLER_URL`.
+direct endpoint ending in `/v1` instead; pass exactly one. A blank relay job, or a base URL that
+does not end in `/v1`, is a usage error before anything is claimed. Inside an Iris job the driver
+reaches the controller that Iris names in `IRIS_CONTROLLER_URL`.
 
 ### Inputs
 
