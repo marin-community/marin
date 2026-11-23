@@ -93,6 +93,23 @@ class Sampler(eqx.Module):
 
         return tokens, log_prob_tokens
 
+    def sample_positions(
+        self,
+        logits: NamedArray,
+        temperatures: NamedArray,
+        *,
+        top_ps: NamedArray,
+        key: PRNGKeyArray,
+    ) -> tuple[NamedArray, NamedArray]:
+        """Sample each position with its own key and nucleus cutoff."""
+        sample = hax.vmap(self, "position")
+        # Branch before vmap so the full-distribution batch skips vocabulary sorting.
+        return jax.lax.cond(
+            hax.all(top_ps >= _FULL_DISTRIBUTION_TOP_P).scalar(),
+            lambda: sample(logits, temperatures, key=key),
+            lambda: sample(logits, temperatures, top_ps=top_ps, key=key),
+        )
+
     def _apply_top_p(
         self,
         scaled_logits: NamedArray,
