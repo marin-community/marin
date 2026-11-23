@@ -30,9 +30,9 @@ This file covers how to run it.
 
 author → submit → validate → review → confirm → review. On *modify*, a new author conversation starts,
 seeded with the findings and the previous submission's files; on *retry*, the same submission is validated
-again: every definitive solver trial (graded, limited, budget-exhausted, faulted) and every parked one (held or
-capped) is kept under its own slot identity (the round's `attempt` names the attempt they share), and only the
-missing evidence is bought, numbered past every trial index used; the kept trials are decided again with it. On *accept*, the confirmation step runs before the acceptance is final (see **Confirmation** below).
+again with a fresh cohort of solver trials under the new round's attempt; the retried round's trials stay in its
+own record. A limited or capped slot is never bought again when the same visit or cohort is replayed, but a retry's
+fresh cohort buys every slot of the new round, that one's included. A limit never causes a retry. On *accept*, the confirmation step runs before the acceptance is final (see **Confirmation** below).
 
 On every author entry, including revision rounds, the workspace holds the proposal, the previous
 submission's `task.json`, `controls.json` and resources, and any validation results. A caller can add
@@ -223,7 +223,9 @@ A validation or confirmation visit that a continuing review decided on is commit
 row carries the visit's identity (its stage, the workpiece it entered with and the run's compatibility digest) and its
 typed evidence, whose solver trials each name the journal row their result was bought at (`receipt`; none for a slot
 whose output budget ran out twice, the only case with no row; a slot-local refusal keeps its row). A later launch that enters the same visit takes
-that evidence and buys nothing inside it again: no solver, control, adversary or solve-review call, no stage duration
+that evidence and buys nothing inside it again (as far as the visit reached a published chunk: work bought after
+the last published chunk is bought again after a hard kill, as for any crash below; a cancelled launch publishes its
+rows first): no solver, control, adversary or solve-review call, no stage duration
 sample, observer notification, sandbox reopen or decision-model answer; the pure review rule then decides again.
 The compatibility digest covers the whole policy, the band and budget, the adversary's and solve-review's effective
 sessions (sampling included), the rollout, grading and decision-model replay identities and the machine backends
@@ -309,7 +311,7 @@ Run `uv run --frozen python -m taskforge.driver report <output-root> [--since-ho
 with the storage credentials above. It reads each journal head and its chunks concurrently,
 then prints terminal/reason counts, the outcomes of the solver trials in the completed validation and confirmation
 records of terminal workpieces (`solver_trial_outcomes scope=terminal_records outcome=<o> count=<n>`, one line per
-outcome; each bought slot once, though a confirmation record and a validation retry repeat the trials they keep; a
+outcome; each bought slot once, though a confirmation record repeats the trials it keeps; a
 running root and a stage that did not finish add nothing), accepted/hour over 1/6/24 hours, tokens by role,
 stage durations, and consecutive-event latency proxies. Replayed results do not add token
 spend or latency samples. Solver usage comes from recorded rollout steps. Each physical model call and solver slot
@@ -466,17 +468,20 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   the engine's model-turn wall from before admission) bounds one solver generation, from its first generated token:
   a generation still running past it is cut, and the trial is recorded at the time limit (`time_limit`): unsolved,
   never retried. The engine has no model-turn wall: the model client owns a turn, its time limit, stalls and
-  availability window. `solver.attempt_timeout` (8400 s, at least `solver.time_limit`) is a spending cap on one
+  availability window. `solver.attempt_timeout` (8400 s, greater than `solver.time_limit`: at equal values the cap fires first and a
+  time-limited trial would read as a capped one) is a spending cap on one
   physical attempt, machine preparation and grading included: an attempt that reaches it is recorded as a parked
   slot (`attempt_cap`, unscored, its prefix and failure record kept), counted against `budget.max_missing_trials` as
-  a held slot is and never bought again by a validation retry. It is a policy choice, not a bound on healthy
+  a held slot is, and never bought again when its visit or cohort is replayed (a validation retry's fresh cohort
+  buys the new round's slots). It is a policy choice, not a bound on healthy
   recovery: two availability waits around a long cut stream can exceed it, and an operator who wants such recoveries
   sets a larger cap. A judge grade's deadline is its normal minimum or `provider.unavailable_wait` plus
   `provider.stall_timeout`, whichever is larger; a decision-model grade's is its normal minimum plus
   `decision_model.unavailable_wait`, so its typed outage comes first. Neither depends on the solver settings.
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
   `provider.backoff_*`), `provider.stall_timeout`, `provider.max_connections`. The run refuses a
-  `solver.time_limit` that is not positive and finite, and a `solver.attempt_timeout` below it.
+  `solver.time_limit` that is not positive and finite, and a `solver.attempt_timeout` that is not finite and
+  greater than it.
 - **Tools**: `tools.output_chars` (at least 240); longer output is saved to `.tool-output/<digest>.txt` in
   the workspace and the model gets the head plus the path, or, for a session without a machine, is clipped.
 

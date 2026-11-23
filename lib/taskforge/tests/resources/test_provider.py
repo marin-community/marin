@@ -429,8 +429,15 @@ def test_the_time_limit_bounds_generation_under_the_stock_attempt_cap_and_no_mod
 def test_a_time_limit_that_bounds_nothing_or_outlasts_the_attempt_cap_is_rejected() -> None:
     with pytest.raises(ValueError, match=r"solver\.time_limit must be positive"):
         stock(0.0)
-    with pytest.raises(ValueError, match=r"solver\.attempt_timeout must be finite and at least solver\.time_limit"):
+    with pytest.raises(ValueError, match=r"solver\.attempt_timeout must be finite and greater than solver\.time_limit"):
         stock(8401.0)
+
+
+# Regression: at an equal cap and time limit the attempt cap fired first, so a time-limited trial was recorded as an
+# unscored attempt_cap and the task held instead of counting the trial unsolved.
+def test_a_time_limit_equal_to_the_attempt_cap_is_rejected() -> None:
+    with pytest.raises(ValueError, match=r"solver\.attempt_timeout must be finite and greater than solver\.time_limit"):
+        stock(8400.0)
 
 
 def test_the_renamed_time_limit_key_names_what_it_became() -> None:

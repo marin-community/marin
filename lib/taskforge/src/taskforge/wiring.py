@@ -398,12 +398,13 @@ def build_config(
 
 
 def provider_policy(policy: Policy) -> Policy:
-    """Reject a solver time limit that bounds no generation, and an attempt cap that ends before one could."""
+    """Reject a solver time limit that bounds no generation, and an attempt cap that ends no later than one could."""
     limit = policy.setting("solver.time_limit", float)
     if not 0 < limit < math.inf:
         raise ValueError("solver.time_limit must be positive and finite")
-    if not limit <= policy.setting("solver.attempt_timeout", float) < math.inf:
-        raise ValueError("solver.attempt_timeout must be finite and at least solver.time_limit")
+    if not limit < policy.setting("solver.attempt_timeout", float) < math.inf:
+        # At equal values the attempt cap fires first, so a time-limited trial would be recorded as an unscored cap.
+        raise ValueError("solver.attempt_timeout must be finite and greater than solver.time_limit")
     return policy
 
 
