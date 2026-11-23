@@ -84,10 +84,6 @@ def graded_stop_reason(rollout: Rollout) -> str | None:
     return LENGTH_STOP_REASON if rollout.stop_reason == TIME_LIMIT_STOP_REASON else rollout.stop_reason
 
 
-class RequestRejected(Hold):
-    """The model server refused this slot's request; a retry would be refused again."""
-
-
 class AttemptCapReached(Hold):
     """The slot's attempt ran out ``solver.attempt_timeout``, an operational cap: no evidence about the task or the
     model, and buying the slot again at once would spend the cap again."""

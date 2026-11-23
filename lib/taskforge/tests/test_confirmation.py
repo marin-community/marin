@@ -52,7 +52,6 @@ import taskforge.stages.solve_review as review_stage
 from taskforge.checkpoint import CheckpointSink, read_journal
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, apply_decision, run_workpiece
-from taskforge.driver import deferred
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, ScopeEntered, ScopeExited, StageCompleted
 from taskforge.effects.issues import ContextExceeded, DecisionModelUnavailable
@@ -106,7 +105,7 @@ from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Terminal, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
-from taskforge.report import report, trial_outcomes
+from taskforge.report import report
 from taskforge.resources.bundle import Resources
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.inference import InferenceClient, InferenceRequest
@@ -1547,11 +1546,6 @@ async def test_the_attempt_cap_parks_a_slot_only_before_a_limit_is_proven(
     await run_workpiece(proposal, config, bundle(again, Reviewer()), relaunch, install=install)
     # It replaces a held parked slot, never a loss, and never a slot an accepted visit committed.
     assert again.runs.count((0, 0)) == int(not proven and not allowance)
-
-
-def waits_for_decision_model(trial: int, attempt: int) -> GradeResult:
-    error = RolloutInterrupted(Rollout(f"arithmetic:{trial}:{attempt}", (), "stop"), RolloutOperation.GRADE)
-    raise error from DecisionModelUnavailable("clef@fixture-1 gave no read within 900s")
 
 
 async def test_a_revision_validates_with_fresh_trials(proposal: TaskProposal) -> None:
