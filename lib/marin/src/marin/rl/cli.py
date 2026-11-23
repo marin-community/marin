@@ -145,10 +145,13 @@ def _coordinator_request(
     env_vars: Mapping[str, str],
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
+    required_env_names = {name for execution in executions for name in execution.required_env_vars}
+    missing_env_names = sorted(name for name in required_env_names if not env_vars.get(name))
+    if missing_env_names:
+        raise click.UsageError(f"missing required RL environment variables: {', '.join(missing_env_names)}")
+
     selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
-    for execution in executions:
-        for name in execution.required_env_vars:
-            selected_env[name] = env_vars[name]
+    selected_env.update({name: env_vars[name] for name in sorted(required_env_names)})
     selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
