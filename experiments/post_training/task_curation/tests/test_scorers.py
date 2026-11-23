@@ -435,10 +435,11 @@ tracemalloc.start()
 cpu_start = time.process_time()
 reward, detail = grade_code(sys.stdin.read(), {"verifier_metadata": {"unit_tests": json.loads(sys.argv[2])}})
 cpu_seconds = time.process_time() - cpu_start
-print(json.dumps([reward, detail["result"], detail["test_results"], tracemalloc.get_traced_memory()[1], cpu_seconds]))
+peak_bytes = tracemalloc.get_traced_memory()[1]
+print(json.dumps([reward, detail["result"], detail["test_results"], peak_bytes, cpu_seconds], default=str))
 """
 """Grades the reply on stdin with Ultra's ``grade_code`` and prints the result with the peak memory and CPU time it
-used in the grading process."""
+used in the grading process; values JSON cannot hold print as text, as in ``code_grade.py``."""
 
 PRINTS_64_MIB = 'print("x" * (64 << 20))'
 """A stdin program whose output is 64 MiB, for tests that expect a few bytes."""
@@ -460,6 +461,26 @@ class Solution:
                     data = data[os.write(item.fileno(), data):]
         return a + b"""
 """Writes its own result to the verifier child's pipe: a dict whose 24,000 keys share one hash, in just under 1 MiB."""
+
+NUMPY_FRAME_ITEMS = 8000
+FUNCTIONAL_ZEROS = [
+    {"input": [NUMPY_FRAME_ITEMS], "output": [0] * NUMPY_FRAME_ITEMS, "testtype": "functional", "fn_name": "zeros"}
+]
+
+WRITES_NUMPY_ARRAY = f"""import gc, json, os, struct
+from multiprocessing.connection import Connection
+
+frame = json.dumps(["value", ["numpy", "float64", [[0]] * {NUMPY_FRAME_ITEMS}], 0], separators=(",", ":")).encode()
+
+def zeros(n):
+    for item in gc.get_objects():
+        if isinstance(item, Connection) and item.writable:
+            data = struct.pack("!Q", len(frame)) + frame
+            while data:
+                data = data[os.write(item.fileno(), data):]
+    return [0] * n"""
+"""Writes its own result to the verifier child's pipe: a NumPy float64 form holding a list of one-item lists, which
+the NumPy constructor would build into an (n, 1) array, in 32 KB."""
 
 
 def ultra_code_grade(tmp_path: Path, cases: list[dict], program: str) -> tuple[float, str, list, int, float]:
@@ -493,3 +514,10 @@ def test_ultra_code_grade_fails_a_dict_with_colliding_keys_without_building_it(t
     assert (reward, outcome, test_results) == (0.0, "failed_tests", [False])
     # Building the dict would take about 24,000 ** 2 / 2 key comparisons in the grading process.
     assert cpu_seconds < 10
+
+
+def test_ultra_code_grade_fails_a_numpy_frame_holding_a_list_without_broadcasting(tmp_path: Path):
+    reward, outcome, test_results, peak_bytes, _ = ultra_code_grade(tmp_path, FUNCTIONAL_ZEROS, WRITES_NUMPY_ARRAY)
+    assert (reward, outcome, test_results) == (0.0, "failed_tests", [False])
+    # An (n, 1) array compared with the n expected items would allocate n * n = 64 MB in the grading process.
+    assert peak_bytes < 16 << 20

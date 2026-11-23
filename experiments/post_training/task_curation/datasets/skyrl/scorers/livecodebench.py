@@ -385,7 +385,8 @@ class _VerifierChildLost(BaseException):
 class _Unsupported:
     """A returned value the parent does not rebuild; it equals nothing.
 
-    Either of a type the verifier child does not send back, or a dict with a key that is not a string.
+    Either of a type the verifier child does not send back, a dict with a key that is not a string, or a NumPy
+    scalar form whose value is not a bool, int or float.
     """
 
     def __init__(self, text: str):
@@ -400,6 +401,8 @@ class _Unsupported:
 
 _NON_STRING_KEY = "a dict with a key that is not a string"
 """How the parent shows a returned dict that it does not rebuild."""
+_NON_SCALAR_NUMPY = "a NumPy scalar whose value is not a bool, int or float"
+"""How the parent shows a NumPy scalar form that it does not rebuild."""
 
 _NUMPY_SCALARS = frozenset(
     {"bool", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float16", "float32", "float64"}
@@ -450,8 +453,13 @@ def _value_from_form(form):
             if not all(isinstance(key, str) for key, _ in pairs):
                 return _Unsupported(_NON_STRING_KEY)
             return {key: _value_from_form(item) for key, item in pairs}
-        case ["numpy", str(name), value] if name in _NUMPY_SCALARS:
+        case ["numpy", str(name), bool() | int() | float() as value] if name in _NUMPY_SCALARS:
             return numpy.dtype(name).type(value)
+        case ["numpy", str(name), _] if name in _NUMPY_SCALARS:
+            # The NumPy constructors also build an array from a list, and comparing an array with an expected list
+            # broadcasts: an (n, 1) array against n items allocates n * n results. ``_value_form`` writes only
+            # ``item()``, a bool, int or float, so any other value equals nothing.
+            return _Unsupported(_NON_SCALAR_NUMPY)
         case ["fraction", int(numerator), int(denominator)]:
             return Fraction(numerator, denominator)
         case ["decimal", str(text)]:
