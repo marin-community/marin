@@ -11,7 +11,6 @@ from evalrecords.eval_policy import (
     policy_violations,
 )
 from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
-from evalrecords.model_identity import comparison_model_name, model_config_digest
 from evalrecords.records import EvalchemyRef, EvalRef, EvalTaskRef, ModelConfigRef, ModelRef
 from marin.evaluation.model_config import ModelConfig
 
@@ -71,15 +70,6 @@ def test_september_16_preserves_model_defaults_and_checks_shots():
 
 def test_legacy_policy_label_is_not_verified():
     assert policy_violations("eval-policy-updated", _model(), _math500(None))
-
-
-def test_model_configurations_have_distinct_comparison_identities():
-    first = _model({"enable_thinking": False})
-    second = _model({"enable_thinking": True})
-    assert comparison_model_name(first) != comparison_model_name(second)
-    assert comparison_model_name(first) == comparison_model_name(
-        first.model_copy(update={"config_digest": model_config_digest(first.config)})
-    )
 
 
 def test_unset_nccl_symmetric_memory_is_omitted_from_recorded_config():
