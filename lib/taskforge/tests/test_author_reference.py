@@ -21,10 +21,6 @@ SCHEMA_LISTS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
 SCHEMA_MAPS = frozenset({"$defs", "dependentSchemas", "patternProperties", "properties"})
 
 
-class Absent:
-    """A keyword one side lacks, distinct from an explicit null."""
-
-
 def shape(schema: object) -> object:
     """The schema node without its wording; data values stay verbatim."""
     if not isinstance(schema, dict):
@@ -47,29 +43,6 @@ def shapes(reference: dict[str, object]) -> dict[str, object]:
     return {name: shape(schema) for name, schema in reference.items()}
 
 
-def as_json(value: object) -> str:
-    return "absent" if isinstance(value, Absent) else json.dumps(value, sort_keys=True)
-
-
-def differences(pinned: object, installed: object, path: str = "$") -> list[str]:
-    """Paths where the two differ, telling absence from null and booleans, integers and floats apart."""
-    if isinstance(pinned, dict) and isinstance(installed, dict):
-        return [
-            line
-            for key in sorted(pinned.keys() | installed.keys())
-            for line in differences(pinned.get(key, Absent()), installed.get(key, Absent()), f"{path}/{key}")
-        ]
-    if isinstance(pinned, list) and isinstance(installed, list) and len(pinned) == len(installed):
-        return [
-            line
-            for i, pair in enumerate(zip(pinned, installed, strict=True))
-            for line in differences(*pair, f"{path}[{i}]")
-        ]
-    if as_json(pinned) == as_json(installed):
-        return []
-    return [f"{path}: pinned {as_json(pinned)[:160]}, installed {as_json(installed)[:160]}"]
-
-
 def test_author_is_shown_the_v1_reference_bytes() -> None:
     reference = author_reference()
     assert hashlib.sha256(reference.encode()).hexdigest() == V1_DIGEST
@@ -85,11 +58,11 @@ def test_a_reworded_field_description_leaves_the_author_prompt_unchanged(monkeyp
 
 
 def test_pinned_reference_has_the_installed_schema_shapes() -> None:
-    installed = json.loads(json.dumps({"TaskSpec": TaskSpec.model_json_schema(), "Control": CONTROL.json_schema()}))
-    found = differences(shapes(json.loads(author_reference())), shapes(installed))
-    assert not found, (
-        f"The installed TaskSpec/Control shapes no longer match the pinned {AUTHOR_REFERENCE.name}, so the author "
-        "would be shown a schema its submissions are not validated against. Do not edit the pinned file: recorded "
-        "author requests replay against its bytes. Add a new reference version and select it deliberately.\n"
-        + "\n".join(found[:20])
+    pinned = json.dumps(shapes(json.loads(author_reference())), sort_keys=True, indent=2)
+    installed = json.dumps(
+        shapes({"TaskSpec": TaskSpec.model_json_schema(), "Control": CONTROL.json_schema()}), sort_keys=True, indent=2
+    )
+    assert pinned == installed, (
+        f"The installed TaskSpec/Control shapes differ from {AUTHOR_REFERENCE.name}. "
+        "Add a new reference version and select it deliberately."
     )
