@@ -72,6 +72,7 @@ from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.rms_norm import Implementation as RmsNormImplementation
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm
+from levanter.kernels.pallas.rms_norm.reference import MAX_FLATTENED_ROWS
 from levanter.kernels.pallas.xsa import xsa_forward
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
@@ -439,6 +440,22 @@ def _replay_norm(cfg: SnowballConfig) -> RmsNormImplementation | None:
     return "pallas_tpu" if cfg.replay_precision == "zero_kl" else None
 
 
+def _bounded_rms_norm(
+    x: jax.Array, weight: jax.Array, eps: float, implementation: RmsNormImplementation
+) -> jax.Array:
+    rows = x.size // x.shape[-1]
+    if rows <= MAX_FLATTENED_ROWS:
+        return batch_invariant_rms_norm(x, weight, eps, implementation)
+    flat = x.reshape(rows, x.shape[-1])
+    sharding = named_sharding_of(flat)
+    chunks = []
+    for start in range(0, rows, MAX_FLATTENED_ROWS):
+        stop = start + MAX_FLATTENED_ROWS
+        chunk = flat.at[start:stop].get(out_sharding=sharding.spec) if sharding is not None else flat[start:stop]
+        chunks.append(batch_invariant_rms_norm(chunk, weight, eps, implementation))
+    return jnp.concatenate(chunks, axis=0).reshape(x.shape)
+
+
 def _normalize_qk(x: jax.Array, cfg: SnowballConfig) -> jax.Array:
     implementation = _replay_norm(cfg)
     if implementation is None:
@@ -448,7 +465,7 @@ def _normalize_qk(x: jax.Array, cfg: SnowballConfig) -> jax.Array:
         row_axes = next(iter(original_sharding.spec), None)
         x = reshard(x, P(row_axes, None, None, None))
     weight = jnp.ones((x.shape[-1],), dtype=jnp.float32)
-    output = batch_invariant_rms_norm(x, weight, _QK_RMS_NORM_EPS, implementation)
+    output = _bounded_rms_norm(x, weight, _QK_RMS_NORM_EPS, implementation)
     if original_sharding is not None and not original_sharding.mesh.empty:
         return reshard(output, original_sharding)
     return output
@@ -471,7 +488,7 @@ class RMSNorm(eqx.Module):
         if self.implementation is not None:
             if self.implementation == "pallas_tpu" and _context_axis() is not None:
                 raise ValueError("Batch-invariant TPU RMSNorm requires an unsharded context axis")
-            output = batch_invariant_rms_norm(x, weight, self.eps, self.implementation)
+            output = _bounded_rms_norm(x, weight, self.eps, self.implementation)
             sharding = named_sharding_of(x)
             return reshard(output, sharding) if sharding is not None and not sharding.mesh.empty else output
         dtype = x.dtype
