@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import tempfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from statistics import mean, median, variance
 
@@ -472,7 +473,15 @@ async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> No
     await rescore_candidate_prefixes(environment, spec, calibration)
 
 
-def run(spec: dict) -> None:
+async def evaluate_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> None:
+    await qualify_arm(environment, spec, arm)
+    await benchmark(environment, spec, arm)
+
+
+def run(
+    spec: dict,
+    arm_evaluator: Callable[[VllmEnvironment, dict, dict], Awaitable[None]] = evaluate_arm,
+) -> None:
     """Run paired arms serially on one allocation, preserving identical serving controls."""
     info = get_job_info()
     if info is None:
@@ -507,8 +516,7 @@ def run(spec: dict) -> None:
                     if launch.is_leader:
                         with iris_vllm_followers(launch):
                             environment.wait_until_ready()
-                            asyncio.run(qualify_arm(environment, spec, arm))
-                            asyncio.run(benchmark(environment, spec, arm))
+                            asyncio.run(arm_evaluator(environment, spec, arm))
                     else:
                         wait_for_iris_vllm_shutdown(launch, environment.check_alive)
                     logs = environment.logs()

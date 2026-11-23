@@ -994,6 +994,17 @@ the server's routing. Each fixed rank traverses the same request inventory;
 request seeds remain unique across clients. In both modes, verify actual running counts from labeled
 engine gauges; client concurrency alone does not establish occupancy.
 
+After a Mochi draft fails its speed gate, saved autoregressive outputs can be
+checked without repeating the remaining speed arms. Run
+`python -m experiments.post_training.mochi_eagle3_rescore --spec <regional-json-uri> --source-revision <commit>`
+inside the qualified Iris serving runtime. Its spec uses one target-only `arms`
+entry and the evaluator's geometry, context, HBM and output fields. Set
+`recorded_evaluation`, `recorded_target_arm`, `recorded_candidate_arms` and the
+SHA-256 of the original `correctness-calibration.json` in `calibration_sha256`.
+The teacher must pass the frozen fixed-prefix and autoregressive target controls
+before scoring candidates. Results retain failed checks and input digests;
+this check does not qualify speed or deployment.
+
 Submit through Iris at production priority, with explicit GPU count, rack
 locality and job deadline. Prepare large model snapshots with a CPU job in the
 same region before reserving accelerators. Record every submission ID and hand
