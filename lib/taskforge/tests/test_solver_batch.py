@@ -199,6 +199,12 @@ async def test_a_long_slot_heartbeats_at_the_policy_cadence_without_touching_its
     beats = [record for record in log.records if isinstance(record.event, Note)]
     assert len(beats) == 2
     assert set(clock.slept) == {HEARTBEAT}
+    # Each beat names the still-running trial and how long it has run, so a silent slot is visibly not hung.
+    assert all(
+        record.event.msg.endswith(f"[trial 0 {n * HEARTBEAT:.0f}s]")
+        for n, record in enumerate(beats, 1)
+        if isinstance(record.event, Note)
+    )
     # A heartbeat is a plain diagnostic row: no request, outcome or sandbox attempt reads it.
     assert all((record.opened, record.attempt, record.answers) == (None, None, None) for record in beats)
     replayed = Slots(failures={0: AssertionError("a heartbeat made the slot execute again")})
