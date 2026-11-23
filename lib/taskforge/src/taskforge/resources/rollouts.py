@@ -28,6 +28,7 @@ from taskforge.effects.issues import (
     DecisionModelUnavailable,
     Hold,
     OutputBudgetExhausted,
+    RequestRejected,
     Restart,
     Transient,
     describe_exception,
@@ -42,10 +43,6 @@ class SolverRollout(Event[GradedRollout]):
     spec: TaskRolloutSpec
     trial: int
     attempt: int
-
-
-class RequestRejected(Hold):
-    """The model server refused this slot's request; a retry would be refused again."""
 
 
 SLOT_LOCAL: tuple[type[Hold], ...] = (RequestRejected,)
