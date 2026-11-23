@@ -2144,9 +2144,24 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   in each saved native reply occurred at a median of 88 tokens. Grading
   those exact prefixes passed five tasks, which would raise the original
   100-task panel score from 0.12 to 0.17 in this offline replay. The first
-  closing delimiter matched the valid prefix in all 11 replies. Qualify
-  a structure-aware stop under the single-call contract on H100, where
-  correctness and time saved depend on stopping during decode.
+  closing delimiter matched the valid prefix in all 11 replies.
+
+  A local CPU prototype requests a structured stop over typed evaluation
+  IPC when the request supplies tools and explicitly disables parallel
+  calls. The serving child uses the staged policy tokenizer and the
+  Snowball tool-call grammar. It stops at the first complete call outside
+  reasoning. Delimiters inside quoted arguments do not trigger a stop.
+  The response preserves the sampled token IDs and logprobs through the
+  closing token. In a mixed CPU batch, subsequent decode chunks advanced
+  only the other request, whose tokens and scores matched the baseline.
+  The current chunk can sample up to 31 extra tokens at the default
+  32-round setting. The assembler drops that suffix before returning the
+  response. The archived 11-reply replay reproduced the 60 to 424 token
+  range and all five prefix passes through the typed evaluation codec.
+
+  The prototype has its own source diff. The sealed 40-H100 comparison
+  still uses the frozen evaluator. Qualify the stop with a new artifact
+  version and measure both device work and end-to-end panel time on H100.
 
   Kueue evicted the trainer at 12:03 UTC to admit another workload in
   the same queue. The other four tasks ended with it. The original trainer
