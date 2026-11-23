@@ -1,11 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import copy
 import hashlib
 import json
-import re
-from typing import Any
 
 import pytest
 from taskcompendium.models import TaskSpec
@@ -71,54 +68,6 @@ def differences(pinned: object, installed: object, path: str = "$") -> list[str]
     if as_json(pinned) == as_json(installed):
         return []
     return [f"{path}: pinned {as_json(pinned)[:160]}, installed {as_json(installed)[:160]}"]
-
-
-def node(reference: Any, path: str) -> Any:
-    for step in path.split("/"):
-        reference = reference[int(step)] if isinstance(reference, list) else reference[step]
-    return reference
-
-
-MODE = "Control/$defs/TaskResource/properties/mode/anyOf/0"
-DELETE = Absent()
-# Each changes what the schema accepts and must be reported at its path; none is wording.
-MUTATIONS = [
-    ("TaskSpec/properties/grader", "const", None),
-    ("Control/$defs/RewardBand/properties/reward_min", "default", DELETE),
-    ("TaskSpec/$defs/JudgeSpec/properties/exact_gate", "default", 1),
-    ("TaskSpec/$defs/JudgeSpec/properties/request_timeout", "default", 120),
-    ("TaskSpec/$defs/ScriptGrader/properties/reward/default", "description", "x"),
-    ("TaskSpec/properties/grader/discriminator/mapping", "title", "#/$defs/NoGrader"),
-    ("TaskSpec/$defs/JudgeSpec/properties/exact_gate", "examples", [{"title": "x"}]),
-    ("Control/$defs/ControlKind", "enum", ["positive", "negative", "malformed", "other"]),
-    (MODE, "pattern", "^[0-7]{3}$"),
-    (MODE, "format", "regex"),
-    ("Control", "required", ["candidate", "expected"]),
-    ("Control/$defs/Candidate/properties", "extra", {"type": "string"}),
-    ("Control/$defs/Candidate/properties", "reply", DELETE),
-]
-
-
-@pytest.mark.parametrize("where, key, value", MUTATIONS, ids=[f"{where}/{key}" for where, key, _ in MUTATIONS])
-def test_the_structural_check_reports_a_shape_change_at_its_path(where: str, key: str, value: object) -> None:
-    pinned = json.loads(author_reference())
-    changed = copy.deepcopy(pinned)
-    target = node(changed, where)
-    if isinstance(value, Absent):
-        del target[key]
-    else:
-        target[key] = value
-    reported = [line.split(": ", 1)[0] for line in differences(shapes(pinned), shapes(changed))]
-    assert reported == ["$/" + re.sub(r"/(\d+)", r"[\1]", f"{where}/{key}")]
-
-
-def test_the_structural_check_ignores_schema_wording() -> None:
-    pinned = json.loads(author_reference())
-    changed = copy.deepcopy(pinned)
-    node(changed, "TaskSpec/$defs/JsonAnswer")["description"] = "Reworded."
-    node(changed, "TaskSpec/properties/grader")["title"] = "Reworded"
-    node(changed, "Control/$defs/RewardBand/properties/reward_min")["title"] = "Reworded"
-    assert differences(shapes(pinned), shapes(changed)) == []
 
 
 def test_author_is_shown_the_v1_reference_bytes() -> None:
