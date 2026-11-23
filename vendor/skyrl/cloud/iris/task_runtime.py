@@ -27,9 +27,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from enum import StrEnum
 import glob
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -513,6 +514,44 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
             _validate_policy_tokenizer(staging, tokenizer_path)
 
     return PreparedPolicyTokenizer(local_path)
+
+
+def bind_policy_tokenizer_metadata(
+    model: PreparedPolicyModel,
+    tokenizer: PreparedPolicyTokenizer,
+    *,
+    tokenizer_source: str,
+    tokenizer_revision: str | None,
+) -> PreparedPolicyModel:
+    """Bind a declared tokenizer to a model-only export without changing either source.
+
+    Exports with their own tokenizer retain it for an independent vocabulary comparison.
+    A model-only export instead uses its explicitly selected policy tokenizer; the binding
+    records that provenance and occupies a separate immutable metadata namespace.
+    """
+    source = Path(model.local_path)
+    if _tokenizer_metadata_files(source):
+        return model
+    tokenizer_path = Path(tokenizer.local_path)
+    metadata = _require_tokenizer_metadata(tokenizer_path, tokenizer_source)
+    binding = {
+        "model_source": model.source_uri,
+        "model_identity": model.source_identity,
+        "tokenizer_source": tokenizer_source,
+        "tokenizer_revision": tokenizer_revision,
+        "files": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in metadata},
+    }
+    payload = json.dumps(binding, sort_keys=True)
+    identity = model.source_identity + ":tokenizer=" + hashlib.sha256(payload.encode()).hexdigest()
+    target = Path(_metadata_path(model.source_uri, identity))
+    with atomic_directory_update(target, staging_prefix=f".{target.name}.tokenizer-binding-") as staging:
+        # Both paths live under the same node-local metadata root. Hard links also
+        # preserve staged-local weights without copying their potentially large payload.
+        shutil.copytree(source, staging, copy_function=os.link)
+        _copy_tokenizer_metadata(tokenizer_path, staging)
+        (staging / "policy-tokenizer-binding.json").write_text(payload + "\n")
+    _log(f"Bound model-only checkpoint metadata to declared policy tokenizer: {tokenizer_source}")
+    return replace(model, local_path=str(target))
 
 
 def _draft_mirror_manifest(model: HuggingFaceModelCache) -> ModelManifest:
@@ -2373,8 +2412,15 @@ def main() -> None:
         stage_task_data(args.terminal_bench_data, role="terminal-bench sidechannel")
     stage_hugging_face_models(launch_config)
     policy_model = prepare_policy_model(args)
-    policy_local_path = policy_model.local_path if policy_model is not None else None
     policy_tokenizer = prepare_policy_tokenizer(args)
+    if policy_model is not None and policy_tokenizer is not None:
+        policy_model = bind_policy_tokenizer_metadata(
+            policy_model,
+            policy_tokenizer,
+            tokenizer_source=args.policy_tokenizer,
+            tokenizer_revision=args.policy_tokenizer_revision,
+        )
+    policy_local_path = policy_model.local_path if policy_model is not None else None
     draft_model = args.draft_model
     if draft_model is not None:
         draft_model = prepare_draft_model(

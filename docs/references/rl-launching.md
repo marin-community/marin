@@ -280,6 +280,15 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
+Adopted long-loop RL rounds also stage model metadata and the pinned tokenizer
+during their CPU no-run preflight, then run the training driver's vocabulary
+check. A model-only export uses its explicitly declared policy tokenizer in a
+separate local metadata view; the binding records the model identity, tokenizer
+revision and file hashes. Embedded checkpoint tokenizers remain independent
+and must match the selected tokenizer's token-to-ID mapping. This check reads
+metadata without downloading weight shards or modifying the published export.
+Its result is recorded as `vocabulary_check` in the native preflight receipt.
+
 Set `trainer.rollout_buffer.groups_per_family` for fixed numbers of prompt groups per task family in
 each training batch. Each Parquet training row supplies its `family`. The counts must sum to
 `trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.

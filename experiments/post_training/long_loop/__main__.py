@@ -35,7 +35,12 @@ from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 
 def validate_graph(
-    terminal: ArtifactStep, directory: Path, artifact_prefix: str, *, model_config: bytes | None = None
+    terminal: ArtifactStep,
+    directory: Path,
+    artifact_prefix: str,
+    *,
+    model_config: bytes | None = None,
+    check_vocabulary: bool = False,
 ) -> None:
     rows = []
     for step in graph_handles([terminal]):
@@ -55,7 +60,12 @@ def validate_graph(
             row = {
                 "stage": step.name,
                 "status": "strictly composed; future checkpoint identity unresolved",
-                **validate_launch(launch.launch_config_yaml, directory / digest, model_config=model_config),
+                **validate_launch(
+                    launch.launch_config_yaml,
+                    directory / digest,
+                    model_config=model_config,
+                    check_vocabulary=check_vocabulary,
+                ),
             }
         rows.append(row)
     directory.mkdir(parents=True, exist_ok=True)

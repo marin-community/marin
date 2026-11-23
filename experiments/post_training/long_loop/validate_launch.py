@@ -15,9 +15,11 @@ from cloud.iris.launch_config import load_launch_config
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS, RLEntrypoint
 from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_role_plan
 from cloud.iris.runtime_environment import IRIS_TASK_IMAGE
-from cloud.iris.task_runtime import prepare_policy_tokenizer
+from cloud.iris.task_runtime import bind_policy_tokenizer_metadata, prepare_policy_model, prepare_policy_tokenizer
+from marinskyrl.resource_locator import RolloutModelLoading
 from omegaconf import OmegaConf
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import get_secret
 from skyrl_train import objective  # noqa: F401 - populate the runtime policy-loss registry
@@ -27,8 +29,59 @@ from skyrl_train.models.grug_moe import GrugMoeConfig, grug_long_layer_flags
 from skyrl_train.rollouts.agent_runtime import InstalledAgentSettings
 from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec
 from skyrl_train.rollouts.workers import WorkerShard
-from skyrl_train.tokenizer import tokenizer_from_config
+from skyrl_train.tokenizer import tokenizer_from_config, tokenizer_vocabulary_fingerprint, validate_checkpoint_vocabulary
 from skyrl_train.trajectory_runners.harbor.configuration import HarborConfigBuilder
+
+
+def validate_policy_vocabulary(launch) -> dict:
+    """Exercise the production metadata/tokenizer staging and vocabulary guard on CPU."""
+    configure_coreweave_s3()
+    source = launch.inputs.model
+    args = argparse.Namespace(
+        model_source_uri=str(source.uri),
+        model_source_identity=str(source.identity),
+        runtime_profile=launch.skyrl.trainer.strategy,
+        rollout_model_loading=RolloutModelLoading.STREAM,
+        policy_tokenizer=str(source.tokenizer_uri),
+        policy_tokenizer_revision=source.tokenizer_revision,
+    )
+    model = prepare_policy_model(args)
+    tokenizer = prepare_policy_tokenizer(args)
+    if model is None or tokenizer is None:
+        raise ValueError("Vocabulary preflight requires a checkpoint and an explicitly selected tokenizer")
+    model = bind_policy_tokenizer_metadata(
+        model,
+        tokenizer,
+        tokenizer_source=args.policy_tokenizer,
+        tokenizer_revision=args.policy_tokenizer_revision,
+    )
+    config = OmegaConf.merge(
+        launch.skyrl,
+        {"trainer": {"policy": {"model": {"tokenizer_path": tokenizer.local_path, "tokenizer_revision": None}}}},
+    )
+    loaded = tokenizer_from_config(config)
+    validate_checkpoint_vocabulary(
+        loaded,
+        checkpoint_path=model.local_path,
+        checkpoint_revision=None,
+        checkpoint_identity=model.source_identity,
+        tokenizer_identity=f"{args.policy_tokenizer}@{args.policy_tokenizer_revision}",
+        disable_fast_tokenizer=config.trainer.disable_fast_tokenizer,
+    )
+    vocab_size = json.loads((Path(model.local_path) / "config.json").read_text()).get("vocab_size")
+    if vocab_size is not None and len(loaded) > vocab_size:
+        raise ValueError(f"Tokenizer has {len(loaded)} tokens but checkpoint vocabulary has only {vocab_size} rows")
+    binding_path = Path(model.local_path) / "policy-tokenizer-binding.json"
+    return {
+        "checkpoint_metadata": model.local_path,
+        "tokenizer_metadata": tokenizer.local_path,
+        "tokenizer_source": args.policy_tokenizer,
+        "tokenizer_revision": args.policy_tokenizer_revision,
+        "vocabulary_fingerprint": tokenizer_vocabulary_fingerprint(loaded),
+        "tokenizer_size": len(loaded),
+        "checkpoint_vocab_size": vocab_size,
+        "model_only_binding": json.loads(binding_path.read_text()) if binding_path.exists() else None,
+    }
 
 
 async def validate_rollout_worker(launch) -> dict:
@@ -71,7 +124,14 @@ async def validate_rollout_worker(launch) -> dict:
         await worker.shutdown()
 
 
-def main(source: Path, destination: Path, model_config: Path | None = None, *, build_worker: bool = False) -> None:
+def main(
+    source: Path,
+    destination: Path,
+    model_config: Path | None = None,
+    *,
+    build_worker: bool = False,
+    check_vocabulary: bool = False,
+) -> None:
     project = Path(__file__).resolve().parents[3] / "vendor/skyrl"
     config = load_launch_config(source)
     HarborConfigBuilder(config.skyrl.terminal_bench_config)
@@ -138,6 +198,7 @@ def main(source: Path, destination: Path, model_config: Path | None = None, *, b
         if not engine.get("enable_auto_tool_choice") or not engine.get("tool_call_parser"):
             raise ValueError("Installed-agent tool requests require automatic tool choice and a tool parser")
     worker = asyncio.run(validate_rollout_worker(config)) if build_worker else None
+    vocabulary = validate_policy_vocabulary(config) if check_vocabulary else None
     compiled = OmegaConf.to_yaml(config, resolve=True)
     destination.write_text(compiled)
     print(
@@ -145,6 +206,7 @@ def main(source: Path, destination: Path, model_config: Path | None = None, *, b
             {
                 "task_image": IRIS_TASK_IMAGE,
                 "rollout_worker": worker,
+                "vocabulary_check": vocabulary,
                 "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                 "compiled_sha256": hashlib.sha256(compiled.encode()).hexdigest(),
                 "validator": "load_launch_config + skyrl_train.utils.utils.validate_cfg",
@@ -169,5 +231,12 @@ if __name__ == "__main__":
     parser.add_argument("destination", type=Path)
     parser.add_argument("model_config", type=Path, nargs="?")
     parser.add_argument("--build-worker", action="store_true")
+    parser.add_argument("--check-vocabulary", action="store_true")
     args = parser.parse_args()
-    main(args.source, args.destination, args.model_config, build_worker=args.build_worker)
+    main(
+        args.source,
+        args.destination,
+        args.model_config,
+        build_worker=args.build_worker,
+        check_vocabulary=args.check_vocabulary,
+    )

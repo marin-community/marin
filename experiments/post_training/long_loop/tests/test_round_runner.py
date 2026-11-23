@@ -174,7 +174,7 @@ def mirror_storage(monkeypatch, tmp_path):
     monkeypatch.setattr(round_runner, "runtime_source_manifest", stub_manifest)
     captured_launches: list[dict] = []
 
-    def stubbed_validate_launch(document, directory, *, model_config=None):
+    def stubbed_validate_launch(document, directory, *, model_config=None, check_vocabulary=False):
         captured_launches.append(
             {"document": document, "model_config": None if model_config is None else model_config.decode()}
         )

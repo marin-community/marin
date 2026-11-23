@@ -23,6 +23,7 @@ from cloud.iris import hf_model_cache, task_runtime
 from cloud.iris.hf_model_cache import HuggingFaceSnapshot, HuggingFaceSnapshotFile, publish_hugging_face_snapshot
 from cloud.iris.task_runtime import (
     _write_final_config,
+    bind_policy_tokenizer_metadata,
     policy_chat_template_model,
     prepare_draft_model,
     prepare_policy_model,
@@ -34,6 +35,7 @@ from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
 from marinskyrl.hf_model import HuggingFaceModelCache
 from marinskyrl.resource_locator import RolloutModelLoading
+from skyrl_train.tokenizer import validate_checkpoint_vocabulary
 
 
 @pytest.mark.parametrize(
@@ -123,6 +125,60 @@ def test_requested_local_policy_tokenizer_is_staged_independently(tmp_path, monk
     assert (destination / "tokenizer.json").read_bytes() == (tokenizer_source / "tokenizer.json").read_bytes()
     tokenizer = AutoTokenizer.from_pretrained(prepared.local_path, local_files_only=True)
     assert tokenizer.encode("hello world") == [1, 2]
+
+
+@pytest.mark.parametrize("loading", [RolloutModelLoading.STREAM, RolloutModelLoading.STAGE_LOCAL])
+def test_model_only_metadata_binds_fast_tokenizer_without_mutating_export(tmp_path, monkeypatch, loading):
+    source = tmp_path / "model-only"
+    source.mkdir()
+    (source / "config.json").write_text('{"model_type":"llama","vocab_size":3}')
+    weights = save({"weight": np.arange(4, dtype=np.float32)})
+    (source / "model.safetensors").write_bytes(weights)
+    tokenizer_source = tmp_path / "tokenizer"
+    _write_tokenizer(tokenizer_source)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+    model = prepare_policy_model(
+        Namespace(
+            model_source_uri=source.as_uri(),
+            model_source_identity="model@v1",
+            runtime_profile="megatron",
+            rollout_model_loading=loading,
+        )
+    )
+    tokenizer = prepare_policy_tokenizer(
+        Namespace(policy_tokenizer=str(tokenizer_source), policy_tokenizer_revision="a" * 40)
+    )
+    assert model is not None and tokenizer is not None
+    bound = bind_policy_tokenizer_metadata(
+        model, tokenizer, tokenizer_source=str(tokenizer_source), tokenizer_revision="a" * 40
+    )
+    assert bound.local_path != model.local_path
+    assert not (Path(model.local_path) / "tokenizer.json").exists()
+    assert not (source / "tokenizer.json").exists()
+    loaded = AutoTokenizer.from_pretrained(tokenizer.local_path, local_files_only=True)
+    validate_checkpoint_vocabulary(
+        loaded,
+        checkpoint_path=bound.local_path,
+        checkpoint_revision=None,
+        checkpoint_identity=model.source_identity,
+        tokenizer_identity="tokenizer@a",
+        disable_fast_tokenizer=False,
+    )
+    binding = json.loads((Path(bound.local_path) / "policy-tokenizer-binding.json").read_text())
+    assert binding["tokenizer_revision"] == "a" * 40
+    assert (
+        binding["files"]["tokenizer.json"]
+        == hashlib.sha256((tokenizer_source / "tokenizer.json").read_bytes()).hexdigest()
+    )
+    if loading is RolloutModelLoading.STAGE_LOCAL:
+        assert (Path(bound.local_path) / "model.safetensors").read_bytes() == weights
+    else:
+        assert not (Path(bound.local_path) / "model.safetensors").exists()
+    another_pin = bind_policy_tokenizer_metadata(
+        model, tokenizer, tokenizer_source=str(tokenizer_source), tokenizer_revision="b" * 40
+    )
+    assert another_pin.local_path != bound.local_path
+    assert json.loads((Path(bound.local_path) / "policy-tokenizer-binding.json").read_text()) == binding
 
 
 def _write_tokenizer(destination: Path) -> None:

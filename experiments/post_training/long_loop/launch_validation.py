@@ -31,7 +31,12 @@ logger = logging.getLogger(__name__)
 
 
 def validate_launch(
-    document: str, directory: Path, *, model_config: bytes | None = None, build_worker: bool = False
+    document: str,
+    directory: Path,
+    *,
+    model_config: bytes | None = None,
+    build_worker: bool = False,
+    check_vocabulary: bool = False,
 ) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     source = directory / "launch.yaml"
@@ -52,6 +57,8 @@ def validate_launch(
         command.append(str(metadata))
     if build_worker:
         command.append("--build-worker")
+    if check_vocabulary:
+        command.append("--check-vocabulary")
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)

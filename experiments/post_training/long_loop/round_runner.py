@@ -835,6 +835,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
             validation_output,
             round_spec.storage.output_prefix,
             model_config=(StoragePath(round_spec.adopted_model.uri) / "config.json").read_bytes(),
+            check_vocabulary=True,
         )
         return terminal
     if isinstance(round_spec, AdoptedHfRound):

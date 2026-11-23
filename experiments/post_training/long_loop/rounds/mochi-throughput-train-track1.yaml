@@ -13,7 +13,7 @@ adopted_model:
   tokenizer_uri: marin-community/marin-tokenizer-tools
   tokenizer_revision: 3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
 name: long-loop/mochi-throughput-train-track1
-version: 2026.11.22.122
+version: 2026.11.23.123
 slug: mochi-throughput-train-track1
 rl:
   role_plan:
