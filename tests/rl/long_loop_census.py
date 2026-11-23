@@ -16,7 +16,7 @@ from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, SkyRLRolePlan
 from marin.training.training import LevanterCheckpoint
 
 from experiments.evaluation.judge_config import JudgeConfig
-from experiments.post_training.long_loop import evaluation, rl
+from experiments.post_training.long_loop import evaluation, priority_drain_debug, rl
 from experiments.post_training.long_loop.nvl72 import NVL72RunSpec, run_from_spec
 from experiments.post_training.long_loop.nvl72_evaluation import NVL72EvaluationSpec, evaluation_from_spec
 from experiments.post_training.long_loop.spec_pipeline import runtime_execution, stage_execution
@@ -119,6 +119,9 @@ def nvl72_evaluation(root: Path):
 
 def launch_builders(root: Path):
     return {
-        f"long-loop/{build.__name__}": partial(build, root)
-        for build in (configured_training, configured_evaluation, nvl72_training, nvl72_evaluation)
+        **{
+            f"long-loop/{build.__name__}": partial(build, root)
+            for build in (configured_training, configured_evaluation, nvl72_training, nvl72_evaluation)
+        },
+        "long-loop/priority-drain-debug": partial(priority_drain_debug.debug_run, "priority", VERSION),
     }

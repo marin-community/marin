@@ -1285,6 +1285,31 @@ Evaluation failures propagate through the next sync fence. Native timings retain
 The prepared `.124` round changes only `.123`'s version and `eval_drain` to
 `priority`; its baseline evaluation remains synchronous.
 
+For the bounded control-flow regression, `priority_drain_debug` uses the existing
+regional Qwen3-0.6B checkpoint on two H100s (one policy GPU and one serving GPU)
+in 02a at interactive priority. Its shared recipe is
+`rounds/priority-drain-h100.yaml`; only the drain mode and run identity vary.
+It runs eight steps with evaluation every two steps, no baseline or checkpoint
+work, four GS2 training groups, and a 256-token response cap. The fixed 512-row
+evaluation cohort forces 256 output tokens per request to extend each session;
+training uses unrestricted temperature-only sampling with `min_tokens: 0`.
+Eight workers each admit two tasks; evaluation admits two tasks globally, while
+the four-group training in-flight limit leaves workers available for eval.
+The 64-step lookahead keeps background generation supplied during the eval fence.
+These are control-flow settings, not a Mochi throughput or quality comparison.
+
+```bash
+uv run python -m experiments.post_training.long_loop.priority_drain_debug \
+  --drain priority --version 2026.11.23.201 --source-revision "$SOURCE_REVISION" \
+  --validation-output /tmp/priority-drain-validation
+```
+
+Run the CPU no-run preflight before adding `--run`. Use an immutable pre-fix
+source for the negative control and the landed admission-fence source for the
+fixed, `abort` and `wait` arms. Keep their combined allocation below 16 H100s,
+retain eval/frozen-policy/admission evidence, and cancel each measured root tree.
+No Mochi GB200 priority relaunch is authorized by this debug recipe.
+
 For separate policy and rollout GPUs, the cadence snapshot overlaps frozen-policy
 evaluation after weight sync. Best selection joins and reuses that snapshot before
 publishing its pointer; step exit also joins on evaluation error or cancellation.
