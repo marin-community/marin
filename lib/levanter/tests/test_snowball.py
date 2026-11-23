@@ -1444,6 +1444,56 @@ def test_snowball_engine_capture_preserves_samples_and_predictor_routes(compact_
             np.testing.assert_allclose(scores, -loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0)
 
 
+def test_continuous_generation_fills_the_next_prefill_batch_while_a_request_is_pending():
+    cfg = _tiny_config(num_layers=2)
+    with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(22))
+        engine = InferenceEngine.from_model_with_config(
+            model.with_split_decode_cache(),
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=16,
+                window_cache_max_pages=10,
+                compute_dtype=jnp.float32,
+                page_size=4,
+                max_rounds=1,
+                max_seqs=3,
+                max_seqs_in_prefill=2,
+                max_queued_tokens=4,
+                max_prefill_size=4,
+                max_retained_prompts=2,
+            ),
+        )
+        params = SeqDecodingParams.default()
+        first = Request([1, 2, 4], 10, replace(params, max_num_tokens=jnp.asarray(8)), n_generations=1)
+        pending = Request([3, 2], 11, replace(params, max_num_tokens=jnp.asarray(3)), n_generations=1)
+        waiting = Request([4, 5], 12, replace(params, max_num_tokens=jnp.asarray(3)), n_generations=1)
+        incoming = [waiting]
+        completed = {}
+        first_token_rounds = {}
+        rounds = []
+
+        def poll(_available):
+            if not rounds or not incoming:
+                return []
+            return [incoming.pop()]
+
+        def record_tokens(request_id, choice, tokens):
+            first_token_rounds.setdefault(request_id, len(rounds))
+
+        engine.generate_continuously(
+            [first, pending],
+            poll_requests=poll,
+            on_complete=completed.__setitem__,
+            on_tokens=record_tokens,
+            step_callback=rounds.append,
+        )
+
+    assert first_token_rounds == {10: 0, 11: 1, 12: 1}
+    assert {request_id: result.total_generated for request_id, result in completed.items()} == {10: 5, 11: 1, 12: 1}
+
+
 @pytest.mark.tpu
 @pytest.mark.skipif(not _tpu_v3_available(), reason="BF16 RPA v3 requires v5p or v6e")
 @pytest.mark.parametrize(
