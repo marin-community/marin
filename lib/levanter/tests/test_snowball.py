@@ -1390,3 +1390,16 @@ def test_snowball_fixed_projection_scores_and_differentiates():
         _, grad = jax.jit(jax.value_and_grad(lambda m: m.compute_next_token_loss(example)))(model)
         gate_grad = np.asarray(grad.transformer.blocks[0].attn.attn_gate)
         assert np.isfinite(gate_grad).all() and np.any(gate_grad != 0)
+
+@pytest.mark.tpu
+@pytest.mark.skipif(jax.default_backend() != "tpu", reason="requires TPU RMSNorm")
+def test_snowball_tpu_rmsnorm_matches_shared_reference():
+    cfg = _tiny_config(hidden_dim=128, num_layers=2)
+    with jax.set_mesh(compact_grug_mesh()):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(19))
+        tokens = _device_batched_ids(cfg.vocab_size, 8)
+        forward = eqx.filter_jit(lambda model, tokens: model(tokens))
+        reference = forward(model.with_batch_invariant_rmsnorm("reference"), tokens)
+        actual = forward(model.with_batch_invariant_rmsnorm("pallas_tpu"), tokens)
+
+    np.testing.assert_allclose(actual.array, reference.array, atol=2e-6, rtol=2e-6)
