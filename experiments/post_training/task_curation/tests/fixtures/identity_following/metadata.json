@@ -1,0 +1,11 @@
+{
+  "adapter_built_at": 1779099614,
+  "adapter_revision": "v2",
+  "adapter_version": 1,
+  "family": "llm_judge_identity",
+  "judge": "litellm:default(openai/gpt-4o-mini)",
+  "row_index": 0,
+  "source": "nemotron_gym",
+  "source_dataset": "nvidia/Nemotron-RL-Identity-Following-v1",
+  "upstream_dataset": "identity_nosys.super_v3_kept.sgd_v2.multilingual"
+}

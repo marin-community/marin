@@ -1,0 +1,16 @@
+version = "1.0"
+
+[metadata]
+adapter = "nemotron_gym"
+
+[verifier]
+timeout_sec = 600.0
+env = { OPENAI_API_KEY = "${OPENAI_API_KEY}", JUDGE_MODEL = "${JUDGE_MODEL:-}", REWARDKIT_JUDGE = "${JUDGE_MODEL:-openai/gpt-4o-mini}" }
+[agent]
+timeout_sec = 900.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 4096
+storage_mb = 10240
