@@ -38,6 +38,7 @@ from marin.training.drafting.dspark_data import (
     supervised_token_ids,
 )
 from marin.training.drafting.dspark_distillation import (
+    HIDDEN_STATES_DIR,
     DraftRecipe,
     DSparkExport,
     extraction_config,
@@ -52,6 +53,7 @@ _GPUS_PER_NODE = 4
 _SMOKE_TRAIN_ROWS = 12
 _SMOKE_VALIDATION_ROWS = 4
 _SMOKE_MAX_TOKENS = 2048
+_SMOKE_MAX_ANCHORS = 128
 _SMOKE_ROW_LENGTH = range(720, 1537)
 _MODEL_ALIAS = "mochi"
 _SHORT_CONV_COMPILATION = json.dumps(
@@ -80,13 +82,14 @@ class DraftSize(StrEnum):
 
     @property
     def architecture(self) -> tuple[int, int]:
+        """Return the layer count and FFN width."""
         if self is DraftSize.ONE_LAYER:
             return 1, 4096
         return 2, 6144
 
 
 @dataclass(frozen=True)
-class CachedDraft:
+class CachedPrefill:
     """Run-time state for one distributed prefill and single-host trainer."""
 
     scratch: Path
@@ -105,7 +108,11 @@ class CachedTraining:
 
 def cached_recipe(recipe: DraftRecipe, sample: Sample) -> DraftRecipe:
     if sample is Sample.SMOKE:
-        return replace(recipe, data=replace(recipe.data, max_sequence_length=_SMOKE_MAX_TOKENS), max_anchors=128)
+        return replace(
+            recipe,
+            data=replace(recipe.data, max_sequence_length=min(recipe.data.max_sequence_length, _SMOKE_MAX_TOKENS)),
+            max_anchors=min(recipe.max_anchors, _SMOKE_MAX_ANCHORS),
+        )
     return recipe
 
 
@@ -141,7 +148,7 @@ def checkpoint_step(
     )
 
 
-def _train_cached(config: CachedTraining, *, cache: CachedDraft | None) -> DSparkExport:
+def _train_cached(config: CachedTraining, *, cache: CachedPrefill | None) -> DSparkExport:
     if cache is None:
         raise ValueError("Mochi training must collect the teacher's hidden states in the Iris gang first")
     return train_cached_and_export(
@@ -272,7 +279,7 @@ def train_mochi(
     prefix: str,
     sample: Sample,
 ) -> bool:
-    """Prefill on the gang and return whether this task published the trained draft."""
+    """Prefill on the gang and return whether this is the leader reporting the draft."""
 
     geometry = ServingGeometry(
         tensor_parallel_size=1,
@@ -287,7 +294,7 @@ def train_mochi(
         if launch.is_leader:
             StepRunner().run([lower(prepared)])
             dataset, split = _stage_data(prepared.path(prefix), scratch, recipe, sample)
-        hidden = scratch / "hidden_states"
+        hidden = scratch / HIDDEN_STATES_DIR
         hidden.mkdir()
         with _teacher_environment(teacher, recipe, launch, hidden) as server:
             if launch.is_leader:
@@ -298,6 +305,6 @@ def train_mochi(
         if not launch.is_leader:
             notify_iris_vllm_stopped(launch)
             return False
-        ready = replace(draft, run=partial(_train_cached, cache=CachedDraft(scratch, split)))
+        ready = replace(draft, run=partial(_train_cached, cache=CachedPrefill(scratch, split)))
         StepRunner().run([lower(ready)])
         return True

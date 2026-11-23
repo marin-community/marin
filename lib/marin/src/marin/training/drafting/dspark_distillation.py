@@ -48,6 +48,7 @@ SPECULATORS_REVISION = "77eaa2390cab54ff7e5315345137394ee44b7a98"
 VLLM_SOURCE_COMMIT = "47a8e415bff17b9376f02d9b92edcc67e962eaee"
 _TEACHER_PORT = 18000
 HF_DRAFT_SUBDIRECTORY = "hf"
+HIDDEN_STATES_DIR = "hidden_states"
 DEFAULT_DRAFT_SEED = 42
 _EPOCHS = 1
 _MARKOV_HEAD = "vanilla"
@@ -207,6 +208,11 @@ def _require_single_worker_teacher(recipe: DraftRecipe) -> None:
     """Keep ShortConv teachers out of the single-worker training path."""
     if recipe.data.shape.sconv:
         raise ValueError("ShortConv DSpark training requires the distributed teacher and cached states")
+
+
+def _require_training_rows(split: PreparedSplits, ranks: int) -> None:
+    if min(split.train, split.validation) < ranks:
+        raise ValueError("Each prepared split needs at least one usable row per trainer rank")
 
 
 def extraction_config(recipe: DraftRecipe, hidden_states: Path) -> tuple[dict, dict]:
@@ -487,7 +493,7 @@ def _fit_and_publish(
             data,
             scratch,
             training,
-            scratch / "hidden_states",
+            scratch / HIDDEN_STATES_DIR,
             train_ratio=split.train_ratio,
             steps=steps,
             endpoint=server.server_url if server is not None else None,
@@ -520,8 +526,7 @@ def train_cached_and_export(
     """Train on prepared Arrow data and indexed hidden states on the same worker."""
 
     require_supported_vllm_release()
-    if min(split.train, split.validation) < recipe.trainer_ranks:
-        raise ValueError("Each prepared split needs at least one usable row per trainer rank")
+    _require_training_rows(split, recipe.trainer_ranks)
     teacher_path = scratch / "teacher"
     _stage_frozen_weights(StoragePath(teacher), teacher_path)
     devices = ",".join(_worker_gpu_devices().split(",")[: recipe.trainer_ranks])
@@ -554,12 +559,11 @@ def train_and_export(
     source = StoragePath(teacher) / teacher_subdirectory
     prepared_source = StoragePath(prepared) / PREPARED_DIR
     split = PreparedSplits(**json.loads((prepared_source / SPLITS_FILE).read_text()))
-    if min(split.train, split.validation) < recipe.trainer_ranks:
-        raise ValueError("Each prepared split needs at least one usable row per trainer rank")
+    _require_training_rows(split, recipe.trainer_ranks)
     teacher_devices, trainer_devices = _gpu_device_split(_worker_gpu_devices(), recipe)
     with TemporaryDirectory(prefix="marin-dspark-") as directory:
         scratch = Path(directory)
-        hidden_states = scratch / "hidden_states"
+        hidden_states = scratch / HIDDEN_STATES_DIR
         hidden_states.mkdir()
         teacher_path = scratch / "teacher"
         prepared_source.download_to(str(scratch / "data"), recursive=True, batch_size=8)
