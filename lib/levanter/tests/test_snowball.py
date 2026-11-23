@@ -45,6 +45,7 @@ from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.grug.attention._paged import _tpu_v3_available
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
@@ -1271,3 +1272,50 @@ def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries(
             assert weight.sharding == want, (name, weight.sharding, want)
 
         assert initialized.memory_analysis().temp_size_in_bytes < replicated.memory_analysis().temp_size_in_bytes / 3
+
+
+@pytest.mark.tpu
+@pytest.mark.skipif(not _tpu_v3_available(), reason="BF16 RPA v3 requires v5p or v6e")
+def test_snowball_bf16_tpu_paged_generation_matches_reference():
+    model_shards = jax.device_count()
+    cfg = _tiny_config(
+        num_layers=2,
+        max_seq_len=256,
+        sliding_window=8,
+        num_heads=4 * model_shards,
+        num_kv_heads=model_shards,
+        head_dim=128,
+    )
+    with jax.set_mesh(compact_grug_mesh(model_axis_size=model_shards)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(17))
+        model = jmp.get_policy("p=bf16,c=bf16").cast_to_compute(model)
+        config = InferenceEngineConfig(
+            max_seq_len=256,
+            max_pages=8,
+            max_rounds=2,
+            page_size=128,
+            compute_dtype=jnp.bfloat16,
+            max_seqs=4,
+            max_queued_tokens=8,
+            max_seqs_in_prefill=4,
+            max_prefill_size=12,
+        )
+        prompts = [[2, 7, 4, 9, 6], [18, 7, 3]]
+        requests = [
+            Request(
+                prompt,
+                request_id=i,
+                decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(len(prompt) + 4)),
+                n_generations=1,
+            )
+            for i, prompt in enumerate(prompts)
+        ]
+        expected = InferenceEngine.from_model_with_config(
+            model.with_paged_attention("reference"), tokenizer=None, config=config
+        ).generate(requests)
+        actual = InferenceEngine.from_model_with_config(
+            model.with_paged_attention("tpu_v3"), tokenizer=None, config=config
+        ).generate(requests)
+    assert actual.tokens == expected.tokens
+    assert actual.total_generated == 8
+    np.testing.assert_allclose(actual.logprobs, expected.logprobs, atol=2e-2, rtol=0)
