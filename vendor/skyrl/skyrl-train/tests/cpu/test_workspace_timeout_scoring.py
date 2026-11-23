@@ -88,6 +88,7 @@ def test_timeout_verdict_survives_worker_projection_and_evaluation(reward):
 @pytest.mark.parametrize("reward,model_failure", [(0.0, False), (1.0, False), (None, False), (1.0, True)])
 async def test_completed_harbor_trial_without_model_turn_keeps_actual_verdict(reward, model_failure):
     config = get_default_config().generator
+    config.sampling_params.logprobs = 0
     projection = WholeTaskProjection(config, SimpleNamespace(eos_token_id=0))
     task = text_task().model_copy(update={"tags": ("harbor",)})
     spec = lowered_task(task, "harbor_trial")

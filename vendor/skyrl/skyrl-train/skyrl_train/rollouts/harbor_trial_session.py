@@ -140,7 +140,10 @@ class HarborTrialHarness:
         # A completed Harbor trial can time out before any response. The generic
         # engine's early-harness-return failure is not a verifier failure then.
         failure = rollout.failure if rollout.response_token_ids else None
-        return replace(rollout, grade=self._grade, failure=failure)
+        # Zero model actions have an empty exact logprob vector, not missing
+        # behavior evidence. Real model failures remain on the path above.
+        logprobs = rollout.logprobs if rollout.response_token_ids else ()
+        return replace(rollout, grade=self._grade, failure=failure, logprobs=logprobs)
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         pass
