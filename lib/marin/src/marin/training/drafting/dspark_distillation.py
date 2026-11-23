@@ -25,6 +25,7 @@ from marin.execution.artifact import Artifact
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import InferenceModelConfig
 from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmLauncherWithEnvironment, VllmType
+from marin.training.drafting.activation_store import OBJECT_STORE_BACKEND
 from marin.training.drafting.dspark_data import (
     ARROW_DATASET_DIR,
     DRAFT_CONFIG_FILE,
@@ -201,7 +202,7 @@ def _install_speculators(scratch: Path, env: dict[str, str], extra_packages: tup
 
 
 def require_supported_vllm_release() -> None:
-    """Fail before staging work if the promoted wheel has changed."""
+    """Require the source revision used to qualify teacher extraction."""
     if VLLM_GPU_RELEASE.source_commit != VLLM_SOURCE_COMMIT:
         raise ValueError("Requalify DSpark against the newly promoted vLLM wheel before changing the pin")
 
@@ -392,7 +393,7 @@ def _write_config_and_build_command(
         "data": {
             "data_path": str(data / ARROW_DATASET_DIR),
             "train_data_ratio": train_ratio,
-            "hidden_states_backend": "object-store" if object_store else "file",
+            "hidden_states_backend": OBJECT_STORE_BACKEND if object_store else "file",
             "total_seq_len": recipe.data.max_sequence_length,
             "max_anchors": recipe.max_anchors,
             "num_workers": 2,

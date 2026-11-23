@@ -6,6 +6,7 @@
 from argparse import Namespace
 
 import torch
+from activation_store import OBJECT_STORE_BACKEND, activation_path  # pyrefly: ignore[missing-import]
 from hs_connectors import FileBackend, HiddenStatesBackend, HiddenStatesTransfer  # pyrefly: ignore[missing-import]
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
@@ -19,7 +20,7 @@ class ObjectStoreTransfer(HiddenStatesTransfer):
         self.root = StoragePath(path)
 
     def get_cached(self, file_idx: int) -> dict[str, torch.Tensor] | None:
-        fs, key = filesystem_for(str(self.root / f"hs_{file_idx}.safetensors"))
+        fs, key = filesystem_for(str(activation_path(self.root, file_idx)))
         try:
             payload = fs.cat_file(key)
         except FileNotFoundError:
@@ -30,7 +31,7 @@ class ObjectStoreTransfer(HiddenStatesTransfer):
         raise ValueError(f"Object-store training expects prefilled activations, got a generated handle {handle!r}")
 
 
-@HiddenStatesBackend.register("object-store")
+@HiddenStatesBackend.register(OBJECT_STORE_BACKEND)
 class ObjectStoreBackend(HiddenStatesBackend):
     """Use the local file connector for prefill and object storage for training."""
 

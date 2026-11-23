@@ -28,6 +28,7 @@ from marin.inference.iris_vllm import (
     wait_for_iris_vllm_shutdown,
 )
 from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmLauncherWithEnvironment, VllmType
+from marin.training.drafting.activation_store import activation_path
 from marin.training.drafting.dspark_data import (
     ARROW_DATASET_DIR,
     DRAFT_CONFIG_FILE,
@@ -226,7 +227,7 @@ def _cache_rows(url: str, dataset: Dataset, hidden_states: StoragePath, recipe: 
             raise ValueError(f"Mochi returned incorrect tokens or tap dimensions for row {row_index}")
         if not bool(tensors["hidden_states"].isfinite().all()):
             raise ValueError(f"Mochi returned non-finite features for row {row_index}")
-        fs, key = filesystem_for(str(hidden_states / f"hs_{row_index}.safetensors"))
+        fs, key = filesystem_for(str(activation_path(hidden_states, row_index)))
         fs.put_file(str(path), key)
         path.unlink()
         lock_path.unlink()
@@ -282,7 +283,7 @@ def train_mochi(
     prefix: str,
     sample: Sample,
 ) -> bool:
-    """Prefill on the gang, then train and publish on the leader."""
+    """Run the gang and return whether this task is the leader reporting the checkpoint."""
 
     geometry = ServingGeometry(
         tensor_parallel_size=1,
