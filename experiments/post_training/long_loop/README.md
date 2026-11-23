@@ -935,6 +935,27 @@ Iris; a Mac-local absolute path is not available there. Keep `--validation-outpu
 under `/tmp` when submitting. Save its local preflight receipts in the experiment
 record before launch.
 
+### Mochi priority evaluation and rolling route quotas
+
+The prepared `rounds/mochi-throughput-train-rolling.yaml` round uses
+`eval_drain: priority` and `batch_policy: rolling`. It is a no-run configuration;
+submission requires explicit approval. Route quotas are derived from the
+curriculum, giving 22 agentic and 42 nonagentic groups at batch size 64.
+Each batch takes the earliest committed groups separately within each route.
+A slow lease does not own a slot in a particular batch; a missing route must
+still supply its quota. Generation capacity reserves the same route shares
+across the staleness lookahead window.
+
+Groups outside the configured policy staleness window are discarded and their
+prompts returned to the existing retry loader. Commit-order selection favors
+faster groups within a route, so exact route quotas do not guarantee the source
+mixture inside a route. Group disposition events retain the source label for
+measuring this bias. No stale or discarded group is scored as zero or trained.
+Checkpointed rollout state records its batch policy. Resume requires the same
+policy; a rolling run refuses full-batch state, including older state without a
+rolling marker. Weight-only initialization is separate from resuming rollout
+state.
+
 ### Adopted NVL72 policy evaluation
 
 Use the same main with `format: nvl72_eval` and `--through eval` to evaluate an

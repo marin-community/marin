@@ -13,7 +13,7 @@ import asyncio
 import collections
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Protocol
 
@@ -68,8 +68,6 @@ class RolloutBufferConfig:
         ):
             raise ValueError("Bounded batch fill requires full_batch without dynamic sampling")
         if self.consumed_route_quotas:
-            if self.batch_policy is not BatchPolicy.FULL_BATCH:
-                raise ValueError("Consumed route quotas require full_batch admission")
             if sum(self.consumed_route_quotas.values()) != self.batch_size or any(value < 1 for value in self.consumed_route_quotas.values()):
                 raise ValueError("Consumed route quotas must be positive and sum to batch_size")
         if self.batch_size < 1:
@@ -378,6 +376,7 @@ class GroupDisposition:
     tokens: int
     dwell_seconds: float | None
     masked_reasons: tuple[tuple[str, int], ...] = ()
+    source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -388,6 +387,7 @@ class BufferSnapshot:
     retries: list[dict]
     leases: frozenset[str]
     replacement_slots: dict[int, list[RolloutStratum]] = field(default_factory=dict)
+    batch_policy: BatchPolicy = BatchPolicy.FULL_BATCH
 
 
 @dataclass(frozen=True)
@@ -501,10 +501,10 @@ class AsyncRolloutPolicy(Protocol):
         """
         ...
 
-    def train_batch(self, rollout: ReadyRollout, open_batch: int, admitted: collections.Counter[int]) -> int | None:
+    def train_batch(self, rollout: ReadyRollout, open_batch: int, admitted: Mapping[int, Sequence[ReadyRollout]]) -> int | None:
         """The batch a committed group joins, or None when it is too stale to join any.
 
-        ``open_batch`` is the earliest batch still taking groups and ``admitted`` counts each batch's admitted groups.
+        ``open_batch`` is the earliest batch still taking groups and ``admitted`` holds each batch's selected groups.
         """
         ...
 
@@ -527,7 +527,7 @@ class FullBatchRolloutPolicy:
                 return batch_id
         return None
 
-    def train_batch(self, rollout: ReadyRollout, open_batch: int, admitted: collections.Counter[int]) -> int | None:
+    def train_batch(self, rollout: ReadyRollout, open_batch: int, admitted: Mapping[int, Sequence[ReadyRollout]]) -> int | None:
         if rollout.batch_id < open_batch:
             # Only a checkpoint written under the rolling policy holds such a group.
             raise ValueError(
@@ -541,7 +541,8 @@ class FullBatchRolloutPolicy:
 class RollingBatchPolicy:
     """Train groups in the order they commit.
 
-    A batch never waits for a slow group: it takes the first groups to commit after the previous batch filled. Groups
+    A batch takes the first groups to commit, within each route when consumed quotas are configured. Every route
+    still needs enough completed groups to fill its quota, but no particular lease owns a batch slot. Groups
     that generate quickly therefore train sooner and at lower staleness than slow ones, and a group that would train
     more than ``max_staleness_steps`` after its lease's policy step is discarded and its prompt returned to the prompt
     loader, which regenerates it up to ``max_stale_retries`` times in a row. A prompt whose rollouts outlast that
@@ -558,9 +559,16 @@ class RollingBatchPolicy:
         # The batch the group joins if groups commit in lease order.
         return step + untrained // self.config.batch_size
 
-    def train_batch(self, rollout: ReadyRollout, open_batch: int, admitted: collections.Counter[int]) -> int | None:
+    def train_batch(self, rollout: ReadyRollout, open_batch: int, admitted: Mapping[int, Sequence[ReadyRollout]]) -> int | None:
         batch_id = open_batch
-        while admitted[batch_id] >= self.config.batch_size:
+        quotas = self.config.consumed_route_quotas
+        route = rollout.prompt.get("group_route")
+        capacity = quotas[route] if quotas else self.config.batch_size
+        while True:
+            batch = admitted.get(batch_id, ())
+            occupied = sum(group.prompt.get("group_route") == route for group in batch) if quotas else len(batch)
+            if occupied < capacity:
+                break
             batch_id += 1
         if batch_id - rollout.policy_step > self.config.max_staleness_steps:
             return None
@@ -635,12 +643,21 @@ class RolloutBuffer:
                 return lease
             route = None
             if self.config.consumed_route_quotas:
-                occupied = collections.Counter(lease.route for lease in self._leases.values() if lease.batch_id == batch_id)
-                occupied.update(rollout.prompt["group_route"] for rollout in self._ready if rollout.batch_id == batch_id)
-                occupied.update(rollout.prompt["group_route"] for rollout in self._admitted[batch_id])
+                rolling = self.config.batch_policy is BatchPolicy.ROLLING
+                occupied = collections.Counter(
+                    lease.route for lease in self._leases.values() if rolling or lease.batch_id == batch_id
+                )
+                occupied.update(
+                    rollout.prompt["group_route"] for rollout in self._ready if rolling or rollout.batch_id == batch_id
+                )
+                occupied.update(
+                    rollout.prompt["group_route"] for step, groups in self._admitted.items()
+                    if rolling or step == batch_id for rollout in groups
+                )
+                windows = self.config.max_staleness_steps + 1 if rolling else 1
                 # Rotate even when a route repeatedly fails, so it cannot monopolize leases.
                 route = next(
-                    (name for name in self._route_order if occupied[name] < self.config.consumed_route_quotas[name]),
+                    (name for name in self._route_order if occupied[name] < windows * self.config.consumed_route_quotas[name]),
                     None,
                 )
                 if route is None:
@@ -894,12 +911,16 @@ class RolloutBuffer:
                     slots.setdefault(lease.batch_id, []).append(lease.stratum)
         return BufferSnapshot(
             ready=[*admitted, *self._ready], retries=list(self._retries), leases=frozenset(self._leases),
-            replacement_slots=slots,
+            replacement_slots=slots, batch_policy=self.config.batch_policy,
         )
 
     async def restore(self, snapshot: BufferSnapshot) -> None:
         """Load a checkpoint's groups into an unpublished, empty buffer."""
         async with self._changed:
+            if snapshot.batch_policy is not self.config.batch_policy:
+                raise ValueError(
+                    f"Cannot resume {self.config.batch_policy} batch policy from {snapshot.batch_policy} checkpoint"
+                )
             if snapshot.replacement_slots and self.config.full_batch_fill is None:
                 raise ValueError("Checkpoint has pinned replacement slots; restore with full_batch_fill enabled")
             if self._policy_step or self._leases or self._ready or self._retries or any(self._admitted.values()):
@@ -923,9 +944,11 @@ class RolloutBuffer:
 
     def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
         dwell = None if rollout.committed_at is None else time.monotonic() - rollout.committed_at
+        task_input = rollout.prompt.get("input")
         self._dispositions.append(
             GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell,
-                             rollout.verdict.masked_reasons)
+                             rollout.verdict.masked_reasons,
+                             task_input.metadata.data_source if task_input is not None else None)
         )
 
     def _batch_complete(self) -> bool:
@@ -946,10 +969,9 @@ class RolloutBuffer:
         if self._policy_step == 0:
             return
         open_batch = self._policy_step + int(self._batch_taken)
-        admitted = collections.Counter({batch_id: len(groups) for batch_id, groups in self._admitted.items()})
         for rollout in self._ready:
             verdict = rollout.verdict
-            batch_id = self._policy.train_batch(rollout, open_batch, admitted)
+            batch_id = self._policy.train_batch(rollout, open_batch, self._admitted)
             if batch_id is None:
                 self._reject(self._stats[open_batch], rollout, AdmissionRejection.STALE)
                 self._retries.append(rollout.prompt)
@@ -970,7 +992,6 @@ class RolloutBuffer:
                     self._dispose(rollout, verdict.selection.value)
                     continue
                 batch.append(rollout)
-                admitted[batch_id] += 1
                 if batch_id == self._policy_step:
                     self._unreported.append(rollout)
         self._ready = []

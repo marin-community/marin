@@ -1,6 +1,7 @@
 """Evaluation admission pauses preserve pending prompts in restart state."""
 
 import asyncio
+import pickle
 from types import SimpleNamespace
 
 import pytest
@@ -83,3 +84,35 @@ async def test_eval_pause_overlaps_existing_work_and_preserves_lease_crossing_pa
         await context.pause_and_drain()
     finally:
         await context.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved_policy", [BatchPolicy.FULL_BATCH, BatchPolicy.ROLLING])
+async def test_checkpoint_preserves_batch_policy_and_refuses_full_batch_as_rolling(saved_policy):
+    def make(policy):
+        config = RolloutBufferConfig(1, 2, 1, policy, None, None,
+                                     consumed_route_quotas={"nonagentic": 1})
+        buffer = RolloutBuffer(config)
+
+        async def snapshot():
+            return buffer.snapshot()
+
+        actor = SimpleNamespace(snapshot=SimpleNamespace(remote=snapshot), restore=SimpleNamespace(remote=buffer.restore))
+        dataset = Dataset(asyncio.Event())
+        loader = PromptLoader(dataset, SeededPasses(1, seed=0, shuffle=False), batch_size=1,
+                              max_stale_retries=0, max_unusable_groups=4)
+        return TrainingContext(loader, config, actor, None, RolloutRequestSpec(1, {}),
+                               SimpleNamespace(), MemoryPayloads(), rollout_spans=False,
+                               eval_drain=EvalDrainStrategy.PRIORITY)
+
+    original = make(saved_policy)
+    original.loader.next_prompt(set())
+    state = pickle.loads(pickle.dumps(await original.state_dict()))
+    resumed = make(BatchPolicy.ROLLING)
+    if saved_policy is BatchPolicy.FULL_BATCH:
+        with pytest.raises(ValueError, match="Cannot resume rolling batch policy from full_batch checkpoint"):
+            await resumed.load_state_dict(state)
+    else:
+        await resumed.load_state_dict(state)
+        assert resumed.loader.state_dict() == state.loader
+        assert (await resumed.state_dict()).batch_policy is BatchPolicy.ROLLING

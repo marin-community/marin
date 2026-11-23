@@ -106,6 +106,7 @@ class TrainingContextState:
     ready: list[ReadyRollout]
     object_store_root: str | None
     replacement_slots: dict[int, list[RolloutStratum]] = field(default_factory=dict)
+    batch_policy: BatchPolicy = BatchPolicy.FULL_BATCH
 
 
 @dataclass(frozen=True)
@@ -436,6 +437,7 @@ class TrainingContext:
                         tokens=outcome.tokens,
                         step=self._policy_step,
                         dwell_seconds=outcome.dwell_seconds,
+                        source=outcome.source,
                     )
             record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
             if admission.admitted:
@@ -479,13 +481,17 @@ class TrainingContext:
         retries = [*loader.retries, *snapshot.retries, *uncommitted]
         return TrainingContextState(
             dataclasses.replace(loader, retries=retries), ready, self._payloads.object_store_root,
-            snapshot.replacement_slots,
+            snapshot.replacement_slots, snapshot.batch_policy,
         )
 
     async def load_state_dict(self, state: TrainingContextState) -> None:
         """Restore a checkpoint's rollout state before ``start``."""
         if self._dispatcher is not None:
             raise RuntimeError("rollout state must be restored before dispatching starts")
+        if state.batch_policy is not self.config.batch_policy:
+            raise ValueError(
+                f"Cannot resume {self.config.batch_policy} batch policy from {state.batch_policy} checkpoint"
+            )
         # Object URIs are absolute, so a resumed run may write new payloads under a different root, but it must
         # read the checkpoint's payloads the way they were stored.
         if state.ready and (state.object_store_root is None) != (self._payloads.object_store_root is None):
@@ -512,6 +518,7 @@ class TrainingContext:
                 ready[index] = dataclasses.replace(ready[index], verdict=verdict)
         await self._buffer.restore.remote(BufferSnapshot(
             ready=ready, retries=[], leases=frozenset(), replacement_slots=state.replacement_slots,
+            batch_policy=state.batch_policy,
         ))
         self._live_uids.update(rollout.verdict.uid for rollout in ready)
         logger.info(

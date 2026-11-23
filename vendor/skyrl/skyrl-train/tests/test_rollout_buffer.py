@@ -1,4 +1,5 @@
 import asyncio
+import pickle
 
 import pytest
 
@@ -215,3 +216,91 @@ async def test_family_leases_fill_batches_reject_wrong_family_and_reopen_slots()
             assert set(buffer.payload_refs(step, [rollout.index for rollout in admission.admitted])) == (
                 {first.lease_id, replacement.lease_id} if step == 1 else {lease.lease_id for lease in later}
             )
+
+
+@pytest.mark.asyncio
+async def test_rolling_route_quotas_take_first_committed_per_route():
+    config = RolloutBufferConfig(3, 9, 2, BatchPolicy.ROLLING, None, None,
+                                consumed_route_quotas={"agentic": 1, "nonagentic": 2})
+    buffer = RolloutBuffer(config)
+    await buffer.publish(1)
+    leases = [await buffer.acquire_lease() for _ in range(9)]
+    a = [lease for lease in leases if lease.route == "agentic"]
+    n = [lease for lease in leases if lease.route == "nonagentic"]
+    for lease, uid in [(a[2], "a-first"), (a[1], "a-second"), (n[-1], "n-first"), (n[-2], "n-second")]:
+        await commit_group(buffer, lease, prompt(uid, "source", lease.route))
+    first = await buffer.admit(1)
+    assert first.selection is not None
+    assert buffer.payload_refs(1, [0, 1, 2]) == ["a-first", "n-first", "n-second"]
+    assert first.selection.metrics["async/consumed_route/agentic"] == 1
+    assert first.selection.metrics["async/consumed_route/nonagentic"] == 2
+    await buffer.publish(2)
+    for lease, uid in [(n[-3], "n-third"), (n[-4], "n-fourth")]:
+        await commit_group(buffer, lease, prompt(uid, "source", lease.route))
+    second = await buffer.admit(1)
+    assert second.selection is not None
+    assert buffer.payload_refs(2, [0, 1, 2]) == ["a-second", "n-third", "n-fourth"]
+
+
+@pytest.mark.asyncio
+async def test_rolling_route_quotas_discard_stale_and_return_prompts():
+    buffer = RolloutBuffer(RolloutBufferConfig(2, 4, 1, BatchPolicy.ROLLING, None, None,
+                                             consumed_route_quotas={"agentic": 1, "nonagentic": 1}))
+    await buffer.publish(1)
+    slow_a, slow_n, fast_a, fast_n = [await buffer.acquire_lease() for _ in range(4)]
+    for lease in [fast_a, fast_n]:
+        await commit_group(buffer, lease, prompt(lease.lease_id, "fast", lease.route))
+    assert (await buffer.admit(1)).selection is not None
+    await buffer.publish(2)
+    for _ in range(2):
+        lease = await buffer.acquire_lease()
+        await commit_group(buffer, lease, prompt(lease.lease_id, "fast", lease.route))
+    assert (await buffer.admit(1)).selection is not None
+    await buffer.publish(3)
+    slow = [prompt("slow-a", "slow", "agentic"), prompt("slow-n", "slow", "nonagentic")]
+    for lease, row in zip([slow_a, slow_n], slow, strict=True):
+        await commit_group(buffer, lease, row)
+    admission = await buffer.admit(1)
+    assert admission.retries == slow
+    assert [(row.uid, row.disposition, row.source) for row in admission.dispositions] == [
+        ("slow-a", AdmissionRejection.STALE.value, "slow"), ("slow-n", AdmissionRejection.STALE.value, "slow"),
+    ]
+    assert admission.admitted == []
+    assert admission.selection is None
+
+
+@pytest.mark.asyncio
+async def test_rolling_checkpoint_resume_preserves_route_commit_order():
+    config = RolloutBufferConfig(2, 4, 1, BatchPolicy.ROLLING, None, None,
+                                consumed_route_quotas={"agentic": 1, "nonagentic": 1})
+    buffer = RolloutBuffer(config)
+    await buffer.publish(1)
+    leases = [await buffer.acquire_lease() for _ in range(4)]
+    a = [lease for lease in leases if lease.route == "agentic"]
+    for lease, uid in zip(reversed(a), ["a-first", "a-second"], strict=True):
+        await commit_group(buffer, lease, prompt(uid, "source", "agentic"))
+    snapshot = pickle.loads(pickle.dumps(buffer.snapshot()))
+    resumed = RolloutBuffer(config)
+    await resumed.restore(snapshot)
+    await resumed.publish(1)
+    for step in [1, 2]:
+        if step == 2:
+            await resumed.publish(step)
+        lease = await resumed.acquire_lease()
+        if lease.route != "nonagentic":
+            lease = await resumed.acquire_lease()
+        assert lease.route == "nonagentic"
+        await commit_group(resumed, lease, prompt(f"n-{step}", "source", "nonagentic"))
+        assert (await resumed.admit(1)).selection is not None
+        assert resumed.payload_refs(step, [0, 1]) == ["a-first" if step == 1 else "a-second", f"n-{step}"]
+
+
+@pytest.mark.asyncio
+async def test_rolling_resume_refuses_full_batch_checkpoint_even_when_empty():
+    full = RolloutBuffer(RolloutBufferConfig(2, 4, 1, BatchPolicy.FULL_BATCH, None, None,
+                                           consumed_route_quotas={"agentic": 1, "nonagentic": 1}))
+    snapshot = pickle.loads(pickle.dumps(full.snapshot()))
+    rolling = RolloutBuffer(RolloutBufferConfig(2, 4, 1, BatchPolicy.ROLLING, None, None,
+                                              consumed_route_quotas={"agentic": 1, "nonagentic": 1}))
+    with pytest.raises(ValueError, match="Cannot resume rolling batch policy from full_batch checkpoint"):
+        await rolling.restore(snapshot)
