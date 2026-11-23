@@ -14,7 +14,6 @@ import subprocess
 import sys
 import tarfile
 import threading
-import time
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -32,7 +31,7 @@ from connectrpc.errors import ConnectError
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.llm.fake_glm import serving
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeCommand, FakeEnv, FakeInference, FakeWeb
-from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, chunk, report, segment
+from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, Time, chunk, report, segment
 from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, Injection, LocalController, local_iris_machine
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model, transcript
 from pydantic import TypeAdapter, ValidationError
@@ -133,7 +132,7 @@ from taskforge.resources.env import (
 )
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids, NewId
-from taskforge.resources.inference import InferenceClient, InferenceRequest
+from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages import STAGES
@@ -1165,36 +1164,55 @@ async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
     assert workpiece.terminal == Terminal.ACCEPTED
 
 
+CUT_SEEN = 30.0
+"""Seconds within which the fake router's next write sees that the client closed a connection."""
+
+
 # Review 2026-11-21: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
 # (1 POST, 0 GETs, nothing resolved) under a 50 ms stall timeout and a 100 ms availability window.
 async def test_a_trickling_error_body_holds_the_workpiece_within_the_availability_window(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    window = {"provider.unavailable_wait": 0.1, "provider.backoff_initial": 0.001, "provider.backoff_maximum": 0.001}
+    # The window's clock moves only when the client backs off: each window holds two attempts and one health poll.
+    window = {
+        "provider.unavailable_wait": 3600.0,
+        "provider.backoff_initial": 1800.0,
+        "provider.backoff_maximum": 1800.0,
+    }
     policy = driver.run_policy(driver_args.policy).overlaid(window)
+    clock = Time()
     with serving() as fake:
         for _ in range(100):
-            fake.status(503, "busy", trickle=400)
+            fake.status(503, "busy", trickle=400)  # each body takes 2 s to arrive; the stall timeout is 50 ms
         source = FixedEndpoint(GlmEndpoint(fake.base_url, "token", Pool.HIGH))
         async with GlmProvider(source, policy.setting("author.model", str), 0.05, 8) as author:
             roles = ("solver", "adversary")
             providers = {role: ScriptedProvider((), policy.setting(f"{role}.model", str)) for role in roles}
             built = build_resources(policy, {**providers, "author": author}, {}, FakeWeb({}, {}))
+            retry = retry_policy(policy, "author")
+            client = GlmInference(
+                ModelClient(author, GLM_5_3, retry, role="author", clock=clock.clock, sleep=clock.sleep), "author"
+            )
             serve(
                 monkeypatch,
-                replace(built, envs=Envs(), role_inference={**built.role_inference, "solve_review": CleanReviewer()}),
+                replace(
+                    built,
+                    envs=Envs(),
+                    inference=client,
+                    role_inference={**built.role_inference, "author": client, "solve_review": CleanReviewer()},
+                ),
             )
-            started = time.monotonic()
             await driver.one(driver_args)
-            elapsed = time.monotonic() - started
+        # Every attempt was cut before its body completed (test_provider pins the configured deadline).
+        assert all(fake.cut.acquire(timeout=CUT_SEEN) for _ in fake.requests), "an error body was read to its end"
     destination = tmp_path / "out" / driver.proposal_key(driver_args.proposals)
     workpiece = published_workpiece(destination)
     assert (workpiece.terminal, solver_slots(destination)) == (Terminal.HELD, [])
     resolved = [record.event for record in history(destination) if isinstance(record.event, Resolved)]
     assert not [event for event in resolved if isinstance(event.request, InferenceRequest)]
-    # Each stage attempt ends within the window plus one bounded attempt, long before one body (2 s) could end.
-    assert elapsed < STAGE_REPLAY_ATTEMPTS * 0.2 and len(fake.requests) >= STAGE_REPLAY_ATTEMPTS
-    assert fake.health_polls >= 1
+    # Each stage attempt ended when its window closed, not when a body completed.
+    assert (len(fake.requests), fake.health_polls) == (2 * STAGE_REPLAY_ATTEMPTS, STAGE_REPLAY_ATTEMPTS)
+    assert clock.waits == [1800.0] * 2 * STAGE_REPLAY_ATTEMPTS
 
 
 def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources, workspace: WorkspaceHydration | None = None) -> None:
