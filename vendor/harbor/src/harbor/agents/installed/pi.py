@@ -503,6 +503,11 @@ export default function (pi) {
 
     async def install(self, environment: BaseEnvironment) -> None:
         """Check the Pi runtime supplied by the environment image."""
+        if self.mcp_servers and self._mcp_adapter_version is not None:
+            raise RuntimeError(
+                f"Pi cannot honor pi-mcp-adapter version {self._mcp_adapter_version} with MCP servers: "
+                "this agent loads the image-provided pi-mcp-extension"
+            )
         result = await self.exec_as_agent(environment, command="pi --version")
         installed_version = self.parse_version(result.stdout)
         if self._version is not None and installed_version != self._version:
@@ -510,19 +515,6 @@ export default function (pi) {
                 f"Image provides Pi {installed_version}, but the agent requires {self._version}"
             )
         self._version = installed_version
-        if self._mcp_adapter_version is not None:
-            result = await self.exec_as_agent(
-                environment,
-                command=(
-                    "node -p \"require('/opt/harbor-pi/node_modules/pi-mcp-extension/package.json').version\""
-                ),
-            )
-            installed_adapter_version = result.stdout.strip()
-            if installed_adapter_version != self._mcp_adapter_version:
-                raise RuntimeError(
-                    f"Image provides Pi MCP adapter {installed_adapter_version}, "
-                    f"but the agent requires {self._mcp_adapter_version}"
-                )
 
     def _build_register_skills_command(self) -> str | None:
         """Return a shell command that copies skills to Pi's skills directory."""
