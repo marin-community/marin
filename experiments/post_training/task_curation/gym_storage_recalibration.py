@@ -34,6 +34,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
@@ -45,6 +46,8 @@ import tomlkit
 from huggingface_hub import HfApi, hf_hub_download
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import get_secret
+from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL
 from taskcompendium.harbor.native_package import write_native_task
 from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import TaskSpec
@@ -61,6 +64,23 @@ from experiments.post_training.task_curation.oracle_filter import (
 logger = logging.getLogger(__name__)
 
 HARBOR_PROJECT = Path(__file__).resolve().parents[3] / "vendor/harbor"
+
+
+def bind_daytona_connection_environment() -> None:
+    """Expose the DATA-account Daytona connection where Harbor reads it.
+
+    Iris mounts secrets as files under the rigging secrets dir, but Harbor resolves its
+    Daytona connection from ``os.environ`` (``host_capabilities_from_environment``), and the
+    calibration trials run as Harbor subprocesses. Bind the DATA credential the difficulty
+    worker binds (``difficulty.runtime``), failing loudly when it is absent.
+    """
+    key = get_secret("DAYTONA_DATA_API_KEY")
+    if not key:
+        raise ValueError("DAYTONA_DATA_API_KEY is required for the Daytona calibration trials")
+    os.environ["DAYTONA_API_KEY"] = key
+    os.environ.setdefault("DAYTONA_TARGET", "us")
+    os.environ.setdefault("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL)
+
 
 TASK_TOML = "task.toml"
 ANSWER_FILE = "/app/answer.txt"
@@ -623,6 +643,8 @@ def run_calibration_source(
     release_parquet = read_release(source_id, scratch / "cache")
     work = scratch / canonical_sha256(source_id)[:8]
     work.mkdir(parents=True, exist_ok=True)
+    if environment == "daytona":
+        bind_daytona_connection_environment()
 
     panel_local = work / "panel.parquet"
     panel_path = StoragePath(panel_parquet) if str(panel_parquet).startswith("s3://") else Path(panel_parquet)
@@ -644,12 +666,12 @@ def run_calibration_source(
             concurrency,
             calibration_solutions=Path(pack["calibration_solutions"]),
         )
-    except Exception as error:
+    except Exception:
         # Preserve the failing attempt's evidence before the scratch disappears: the
         # harbor log, the recorded result and a fresh inspection of the package.
         logger.exception("Calibration failed for %s; uploading attempt evidence", source_id)
         evidence = StoragePath(output_root) / "failure-evidence"
-        evidence.mkdirs(parents=True, exist_ok=True)
+        evidence.mkdirs(exist_ok=True)
         for attempt_dir in sorted((calibration_dir).glob("*/attempt-*")):
             name = f"{attempt_dir.parent.name}-{attempt_dir.name}"
             for member in ("harbor.log", "trial.json", "sandbox-lifecycle.jsonl"):
