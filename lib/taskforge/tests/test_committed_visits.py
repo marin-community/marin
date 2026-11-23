@@ -7,12 +7,13 @@ with its stored evidence and buys nothing inside it, while the open frontier exe
 import hashlib
 import json
 import logging
+import math
 from argparse import Namespace
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import Any, override
+from typing import Any, cast, override
 
 import pytest
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference
@@ -49,7 +50,7 @@ from taskforge.llm.glm_provider import EndpointSource
 from taskforge.llm.policy import GLM_5_3, LLMPolicy, ModelProfile
 from taskforge.model.content_hash import digest
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
-from taskforge.model.review import EvidenceKind, Incomplete, MissingEvidence
+from taskforge.model.review import VALIDATION_RESULT, EvidenceKind, Incomplete, MissingEvidence
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation, Terminal, Workpiece
 from taskforge.policy import Policy
@@ -420,6 +421,44 @@ async def test_nonalphabetic_grade_diagnostics_hydrate_the_same_author_bytes_on_
     assert not resumed.repeated and len(resumed.requests) == 1
     assert sorted(second.solver.runs) == [(0, 1), (1, 1), *sorted(confirmation(2))]
     assert scopes(launches.rows()[held:], "validate") == 1  # round 1's, never round 0's again
+
+
+def nonfinite(reward: float) -> Callable[[int, int], GradeResult]:
+    """Round 0's first trial reports ``reward``, so the round asks for a modification; later rounds solve half."""
+
+    def grade(trial: int, attempt: int) -> GradeResult:
+        return GradeResult(Outcome.GRADED, reward if (trial, attempt) == (0, 0) else float(trial % 2 == 0))
+
+    return grade
+
+
+def validation_files(attempt: Launch) -> list[bytes]:
+    """Every ``.validation/0.json`` this launch's machines were given."""
+    envs = cast(Envs, attempt.bundle.envs).created
+    return [data for env in envs for path, data in env.files.items() if str(path).endswith(".validation/0.json")]
+
+
+def strict(constant: str) -> object:
+    raise ValueError(f"{constant} is not JSON")
+
+
+@pytest.mark.parametrize("reward", [math.nan, math.inf])
+async def test_a_nonfinite_reward_reaches_the_author_as_strict_json_alike_live_and_stored(
+    launches: Driver, reward: float
+) -> None:
+    """Regression: the author's evidence file carried the literal tokens NaN or Infinity, which no strict JSON reader
+    accepts, where the wire form writes null."""
+    first_author = FakeInference((*AUTHOR, *REVISION[:2], OUTAGE))
+    first = launch(Paid(nonfinite(reward)), inference=first_author)
+    assert await launches.run(first) == driver.DEFERRED
+    assert kinds(published_workpiece(launches.root))[:1] == ["modify"]
+    second = launch(Paid(nonfinite(reward)), inference=ServedOnce(REVISION[2:], first_author.requests[:-1]))
+    assert await launches.run(second) == 0
+    [live], [stored] = validation_files(first), validation_files(second)
+    assert live == stored
+    evidence = published_workpiece(launches.root).evidence[0]
+    wire = json.loads(VALIDATION_RESULT.dump_json(evidence, exclude={"solver": {"__all__": {"receipt"}}}))
+    assert json.loads(live, parse_constant=strict) == wire and wire["solver"][0]["grade"]["reward"] is None
 
 
 async def test_a_heartbeat_only_policy_edit_is_a_new_plan_and_replans_every_visit(launches: Driver) -> None:
