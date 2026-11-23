@@ -47,7 +47,10 @@ class QualifyingWrapper(MegatronModelWrapper):
 class QualifyingWorker(MegatronPolicyWorkerBase):
     def init_model(self, *args, **kwargs):
         self.failure_directory = Path(os.environ["IRIS_OUTPUT_DIR"])
-        super().init_model(*args, **kwargs)
+        with capture_cuda_failure(
+            self.cfg.trainer.export_path, self.failure_directory, rank=self._rank, phase="model-init"
+        ):
+            super().init_model(*args, **kwargs)
         replay = self.model.router_replay
         self.model = QualifyingWrapper(
             self.cfg,
@@ -98,7 +101,10 @@ class QualifyingWorker(MegatronPolicyWorkerBase):
         }
 
     def qualify_real_batch(self, batch):
-        self.forward(batch)
+        with capture_cuda_failure(
+            self.cfg.trainer.export_path, self.failure_directory, rank=self._rank, phase="real-batch-forward"
+        ):
+            self.forward(batch)
         report = {
             "rank": self._rank,
             "pipeline_last": mpu.is_pipeline_last_stage(ignore_virtual=True),
