@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 9:39 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 10:04 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched frozen comparison is complete. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 67B live swap, real tool-turn replay and full-context fused scoring passed together on one eight-H100 host. The latest diagnostic had zero crossings across 32,768 scores. Earlier runs had up to three crossings. The renderer repair is in the matched five-host arm. | Verify both matched panels and learner updates. Establish reproducible full-context scores before promoting native serving. |
+| Native inventory backend | The 67B live swap, real tool-turn replay and full-context fused scoring passed together on one eight-H100 host. The latest diagnostic had zero crossings across 32,768 scores. Earlier runs had up to three crossings. The repaired five-host arm matched all 100 vLLM baseline prompt token sequences. | Verify both updates and the final matched panel. Establish reproducible full-context scores before promoting native serving. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Verify the full native handoff at 67B. The frozen H100 comparison uses its original worker transport. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -1995,10 +1995,15 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   ranks, initialized the four learners and installed the same policy-0
   digest with all 502 tensors and their shard hashes verified.
   Snapshot publication took 817.7 seconds and serving install took
-  547.4 seconds. The replacement started its 100-task baseline.
+  547.4 seconds. The replacement scored all 100 baseline tasks in
+  1,685.4 seconds and opened its first training lease. An independent
+  audit matched all 100 original task IDs and prompt token sequences
+  against the pinned vLLM control. The baseline means were 0.10 for
+  native and 0.21 for vLLM. The comparison uses a single run per backend.
   [Reviewed renderer proof][held-native-prompt-parity-proof] ·
   [First prompt-aligned child][iris-held-native-prompt-aligned] ·
-  [Prompt-aligned replacement][iris-held-native-prompt-aligned-replacement]
+  [Prompt-aligned replacement][iris-held-native-prompt-aligned-replacement] ·
+  [Verified live prompt parity][held-native-live-prompt-parity]
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
@@ -2172,6 +2177,7 @@ arms. [Prior timing comparison][timing]
 [held-native-prompt-parity-proof]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-079e4e4%2Fprompt-parity-proof.tar.zst
 [iris-held-native-prompt-aligned]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-9a7e3ee-in-424011b4-2026.11.22.3-coordinator-f0713ab7%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-9a7e3ee-in-424011b4-2026.11.22.3-a6705fa4611d
 [iris-held-native-prompt-aligned-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-9a7e3ee-in-424011b4-2026.11.22.3-coordinator-f0713ab7%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-9a7e3ee-in-424011b4-2026.11.22.3-afb17423cacb
+[held-native-live-prompt-parity]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-afb17423cacb%2Fverified-baseline-prompt-parity.json
 [iris-native-emission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122p
 [native-passing-diagnostic-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122p%2Findependently-verified-passing-diagnostic.json
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
