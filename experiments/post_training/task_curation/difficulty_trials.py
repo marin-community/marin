@@ -138,11 +138,17 @@ def pinned_registry_reference(reference: str, authfile: str | None = None) -> st
         return reference
     command = ["skopeo", "inspect", "--format", "{{.Digest}}"]
     if authfile is not None:
-        command.extend(("--src-authfile", authfile))
-    command.append(reference)
-    digest = subprocess.run(command, check=True, capture_output=True, text=True).stdout.strip()
-    if not digest.startswith("sha256:"):
-        raise ValueError(f"Registry digest lookup returned no digest for {reference}: {digest!r}")
+        command.extend(("--authfile", authfile))
+    # The wave's skopeo rejects a bare registry reference as an unknown
+    # transport; the explicit docker:// transport parses everywhere.
+    command.append(f"docker://{reference}")
+    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    digest = completed.stdout.strip()
+    if completed.returncode != 0 or not digest.startswith("sha256:"):
+        raise ValueError(
+            f"Registry digest lookup failed for {reference} (rc={completed.returncode}): "
+            f"{(completed.stderr or completed.stdout).strip()[:400]}"
+        )
     return f"{reference}@{digest}"
 
 

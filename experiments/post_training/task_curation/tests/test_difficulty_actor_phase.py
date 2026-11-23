@@ -138,14 +138,30 @@ def test_registry_reference_pins_its_digest(monkeypatch):
 
     def fake_run(command, check, capture_output, text):
         calls.append(command)
-        return SimpleNamespace(stdout="sha256:" + "e" * 64 + "\n", returncode=0)
+        return SimpleNamespace(stdout="sha256:" + "e" * 64 + "\n", returncode=0, stderr="")
 
     monkeypatch.setattr("subprocess.run", fake_run)
     reference = "ghcr.io/marin-community/rollout-images:task-curation-env-0427f1c8ec6612e4"
     resolved = pinned_registry_reference(reference, authfile="/run/auth.json")
     assert resolved == reference + "@sha256:" + "e" * 64
-    assert calls[0][0:2] == ["skopeo", "inspect"] and calls[0][-1] == reference
-    assert calls[0][calls[0].index("--src-authfile") + 1] == "/run/auth.json"
+    assert calls[0][0:2] == ["skopeo", "inspect"]
+    assert calls[0][calls[0].index("--authfile") + 1] == "/run/auth.json"
+    assert calls[0][-1] == f"docker://{reference}"
     # One registry lookup per (reference, authfile) pair.
     pinned_registry_reference(reference, authfile="/run/auth.json")
     assert len(calls) == 1
+
+
+def test_registry_reference_reports_the_skopeo_failure(monkeypatch):
+    pinned_registry_reference.cache_clear()
+
+    def fake_run(command, check, capture_output, text):
+        return SimpleNamespace(stdout="", returncode=1, stderr='time="..." level=fatal msg="boom"')
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    reference = "ghcr.io/marin-community/rollout-images:task-curation-env-0427f1c8ec6612e4"
+    try:
+        pinned_registry_reference(reference, authfile="/run/auth.json")
+        raise AssertionError("expected the digest lookup to raise")
+    except ValueError as error:
+        assert "rc=1" in str(error) and "boom" in str(error)
