@@ -166,7 +166,7 @@ async def benchmark(environment: VllmEnvironment, spec: dict, stage: str) -> Non
 
 def run(spec: dict) -> None:
     info = get_job_info()
-    if info is None or info.worker_region.casefold() != "us-east-08a":
+    if info is None or (info.worker_region is not None and info.worker_region.casefold() != "us-east-08a"):
         raise ValueError("Run this gate only in the registered 08a Iris gang")
     calibration = checked_json(spec["calibration"], spec["calibration_sha256"])
     if not calibration["sensitivity_passed"] or any(

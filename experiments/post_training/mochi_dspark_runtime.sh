@@ -37,7 +37,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 spec_uri, revision = sys.argv[1:]
 info = get_job_info()
-if info is None or info.worker_region.casefold() != "us-east-08a":
+if info is None or (info.worker_region is not None and info.worker_region.casefold() != "us-east-08a"):
     raise RuntimeError("Run only in the registered 08a Iris gang")
 os.environ["AWS_CONFIG_FILE"] = _write_virtual_hosted_s3_config()
 cache_root = Path(tempfile.mkdtemp(prefix="mochi-dspark-compile-"))
