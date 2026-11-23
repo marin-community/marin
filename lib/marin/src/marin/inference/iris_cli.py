@@ -396,6 +396,19 @@ def _wait_and_report_endpoint(
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
 @click.option("--chat-template", default=None, help="Jinja chat template: local file path or http(s) URL.")
 @click.option(
+    "--tokenizer",
+    default=None,
+    help=(
+        "Tokenizer source when the weights location carries none (e.g. object-store exports): "
+        "an HF repo id or local path. Also drives the tool chat template resolution."
+    ),
+)
+@click.option(
+    "--tokenizer-revision",
+    default=None,
+    help="Pin an immutable revision of --tokenizer (an HF commit).",
+)
+@click.option(
     "--max-model-len",
     type=int,
     default=None,
@@ -521,6 +534,8 @@ def main(
     name: str | None,
     endpoint_name: str | None,
     chat_template: str | None,
+    tokenizer: str | None,
+    tokenizer_revision: str | None,
     max_model_len: int | None,
     max_num_batched_tokens: int,
     max_seqs: int,
@@ -676,6 +691,8 @@ def main(
     )
     model_config = ServedModelConfig(
         weights=model,
+        tokenizer=tokenizer,
+        tokenizer_revision=tokenizer_revision,
         dtype=dtype,
         max_model_len=max_model_len,
         tensor_parallel_size=tensor_parallel_size,
