@@ -23,6 +23,8 @@ from scripts.ci.package_release import (
     cargo_compatible_version,
     latest_native_release_versions,
     latest_supported_version,
+    lock_changed_outside,
+    lock_paths_recording,
     next_development_version,
     packages_for_changes,
     python_compatible_version,
@@ -285,7 +287,7 @@ def test_shellbox_iris_extra_pins_to_bundle_release() -> None:
     released = tomllib.loads(_rewrite_sibling_pins(pyproject, "0.3.0.dev30194118926"))
 
     assert released["project"]["optional-dependencies"]["iris"] == ["marin-iris==0.3.0.dev30194118926"]
-    assert "marin-rigging==0.3.0.dev30194118926" in released["project"]["optional-dependencies"]["daytona"]
+    assert "marin-rigging==0.3.0.dev30194118926" in released["project"]["dependencies"]
 
 
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
@@ -426,6 +428,83 @@ source = { registry = "https://pypi.org/simple" }
     with pytest.raises(ValueError, match="lockfile metadata"):
         validate_targeted_lock_change(
             before, newer_uv.replace("version = 1", "version = 2"), "marin-iris-native", "0.1.4.dev30194118926"
+        )
+
+
+def test_marker_changes_pass_the_lock_guard_and_are_reported() -> None:
+    # uv 0.13.9 factors shared terms out of the markers that uv 0.13.8 and earlier wrote.
+    expanded = (
+        "(python_full_version < '3.13' and sys_platform == 'linux') or "
+        "(python_full_version < '3.13' and sys_platform == 'darwin')"
+    )
+    factored = "python_full_version < '3.13' and (sys_platform == 'darwin' or sys_platform == 'linux')"
+    lock = """\
+version = 1
+revision = 3
+resolution-markers = ["{marker}"]
+
+[[package]]
+name = "jax"
+version = "0.8.0"
+source = {{ registry = "https://pypi.org/simple" }}
+dependencies = [{{ name = "jaxlib", marker = "{marker}" }}]
+
+[[package]]
+name = "marin-iris-native"
+version = "{native}"
+source = {{ registry = "https://pypi.org/simple" }}
+"""
+    before = lock.format(marker=expanded, native="0.1.3")
+    target = "0.1.4.dev30194118926"
+    bumped = lock.format(marker=expanded, native=target)
+    respelled = lock.format(marker=factored, native=target)
+
+    validate_targeted_lock_change(before, respelled, "marin-iris-native", target)
+    assert lock_changed_outside(before, respelled, ("marin-iris-native",))
+    assert not lock_changed_outside(before, bumped, ("marin-iris-native",))
+
+
+def test_lock_paths_include_vendored_locks_that_install_the_owner_locally(tmp_path: Path) -> None:
+    lock = """\
+version = 1
+
+[[package]]
+name = "marin-iris"
+version = "0.2.0"
+source = {{ {source} }}
+"""
+    for project, source in {
+        "skyrl": 'editable = "../../lib/iris"',
+        "harbor": 'registry = "https://pypi.org/simple"',
+    }.items():
+        (tmp_path / "vendor" / project).mkdir(parents=True)
+        (tmp_path / "vendor" / project / "uv.lock").write_text(lock.format(source=source))
+
+    assert lock_paths_recording(tmp_path, "marin-iris") == [tmp_path / "uv.lock", tmp_path / "vendor/skyrl/uv.lock"]
+    assert lock_paths_recording(tmp_path, "marin-dupekit") == [tmp_path / "uv.lock"]
+
+
+def test_vendored_lock_may_record_the_floor_without_the_distribution() -> None:
+    lock = """\
+version = 1
+revision = 3
+
+[[package]]
+name = "marin-iris"
+version = "0.2.0"
+source = {{ editable = "../../lib/iris" }}
+
+[package.metadata]
+requires-dist = [{{ name = "marin-finelog-server", marker = "extra == 'controller'", specifier = "{floor}" }}]
+"""
+    before = lock.format(floor=">=0.2.67")
+    after = lock.format(floor=">=0.2.87")
+    root_before = f'{before}\n[[package]]\nname = "marin-finelog-server"\nversion = "0.2.67"\n'
+
+    validate_targeted_lock_change(before, after, "marin-finelog-server", "0.2.87", allowed_packages=("marin-iris",))
+    with pytest.raises(ValueError, match="Expected marin-finelog-server"):
+        validate_targeted_lock_change(
+            root_before, after, "marin-finelog-server", "0.2.87", allowed_packages=("marin-iris",)
         )
 
 

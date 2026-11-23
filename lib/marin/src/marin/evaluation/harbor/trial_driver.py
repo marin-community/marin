@@ -55,13 +55,14 @@ from harbor.utils.env import (  # pyrefly: ignore[missing-import]
 )
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config.env import get_required_host_vars  # pyrefly: ignore[missing-import]
-from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
+from harbor_config.errors import ERROR_CATEGORIES  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
 from harbor_config.models.environment_type import EnvironmentType  # pyrefly: ignore[missing-import]
 from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.s3_compat import s3_credential_options
+from rigging.task_errors import ErrorCategory, errors_by_category, known_error_types
 
 from marin.evaluation.harbor.agent_context import (
     CANDIDATE_API_KEY_ENV,
@@ -662,10 +663,12 @@ def _preflight_one(
         _validate_job_tasks(job)
     if len(job.benchmark_metadata) != 1:
         raise ValueError("Harbor shared launcher requires exactly one benchmark descriptor")
-    infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE)
-    agent_errors = errors_by_category(ErrorCategory.AGENT)
-    passthrough_errors = errors_by_category(ErrorCategory.PASSTHROUGH)
-    undecided_errors = known_error_types() - infrastructure_errors - agent_errors - passthrough_errors
+    infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE, categories=ERROR_CATEGORIES)
+    agent_errors = errors_by_category(ErrorCategory.AGENT, categories=ERROR_CATEGORIES)
+    passthrough_errors = errors_by_category(ErrorCategory.PASSTHROUGH, categories=ERROR_CATEGORIES)
+    undecided_errors = (
+        known_error_types(categories=ERROR_CATEGORIES) - infrastructure_errors - agent_errors - passthrough_errors
+    )
     model_info = effective.agents[0].kwargs[MODEL_INFO_KEY]
     return {
         "stable_policy_json": stable_policy_json,

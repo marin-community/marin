@@ -14,6 +14,7 @@ from experiments.evaluation.benchmarks import (
     econevals,
     facts_grounding,
     financebench,
+    genomeqa,
     gsm8k,
     instruction_following,
     jee,
@@ -27,6 +28,7 @@ from experiments.evaluation.benchmarks import (
     mmlu_redux,
     multiple_choice,
     nupa,
+    physics_verified,
     question_answering,
     reasoning,
     simpleqa,
@@ -65,12 +67,14 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             reasoning,
             financebench,
             facts_grounding,
+            genomeqa,
             simpleqa,
             econevals,
             long_context,
             longbench,
             nupa,
             supergpqa,
+            physics_verified,
         )
         for benchmark in family.benchmarks()
     ]
