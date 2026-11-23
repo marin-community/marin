@@ -75,6 +75,7 @@ class BackendKind(StrEnum):
 
     WORKER = "worker-daemon"
     KUBERNETES = "kubernetes"
+    DAYTONA = "daytona"
 
 
 class EgressAllowlistMode(StrEnum):

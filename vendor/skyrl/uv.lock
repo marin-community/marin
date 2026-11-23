@@ -2710,6 +2710,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.3.1" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "connect-python", specifier = ">=0.9.0" },
+    { name = "daytona", marker = "extra == 'daytona'", specifier = "==2.1.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "google-auth", specifier = ">=2.0" },
@@ -2737,14 +2738,14 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
     { name = "zstandard", specifier = ">=0.22.0" },
 ]
-provides-extras = ["controller", "worker", "iap"]
+provides-extras = ["daytona", "controller", "worker", "iap"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jax", specifier = "==0.11.1" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "marin-iris", extras = ["controller"], editable = "../../lib/iris" },
+    { name = "marin-iris", extras = ["controller", "daytona"], editable = "../../lib/iris" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "nbconvert", specifier = ">=7.17.2" },
     { name = "nbformat", specifier = ">=5.10.4" },
@@ -2764,7 +2765,7 @@ examples = [
 ]
 test = [
     { name = "jax", specifier = "==0.11.1" },
-    { name = "marin-iris", extras = ["controller"], editable = "../../lib/iris" },
+    { name = "marin-iris", extras = ["controller", "daytona"], editable = "../../lib/iris" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "playwright", specifier = ">=1.49.0" },
     { name = "pytest", specifier = ">=8.4" },

@@ -733,6 +733,21 @@ class CiliumConfig(_Config):
     egress_endpoints: list[EgressEndpointsConfig] = Field(default_factory=list)
 
 
+class DaytonaProviderConfig(_Config):
+    """Run each task attempt in its own Daytona v2 sandbox (proof of concept)."""
+
+    # Environment variable holding the Daytona API key; never the key itself.
+    api_key_env: str = Field(min_length=1)
+    # Registry image a task runs in when its request names none. It must provide bash and tar.
+    default_task_image: str = Field(min_length=1)
+    # Injected into tasks as IRIS_CONTROLLER_ADDRESS; leave empty when sandboxes cannot reach the controller.
+    controller_address: str = ""
+    # Hard cap on a sandbox's lifetime, so a lost controller cannot leak sandboxes.
+    sandbox_ttl_minutes: int = Field(default=360, gt=0)
+    # Concurrent sandbox creations and bundle uploads.
+    launch_workers: int = Field(default=16, gt=0)
+
+
 class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
@@ -864,7 +879,7 @@ class ClusterFinelogConfig(_Config):
 class IrisClusterConfig(_OneofConfig):
     """Full cluster configuration: platform, defaults, storage, controller, scale groups, auth."""
 
-    _ONEOF_ARMS = ("worker_provider", "kubernetes_provider")
+    _ONEOF_ARMS = ("worker_provider", "kubernetes_provider", "daytona_provider")
     name: str = ""
     # Always present (empty unless configured); the selected sub-platform is an
     # at-most-one arm. validate_config requires exactly one arm for a real cluster.
@@ -877,6 +892,7 @@ class IrisClusterConfig(_OneofConfig):
     auth: AuthConfig | None = None
     kubernetes_provider: KubernetesProviderConfig | None = None
     worker_provider: WorkerProviderConfig | None = None
+    daytona_provider: DaytonaProviderConfig | None = None
     user_budget_defaults: UserBudgetDefaultsConfig = Field(default_factory=UserBudgetDefaultsConfig)
     user_budgets: list[UserBudgetTier] = Field(default_factory=list)
     endpoints: dict[str, EndpointSpec] = Field(default_factory=dict)

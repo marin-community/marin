@@ -526,6 +526,9 @@ ignore-missing-imports = [
     # QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
     "cutlass",
     "cutlass.*",
+    # Optional extra marin-iris[daytona]; only the Daytona backend imports it.
+    "daytona",
+    "daytona.*",
     "jax_triton",
     "jax_triton.*",
     "jaxlib",

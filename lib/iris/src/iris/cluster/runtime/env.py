@@ -10,6 +10,7 @@ and Kubernetes paths, plus workdir file writing utilities.
 import json
 import logging
 import posixpath
+import shlex
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -161,6 +162,18 @@ def render_setup_steps(scripts: Sequence[str]) -> list[str]:
         lines.append(f'echo "[iris setup] step {index}/{total}"')
         lines.append(f"bash {step_file}")
     return lines
+
+
+def build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
+    """A bash script that runs a direct-dispatch task's setup steps, then its run command, in /app."""
+    lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
+    lines.extend(render_setup_steps(run_req.entrypoint.setup_commands))
+    # Activate the venv the setup script populated. Conditional on it existing so
+    # a custom or no-setup script that brings its own environment runs as-is.
+    lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
+    if run_req.entrypoint.run_command.argv:
+        lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
+    return "\n".join(lines)
 
 
 def normalize_workdir_relative_path(path: str) -> str:
