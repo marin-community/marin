@@ -16,13 +16,15 @@ import jmp
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from levanter.inference.snowball_loading import load_snowball_serving_model
 from levanter.models.lm_model import LmHeadModel
+from levanter.models.snowball import SnowballConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from transformers import PreTrainedTokenizerBase
 
 from marin.inference.backend import ModelSpec
-from marin.inference.config import LevanterEngineConfig
+from marin.inference.config import DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE, LevanterEngineConfig
 from marin.inference.dashboard_server import BackgroundServer, bind_serving_socket, serve_app_background
 from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size, tool_chat_template
 from marin.inference.vllm_server import (
@@ -110,9 +112,15 @@ class LevanterBackend:
     def _resolved_spec(self, spec: ModelSpec) -> ModelSpec:
         num_chips = spec.num_chips or jax.device_count()
         tensor_parallel_size = spec.tensor_parallel_size
+        expert_parallel_size = self.config.expert_parallel_size
+        chips_per_expert_shard, remainder = divmod(num_chips, expert_parallel_size)
+        if remainder or not chips_per_expert_shard:
+            raise ValueError(f"expert_parallel_size={expert_parallel_size} does not divide the {num_chips}-chip slice.")
         if tensor_parallel_size is None:
             attention_heads, key_value_heads = read_attention_heads(spec.weights, spec.revision)
-            tensor_parallel_size = select_tensor_parallel_size(attention_heads, num_chips, key_value_heads)
+            # Only powers of two that divide the remaining slice are valid candidates.
+            tp_limit = chips_per_expert_shard & -chips_per_expert_shard
+            tensor_parallel_size = select_tensor_parallel_size(attention_heads, tp_limit, key_value_heads)
         return replace(spec, num_chips=num_chips, tensor_parallel_size=tensor_parallel_size)
 
     @contextmanager
@@ -147,7 +155,7 @@ class LevanterBackend:
             model_config = dataclasses.replace(model_config, **dict(config_overrides))
         trainer = TrainerConfig(
             mp=jmp.get_policy(f"p={dtype},c={dtype}"),
-            mesh=inference_mesh(spec.num_chips, spec.tensor_parallel_size),
+            mesh=inference_mesh(spec.num_chips, spec.tensor_parallel_size, self.config.expert_parallel_size),
             use_explicit_mesh_axes=model_config.requires_explicit_mesh_axes,
         )
         tokenizer = load_tokenizer(spec.tokenizer_source, revision=spec.tokenizer_revision)
@@ -167,13 +175,24 @@ class LevanterBackend:
         )
 
         with trainer.use_device_mesh():
-            model = converter.load_pretrained(
-                model_config.model_type,
-                ref=checkpoint_ref,
-                config=model_config,
-                dtype=trainer.mp.compute_dtype,
-                axis_mapping=trainer.parameter_axis_mapping,
-            )
+            if self.config.checkpoint_load_mode == "snowball_layerwise":
+                if not isinstance(model_config, SnowballConfig):
+                    raise ValueError("Layerwise serving load requires a Snowball checkpoint")
+                model = load_snowball_serving_model(
+                    converter,
+                    checkpoint_ref,
+                    model_config,
+                    dtype=trainer.mp.compute_dtype,
+                    axis_mapping=trainer.parameter_axis_mapping,
+                )
+            else:
+                model = converter.load_pretrained(
+                    model_config.model_type,
+                    ref=checkpoint_ref,
+                    config=model_config,
+                    dtype=trainer.mp.compute_dtype,
+                    axis_mapping=trainer.parameter_axis_mapping,
+                )
             yield LoadedLevanterModel(
                 model=model,
                 trainer=trainer,
@@ -234,28 +253,22 @@ class LevanterBackend:
             server.shutdown()
 
 
-def inference_mesh(num_chips: int, tensor_parallel_size: int) -> MeshConfig:
-    """Build the serving mesh: ``model`` shards the model, ``data`` absorbs the rest of the slice.
-
-    A mesh must cover every chip, and Levanter shards attention heads and MLPs across the ``model``
-    axis, so the model axis is the tensor-parallel width and whatever chips remain land on
-    ``data``. When the chip count divides the model's head count the whole slice goes on the model
-    axis (``data`` is 1); a head count the slice cannot divide leaves chips over, and they
-    replicate the model rather than shard it — correct, but duplicated work.
-    """
-    data, remainder = divmod(num_chips, tensor_parallel_size)
+def inference_mesh(
+    num_chips: int, tensor_parallel_size: int, expert_parallel_size: int = DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE
+) -> MeshConfig:
+    """Assign the serving slice to tensor, expert, and data axes."""
+    if min(num_chips, tensor_parallel_size, expert_parallel_size) < 1:
+        raise ValueError("Serving mesh dimensions must be positive")
+    data, remainder = divmod(num_chips, tensor_parallel_size * expert_parallel_size)
     if remainder:
-        raise ValueError(f"tensor_parallel_size={tensor_parallel_size} does not divide the {num_chips}-chip slice.")
-    if data > 1:
-        logger.warning(
-            "tensor_parallel_size=%d does not span all %d chips; the model replicates %d ways.",
-            tensor_parallel_size,
-            num_chips,
-            data,
+        raise ValueError(
+            f"The serving mesh {tensor_parallel_size} x {expert_parallel_size} does not divide {num_chips} chips."
         )
-    # Snowball's explicit PartitionSpecs name both axes even when they do not shard this slice.
-    # Keep them on the serving mesh so its forward pass can reshard tokens and expert weights.
-    return MeshConfig(axes={"replica": 1, "data": data, "model": tensor_parallel_size, "expert": 1, "context": 1})
+    if data > 1:
+        logger.warning("The serving mesh uses %d model replicas across %d chips.", data, num_chips)
+    return MeshConfig(
+        axes={"replica": 1, "data": data, "model": tensor_parallel_size, "expert": expert_parallel_size, "context": 1}
+    )
 
 
 def validate_levanter_dtype(dtype: str) -> str:
