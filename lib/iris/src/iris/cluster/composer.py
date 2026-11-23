@@ -235,6 +235,7 @@ def make_backend(
             remote_state_dir=remote_state_dir,
             logs=log_stack.client,
             cluster_name=config.name,
+            cluster_env=dict(config.defaults.task_env),
         )
         logger.info("Backend created: %s", type(provider).__name__)
         return provider

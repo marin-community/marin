@@ -4,11 +4,12 @@
 """Direct-dispatch Iris backend that runs each task attempt in its own Daytona v2 sandbox.
 
 The controller performs all provider I/O. It creates the sandbox, uploads the
-code bundle, starts the task script as a sandbox process, follows the process
-log into finelog and reads the exit status, so a sandbox never connects to the
-controller. Tasks that call back into Iris (child jobs, endpoints, actors) still
-need ``controller_address`` to be reachable from Daytona, and tasks cannot reach
-each other: this backend runs independent CPU tasks.
+code bundle, workdir files and secrets, starts the task script as a sandbox
+process, follows the process log into finelog and reads the exit status, so a
+sandbox never connects to the controller. Tasks that call back into Iris (child
+jobs, endpoints, actors) still need ``controller_address`` to be reachable from
+Daytona, and tasks cannot reach each other: this backend runs independent CPU
+tasks.
 """
 
 import base64
@@ -17,7 +18,6 @@ import io
 import logging
 import math
 import os
-import shlex
 import signal
 import tarfile
 import tempfile
@@ -26,14 +26,24 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic, sleep
 
-from daytona import Daytona, DaytonaConfig, DaytonaError, DaytonaNotFoundError, DaytonaV2Client
+from daytona import (
+    Daytona,
+    DaytonaConfig,
+    DaytonaConnectionError,
+    DaytonaError,
+    DaytonaNotFoundError,
+    DaytonaTimeoutError,
+    DaytonaV2Client,
+)
 from daytona.v2 import ProcessHandle, Resources, Sandbox, WaitResult
 from daytona.v2 import _transport as daytona_transport
 from finelog.client.log_client import LogClient
 from finelog.rpc import logging_pb2
 from rigging.filesystem.storage_path import prefix_join
-from rigging.timing import Duration
+from rigging.secrets import SECRETS_DIR, SECRETS_DIR_ENV, secret_file_contents, secret_file_environment
+from rigging.timing import Duration, ExponentialBackoff
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import DaytonaProviderConfig
@@ -59,8 +69,9 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.log_keys import classify_log_level
-from iris.cluster.runtime.env import build_common_iris_env, render_setup_steps
+from iris.cluster.runtime.env import build_common_iris_env, build_task_script, write_workdir_files
 from iris.cluster.runtime.sandbox import task_isolation
+from iris.cluster.secrets import task_secret_values
 from iris.cluster.types import AttemptUid, JobName
 from iris.preemption import resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -76,9 +87,19 @@ IMAGE_PREFIX = "iris-"
 VCPUS_PER_CORE = 2
 MIN_CORES = 0.5
 DEFAULT_MEMORY_GIB = 1
-CREATE_TIMEOUT_SECONDS = 600
+# A launch waits this long for its image and for Daytona capacity before the attempt is retried.
+LAUNCH_TIMEOUT_SECONDS = 600
 DELETE_TIMEOUT_SECONDS = 60
-LOG_BATCH_LINES = 200
+# A deletion whose answer was lost is repeated this many times.
+DELETE_RETRIES = 3
+# A followed log that ends before its eof resumes from its last cursor this many times in a row.
+LOG_STREAM_RESUMES = 5
+# Seconds a sandbox outlives its task's own timeout before Daytona deletes it.
+TASK_TIMEOUT_SLACK_SECONDS = 600
+
+
+class AttemptCancelled(Exception):
+    """The attempt left the desired set while it was being launched."""
 
 
 def sandbox_resources(resources: job_pb2.ResourceSpecProto) -> Resources:
@@ -90,18 +111,10 @@ def sandbox_resources(resources: job_pb2.ResourceSpecProto) -> Resources:
     return Resources(cpu=cores, cpu_max=cores, memory=memory, memory_max=memory, disk=disk)
 
 
-def build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
-    """Run the setup steps, then the run command, in the bundle directory."""
-    lines = ["set -e", "ulimit -c 0", f"cd {WORKDIR}"]
-    lines.extend(render_setup_steps(run_req.entrypoint.setup_commands))
-    lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
-    if run_req.entrypoint.run_command.argv:
-        lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
-    return "\n".join(lines)
-
-
-def task_environment(run_req: job_pb2.RunTaskRequest, controller_address: str) -> dict[str, str]:
-    """The job's variables overlaid with the Iris system variables, as a pod receives them."""
+def task_environment(
+    run_req: job_pb2.RunTaskRequest, *, controller_address: str, cluster_env: dict[str, str]
+) -> dict[str, str]:
+    """The task's variables as a Kubernetes pod receives them: cluster, then job, then Iris system values."""
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
     iris_env = build_common_iris_env(
         task_id=run_req.task_id,
@@ -117,7 +130,17 @@ def task_environment(run_req: job_pb2.RunTaskRequest, controller_address: str) -
         resources=run_req.resources if run_req.HasField("resources") else None,
         termination_grace=resolve_termination_grace(Duration.from_ms(run_req.termination_grace.milliseconds)),
     )
-    return {**dict(run_req.environment.env_vars), **iris_env}
+    combined = {
+        **(cluster_env if isolation.include_cluster_env else {}),
+        **dict(run_req.environment.env_vars),
+        **iris_env,
+    }
+    secrets = task_secret_values(run_req.environment)
+    if secrets:
+        combined[SECRETS_DIR_ENV] = str(SECRETS_DIR)
+        for name, value in secret_file_environment(secrets).items():
+            combined.setdefault(name, value)
+    return combined
 
 
 def image_name(reference: str) -> str:
@@ -138,12 +161,29 @@ def decode_frame(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
 
 
+def _is_ambiguous(error: DaytonaError) -> bool:
+    """Whether Daytona may have done what a request asked even though its answer was lost."""
+    return isinstance(error, DaytonaConnectionError | DaytonaTimeoutError) or error.status_code in (502, 503, 504)
+
+
+def _is_capacity(error: BaseException) -> bool:
+    """Whether a launch failed for lack of Daytona capacity or a lost answer, not because of the task."""
+    return isinstance(error, DaytonaError) and (_is_ambiguous(error) or error.status_code == 429)
+
+
+def launch_failure_state(error: BaseException) -> int:
+    """A capacity failure retries the attempt for free (it is still ASSIGNED); any other charges the task."""
+    return job_pb2.TASK_STATE_WORKER_FAILED if _is_capacity(error) else job_pb2.TASK_STATE_FAILED
+
+
 @dataclass
 class _Attempt:
     """One task attempt's sandbox and process, as far as they got."""
 
     run_req: job_pb2.RunTaskRequest
-    launch: Future["_Launched"]
+    launch: Future["_Launched"] = field(default_factory=Future)
+    cancelled: threading.Event = field(default_factory=threading.Event)
+    released: bool = False
     reported_running: bool = False
     exit_code: int | None = None
     error: str | None = None
@@ -156,6 +196,10 @@ class _Attempt:
     @property
     def uid(self) -> str:
         return self.run_req.attempt_uid
+
+    def check(self) -> None:
+        if self.cancelled.is_set():
+            raise AttemptCancelled(self.uid)
 
 
 @dataclass(frozen=True)
@@ -176,6 +220,7 @@ class DaytonaTaskProvider:
         bundles: BundleStore,
         logs: LogClient,
         cluster_name: str,
+        cluster_env: dict[str, str],
     ):
         self.descriptor = descriptor
         self._config = config
@@ -183,14 +228,18 @@ class DaytonaTaskProvider:
         self._bundles = bundles
         self._logs = logs
         self._cluster_name = cluster_name
+        self._cluster_env = cluster_env
         self._attempts: dict[str, _Attempt] = {}
         self._lock = threading.Lock()
-        self._pool = ThreadPoolExecutor(max_workers=config.launch_workers, thread_name_prefix="daytona-launch")
+        self._lock_release = threading.Lock()
+        self._launches = ThreadPoolExecutor(max_workers=config.launch_workers, thread_name_prefix="daytona-launch")
+        # Deletions never queue behind launches.
+        self._deletions = ThreadPoolExecutor(max_workers=config.launch_workers, thread_name_prefix="daytona-delete")
 
     # -- lifecycle -----------------------------------------------------------------
 
     def initialize(self, request: BackendRecoveryRequest) -> BackendRecoveryResult:
-        """Delete sandboxes a previous controller left behind; their attempts are re-dispatched."""
+        """Delete sandboxes a previous controller left behind; their attempts are retried."""
         for sandbox in self._client.find_by_name(self._cluster_name):
             logger.info("Deleting Daytona sandbox %s left by an earlier controller", sandbox.id)
             self._delete(sandbox)
@@ -201,8 +250,9 @@ class DaytonaTaskProvider:
             attempts = list(self._attempts.values())
             self._attempts.clear()
         for attempt in attempts:
-            self._stop(attempt)
-        self._pool.shutdown(wait=True)
+            self._cancel(attempt)
+        self._launches.shutdown(wait=True)
+        self._deletions.shutdown(wait=True)
         self._client.close()
 
     # -- reconcile -----------------------------------------------------------------
@@ -215,16 +265,26 @@ class DaytonaTaskProvider:
         with self._lock:
             for uid in [uid for uid in self._attempts if uid not in desired]:
                 # Cancelled, timed out or finished: the attempt left the desired set.
-                self._pool.submit(self._stop, self._attempts.pop(uid))
+                self._cancel(self._attempts.pop(uid))
             for run_req in request.tasks_to_run:
                 if run_req.attempt_uid not in self._attempts:
-                    attempt = _Attempt(run_req=run_req, launch=Future())
-                    attempt.launch = self._pool.submit(self._launch, attempt)
+                    attempt = _Attempt(run_req=run_req)
+                    attempt.launch = self._launches.submit(self._launch, attempt)
+                    # Whatever the launch's outcome, a cancelled attempt's sandbox is deleted.
+                    attempt.launch.add_done_callback(lambda _future, attempt=attempt: self._release(attempt))
                     self._attempts[run_req.attempt_uid] = attempt
-                updates.append(self._update(self._attempts[run_req.attempt_uid], job_pb2.TASK_STATE_BUILDING))
+            observed: set[str] = set()
+            for uid in [run_req.attempt_uid for run_req in request.tasks_to_run] + [
+                str(entry.attempt_uid) for entry in request.running_tasks
+            ]:
+                if uid in observed or uid not in self._attempts:
+                    continue
+                observed.add(uid)
+                update = self._observe(self._attempts[uid])
+                if update is not None:
+                    updates.append(update)
             for entry in request.running_tasks:
-                attempt = self._attempts.get(str(entry.attempt_uid))
-                if attempt is None:
+                if str(entry.attempt_uid) not in self._attempts:
                     updates.append(
                         TaskUpdate(
                             task_id=entry.task_id,
@@ -234,10 +294,6 @@ class DaytonaTaskProvider:
                             error="No Daytona sandbox runs this attempt (the controller restarted)",
                         )
                     )
-                    continue
-                update = self._observe(attempt)
-                if update is not None:
-                    updates.append(update)
         return ReconcileObservation(task_updates=updates)
 
     def _update(self, attempt: _Attempt, state: int, **fields) -> TaskUpdate:
@@ -250,14 +306,14 @@ class DaytonaTaskProvider:
         )
 
     def _observe(self, attempt: _Attempt) -> TaskUpdate | None:
+        # The attempt stays ASSIGNED until its process starts, so a failed launch retries for free.
         if not attempt.launch.done():
             return None
         error = attempt.launch.exception()
         if error is not None:
-            # Nothing ran, so the attempt retries without charging the task's failure budget.
-            return self._update(attempt, job_pb2.TASK_STATE_WORKER_FAILED, error=f"Daytona launch failed: {error}")
+            return self._update(attempt, launch_failure_state(error), error=f"Daytona launch failed: {error}")
         if attempt.finished.is_set():
-            if attempt.error is not None:
+            if attempt.exit_code is None:
                 return self._update(attempt, job_pb2.TASK_STATE_WORKER_FAILED, error=attempt.error)
             if attempt.exit_code == 0:
                 return self._update(attempt, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
@@ -272,48 +328,111 @@ class DaytonaTaskProvider:
         attempt.reported_running = True
         return self._update(attempt, job_pb2.TASK_STATE_RUNNING, status_message="")
 
+    def _cancel(self, attempt: _Attempt) -> None:
+        """Stop the attempt's launch; its sandbox is deleted once the launch has settled."""
+        attempt.cancelled.set()
+        attempt.launch.cancel()
+        if attempt.launch.done():
+            self._release(attempt)
+
+    def _release(self, attempt: _Attempt) -> None:
+        """Delete a cancelled attempt's sandbox from the deletion pool, once its launch has settled.
+
+        Both the launch's done callback and ``_cancel`` call this; whichever sees
+        a settled, cancelled launch first deletes the sandbox.
+        """
+        with self._lock_release:
+            if attempt.released or not attempt.cancelled.is_set() or not attempt.launch.done():
+                return
+            attempt.released = True
+        if attempt.launch.cancelled() or attempt.launch.exception() is not None:
+            # A launch that never ran, or failed, has deleted what it created.
+            return
+        self._deletions.submit(self._delete, attempt.launch.result().sandbox)
+
     # -- provider I/O (launch pool) ------------------------------------------------
 
-    def _ensure_image(self, reference: str) -> str:
+    def _ensure_image(self, attempt: _Attempt, reference: str, deadline: float) -> str:
         name = image_name(reference)
         try:
             image = self._client.images.get(name)
         except DaytonaNotFoundError:
             image = self._client.images.pull(reference, name=name, wait=False)
         while image.status not in ("ready", "failed", "error"):
+            attempt.check()
+            if monotonic() > deadline:
+                raise RuntimeError(f"Daytona image {reference} was not ready within {LAUNCH_TIMEOUT_SECONDS} s")
+            # One server long poll per request.
             image = self._client.images.get(image.id, wait="ready")
         if image.status != "ready":
             raise RuntimeError(f"Daytona image {reference} is {image.status}: {image.error}")
         return name
 
-    def _launch(self, attempt: _Attempt) -> _Launched:
+    def _create(self, attempt: _Attempt, image: str, deadline: float) -> Sandbox:
+        """Create the attempt's sandbox, waiting for capacity until ``deadline``.
+
+        A repeat with the same idempotency key returns the sandbox an earlier,
+        unanswered request created. If the launch gives up after such a request,
+        the sandbox is searched for by its attempt label and deleted.
+        """
         run_req = attempt.run_req
-        image = self._ensure_image(run_req.task_image or self._config.default_task_image)
         timeout_seconds = run_req.timeout.milliseconds // 1000 if run_req.timeout.milliseconds else 0
         ttl = self._config.sandbox_ttl_minutes * 60
-        sandbox = self._client.create(
-            image,
-            # The cluster name is the search key that recovery deletes by; the label names the attempt.
-            name=self._cluster_name,
-            idempotency_key=f"{self._cluster_name}-{attempt.uid}",
-            labels={CLUSTER_LABEL: self._cluster_name, ATTEMPT_LABEL: attempt.uid},
-            resources=sandbox_resources(run_req.resources),
-            user="root",
-            lifecycle_policy={
-                "timeout_seconds": min(ttl, timeout_seconds + 600) if timeout_seconds else ttl,
-                "on_timeout": "delete",
-            },
-            wait_seconds=CREATE_TIMEOUT_SECONDS,
-            create_timeout_seconds=CREATE_TIMEOUT_SECONDS,
-        )
+        backoff = ExponentialBackoff(initial=1, maximum=10, factor=2, jitter=0.5)
+        unanswered = False
+        while True:
+            try:
+                return self._client.create(
+                    image,
+                    # The cluster name is the search key that recovery deletes by; the label names the attempt.
+                    name=self._cluster_name,
+                    idempotency_key=f"{self._cluster_name}-{attempt.uid}",
+                    labels={CLUSTER_LABEL: self._cluster_name, ATTEMPT_LABEL: attempt.uid},
+                    resources=sandbox_resources(run_req.resources),
+                    user="root",
+                    lifecycle_policy={
+                        "timeout_seconds": (
+                            min(ttl, timeout_seconds + TASK_TIMEOUT_SLACK_SECONDS) if timeout_seconds else ttl
+                        ),
+                        "on_timeout": "delete",
+                    },
+                    wait_seconds=LAUNCH_TIMEOUT_SECONDS,
+                    create_timeout_seconds=LAUNCH_TIMEOUT_SECONDS,
+                )
+            except DaytonaError as error:
+                unanswered = unanswered or _is_ambiguous(error)
+                wait = max(backoff.next_interval(), error.retry_after_seconds or 0)
+                if not _is_capacity(error) or monotonic() + wait > deadline or attempt.cancelled.is_set():
+                    if unanswered:
+                        self._delete_attempt_sandboxes(attempt.uid)
+                    raise
+                sleep(wait)
+
+    def _delete_attempt_sandboxes(self, uid: str) -> None:
+        # The search is eventually consistent; the lifecycle policy deletes a sandbox it misses.
+        for sandbox in self._client.find_by_name(self._cluster_name):
+            if (sandbox.labels or {}).get(ATTEMPT_LABEL) == uid:
+                self._delete(sandbox)
+
+    def _launch(self, attempt: _Attempt) -> _Launched:
+        run_req = attempt.run_req
+        deadline = monotonic() + LAUNCH_TIMEOUT_SECONDS
+        attempt.check()
+        image = self._ensure_image(attempt, run_req.task_image or self._config.default_task_image, deadline)
+        attempt.check()
+        sandbox = self._create(attempt, image, deadline)
         try:
             if sandbox.state != "started":
                 raise RuntimeError(f"Daytona sandbox {sandbox.id} is {sandbox.state}: {sandbox.error}")
+            attempt.check()
             self._upload_workdir(sandbox, run_req)
+            attempt.check()
             process = sandbox.process.start(
                 argv=["bash", "-lc", build_task_script(run_req)],
                 cwd=WORKDIR,
-                env=task_environment(run_req, self._config.controller_address),
+                env=task_environment(
+                    run_req, controller_address=self._config.controller_address, cluster_env=self._cluster_env
+                ),
                 tag=attempt.uid,
             )
         except BaseException:
@@ -325,26 +444,35 @@ class DaytonaTaskProvider:
         return _Launched(sandbox, process)
 
     def _upload_workdir(self, sandbox: Sandbox, run_req: job_pb2.RunTaskRequest) -> None:
-        """Unpack the bundle and the inline workdir files into ``WORKDIR`` through one tar upload."""
+        """Unpack the bundle, workdir files and secret files through one tar upload."""
         with tempfile.TemporaryDirectory(prefix="iris-daytona-") as staging:
-            root = Path(staging) / "app"
+            root = Path(staging)
+            app = root / WORKDIR.lstrip("/")
             if run_req.bundle_id:
-                self._bundles.extract_bundle_to(run_req.bundle_id, root)
-            root.mkdir(parents=True, exist_ok=True)
-            for name, data in run_req.entrypoint.workdir_files.items():
-                (root / name).parent.mkdir(parents=True, exist_ok=True)
-                (root / name).write_bytes(data)
-            for name, digest in run_req.entrypoint.workdir_file_refs.items():
-                (root / name).parent.mkdir(parents=True, exist_ok=True)
-                (root / name).write_bytes(self._bundles.get(digest))
+                self._bundles.extract_bundle_to(run_req.bundle_id, app)
+            app.mkdir(parents=True, exist_ok=True)
+            # Paths are validated, so a name cannot escape the workdir.
+            write_workdir_files(app, dict(run_req.entrypoint.workdir_files))
+            write_workdir_files(
+                app,
+                {name: self._bundles.get(digest) for name, digest in run_req.entrypoint.workdir_file_refs.items()},
+            )
+            secrets = secret_file_contents(task_secret_values(run_req.environment))
+            secrets_dir = root / str(SECRETS_DIR).lstrip("/")
+            if secrets:
+                secrets_dir.mkdir(parents=True, mode=0o700)
+                for name, value in secrets.items():
+                    (secrets_dir / name).write_text(value)
+                    (secrets_dir / name).chmod(0o600)
             archive = io.BytesIO()
             with tarfile.open(fileobj=archive, mode="w:gz") as tar:
-                tar.add(root, arcname=".")
+                # Name each tree, so that unpacking at / leaves the parent directories as they are.
+                tar.add(app, arcname=str(app.relative_to(root)))
+                if secrets:
+                    tar.add(secrets_dir, arcname=str(secrets_dir.relative_to(root)))
         remote = f"/tmp/iris-workdir-{run_req.attempt_uid}.tar.gz"
         sandbox.fs.write_bytes(remote, archive.getvalue())
-        unpacked = sandbox.process.run(
-            argv=["sh", "-c", f"mkdir -p {WORKDIR} && tar xzf {remote} -C {WORKDIR} && rm -f {remote}"]
-        )
+        unpacked = sandbox.process.run(argv=["sh", "-c", f"tar xzf {remote} -C / && rm -f {remote}"])
         if unpacked.exit_code != 0:
             raise RuntimeError(f"Cannot unpack the task workdir: {unpacked.output}")
 
@@ -352,57 +480,64 @@ class DaytonaTaskProvider:
         """Copy the process log into finelog under the attempt's key and record its exit status."""
         key = f"{attempt.run_req.task_id}:{attempt.run_req.attempt_id}"
         pending: dict[str, bytes] = {"stdout": b"", "stderr": b""}
-        batch: list[logging_pb2.LogEntry] = []
 
-        def emit(source: str, line: bytes) -> None:
+        def entry(source: str, line: bytes) -> logging_pb2.LogEntry:
             text = line.decode(errors="replace")
-            entry = logging_pb2.LogEntry(
-                source=source,
-                data=text,
-                attempt_id=attempt.run_req.attempt_id,
-                level=classify_log_level(source, text),
+            record = logging_pb2.LogEntry(
+                source=source, data=text, attempt_id=attempt.run_req.attempt_id, level=classify_log_level(source, text)
             )
-            entry.timestamp.epoch_ms = int(time.time() * 1000)
-            batch.append(entry)
+            record.timestamp.epoch_ms = int(time.time() * 1000)
+            return record
 
+        cursor: str | None = None
+        resumes = 0
+        backoff = ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
         try:
-            for event in process.stream_logs(encoding="base64"):
-                if event.type == "log":
-                    source = "stderr" if event.frame.channel == "stderr" else "stdout"
-                    *lines, pending[source] = (pending[source] + decode_frame(event.frame.data)).split(b"\n")
-                    for line in lines:
-                        emit(source, line)
-                elif event.type == "state":
-                    attempt.exit_code = exit_status(event.result)
-                if len(batch) >= LOG_BATCH_LINES:
-                    self._logs.write_batch(key, batch)
-                    batch = []
-            for source, rest in pending.items():
-                if rest:
-                    emit(source, rest)
+            while True:
+                try:
+                    for event in process.stream_logs(cursor=cursor, encoding="base64"):
+                        if event.type == "log":
+                            source = "stderr" if event.frame.channel == "stderr" else "stdout"
+                            *lines, pending[source] = (pending[source] + decode_frame(event.frame.data)).split(b"\n")
+                            if lines:
+                                # Flush each frame's complete lines, so a quiet task still streams.
+                                self._logs.write_batch(key, [entry(source, line) for line in lines])
+                        elif event.type == "state":
+                            attempt.exit_code = exit_status(event.result)
+                        elif event.type == "warning":
+                            logger.warning("Daytona dropped output of attempt %s: %s", attempt.uid, event.message)
+                        cursor, resumes = event.cursor, 0
+                    break
+                except DaytonaConnectionError:
+                    resumes += 1
+                    if resumes > LOG_STREAM_RESUMES or attempt.cancelled.is_set():
+                        raise
+                    sleep(backoff.next_interval())
+            if any(pending.values()):
+                self._logs.write_batch(key, [entry(source, rest) for source, rest in pending.items() if rest])
             if attempt.exit_code is None:
-                attempt.error = "Daytona process log ended without an exit status"
-        except DaytonaError as error:
-            attempt.error = f"Lost the Daytona process: {error}"
+                # The stream ended without the state event; the process record still has it.
+                attempt.exit_code = exit_status(process.wait(timeout=DELETE_TIMEOUT_SECONDS))
+        except (DaytonaError, RuntimeError) as error:
+            if attempt.exit_code is None:
+                attempt.error = f"Lost the Daytona process: {error}"
         finally:
-            self._logs.write_batch(key, batch)
             attempt.finished.set()
 
-    def _stop(self, attempt: _Attempt) -> None:
-        try:
-            launched = attempt.launch.result()
-        except BaseException:
-            return
-        self._delete(launched.sandbox)
-
     def _delete(self, sandbox: Sandbox) -> None:
-        try:
-            self._client.delete(sandbox, timeout=DELETE_TIMEOUT_SECONDS)
-        except DaytonaNotFoundError:
-            pass
-        except DaytonaError as error:
-            # The lifecycle policy deletes the sandbox at its TTL if this request is lost.
-            logger.warning("Cannot delete Daytona sandbox %s: %s", sandbox.id, error)
+        backoff = ExponentialBackoff(initial=1, maximum=10, factor=2, jitter=0.5)
+        for retry in range(DELETE_RETRIES + 1):
+            try:
+                self._client.delete(sandbox, timeout=DELETE_TIMEOUT_SECONDS)
+                return
+            except DaytonaNotFoundError:
+                return
+            except DaytonaError as error:
+                if not _is_ambiguous(error) or retry == DELETE_RETRIES:
+                    # The lifecycle policy deletes the sandbox at its TTL if this request never lands.
+                    logger.warning("Cannot delete Daytona sandbox %s: %s", sandbox.id, error)
+                    return
+                sleep(backoff.next_interval())
 
     # -- on-demand RPCs ------------------------------------------------------------
 
@@ -416,9 +551,9 @@ class DaytonaTaskProvider:
             attempt = self._attempts.get(target.attempt_uid)
         if attempt is None or not attempt.launch.done() or attempt.launch.exception() is not None:
             return worker_pb2.Worker.ExecInContainerResponse(error="The attempt has no running Daytona sandbox")
-        # A negative timeout means none, as for the other backends.
+        # A negative timeout means none, as for the other backends; Daytona also reads zero as none.
         result = attempt.launch.result().sandbox.process.run(
-            argv=list(request.command), cwd=WORKDIR, execution_timeout=timeout_seconds if timeout_seconds > 0 else None
+            argv=list(request.command), cwd=WORKDIR, execution_timeout=timeout_seconds if timeout_seconds >= 0 else None
         )
         if result.exit_code is None:
             return worker_pb2.Worker.ExecInContainerResponse(error=f"Command did not exit: {result.reason}")
@@ -479,6 +614,8 @@ def daytona_client(api_key_env: str) -> DaytonaV2Client:
     api_key = os.environ.get(api_key_env)
     if not api_key:
         raise ValueError(f"Daytona provider requires the API key in ${api_key_env}")
+    # Assigning a name the SDK no longer reads would silently re-enable HTTP/2.
+    assert hasattr(daytona_transport, "_HTTP2_AVAILABLE"), "The Daytona SDK no longer has its HTTP/2 switch"
     daytona_transport._HTTP2_AVAILABLE = False
     return Daytona(DaytonaConfig(api_key=api_key)).v2
 
@@ -490,6 +627,7 @@ def make_daytona_provider(
     remote_state_dir: str,
     logs: LogClient,
     cluster_name: str,
+    cluster_env: dict[str, str],
 ) -> DaytonaTaskProvider:
     return DaytonaTaskProvider(
         config,
@@ -498,4 +636,5 @@ def make_daytona_provider(
         bundles=BundleStore(storage_dir=prefix_join(remote_state_dir, "bundles")),
         logs=logs,
         cluster_name=cluster_name,
+        cluster_env=cluster_env,
     )

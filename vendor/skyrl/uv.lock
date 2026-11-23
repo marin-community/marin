@@ -2743,7 +2743,7 @@ dev = [
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jax", specifier = "==0.11.1" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "marin-iris", extras = ["controller"], editable = "../../lib/iris" },
+    { name = "marin-iris", extras = ["controller", "daytona"], editable = "../../lib/iris" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "nbconvert", specifier = ">=7.17.2" },
     { name = "nbformat", specifier = ">=5.10.4" },
@@ -2763,7 +2763,7 @@ examples = [
 ]
 test = [
     { name = "jax", specifier = "==0.11.1" },
-    { name = "marin-iris", extras = ["controller"], editable = "../../lib/iris" },
+    { name = "marin-iris", extras = ["controller", "daytona"], editable = "../../lib/iris" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "playwright", specifier = ">=1.49.0" },
     { name = "pytest", specifier = ">=8.4" },

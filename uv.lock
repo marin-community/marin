@@ -5260,7 +5260,7 @@ dev = [
     { name = "ipykernel" },
     { name = "jax", version = "0.11.1", source = { registry = "https://pypi.org/simple" } },
     { name = "jupyter" },
-    { name = "marin-iris", extra = ["controller"], marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-gpu' or extra == 'extra-10-marin-core-tpu' or extra == 'extra-14-marin-levanter-gpu' or extra == 'extra-14-marin-levanter-tpu' or extra == 'group-10-marin-fray-fray-tpu-test' or extra == 'group-10-marin-iris-dev' or extra == 'group-10-marin-iris-test' or (extra == 'extra-10-marin-core-rocm' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-rocm') or (extra != 'extra-10-marin-core-rocm' and extra != 'extra-10-marin-root-pipeline' and extra != 'extra-14-marin-levanter-rocm')" },
+    { name = "marin-iris", extra = ["controller", "daytona"], marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-gpu' or extra == 'extra-10-marin-core-tpu' or extra == 'extra-14-marin-levanter-gpu' or extra == 'extra-14-marin-levanter-tpu' or extra == 'group-10-marin-fray-fray-tpu-test' or extra == 'group-10-marin-iris-dev' or extra == 'group-10-marin-iris-test' or (extra == 'extra-10-marin-core-rocm' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-rocm') or (extra != 'extra-10-marin-core-rocm' and extra != 'extra-10-marin-root-pipeline' and extra != 'extra-14-marin-levanter-rocm')" },
     { name = "memray" },
     { name = "nbconvert" },
     { name = "nbformat" },
@@ -5280,7 +5280,7 @@ examples = [
 ]
 test = [
     { name = "jax", version = "0.11.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "marin-iris", extra = ["controller"], marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-gpu' or extra == 'extra-10-marin-core-tpu' or extra == 'extra-14-marin-levanter-gpu' or extra == 'extra-14-marin-levanter-tpu' or extra == 'group-10-marin-fray-fray-tpu-test' or extra == 'group-10-marin-iris-dev' or extra == 'group-10-marin-iris-test' or (extra == 'extra-10-marin-core-rocm' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-rocm') or (extra != 'extra-10-marin-core-rocm' and extra != 'extra-10-marin-root-pipeline' and extra != 'extra-14-marin-levanter-rocm')" },
+    { name = "marin-iris", extra = ["controller", "daytona"], marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-gpu' or extra == 'extra-10-marin-core-tpu' or extra == 'extra-14-marin-levanter-gpu' or extra == 'extra-14-marin-levanter-tpu' or extra == 'group-10-marin-fray-fray-tpu-test' or extra == 'group-10-marin-iris-dev' or extra == 'group-10-marin-iris-test' or (extra == 'extra-10-marin-core-rocm' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-rocm') or (extra != 'extra-10-marin-core-rocm' and extra != 'extra-10-marin-root-pipeline' and extra != 'extra-14-marin-levanter-rocm')" },
     { name = "memray" },
     { name = "playwright" },
     { name = "pytest" },
@@ -5331,7 +5331,7 @@ dev = [
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jax", specifier = "==0.11.1" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
+    { name = "marin-iris", extras = ["controller", "daytona"], editable = "lib/iris" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "nbconvert", specifier = ">=7.17.2" },
     { name = "nbformat", specifier = ">=5.10.4" },
@@ -5351,7 +5351,7 @@ examples = [
 ]
 test = [
     { name = "jax", specifier = "==0.11.1" },
-    { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
+    { name = "marin-iris", extras = ["controller", "daytona"], editable = "lib/iris" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "playwright", specifier = ">=1.49.0" },
     { name = "pytest", specifier = ">=8.4" },

@@ -121,9 +121,9 @@ from iris.cluster.runtime.env import (
     VENV_PATH,
     WORKDIR_MOUNT,
     build_common_iris_env,
+    build_task_script,
     cache_host_dirname,
     normalize_workdir_relative_path,
-    render_setup_steps,
 )
 from iris.cluster.runtime.output_capture import task_output_storage_failure
 from iris.cluster.runtime.profile import (
@@ -608,18 +608,6 @@ class PodConfig:
     egress_allowlist: EgressAllowlistConfig | None = None
 
 
-def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
-    """Build a shell script that runs the setup steps then the run_command."""
-    lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
-    lines.extend(render_setup_steps(run_req.entrypoint.setup_commands))
-    # Activate the venv the setup script populated. Conditional on it existing so
-    # a custom or no-setup script that brings its own environment runs as-is.
-    lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
-    if run_req.entrypoint.run_command.argv:
-        lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
-    return "\n".join(lines)
-
-
 def _build_init_container_spec(
     run_req: job_pb2.RunTaskRequest,
     pod_name: str,
@@ -1071,7 +1059,7 @@ def _build_pod_manifest(
         "env": env_list,
         "workingDir": WORKDIR_MOUNT.container_path,
         "volumeMounts": vol_mounts,
-        "command": ["bash", "-lc", _build_task_script(run_req)],
+        "command": ["bash", "-lc", build_task_script(run_req)],
         # Without this, a non-zero exit leaves containerStatuses[].state.terminated
         # with an empty message and a bare "Error" reason, burying the actual
         # crash (JAX traceback, fatal-error banner, OOM abort, ...) in logs the

@@ -77,8 +77,9 @@ test = [
     # Keep the test environment on the workspace runtime pin. The node-local
     # XLA autotune cache requires JAX's cache-key exclusion for its directory.
     "jax==0.11.1",
-    # kubernetes and the embedded native log server for LocalCluster-backed tests.
-    "marin-iris[controller]",
+    # kubernetes and the embedded native log server for LocalCluster-backed tests,
+    # and the Daytona SDK for the Daytona backend tests.
+    "marin-iris[controller,daytona]",
     "memray>=1.19.3",
     "playwright>=1.49.0",
     "pytest-asyncio",
