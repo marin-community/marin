@@ -1,0 +1,27 @@
+series: "snowball010-native-64k-probe"
+model: "open-athena/Marin-Snowball-67B-A2B-v0.1"
+# Checkpoint and tokenizer must use this same revision.
+model_revision: "adc0078a19a4383bc998fcdb43867b3360baf5f3"
+tokenizer: "open-athena/Marin-Snowball-67B-A2B-v0.1"
+tokenizer_revision: "adc0078a19a4383bc998fcdb43867b3360baf5f3"
+# AgentX owns replay, warmup, reconstruction and native validity.
+# Rebuild or warm the native cache with python -m experiments.evaluation.knotmeter.workload.
+harness_version: "1.0.12"
+harness_source: "e4bb2f835ffedbbe6b76252ea5c93caec68c5faf"
+dataset: "semianalysisai/cc-traces-weka-062126-256k"
+dataset_loader: "semianalysis_cc_traces_weka_062126_256k"
+# All 393 official 062126-256k sessions; verify the corpus digest below.
+dataset_revision: "8fecd2fc56694469f758f0afbbb6335ad3043740"
+dataset_sha256: "e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef"
+sessions: 393
+max_context: 65536
+# Comparison window; shorter runs are validation only.
+duration: 180
+unsafe_override: true
+warmup_requests_per_lane: 1
+# Profiling requests only; warmup errors are excluded.
+max_profiling_error_ratio: 0.01
+random_seed: 42
+warmup_grace_period: 1800
+trace_idle_gap_cap_seconds: 300
+prepare_timeout: 1800
