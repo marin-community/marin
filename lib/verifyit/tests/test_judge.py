@@ -1305,3 +1305,12 @@ def test_a_callback_finish_is_read_as_the_same_finish_from_an_endpoint(api, poli
     else:
         assert grade_judge.grade_judge_candidate(spec, "candidate", connection=connection).reward == expected[1]
     assert budgets == expected[0]
+
+
+def test_a_callback_refuses_a_rubric_that_samples_at_the_judges_default_temperature():
+    """A callback request carries no temperature, so the answers rubric's default sampling would be dropped."""
+    calls = []
+    connection = grade_judge.JudgeConnection("", "", default_model="callback-judge", callback=calls.append)
+    with pytest.raises(InvalidTask, match="answers rubric"):
+        grade_judge.grade_judge_candidate(_answers_spec(), "candidate", connection=connection, runtime=None)
+    assert calls == []
