@@ -54,6 +54,7 @@ from levanter.inference.binary import (
     read_generate_request,
 )
 from levanter.inference.engine import (
+    GenerationResult,
     GeneratedExpertRoutes,
     InferenceEngine,
     InferenceEngineConfig,
@@ -201,6 +202,8 @@ class InferenceContext:
         self.batch_queue: queue.Queue[InferenceBatch] = queue.Queue()
         self.shutdown_event = threading.Event()
         self.model_lock = threading.Lock()
+        self._publication_lock = threading.Lock()
+        self._publication_pending = threading.Event()
         self._model_version = 0
         self._policy_id = config.initial_policy_id
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
@@ -233,29 +236,34 @@ class InferenceContext:
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
     ) -> int:
         """Install new weights and return the serving version after resetting the cache."""
-        with self.model_lock:
-            if expected_version is not None and expected_version != self._model_version:
-                raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
-            if policy_id is not None and (
-                not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id == self._policy_id
-            ):
-                raise ValueError("A weight update requires a new, nonempty policy ID")
+        with self._publication_lock:
+            self._publication_pending.set()
+            try:
+                with self.model_lock:
+                    if expected_version is not None and expected_version != self._model_version:
+                        raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
+                    if policy_id is not None and (
+                        not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id == self._policy_id
+                    ):
+                        raise ValueError("A weight update requires a new, nonempty policy ID")
 
-            with (
-                hax.partitioning.set_mesh(self.mesh),
-                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-            ):
-                model = weight_callback(self.model)
-                engine = InferenceEngine.from_model_with_config(
-                    model=model,
-                    tokenizer=self.tokenizer,
-                    config=self.config.service,
-                    axis_resources=self.config.trainer.compute_axis_mapping,
-                )
-            self.model, self.engine = model, engine
-            self._model_version += 1
-            self._policy_id = policy_id
-            return self._model_version
+                    with (
+                        hax.partitioning.set_mesh(self.mesh),
+                        hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+                    ):
+                        model = weight_callback(self.model)
+                        engine = InferenceEngine.from_model_with_config(
+                            model=model,
+                            tokenizer=self.tokenizer,
+                            config=self.config.service,
+                            axis_resources=self.config.trainer.compute_axis_mapping,
+                        )
+                    self.model, self.engine = model, engine
+                    self._model_version += 1
+                    self._policy_id = policy_id
+                    return self._model_version
+            finally:
+                self._publication_pending.clear()
 
     def submit_request(
         self,
@@ -346,146 +354,164 @@ class InferenceContext:
 
         logger.info("Inference thread shutting down")
 
-    def _batch_processing_loop(self):
-        """Batch processing loop running in background thread - waits for batches and executes them"""
-        logger.info("Batch processing thread started")
+    def _batch_processing_loop(self) -> None:
+        waiting: collections.deque[InferenceRequest] = collections.deque()
+
+        def poll(capacity: int, capture_routes: bool) -> InferenceBatch:
+            if not waiting:
+                try:
+                    waiting.extend(self.batch_queue.get_nowait())
+                except queue.Empty:
+                    return InferenceBatch()
+            admitted = InferenceBatch()
+            while waiting and capacity >= waiting[0].n_generations:
+                if waiting[0].return_route_captures and not capture_routes:
+                    break
+                request = waiting.popleft()
+                admitted.append(request)
+                capacity -= request.n_generations
+            return admitted
 
         while not self.shutdown_event.is_set():
+            if waiting:
+                batch = InferenceBatch(waiting)
+                waiting.clear()
+            else:
+                try:
+                    batch = self.batch_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
             try:
-                batch = self.batch_queue.get(timeout=1)
+                # A waiting publication gets a chance to acquire the model lock
+                # before the next generation window starts.
+                with self._publication_lock:
+                    pass
                 with (
                     self.model_lock,
                     hax.partitioning.set_mesh(self.mesh),
                     hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                 ):
-                    batch = self._filter_policy_requests(batch)
-                    if batch:
-                        self._execute_batch(batch)
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Error executing batch: {e}", exc_info=True)
-                # Set exceptions on all futures in the batch
-                for req in batch:
-                    try:
-                        req.future.get_loop().call_soon_threadsafe(req.future.set_exception, e)
-                    except Exception:
-                        pass
-
-        logger.info("Batch processing thread shutting down")
+                    self._execute_batch(batch, poll)
+            except Exception as exc:
+                logger.exception("Inference window failed")
+                for request in batch:
+                    self._fail_request(request, exc)
 
     def _filter_policy_requests(self, requests: InferenceBatch) -> InferenceBatch:
         admitted = InferenceBatch()
-        for req in requests:
-            if req.expected_policy_id is not None and req.expected_policy_id != self._policy_id:
-                error = PolicyMismatchError("The requested policy is no longer active")
-                req.future.get_loop().call_soon_threadsafe(req.future.set_exception, error)
+        for request in requests:
+            if request.future.cancelled():
+                continue
+            if request.expected_policy_id is not None and request.expected_policy_id != self._policy_id:
+                self._fail_request(request, PolicyMismatchError("The requested policy is no longer active"))
             else:
-                admitted.append(req)
+                admitted.append(request)
         return admitted
 
-    def _execute_batch(self, requests: InferenceBatch):
-        """Execute a batch of inference requests"""
-        service_requests = []
+    @staticmethod
+    def _fail_request(request: InferenceRequest, error: Exception) -> None:
+        def fail() -> None:
+            if not request.future.done():
+                request.future.set_exception(error)
 
+        request.future.get_loop().call_soon_threadsafe(fail)
+
+    @staticmethod
+    def _engine_request(request: InferenceRequest, request_id: int) -> Request:
+        stop_ids = None
+        if request.stop_tokens:
+            width = max(map(len, request.stop_tokens))
+            padded = [seq + [INVALID] * (width - len(seq)) for seq in request.stop_tokens]
+            stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
+        seed = request.seed if request.seed is not None else np.random.default_rng().integers(0, 2**32 - 1)
+        params = SeqDecodingParams(
+            max_num_tokens=jnp.asarray(len(request.prompt_tokens) + request.max_tokens, dtype=jnp.int32),
+            stop_tokens=stop_ids,
+            temperature=jnp.asarray(request.temperature, dtype=jnp.float32),
+            top_p=jnp.asarray(1.0 if request.top_p is None else request.top_p, dtype=jnp.float32),
+            key=jrandom.PRNGKey(seed),
+        )
+        return Request(request.prompt_tokens, request_id, params, request.n_generations)
+
+    def _execute_batch(
+        self, requests: InferenceBatch, poll: collections.abc.Callable[[int, bool], InferenceBatch]
+    ) -> None:
         if not self.engine:
             raise RuntimeError("Inference engine is not initialized.")
-
-        for i, req in enumerate(requests):
-            # Create stop tokens if specified
-            stop_ids = None
-            if req.stop_tokens:
-                width = max(map(len, req.stop_tokens))
-                padded = [seq + [INVALID] * (width - len(seq)) for seq in req.stop_tokens]
-                stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
-
-            # dumb fallback seed if none provided
-            if req.seed is None:
-                req.seed = np.random.default_rng().integers(0, 2**32 - 1)
-
-            seq_params = SeqDecodingParams(
-                max_num_tokens=jnp.array(len(req.prompt_tokens) + req.max_tokens, dtype=jnp.int32),
-                stop_tokens=stop_ids,
-                temperature=jnp.array(req.temperature, dtype=jnp.float32),
-                top_p=jnp.array(1.0 if req.top_p is None else req.top_p, dtype=jnp.float32),
-                key=jrandom.PRNGKey(req.seed if req.seed is not None else i),
-            )
-
-            service_req = Request(
-                prompt_tokens=req.prompt_tokens,
-                request_id=i,  # Use batch index as service request id
-                decode_params=seq_params,
-                n_generations=req.n_generations,
-            )
-            service_requests.append(service_req)
-
-        # Generate responses
-        start_time = time.time()
         capture_routes = any(request.return_route_captures for request in requests)
-        result = self.engine.generate(service_requests, capture_routes=capture_routes)
-        duration = time.time() - start_time
-        logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
+        outstanding: dict[int, InferenceRequest] = {}
+        next_id = 0
 
-        # Return results to futures
-        output_idx = 0
-        for req in requests:
+        def admit(batch: InferenceBatch) -> list[Request]:
+            nonlocal next_id
+            admitted = []
+            for request in self._filter_policy_requests(batch):
+                try:
+                    engine_request = self._engine_request(request, next_id)
+                except Exception as exc:
+                    self._fail_request(request, exc)
+                    continue
+                outstanding[next_id] = request
+                admitted.append(engine_request)
+                next_id += 1
+            return admitted
+
+        def receive(capacity: int) -> list[Request]:
+            if self._publication_pending.is_set() or self.shutdown_event.is_set():
+                return []
+            return admit(poll(capacity, capture_routes))
+
+        def complete(request_id: int, result: GenerationResult) -> None:
+            request = outstanding.pop(request_id)
+            if request.future.cancelled():
+                return
             try:
-                req_outputs = []
-                for _ in range(req.n_generations):
-                    if output_idx < len(result.tokens):
-                        generated_tokens = result.tokens[output_idx]
-                        text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+                self._complete_request(request, result)
+            except Exception as exc:
+                self._fail_request(request, exc)
 
-                        result_logprobs = result.logprobs[output_idx] if result.logprobs is not None else None
-                        echo_token_ids = None
-                        echo_logprobs = None
-                        if req.echo_logprobs_top_k is not None:
-                            echo_token_ids = req.prompt_tokens + generated_tokens
-                            echo_logprobs = self.engine.score_token_logprobs(
-                                echo_token_ids,
-                                req.echo_logprobs_top_k,
-                            )
+        try:
+            initial = admit(requests)
+            self.engine.generate_continuously(
+                initial, on_complete=complete, poll_requests=receive, capture_routes=capture_routes
+            )
+        except Exception as exc:
+            for request in outstanding.values():
+                self._fail_request(request, exc)
+            raise
 
-                        req_outputs.append(
-                            InferenceResponse(
-                                text=text,
-                                tokens=result.tokens[output_idx],
-                                logprobs=result_logprobs,
-                                prompt_tokens=len(req.prompt_tokens),
-                                completion_tokens=len(generated_tokens),
-                                request_id=req.request_id,
-                                model_version=self._model_version,
-                                policy_id=self._policy_id,
-                                echo_token_ids=echo_token_ids,
-                                echo_logprobs=echo_logprobs,
-                                expert_routes=(
-                                    result.expert_routes[output_idx]
-                                    if req.return_route_captures and result.expert_routes is not None
-                                    else None
-                                ),
-                            )
-                        )
-                        output_idx += 1
-                    else:
-                        logger.error(f"Missing output for request {req.request_id}")
-                        req_outputs.append(
-                            InferenceResponse(
-                                text="<error while generating>",
-                                tokens=[],
-                                logprobs=None,
-                                prompt_tokens=0,
-                                completion_tokens=0,
-                                request_id=req.request_id,
-                                model_version=self._model_version,
-                                policy_id=self._policy_id,
-                            )
-                        )
+    def _complete_request(self, request: InferenceRequest, result: GenerationResult) -> None:
+        outputs = []
+        for index, tokens in enumerate(result.tokens):
+            echo_token_ids = echo_logprobs = None
+            if request.echo_logprobs_top_k is not None:
+                echo_token_ids = request.prompt_tokens + tokens
+                echo_logprobs = self.engine.score_token_logprobs(echo_token_ids, request.echo_logprobs_top_k)
+            outputs.append(
+                InferenceResponse(
+                    request_id=request.request_id,
+                    text=self.tokenizer.decode(tokens, skip_special_tokens=True),
+                    tokens=tokens,
+                    prompt_tokens=len(request.prompt_tokens),
+                    completion_tokens=len(tokens),
+                    logprobs=result.logprobs[index] if result.logprobs is not None else None,
+                    model_version=self._model_version,
+                    policy_id=self._policy_id,
+                    echo_token_ids=echo_token_ids,
+                    echo_logprobs=echo_logprobs,
+                    expert_routes=(
+                        result.expert_routes[index]
+                        if request.return_route_captures and result.expert_routes is not None
+                        else None
+                    ),
+                )
+            )
 
-                # Set the future result
-                req.future.get_loop().call_soon_threadsafe(req.future.set_result, req_outputs)
-            except Exception as e:
-                logger.error(f"Error processing result for {req.request_id}: {e}")
-                req.future.get_loop().call_soon_threadsafe(req.future.set_exception, e)
+        def finish() -> None:
+            if not request.future.done():
+                request.future.set_result(outputs)
+
+        request.future.get_loop().call_soon_threadsafe(finish)
 
 
 def _health_check() -> dict:
