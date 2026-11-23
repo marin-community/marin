@@ -423,7 +423,9 @@ class InferenceContext:
             width = max(map(len, request.stop_tokens))
             padded = [seq + [INVALID] * (width - len(seq)) for seq in request.stop_tokens]
             stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
-        seed = request.seed if request.seed is not None else np.random.default_rng().integers(0, 2**32 - 1)
+        seed = request.seed
+        if seed is None:
+            seed = np.random.default_rng().integers(np.iinfo(np.uint32).max, endpoint=True, dtype=np.uint32)
         params = SeqDecodingParams(
             max_num_tokens=jnp.asarray(len(request.prompt_tokens) + request.max_tokens, dtype=jnp.int32),
             stop_tokens=stop_ids,
