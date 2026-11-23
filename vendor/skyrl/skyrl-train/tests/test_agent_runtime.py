@@ -2,31 +2,43 @@
 
 import asyncio
 import json
+import os
 import shutil
+import socket
 from contextlib import asynccontextmanager
 
 import daytona
+import httpx
 import pytest
 from harbor.host_capabilities import HostCapabilities
+from harbor import host_capabilities
 from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.pi import Pi
+from harbor.environments import model_relay
 from harbor.environments.factory import EnvironmentFactory
+from harbor.environments.model_relay import ModelRelay
 from shellbox.backends.daytona.connection import DaytonaConnection
-from harbor.models.task.config import EnvironmentConfig
+from harbor.models.task.config import EnvironmentConfig, TaskConfig as PackageTaskConfig
+from harbor.models.task.task import Task
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
+from harbor.verifier.verifier import Verifier
 from omegaconf import OmegaConf
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRolloutInterrupted
+from shellbox.http_service import serve_http
 from shellbox.machine import ExitReason, Result
+from shellbox.process_session import SubprocessSession
 from taskcompendium.models import Source
+from verifyit.modes.grade_judge import JudgeConnection
 
 from skyrl_train.dataset.harbor_import import harbor_trial_task
 from skyrl_train.rollouts import agent_runtime
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 from skyrl_train.rollouts.agent_environment import BorrowedMachineEnvironment
-from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
+from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings, bind_original_verifier
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.harbor_trial_session import run_harbor_trial
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
@@ -67,6 +79,69 @@ class ProcessTransport:
         return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
 
 
+class RelayProcessMachine:
+    def __init__(self, root):
+        self.root = root
+        self.path("/workspace").mkdir(parents=True)
+        self.sessions = []
+
+    def path(self, value):
+        return self.root / value.lstrip("/")
+
+    def argument(self, value):
+        for prefix in ("/workspace", "/tests", "/logs"):
+            value = value.replace(prefix, str(self.path(prefix)))
+        return value
+
+    async def open_process(self, command):
+        process = await asyncio.create_subprocess_exec(
+            *(self.argument(value) for value in command.argv),
+            cwd=self.path(command.cwd or "/workspace"),
+            env={"PATH": os.environ["PATH"], **command.env},
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        async def stop():
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+
+        session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
+        self.sessions.append(session)
+        return session
+
+    async def run(self, command):
+        process = await asyncio.create_subprocess_exec(
+            *(self.argument(value) for value in command.argv),
+            cwd=self.path(command.cwd or "/workspace"),
+            env={"PATH": os.environ["PATH"], **command.env},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
+
+    async def upload(self, source, target):
+        destination = self.path(target)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, destination, dirs_exist_ok=True)
+        else:
+            shutil.copyfile(source, destination)
+
+    async def download(self, source, target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if self.path(source).is_dir():
+            shutil.copytree(self.path(source), target, dirs_exist_ok=True)
+        else:
+            shutil.copyfile(self.path(source), target)
+
+    async def close(self):
+        await asyncio.gather(*(session.close() for session in self.sessions))
+
+
 @pytest.fixture
 def harbor_package(tmp_path):
     package = tmp_path / "package"
@@ -77,6 +152,85 @@ def harbor_package(tmp_path):
     (package / "instruction.md").write_text("Write an answer.")
     (package / "task.toml").write_text('[environment]\ndocker_image = "fixture/image:latest"\n')
     return package
+
+
+@pytest.mark.asyncio
+async def test_bixbench_verifier_grades_through_host_judge_relay(harbor_package, tmp_path, monkeypatch):
+    package = harbor_package
+    (package / "task.toml").write_text(
+        '[environment]\ndocker_image = "fixture/image:latest"\n'
+        '[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
+        'OPENAI_BASE_URL = "https://provider.invalid/v1"\nMODEL_NAME = "fixture-judge"\n'
+    )
+    (package / "tests" / "test.sh").write_text(
+        "#!/bin/sh\n"
+        "python3 - <<'PY'\n"
+        "import json, os, urllib.request\n"
+        "assert os.environ['OPENAI_API_KEY'] == 'EMPTY'\n"
+        "assert 'host-private-key' not in os.environ.values()\n"
+        "request = urllib.request.Request(\n"
+        "    os.environ['OPENAI_BASE_URL'] + '/chat/completions',\n"
+        "    data=json.dumps({'model': os.environ['MODEL_NAME'], 'messages': [{'role': 'user', 'content': 'Grade'}]}).encode(),\n"
+        "    headers={'Authorization': 'Bearer ' + os.environ['OPENAI_API_KEY'], 'Content-Type': 'application/json'},\n"
+        ")\n"
+        "with urllib.request.urlopen(request) as response:\n"
+        "    assert json.load(response)['choices'][0]['message']['content'] == 'CORRECT'\n"
+        "with open(os.environ['REWARD_PATH'], 'w') as reward:\n"
+        "    reward.write('1')\n"
+        "PY\n"
+    )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    monkeypatch.setattr(host_capabilities, "MODEL_RELAY_PORT", port)
+    machine = RelayProcessMachine(tmp_path / "guest")
+    machine.path("/logs/verifier").mkdir(parents=True)
+    paths = TrialPaths(tmp_path / "trial")
+    paths.mkdir()
+    config = TrialConfig(
+        task=TaskConfig(path=package),
+        agent=AgentConfig(name="pi"),
+        environment={"type": "daytona"},
+        verifier={"env": {"REWARD_PATH": str(machine.path("/logs/verifier/reward.txt"))}},
+    )
+    judge = JudgeConnection("https://provider.invalid/v1", "host-private-key")
+    config, capabilities = bind_original_verifier(
+        config, PackageTaskConfig.model_validate_toml((package / "task.toml").read_text()), judge, HostCapabilities()
+    )
+    observed = []
+
+    def provider(request):
+        observed.append((request.headers["authorization"], request.url.path, request.read()))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "CORRECT"}}]})
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        model_relay.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(provider), **kwargs),
+    )
+    relay = ModelRelay.from_endpoint(
+        config.environment.kwargs["model_endpoint"],
+        config.environment.kwargs["model_name"],
+        authentication=capabilities.model_authentication,
+    )
+    assert relay is not None
+    task = Task(package)
+    environment = BorrowedMachineEnvironment(
+        machine, tmp_path / "trial", "bixbench", task.config.environment, host_capabilities=capabilities
+    )
+    verifier = Verifier(task=task, trial_paths=paths, environment=environment, override_env=config.verifier.env)
+    try:
+        async with asyncio.TaskGroup() as service_tasks:
+            async with serve_http(machine, relay.handle, port=port, task_group=service_tasks):
+                result = await verifier.verify()
+    finally:
+        await machine.close()
+    assert result.rewards == {"reward": 1.0}
+    assert len(observed) == 1
+    assert observed[0][0] == "Bearer host-private-key"
+    assert observed[0][1] == "/v1/chat/completions"
+    assert json.loads(observed[0][2])["model"] == "fixture-judge"
 
 
 @pytest.mark.asyncio
@@ -249,8 +403,13 @@ async def test_original_trial_runs_setup_before_installation_and_retains_failure
     evidence = tmp_path / "setup-evidence"
     backend = AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder())
     result = await run_harbor_trial(
-        trial, backend, unexpected_model_request, evidence,
-        setup_commands=commands, setup_cwd=str(tmp_path), setup_timeout=5,
+        trial,
+        backend,
+        unexpected_model_request,
+        evidence,
+        setup_commands=commands,
+        setup_cwd=str(tmp_path),
+        setup_timeout=5,
     )
     assert (tmp_path / "prepared").read_text() == "task-value"
     evidence = evidence / "task-setup"

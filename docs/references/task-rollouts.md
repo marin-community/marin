@@ -126,6 +126,10 @@ trial's time limit.
 For these trials, the Harbor task package defines the image, environment variables
 and agent user. TaskSpec may add `setup_commands` and their setup-only
 `working_directory`; other TaskSpec machine-environment overrides are rejected.
+When the package verifier declares a model endpoint and model role, the original
+Harbor trial binds `remote_judge` to a Shellbox model relay. The verifier receives
+the local relay endpoint and a dummy API key. The provider key stays on the host;
+a verifier with no remote judge connection fails before sandbox startup.
 
 ## Harnesses
 

@@ -419,7 +419,10 @@ class TaskRolloutWorker:
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
         harnesses = episode_harnesses(lowered, self.sessions)
-        if lowered.harness == ASSISTANT_PREFIX_HARNESS and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
+        if (
+            lowered.harness == ASSISTANT_PREFIX_HARNESS
+            and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT
+        ):
             # The assistant-prefix transport records no reasoning violation, so rejection would never fire.
             raise ValueError("Assistant-prefix tasks cannot reject malformed reasoning spans")
         if lowered.harness == ASSISTANT_PREFIX_HARNESS:
@@ -440,9 +443,7 @@ class TaskRolloutWorker:
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
             # The bound Harbor trial retains and executes the original setup.
             # The recording engine must not provision a second task machine for it.
-            engine_task = lowered.task.model_copy(
-                update={"environment_requirements": engine_requirements}
-            )
+            engine_task = lowered.task.model_copy(update={"environment_requirements": engine_requirements})
             # Harbor owns the phase deadlines and must still run its verifier
             # after an agent timeout. The outer attempt deadline covers the full trial.
             lowered = lowered.model_copy(
@@ -490,10 +491,11 @@ class TaskRolloutWorker:
         ]
         selected_harnesses: list[Mapping[str, Harness]] = []
         for index, lowered in enumerate(lowered_tasks):
+            lowered = lowered.model_copy(update={"judge_connection": self.judge_connection})
             lowered, harnesses = self._configured_task_and_harnesses(
                 lowered, harbor_settings[index], session_ids[index], phase
             )
-            lowered_tasks[index] = lowered.model_copy(update={"judge_connection": self.judge_connection})
+            lowered_tasks[index] = lowered
             selected_harnesses.append(harnesses)
         engines = [RolloutEngine(self.factories, harnesses) for harnesses in selected_harnesses]
         for engine, lowered in zip(engines, lowered_tasks, strict=True):

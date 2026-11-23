@@ -13,8 +13,9 @@ from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
-from harbor.models.task.config import EnvironmentConfig
-from harbor.host_capabilities import HostCapabilities
+from harbor.models.task.config import EnvironmentConfig, TaskConfig as PackageTaskConfig
+from harbor.host_capabilities import HostCapabilities, judge_model, model_api_url, model_guest_environment
+from harbor.utils.env import protected_environment_values
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
@@ -29,6 +30,7 @@ from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
 from taskcompendium.submission import conversation_messages
+from verifyit.modes.grade_judge import JudgeConnection
 
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
 from skyrl_train.io import io
@@ -74,6 +76,39 @@ class InstalledAgentSettings(BaseModel):
                 "and remove the legacy snapshot mapping before launching"
             )
         return values
+
+
+def bind_original_verifier(
+    config: TrialConfig,
+    package: PackageTaskConfig,
+    judge: JudgeConnection | None,
+    host_capabilities: HostCapabilities,
+) -> tuple[TrialConfig, HostCapabilities]:
+    """Bind a declared verifier model to host relay authority and guest access."""
+    verifier_env = {**package.verifier.env, **config.verifier.env}
+    model = judge_model(verifier_env)
+    if model is None or model_api_url(verifier_env) is None:
+        return config, host_capabilities
+    if judge is None:
+        raise ValueError("Original Harbor verifier model access requires a remote judge connection")
+    environment = config.environment.model_copy(
+        update={
+            "kwargs": {
+                **config.environment.kwargs,
+                "model_endpoint": judge.base_url,
+                "model_name": model,
+            }
+        }
+    )
+    verifier = config.verifier.model_copy(update={"env": model_guest_environment(verifier_env, model)})
+    bound = config.model_copy(update={"environment": environment, "verifier": verifier})
+    capabilities = HostCapabilities(
+        daytona=host_capabilities.daytona,
+        model_authentication={judge.base_url: judge.api_key},
+        protected_values=host_capabilities.protected_values
+        | protected_environment_values({"OPENAI_API_KEY": judge.api_key}),
+    )
+    return bound, capabilities
 
 
 class InstalledAgentRuntime:
@@ -215,6 +250,12 @@ class InstalledAgentRuntime:
             environment = config.environment
             if binding is not None:
                 environment = environment.model_copy(update=binding.environment_resources.model_dump(exclude_none=True))
+            package = PackageTaskConfig.model_validate_toml((task_dir / "task.toml").read_text())
+            config = config.model_copy(update={"environment": environment})
+            config, host_capabilities = bind_original_verifier(
+                config, package, lowered.judge_connection, host_capabilities
+            )
+            environment = config.environment
             run_timeout = lowered.limits.total_turn_timeout or self.settings.run_timeout
             assert config.trial_attempt_timeout_sec is not None
             async with self._served_agent(
