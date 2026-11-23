@@ -648,8 +648,8 @@ def run_calibration_source(
         # Preserve the failing attempt's evidence before the scratch disappears: the
         # harbor log, the recorded result and a fresh inspection of the package.
         logger.exception("Calibration failed for %s; uploading attempt evidence", source_id)
-        evidence = output = StoragePath(output_root) / "failure-evidence"
-        evidence.mkdir(parents=True, exist_ok=True)
+        evidence = StoragePath(output_root) / "failure-evidence"
+        evidence.mkdirs(parents=True, exist_ok=True)
         for attempt_dir in sorted((calibration_dir).glob("*/attempt-*")):
             name = f"{attempt_dir.parent.name}-{attempt_dir.name}"
             for member in ("harbor.log", "trial.json", "sandbox-lifecycle.jsonl"):
