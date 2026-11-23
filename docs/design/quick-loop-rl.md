@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 8:36 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 8:40 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2130,6 +2130,17 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   verifier score was 0.12 for native and 0.21 for vLLM. The native trainer
   opened its first 32-group admission window at 11:31 UTC.
   [Original matched baseline receipt][held-native-matched-current-panel0]
+
+  The 11 tool-use tasks accounted for seven of vLLM's nine additional
+  passes. Native reached the 512-token cap on all 11. vLLM emitted 10
+  structured final calls and passed seven tasks. Replaying the saved
+  native tokens with tool parsing enabled recovered five complete calls.
+  The original final-action grader scored all five zero. The replay also
+  reproduced the function names and arguments of all 10 saved vLLM calls
+  through the native parser and reproduced their original scores. The
+  two engines used the same declared sampling settings and independent
+  random draws. Compare the generated tokens and effective stop behavior
+  before attributing the score gap to the response wrapper.
 
   Kueue evicted the trainer at 12:03 UTC to admit another workload in
   the same queue. The other four tasks ended with it. The original trainer
