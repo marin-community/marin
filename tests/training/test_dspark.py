@@ -9,6 +9,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import torch
 from datasets.exceptions import DatasetGenerationError
 from levanter.models.snowball import GRUG_MOE_ARCHITECTURE
 from marin.training.drafting.dspark_data import (
@@ -161,8 +162,10 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
     rows = datasets.load_from_disk(str(prepared / "dataset"))
     split = json.loads((prepared / "splits.json").read_text())
     assert int(len(rows) * split["train_ratio"]) == 1
-    assert rows[0] == {"input_ids": [1, 2, 3, 5], "loss_mask": [False, False, True, True], "seq_len": 4}
-    assert rows[1]["input_ids"] == [1, 4, 6]
+    assert torch.equal(rows[0]["input_ids"], torch.tensor([1, 2, 3, 5]))
+    assert torch.equal(rows[0]["loss_mask"], torch.tensor([False, False, True, True]))
+    assert rows[0]["seq_len"] == 4
+    assert rows[1]["input_ids"].tolist() == [1, 4, 6]
     assert json.loads((prepared / "token_frequencies.json").read_text()) == {"3": 1, "5": 1}
 
 

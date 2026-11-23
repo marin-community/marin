@@ -378,7 +378,9 @@ def _write_masked_dataset(
     # Speculators floors len(dataset) * train_data_ratio. Use the midpoint
     # between split boundaries so rounding cannot move a row into validation.
     train_ratio = (len(train) + 0.5) / (len(train) + len(val))
-    datasets.concatenate_datasets([train, val]).save_to_disk(str(prepared / ARROW_DATASET_DIR))
+    # Speculators compares the reloaded input IDs directly with teacher tensors.
+    dataset = datasets.concatenate_datasets([train, val]).with_format("torch")
+    dataset.save_to_disk(str(prepared / ARROW_DATASET_DIR))
 
     (prepared / TOKEN_FREQUENCIES_FILE).write_text(json.dumps(frequencies, sort_keys=True) + "\n")
     return {"train": len(train), "validation": len(val), "train_ratio": train_ratio}

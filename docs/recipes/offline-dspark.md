@@ -103,7 +103,8 @@ exchange hidden states over the worker's local filesystem.
 Preparation verifies the data shard digests, renders assistant masks with
 Levanter's SFT chat processor, and rejects exact rendered sequences shared
 across splits. For a large mix, `--stage prepare` can build that same
-artifact on CPU in the storage region ahead of training. The GPU worker
+artifact on CPU in the storage region ahead of training. Use `uv run --extra cpu`
+to include the PyTorch dataset formatter. The GPU worker
 stages and verifies the teacher files before starting prefill. A failed
 training attempt can reuse the prepared dataset.
 

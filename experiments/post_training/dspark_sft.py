@@ -48,7 +48,7 @@ _FEATURE_TAPS = {
     TeacherFamily.SNOWBALL: (2, 12, 22),
     TeacherFamily.MOCHI: (2, 24, 45),
 }
-_RECIPE_VERSION = "2026.11.22.1"
+_RECIPE_VERSION = "2026.11.22.2"
 
 
 @dataclass(frozen=True)
