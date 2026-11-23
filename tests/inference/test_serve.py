@@ -1092,6 +1092,53 @@ def test_backend_resolves_the_chat_template_from_the_separate_tokenizer(tmp_path
         _resolved_chat_template(without_tokenizer)
 
 
+def test_iris_serve_caps_distributed_streamer_buffers_by_default(monkeypatch):
+    """A distributed runai loader config without bounds made the streamer buffer unbounded and
+    OOM the serve container mid-load (1.07 TB export, 880 GiB request). The iris subcommand
+    fills in the evaluation path's proven defaults; explicit values pass through untouched."""
+    result, _client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--gpu",
+        "H100x8",
+        "--tensor-parallel-size",
+        "1",
+        "--vllm-arg",
+        "--enable-expert-parallel",
+        "--vllm-arg",
+        "--model-loader-extra-config",
+        "--vllm-arg",
+        '{"distributed":true}',
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    args = services[0].engine.extra_args
+    filled = json.loads(args[args.index("--model-loader-extra-config") + 1])
+    assert filled == {"distributed": True, "concurrency": 4, "memory_limit": 17179869184}
+
+
+def test_iris_serve_keeps_explicit_streamer_bounds(monkeypatch):
+    result, _client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--gpu",
+        "H100x8",
+        "--tensor-parallel-size",
+        "1",
+        "--vllm-arg",
+        "--model-loader-extra-config",
+        "--vllm-arg",
+        '{"distributed":true,"memory_limit":8589934592}',
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    args = services[0].engine.extra_args
+    filled = json.loads(args[args.index("--model-loader-extra-config") + 1])
+    assert filled["distributed"] is True
+    assert filled["memory_limit"] == 8589934592
+    assert filled["concurrency"] == 4
+
+
 def test_iris_serve_delivers_secret_without_putting_it_in_the_service_config(monkeypatch):
     monkeypatch.setenv("TEST_PARALLEL_KEY", "parallel-key")
 

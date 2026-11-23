@@ -34,6 +34,7 @@ endpoint is ready, the command always mints and prints an endpoint-scoped capabi
 
 import contextlib
 import importlib.metadata
+import json
 import logging
 import math
 import re
@@ -267,6 +268,43 @@ def _prepared_direct_service(
     except ModelPreparationError as exc:
         raise click.ClickException(str(exc)) from exc
     return replace(service, model=model, engine=engine)
+
+
+_RUNAI_STREAMER_LOADER_FLAG = "--model-loader-extra-config"
+_RUNAI_STREAMER_DEFAULT_CONCURRENCY = 4
+_RUNAI_STREAMER_DEFAULT_MEMORY_LIMIT_BYTES = 16 * (1 << 30)
+
+
+def _bound_distributed_streamer_buffers(extra_args: tuple[str, ...]) -> tuple[str, ...]:
+    """Cap the runai streamer's host RAM buffer pool for distributed loading.
+
+    The evaluation serving path resolves a distributed ``--model-loader-extra-config`` to
+    ``{distributed: true, concurrency: 4, memory_limit: 16 GiB}``; without the memory limit the
+    streamer buffers unbounded while streaming a checkpoint through the serve child's cgroup and
+    the container is OOMKilled mid-load (observed on a 1.07 TB export at 28% of streaming with a
+    880 GiB request). Fill in the defaults for whichever bound the caller's distributed config
+    omits; explicit values pass through untouched.
+    """
+    if _RUNAI_STREAMER_LOADER_FLAG not in extra_args:
+        return extra_args
+    index = extra_args.index(_RUNAI_STREAMER_LOADER_FLAG)
+    if index + 1 >= len(extra_args):
+        return extra_args
+    try:
+        config = json.loads(extra_args[index + 1])
+    except ValueError:
+        return extra_args
+    if not isinstance(config, dict) or config.get("distributed") is not True:
+        return extra_args
+    defaults = {
+        "concurrency": _RUNAI_STREAMER_DEFAULT_CONCURRENCY,
+        "memory_limit": _RUNAI_STREAMER_DEFAULT_MEMORY_LIMIT_BYTES,
+    }
+    missing = {key: value for key, value in defaults.items() if key not in config}
+    if not missing:
+        return extra_args
+    filled = dict(config, **missing)
+    return (*extra_args[: index + 1], json.dumps(filled), *extra_args[index + 2 :])
 
 
 def _resolve_chat_template(spec: str | None) -> str | None:
@@ -629,6 +667,10 @@ def main(
         plan = replace(plan, engine=replace(plan.engine, release=load_vllm_gpu_release(vllm_release)))
 
     geometry = None
+    if plan.gpu_count is not None and isinstance(plan.engine, VllmEngineConfig):
+        plan = replace(
+            plan, engine=replace(plan.engine, extra_args=_bound_distributed_streamer_buffers(plan.engine.extra_args))
+        )
     if data_parallel_size is not None:
         if plan.gpu_count is None or backend != "vllm" or tensor_parallel_size is None:
             raise click.ClickException("native DP geometry requires --gpu, --backend vllm and --tensor-parallel-size")
