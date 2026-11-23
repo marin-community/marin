@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from safetensors.numpy import load, save
 
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
@@ -144,7 +145,7 @@ def test_payload_rejects_altered_tokens_order_prompt_policy_and_transport(replay
     with pytest.raises(ValueError, match="identity"):
         replay_snowball_logits(model, payload, policy_id="another-checkpoint")
     different = SnowballLMHeadModel(model.transformer, dataclasses.replace(model.config, sliding_window=3))
-    with pytest.raises(ValueError, match="model/config"):
+    with pytest.raises(ValueError, match="model architecture"):
         replay_snowball_logits(different, payload, policy_id="tiny-checkpoint-41")
     wire = payload.to_bytes()
     with pytest.raises(ValueError):
@@ -155,11 +156,32 @@ def test_payload_rejects_altered_tokens_order_prompt_policy_and_transport(replay
     metadata_size = struct.unpack(">I", wire[header_start : header_start + 4])[0]
     start = header_start + 4
     metadata = json.loads(wire[start : start + metadata_size])
-    metadata["version"] = 2
+    metadata["version"] = 100
     encoded = json.dumps(metadata).encode()
     incompatible = wire[:header_start] + struct.pack(">I", len(encoded)) + encoded + wire[start + metadata_size :]
     with pytest.raises(ValueError, match="version"):
         SnowballReplayPayload.from_bytes(incompatible)
+
+
+def test_wire_packs_expert_ids_and_preserves_the_archived_binding(replay_case):
+    _, _, _, payload = replay_case
+    wire = payload.to_bytes()
+    metadata_start = wire.index(b"\n") + 1
+    metadata_size = struct.unpack_from(">I", wire, metadata_start)[0]
+    arrays_start = metadata_start + 4 + metadata_size
+    arrays = load(wire[arrays_start:])
+    assert arrays["layer.0.selected_experts"].dtype == np.uint8
+    assert SnowballReplayPayload.from_bytes(wire).binding == payload.binding
+
+    legacy = json.loads(wire[metadata_start + 4 : arrays_start])
+    legacy["version"] = 1
+    metadata = json.dumps(legacy).encode()
+    arrays["layer.0.selected_experts"] = arrays["layer.0.selected_experts"].astype(np.int32)
+    archived = wire[:metadata_start] + struct.pack(">I", len(metadata)) + metadata + save(arrays)
+    assert len(archived) > len(wire)
+    restored = SnowballReplayPayload.from_bytes(archived)
+    assert restored.binding == payload.binding
+    np.testing.assert_array_equal(restored.layers[0].selected_experts, payload.layers[0].selected_experts)
 
 
 @pytest.mark.timeout(240)

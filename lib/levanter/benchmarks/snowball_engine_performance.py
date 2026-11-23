@@ -218,7 +218,7 @@ def _measure_call(
         ]
         raise
     call["completed_batch_latency"] = time.perf_counter() - started
-    # All validation, comparisons and hashes occur after the timed boundary.
+    # Benchmark output checks and comparison hashes follow the timed boundary.
     call["generated_tokens"] = result.total_generated
     try:
         call["outputs"] = _outputs(result, requests)
@@ -371,7 +371,11 @@ def run(
             fixture=(
                 "accepted-four-slot256token-fixed-schedule" if backend == "tpu" else "CPU-reference-four-slot-H16-D8"
             ),
-            timing="End-to-end generate, including reset, host extraction and synchronization; construction, hashing and parity excluded. Engine donation is unchanged between arms.",
+            timing=(
+                "End-to-end generation includes reset, host extraction, synchronization, and serialization for "
+                "route capture. Engine construction, output comparisons, and fixture hashes are outside the timer. "
+                "Engine donation is unchanged between arms."
+            ),
             accuracy_note="Exact ordinary-engine sampled tokens/logprobs/finish reasons across max_rounds, not full-vocabulary training parity.",
             source_sha_origin="caller" if source_sha is not None else "git_head",
         )

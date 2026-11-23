@@ -95,8 +95,10 @@ pages and the active policy. A final route-only decode covers the terminal
 token before the scheduler releases the slot.
 
 The wire payload binds tokens, positions, sampling parameters, layer order
-and policy identity. `align_snowball_policy_routes` checks those coordinates
-against padded learner rows. `PolicyRouteCaptures` stores replay arrays on
+and policy identity. Version 2 stores expert IDs as one byte per ID when they
+fit. The decoder restores the canonical int32 IDs before checking the digest
+and can read existing version 1 archives. `align_snowball_policy_routes`
+checks those coordinates against padded learner rows. `PolicyRouteCaptures` stores replay arrays on
 named batch and position axes. `pack_policy_batch` moves the route rows with
 the tokens and masks. `response_logprobs` passes them to Snowball for both
 forward scoring and backward recomputation. Current weights still determine

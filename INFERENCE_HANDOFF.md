@@ -72,12 +72,26 @@ after this change.
 
 The initial full-model replay arm on v5p-8 generated 400.97 output tokens/s.
 That snapshot buffered text until completion for requests with raw policy
-scores, so its first-token latency includes generation time.
+scores, so its first-token latency includes generation time. The second arm
+hit the one-hour job cap during compilation.
 [Paired v5p-8 AgentX runs](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-replay-pair-20261122)
 
 The follow-up runs use the shared terminal kernel and incremental chat
 streaming. They retain the same context, offered concurrency, checkpoint,
-and frozen prompts. Both arms request raw policy scores.
+and frozen prompts. Both native arms request raw policy scores. The
+compiled vLLM result is the previous same-platform AgentX baseline, using
+its standard response fields.
+
+| v5p-8 run | Output tok/s | P90 first token (s) |
+| --- | ---: | ---: |
+| Compiled vLLM baseline | 549.46 | 1.339 |
+| Native, replay off | 570.53 | 1.340 |
+| Native, replay on | 442.62 | 2.153 |
+
+Replay lowered throughput by 22.4% against the native control and 19.4%
+against compiled vLLM. Both native jobs reported zero profiling errors.
+The replay arm cancelled one outstanding request at the drain deadline.
+Its median HTTP response was 33.4 MiB, compared with 15.3 KiB for the control.
 [Optimized replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-optimized-replay-20261122)
 · [Replay-off control](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-optimized-control-20261122)
 
@@ -87,6 +101,14 @@ compared with 118 ms for the old formatter, and produced identical bytes.
 The normal OpenAI stream and tensor endpoint still agree on route identity
 and policy scores.
 [Byte-oriented replay run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-byte-stream-replay-20261122)
+
+Route archive version 2 uses one byte per expert ID when all IDs in the
+layer fit. The decoder widens IDs before validating the unchanged evidence
+digest and still reads version 1 archives. A synthetic 64K capture with
+the 67B model's route dimensions shrank from 34.63 MiB to 15.13 MiB before
+base64 encoding. The fresh-process score and gradient tests and the OpenAI
+stream and binary endpoint checks passed.
+[Compact archive replay run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-compact-wire-replay-20261122)
 
 On CoreWeave, a four-GB200 smoke matched packed native and captured
 generation, including scores and terminal routes. Both full AgentX runs

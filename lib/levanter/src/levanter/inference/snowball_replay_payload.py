@@ -30,7 +30,8 @@ from levanter.models.snowball import (
 )
 
 _MAGIC = b"SNOWBALL-ENGINE-REPLAY\n"
-_SCHEMA_VERSION = 1
+_BINDING_VERSION = 1
+_WIRE_VERSION = 2
 _MASK = "contiguous-causal-v1"
 
 
@@ -86,7 +87,7 @@ class SnowballReplayPayload:
 
     def _metadata(self) -> dict:
         return {
-            "version": _SCHEMA_VERSION,
+            "version": _BINDING_VERSION,
             "mask": _MASK,
             "route_source": "engine.decode_with_route_captures",
             "logprob_semantics": "engine-sampling-logits-v1",
@@ -190,10 +191,16 @@ class SnowballReplayPayload:
         return example, SnowballRouteCaptureBatch(routes, jnp.asarray(self.tokens[None, :]), None)
 
     def to_bytes(self) -> bytes:
-        """Serialize versioned JSON metadata and safetensors arrays; never pickle."""
+        """Serialize metadata and routes, narrowing expert IDs when they fit."""
         self.validate()
-        metadata = json.dumps({**self._metadata(), "binding": self.binding}, sort_keys=True).encode()
-        return _MAGIC + struct.pack(">I", len(metadata)) + metadata + save(self._arrays())
+        arrays = self._arrays()
+        for index, layer in enumerate(self.layers):
+            if layer.selected_experts.max() <= np.iinfo(np.uint8).max:
+                arrays[f"layer.{index}.selected_experts"] = layer.selected_experts.astype(np.uint8)
+        metadata = json.dumps(
+            {**self._metadata(), "version": _WIRE_VERSION, "binding": self.binding}, sort_keys=True
+        ).encode()
+        return _MAGIC + struct.pack(">I", len(metadata)) + metadata + save(arrays)
 
     @classmethod
     def from_bytes(cls, data: bytes) -> "SnowballReplayPayload":
@@ -207,7 +214,8 @@ class SnowballReplayPayload:
             raise ValueError("truncated Snowball replay metadata")
         try:
             metadata = json.loads(data[start : start + length])
-            if type(metadata["version"]) is not int or metadata.pop("version") != _SCHEMA_VERSION:
+            version = metadata.pop("version")
+            if type(version) is not int or version not in (_BINDING_VERSION, _WIRE_VERSION):
                 raise ValueError("incompatible Snowball replay schema version")
             if (
                 metadata.pop("mask") != _MASK
@@ -216,16 +224,22 @@ class SnowballReplayPayload:
             ):
                 raise ValueError("incompatible Snowball replay causal or sampling contract")
             arrays = load(data[start + length :])
-            layers = tuple(
-                SnowballReplayLayer(
-                    *(arrays.pop(f"layer.{index}.{name}") for name in ("selected_experts", "token_valid", "qb_alpha"))
+            layers = []
+            for index in range(metadata.pop("num_layers")):
+                prefix = f"layer.{index}."
+                selected_experts = arrays.pop(prefix + "selected_experts")
+                if version == _WIRE_VERSION and selected_experts.dtype == np.uint8:
+                    # The binding and learner both use canonical int32 expert IDs.
+                    selected_experts = selected_experts.astype(np.int32)
+                layers.append(
+                    SnowballReplayLayer(
+                        selected_experts, arrays.pop(prefix + "token_valid"), arrays.pop(prefix + "qb_alpha")
+                    )
                 )
-                for index in range(metadata.pop("num_layers"))
-            )
             sampling = metadata.pop("sampling")
             sampling["stop_tokens"] = tuple(tuple(row) for row in sampling["stop_tokens"])
             sampling["key"] = tuple(sampling["key"])
-            payload = cls(layers=layers, sampling=SnowballReplaySampling(**sampling), **arrays, **metadata)
+            payload = cls(layers=tuple(layers), sampling=SnowballReplaySampling(**sampling), **arrays, **metadata)
         except (KeyError, TypeError, ValueError, SafetensorError) as exc:
             raise ValueError(f"invalid Snowball replay payload: {exc}") from exc
         payload.validate()
