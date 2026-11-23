@@ -5,11 +5,11 @@
 
 import hashlib
 import json
-
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.curation import ActorCensusInput, GradingEnvironmentEvidence
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec
 
@@ -48,9 +48,8 @@ def write_census_population(tmp_path: Path, encoded: list[str], source) -> tuple
     specs.mkdir()
     pq.write_table(pa.table({"task_spec": encoded}), specs / "part-000000.parquet")
     digest = hashlib.sha256("".join(encoded).encode()).hexdigest()
-    binding = (
-        census_receipt(source)
-        .input.model_copy(update={"task_specs_sha256": digest, "measured_tasks": len(encoded)})
+    binding = census_receipt(source).input.model_copy(
+        update={"task_specs_sha256": digest, "measured_tasks": len(encoded)}
     )
     population = SourceTextPopulation(
         path=str(tmp_path / "population"),
@@ -106,8 +105,6 @@ class _Existing:
 
 
 def verify_receipt(declared: dict[str, int]) -> GradingCensusReceipt:
-    from finestore.rl.curation import ActorCensusInput, GradingEnvironmentEvidence
-
     assessed = sum(declared.values())
     return GradingCensusReceipt(
         source_id="Evalchemy:fixture",
@@ -127,7 +124,9 @@ def verify_receipt(declared: dict[str, int]) -> GradingCensusReceipt:
             required_counts={"separate": assessed},
             declared_counts={"separate": assessed},
             status_counts={"matched": assessed},
-            reason_counts={"The typed grader reads the declared submitted answer or captured files in its own environment": assessed},
+            reason_counts={
+                "The typed grader reads the declared submitted answer or captured files in its own environment": assessed
+            },
             evidence_url="s3://fixture/receipt.json",
             missing_artifact_counts={uri: 1 for uri in declared},
             declared_artifact_counts=dict(declared),

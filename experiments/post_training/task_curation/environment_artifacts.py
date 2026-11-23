@@ -111,9 +111,12 @@ def verify_declared_environment_artifacts(
         for uri, task_count in sorted(evidence.declared_artifact_counts.items()):
             if StoragePath(uri).exists():
                 continue
-            finding = _rebuild_finding(source_id, uri, task_count, rebuild_artifact(
-                RebuildEnvironmentArtifact(uri=uri, cells=(), evidence_ids=())
-            ))
+            finding = _rebuild_finding(
+                source_id,
+                uri,
+                task_count,
+                rebuild_artifact(RebuildEnvironmentArtifact(uri=uri, cells=(), evidence_ids=())),
+            )
             if finding.reason is not None or not StoragePath(uri).exists():
                 blocking.append(finding)
             else:
