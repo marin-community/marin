@@ -9,27 +9,29 @@ import struct
 from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from itertools import batched
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal, cast
+from typing import cast
 
 import datasets
 import pyarrow.parquet as pq
+from levanter.compat.hf_checkpoints import SAFE_TENSORS_INDEX_NAME
 from levanter.data.text.formats import ChatProcessor
 from levanter.models.snowball import GRUG_MOE_ARCHITECTURE, GRUG_MOE_MODEL_TYPE
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from safetensors import safe_open
+from transformers.utils import CONFIG_NAME
 
 GRUG_MASK_TOKEN = "<|finetune_right_pad_id|>"
 PREPARED_DIR = "prepared"
 ARROW_DATASET_DIR = "dataset"
 DRAFT_CONFIG_FILE = "draft_config.json"
+DRAFT_LAYER_TYPE = "qwen3"
 TOKEN_FREQUENCIES_FILE = "token_frequencies.json"
-SAFETENSORS_INDEX = "model.safetensors.index.json"
 _SAFETENSORS_FILE = "model.safetensors"
 SPLITS_FILE = "splits.json"
 _MAX_SAFETENSORS_HEADER = 100_000_000
@@ -66,41 +68,12 @@ class DraftDataConfig:
 
 
 @dataclass(frozen=True)
-class DraftRecipe:
-    """DSpark model and optimizer settings."""
+class PreparedSplits:
+    """Prepared Arrow split sizes and the ratio passed to Speculators."""
 
-    data: DraftDataConfig
-    feature_taps: tuple[int, ...]
-    max_anchors: int
-    max_steps: int
-    trainer_ranks: int
-    teacher_replicas: int
-    cross_entropy_weight: float
-    total_variation_weight: float
-    optimizer: Literal["muon", "adamw"]
-    lr_schedule: Literal["linear", "cosine", "none"]
-    draft_vocab_size: int = 32000
-    block_size: int = 8
-    markov_rank: int = 256
-    learning_rate: float = 3e-4
-    seed: int = 42
-
-    def __post_init__(self) -> None:
-        if not self.feature_taps or tuple(sorted(set(self.feature_taps))) != self.feature_taps:
-            raise ValueError("Feature taps must be strictly increasing")
-        if self.feature_taps[0] < 0 or self.feature_taps[-1] >= self.data.shape.num_hidden_layers:
-            raise ValueError("Feature taps must precede the final pre-norm distillation tap")
-        if not 0 < self.draft_vocab_size < self.data.shape.vocab_size:
-            raise ValueError("The draft vocabulary must be a strict subset of the teacher vocabulary")
-        max_length = self.data.max_sequence_length
-        if not max_length > self.block_size or not 0 < self.max_anchors <= max_length:
-            raise ValueError("The sequence length and anchor budget must fit the draft block")
-        if min(self.max_steps, self.trainer_ranks, self.teacher_replicas) <= 0:
-            raise ValueError("Step budget and GPU counts must be positive")
-
-    @property
-    def extraction_taps(self) -> tuple[int, ...]:
-        return (*self.feature_taps, self.data.shape.num_hidden_layers)
+    train: int
+    validation: int
+    train_ratio: float
 
 
 def file_sha256(path: Path | StoragePath) -> str:
@@ -146,7 +119,7 @@ def _manifest(path: StoragePath, expected: str) -> dict:
 def tensor_files(root: Path) -> dict[str, str]:
     """Map tensor names to relative safetensors filenames."""
 
-    index = root / SAFETENSORS_INDEX
+    index = root / SAFE_TENSORS_INDEX_NAME
     if index.is_file():
         return json.loads(index.read_text())["weight_map"]
     with safe_open(root / _SAFETENSORS_FILE, framework="np") as weights:
@@ -158,7 +131,7 @@ def _teacher_files(
 ) -> tuple[dict[str, StoragePath], dict[str, str]]:
     hashes = _manifest(manifest, manifest_sha256)
     files = _bundle_files(root, hashes)
-    for name in ("config.json", "tokenizer.json", "tokenizer_config.json"):
+    for name in (CONFIG_NAME, "tokenizer.json", "tokenizer_config.json"):
         if name not in files:
             raise ValueError(f"Teacher manifest must include {name}")
     return files, hashes
@@ -174,7 +147,7 @@ def _tensor_header(path: StoragePath) -> dict:
 
 
 def _check_teacher_tensors(files: dict[str, StoragePath], metadata: Path, shape: GrugShape) -> None:
-    index = metadata / SAFETENSORS_INDEX
+    index = metadata / SAFE_TENSORS_INDEX_NAME
     if index.is_file():
         weights = json.loads(index.read_text())["weight_map"]
         headers = {}
@@ -248,7 +221,7 @@ def _teacher_decoder(target: dict, config: DraftDataConfig) -> dict[str, str | i
         raise ValueError("Teacher needs context for the full prefill row and one output token")
 
     return {
-        "model_type": "qwen3",
+        "model_type": DRAFT_LAYER_TYPE,
         "hidden_size": shape.hidden_size,
         "num_attention_heads": shape.num_attention_heads,
         "num_key_value_heads": shape.num_key_value_heads,
@@ -277,7 +250,7 @@ def _teacher_inputs(
             if source.name.endswith(".safetensors"):
                 continue
             _stage_file(source, metadata / name, hashes[name])
-        decoder = _teacher_decoder(json.loads((metadata / "config.json").read_text()), config)
+        decoder = _teacher_decoder(json.loads((metadata / CONFIG_NAME).read_text()), config)
         _check_teacher_tensors(files, metadata, config.shape)
         tokenizer = load_tokenizer(str(metadata))
         if not tokenizer.chat_template or tokenizer.vocab_size > config.shape.vocab_size:
@@ -335,7 +308,7 @@ def _tokenized_rows(
 def inspect_mix(
     root: StoragePath, manifest_sha256: str, *, verify_shards: bool = False
 ) -> tuple[dict[str, StoragePath], dict[str, StoragePath]]:
-    """Read the pinned train and validation shard lists."""
+    """Read the pinned split lists and optionally verify every shard digest."""
 
     splits = _manifest(root / "dspark-mix.json", manifest_sha256)
     train_files = _bundle_files(root, splits["train"])
@@ -355,7 +328,7 @@ def _write_masked_dataset(
     val_files: dict[str, StoragePath],
     tokenizer: MarinTokenizer,
     config: DraftDataConfig,
-) -> dict[str, int | float]:
+) -> PreparedSplits:
     processor = ChatProcessor(tokenizer)
     frequencies: Counter[int] = Counter()
     validation_keys: set[bytes] = set()
@@ -393,7 +366,7 @@ def _write_masked_dataset(
     dataset.save_to_disk(str(prepared / ARROW_DATASET_DIR))
 
     (prepared / TOKEN_FREQUENCIES_FILE).write_text(json.dumps(frequencies, sort_keys=True) + "\n")
-    return {"train": len(train), "validation": len(val), "train_ratio": train_ratio}
+    return PreparedSplits(len(train), len(val), train_ratio)
 
 
 def prepare_data(
@@ -426,4 +399,4 @@ def prepare_data(
                 target.parent.mkdirs()
                 target.upload_from(str(file))
         # The artifact runner serializes writers. Publish the split descriptor last.
-        (destination / SPLITS_FILE).write_text(json.dumps(splits, indent=2) + "\n")
+        (destination / SPLITS_FILE).write_text(json.dumps(asdict(splits), indent=2) + "\n")

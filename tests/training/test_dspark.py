@@ -20,14 +20,13 @@ from marin.training.drafting.dspark_data import (
     GRUG_MASK_TOKEN,
     LM_HEAD,
     DraftDataConfig,
-    DraftRecipe,
     GrugShape,
     file_sha256,
     inspect_teacher,
     prepare_data,
     stage_teacher,
 )
-from marin.training.drafting.dspark_distillation import extraction_config, gpu_device_split, validate_draft
+from marin.training.drafting.dspark_distillation import DraftRecipe, extraction_config, gpu_device_split, validate_draft
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import save_file
 from tokenizers import AddedToken, Tokenizer

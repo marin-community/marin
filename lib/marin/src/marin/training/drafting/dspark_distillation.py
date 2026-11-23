@@ -11,11 +11,14 @@ import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Literal
 
 import numpy as np
+from levanter.compat.hf_checkpoints import SAFE_TENSORS_INDEX_NAME
 from levanter.compat.hf_export import write_export_json
 from rigging.filesystem.storage_path import StoragePath
 from safetensors import safe_open
+from transformers.utils import CONFIG_NAME
 
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import InferenceModelConfig
@@ -23,12 +26,13 @@ from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmL
 from marin.training.drafting.dspark_data import (
     ARROW_DATASET_DIR,
     DRAFT_CONFIG_FILE,
+    DRAFT_LAYER_TYPE,
     LM_HEAD,
     PREPARED_DIR,
-    SAFETENSORS_INDEX,
     SPLITS_FILE,
     TOKEN_FREQUENCIES_FILE,
-    DraftRecipe,
+    DraftDataConfig,
+    PreparedSplits,
     file_sha256,
     inspect_teacher,
     stage_teacher,
@@ -83,6 +87,44 @@ print(json.dumps({
     "packages": {name: version(name) for name in ("torch", "transformers", "datasets")},
 }))
 """
+
+
+@dataclass(frozen=True)
+class DraftRecipe:
+    """DSpark model and optimizer settings."""
+
+    data: DraftDataConfig
+    feature_taps: tuple[int, ...]
+    max_anchors: int
+    max_steps: int
+    trainer_ranks: int
+    teacher_replicas: int
+    cross_entropy_weight: float
+    total_variation_weight: float
+    optimizer: Literal["muon", "adamw"]
+    lr_schedule: Literal["linear", "cosine", "none"]
+    draft_vocab_size: int = 32000
+    block_size: int = 8
+    markov_rank: int = 256
+    learning_rate: float = 3e-4
+    seed: int = 42
+
+    def __post_init__(self) -> None:
+        if not self.feature_taps or tuple(sorted(set(self.feature_taps))) != self.feature_taps:
+            raise ValueError("Feature taps must be strictly increasing")
+        if self.feature_taps[0] < 0 or self.feature_taps[-1] >= self.data.shape.num_hidden_layers:
+            raise ValueError("Feature taps must precede the final pre-norm distillation tap")
+        if not 0 < self.draft_vocab_size < self.data.shape.vocab_size:
+            raise ValueError("The draft vocabulary must be a strict subset of the teacher vocabulary")
+        max_length = self.data.max_sequence_length
+        if not max_length > self.block_size or not 0 < self.max_anchors <= max_length:
+            raise ValueError("The sequence length and anchor budget must fit the draft block")
+        if min(self.max_steps, self.trainer_ranks, self.teacher_replicas) <= 0:
+            raise ValueError("Step budget and GPU counts must be positive")
+
+    @property
+    def extraction_taps(self) -> tuple[int, ...]:
+        return (*self.feature_taps, self.data.shape.num_hidden_layers)
 
 
 @dataclass(frozen=True)
@@ -175,10 +217,10 @@ def extraction_config(recipe: DraftRecipe, hidden_states: Path) -> tuple[dict, d
 def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.ndarray) -> dict:
     """Check the Qwen3 DSpark serving contract and return its checkpoint config."""
 
-    config = json.loads((checkpoint / "config.json").read_text())
+    config = json.loads((checkpoint / CONFIG_NAME).read_text())
     required = {
         "speculators_model_type": "dspark",
-        "layer_type": "qwen3",
+        "layer_type": DRAFT_LAYER_TYPE,
         "block_size": recipe.block_size,
         "sample_from_anchor": True,
         "aux_hidden_state_layer_ids": list(recipe.feature_taps),
@@ -194,7 +236,7 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
             raise ValueError(f"DSpark checkpoint has unexpected {name}: {config.get(name)!r}")
     decoder = config["transformer_layer_config"]
     if (
-        decoder["model_type"] != "qwen3"
+        decoder["model_type"] != DRAFT_LAYER_TYPE
         or decoder["hidden_size"] != recipe.data.shape.hidden_size
         or decoder["vocab_size"] != recipe.data.shape.vocab_size
         or decoder["num_hidden_layers"] != recipe.data.draft_layers
@@ -251,14 +293,14 @@ def _publish_checkpoint(
     # The training-time staging path is not a portable verifier identity.
     config["speculators_config"]["verifier"]["name_or_path"] = provenance.teacher_identity
     names = sorted(set(tensor_files(checkpoint).values()))
-    index = checkpoint / SAFETENSORS_INDEX
+    index = checkpoint / SAFE_TENSORS_INDEX_NAME
     if index.is_file():
         names.append(index.name)
 
     output.mkdirs()
     for name in names:
         (output / name).upload_from(str(checkpoint / name))
-    config_path = output / "config.json"
+    config_path = output / CONFIG_NAME
     config_path.write_text(json.dumps(config, indent=2) + "\n")
     receipt = {
         **asdict(provenance),
@@ -270,7 +312,7 @@ def _publish_checkpoint(
         "steps": state["global_step"],
         "validation": metrics,
         "files": {
-            "config.json": file_sha256(config_path),
+            CONFIG_NAME: file_sha256(config_path),
             **{name: file_sha256(checkpoint / name) for name in names},
         },
     }
@@ -287,7 +329,7 @@ def _teacher_environment(teacher: Path, recipe: DraftRecipe, hidden_states: Path
             "HF_HUB_OFFLINE": "1",
             "PYTHONPATH": "",
             # FlashInfer's Ninja builds can otherwise exhaust the Iris task's memory.
-            "MAX_JOBS": os.environ.get("MAX_JOBS", "2"),
+            "MAX_JOBS": "2",
         },
     )
     return VllmEnvironment(
@@ -311,7 +353,7 @@ def _teacher_environment(teacher: Path, recipe: DraftRecipe, hidden_states: Path
     )
 
 
-def _trainer_command(
+def _write_config_and_build_command(
     teacher: Path,
     recipe: DraftRecipe,
     python: str,
@@ -367,7 +409,7 @@ def _trainer_command(
         },
         "dflash": {"block_size": recipe.block_size, "sample_from_anchor": True},
         "dspark": {
-            "draft_layer_type": "qwen3",
+            "draft_layer_type": DRAFT_LAYER_TYPE,
             "markov_rank": recipe.markov_rank,
             "markov_head_type": _MARKOV_HEAD,
             "enable_confidence_head": True,
@@ -412,6 +454,7 @@ def _prepare_trainer_inputs(
 
 
 def _verify_completed_export(export: StoragePath, provenance: TrainingProvenance) -> bool:
+    """Check a completed export, returning False only when its receipt is absent."""
     receipt_path = export / _EXPORT_RECEIPT
     if not receipt_path.isfile():
         return False
@@ -443,8 +486,8 @@ def train_and_export(
     source = StoragePath(teacher)
     manifest = StoragePath(teacher_manifest)
     prepared_source = StoragePath(prepared) / PREPARED_DIR
-    split = json.loads((prepared_source / SPLITS_FILE).read_text())
-    if min(split["train"], split["validation"]) < recipe.trainer_ranks:
+    split = PreparedSplits(**json.loads((prepared_source / SPLITS_FILE).read_text()))
+    if min(split.train, split.validation) < recipe.trainer_ranks:
         raise ValueError("Each prepared split needs at least one usable row per trainer rank")
     decoder = inspect_teacher(source, manifest, provenance.teacher_manifest_sha256, recipe.data)
     if json.loads((prepared_source / DRAFT_CONFIG_FILE).read_text()) != decoder:
@@ -462,13 +505,13 @@ def train_and_export(
         data = scratch / "data"
         prepared_source.download_to(str(data), recursive=True, batch_size=8)
         python = _install_speculators(scratch, trainer_env)
-        steps, packages = _prepare_trainer_inputs(python, data, scratch, recipe, split["train"], trainer_env)
+        steps, packages = _prepare_trainer_inputs(python, data, scratch, recipe, split.train, trainer_env)
 
         logger.info("Staging verified DSpark inputs for %s", provenance.teacher_identity)
         stage_teacher(source, manifest, provenance.teacher_manifest_sha256, teacher_path)
         logger.info("Training DSpark for %s at %s for %d optimizer steps", provenance.teacher_identity, output, steps)
         with _teacher_environment(teacher_path, recipe, hidden_states, teacher_devices) as server:
-            train = _trainer_command(
+            train = _write_config_and_build_command(
                 teacher_path,
                 recipe,
                 python,
@@ -476,7 +519,7 @@ def train_and_export(
                 scratch,
                 training,
                 hidden_states,
-                train_ratio=split["train_ratio"],
+                train_ratio=split.train_ratio,
                 steps=steps,
                 endpoint=server.server_url,
             )

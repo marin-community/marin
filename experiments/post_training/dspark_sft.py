@@ -17,7 +17,6 @@ from marin.execution.lazy import OUT, ArtifactStep, apply, lower
 from marin.execution.step_runner import StepRunner
 from marin.training.drafting.dspark_data import (
     DraftDataConfig,
-    DraftRecipe,
     GrugShape,
     inspect_mix,
     inspect_teacher,
@@ -27,6 +26,7 @@ from marin.training.drafting.dspark_data import (
 from marin.training.drafting.dspark_distillation import (
     SPECULATORS_REVISION,
     VLLM_SOURCE_COMMIT,
+    DraftRecipe,
     TrainingProvenance,
     require_qualified_teacher,
     require_supported_vllm_release,
