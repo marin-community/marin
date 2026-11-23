@@ -22,6 +22,7 @@ from verifyit.modes.grade_judge import JudgeConnection
 
 from experiments.evaluation.benchmarks.multichallenge import sources as multichallenge_sources
 from experiments.evaluation.benchmarks.simpleqa import simpleqa_source, simpleqa_verified_source
+from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.publication_cases import published_cases
 
 
@@ -205,3 +206,35 @@ def test_multichallenge_replays_history_and_passes_on_the_expected_verdict(
             "content": MULTICHALLENGE_JUDGE_TEMPLATE.format(candidate="Lentil curry.", reference="Is the dinner vegan?"),
         }
     ]
+
+
+def test_physics_verified_drops_figure_rows_and_judges_each_labelled_answer(tmp_path, monkeypatch, judge_http):
+    row = {
+        "id": "Optics/1-1",
+        "domain": "Optics",
+        "questions": "(a) Find f. (b) Find n.",
+        "solutions": "Fixture solution.",
+        "final_answers": ["f = 10 \\text{ cm}", "n = 1.5"],
+        "answer_labels": ["(a)", "(b)"],
+        "answer_types": ["numeric", "numeric"],
+        "figures": None,
+    }
+    figure_row = {**row, "id": "Optics/1-2", "figures": [{"type": "image_url", "image_url": {"url": "data:,"}}]}
+
+    def write_rows(file):
+        file.write_text("".join(json.dumps(item) + "\n" for item in (row, figure_row)))
+
+    [source] = evaluation_benchmarks()["physics-verified"].resolve()
+    (case,) = published_cases(source, write_rows, tmp_path, monkeypatch, 1)
+    _, user = conversation_messages(case.task.context.events)
+    assert user == {"role": "user", "content": "(a) Find f. (b) Find n."}
+    state, connection = judge_http
+    verdicts = {"answers": [{"correct": "yes"}, {"correct": "no"}], "confidence": 70}
+    state["response"] = judge_response("PHYSICS-Verified", reply=json.dumps(verdicts))
+    connection = replace(connection, default_model="fixture-judge")
+    result = grade_remote_judge_answer(case.task, judged_attempt(case.task, "Answers:\n(a) 10 cm\n(b) 1.4"), connection)
+    assert result.status is Outcome.GRADED
+    assert result.reward == 0
+    assert result.detail["partial_credit"] == 0.5
+    prompt = state["requests"][-1]["messages"][-1]["content"]
+    assert "[reference_answers]:\n0. label (a): f = 10 \\text{ cm}\n1. label (b): n = 1.5\n" in prompt
