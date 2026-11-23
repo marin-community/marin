@@ -23,9 +23,9 @@ Usage::
 import argparse
 import ast
 import dataclasses
-import datetime
 import re
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Virtualenv trees: environments, not scripts and not bundled repo copies.
@@ -691,7 +691,7 @@ def _first_docstring(path: Path) -> str:
 def _classify_file(relative: Path, path: Path) -> Row:
     stat = path.stat()
     size = stat.st_size
-    modified = datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.UTC).isoformat(timespec="seconds")
+    modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(timespec="seconds")
     stem = path.stem
     if _is_env(relative):
         return Row(
@@ -815,7 +815,7 @@ def _script_table(rows: list[Row]) -> str:
 
 
 def render(rows: list[Row], root: Path) -> str:
-    generated = datetime.datetime.now(tz=datetime.UTC).isoformat(timespec="seconds")
+    generated = datetime.now(tz=UTC).isoformat(timespec="seconds")
     bundles = Counter(row.relative.split("/")[0] for row in rows if row.tier == "bundled")
     envs = Counter(row.relative.split("/")[0] for row in rows if row.tier == "environment")
     evidence_exts = Counter(Path(row.relative).suffix for row in rows if row.tier == "evidence")

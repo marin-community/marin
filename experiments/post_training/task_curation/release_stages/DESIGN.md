@@ -142,12 +142,23 @@ resources are recorded in the manifest and the stage receipt.
 
 ## 8. Alerts (`alerts.py`, BRIEF requirement 5)
 
-Every stage emits `start` / `finish` / `fail` / `stall` events with evidence links to
-the ops feed and the job-watchdog `alerts.jsonl`. Each stage submission registers its
-own watchdog `RegistryEntry` with a probe mapping (JSON-field probe on the stage
-receipt, log-regex probe on the job log) so failures surface without an agent
-watching. Registration uses the documented watchdog procedure; the registry stays
-operator-owned — the pipeline proposes the entry, the coordinator merges it.
+Every stage emits `start` / `finish` / `fail` / `stall` events **directly** with
+evidence links to the ops feed and the job-watchdog `alerts.jsonl` — failure
+detection never depends on a registry edit (coordinator amendment, 2026-11-23). Each
+stage submission additionally proposes its own watchdog `RegistryEntry` with a probe
+mapping (JSON-field probe on the stage receipt, log-regex probe on the job log); the
+registry stays operator-owned — the pipeline proposes the entry, the coordinator
+merges it.
+
+## 8b. Pre-write checks for SQL-writing stages (coordinator + r39 builder, 2026-11-23)
+
+History staging, catalog load and curriculum load write to the served database. Each
+of them (1) runs in a dry-run mode that computes the planned writes without writing,
+and (2) checks its typed target IDs — target load ID, snapshot name, prior pins —
+against the manifest before any write. This is the mechanical fix for the r39
+history-stage failure (a `sed`ed worker whose target load ID literal was never
+replaced): the worker asserts `planned_target == manifest target` and refuses
+otherwise. Preflight exercises the dry-run path on a small slice.
 
 ## 9. Resume (BRIEF requirement 6)
 
