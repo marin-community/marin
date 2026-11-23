@@ -50,16 +50,26 @@ def package_archive(directory: Path) -> bytes:
     return buffer.getvalue()
 
 
-def stage_repository_packages(repo: str, revision: str, output: StoragePath) -> None:
-    """Archive every top-level package directory of a pinned Hugging Face dataset repository.
+def stage_repository_packages(
+    repo: str, revision: str, output: StoragePath, *, root: str = "", selected: frozenset[str] | None = None
+) -> None:
+    """Archive packages directly under ``root`` of a pinned Hugging Face repository.
 
-    A top-level directory is a package when it holds ``task.toml``; other files are repository metadata.
+    A directory is a package when it holds ``task.toml``. ``selected`` restricts the package names.
     """
     with TemporaryDirectory(prefix="harbor-repository-") as directory:
-        root = Path(snapshot_download(repo, repo_type="dataset", revision=revision, local_dir=directory))
-        packages = sorted(path.parent for path in root.glob(f"*/{TASK_CONFIG}"))
+        snapshot = Path(snapshot_download(repo, repo_type="dataset", revision=revision, local_dir=directory))
+        package_root = (snapshot / root).resolve()
+        if not package_root.is_relative_to(snapshot.resolve()):
+            raise ValueError(f"Package root escapes the repository: {root!r}")
+        packages = sorted(path.parent for path in package_root.glob(f"*/{TASK_CONFIG}"))
         if not packages:
             raise ValueError(f"{repo}@{revision} has no Harbor packages")
+        if selected is not None:
+            missing = selected - {package.name for package in packages}
+            if missing:
+                raise ValueError(f"{repo}@{revision} has no Harbor packages {sorted(missing)} under {root!r}")
+            packages = [package for package in packages if package.name in selected]
         write_package_archives(packages, output)
 
 

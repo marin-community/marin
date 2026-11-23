@@ -264,6 +264,50 @@ environment. Source program builders prepare tests and apply the benchmark
 execution timer. A completion receipt distinguishes finished tests from an early
 process exit. Shellbox provides the sandbox and bounds the whole grader command. Verifyit remains the shared scoring and verdict layer.
 
+### SWE-bench Science
+
+`swebench-science` runs the upstream unrestricted 96-task selection with
+mini-swe-agent 2.1.0, one attempt per task and concurrency one. It is not in a
+default suite. The source is
+[OpenMOSS-Team/SWE-bench-Science at 99740829](https://huggingface.co/datasets/OpenMOSS-Team/SWE-bench-Science/tree/997408298e8e4d09978b1120b95c4540d1a71bcb).
+Release tooling and metadata are MIT licensed; task materials retain their
+upstream licenses. The 23 tasks requiring the release's restricted-license
+opt-in are excluded.
+
+The adapter preserves each instruction and both digest-pinned images. It
+translates Pier's `pre_artifacts.sh` into a collect command, then transfers
+only `model.patch` to a fresh verifier. A missing patch is an infrastructure
+failure; a clean solver produces an explicit empty patch. The release's
+`grader.py` overlays the verifier image, as upstream does, but the public
+`test.sh` stub is not uploaded: the image's native entrypoint applies the
+patch, rebuilds and invokes the grader. The numeric `reward` field is read
+from the original JSON report without interpreting nested diagnostics as
+metrics.
+
+The released tasks request two CPUs, 8 GiB RAM and 20 GiB storage per machine.
+The agent receives those resources. The curated runner currently uses a fresh
+local Shellbox verifier on its remote evaluator worker (eight CPUs, 12 GiB RAM,
+64 GiB disk), without per-verifier resource limits. The Qwen3.6-35B-A3B
+and Nemotron 3.5 Super VL 120B-A12B validation runs used Daytona for both
+machines with two CPUs, 8 GiB RAM, and 10 GiB disk each. Both runs graded
+all 96 tasks with a 32,768-token context.
+The native agent and verifier deadlines are preserved; the attempt backstop is
+three hours. Both machines deny external networking; model requests stay on
+the host. The protocol caps replies at 8,192 tokens and uses the served
+context window. These harness and token settings, and the 96-task selection,
+must accompany reported scores: the website's 119-task leaderboard uses
+several different harnesses and is not a direct reference score.
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b --evals swebench-science --limit 1 --dry-run
+```
+
+Remove `--dry-run` only for an authorized run. Preparation downloads task
+packages automatically; no manual dataset directory or grader image build is
+required. Native reference patches are not released, so a positive oracle
+comparison requires an independently verified candidate patch.
+
 ## Published corpus and raw results
 
 | Corpus file | Contract |

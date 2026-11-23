@@ -131,6 +131,27 @@ def test_a_repository_archive_with_another_digest_stages_nothing(tmp_path):
     assert not output.exists()
 
 
+def test_nested_huggingface_selection_stages_only_requested_tasks(tmp_path, monkeypatch):
+    repository = tmp_path / "repository"
+    for name in ("task_001", "task_002", "task_003"):
+        write_package(repository / "tasks" / name, f'[environment]\ndocker_image = "{IMAGE}"\n')
+    monkeypatch.setattr(packages_module, "snapshot_download", lambda *_args, **_kwargs: str(repository))
+    output = tmp_path / "staged"
+    stage_repository_packages(
+        "org/fixture", REVISION, StoragePath(str(output)), root="tasks", selected=frozenset({"task_001", "task_002"})
+    )
+    assert sorted(path.name for path in (output / "tasks").iterdir()) == ["task_001.tar.gz", "task_002.tar.gz"]
+    assert (output / "tasks/task_002.tar.gz").read_bytes() == package_archive(repository / "tasks/task_002")
+    with pytest.raises(ValueError, match="task_004"):
+        stage_repository_packages(
+            "org/fixture",
+            REVISION,
+            StoragePath(str(tmp_path / "missing")),
+            root="tasks",
+            selected=frozenset({"task_004"}),
+        )
+
+
 def test_a_harbor_repository_publishes_one_agent_item_per_package(tmp_path, local_graph, monkeypatch):
     repository = tmp_path / "repository"
     write_package(
