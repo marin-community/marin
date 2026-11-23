@@ -1,6 +1,6 @@
-# Eval policy `marin-2026-11-20`
+# Eval policy `marin-2026-11-20-trial`
 
-The closest approximation of the October 2026 eval policy ([#10197](https://github.com/marin-community/marin/issues/10197))
+A trial policy for exercising the policy launcher, not a released policy. It is the closest approximation of the October 2026 eval policy ([#10197](https://github.com/marin-community/marin/issues/10197))
 that `main` can run. October ran from Marin commit `75a5690b` (2026-10-16) through the
 [unlabeled campaign](../../campaigns/eval-campaign-09-25-unlabeled/README.md): single-turn
 benchmarks on vendored Evalchemy, agentic ones on an external Harbor fork. This policy runs
@@ -8,7 +8,7 @@ single-turn benchmarks as TaskSpec entries of the [benchmark catalog](../../cata
 agentic ones on vendored Harbor. [`policy.py`](policy.py) declares it; print it with
 
 ```bash
-uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20
+uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20-trial
 ```
 
 ## Candidates

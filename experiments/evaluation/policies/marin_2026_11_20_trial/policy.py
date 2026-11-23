@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Marin's eval policy of 2026-11-20: the closest approximation of the October 2026 policy that ``main`` runs.
+"""A trial eval policy for exercising the policy launcher.
+
+It is the closest approximation of the October 2026 policy that ``main`` runs.
 
 Benchmarks own their prompts, thinking mode, repeats, output caps and metrics; this module only chooses
 them and the context, output limit and seed each runs with. README.md lists the differences from October.
@@ -16,7 +18,7 @@ from experiments.evaluation.evals import EVALS, HarborDefinition
 from experiments.evaluation.models import models
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
 
-VERSION = "marin-2026-11-20"
+VERSION = "marin-2026-11-20-trial"
 
 # October served every candidate at this window; benchmarks whose protocol declares a smaller one run
 # at the protocol's window.

@@ -3,7 +3,7 @@
 
 """Command-line view of eval policies.
 
-``uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20``.
+``uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20-trial``.
 """
 
 from collections.abc import Mapping

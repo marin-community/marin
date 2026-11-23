@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The 2026-11-20 policy resolves to runnable catalog selections and Harbor configs for every candidate."""
+"""The 2026-11-20 trial policy resolves to runnable catalog selections and Harbor configs for every candidate."""
 
 import pytest
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.harbor.driver_config import preflight_harbor_configs
 
 from experiments.evaluation.evals import HarborDefinition, harbor_model_agent_kwargs
-from experiments.evaluation.policies.marin_2026_11_20.policy import POLICY
+from experiments.evaluation.policies.marin_2026_11_20_trial.policy import POLICY
 from experiments.evaluation.policy.cli import selection_dataset
 from experiments.evaluation.policy.resolve import resolve
 
