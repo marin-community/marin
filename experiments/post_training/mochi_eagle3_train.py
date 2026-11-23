@@ -41,7 +41,7 @@ class PreparedDraftTraining:
 
 
 def copy_training_artifacts(source: str, destination: str, workers: int) -> None:
-    """Stream a capture tree with bounded per-file buffers through fsutil's copy APIs."""
+    """Copy capture artifacts with bounded parallelism and per-file buffers."""
     plan = copy_plan((source,), destination, recursive=True, no_clobber=False)
     for directory in plan.directories:
         directory.destination.filesystem.makedirs(directory.destination.path, exist_ok=True)

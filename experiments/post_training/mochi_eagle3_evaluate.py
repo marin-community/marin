@@ -366,68 +366,91 @@ async def benchmark(environment: VllmEnvironment, spec: dict, arm: dict) -> None
                     logger.warning("Occupancy unachieved for %s; exclude this cell from speed qualification", name)
 
 
+async def calibrate_baseline(environment: VllmEnvironment, spec: dict, arm: dict) -> None:
+    """Calibrate bounds and qualify independent target-only repeats."""
+    if arm["draft"] is not None:
+        raise ValueError("The first arm must establish target-only numerical noise")
+    requests = workload_requests(spec["workloads"][0], arm["seeds"][0])[: spec["probe_requests"]]
+    probes = await probe_inventory(environment.server_url, requests)
+    reference = await prefix_scores(environment.server_url, probes, 1)
+    repeat = await prefix_scores(environment.server_url, probes, 16)
+    noise = score_difference(reference, repeat)
+    control = await prefix_scores(environment.server_url, probes, 16)
+    control_noise = score_difference(reference, control)
+    autoregressive = await decode_probes(environment.server_url, probes, spec["correctness_seeds"])
+    write_json(spec["output"], f"{arm['name']}/{AUTOREGRESSIVE_ARTIFACT}", autoregressive)
+    teacher = await prefix_scores(environment.server_url, list(autoregressive["scores"].values()), 16)
+    decode_noise = score_difference(autoregressive["scores"], teacher)
+    teacher_control = await prefix_scores(environment.server_url, list(autoregressive["scores"].values()), 16)
+    decode_control_noise = score_difference(autoregressive["scores"], teacher_control)
+    # Accepted design: predeclare the numerical bound from baseline repeats,
+    # before observing any candidate scores.
+    calibration = {
+        "probes": probes,
+        "reference": reference,
+        "repeat": repeat,
+        "control": control,
+        "noise": noise,
+        "control_noise": control_noise,
+        "fixed_bounds": {
+            "max_absolute_logprob_error": max(1e-4, 2 * noise["max_absolute_logprob_error"]),
+            "top1_mismatch_fraction": noise["top1_mismatch_fraction"] + 1 / len(probes),
+            "mean_prompt_route_choice_mismatch_fraction": route_choice_bound(noise),
+        },
+        "decode_teacher": teacher,
+        "decode_teacher_control": teacher_control,
+        "decode_noise": decode_noise,
+        "decode_control_noise": decode_control_noise,
+        "decode_bounds": {
+            "max_absolute_logprob_error": max(1e-4, 2 * decode_noise["max_absolute_logprob_error"]),
+            "max_top1_logprob_error": max(1e-4, 2 * decode_noise["max_top1_logprob_error"]),
+            "top1_mismatch_fraction": decode_noise["top1_mismatch_fraction"] + 1 / len(teacher),
+            "mean_prompt_route_choice_mismatch_fraction": route_choice_bound(decode_noise),
+        },
+    }
+    calibration["sampling"] = sampling_calibration(sampling_by_prompt(autoregressive["trajectories"]))
+    calibration["sensitivity_passed"] = (
+        max(
+            calibration["fixed_bounds"]["mean_prompt_route_choice_mismatch_fraction"],
+            calibration["decode_bounds"]["mean_prompt_route_choice_mismatch_fraction"],
+        )
+        <= MAX_ROUTE_CHOICE_NOISE
+    )
+    calibration["negative_controls_passed"] = all(
+        difference[name] <= bound
+        for difference, bounds in (
+            (control_noise, calibration["fixed_bounds"]),
+            (decode_control_noise, calibration["decode_bounds"]),
+        )
+        for name, bound in bounds.items()
+    )
+    write_json(spec["output"], "correctness-calibration.json", calibration)
+    if not calibration["sensitivity_passed"] or not calibration["negative_controls_passed"]:
+        raise ValueError("Target-only expert-choice sensitivity or independent negative control failed")
+
+
+async def rescore_candidate_prefixes(environment: VllmEnvironment, spec: dict, calibration: dict) -> None:
+    """Qualify recorded autoregressive outputs with the final target-only teacher."""
+    root = StoragePath(spec["output"])
+    for candidate in spec["arms"][1:]:
+        recorded = json.loads((root / candidate["name"] / AUTOREGRESSIVE_ARTIFACT).read_text())
+        teacher = await prefix_scores(environment.server_url, list(recorded["scores"].values()), 16)
+        difference = score_difference(recorded["scores"], teacher)
+        passed = all(difference[name] <= bound for name, bound in calibration["decode_bounds"].items())
+        write_json(
+            spec["output"],
+            f"{candidate['name']}/autoregressive-correctness.json",
+            {"passed": passed, "difference": difference, "teacher_scores": teacher},
+        )
+        if not passed:
+            raise ValueError(f"Autoregressive logprobs/routes exceeded baseline noise for {candidate['name']}")
+
+
 async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> None:
+    """Gate fixed-prefix and sampled behavior before benchmarking an arm."""
     root = StoragePath(spec["output"])
     if arm["name"] == spec["arms"][0]["name"]:
-        if arm["draft"] is not None:
-            raise ValueError("The first arm must establish target-only numerical noise")
-        requests = workload_requests(spec["workloads"][0], arm["seeds"][0])[: spec["probe_requests"]]
-        probes = await probe_inventory(environment.server_url, requests)
-        reference = await prefix_scores(environment.server_url, probes, 1)
-        repeat = await prefix_scores(environment.server_url, probes, 16)
-        noise = score_difference(reference, repeat)
-        control = await prefix_scores(environment.server_url, probes, 16)
-        control_noise = score_difference(reference, control)
-        autoregressive = await decode_probes(environment.server_url, probes, spec["correctness_seeds"])
-        write_json(spec["output"], f"{arm['name']}/{AUTOREGRESSIVE_ARTIFACT}", autoregressive)
-        teacher = await prefix_scores(environment.server_url, list(autoregressive["scores"].values()), 16)
-        decode_noise = score_difference(autoregressive["scores"], teacher)
-        teacher_control = await prefix_scores(environment.server_url, list(autoregressive["scores"].values()), 16)
-        decode_control_noise = score_difference(autoregressive["scores"], teacher_control)
-        # Accepted design: predeclare the numerical bound from baseline repeats,
-        # before observing any candidate scores.
-        calibration = {
-            "probes": probes,
-            "reference": reference,
-            "repeat": repeat,
-            "control": control,
-            "noise": noise,
-            "control_noise": control_noise,
-            "fixed_bounds": {
-                "max_absolute_logprob_error": max(1e-4, 2 * noise["max_absolute_logprob_error"]),
-                "top1_mismatch_fraction": noise["top1_mismatch_fraction"] + 1 / len(probes),
-                "mean_prompt_route_choice_mismatch_fraction": route_choice_bound(noise),
-            },
-            "decode_teacher": teacher,
-            "decode_teacher_control": teacher_control,
-            "decode_noise": decode_noise,
-            "decode_control_noise": decode_control_noise,
-            "decode_bounds": {
-                "max_absolute_logprob_error": max(1e-4, 2 * decode_noise["max_absolute_logprob_error"]),
-                "max_top1_logprob_error": max(1e-4, 2 * decode_noise["max_top1_logprob_error"]),
-                "top1_mismatch_fraction": decode_noise["top1_mismatch_fraction"] + 1 / len(teacher),
-                "mean_prompt_route_choice_mismatch_fraction": route_choice_bound(decode_noise),
-            },
-        }
-        calibration["sampling"] = sampling_calibration(sampling_by_prompt(autoregressive["trajectories"]))
-        calibration["sensitivity_passed"] = (
-            max(
-                calibration["fixed_bounds"]["mean_prompt_route_choice_mismatch_fraction"],
-                calibration["decode_bounds"]["mean_prompt_route_choice_mismatch_fraction"],
-            )
-            <= MAX_ROUTE_CHOICE_NOISE
-        )
-        calibration["negative_controls_passed"] = all(
-            difference[name] <= bound
-            for difference, bounds in (
-                (control_noise, calibration["fixed_bounds"]),
-                (decode_control_noise, calibration["decode_bounds"]),
-            )
-            for name, bound in bounds.items()
-        )
-        write_json(spec["output"], "correctness-calibration.json", calibration)
-        if not calibration["sensitivity_passed"] or not calibration["negative_controls_passed"]:
-            raise ValueError("Target-only expert-choice sensitivity or independent negative control failed")
+        await calibrate_baseline(environment, spec, arm)
         return
     calibration = json.loads((root / "correctness-calibration.json").read_text())
     scores = await prefix_scores(environment.server_url, calibration["probes"], 16)
@@ -446,18 +469,7 @@ async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> No
         raise ValueError("Sampled logprob/top-one mass shifted beyond predeclared target-only seed variation")
     if arm["name"] != spec["arms"][-1]["name"]:
         return
-    for candidate in spec["arms"][1:]:
-        recorded = json.loads((root / candidate["name"] / AUTOREGRESSIVE_ARTIFACT).read_text())
-        teacher = await prefix_scores(environment.server_url, list(recorded["scores"].values()), 16)
-        difference = score_difference(recorded["scores"], teacher)
-        passed = all(difference[name] <= bound for name, bound in calibration["decode_bounds"].items())
-        write_json(
-            spec["output"],
-            f"{candidate['name']}/autoregressive-correctness.json",
-            {"passed": passed, "difference": difference, "teacher_scores": teacher},
-        )
-        if not passed:
-            raise ValueError(f"Autoregressive logprobs/routes exceeded baseline noise for {candidate['name']}")
+    await rescore_candidate_prefixes(environment, spec, calibration)
 
 
 def run(spec: dict) -> None:
