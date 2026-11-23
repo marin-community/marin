@@ -27,6 +27,7 @@ from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
 )
 from skyrl_train.io import io
 
+from experiments.mlx_export.provenance import file_digest
 from experiments.post_training.mochi_eagle3 import STOP_TOKEN_IDS, TARGET_IDENTITY, initialize_draft, worker_spec
 
 logger = logging.getLogger(__name__)
@@ -97,8 +98,7 @@ def prepare_training_capture(spec: dict, directory: Path) -> PreparedDraftTraini
     seed = seed_root / "seed-draft"
     seed_weights = load_file(seed / "model.safetensors")
     map_digest = hashlib.sha256(seed_weights["d2t"].numpy().tobytes()).hexdigest()
-    with (seed / "model.safetensors").open("rb") as stream:
-        initial_weights_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    initial_weights_digest = file_digest(seed / "model.safetensors")
     # Features and embeddings are unchanged. Reproject only the frozen head to
     # the training-fold vocabulary, preserving the raw rank captures intact.
     target_weights = load_file(merged / "target.safetensors")
@@ -112,7 +112,7 @@ def prepare_training_capture(spec: dict, directory: Path) -> PreparedDraftTraini
         "vocabulary_map_sha256": map_digest,
         "initial_draft": prefix_join(spec["output"], "initial-draft"),
         "initial_weights_sha256": initial_weights_digest,
-        "initial_config_sha256": hashlib.sha256((seed / "config.json").read_bytes()).hexdigest(),
+        "initial_config_sha256": file_digest(seed / "config.json"),
         "initialization": initialization,
         "source": spec,
     }
@@ -151,12 +151,11 @@ def publish_serving_draft(candidate: Path, seed: Path, output: str, receipt: dic
         raise ValueError("Standalone draft vocabulary omits a Mochi stop token")
     weights_path = bundle / "model.safetensors"
     save_file(weights, weights_path, metadata={"format": "pt"})
-    with weights_path.open("rb") as stream:
-        weights_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    weights_digest = file_digest(weights_path)
     lineage = {
         **receipt,
         "serving_weights_sha256": weights_digest,
-        "serving_config_sha256": hashlib.sha256((bundle / "config.json").read_bytes()).hexdigest(),
+        "serving_config_sha256": file_digest(bundle / "config.json"),
     }
     (bundle / "lineage.json").write_text(json.dumps(lineage, indent=2))
     io.upload_directory(str(bundle), prefix_join(output, "serving-draft"))

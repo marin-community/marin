@@ -1001,6 +1001,7 @@ inside the qualified Iris serving runtime. Its spec uses one target-only `arms`
 entry and the evaluator's geometry, context, HBM and output fields. Set
 `recorded_evaluation`, `recorded_target_arm`, `recorded_candidate_arms` and the
 SHA-256 of the original `correctness-calibration.json` in `calibration_sha256`.
+Pin each arm's `autoregressive.json` hash in `recorded_outputs_sha256`.
 The teacher must pass the frozen fixed-prefix and autoregressive target controls
 before scoring candidates. Results retain failed checks and input digests;
 this check does not qualify speed or deployment.

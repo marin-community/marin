@@ -31,7 +31,10 @@ async def qualify_saved_outputs(environment: VllmEnvironment, spec: dict, arm: d
     calibration = json.loads(calibration_payload)
     if not calibration["sensitivity_passed"] or not calibration["negative_controls_passed"]:
         raise ValueError("The recorded calibration did not qualify its target-only controls")
-    target_scores = json.loads((source / spec["recorded_target_arm"] / AUTOREGRESSIVE_ARTIFACT).read_text())["scores"]
+    target_payload = (source / spec["recorded_target_arm"] / AUTOREGRESSIVE_ARTIFACT).read_bytes()
+    if hashlib.sha256(target_payload).hexdigest() != spec["recorded_outputs_sha256"][spec["recorded_target_arm"]]:
+        raise ValueError("The recorded target-only outputs changed")
+    target_scores = json.loads(target_payload)["scores"]
     controls = (
         (
             "fixed-target-control",
@@ -59,6 +62,9 @@ async def qualify_saved_outputs(environment: VllmEnvironment, spec: dict, arm: d
             raise ValueError(f"Fresh target-only teacher failed the frozen {name} bounds")
     for name in spec["recorded_candidate_arms"]:
         payload = (source / name / AUTOREGRESSIVE_ARTIFACT).read_bytes()
+        payload_digest = hashlib.sha256(payload).hexdigest()
+        if payload_digest != spec["recorded_outputs_sha256"][name]:
+            raise ValueError(f"The recorded candidate outputs changed: {name}")
         recorded = json.loads(payload)
         teacher = await prefix_scores(environment.server_url, list(recorded["scores"].values()), 16)
         difference = score_difference(recorded["scores"], teacher)
@@ -70,7 +76,7 @@ async def qualify_saved_outputs(environment: VllmEnvironment, spec: dict, arm: d
                 "passed": passed,
                 "recorded_evaluation": str(source),
                 "recorded_arm": name,
-                "recorded_outputs_sha256": hashlib.sha256(payload).hexdigest(),
+                "recorded_outputs_sha256": payload_digest,
                 "calibration_sha256": spec["calibration_sha256"],
                 "bounds": calibration["decode_bounds"],
                 "difference": difference,
