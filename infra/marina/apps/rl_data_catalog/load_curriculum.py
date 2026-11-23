@@ -26,6 +26,7 @@ from infra.marina.apps.rl_data_catalog.load import (
     batches,
     ensure_tables,
     insert_rows,
+    served_declaration_projection,
     sql_column_names,
     table_batch_bytes,
     table_batch_rows,
@@ -329,7 +330,7 @@ def load_curriculum(
             (
                 {
                     "source_id": row.id,
-                    "declaration": row.model_dump(mode="json"),
+                    "declaration": served_declaration_projection(row.model_dump(mode="json")),
                     "family": row.family or row.origin,
                     "alignment": selected.get(row.id),
                 }

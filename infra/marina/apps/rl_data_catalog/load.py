@@ -158,6 +158,26 @@ def table_batch_rows(table: str) -> int | None:
     return TABLE_BATCH_ROWS.get(table.removeprefix(STAGING_TABLE_PREFIX))
 
 
+def served_declaration_projection(declaration: dict[str, Any]) -> dict[str, Any]:
+    """Project one served declaration row onto what the SQL gateway can carry.
+
+    ``oracle_filtration.pending_exclusions`` names every task excluded from a
+    private oracle-qualified release (one entry per task, so a large admitted
+    population makes the row exceed the SQL batch budget and the gateway's
+    statement limit). No API document consumes the per-task list: the aggregate
+    ``exclusion_counts`` and every pinned filter/validation artifact reference
+    stay on the row, the admission-time validation reads the typed model from
+    its sealed receipts, and the full evidence remains in the catalog snapshot
+    and census receipts. The r34 release-manifest projection (served row
+    trimmed, stored manifest unchanged) is the precedent.
+    """
+    filtration = declaration.get("oracle_filtration")
+    if not filtration or not filtration.get("pending_exclusions"):
+        return declaration
+    trimmed = {k: v for k, v in filtration.items() if k != "pending_exclusions"}
+    return {**declaration, "oracle_filtration": trimmed}
+
+
 def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
     """Create explicitly requested additive measurement tables from the app's schema."""
     statements: dict[str, str] = {
@@ -642,6 +662,7 @@ def load_catalog(
                 "backend_verification_pending": verification_pending.get(row.id),
                 "sample_pin_stale": sample_pin_stale.get(row.id),
                 "method_variants": source_variants(row.declaration.model_dump(mode="json")),
+                "declaration": served_declaration_projection(row.declaration.model_dump(mode="json")),
             }
             for row in sources
         ],
