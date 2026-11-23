@@ -5,6 +5,7 @@
 
 import pytest
 from marina.journeys import Journey
+from playwright.sync_api import expect
 
 from infra.marina.apps.rl_data_catalog.readability import AUDIT, readability_smoke, readability_sweep
 
@@ -93,3 +94,48 @@ def test_focus_checker_measures_disjoint_wrapped_link_fragments(journey: Journey
     page.locator("#overlay").evaluate("e=>{e.style.left='0';e.style.width='300px';e.style.height='80px';}")
     covered = page.evaluate(AUDIT, {"mode": "focus"})
     assert any(row["rule"] == "focus-obscured" for row in covered["findings"])
+
+
+@pytest.mark.timeout(600)
+def test_header_sort_and_resize_controls_stay_visible_when_focused(journey: Journey, readability_catalog: None) -> None:
+    """Every header control a keyboard user reaches is fully on screen and receives the point.
+
+    The all-sources table is wider than the viewport, so a focused sort button or resize
+    handle past the scroller's visible right edge must be revealed by the scroller: a
+    clipped or covered control is unreadable and its center point hits nothing.
+    """
+    page = journey.page.context.new_page()
+    try:
+        page.set_viewport_size({"width": 1440, "height": 1000})
+        page.emulate_media(color_scheme="light")
+        page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/#all=1")
+        expect(page.locator("#rows tr").first).to_be_visible(timeout=60000)
+        page.evaluate(
+            "() => {document.body.tabIndex=-1; document.body.focus(); document.body.removeAttribute('tabindex');}"
+        )
+        entered = False
+        for _ in range(200):
+            page.keyboard.press("Tab")
+            state = page.evaluate(
+                """() => {
+                const e = document.activeElement;
+                const th = e && e.closest ? e.closest('#headers th') : null;
+                if (!th) return null;
+                const r = e.getBoundingClientRect();
+                const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+                return {column: [...th.parentElement.children].indexOf(th) + 1, tag: e.tagName,
+                        inside: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight,
+                        hit: !!hit && (e === hit || e.contains(hit) || hit.contains(e))};
+            }"""
+            )
+            if state is None:
+                if entered:
+                    break
+                continue
+            entered = True
+            assert (
+                state["inside"] and state["hit"]
+            ), f"header control in column {state['column']} ({state['tag']}) is clipped or obscured when focused"
+        assert entered, "the focus walk never reached the header row"
+    finally:
+        page.close()

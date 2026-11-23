@@ -368,6 +368,19 @@ $('difficulty-model').addEventListener('change', () => {
 $('show-all').addEventListener('change', () => update());
 $('reset-column-widths').addEventListener('click', () => AtlasColumns.reset(document.querySelector('.source-table'), columns));
 $('filters').addEventListener('submit', event => event.preventDefault());
+// A header control focused past the scroller's right edge stays mostly offscreen: the
+// browser's focus scroll reveals only its leading edge, so a keyboard user cannot see what
+// they reached. Scroll the scroller until the focused header control is fully inside it.
+document.querySelector('.source-table').addEventListener('focusin', event => {
+  const control = event.target.closest('#headers button, #headers .column-resize-handle');
+  if (!control) return;
+  const scroller = control.closest('.table-scroller');
+  if (!scroller) return;
+  const margin = 12;
+  const box = scroller.getBoundingClientRect(), target = control.getBoundingClientRect();
+  if (target.left < box.left + margin) scroller.scrollLeft -= box.left + margin - target.left;
+  else if (target.right > box.right - margin) scroller.scrollLeft += target.right - (box.right - margin);
+});
 $('search').addEventListener('input', () => update(true));
 $('close-details').addEventListener('click', () => $('details').close());
 function resetFilters() {
