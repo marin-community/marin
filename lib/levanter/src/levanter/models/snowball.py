@@ -453,6 +453,16 @@ class GatedNorm(eqx.Module):
         return x * gate.astype(x.dtype)
 
 
+def _inference_kv_heads(config: SnowballConfig, kv_axis: str) -> int:
+    if kv_axis == "model":
+        return config.num_kv_heads
+    mesh = _current_mesh()
+    if _mesh_axis_size(mesh, "model") != 1:
+        raise ValueError("Expert-sharded KV requires model_axis_size=1")
+    expert_size = _mesh_axis_size(mesh, "expert")
+    return (config.num_kv_heads + expert_size - 1) // expert_size * expert_size
+
+
 class SnowballAttention(eqx.Module):
     """GQA + half-RoPE + XSA + per-head sigmoid gate (pinned production attention).
 
@@ -556,17 +566,25 @@ class SnowballAttention(eqx.Module):
         *,
         mode: Literal["short", "long"],
         implementation: PagedAttentionImplementation | None = None,
+        kv_axis: Literal["model", "expert"] = "model",
     ) -> tuple[jax.Array, KvPageCache]:
         """Write the new keys and values, then attend over each request's cached prefix."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
         q, k, v = self._project_qkv(x, disable_rope=mode == "long", position_ids=pos_ids[:, None])
         token_axis = batch_info.new_token_dests.axes[0]
-        kv_axes = (token_axis, Axis("kv_head", cfg.num_kv_heads), Axis("head_size", head_dim))
-        cache_k = reshard(k[:, 0], P(None, "model", None))
-        cache_v = reshard(v[:, 0], P(None, "model", None))
+        kv_heads = _inference_kv_heads(cfg, kv_axis)
+        extra_heads = kv_heads - cfg.num_kv_heads
+        kv_axes = (token_axis, Axis("kv_head", kv_heads), Axis("head_size", head_dim))
+        cache_k, cache_v = k[:, 0], v[:, 0]
         q = q.reshape(x.shape[0], cfg.num_kv_heads, cfg.num_heads // cfg.num_kv_heads, head_dim)
-        q = reshard(q, P(None, "model", None, None))
+        if extra_heads:
+            cache_k = jnp.pad(cache_k, ((0, 0), (0, extra_heads), (0, 0)))
+            cache_v = jnp.pad(cache_v, ((0, 0), (0, extra_heads), (0, 0)))
+            q = jnp.pad(q, ((0, 0), (0, extra_heads), (0, 0), (0, 0)))
+        cache_k = reshard(cache_k, P(None, kv_axis, None))
+        cache_v = reshard(cache_v, P(None, kv_axis, None))
+        q = reshard(q, P(None, kv_axis, None, None))
         metadata = (
             batch_info.seq_lens.array,
             batch_info.page_indices.array,
@@ -601,6 +619,8 @@ class SnowballAttention(eqx.Module):
                 sliding_window=sliding_window,
                 implementation=implementation,
             )
+        if kv_axis == "expert":
+            out = reshard(out, P(_BATCH_AXES, None, None, None))[:, : cfg.num_kv_heads]
         out = out.reshape(x.shape[0], 1, cfg.num_heads, head_dim)
         return self._project_output(x, out, v), cache
 
@@ -883,15 +903,16 @@ class SnowballBlock(eqx.Module):
         token_valid: Array,
         *,
         implementation: PagedAttentionImplementation | None = None,
+        kv_axis: Literal["model", "expert"] = "model",
     ) -> tuple[Array, KvPageCache]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         attn_out, cache = jax.lax.cond(
             use_long,
             lambda _: self.attn.decode(
-                attn_in, cache, batch_info, pos_ids, mode="long", implementation=implementation
+                attn_in, cache, batch_info, pos_ids, mode="long", implementation=implementation, kv_axis=kv_axis
             ),
             lambda _: self.attn.decode(
-                attn_in, cache, batch_info, pos_ids, mode="short", implementation=implementation
+                attn_in, cache, batch_info, pos_ids, mode="short", implementation=implementation, kv_axis=kv_axis
             ),
             operand=None,
         )
@@ -1017,6 +1038,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     transformer: SnowballTransformer
     _config: SnowballConfig = eqx.field(static=True)
     _paged_attention: PagedAttentionImplementation | None = eqx.field(static=True, default=None)
+    _kv_axis: Literal["model", "expert"] = eqx.field(static=True, default="model")
+
+    def with_expert_sharded_kv(self) -> "SnowballLMHeadModel":
+        """Shard paged KV heads across the expert axis during generation."""
+        return dataclasses.replace(self, _kv_axis="expert")
 
     def with_paged_attention(self, implementation: PagedAttentionImplementation) -> "SnowballLMHeadModel":
         """Select the attention backend for cache-based generation."""
@@ -1159,12 +1185,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if _context_axis() is not None:
             raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
-        kv_heads, head_size = Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim)
+        kv_heads = Axis("kv_head", _inference_kv_heads(cfg, self._kv_axis))
+        head_size = Axis("head_size", cfg.inferred_head_dim)
         caches = []
         for _ in self.transformer.blocks:
             cache = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype)
-            # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
-            pages = reshard(cache.kv_pages.array, P(None, None, "model", None))
+            # Keep each interleaved K/V pair on the same shard.
+            pages = reshard(cache.kv_pages.array, P(None, None, self._kv_axis, None))
             caches.append(KvPageCache(hax.named(pages, cache.kv_pages.axes)))
         return ListCache(tuple(caches))
 
@@ -1198,7 +1225,14 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             block, pages, use_long = layer_data
             cache = KvPageCache(hax.named(pages, cache_axes))
             x, cache = block.decode(
-                x, cache, batch_info, pos_ids.array, use_long, token_valid, implementation=self._paged_attention
+                x,
+                cache,
+                batch_info,
+                pos_ids.array,
+                use_long,
+                token_valid,
+                implementation=self._paged_attention,
+                kv_axis=self._kv_axis,
             )
             return x, cache.kv_pages.array
 
