@@ -1,4 +1,4 @@
-"""Pinned source instruction predicates executed by IFEval under one deadline."""
+"""Instruction checks executed by verifyit under one deadline."""
 
 from __future__ import annotations
 
@@ -6,9 +6,14 @@ import inspect
 import json
 import math
 import random
+from importlib.metadata import distribution
 from typing import Any
 
+from verifyit.adapters.open_instruct_ifeval import compute_score, normalize_ground_truth
 from verifyit.execution.worker import call_bounded
+from verifyit.grade import InvalidTask, Status
+from verifyit.modes.grade_ifeval import grade_ifeval_candidate
+from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalSpec
 
 
 class ReferenceError(ValueError):
@@ -58,7 +63,6 @@ def _check(text: str, params: dict, predicate) -> tuple[bool, str]:
 
 
 def _json_format(text: str, fenced: bool = False) -> bool:
-    from verifyit.grade import Status
     from verifyit.modes.grade_json_schema import grade_json_schema_candidate
 
     if fenced:
@@ -85,45 +89,6 @@ def _references(kind: str, data: Any, *, runtime: bool = False):
     if not _finite(data):
         raise ReferenceError("Nonfinite instruction reference")
     references = []
-    if kind == "standalone":
-        from skyrl_gym.envs.ifeval import utils
-
-        decoded = json.loads(data) if isinstance(data, str) else data
-        specs = decoded if isinstance(decoded, list) else [decoded]
-        if not specs or not all(isinstance(spec, dict) for spec in specs):
-            raise ReferenceError("Instructions must be a nonempty list of objects")
-        for spec in specs:
-            normalized = utils._normalize_constraint(spec)
-            name = normalized.pop("func_name")
-            if not _finite(normalized):
-                raise ReferenceError("Nonfinite instruction parameters")
-            for key, value in normalized.items():
-                if key in {"N", "i"} and (
-                    isinstance(value, bool) or not isinstance(value, int) or value < 0 or (key == "i" and value == 0)
-                ):
-                    raise ReferenceError("Invalid instruction count or index")
-                if key in {"keyword_list", "forbidden_words", "options"} and (
-                    not isinstance(value, list)
-                    or not value
-                    or not all(isinstance(item, str) and item for item in value)
-                ):
-                    raise ReferenceError("Empty or malformed instruction word policy")
-                if key not in {
-                    "N",
-                    "i",
-                    "keyword_list",
-                    "forbidden_words",
-                    "options",
-                } and (not isinstance(value, str) or not value):
-                    raise ReferenceError("Invalid instruction text parameter")
-            if name in {"validate_placeholders", "validate_highlighted_sections"} and normalized["N"] == 0:
-                raise ReferenceError("Vacuous minimum instruction count")
-            if normalized.get("N") == 0 and normalized.get("quantifier") == "at least":
-                raise ReferenceError("Vacuous minimum instruction count")
-            predicate = _json_format if name == "validate_json_format" else utils.IF_FUNCTIONS_MAP[name]
-            inspect.signature(predicate).bind("", **normalized)
-            references.append(("marin_skyrl:rlvr:" + name, normalized, predicate))
-        return references, "fraction", decoded
     if kind != "nemotron":
         raise ReferenceError("Unknown instruction profile")
     from verifiable_instructions import instructions_registry
@@ -131,8 +96,6 @@ def _references(kind: str, data: Any, *, runtime: bool = False):
         _ensure_nltk_data,
         build_instruction,
     )
-    from importlib.metadata import distribution
-
     provenance = json.loads(distribution("verifiable-instructions").read_text("direct_url.json") or "{}")
     if provenance.get("vcs_info", {}).get("commit_id") != "f46a5ac87b1400a4f8973039844b6be9b56e3faf":
         raise RuntimeError("Instruction registry does not match the pinned source dependency")
@@ -275,16 +238,20 @@ def _references(kind: str, data: Any, *, runtime: bool = False):
 
         references.append(("marin_skyrl:nvidia:" + identity, {}, predicate))
     _ensure_nltk_data()
-    return references, mode, data
+    return references, mode
 
 
 def _evaluate(kind: str, text: str, data: Any, *, runtime: bool = False) -> dict:
-    from verifyit.grade import InvalidTask
-    from verifyit.modes.grade_ifeval import grade_ifeval_candidate
-    from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalSpec
+    if kind == "standalone":
+        try:
+            normalized = normalize_ground_truth(data)
+        except (ValueError, TypeError, KeyError):
+            return {"status": "invalid_task", "reward": 0.0, "detail": {"error_type": "schema_error"}}
+        feedback = compute_score(text, normalized)
+        return {"status": "scored", "reward": feedback["score"], "detail": {"source_feedback": feedback}}
 
     try:
-        references, mode, decoded = _references(kind, data, runtime=runtime)
+        references, mode = _references(kind, data, runtime=runtime)
     except (ReferenceError, ValueError, TypeError, KeyError):
         return {
             "status": "invalid_task",
@@ -297,25 +264,7 @@ def _evaluate(kind: str, text: str, data: Any, *, runtime: bool = False) -> dict
     constraints = []
     registry = {}
     for index, (name, params, predicate) in enumerate(references):
-        if name == "marin_skyrl:rlvr:verify_keywords":
-            name, params = (
-                "keywords:existence",
-                {
-                    "keywords": params["keyword_list"],
-                    "word_boundary": False,
-                },
-            )
-        elif name == "marin_skyrl:rlvr:validate_forbidden_words":
-            name, params = (
-                "keywords:forbidden_words",
-                {
-                    **params,
-                    "word_boundary": False,
-                },
-            )
-        elif name == "marin_skyrl:rlvr:validate_no_commas":
-            name = "punctuation:no_comma"
-        elif name in {
+        if name in {
             "marin_skyrl:nvidia:punctuation:no_comma",
             "marin_skyrl:nvidia:punctuation:punctuation_dot",
             "marin_skyrl:nvidia:punctuation:punctuation_exclamation",
@@ -357,23 +306,14 @@ def _evaluate(kind: str, text: str, data: Any, *, runtime: bool = False) -> dict
             },
         }
     reward = float(all(results)) if mode == "binary" else sum(results) / len(results)
-    if kind == "standalone":
-        feedback = {
-            "score": reward,
-            "acc": all(results),
-            "func_name": (decoded.get("func_name") if isinstance(decoded, dict) else None),
-            "constraints_satisfied": sum(results),
-            "constraints_total": len(results),
-        }
-    else:
-        feedback = {
-            "follow_all_instructions": all(results),
-            "follow_instruction_list": results,
-            "instruction_errors": errors,
-            "grading_mode": mode,
-            "num_passed": sum(results),
-            "num_total": len(results),
-        }
+    feedback = {
+        "follow_all_instructions": all(results),
+        "follow_instruction_list": results,
+        "instruction_errors": errors,
+        "grading_mode": mode,
+        "num_passed": sum(results),
+        "num_total": len(results),
+    }
     return {
         "status": "scored",
         "reward": reward,
