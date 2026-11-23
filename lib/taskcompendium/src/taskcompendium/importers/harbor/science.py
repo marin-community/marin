@@ -28,11 +28,7 @@ PATCH = "/logs/artifacts/model.patch"
 
 
 def lower_science_package(directory: Path, *, task_id: str, source: Source) -> HarborTask:
-    """Translate Pier's collection hook and keep the native clean-rebuild entrypoint.
-
-    The release's public test.sh is a loader stub. Only grader.py overlays the fresh verifier
-    image; its own /tests/test.sh applies the patch and rebuilds before invoking that grader.
-    """
+    """Convert a Pier 1.3 science package to a Harbor task with isolated patch grading."""
     config = tomllib.loads((directory / "task.toml").read_text())
     verifier = config["verifier"]
     if config["schema_version"] != "1.3" or verifier["environment_mode"] != "separate":
