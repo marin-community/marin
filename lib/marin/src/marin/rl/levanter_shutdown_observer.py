@@ -89,6 +89,8 @@ class ShutdownObserver:
         nonce = uuid.uuid4().hex
         self.directory = destination / "native-shutdown-observer" / f"rank{process_id}-pid{target.pid}-{nonce}"
         self.directory.mkdir(parents=True, mode=0o700)
+        # Output volumes can add inherited setgid despite mkdir's requested mode.
+        self.directory.chmod(0o700, follow_symlinks=False)
         self.config = {
             "pid": target.pid,
             "starttime": target.starttime,
