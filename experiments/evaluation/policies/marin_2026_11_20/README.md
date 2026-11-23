@@ -20,8 +20,7 @@ uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-2
 | Qwen3.6-35B-A3B | `995ad96` | 73,728 | 262,144 |
 
 Qwen3.6 is served as October served it: 4×H100 (TP2×DP2), 320 GB host memory, and the `qwen3`
-reasoning and `qwen3_coder` tool parsers. Snowball v0.1 (Smartie RL `.32` step 14) joins once it has
-a catalog entry; it will be served with the `grug` reasoning parser, which October did not use.
+reasoning and `qwen3_coder` tool parsers.
 
 ## Differences from October
 
@@ -41,15 +40,11 @@ Run, with a known difference:
 | NUPA | no output cap | protocol cap 256 tokens |
 | OlympiadBench | no output cap | protocol cap 32,768 tokens |
 | TB2, OT-TBLite | external Harbor fork | vendored Harbor; retry list adds the sandbox errors classified since October |
-| All Harbor benchmarks | Daytona snapshots | declarative image builds in the Daytona eval account, which create no snapshots |
+| All Harbor benchmarks | Daytona snapshots | declarative Daytona image builds, which create no snapshots |
 | SWE-bench Verified, DS-1000 | registry at `016dd78` | registry at `38742b0` |
-| SWE-bench Verified | 32,768-token budget in the campaign file | same; the campaign README says the policy ran 131,072, unconfirmed |
 | OT-TBLite | registry version `2.0` | same; the version maps every task to [OpenThoughts-TBLite](https://github.com/open-thoughts/OpenThoughts-TBLite) commit `f075e46`, but the mapping itself is not pinned |
 
 The same as October: the 20 single-turn selections (thinking mode, repeats, few-shot count,
 MRCR and MMLU-Pro windows), seed 42 on AIME24 and OlympiadBench, and the Together
 `openai/gpt-oss-120b` judge for FinanceBench and OlympiadBench. Harbor agent budgets match the
 October campaign files.
-
-Not yet compared: prompt text, item counts and dataset revisions against October's Evalchemy
-tasks; task changes between the two Harbor registry pins.

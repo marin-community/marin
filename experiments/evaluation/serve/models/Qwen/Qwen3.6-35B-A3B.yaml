@@ -7,8 +7,8 @@ apply_chat_template: true
 resource_hint:
   gpu:
     H100: 4
-  # Each data-parallel replica streams the full bf16 checkpoint through host memory; checkpoint-based
-  # sizing assumes one copy, and 160g was OOM-killed during weight loading.
+  # Each data-parallel replica streams the full bf16 checkpoint through host memory, so host memory
+  # holds one copy per replica.
   memory: 320g
 serve:
   tensor_parallel_size: 2
