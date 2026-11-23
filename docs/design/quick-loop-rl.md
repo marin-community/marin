@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 3:39 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 4:08 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched frozen comparison is complete. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 67B live swap and real tool-turn replay passed. The full-context score gate found three crossings with ordered gather and one with scatter. The first five-host pilot committed policy 0 and hit a config binding error. The CPU-tested repair is now running on 40 H100s. | Complete the held comparison and resolve the full-context scoring discrepancy. |
+| Native inventory backend | The 67B live swap and real tool-turn replay passed. The latest full-context probe found one score ratio outside the permitted range across 32,768 sampled tokens. The repaired five-host pilot installed policy 0, scored 32 of 100 baseline tasks and stopped on an assistant-prefix request before its first update. | Qualify evaluation batching and assistant-prefix replay on H100, complete the held comparison and resolve the full-context scoring discrepancy. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -1802,8 +1802,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   priority. Kueue admitted all five original GPU tasks with the managed-node
   selector. The 40-rank NCCL gate passed. vLLM published policy 0 in 124.8
   seconds and all eight receivers verified 157,498,867,712 bytes with zero
-  mismatches. Evaluation has started. Terminal artifact recovery still needs
-  a successful run.
+  mismatches. The baseline scored all 100 tasks in 16.5 seconds with a mean
+  verifier score of 0.1800. The first training window admitted 32 groups
+  of four rollouts in 10.0 seconds at zero staleness. The supplemental
+  fresh-learner recovery check then began writing a roughly 750 GiB optimizer
+  checkpoint. Two of the four learner ranks reported local write completion
+  before the 30-minute learner command deadline. The checkpoint prefix
+  contained a partial TensorStore manifest and lacked committed metadata.
+  The job ended before accepting update 1 or publishing policy 1.
+  The retry plan allows up to 60 minutes for the learner command, retains
+  the independent TensorStore commit deadline and requires exact restore.
 
   The native coordinator lost its first slot before the GPU group was
   admitted and its second during regional initializer streaming. Its
@@ -1829,7 +1837,10 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   matched all 502 tensor inventories and shard hashes from the earlier
   snapshot. Serving verified and acknowledged that same policy identity.
   Writing the snapshot took 333.0 seconds and serving install took 158.8
-  seconds. The 100-task baseline evaluation has started.
+  seconds. Serial baseline evaluation scored 32 of the 100 tasks before
+  the 30-minute deadline. When training opened, the native bridge rejected
+  an assistant-prefix request before admitting the first group. The job
+  ended with policy 0 and zero accepted updates.
   [Repaired held native run][iris-held-native-repaired] ·
   [Source delta and regression proof][held-capacity-source-proof]
 
@@ -1840,20 +1851,30 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   capture. It compares the serving and learner activations only when all
   four replay frames and the original fused scores match exactly. The CPU
   regression preserved ordinary frames and scores with repeated callbacks.
-  The revised probe has started on one spare eight-H100 host.
+  The revised eight-H100 probe generated all four full-context responses.
+  It reproduced every sampled token ID, position and validity mask from
+  the earlier ordered-gather run. The raw logprobs differed from the first
+  sampled target and some expert routes differed. The frame hash check
+  rejected the head comparison. The ordinary scorer finished with zero
+  crossings across 242 tool-turn targets and one above the upper bound
+  across 32,768 full-context targets. The earlier ordered-gather run found
+  three full-context crossings. One target crossed in both runs with
+  opposite signs. Compare head activations from the same generation call
+  as the scored frames in the next diagnostic.
   [First head diagnostic][iris-native-head-comparison] ·
   [Verified failed-task archive][native-head-first-archive] ·
   [Revised diagnostic][iris-native-head-retry]
 
-  The native baseline completed 23 of 100 tasks in 23 minutes. The actor's
-  evaluation path holds the serving-process lock for each decode. Training
-  requests already coalesce, so report the evaluation wall time separately
-  from training admission. On the small BF16 CPU fixture, one native batch
-  with four independent seeds, stops, temperature 0.6 and top-p 0.95
-  preserved all tokens, score bits and finish reasons in either request
-  order. Extend the typed evaluation RPC to carry bounded batches without
-  replay payloads. Close admission and drain both queues before installing
-  weights. Measure this change on the same fixed panel.
+  The native baseline held the serving-process lock for each evaluation
+  decode. The repair coalesces evaluation requests in a typed binary batch
+  and drains evaluation and training requests before installing weights.
+  On the small BF16 CPU fixture, the actual worker and client preserved
+  the serial evaluation's tokens, score bits and finish reasons with
+  independent seeds and stops. A separate CPU rollout carried the shared
+  renderer's assistant-prefix tokens in context and attached replay scores
+  to newly sampled tokens. Measure the 100 pinned prompts and check
+  assistant-prefix replay on one eight-H100 host before retrying the
+  five-host native pilot.
 
   Both plans use a 24,576-token serving limit and a 16,896-token request
   limit. Native uses the cache geometry from the 67B live-swap run. Use the same learner, selection and fixed panel to
