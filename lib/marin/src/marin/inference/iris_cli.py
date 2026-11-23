@@ -66,6 +66,7 @@ from rigging.timing import Duration
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     SNOWBALL_AGENTX_LIBTPU_INIT_ARGS,
+    SNOWBALL_AGENTX_PROFILE,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
@@ -163,7 +164,7 @@ def _resolve_serving_plan(
         raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
     if vllm.router is not None and (gpu is None or backend != "vllm"):
         raise click.ClickException("--session-router requires --gpu with the vLLM backend")
-    if backend == "levanter" and levanter.profile == "snowball_agentx_v5p":
+    if backend == "levanter" and levanter.profile == SNOWBALL_AGENTX_PROFILE:
         if gpu is not None or tpu != "v5p-8":
             raise click.ClickException("The Snowball AgentX profile requires --tpu v5p-8")
         if not in_checkout:
@@ -684,7 +685,7 @@ def main(
         setup_scripts = [_checkout_free_setup_script(_marin_core_version(), plan.worker_extras)]
     agentx_environment = (
         {"JAX_PLATFORMS": "tpu", "LIBTPU_INIT_ARGS": SNOWBALL_AGENTX_LIBTPU_INIT_ARGS}
-        if isinstance(plan.engine, LevanterEngineConfig) and plan.engine.profile == "snowball_agentx_v5p"
+        if isinstance(plan.engine, LevanterEngineConfig) and plan.engine.profile == SNOWBALL_AGENTX_PROFILE
         else None
     )
     worker_environment = create_environment(

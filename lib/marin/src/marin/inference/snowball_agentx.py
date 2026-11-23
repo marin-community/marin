@@ -12,8 +12,9 @@ from levanter.inference.snowball_loading import load_snowball_serving_model
 from levanter.layers.sampler import LogprobMode
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
+from marin.inference.config import SNOWBALL_AGENTX_EXPERT_SHARDS
+
 AGENTX_CONTEXT = 65536
-AGENTX_EXPERT_SHARDS = 4
 AGENTX_MAX_CONCURRENCY = 128
 AGENTX_BATCH_TIMEOUT = 0.001
 _PREFILL_BUCKETS = (256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 49152)
@@ -23,7 +24,7 @@ _DECODE_BUCKETS = (4, 8, 16)
 def require_agentx_devices() -> None:
     """Check the geometry before allocating the model and compact KV pools."""
     devices = jax.devices()
-    if len(devices) != AGENTX_EXPERT_SHARDS or any(device.device_kind != "TPU v5" for device in devices):
+    if len(devices) != SNOWBALL_AGENTX_EXPERT_SHARDS or any(device.device_kind != "TPU v5" for device in devices):
         raise ValueError(f"Native Snowball AgentX requires one v5p-8, got {devices}")
 
 
