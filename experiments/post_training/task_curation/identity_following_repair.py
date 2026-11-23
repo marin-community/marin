@@ -37,6 +37,8 @@ CONFIG = "laion__nemotron-gym-identity-following-v4"
 SOURCE_ID = f"TaskTrove:{CONFIG}"
 REPAIR_DATE = "20261123"
 REPAIR_LABEL = f"@repaired-{REPAIR_DATE}"
+IMPORTER_REVISION = "identity-repair-20261123-v2"
+"""The repaired population's importer revision; the build recipe and the declaration share it."""
 REPAIR_RULE = f"identity-repair-{REPAIR_DATE}-v2"
 EXCLUSION_RULING = (
     "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "

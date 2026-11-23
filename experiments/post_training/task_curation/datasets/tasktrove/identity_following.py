@@ -22,13 +22,15 @@ from dataclasses import replace
 from functools import partial
 from typing import Any
 
+from finestore.rl.curation import DatasetRelease, OracleValidation, RecipeQAHistoricalNotes, SourceQualityResult
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportRejection, NormalizationChange, NormalizedTask, RawRow
+from taskcompendium.pipeline.models import ImportRejection, IntendedUse, NormalizationChange, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import JudgeSpec
 
@@ -37,6 +39,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 from experiments.post_training.task_curation.identity_following_repair import (
     CONFIG,
     GRADER_CRITERION,
+    IMPORTER_REVISION,
     INSTRUCTION_FILE,
     JUDGE_CONFIG_FILE,
     PERSONA_STATEMENT,
@@ -49,6 +52,8 @@ from experiments.post_training.task_curation.identity_following_repair import (
     repair_archive,
 )
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 DELIVERY_REWRITE_REASON = "Replace the source's response-file delivery with the assistant response convention"
 IDENTITY_REWRITE_REASON = (
@@ -183,6 +188,93 @@ def identity_judge() -> JudgeSpec:
         JUDGE_TIERS[JudgeTier.MEDIUM].spec,
         temperature=JUDGE_TEMPERATURE,
         incomplete_retry_tokens=JUDGE_INCOMPLETE_RETRY_TOKENS,
+    )
+
+
+REPAIRED_VARIANT_ID = f"TaskTrove:{CONFIG}@repaired-20261123"
+REPAIRED_RELEASE_REPO = "open-athena/tasktrove-identity-following-repaired-20261123"
+REPAIRED_RELEASE_REVISION = "94967dd29123f9d1274a660491b6612fbd6ebd40"
+REPAIRED_TASK_COUNT = 21_660
+
+
+def repaired_variant_source() -> Any:
+    """The repaired population's catalog declaration, pending its admission receipts.
+
+    The repaired revision re-enters ingestion at stage b (a converter/prompt change), so readmission
+    needs fresh within-source dedup, cross-source overlap, lexical, census and admission bindings at
+    the variant identity before the declaration may land — the declaration audit refuses a declared
+    source without its dedup receipt, so this entry stays unwired from ``configured_sources`` until
+    the campaign produces them. The QA receipts bound to the revision:
+    ``s3://marin-us-east-02a/marin/rl-data/atlas/identity-following-repair/20261123/qa-r3/controls.json``
+    (oracle/NoP controls, 90/90 as expected) and
+    ``s3://marin-us-east-08a/marin/rl-data/atlas/identity-following-repair/20261123/qa-r3/sample-review.json``
+    (SAMPLE review, 120/120 good, 0 unavailable).
+    """
+
+    cohort = PrebuiltCohort(
+        intended_use=IntendedUse.TRAIN,
+        name="tasktrove-identity-following",
+        version=IMPORTER_REVISION,
+        repo=REPAIRED_RELEASE_REPO,
+        revision=REPAIRED_RELEASE_REVISION,
+        expected_rows=REPAIRED_TASK_COUNT,
+    )
+    return RlDataSource(
+        pipeline=import_taskcompendium_prebuilt,
+        config=cohort,
+        info=SourceInfo(
+            data_restriction=DataRestriction.OPEN,
+            id=REPAIRED_VARIANT_ID,
+            upstream_dataset=CONFIG,
+            upstream_name=CONFIG,
+            subset=None,
+            variant="repaired-20261123",
+            build_path="TaskTrove identity repair",
+            origin=SourceOrigin.TASKTROVE,
+            upstream_url=(
+                "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/"
+                "02923004846e4e73862c20962f823a6d05100e7a"
+            ),
+            family="llm-judge-freeform",
+            tags=("judge", "rubric", "no-reference", "identity", "repair-release", "converted"),
+            count=REPAIRED_TASK_COUNT,
+            task_format=TaskFormat.TASKSPEC,
+            current_release=DatasetRelease(
+                repo=REPAIRED_RELEASE_REPO,
+                revision=REPAIRED_RELEASE_REVISION,
+                url=f"https://huggingface.co/datasets/{REPAIRED_RELEASE_REPO}/tree/{REPAIRED_RELEASE_REVISION}",
+            ),
+            oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+            recipe_qa_history=RecipeQAHistoricalNotes(
+                campaign="identity-following repair 2026-11-23",
+                recipe_revision=IMPORTER_REVISION,
+                verification=(
+                    "Rule identity-repair-20261123-v2 replaced the three false-persona defect strings in "
+                    "every task; the pinned MEDIUM grader accepted the correct identity and rejected every "
+                    "NVIDIA attribution across a 30-task stratified control panel (90/90 as expected), and "
+                    "the pinned V4 GLM reviewer scored 120/120 good with zero unavailable on the stratified "
+                    "SAMPLE panel."
+                ),
+                reviewed=120,
+                admitted=0,
+            ),
+            quality_result=SourceQualityResult(
+                reviewed=120,
+                issue_count=0,
+                uncertain_count=0,
+                unavailable_count=0,
+                issues=(),
+                repair_recommendation="No repairs indicated by conclusive reviews.",
+            ),
+            notes=(
+                "Repaired full population of TaskTrove:laion__nemotron-gym-identity-following-v4: every "
+                "task carried a false 'Marin trained and developed by researchers from NVIDIA' persona in "
+                "its prompt, embedded rubric, verifier principle and archived judge config; rule "
+                "identity-repair-20261123-v2 replaces exactly those strings (Stanford and Open Athena "
+                "attribution) with everything else byte-identical. The parent source stays Excluded "
+                "(NO_SUPPORTED_BACKEND, ruling 2026-11-17) until this variant's admission receipts bind."
+            ),
+        ),
     )
 
 

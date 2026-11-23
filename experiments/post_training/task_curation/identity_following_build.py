@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.identity_followi
 from experiments.post_training.task_curation.identity_following_repair import (
     CONFIG,
     EXCLUSION_RULING,
+    IMPORTER_REVISION,
     REPAIR_LABEL,
     REPAIR_RULE,
     SOURCE_ID,
@@ -45,7 +46,6 @@ from experiments.post_training.task_curation.remediation_publish import TASK_SCH
 logger = logging.getLogger(__name__)
 
 RECIPE_NAME = "tasktrove-identity-following"
-IMPORTER_REVISION = "identity-repair-20261123-v1"
 REPLY_ONLY_RUNTIME = {"task_machine": None, "verifier_machine": None}
 LEDGER_FILE = "repair-ledger.jsonl"
 MANIFEST_FILE = "manifest.json"
