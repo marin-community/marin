@@ -1302,32 +1302,38 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         new_tf = eqx.tree_at(lambda t: (t.token_embed, t.output_proj, t.config), self.transformer, (te, op, new_cfg))
         return dataclasses.replace(self, transformer=new_tf, _config=new_cfg)
 
+    def initial_layer_cache(self, spec: PageTableSpec, *, dtype: jnp.dtype) -> KvPageCache:
+        """Allocate interleaved KV pages directly on the model's head sharding."""
+        if _context_axis() is not None:
+            raise ValueError("Snowball paged inference requires context_axis_size=1")
+        axes = (
+            Axis("page", spec.num_pages),
+            Axis("slot", spec.page_size),
+            Axis("kv_head", 2 * _inference_kv_heads(self.config, self._kv_axis)),
+            Axis("head_size", self.config.inferred_head_dim),
+        )
+        sharding = _current_sharding(P(None, None, self._kv_axis, None))
+        pages = jnp.zeros(tuple(axis.size for axis in axes), dtype, out_sharding=sharding)
+        return KvPageCache(hax.named(pages, axes))
+
+    def layer_cache_specs(self, spec: PageTableSpec, window_cache_pages: int) -> tuple[PageTableSpec, ...]:
+        """Select full-context or sliding-window capacity for each split layer."""
+        layers = len(self.transformer.blocks)
+        if not self._split_decode_cache or num_long_attention_layers(layers) == layers:
+            raise ValueError("A compact window cache requires split decode and sliding-window layers")
+        window_spec = dataclasses.replace(spec, num_pages=window_cache_pages)
+        return tuple(spec if _is_long_attention_layer(i, layers) else window_spec for i in range(layers))
+
     def initial_cache(
         self, spec: PageTableSpec, *, dtype: jnp.dtype, window_cache_pages: int | None = None
     ) -> StackedKvPageCache | ListCache[KvPageCache]:
         """Allocate paged KV state on a serving mesh with context parallelism disabled."""
-        if _context_axis() is not None:
-            raise ValueError("Snowball paged inference requires context_axis_size=1")
-        cfg = self.config
-        kv_heads, head_size = Axis("kv_head", _inference_kv_heads(cfg, self._kv_axis)), Axis(
-            "head_size", cfg.inferred_head_dim
-        )
-        num_layers = len(self.transformer.blocks)
         if window_cache_pages is not None:
-            if not self._split_decode_cache or num_long_attention_layers(num_layers) == num_layers:
-                raise ValueError("A compact window cache requires split decode and sliding-window layers")
-            window_spec = dataclasses.replace(spec, num_pages=window_cache_pages)
-            layer_sharding = P(None, None, self._kv_axis, None)
-            layers = []
-            for index in range(num_layers):
-                layer_spec = spec if _is_long_attention_layer(index, num_layers) else window_spec
-                pages = KvPageCache.init(layer_spec, kv_heads, head_size, dtype=dtype).kv_pages
-                layers.append(KvPageCache(hax.named(reshard(pages.array, layer_sharding), pages.axes)))
-            return ListCache(tuple(layers))
-        layer = Axis(_CACHE_LAYER_AXIS, num_layers)
-        pages = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype).kv_pages
+            specs = self.layer_cache_specs(spec, window_cache_pages)
+            return ListCache(tuple(self.initial_layer_cache(layer, dtype=dtype) for layer in specs))
+        layer = Axis(_CACHE_LAYER_AXIS, len(self.transformer.blocks))
+        pages = self.initial_layer_cache(spec, dtype=dtype).kv_pages
         stacked = pages.broadcast_axis(layer).rearrange((layer, ...))
-        # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
         stacked = hax.named(reshard(stacked.array, P(None, None, None, self._kv_axis, None)), stacked.axes)
         cache = StackedKvPageCache(stacked)
         return _split_layer_cache(cache, self._kv_axis) if self._split_decode_cache else cache

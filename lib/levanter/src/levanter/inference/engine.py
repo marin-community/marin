@@ -37,7 +37,7 @@ from levanter.inference.utils import INVALID, is_valid
 from levanter.inference.window_page_map import WindowPageMap
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
-from levanter.layers.kv_cache import PageCache
+from levanter.layers.kv_cache import ListCache, PageCache
 from levanter.layers.sampler import LogprobMode, Sampler
 from levanter.models.lm_model import LmHeadModel
 from levanter.models.snowball import SnowballLMHeadModel
@@ -1081,7 +1081,6 @@ class InferenceEngine:
 
         table = PageTable.init(config.max_pages, config.max_seqs, config.page_size, max_pages_per_seq)
         window_pages = None
-        initialize_cache = model.initial_cache
         window_capacity = config.window_cache_max_pages
         if window_capacity is not None:
             if not isinstance(model, SnowballLMHeadModel):
@@ -1096,10 +1095,14 @@ class InferenceEngine:
             if not min_pages <= window_capacity < table.num_pages:
                 raise ValueError(f"Compact window cache capacity must be in [{min_pages}, {table.num_pages})")
             window_pages = WindowPageMap.init(table.num_pages, window_capacity, window)
-            initialize_cache = functools.partial(model.initial_cache, window_cache_pages=window_capacity)
-        cache = hax.named_jit(initialize_cache, axis_resources=axis_resources)(
-            table.spec(), dtype=config.compute_dtype
-        )
+            # Allocate one layer at a time and keep the KV head placement specified by Snowball.
+            initialize_layer = eqx.filter_jit(model.initial_layer_cache)
+            specs = model.layer_cache_specs(table.spec(), window_capacity)
+            cache = ListCache(tuple(initialize_layer(spec, dtype=config.compute_dtype) for spec in specs))
+        else:
+            cache = hax.named_jit(model.initial_cache, axis_resources=axis_resources)(
+                table.spec(), dtype=config.compute_dtype
+            )
         decode_state = DecodeState.init(
             table,
             max_stop_seqs=config.max_stop_seqs,
