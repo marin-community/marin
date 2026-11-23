@@ -17,7 +17,17 @@ import httpx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.inference.binary import (
+    GENERATE_PATH,
+    MEDIA_TYPE,
+    PROMPT_TOKEN_IDS,
+    TOKEN_IDS,
+    choice_tensor_key,
+    decode_frame,
+    encode_frame,
+)
 from levanter.inference.engine import Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
@@ -92,6 +102,21 @@ def _check_chat_stream(server_url: str, model: str, capture_routes: bool) -> Non
     if not completed or (capture_routes and not route_frame):
         raise RuntimeError("Native chat preflight did not complete its requested stream")
     logger.info("Native chat stream completed with route capture %s", capture_routes)
+
+
+def _check_binary_context_limit(server_url: str, token: int, max_context: int) -> None:
+    prompt = np.full(max_context - 1, token, dtype=np.int32)
+    response = httpx.post(
+        f"{server_url}{GENERATE_PATH}",
+        headers={"content-type": MEDIA_TYPE},
+        content=encode_frame({"max_tokens": 1, "temperature": 0}, {PROMPT_TOKEN_IDS: prompt}),
+        timeout=180.0,
+    )
+    response.raise_for_status()
+    _, tensors = decode_frame(response.content)
+    if not np.array_equal(tensors[PROMPT_TOKEN_IDS], prompt) or tensors[choice_tensor_key(0, TOKEN_IDS)].shape != (1,):
+        raise RuntimeError("Native binary generation did not round-trip the context-boundary request")
+    logger.info("Native binary generation completed with %d prompt tokens and one output token", prompt.size)
 
 
 def main() -> None:
@@ -180,6 +205,8 @@ def main() -> None:
                         timeout=series["warmup_grace_period"] + series["duration"] + 300,
                         sample=output / "client-load.jsonl",
                     )
+                    filler = tokenizer.encode(" example", add_special_tokens=False)[0]
+                    _check_binary_context_limit(server_url, filler, config.max_seq_len)
                 profile = json.loads((output / PROFILE_EXPORT_RELATIVE_PATH).read_text())
                 if profile.get("was_cancelled") or profile.get("request_count", {}).get("avg", 0) == 0:
                     raise RuntimeError("AgentX reported no completed timed requests")
