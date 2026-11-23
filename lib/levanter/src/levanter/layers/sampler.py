@@ -14,6 +14,8 @@ from levanter.kernels.logsumexp import batch_invariant_logsumexp
 
 __all__ = ["Sampler", "LogprobMode"]
 
+FULL_DISTRIBUTION_TOP_P = 1.0
+
 
 class LogprobMode(StrEnum):
     BEHAVIOR = "behavior"
@@ -118,14 +120,14 @@ class Sampler(eqx.Module):
     ) -> tuple[NamedArray, NamedArray]:
         """Sample a fixed-width batch with a valid prefix of ``num_samples`` positions.
 
-        Padded positions use the full distribution so their cutoffs cannot force sorting.
+        Padded positions use the full distribution.
         """
         positions = hax.arange(logits.resolve_axis("position"))
-        top_ps = hax.where(positions < num_samples, top_ps, 1.0)
+        top_ps = hax.where(positions < num_samples, top_ps, FULL_DISTRIBUTION_TOP_P)
         sample = hax.vmap(self, "position")
         # Branch before vmap so the full-distribution batch skips vocabulary sorting.
         return jax.lax.cond(
-            hax.all(top_ps >= 1.0).scalar(),
+            hax.all(top_ps >= FULL_DISTRIBUTION_TOP_P).scalar(),
             lambda: sample(logits, temperatures, key=key),
             lambda: sample(logits, temperatures, top_ps=top_ps, key=key),
         )

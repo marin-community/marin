@@ -38,7 +38,7 @@ from levanter.inference.window_page_map import WindowPageMap
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import ListCache, PageCache
-from levanter.layers.sampler import LogprobMode, Sampler
+from levanter.layers.sampler import FULL_DISTRIBUTION_TOP_P, LogprobMode, Sampler
 from levanter.models.lm_model import LmHeadModel
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
@@ -532,7 +532,7 @@ def _sample_sharded_positions(
     row_spec = PartitionSpec(sharding.spec[0])
     logits_spec = PartitionSpec(sharding.spec[0], None)
     positions = hax.arange(logits.resolve_axis("position"))
-    top_ps = hax.where(positions < num_samples, top_ps, 1.0)
+    top_ps = hax.where(positions < num_samples, top_ps, FULL_DISTRIBUTION_TOP_P)
 
     def local_sample(local_logits, local_temps, local_top_ps, local_keys):
         rows = hax.Axis("position", local_logits.shape[0])
