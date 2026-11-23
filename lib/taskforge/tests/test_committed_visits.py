@@ -349,7 +349,8 @@ async def test_a_malformed_commitment_receipt_leaves_the_held_head_byte_identica
     [at] = [
         n
         for n, line in enumerate(lines)
-        if (row := json.loads(line))["event"].get("type") == StageCompleted.kind and row["event"]["payload"]["committed"]
+        if (row := json.loads(line))["event"].get("type") == StageCompleted.kind
+        and row["event"]["payload"].get("committed")
     ]
     row = json.loads(lines[at])
     first, second = receipts(row)

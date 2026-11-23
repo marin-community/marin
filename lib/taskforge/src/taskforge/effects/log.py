@@ -7,7 +7,7 @@ import json
 import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from itertools import islice
 from pathlib import Path
@@ -33,6 +33,7 @@ from taskforge.effects.events import (
     digest,
     event_digest,
     json_value,
+    recorded_fields,
 )
 from taskforge.effects.issues import LogFailure, Unreproducible
 from taskforge.model.review import Receipt
@@ -146,8 +147,7 @@ def _encode(event: Event[object], sequence: int = 0, known: dict[str, int] | Non
             if isinstance(value := getattr(event, item.name), Event)
             else json_value(value)
         )
-        for item in fields(event)
-        if item.metadata.get("serialize", True)
+        for item in recorded_fields(event)
     }
     return {"type": event.kind, "payload": payload}
 

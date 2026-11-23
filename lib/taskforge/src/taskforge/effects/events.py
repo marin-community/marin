@@ -11,7 +11,7 @@ the replay digest, so classes may move or be renamed freely. Changing a kind bre
 """
 
 import errno
-from dataclasses import dataclass, field, fields
+from dataclasses import Field, dataclass, field, fields
 from enum import StrEnum
 from types import get_original_bases
 from typing import ClassVar, Generic, TypeVar, get_args, get_origin
@@ -67,8 +67,7 @@ class Event(Generic[T_co]):
     def identity(self) -> object:
         return {
             item.name: event_digest(value) if isinstance(value := getattr(self, item.name), Event) else value
-            for item in fields(self)
-            if item.metadata.get("serialize", True)
+            for item in recorded_fields(self)
         }
 
     def __init_subclass__(cls) -> None:
@@ -85,6 +84,19 @@ class Event(Generic[T_co]):
         if existing is not None and (fields is None or vars(existing).get("__dataclass_fields__") is not fields):
             raise TypeError(f"Event kind {kind!r} is declared by both {existing.__qualname__} and {cls.__qualname__}")
         EVENT_TYPES[kind] = cls
+
+
+ABSENT_WHEN_NONE = {"absent_when_none": True}
+"""Field metadata: a later optional field left out of identity and payload while None, so earlier rows keep both."""
+
+
+def recorded_fields(event: Event[object]) -> list[Field[object]]:
+    return [
+        item
+        for item in fields(event)
+        if item.metadata.get("serialize", True)
+        and not (item.metadata.get("absent_when_none") and getattr(event, item.name) is None)
+    ]
 
 
 # Event registration is the sole module-state exception; logs never import classes.
@@ -190,4 +202,4 @@ class StageCompleted(Event[None]):
     exit: str
     round: int = 0
     terminal: Terminal | None = None
-    committed: Committed | None = None
+    committed: Committed | None = field(default=None, metadata=ABSENT_WHEN_NONE)

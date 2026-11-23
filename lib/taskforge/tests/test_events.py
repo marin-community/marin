@@ -11,6 +11,7 @@ from taskcompendium.identity import canonical_sha256
 from taskforge import wiring
 from taskforge.effects.events import (
     EVENT_TYPES,
+    Committed,
     Event,
     Failed,
     Fingerprint,
@@ -30,6 +31,7 @@ from taskforge.harness.events import ToolInvoked, ToolReturned
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import json_value
 from taskforge.model.llm import Message, Role
+from taskforge.model.review import ValidationResult
 from taskforge.model.stage import Stage
 from taskforge.resources.decision_model import DecisionModelRead
 from taskforge.resources.env import ReadFile, RunCommand, WriteFile, WriteFiles
@@ -84,6 +86,11 @@ RECORDED = b"""\
 """Journal lines written by this format, frozen."""
 
 
+COMMITTED = Committed("visit", 0, ValidationResult("task", (), (), ()))
+
+
+# Review 2026-11-23: an unconditional ``committed`` field moved every marker's digest, so a format-12 root's repeated
+# markers, stored as digest references, no longer decoded. A marker without a commitment keeps its format-12 digest.
 def test_recorded_kinds_decoders_and_replay_digests_are_pinned() -> None:
     assert wiring.install  # importing wiring registers every library event
     assert {kind: cls for kind, cls in EVENT_TYPES.items() if cls.__module__.startswith("taskforge.")} == KINDS
@@ -110,11 +117,13 @@ def test_recorded_kinds_decoders_and_replay_digests_are_pinned() -> None:
     request = InferenceRequest((Message(Role.USER, "hi"),), (), LLMPolicy())
     assert {
         "stage": event_digest(StageCompleted(Stage.AUTHOR, "config", "submitted", 1)),
+        "committed": event_digest(StageCompleted(Stage.REVIEW, "config", "Decided", 0, None, COMMITTED)),
         "command": event_digest(RunCommand("true", 30.0)),
         "inference": event_digest(request),
         "resolved": event_digest(resolved),
     } == {
-        "stage": "bad3ae86554a0271af03eae04ff13c9697d84d908e5cad040fc9114d41108483",  # format 13: committed
+        "stage": "230238f1053d6ebfb3a54954281e736c301dcb21323bbc456f77d5e39500585d",
+        "committed": "c842ad0afcf5ed55d891744241acf20a7cedc53ddfdbb8cd98836574471f6e60",
         "command": "227b4531c6a0a3a00d43fa741cd010bd246b32d81c1237126231830b797279ba",
         "inference": "2709c75295b758602f82a1e114cfbf401cdba869c2d6620caaa851973f9887aa",
         "resolved": "052985a3615a19c16965da77e0bcd07d7741bf5b9f6f1a65ca4d8bd946ffc5e0",
