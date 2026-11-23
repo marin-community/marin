@@ -76,6 +76,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
+from experiments.post_training.task_curation.datasets.terminal_lego import tasks as terminal_lego
 from experiments.post_training.task_curation.datasets.terminalworld import tasks as terminalworld
 from experiments.post_training.task_curation.derived_contract_tags import bind_derived_contract_tags
 from experiments.post_training.task_curation.grading_binding import bind_grading_census
@@ -158,6 +159,7 @@ def configured_sources() -> list[RlDataSource]:
         *facet.sources(),
         *fineenvs.sources(fineenvs.PUBLISHED_IMAGES),
         *mimo.sources(),
+        *terminal_lego.sources(),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),

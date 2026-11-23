@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "45e9b8dc0e2813da47f573a86b96df9f348b9b64",
+  "path": "experiments/post_training/task_curation/datasets/terminal_lego/qualification.json",
+  "sha256": "194774592d29763cc56dfc3a1fee202f2ff5ab9ab29aa92d2dabc46881d65b5f"
+}

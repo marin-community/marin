@@ -1,42 +1,42 @@
 {
   "repo": "open-athena/marin-license-receipts",
-  "revision": "d946ca1f53bf490c413f4087841c79d2ef9b9875",
+  "revision": "5737e246e90200cad05cd8fec8795cbcd66d8dc4",
   "references": [
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "d946ca1f53bf490c413f4087841c79d2ef9b9875",
-      "path": "exclusions_20261122_b_v1/part-000.json",
+      "revision": "5737e246e90200cad05cd8fec8795cbcd66d8dc4",
+      "path": "terminal_lego_20261123_b_v1/part-000.json",
       "sha256": "f88ce71ac5611fe3cc93690eeb7c2dff9c7d1d4e70d8ff1f573c525e700a8628"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "d946ca1f53bf490c413f4087841c79d2ef9b9875",
-      "path": "exclusions_20261122_b_v1/part-001.json",
+      "revision": "5737e246e90200cad05cd8fec8795cbcd66d8dc4",
+      "path": "terminal_lego_20261123_b_v1/part-001.json",
       "sha256": "1663a9af35ece4247dbc74e32dacd5c22b33685bb8a3c449f34586740cbc4df9"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "d946ca1f53bf490c413f4087841c79d2ef9b9875",
-      "path": "exclusions_20261122_b_v1/part-002.json",
-      "sha256": "02065fadc4ef663f1bbd041aef55f5aa32d1c4d2db74161a0bc20385c9c882c3"
+      "revision": "5737e246e90200cad05cd8fec8795cbcd66d8dc4",
+      "path": "terminal_lego_20261123_b_v1/part-002.json",
+      "sha256": "f25b0f447f059c35a2252e0106bc87649d060f2075754878a8c5c9a53a7662d0"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "d946ca1f53bf490c413f4087841c79d2ef9b9875",
-      "path": "exclusions_20261122_b_v1/part-003.json",
-      "sha256": "ca5a08517bc023afbe8d34bc21ee6f189c076b3d6700f8d2b16d07d44b1b319a"
+      "revision": "5737e246e90200cad05cd8fec8795cbcd66d8dc4",
+      "path": "terminal_lego_20261123_b_v1/part-003.json",
+      "sha256": "975766c4995b0330cc2cd6be39ad919dc444b85dd4c531e216eab4029c14e308"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "d946ca1f53bf490c413f4087841c79d2ef9b9875",
-      "path": "exclusions_20261122_b_v1/part-004.json",
-      "sha256": "be8dc2de949d69024f65a1b6a070304dde979ed9108ddbe6fd08f5b1402dac61"
+      "revision": "5737e246e90200cad05cd8fec8795cbcd66d8dc4",
+      "path": "terminal_lego_20261123_b_v1/part-004.json",
+      "sha256": "42aadeba96bd75f3d5cea1f34f8623e6ab3e99bad9c6a770e1e7b4954f9a1a01"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "d946ca1f53bf490c413f4087841c79d2ef9b9875",
-      "path": "exclusions_20261122_b_v1/part-005.json",
-      "sha256": "c193c808233ae75d809112fc935a23b927c5536a1927b8fc8ad752aa999ce944"
+      "revision": "5737e246e90200cad05cd8fec8795cbcd66d8dc4",
+      "path": "terminal_lego_20261123_b_v1/part-005.json",
+      "sha256": "7ef02097d818a23056fb499f69b5cbc33c86257f7a315d4a1cb62c1a190e75b7"
     }
   ]
 }
