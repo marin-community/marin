@@ -164,6 +164,11 @@ class InferenceContext:
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
 
+    def policy_identity(self) -> tuple[int, str]:
+        """Read the version and policy identity from one admission epoch."""
+        with self.admission_lock:
+            return self.model_version, self.policy_id
+
     def start(self):
         """Start the inference and batch processing threads"""
         logger.info("Starting inference context...")

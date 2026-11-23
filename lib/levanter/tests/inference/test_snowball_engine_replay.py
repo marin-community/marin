@@ -379,6 +379,7 @@ def test_packed_sampling_matches_serial_requests_on_expert_mesh(serving_model):
         max_seqs_in_prefill=4,
         max_tokens_per_round=4,
         compute_dtype=jnp.float32,
+        return_policy_logprobs=True,
     )
     with (
         jax.set_mesh(compact_grug_mesh(expert_axis_size=4)),
@@ -392,7 +393,9 @@ def test_packed_sampling_matches_serial_requests_on_expert_mesh(serving_model):
         requests = _requests()
         requests.append(dataclasses.replace(requests[0], request_id=505))
         expected = [serial.generate([request]).tokens[0] for request in requests]
-        assert parallel.generate(requests).tokens == expected
+        result = parallel.generate(requests)
+        assert result.tokens == expected
+        assert result.policy_logprobs == result.logprobs
 
 
 @eqx.filter_jit

@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -554,30 +555,39 @@ def _sample_expert_shards(
     )
 
 
+def _terminal_capture_rows(finished_count: int) -> int:
+    mesh = jax.sharding.get_abstract_mesh()
+    batch_shards = math.prod(mesh.shape.get(axis, 1) for axis in ("replica_dcn", "data", "expert"))
+    partitions = (finished_count + batch_shards - 1) // batch_shards
+    return batch_shards * (1 << (partitions - 1).bit_length())
+
+
+@functools.partial(jax.jit, donate_argnums=0, static_argnames=("rows", "max_active_tokens"))
 def _capture_terminal_inputs(
-    gen_state: GenState, model: SnowballLMHeadModel, routes: _SnowballRouteBuffer
+    gen_state: GenState, model: SnowballLMHeadModel, *, rows: int, max_active_tokens: int
 ) -> tuple[GenState, _SnowballRouteBuffer]:
-    """Decode finished inputs once, without sampling, while their pages still exist."""
-
-    def capture(state):
-        gen_state, routes = state
-        ds = gen_state.decode_state
-        finished = ds.finished.array & ds.sequences.used_mask.array
-        slots = jnp.nonzero(finished, size=ds.max_seqs, fill_value=INVALID)[0].astype(jnp.int32)
-        safe_slots = jnp.maximum(slots, 0)
-        positions = jnp.where(slots >= 0, ds.seq_lens.array[safe_slots] - 1, INVALID)
-        tokens = jnp.where(slots >= 0, ds.tokens.array[safe_slots, jnp.maximum(positions, 0)], INVALID)
-        slot_ids = hax.named(slots, "position")
-        pos_ids = hax.named(positions, "position")
-        ds, info = ds.allocate_for_seq(slot_ids, pos_ids)
-        gen_state, window_info = gen_state.remap_window_pages(ds.sequences, info)
-        _, cache, captured = model.decode_with_route_captures(
-            hax.named(tokens, "position"), gen_state.cache, info, pos_ids, window_batch_info=window_info
-        )
-        return dataclasses.replace(gen_state, decode_state=ds, cache=cache), routes.append(captured, slot_ids)
-
-    finished = gen_state.decode_state.finished & gen_state.decode_state.sequences.used_mask
-    return jax.lax.cond(hax.any(finished).scalar(), capture, lambda state: state, (gen_state, routes))
+    """Capture finished inputs before releasing their KV pages."""
+    ds = gen_state.decode_state
+    finished = ds.finished.array & ds.sequences.used_mask.array
+    slots = jnp.nonzero(finished, size=rows, fill_value=INVALID)[0].astype(jnp.int32)
+    safe_slots = jnp.maximum(slots, 0)
+    positions = jnp.where(slots >= 0, ds.seq_lens.array[safe_slots] - 1, INVALID)
+    tokens = jnp.where(slots >= 0, ds.tokens.array[safe_slots, jnp.maximum(positions, 0)], INVALID)
+    slot_ids = hax.named(slots, "position")
+    pos_ids = hax.named(positions, "position")
+    ds, info = ds.allocate_for_seq(slot_ids, pos_ids)
+    info = info.with_seq_capacity(min(ds.max_seqs, rows))
+    gen_state, window_info = gen_state.remap_window_pages(ds.sequences, info)
+    _, cache, captured = model.decode_with_route_captures(
+        hax.named(tokens, "position"),
+        gen_state.cache,
+        info,
+        pos_ids,
+        max_active_tokens=max_active_tokens,
+        window_batch_info=window_info,
+    )
+    routes = _SnowballRouteBuffer.init(model, rows).append(captured, slot_ids)
+    return dataclasses.replace(gen_state, decode_state=ds, cache=cache), routes
 
 
 def _prefill_kernel(
@@ -615,7 +625,7 @@ def _prefill_kernel(
     routes = None
     if capture_routes:
         assert isinstance(model, SnowballLMHeadModel)
-        routes = _SnowballRouteBuffer.init(model, tokens.axis_size("position") + decode_state.max_seqs)
+        routes = _SnowballRouteBuffer.init(model, tokens.axis_size("position"))
         use_selected_rows = model.config.projection_implementation == "native"
         logits, cache, captured = model.decode_with_route_captures(
             tokens,
@@ -694,8 +704,6 @@ def _prefill_kernel(
     #     queued=gen_state.decode_state.num_queued_tokens,
     # )
     if routes is not None:
-        assert isinstance(model, SnowballLMHeadModel)
-        gen_state, routes = _capture_terminal_inputs(gen_state, model, routes)
         return gen_state, _SnowballDecodeOutputs(outputs, routes)
     return gen_state, outputs
 
@@ -1085,7 +1093,7 @@ def _run_generation_loop(
     routes = None
     if capture_routes:
         assert isinstance(model, SnowballLMHeadModel)
-        routes = _SnowballRouteBuffer.init(model, max_tokens_per_round * max_rounds + gen_state.decode_state.max_seqs)
+        routes = _SnowballRouteBuffer.init(model, max_tokens_per_round * max_rounds)
     split_cache = False
     keep_layers = isinstance(model, SnowballLMHeadModel) and model.config.inference_decode_token_layout == "replicated"
     if (
@@ -1121,8 +1129,6 @@ def _run_generation_loop(
         assert isinstance(final_gen_state.cache, ListCache)
         final_gen_state = dataclasses.replace(final_gen_state, cache=_stack_snowball_cache(final_gen_state.cache))
     if routes is not None:
-        assert isinstance(model, SnowballLMHeadModel)
-        final_gen_state, routes = _capture_terminal_inputs(final_gen_state, model, routes)
         return final_gen_state, _SnowballDecodeOutputs(final_outputs, routes)
     return final_gen_state, final_outputs
 
@@ -2160,6 +2166,13 @@ class InferenceEngine:
 
         # Update done flags based on snapshot
         finished_slots = sorted(slot for slot in self.local_map if fins[slot])
+        if replay is not None and finished_slots:
+            assert isinstance(self.model, SnowballLMHeadModel)
+            rows = _terminal_capture_rows(len(finished_slots))
+            self.gen_state, terminal = _capture_terminal_inputs(
+                self.gen_state, self.model, rows=rows, max_active_tokens=min(rows, self.config.max_seqs)
+            )
+            replay.append(jax.device_get(terminal), self.local_map)
         for local_slot in finished_slots:
             rid, cid = self.local_map[local_slot]
             dr = self.results[rid][cid]

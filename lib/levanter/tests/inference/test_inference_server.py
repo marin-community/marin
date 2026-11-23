@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import base64
 import dataclasses
 import json
 import logging
@@ -19,9 +20,11 @@ from levanter.inference.jit_scheduler import FinishReason
 from levanter.inference.utils import INVALID
 from levanter.layers.kv_cache import KvPageCache
 from levanter.models.llama import LlamaLMHeadModel
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 
 try:
     from fastapi import HTTPException
@@ -47,6 +50,7 @@ try:
         _compute_tokens,
     )
     from levanter.inference.openai_protocol import ChatMessage
+    from levanter.inference.snowball_replay_payload import SnowballReplayPayload
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -763,6 +767,68 @@ def test_binary_and_openai_use_the_same_scores_and_policy_fence(exact_token_clie
     response = exact_token_client.post("/v1/completions", json={**json_request, "expected_model_version": 1})
     assert response.status_code == 200, response.text
     assert response.json()["choices"][0]["policy_id"] == "test:second"
+
+
+def test_snowball_route_evidence_is_consistent_across_serving_adapters():
+    model_config = SnowballConfig(
+        vocab_size=4,
+        hidden_dim=16,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_layers=1,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+        attention_implementation="reference",
+        inference_attention_implementation="reference",
+    )
+    config = _exact_token_config()
+    mesh = MeshConfig(axes={"replica": 1, "data": jax.device_count(), "model": 1, "expert": 1, "context": 1})
+    config = dataclasses.replace(
+        config,
+        trainer=dataclasses.replace(config.trainer, use_explicit_mesh_axes=True, mesh=mesh),
+        capture_routes=True,
+        initial_policy_id="fixture:41",
+        service=dataclasses.replace(config.service, max_seqs=4, max_pages=8),
+    )
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        model = SnowballLMHeadModel.init(hax.Axis("vocab", 4), model_config, key=jax.random.key(41))
+        server = InferenceServer.create(config, model, _AliasingChatTokenizer())
+    options = {
+        "max_tokens": 3,
+        "temperature": 0.0,
+        "seed": 42,
+        "expected_policy_id": "fixture:41",
+        "return_policy_logprobs": True,
+        "return_route_captures": True,
+    }
+    prompt = np.asarray([0, 3], dtype=np.int32)
+    try:
+        with TestClient(server.app) as client:
+            response = client.post(
+                "/v1/completions",
+                json={**options, "model": "snowball", "prompt": prompt.tolist(), "return_token_ids": True},
+            )
+            binary = client.post(
+                GENERATE_PATH,
+                content=encode_frame(options, {"prompt_token_ids": prompt}),
+                headers={"Content-Type": MEDIA_TYPE},
+            )
+        assert response.status_code == binary.status_code == 200, (response.text, binary.status_code)
+        choice = response.json()["choices"][0]
+        _, arrays = decode_frame(binary.content)
+        from_openai = SnowballReplayPayload.from_bytes(base64.b64decode(choice["route_capture"]))
+        from_binary = SnowballReplayPayload.from_bytes(arrays["choice.0.route_capture"].tobytes())
+        np.testing.assert_array_equal(from_openai.tokens, from_binary.tokens)
+        np.testing.assert_array_equal(from_openai.tokens, [*prompt, *choice["token_ids"]])
+        np.testing.assert_array_equal(from_openai.layers[0].selected_experts, from_binary.layers[0].selected_experts)
+        np.testing.assert_array_equal(arrays["choice.0.policy_logprobs"], choice["policy_logprobs"])
+        assert from_binary.policy_id == from_openai.policy_id == "fixture:41"
+    finally:
+        server.shutdown()
 
 
 def test_completion_integer_prompts_keep_token_identity_through_stopping(exact_token_client):

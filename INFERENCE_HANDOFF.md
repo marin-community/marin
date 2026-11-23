@@ -40,6 +40,13 @@ matched bit-for-bit. Timing includes the serialized route payloads.
 
 [TPUv4 qualification](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-qualification-20261122-v3)
 
+Packing route IDs and thresholds into contiguous device buffers reduced
+transfer overhead. The repeat on the same TPUv4 worker reached 5,134
+versus 5,709 output tok/s for the homogeneous burst, a 10.1% slowdown.
+The mixed batch reached 754 versus 963 output tok/s, a 21.6% slowdown.
+All compared outputs still matched bit-for-bit.
+[Compact route buffer repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-compact-20261122)
+
 The full-model v5p-8 job runs both replay arms with raw policy scores enabled.
 Both use the same worker and pinned 64K AgentX traffic. The measured native
 and compiled vLLM gap is a separate acceptance gate.

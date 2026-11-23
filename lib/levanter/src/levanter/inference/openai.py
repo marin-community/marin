@@ -36,7 +36,7 @@ from openai.types.completion_choice import CompletionChoice, Logprobs
 from tokenizers.decoders import DecodeStream
 from tokenizers.models import BPE
 from transformers import PreTrainedTokenizerFast
-from levanter.inference.binary import register_binary_routes
+from levanter.inference.binary import GENERATE_PATH, register_binary_routes
 from levanter.inference.engine import InferenceEngine, TokenSequenceLogprobs
 from levanter.inference.jit_scheduler import FinishReason
 from levanter.inference.runtime import (
@@ -772,10 +772,21 @@ class InferenceServer:
         @app.get("/v1/models")
         async def list_models() -> dict:
             model = Model(id=model_name, object="model", created=int(time.time()), owned_by="levanter")
+            version, policy_id = inference_context.policy_identity()
             return {
                 "object": "list",
                 "data": [
-                    {**model.model_dump(mode="json"), "max_model_len": inference_context.engine.config.max_seq_len}
+                    {
+                        **model.model_dump(mode="json"),
+                        "max_model_len": inference_context.config.service.max_seq_len,
+                        "model_version": version,
+                        "policy_id": policy_id,
+                        "levanter": {
+                            "binary_generate": GENERATE_PATH,
+                            "policy_logprobs": inference_context.config.service.return_policy_logprobs,
+                            "route_captures": inference_context.config.capture_routes,
+                        },
+                    }
                 ],
             }
 

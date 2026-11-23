@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 from haliax import Axis
 from jax.sharding import PartitionSpec as P
-from levanter.grug.attention import AttentionMask, token_validity_from_attention_mask
+from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
@@ -91,19 +91,15 @@ def _capture_snowball(model: SnowballLMHeadModel, tokens: jax.Array) -> list[np.
     """Per-block hidden states for the Snowball transformer (mirrors its __call__)."""
     tf = model.transformer
     cfg = tf.config
-    mask = AttentionMask.causal()
     short = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=None)
     long = AttentionMask(is_causal=True, sliding_window=None, segment_ids=None)
-    token_valid = token_validity_from_attention_mask(
-        mask, batch_size=tokens.shape[0], sequence_length=tokens.shape[1]
-    ).reshape(-1)
     hidden = tf.token_embed.at[tokens].get(out_sharding=_EMBED_SPEC)
     hidden = tf.embed_gated_norm(tf.embed_norm(hidden))
     outs = [hidden]
     n = len(tf.blocks)
     for i, block in enumerate(tf.blocks):
         is_long = i % 4 == 3 or i == n - 1
-        hidden = block(hidden, short, long, is_long, token_valid)
+        hidden = block(hidden, short, long, is_long)
         outs.append(hidden)
     outs.append(tf.final_gated_norm(tf.final_norm(hidden)))
     return outs

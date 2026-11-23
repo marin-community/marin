@@ -118,11 +118,12 @@ def test_june_public_loss_replays_cached_snowball_routes_under_jit():
         max_seq_len=8,
         sliding_window=4,
         attention_implementation="reference",
-        inference_attention_implementation="reference",
         moe_implementation="scatter",
     )
     serving_config_values = {field.name: getattr(config, field.name) for field in dataclasses.fields(SnowballConfig)}
-    serving_config = SnowballConfig(**serving_config_values)
+    serving_config = dataclasses.replace(
+        SnowballConfig(**serving_config_values), inference_attention_implementation="reference"
+    )
     batch = Axis("batch", 1)
     position = Axis("position", 4)
     serving_ids = hax.named(jnp.asarray([2, 5, 7, 11], dtype=jnp.int32), "position")
@@ -155,8 +156,9 @@ def test_june_public_loss_replays_cached_snowball_routes_under_jit():
             batch_info=serving_info,
         )
         later_layer_bad_routes = list(replay_capture.route_captures)
+        valid = later_layer_bad_routes[1].token_valid
         later_layer_bad_routes[1] = later_layer_bad_routes[1]._replace(
-            token_valid=later_layer_bad_routes[1].token_valid.at[0].set(False)
+            token_valid=valid.at[0].set(False, out_sharding=valid.sharding)
         )
         mismatched_validity_capture = replay_capture._replace(route_captures=tuple(later_layer_bad_routes))
         june_model = JuneSnowballLMHeadModel.init(
