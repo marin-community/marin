@@ -19,9 +19,6 @@ from taskforge.stages.author import AuthorReference
 from taskforge.stages.classify import replayable_grade
 from taskforge.wiring import install
 
-FIXTURE_WORDING = "The string ``answer`` field of a JSON object in the final assistant message."
-"""The ``JsonAnswer`` description shown to the authors of the journal fixtures that record no author reference."""
-
 
 def reword(monkeypatch: pytest.MonkeyPatch, description: str) -> None:
     """Install a TaskCompendium whose ``JsonAnswer`` description reads ``description``."""
