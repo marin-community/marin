@@ -183,7 +183,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   workspace and the model gets the head plus the path.
 
 Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the pinned
-`TaskSpec` and control reference (`defaults/author-reference-v1.json`), and the adversary's user prompt renders the task without file
+`TaskSpec` and control reference (`defaults/author-reference-v2.json`), and the adversary's user prompt renders the task without file
 payloads (they are in the workdir).
 
 ## Environments
