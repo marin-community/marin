@@ -61,7 +61,15 @@ from taskforge.llm.glm_provider import EndpointSource
 from taskforge.llm.policy import GLM_5_3, LLMPolicy, ModelProfile
 from taskforge.model.content_hash import digest
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
-from taskforge.model.review import VALIDATION_RESULT, Cause, EvidenceKind, Incomplete, MissingEvidence, TrialOutcome
+from taskforge.model.review import (
+    VALIDATION_RESULT,
+    Accept,
+    Cause,
+    EvidenceKind,
+    Incomplete,
+    MissingEvidence,
+    TrialOutcome,
+)
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation, Terminal, Workpiece
 from taskforge.policy import Policy
@@ -729,7 +737,7 @@ async def test_a_time_limited_trial_is_a_typed_failed_trial_no_later_launch_buys
     assert (trial.cause, trial.outcome, trial.grade) == (Cause.TIME_LIMIT, TrialOutcome.TIME_LIMIT, grade)
     assert first.solver.runs.count((1, 0)) == 1 and (1, 0) not in last.solver.runs
     assert sorted(last.solver.runs) == sorted({*outage, *confirmed(1)} - finished(first))
-    accepted = wp.decisions[-1]
+    assert isinstance(accepted := wp.decisions[-1], Accept)
     assert "Counted unsolved without a gradable answer: 1 time_limit" in accepted.reasons
     assert "Confirmation: 4 of 8 trials solved: in_band" in accepted.reasons
     assert trial_outcomes(wp) == {TrialOutcome.GRADED: 7, TrialOutcome.TIME_LIMIT: 1}  # each slot once
@@ -748,7 +756,8 @@ async def test_an_attempt_cap_slot_is_unscored_and_no_later_launch_buys_it_again
     trial = wp.evidence[0].solver[1]
     assert (trial.cause, trial.outcome, trial.grade) == (Cause.ATTEMPT_CAP, TrialOutcome.UNSCORED, None)
     assert sorted(last.solver.runs) == [(2, 0), *confirmed(1, placed=2)]
-    assert "1 of 3 solver trials have no score; placed over 2" in wp.decisions[0].reasons
+    assert isinstance(accepted := wp.decisions[0], Accept)
+    assert "1 of 3 solver trials have no score; placed over 2" in accepted.reasons
 
 
 async def test_a_changed_time_limit_is_another_plan_and_the_old_limit_returns_to_its_visits(launches: Driver) -> None:
@@ -771,7 +780,8 @@ async def test_explicit_resume_replaces_only_the_live_parked_slots(launches: Dri
     """Validation tolerated parked slot 2 and accepted; two confirmation slots parked past the allowance, a manual
     hold. ``--resume-held`` buys only those two, never the slot the accepted visit committed."""
     settings = {"solver.k": 3, "budget.max_missing_trials": 1}
-    first = launch(Paid(**{parked: {(2, 0), (3, 1), (4, 1)}}))
+    slots = {(2, 0), (3, 1), (4, 1)}
+    first = launch(Paid(refused=slots) if parked == "refused" else Paid(capped=slots))
     assert await launches.run(first, settings) == 0
     held = published_workpiece(launches.root)
     assert held.terminal is Terminal.HELD and kinds(held) == ["accept", "incomplete"]
