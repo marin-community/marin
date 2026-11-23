@@ -1364,8 +1364,8 @@ def test_snowball_paged_routes_replay_into_learner():
     np.testing.assert_allclose(logits.array[:5], replayed.array[:5], atol=2e-5, rtol=2e-5)
 
 
-@pytest.mark.parametrize("compact_window", [False, True])
-def test_snowball_engine_capture_preserves_samples_and_predictor_routes(compact_window):
+@pytest.mark.parametrize("compact_window, retain_prompts", [(False, False), (True, False), (True, True)])
+def test_snowball_engine_capture_preserves_samples_and_predictor_routes(compact_window, retain_prompts, monkeypatch):
     cfg = _tiny_config(num_layers=2)
     with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(21))
@@ -1378,6 +1378,8 @@ def test_snowball_engine_capture_preserves_samples_and_predictor_routes(compact_
                 max_seq_len=16,
                 max_pages=32,
                 window_cache_max_pages=22 if compact_window else None,
+                max_retained_prompts=2 if retain_prompts else 0,
+                prefill_bucket_sizes=(2, 6),
                 max_rounds=2,
                 page_size=2,
                 compute_dtype=jnp.float32,
@@ -1393,6 +1395,25 @@ def test_snowball_engine_capture_preserves_samples_and_predictor_routes(compact_
         plain = engine.generate(requests)
         captured = engine.generate(requests, capture_routes=True)
         assert captured.expert_routes is not None
+        if retain_prompts:
+            submitted = []
+            prefill = engine._prefill_prompts
+
+            def record_prefill(*args):
+                work = prefill(*args)
+                if work is not None:
+                    submitted.append(int(work.queue.num_queued_tokens))
+                return work
+
+            monkeypatch.setattr(engine, "_prefill_prompts", record_prefill)
+            warm = engine.generate(requests, capture_routes=True)
+            assert submitted == [1]
+            assert warm.tokens == captured.tokens
+            np.testing.assert_allclose(warm.logprobs, captured.logprobs, atol=1e-5, rtol=0)
+            assert warm.expert_routes is not None
+            np.testing.assert_array_equal(warm.expert_routes[0].expert_ids, captured.expert_routes[0].expert_ids)
+            np.testing.assert_array_equal(warm.expert_routes[0].valid, captured.expert_routes[0].valid)
+
         assert captured.tokens == plain.tokens
         np.testing.assert_allclose(captured.logprobs, plain.logprobs, atol=1e-5, rtol=0)
         for generated, scores, routes in zip(captured.tokens, captured.logprobs, captured.expert_routes, strict=True):

@@ -14,6 +14,13 @@ from levanter.inference.utils import INVALID, is_valid
 __all__ = ["PageTable", "PageTableSpec", "PageBatchInfo"]
 
 
+def kv_pages_for_request(prompt_tokens: int, max_sequence_tokens: int, choices: int, page_size: int) -> int:
+    """Bound KV usage across choices that share their full prompt pages."""
+    shared = prompt_tokens // page_size
+    per_sequence = (max(prompt_tokens, max_sequence_tokens) + page_size - 1) // page_size
+    return shared + choices * (per_sequence - shared)
+
+
 @dataclasses.dataclass(frozen=True)
 class PageTableSpec:
     """Lightweight description of the layout required for allocating paged KV caches."""

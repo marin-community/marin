@@ -21,6 +21,7 @@ class WindowPageMap(eqx.Module):
     logical_to_window: jax.Array
     window_to_logical: jax.Array
     next_slot: jax.Array
+    terminal_pins: jax.Array
     window: int = eqx.field(static=True)
 
     @staticmethod
@@ -29,6 +30,7 @@ class WindowPageMap(eqx.Module):
             jnp.full(logical_pages, INVALID, jnp.int32),
             jnp.full(window_pages, INVALID, jnp.int32),
             jnp.asarray(0, jnp.int32),
+            jnp.zeros(logical_pages, jnp.bool_),
             window,
         )
 
@@ -74,7 +76,7 @@ class WindowPageMap(eqx.Module):
         batch_keep = (jnp.arange(batch_lens.shape[0])[:, None] < batch.num_seqs) & (columns >= batch_start)
         batch_pages = jnp.where(batch_keep, batch.page_indices.array, INVALID)
 
-        pinned = jnp.zeros(global_pages, jnp.bool_)
+        pinned = self.terminal_pins
         pinned = pinned.at[live_pages].set(True, mode="drop")
         pinned = pinned.at[batch_pages].set(True, mode="drop")
 
