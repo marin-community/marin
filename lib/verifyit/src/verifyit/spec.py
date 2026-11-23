@@ -12,20 +12,18 @@ or missing fields; ``render_spec`` writes it back. Paths in a spec (``schema``, 
 
 import dataclasses
 import json
-import tomllib
 from dataclasses import dataclass, field, fields
-from enum import StrEnum
-from typing import Any
-
-import tomli_w
+from typing import Any, get_origin
 
 from verifyit.closure_scoring import ClosureFormat
+from verifyit.compat import StrEnum, tomllib
 from verifyit.json_comparison import JsonValue, NumericTypePolicy
 from verifyit.json_objects import unique_object
 
 DEFAULT_REWARD_KEY = "reward"
 DEFAULT_OUTPUT = "/app/answer.txt"
 DEFAULT_WORKSPACE = "/app"
+API_DEFAULT_TEMPERATURE = "API default"
 
 
 class Mode(StrEnum):
@@ -91,6 +89,17 @@ class EmptyOutputPolicy(StrEnum):
     GRADE = "grade"
 
 
+class McqExtraction(StrEnum):
+    """How an MCQ grader finds the chosen option in the output.
+
+    ``ANSWER_LINE`` reads the last ``Answer: X`` line or a bare letter. ``SUPERGPQA_REFERENCE``
+    reproduces the SuperGPQA runner's zero-shot extraction, including its option-text fallback.
+    """
+
+    ANSWER_LINE = "answer_line"
+    SUPERGPQA_REFERENCE = "supergpqa_reference"
+
+
 @dataclass(frozen=True)
 class FunctionCall:
     """A function name and decoded JSON argument object, without a harness call ID."""
@@ -137,6 +146,9 @@ class McqSpec:
     options: int = 4
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+    extraction: McqExtraction = field(default=McqExtraction.ANSWER_LINE, kw_only=True)
+    # The text of each option, in letter order; the SuperGPQA extraction maps matched option text to its letter.
+    option_texts: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -147,6 +159,7 @@ class MathSpec:
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
     profile: MathProfile = MathProfile.ANCHORED
     allow_additive_constant: bool = False
+    positive_symbols: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -302,7 +315,9 @@ class GotestSpec:
 RUBRIC_REFERENCE = "reference"
 RUBRIC_CHECKLIST = "checklist"
 RUBRIC_LABELS = "labels"
-RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS})
+RUBRIC_ANSWERS = "answers"
+RUBRIC_PAIRWISE = "pairwise"
+RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_ANSWERS, RUBRIC_PAIRWISE})
 
 
 class JudgeCompletionPolicy(StrEnum):
@@ -316,9 +331,17 @@ class JudgeSpec:
 
     Rubric ``reference`` asks whether the answer matches any of ``references``, after an exact
     gate that answers verbatim matches without a model call. Rubric ``checklist`` asks one yes/no
-    question per entry of ``criteria`` and scores the fraction answered yes. ``context`` names a
+    question per entry of ``criteria`` and scores the fraction answered yes. Rubric ``answers`` asks
+    for one JSON verdict per entry of ``references`` in a single call and scores 1 only when every
+    reference is matched; its detail records the matched fraction as ``partial_credit``. ``context`` names a
     file under the tests directory (a conversation transcript, say) shown to the judge alongside the
     answer. ``constraints`` are IFEval checks that must all pass before the judge is consulted.
+
+    Rubric ``pairwise`` compares the answer with the single baseline in ``references`` twice, once
+    in each position, as Arena-Hard does. ``prompt_template`` places the two answers with
+    ``{answer_a}`` and ``{answer_b}``. The last match of the first ``verdict_patterns`` entry that
+    matches the reply names a verdict, ``label_scores`` gives assistant A's score for it, and
+    ``label_weights`` repeats it as several games (Arena-Hard counts a decisive verdict three times).
     """
 
     references: tuple[str, ...] = ()
@@ -330,7 +353,7 @@ class JudgeSpec:
     model: str = ""
     exact_gate: bool = True
     request_timeout: float = 120.0
-    transport_attempts: int = field(default=1, kw_only=True)
+    transport_attempts: int = field(default=3, kw_only=True)
     transport_budget: float = field(default=180.0, kw_only=True)
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
@@ -349,6 +372,13 @@ class JudgeSpec:
     label_scan: str = "literal"
     label_case: str = "sensitive"
     api: str = "chat_completions"
+    context_char_limit: int = field(default=60_000, kw_only=True)
+    max_turns: int = field(default=1, kw_only=True)
+    temperature: float | None = field(default=0.0, kw_only=True)
+    parse_attempts: int = field(default=2, kw_only=True)
+    chat_template_kwargs: dict[str, str] = field(default_factory=dict, kw_only=True)
+    verdict_patterns: tuple[str, ...] = field(default=(), kw_only=True)
+    label_weights: dict[str, float] = field(default_factory=dict, kw_only=True)
 
 
 class JudgeRuntimeSource(StrEnum):
@@ -487,7 +517,19 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
         return tuple(value)
     if annotation == tuple[Constraint, ...]:
         return tuple(Constraint(name=c["name"], params=dict(c.get("params", {}))) for c in value)
-    if isinstance(annotation, type) and issubclass(annotation, StrEnum):
+    if annotation == dict[str, float]:
+        if not isinstance(value, dict):
+            raise ValueError(f"field {name!r} expects a table of numbers")
+        return {key: _coerced_float(name, item) for key, item in value.items()}
+    if annotation == dict[str, dict[str, float]]:
+        if not isinstance(value, dict) or any(not isinstance(inner, dict) for inner in value.values()):
+            raise ValueError(f"field {name!r} expects a table of number tables")
+        return {
+            key: {inner_key: _coerced_float(name, item) for inner_key, item in inner.items()}
+            for key, inner in value.items()
+        }
+    # typing.get_origin excludes parameterized generics: on 3.10 they still report as ``type``.
+    if get_origin(annotation) is None and isinstance(annotation, type) and issubclass(annotation, StrEnum):
         return annotation(value)
     if annotation is float and type(value) is int:
         try:
@@ -505,9 +547,18 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
             raise ValueError(f"field {name!r} is outside the float range") from error
     if annotation is int and type(value) is not int:
         raise ValueError(f"field {name!r} expects an integer")
-    if isinstance(annotation, type) and not isinstance(value, annotation):
+    if get_origin(annotation) is None and isinstance(annotation, type) and not isinstance(value, annotation):
         raise ValueError(f"field {name!r} expects {annotation.__name__}, got {type(value).__name__}")
     return value
+
+
+def _coerced_float(name: str, value: Any) -> float:
+    if type(value) not in (int, float):
+        raise ValueError(f"field {name!r} expects a number")
+    try:
+        return float(value)
+    except OverflowError as error:
+        raise ValueError(f"field {name!r} is outside the float range") from error
 
 
 def spec_from_table(table: dict[str, Any]) -> Spec:
@@ -520,7 +571,19 @@ def spec_from_table(table: dict[str, Any]) -> Spec:
     unknown = sorted(set(table) - set(declared) - {"mode"})
     if unknown:
         raise ValueError(f"mode {mode} does not accept {unknown}")
-    values = {name: _coerce(name, f.type, table[name]) for name, f in declared.items() if name in table}
+    values = {
+        name: _coerce(
+            name,
+            f.type,
+            (
+                None
+                if mode is Mode.JUDGE and name == "temperature" and table[name] == API_DEFAULT_TEMPERATURE
+                else table[name]
+            ),
+        )
+        for name, f in declared.items()
+        if name in table
+    }
     missing = [
         n
         for n, f in declared.items()
@@ -549,6 +612,9 @@ def spec_to_table(spec: Spec) -> dict[str, Any]:
     table: dict[str, Any] = {"mode": mode_of(spec).value}
     for f in fields(spec):
         value = getattr(spec, f.name)
+        if isinstance(spec, JudgeSpec) and f.name == "temperature" and value is None:
+            table[f.name] = API_DEFAULT_TEMPERATURE
+            continue
         if value is None and f.default is None:
             continue
         if isinstance(value, tuple):
@@ -567,4 +633,8 @@ def render_spec(spec: Spec) -> str:
         ]
     if isinstance(spec, StructuredExactSpec):
         table["expected"] = json.dumps(spec.expected, allow_nan=False)
+    # Rendering is host-side staging; the grader machine never imports this, so the
+    # writer dependency stays off the machine's interpreter.
+    import tomli_w  # noqa: PLC0415
+
     return tomli_w.dumps(table)

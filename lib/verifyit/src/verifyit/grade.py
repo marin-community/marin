@@ -12,13 +12,13 @@ import sys
 import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
 from fractions import Fraction
 from functools import cache
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from verifyit.compat import StrEnum
 from verifyit.file_ops.read import read_text
 from verifyit.numeric import MAX_NUMERIC_DIGITS, numeric_literal
 from verifyit.spec import (
@@ -163,38 +163,6 @@ def aggregate_rewards(
         scale = 10**round_digits
         reward = round(reward * scale) / scale
     return scored(reward, passed=passed, total=expected_total, missing=expected_total - len(validated))
-
-
-def aggregate_first_fit(verdicts: Sequence[Sequence[Reward]], *, expected_total: int) -> Reward:
-    """Require a first-fit one-to-one assignment of binary primitive grades.
-
-    Rows and columns retain caller-declared order. Each row consumes its first
-    still-unused passing column; this is deliberately not maximum matching.
-    Validate every edge before selection, including edges that selection would
-    not visit. Missing or extra candidate dimensions score zero, ragged matrices
-    are infrastructure failures, and an empty trusted assignment is invalid.
-    """
-    if type(expected_total) is not int or expected_total <= 0:
-        return invalid_task("expected_total must be a positive integer")
-    columns = len(verdicts[0]) if verdicts else 0
-    if any(len(row) != columns for row in verdicts):
-        return infra_error("assignment grades must form a rectangular matrix")
-    edges = [verdict for row in verdicts for verdict in row]
-    if edges:
-        admission = aggregate_rewards(edges, expected_total=len(edges), policy=Aggregation.ALL)
-        if admission.status != Status.SCORED:
-            return admission
-        if any(verdict.reward not in (0.0, 1.0) for verdict in edges):
-            return infra_error("assignment requires binary primitive grades")
-    if len(verdicts) != expected_total or columns != expected_total:
-        return scored(0.0, reason="assignment_cardinality", rows=len(verdicts), columns=columns, total=expected_total)
-    used: set[int] = set()
-    for row in verdicts:
-        match = next((index for index, verdict in enumerate(row) if index not in used and verdict.reward == 1.0), None)
-        if match is None:
-            return scored(0.0, matched=len(used), total=expected_total)
-        used.add(match)
-    return scored(1.0, matched=len(used), total=expected_total)
 
 
 def invalid_task(message: str) -> Reward:

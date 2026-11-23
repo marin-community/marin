@@ -48,7 +48,7 @@ from levanter.compat.hf_checkpoints import (
     ModelWithHfSerializationMixin,
     VisionModelWithHfSerializationMixin,
     HfLmCheckpointConverter,
-    HfVisionLmCheckpointConverter,
+    HfVisionCheckpointConverter,
     RepoRef,
     _causal_lm_architecture_name,
     _convert_to_jnp,
@@ -143,6 +143,8 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     (reference / "configuration_custom.py").write_bytes(b"CUSTOM_ARCHITECTURE = True\n")
     (reference / "nested/modeling_custom.py").write_bytes(b"CUSTOM_MODEL = True\n")
     (reference / ".git/config").write_bytes(b"git metadata")
+    (reference / ".verified-copy-manifest.json").write_bytes(b'{"files": ["initializer weights"]}')
+    (reference / ".cache_metadata.json").write_bytes(b'{"source_revision": "initializer"}')
     (reference / "reference-weights.safetensors").write_bytes(b"stale weights")
     (reference / "pytorch_model.bin").write_bytes(b"stale torch weights")
     (reference / "pytorch_model-00001-of-00002.bin").write_bytes(b"stale torch shard")
@@ -164,6 +166,8 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     assert (tmp_path / "configuration_custom.py").read_bytes() == b"CUSTOM_ARCHITECTURE = True\n"
     assert (tmp_path / "nested/modeling_custom.py").read_bytes() == b"CUSTOM_MODEL = True\n"
     assert not (tmp_path / ".git/config").exists()
+    assert not (tmp_path / ".verified-copy-manifest.json").exists()
+    assert not (tmp_path / ".cache_metadata.json").exists()
     assert not (tmp_path / "reference-weights.safetensors").exists()
     assert not (tmp_path / "pytorch_model.bin").exists()
     assert not (tmp_path / "pytorch_model-00001-of-00002.bin").exists()
@@ -803,11 +807,18 @@ class TinyVisionModel(ModuleWithStateDictSerialization, VisionModelWithHfSeriali
 @pytest.mark.parametrize("prefix", [None, "vision_model"])
 def test_vision_converter_restores_weights_and_missing_buffers(tmp_path, prefix):
     config = TinyVisionConfig(width=2)
-    config.to_hf_config().save_pretrained(tmp_path)
+    reference_config = config.to_hf_config()
+    reference_config.architectures = ["ReferenceVisionModel"]
+    reference_config.auto_map = {"AutoModel": "modeling_reference.ReferenceVisionModel"}
+    reference_config.save_pretrained(tmp_path)
     weights = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
     safetensors.numpy.save_file({with_prefix(prefix, "weight"): weights}, str(tmp_path / SAFE_TENSORS_MODEL))
-    converter = HfVisionLmCheckpointConverter(
-        TinyVisionConfig, reference_checkpoint=RepoRef(str(tmp_path)), HfConfigClass=HfViTConfig, ignore_prefix=prefix
+    converter = HfVisionCheckpointConverter(
+        TinyVisionConfig,
+        reference_checkpoint=str(tmp_path),
+        HfConfigClass=HfViTConfig,
+        config_overrides={"image_size": 32},
+        ignore_prefix=prefix,
     )
     pixels = jnp.array([2, 3, 4], dtype=jnp.float32)
     expected = np.array([20, 48], dtype=np.float32)
@@ -816,9 +827,27 @@ def test_vision_converter_restores_weights_and_missing_buffers(tmp_path, prefix)
         np.testing.assert_allclose(eqx.filter_jit(lambda model: model(pixels))(loaded), expected)
         exported = tmp_path / "exported"
         converter.save_pretrained(loaded, str(exported), save_reference_code=False)
-        restored = converter.load_pretrained(TinyVisionModel, ref=RepoRef(str(exported)))
+        restored = converter.load_pretrained(TinyVisionModel, ref=str(exported))
         np.testing.assert_allclose(eqx.filter_jit(lambda model: model(pixels))(restored), expected)
     np.testing.assert_array_equal(safetensors.numpy.load_file(exported / SAFE_TENSORS_MODEL)["weight"], weights)
+    exported_config = HfViTConfig.from_pretrained(exported)
+    assert exported_config.image_size == 32
+    assert exported_config.architectures == ["ReferenceVisionModel"]
+    assert exported_config.auto_map == {"AutoModel": "modeling_reference.ReferenceVisionModel"}
+
+
+def test_vision_converter_accepts_dynamic_config_class_name(tmp_path):
+    (tmp_path / "configuration_test_vision.py").write_text(
+        "from transformers import ViTConfig\n\nclass CustomVisionConfig(ViTConfig):\n    pass\n"
+    )
+
+    converter = HfVisionCheckpointConverter(
+        TinyVisionConfig,
+        reference_checkpoint=str(tmp_path),
+        HfConfigClass="configuration_test_vision.CustomVisionConfig",
+    )
+
+    assert issubclass(converter.HfConfigClass, HfViTConfig)
 
 
 def test_vision_converter_exports_bundled_processor(tmp_path, local_gpt2_tokenizer_path):
@@ -826,7 +855,7 @@ def test_vision_converter_exports_bundled_processor(tmp_path, local_gpt2_tokeniz
         image_processor=transformers.CLIPImageProcessorPil(crop_size={"height": 48, "width": 48}),
         tokenizer=transformers.AutoTokenizer.from_pretrained(local_gpt2_tokenizer_path),
     )
-    converter = HfVisionLmCheckpointConverter(TinyVisionConfig, HfConfigClass=HfViTConfig, processor=processor)
+    converter = HfVisionCheckpointConverter(TinyVisionConfig, HfConfigClass=HfViTConfig, processor=processor)
     with use_test_mesh():
         model = TinyVisionModel.init(TinyVisionConfig(width=2), key=PRNGKey(0))
         converter.save_pretrained(model, str(tmp_path), save_reference_code=False)

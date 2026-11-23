@@ -191,9 +191,17 @@ and unavailable, timeout, corrupt, stale, or missing-bundle counters explain
 why pruning was declined. Several scans can share one request's counters.
 
 For log searches, `epoch_ms` is not the catalog key: `log` is keyed by task
-`key`. A time bound can therefore still require footer reads for old segments.
-When a known sequence window is available, bound `seq` as well to exclude
-segments from catalog metadata before either footer or index reads.
+`key`. The catalog also keeps each segment's `epoch_ms` min and max
+(`catalog_bounds` on the column), so a time bound drops the segments outside
+it before any footer or index read. Write the bound as an integer comparison on
+the bare column, such as
+`epoch_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '1 hour') * 1000 AS BIGINT)`;
+the unconverted `extract(epoch from now()) * 1000` form also works. A bound on
+an expression of the column, such as `to_timestamp_millis(epoch_ms)`, is not
+used. A segment written before the column had bounds is scanned until
+maintenance reads its footer; on an object-backed table this backfill reads a
+bounded batch per tick. A legacy-local table is always scanned. Bounding `seq` as well still excludes segments when a sequence window
+is known.
 
 An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
 carries a trigram index; otherwise it decodes the column for every row in the
@@ -605,7 +613,7 @@ a sender missing from this list is a sender whose rows are not arriving.
 ```bash
 uv run finelog query marin --format table \
   'SELECT cluster, count(*) AS rows FROM "log"
-   WHERE epoch_ms > (extract(epoch from now()) * 1000 - 600000)
+   WHERE epoch_ms > CAST(EXTRACT(EPOCH FROM now() - INTERVAL '\''10 minutes'\'') * 1000 AS BIGINT)
    GROUP BY cluster'
 ```
 
@@ -779,7 +787,7 @@ uv run finelog query marin --format table \
    WHERE name = '\''forwarding_seq_positions'\''
      AND json_get(attributes_json, '\''outcome'\'') IN
          ('\''permanent_rejection'\'', '\''retention_eviction'\'')
-     AND timestamp_ms > (extract(epoch from now()) * 1000 - 3600000)
+     AND timestamp_ms > CAST(EXTRACT(EPOCH FROM now() - INTERVAL '\''1 hour'\'') * 1000 AS BIGINT)
    GROUP BY bucket, cluster, namespace, outcome
    ORDER BY bucket, cluster, namespace, outcome'
 ```
@@ -861,6 +869,28 @@ records its rendered dashboard `window`; literal query files record `window: nul
 because their bounds come from their SQL. RPC wall time includes queueing;
 it does not isolate planner CPU. Keep the original Parquet files for the
 baseline and compare result digests before interpreting a sampled speedup.
+
+## Diagnosing blocked ingestion and registration
+
+A Ready pod can have a blocked storage path. A full blocking pool can prevent
+ingestion and publication while `/health` still returns `ok`. Compare visible,
+published, and settled positions in the table's Forwarding card. Inspect
+process threads when all three stop. The ingest buffer does not count queued
+RPC requests, so RSS can increase while the buffer stays small.
+
+Use WebSocket exec if the Kubernetes endpoint rejects SPDY upgrades:
+
+```bash
+KUBECTL_REMOTE_COMMAND_WEBSOCKETS=true kubectl \
+  --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  exec <pod> -c finelog -- cat /proc/1/status
+```
+
+[Incident 1046](https://marina.oa.dev/echo/wiki/1046) shows how to capture
+thread stacks from a temporary debug container with `SYS_PTRACE`. With a
+`node-local` cache, an approved container restart in the same pod keeps the
+`emptyDir` cache. Pod replacement discards that cache. Neither action keeps
+queued requests in process memory.
 
 ## Diagnosing Kubernetes mirror readiness
 

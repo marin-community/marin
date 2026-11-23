@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,6 @@ from daytona import (
     AsyncDaytona,
     CreateSnapshotParams,
     DaytonaConflictError,
-    DaytonaError,
     DaytonaNotFoundError,
     Image,
     Resources,
@@ -33,13 +33,13 @@ from daytona.common.snapshot import Snapshot
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.transient import retry_transient
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 
 SNAPSHOT_PREFIX = "shellbox-"
 SNAPSHOT_STALE_AFTER = timedelta(hours=1)
 SNAPSHOT_PAGE_SIZE = 100
-TRANSIENT_SNAPSHOT_STATUS = frozenset({502, 503, 504})
 FAILED_SNAPSHOT_STATES = frozenset({SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE})
 
 
@@ -164,25 +164,11 @@ def snapshot_request_for_spec(spec: MachineSpec) -> SnapshotRequest:
     )
 
 
-async def _snapshot_metadata(client: AsyncDaytona, name: str) -> Snapshot:
-    """Retry transient snapshot metadata reads within the caller's deadline."""
-    backoff = ExponentialBackoff(initial=1, maximum=2, factor=2, jitter=0)
-    attempts = 0
-    while True:
-        try:
-            return await client.snapshot.get(name)
-        except DaytonaError as error:
-            attempts += 1
-            if error.status_code not in TRANSIENT_SNAPSHOT_STATUS or attempts == 3:
-                raise
-            await asyncio.sleep(backoff.next_interval())
-
-
 async def ensure_snapshot(client: AsyncDaytona, request: SnapshotRequest) -> str:
     """Create or await the active snapshot identified by ``request``."""
     name = request.name
     try:
-        snapshot = await _snapshot_metadata(client, name)
+        snapshot = await retry_transient(lambda: client.snapshot.get(name))
     except DaytonaNotFoundError:
         try:
             snapshot = await client.snapshot.create(
@@ -190,13 +176,13 @@ async def ensure_snapshot(client: AsyncDaytona, request: SnapshotRequest) -> str
             )
         except DaytonaConflictError:
             # Another rollout can create this image through a separate client.
-            snapshot = await _snapshot_metadata(client, name)
+            snapshot = await retry_transient(lambda: client.snapshot.get(name))
     backoff = ExponentialBackoff(initial=1, maximum=10)
     while snapshot.state != SnapshotState.ACTIVE:
         if snapshot.state in FAILED_SNAPSHOT_STATES:
             raise RuntimeError(f"Daytona snapshot {name} is {snapshot.state}: {snapshot.error_reason}")
         await asyncio.sleep(backoff.next_interval())
-        snapshot = await _snapshot_metadata(client, name)
+        snapshot = await retry_transient(lambda: client.snapshot.get(name))
     return name
 
 
@@ -312,7 +298,7 @@ async def purge_stale_snapshots(
             referenced_kept.append(name)
             continue
         try:
-            current = await _snapshot_metadata(client, name)
+            current = await retry_transient(partial(client.snapshot.get, name))
         except DaytonaNotFoundError:
             continue
         current_class = classify_snapshot(current, now=observed_at, minimum_idle=minimum_idle)

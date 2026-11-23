@@ -50,8 +50,10 @@ from jaxtyping import Array, PRNGKeyArray
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
 from tqdm_loggable.auto import tqdm
 
+from levanter.model_cache import DEFAULT_COMPLETE_MARKER
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
 from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
@@ -110,7 +112,7 @@ def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
     return f"hf://{model_id}"
 
 
-def _is_hf_model_id(path: str) -> bool:
+def is_hf_model_id(path: str) -> bool:
     """Check if a path looks like a HuggingFace model ID (not a URL or local path)."""
     # If it contains "://", it's already a URL
     if "://" in path:
@@ -556,7 +558,7 @@ class HfCheckpointIO(Generic[LevConfig]):
     """Whether to allow Hugging Face to execute custom code from the checkpoint repository."""
 
     ignore_prefix: Optional[str] = None
-    """Prefix to strip from checkpoint keys, such as transformer for GPT-2."""
+    """Prefix to strip when checkpoints differ between a pretrained base model and its task-specific head."""
 
     @staticmethod
     def _infer_config_class(hf_config_class, ref, trust_remote_code):
@@ -634,7 +636,7 @@ class HfCheckpointIO(Generic[LevConfig]):
             return self._load_from_remote(id, dtype)
 
         # Convert HF model IDs to hf:// URLs and stream directly
-        if _is_hf_model_id(id):
+        if is_hf_model_id(id):
             hf_url = _convert_to_hf_url(id, rev)
             logger.info(f"Loading from HuggingFace Hub: {hf_url}")
             return self._load_from_remote(hf_url, dtype)
@@ -770,6 +772,35 @@ class HfCheckpointIO(Generic[LevConfig]):
             config_overrides = cast(dict, mergedeep.merge({}, self.config_overrides, config_overrides))
         return dataclasses.replace(self, config_overrides=config_overrides)  # type: ignore
 
+    def _merge_hf_config(self, config: HfConfig, *, fallback_architecture: Optional[str] = None) -> dict:
+        """Merge reference metadata and explicit overrides into an exported config."""
+        dict_config = config.to_dict()
+
+        try:
+            base_config = self.default_hf_config
+        except ValueError:
+            base_config = None
+            logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
+        except OSError as e:
+            warnings.warn(
+                f"Could not load reference HF config from {self.reference_checkpoint!r} ({type(e).__name__});"
+                " saving with locally generated config metadata."
+            )
+            base_config = None
+            if fallback_architecture is not None:
+                dict_config["architectures"] = [fallback_architecture]
+
+        if base_config is not None:
+            for key in KEYS_TO_COPY_FROM_BASE_CONFIG:
+                value = getattr(base_config, key, None)
+                if value is not None:
+                    dict_config[key] = value
+
+        if self.config_overrides:
+            dict_config = cast(dict, mergedeep.merge({}, dict_config, self.config_overrides))
+
+        return dict_config
+
     def _resolve_save_reference_code(self, save_reference_code: Optional[bool]) -> bool:
         """Determine whether reference code should be bundled with the checkpoint."""
         #  the way we determine this is if the config class is in the HF package or not
@@ -846,6 +877,8 @@ class HfCheckpointIO(Generic[LevConfig]):
                 "pytorch_model.bin",
                 "pytorch_model-*.bin",
                 "pytorch_model.bin.index.json",
+                COMPLETION_MANIFEST,
+                DEFAULT_COMPLETE_MARKER,
             ]
         )
         if _is_url_like(repo):
@@ -1255,48 +1288,31 @@ class HfLmCheckpointConverter(HfCheckpointIO[MConfig]):
             return model_cls.init(Vocab, config, key=PRNGKey(0))
 
         lev_model = _load_pretrained_model(self, initialize, ref, axis_mapping, dtype)
-        if Vocab.size != tokenizer_Vocab.size and resize_vocab_to_match_tokenizer:
+        if Vocab.size != tokenizer_Vocab.size:
+            logger.info(
+                "Model vocab size (%d) does not match tokenizer vocab size (%d).",
+                Vocab.size,
+                tokenizer_Vocab.size,
+            )
+            if resize_vocab_to_match_tokenizer:
+                logger.info("Resizing model vocabulary to %d tokens.", tokenizer_Vocab.size)
 
-            @haliax.named_jit(axis_resources=axis_mapping, out_axis_resources=axis_mapping)
-            def resize(model):
-                return model.resize_vocab(tokenizer_Vocab.size)
+                @haliax.named_jit(axis_resources=axis_mapping, out_axis_resources=axis_mapping)
+                def resize(model):
+                    return model.resize_vocab(tokenizer_Vocab.size)
 
-            lev_model = resize(lev_model)
+                lev_model = resize(lev_model)
+            else:
+                logger.info("Leaving model vocabulary unchanged.")
         return lev_model
 
     def _build_hf_config_dict(self, model: ModelWithHfSerializationMixin) -> dict:
         """Construct the Hugging Face config dictionary for the provided model."""
         config = model.config.to_hf_config(model.Vocab.size)
-        dict_config = config.to_dict()
-
-        try:
-            base_config = self.default_hf_config
-        except ValueError:
-            # Training-from-scratch runs may intentionally omit a reference checkpoint. In that case, we can't pull
-            # metadata like `architectures` from an upstream config; the config produced by `to_hf_config()` is still
-            # sufficient for most built-in architectures.
-            base_config = None
-            logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
-        except OSError as e:
-            # The reference config could not be read: the repo is gated, or the Hub is unreachable
-            # (HF outage, or HF_HUB_OFFLINE in CI). Every HF/transformers "can't fetch" error is an
-            # OSError subclass. We can still save: `to_hf_config()` already produced a complete config,
-            # so an HF outage never blocks a save. Record `architectures` from the model type (torch-free)
-            # so the checkpoint stays loadable.
-            warnings.warn(
-                f"Could not load reference HF config from {self.reference_checkpoint!r} ({type(e).__name__});"
-                " saving with architecture metadata derived from the model type."
-            )
-            base_config = None
-            architecture = _causal_lm_architecture_name(self.HfConfigClass)
-            if architecture is not None:
-                dict_config["architectures"] = [architecture]
-
-        if base_config is not None:
-            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
-                attr = getattr(base_config, k, None)
-                if attr is not None:
-                    dict_config[k] = attr
+        dict_config = self._merge_hf_config(
+            config,
+            fallback_architecture=_causal_lm_architecture_name(self.HfConfigClass),
+        )
 
         if self.tokenizer:
             tokenizer_dependent_config = {}
@@ -1314,9 +1330,6 @@ class HfLmCheckpointConverter(HfCheckpointIO[MConfig]):
             if len(suppress_tokens) > 0:
                 tokenizer_dependent_config["begin_suppress_tokens"] = list(set(suppress_tokens))
             dict_config = mergedeep.merge({}, dict_config, tokenizer_dependent_config)
-
-        if self.config_overrides:
-            dict_config = mergedeep.merge({}, dict_config, self.config_overrides)
 
         dict_config = _add_legacy_rope_keys(dict_config)
 
@@ -1431,7 +1444,7 @@ class HfLmCheckpointConverter(HfCheckpointIO[MConfig]):
 
 
 @dataclass_with_default_init(frozen=True)
-class HfVisionLmCheckpointConverter(HfCheckpointIO[VisionConfig]):
+class HfVisionCheckpointConverter(HfCheckpointIO[VisionConfig]):
     """Convert standalone vision encoder checkpoints."""
 
     processor: Optional["ProcessorMixin | BaseImageProcessor"] = None
@@ -1439,18 +1452,19 @@ class HfVisionLmCheckpointConverter(HfCheckpointIO[VisionConfig]):
     def __init__(
         self,
         LevConfigClass: Type[VisionConfig],
-        reference_checkpoint: Optional[RepoRef] = None,
-        HfConfigClass: Optional[Type] = None,
+        reference_checkpoint: Optional[Union[RepoRef, str]] = None,
+        HfConfigClass: Optional[Union[str, Type]] = None,
         config_overrides: Optional[dict] = None,
         trust_remote_code: bool = False,
         ignore_prefix: Optional[str] = None,
         *,
         processor: Optional["ProcessorMixin | BaseImageProcessor"] = None,
     ):
-        hf_class = self._infer_config_class(HfConfigClass, reference_checkpoint, trust_remote_code)
+        ref = _coerce_to_rr(reference_checkpoint) if reference_checkpoint is not None else None
+        hf_class = self._infer_config_class(HfConfigClass, ref, trust_remote_code)
         self.__default_init__(  # type: ignore
             LevConfigClass=LevConfigClass,
-            reference_checkpoint=reference_checkpoint,
+            reference_checkpoint=ref,
             HfConfigClass=hf_class,
             config_overrides=config_overrides,
             trust_remote_code=trust_remote_code,
@@ -1461,7 +1475,7 @@ class HfVisionLmCheckpointConverter(HfCheckpointIO[VisionConfig]):
     def load_pretrained(
         self,
         model_cls: Type[VisionModelWithHfSerializationMixin[VisionConfig]],
-        ref: Optional[RepoRef] = None,
+        ref: Optional[Union[str, RepoRef]] = None,
         config: Optional[VisionConfig] = None,
         axis_mapping: Optional[ResourceMapping] = None,
         dtype: Optional[jnp.dtype] = None,
@@ -1488,7 +1502,7 @@ class HfVisionLmCheckpointConverter(HfCheckpointIO[VisionConfig]):
         **hf_upload_kwargs,
     ) -> None:
         """Export weights and vision configuration in Hugging Face format."""
-        config = model.config.to_hf_config(config_overrides=self.config_overrides).to_dict()
+        config = self._merge_hf_config(model.config.to_hf_config())
         self._save_pretrained(
             model,
             path,

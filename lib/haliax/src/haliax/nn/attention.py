@@ -11,7 +11,7 @@ from jaxtyping import PRNGKeyArray
 
 import haliax
 import haliax.random as hrandom
-from haliax.axis import Axis, AxisSelection, AxisSelector, axis_name, axis_spec_to_shape_dict
+from haliax.axis import Axis, AxisSelection, AxisSelector, axis_spec_to_shape_dict
 from haliax.core import NamedArray
 from haliax.types import PrecisionLike
 
@@ -123,18 +123,6 @@ def dot_product_attention(
     )
 
     return haliax.dot(weights, value, axis=KPos)
-
-
-def _get_query_pos_renames(Pos):
-    new_Pos: list[Axis] = []
-    renames: dict[str, str] = {}
-    for i, axis in enumerate(Pos):
-        ax_name = axis_name(axis)
-        axis = axis.alias(f"q_{ax_name}")
-        renames[ax_name] = axis.name
-        new_Pos.append(axis)
-
-    return tuple(new_Pos), renames
 
 
 def mask_to_bias(mask: NamedArray, mask_value: float = -1e9) -> NamedArray:

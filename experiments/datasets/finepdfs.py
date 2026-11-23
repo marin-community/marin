@@ -65,21 +65,6 @@ def finepdfs_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Artifac
     }
 
 
-def finepdfs_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
-    """Tokenized FinePDFs validation data per language."""
-    raw = _finepdfs_raw()
-    return {
-        "eng_Latn": tokenized(
-            "finepdfs/eng_Latn_val",
-            tokenizer=tokenizer,
-            raw=raw,
-            glob="data/eng_Latn/test/*.parquet",
-            validation=True,
-            version="2026.06.28",
-        )
-    }
-
-
 def finepdfs_edu_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """Tokenized FinePDFs-edu train data per language."""
     raw = _finepdfs_edu_raw()

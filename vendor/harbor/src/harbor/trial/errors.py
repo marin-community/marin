@@ -13,6 +13,10 @@ class AgentDiskFullError(RuntimeError):
     """The sandbox ran out of disk space during agent execution."""
 
 
+class AgentCommandOutputLostError(RuntimeError):
+    """The agent removed a sandbox command's captured output, for example by clearing /tmp."""
+
+
 class VerifierTimeoutError(asyncio.TimeoutError):
     pass
 
@@ -39,6 +43,10 @@ class RuntimeServiceError(RuntimeError):
 
 class RuntimeLogCollectionError(RuntimeError):
     """Required runtime logs could not be collected before grading."""
+
+
+class EnvironmentSetupError(RuntimeError):
+    """Task-declared initialization failed before actor access."""
 
 
 class EnvironmentStopError(RuntimeError):

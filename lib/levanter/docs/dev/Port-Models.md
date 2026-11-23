@@ -105,7 +105,7 @@ ensure that `out_first=True` is set on Linear modules if they're going to be loa
 
 ### Hugging Face checkpoint converters
 
-Use `HfLmCheckpointConverter` for language models and `HfVisionLmCheckpointConverter` for vision encoders. Load weights with `converter.load_pretrained(model_cls)` and export them with `converter.save_pretrained(model, path)`. Pass the matching Hugging Face processor as `processor=` to the vision converter to include it in the export.
+Use `HfLmCheckpointConverter` for language models and `HfVisionCheckpointConverter` for vision encoders. Load weights with `converter.load_pretrained(model_cls)` and export them with `converter.save_pretrained(model, path)`. Pass the matching Hugging Face processor as `processor=` to the vision converter to include it in the export.
 
 ### Serialization to/from State Dicts
 
