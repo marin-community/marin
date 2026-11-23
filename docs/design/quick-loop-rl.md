@@ -2128,6 +2128,22 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   so the two-update comparison needs a fresh attempt.
   [Verified interrupted attempt][held-native-matched-current-preemption]
 
+  Regional telemetry recorded 32 group calls and 128 model waits in the
+  first lease. Five group calls finished just after the 1,800-second model
+  deadline and reported four projected tokens each. The buffer separately
+  recorded five fully masked groups totaling 20 projected tokens. The two
+  series have no shared group identifier. The model deadline starts before
+  the Ray request is queued, and the logs show it expired before eviction.
+  [Original native attempt][iris-held-native-matched-current]
+
+  A local cancellation fix forwards the expired training request's
+  cancellation to Ray. In the frozen CPU reproduction, the expired request
+  stayed queued and was sent to the serving subprocess with a live request.
+  The fix removed it before dispatch and preserved the live binary replies
+  byte for byte. Already-dispatched work still drains the framed pipe. This
+  removes work after a caller expires. The effect on H100 admission time
+  remains unmeasured.
+
   A fresh-start diagnostic can skip the initial evaluation callback and
   keep the final panel. The callback ran for 26m55s in the interrupted
   attempt. The production worker composer reproduced the archived
