@@ -46,7 +46,11 @@ def _score_microbatch(model, batch, *, mp, block_size):
 def _slice_batch(value, *, start: int, size: int):
     if not isinstance(value, hax.NamedArray):
         return value
-    return value["batch", hax.ds(start, size)]
+    dimension = value.axis_indices("batch")
+    if dimension is None:
+        return value
+    axes = tuple(axis.resize(size) if axis.name == "batch" else axis for axis in value.axes)
+    return hax.named(jax.lax.slice_in_dim(value.array, start, start + size, axis=dimension), axes)
 
 
 @dataclass(frozen=True)
