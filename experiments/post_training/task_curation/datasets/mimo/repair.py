@@ -32,12 +32,16 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from huggingface_hub import hf_hub_download
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.harbor.root_delivery import TEST_EXIT, TEST_OUTPUT, native_file_reward_grader
 from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
 from taskcompendium.models import TaskSpec, VerifierCommand, require_resolved_environment
@@ -315,7 +319,11 @@ def ledger_entry(original: TaskSpec, repaired: TaskSpec, recipe: Recipe, binding
 
 def load_bindings(path: Path) -> dict[str, ImageBinding]:
     """Read the image-preparation lane's binding document, keyed by task id."""
-    document = json.loads(path.read_text())
+    return bindings_from_document(json.loads(path.read_text()))
+
+
+def bindings_from_document(document: dict) -> dict[str, ImageBinding]:
+    """Validate the image-preparation lane's binding document, keyed by task id."""
     bindings = {}
     for entry in document["images"]:
         binding = ImageBinding(
@@ -390,12 +398,44 @@ def repair_population(input_parquet: Path, bindings: dict[str, ImageBinding], ou
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, required=True, help="the pinned retained tasks.parquet")
-    parser.add_argument("--bindings", type=Path, required=True, help="the image lane's binding document")
-    parser.add_argument("--output", type=Path, required=True, help="directory for the repaired release")
+    parser.add_argument("--input", type=Path, default=None, help="the pinned retained tasks.parquet")
+    parser.add_argument("--repo", default=None, help="the pinned release repo, downloaded when --input is absent")
+    parser.add_argument("--revision", default=None, help="the pinned release revision")
+    parser.add_argument("--bindings", required=True, help="the image lane's binding document URI")
+    parser.add_argument("--output", required=True, help="directory for the repaired release, local or object-store")
     arguments = parser.parse_args()
-    summary = repair_population(arguments.input, load_bindings(arguments.bindings), arguments.output)
-    print(json.dumps(summary, indent=1))
+    if (arguments.input is None) == (arguments.repo is None):
+        parser.error("provide exactly one of --input or --repo/--revision")
+    input_parquet = arguments.input
+    if input_parquet is None:
+        input_parquet = Path(
+            hf_hub_download(arguments.repo, "tasks.parquet", repo_type="dataset", revision=arguments.revision)
+        )
+    bindings = bindings_from_document(json.loads(StoragePath(arguments.bindings).read_text()))
+    output = StoragePath(arguments.output)
+    if output.is_local:
+        summary = repair_population(input_parquet, bindings, Path(arguments.output))
+        print(json.dumps(summary, indent=1))
+        return
+    with TemporaryDirectory(prefix="mimo-repair-") as temporary:
+        staging = Path(temporary)
+        summary = repair_population(input_parquet, bindings, staging)
+        for name in ("tasks.parquet", "repair-ledger.json", "repair-summary.json"):
+            destination = output / name
+            if destination.exists():
+                raise FileExistsError(str(destination))
+            copy_file_verified(staging / name, destination)
+        print(json.dumps(summary, indent=1))
+
+
+def copy_file_verified(source: Path, destination: StoragePath) -> None:
+    """Upload one artifact and verify the stored bytes against the source file."""
+    digest = hashlib.file_digest(source.open("rb"), "sha256").hexdigest()
+    with source.open("rb") as reader, destination.open("wb", auto_mkdir=True) as writer:
+        shutil.copyfileobj(reader, writer, length=1024 * 1024)
+    with destination.open("rb") as reader:
+        if hashlib.file_digest(reader, "sha256").hexdigest() != digest:
+            raise ValueError(f"the repaired artifact readback differs: {destination}")
 
 
 if __name__ == "__main__":
