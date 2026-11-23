@@ -127,6 +127,12 @@ For these trials, the Harbor task package defines the image, environment variabl
 and agent user. TaskSpec may add `setup_commands` and their setup-only
 `working_directory`; other TaskSpec machine-environment overrides are rejected.
 
+## SkyRL reply text
+
+SkyRL reply text (`responses`, assistant content) never includes a trailing EOS or turn
+terminator, even with `skip_special_tokens=False`. `response_ids` keep every sampled
+token, including the terminator.
+
 ## Harnesses
 
 A harness is the agent loop of a task: what the model sees, which tools run, and when the attempt ends.
