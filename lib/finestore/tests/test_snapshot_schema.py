@@ -17,16 +17,16 @@ from finestore.rl.curation import (
     SnapshotSource,
     normalize_snapshot_declaration,
     snapshot_declaration_generation,
+    source_display_name,
 )
-from finestore.rl.status_taxonomy import PendingStage
+from finestore.rl.status_taxonomy import ExclusionReason, PendingStage
 
 
 def _qualified_document(source_id: str, *, status: str = "Available") -> dict:
     """A current-schema full-form declaration document (the union's first member)."""
     return {
         "id": source_id,
-        "name": "fixture",
-        "display_name": "fixture",
+        "display_name": source_display_name(source_id),
         "origin": "Marin",
         "build_path": "fixture",
         "upstream_dataset": "fixture",
@@ -105,8 +105,12 @@ def test_generation_detection_names_each_form():
     assert snapshot_declaration_generation(_qualified_document("Marin:fixture")) == "qualified-v2"
     current_pending = {**_qualified_document("Marin:fixture", status="Pending"), "stage": "Measurements pending"}
     assert snapshot_declaration_generation(current_pending) == "qualified-v2"
-    pre_stage = _qualified_document("Marin:fixture", status="Pending")
+    pre_stage = {**_qualified_document("Marin:fixture", status="Pending"), "name": "fixture"}
     assert snapshot_declaration_generation(pre_stage) == "qualified-v1"
+    # Any full-form row still carrying the removed free-text name field is pre-name.
+    assert snapshot_declaration_generation({**_qualified_document("Marin:fixture"), "name": "fixture"}) == (
+        "qualified-v1"
+    )
     assert snapshot_declaration_generation(_thin_document("Evalchemy:fixture")) == "pre-lineage"
 
 
@@ -118,14 +122,32 @@ def test_current_form_passes_through_without_a_callback():
     assert normalized == thin
 
 
-def test_pre_stage_pending_takes_its_stage_from_the_evidence_callback():
-    document = _qualified_document("Marin:fixture", status="Pending")
-    document.pop("stage", None)
+def test_pre_stage_form_converts_only_the_named_fields():
+    document = {**_qualified_document("Marin:fixture", status="Pending"), "name": "fixture-free-text"}
     with pytest.raises(ValueError, match="supply pending_stage_of"):
         normalize_snapshot_declaration(document)
     normalized = normalize_snapshot_declaration(document, pending_stage_of=_stage_of)
+    assert "name" not in normalized
+    assert normalized["display_name"] == source_display_name("Marin:fixture")
     assert normalized["stage"] == PendingStage.MEASUREMENTS_PENDING.value
     assert QualifiedSourceDeclaration.model_validate(normalized).stage is PendingStage.MEASUREMENTS_PENDING
+
+
+def test_pre_ruling_exclusion_reason_becomes_unspecified_legacy_verbatim():
+    document = _qualified_document("Marin:fixture", status="Excluded")
+    legacy_claim = {
+        "reason": "superseded-by-replacement",
+        "evidence": {"kind": "note", "message": "Deprecated: replaced by the hardened variant."},
+    }
+    document["exclusion_claims"] = [legacy_claim]
+    normalized = normalize_snapshot_declaration(document, pending_stage_of=_stage_of)
+    claim = normalized["exclusion_claims"][0]
+    assert claim["reason"] == ExclusionReason.UNSPECIFIED_LEGACY.value
+    assert claim["evidence"]["message"].startswith("[legacy reason: superseded-by-replacement] ")
+    assert "replaced by the hardened variant" in claim["evidence"]["message"]
+    assert QualifiedSourceDeclaration.model_validate(normalized).exclusion_claims[0].reason is (
+        ExclusionReason.UNSPECIFIED_LEGACY
+    )
 
 
 def test_snapshot_source_reads_each_generation(tmp_path):

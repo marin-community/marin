@@ -18,7 +18,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationIn
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
 from finestore.rl.licenses import LicenseReceipt
-from finestore.rl.status_taxonomy import DataRestriction, ExclusionClaim, PendingStage, SourceStatus
+from finestore.rl.status_taxonomy import (
+    DataRestriction,
+    ExclusionClaim,
+    ExclusionReason,
+    PendingStage,
+    SourceStatus,
+)
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
@@ -1467,18 +1473,26 @@ def snapshot_declaration_generation(declaration: dict) -> str:
     """Detect which schema generation one served declaration document belongs to.
 
     ``qualified-v2`` is the current schema; ``qualified-v1`` is the same full form
-    before Pending sources carried a computed stage (every served full-form snapshot
-    through the r39-era cuts); ``pre-lineage`` is everything older, which has no
-    receipt-bearing fields to convert.
+    before the typed-status and naming schema — a Pending row without a computed
+    stage, a row still carrying the removed free-text ``name`` field, or a row whose
+    exclusion claims use reasons the pre-ruling taxonomy had — which is what every
+    served full-form snapshot through the r39-era cuts carries. ``pre-lineage`` is
+    everything older, which has no receipt-bearing fields to convert.
     """
     if not isinstance(declaration, dict):
         return SNAPSHOT_SCHEMA_PRE_LINEAGE
-    full_form = any(marker in declaration for marker in _FULL_FORM_MARKERS)
-    if full_form:
-        if declaration.get("status") == "Pending" and "stage" not in declaration:
-            return SNAPSHOT_SCHEMA_PRE_STAGE
-        return SNAPSHOT_SCHEMA_CURRENT
-    return SNAPSHOT_SCHEMA_PRE_LINEAGE
+    if not any(marker in declaration for marker in _FULL_FORM_MARKERS):
+        return SNAPSHOT_SCHEMA_PRE_LINEAGE
+    if declaration.get("status") == "Pending" and "stage" not in declaration:
+        return SNAPSHOT_SCHEMA_PRE_STAGE
+    if "name" in declaration:
+        return SNAPSHOT_SCHEMA_PRE_STAGE
+    if any(
+        isinstance(claim, dict) and claim.get("reason") not in _CURRENT_REASON_VALUES
+        for claim in declaration.get("exclusion_claims") or []
+    ):
+        return SNAPSHOT_SCHEMA_PRE_STAGE
+    return SNAPSHOT_SCHEMA_CURRENT
 
 
 def normalize_snapshot_declaration(
@@ -1489,12 +1503,16 @@ def normalize_snapshot_declaration(
     """Normalize one served declaration document to the current schema.
 
     Returns the document as the :class:`SnapshotSource` ``declaration`` union should
-    receive it. A ``qualified-v1`` Pending row gains the stage the supplied
-    ``pending_stage_of`` callback computes from the measurement-receipt evidence —
-    the stage is evidence-computed, never hand-entered, so the callback is required
-    and a row whose id it cannot stage is refused. A ``pre-lineage`` row passes
-    through unchanged for the union's :class:`PreLineageSnapshotDeclaration` member.
-    Anything else raises with the generation named.
+    receive it. A ``qualified-v1`` row is the full form before the typed-status and
+    naming schema: the free-text ``name`` is dropped (the schema removed it; the
+    display name derives from the source ID), the display name becomes the schema's
+    derived value, a Pending row takes its stage from the supplied
+    ``pending_stage_of`` callback (evidence-computed, never hand-entered), and
+    exclusion reasons outside the current taxonomy become ``unspecified-legacy``
+    with the original reason carried verbatim in the claim message. A
+    ``pre-lineage`` row passes through unchanged for the union's
+    :class:`PreLineageSnapshotDeclaration` member. Anything else raises with the
+    generation named.
     """
     try:
         QualifiedSourceDeclaration.model_validate(declaration)
@@ -1514,8 +1532,7 @@ def normalize_snapshot_declaration(
                 f" {SNAPSHOT_SCHEMA_PRE_STAGE}); supply pending_stage_of to compute the"
                 " stage from measurement-receipt evidence"
             )
-        stage = pending_stage_of(declaration["id"])
-        normalized = {**declaration, "stage": stage.value}
+        normalized = _normalize_pre_stage_form(declaration, pending_stage_of)
         QualifiedSourceDeclaration.model_validate(normalized)
         return normalized
     if generation == SNAPSHOT_SCHEMA_PRE_LINEAGE:
@@ -1525,6 +1542,55 @@ def normalize_snapshot_declaration(
         f"served snapshot declaration fails the {generation!r} schema contract it was"
         " detected as; refusing to guess a conversion"
     )
+
+
+_LEGACY_REASON_PREFIX = "[legacy reason: "
+
+
+_LEGACY_REASON_PREFIX = "[legacy reason: "
+# Reasons the current taxonomy removed; a pre-ruling row may still carry them.
+_LEGACY_REASON_VALUES = frozenset({"superseded-by-replacement"})
+
+
+def _current_reason_values() -> frozenset:
+    return frozenset(reason.value for reason in ExclusionReason)
+
+
+_CURRENT_REASON_VALUES = _current_reason_values()
+
+
+def _normalize_pre_stage_form(declaration: dict, pending_stage_of: Callable[[str], PendingStage]) -> dict:
+    """The qualified-v1 → current conversion, one named step per removed field.
+
+    ``name`` — dropped: the schema removed the free-text field and derives the
+    display name from the source ID. ``display_name`` — the schema's derived value.
+    ``stage`` — the evidence-computed PendingStage. ``exclusion_claims`` — reasons
+    outside the current taxonomy become ``unspecified-legacy`` with the original
+    reason carried verbatim at the head of the claim message, so no ruling is
+    invented and no evidence is lost.
+    """
+    normalized = {key: value for key, value in declaration.items() if key != "name"}
+    normalized["display_name"] = source_display_name(normalized["id"])
+    claims = normalized.get("exclusion_claims") or []
+    normalized["exclusion_claims"] = [_normalize_legacy_claim(claim) for claim in claims]
+    if normalized.get("status") == "Pending" and "stage" not in normalized:
+        normalized["stage"] = pending_stage_of(normalized["id"]).value
+    return normalized
+
+
+def _normalize_legacy_claim(claim: Any) -> dict:
+    """Retype a pre-ruling exclusion reason, preserving it verbatim in the message."""
+    if not isinstance(claim, dict):
+        return claim
+    reason = claim.get("reason")
+    if reason in _LEGACY_REASON_VALUES or reason not in _CURRENT_REASON_VALUES:
+        evidence = claim.get("evidence") or {}
+        message = evidence.get("message") or ""
+        head = f"{_LEGACY_REASON_PREFIX}{reason}] "
+        if not message.startswith(head):
+            evidence = {**evidence, "message": head + message}
+        return {**claim, "reason": ExclusionReason.UNSPECIFIED_LEGACY.value, "evidence": evidence}
+    return claim
 
 
 class SnapshotSource(CatalogRecord):
