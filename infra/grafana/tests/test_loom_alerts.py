@@ -75,7 +75,7 @@ def client_for(
     slack: FakeSlack,
     *,
     runs: list[dict] | None = None,
-    loom_status: int | None = None,
+    loom_status: int | list[int | None] | None = None,
 ):
     """A client whose Slack and Loom legs are both mocked.
 
@@ -86,8 +86,9 @@ def client_for(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "slack.com":
             return slack.respond(request)
-        if loom_status is not None:
-            return httpx.Response(loom_status, text="secret response body")
+        status = loom_status[0] if isinstance(loom_status, list) else loom_status
+        if status is not None:
+            return httpx.Response(status, text="secret response body")
         if request.url.host == "metadata.google.internal":
             assert request.headers["Metadata-Flavor"] == "Google"
             assert dict(request.url.params) == {
@@ -406,6 +407,34 @@ def test_a_loom_failure_is_reported_on_the_alert_thread_and_still_fails_the_webh
     assert "secret response body" not in str(raised.value)
     assert len(slack.roots) == 1, "the alert is announced even when Loom is unreachable"
     assert any("No Loom triage session opened" in text for text in slack.reply_texts)
+
+
+def test_loom_failure_retries_keep_one_thread_reply_until_delivery_recovers(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(loom_alerts.time, "monotonic", lambda: clock[0])
+    status: list[int | None] = [503]
+    slack = FakeSlack()
+    client = client_for(slack, loom_status=status)
+
+    for minute in (0, 1, 20, 40):
+        clock[0] = minute * 60
+        with pytest.raises(LoomAlertDeliveryError):
+            asyncio.run(client.submit(alert_payload()))
+
+    assert len(slack.roots) == 1
+    assert len(slack.reply_texts) == 1
+    assert "No Loom triage session opened" in slack.reply_texts[0]
+
+    status[0] = None
+    clock[0] = 41 * 60
+    asyncio.run(client.submit(alert_payload()))
+    assert slack.reply_texts.count("Triage session: https://loom.example.com/s/session-1") == 1
+
+    status[0] = 503
+    clock[0] = 42 * 60
+    with pytest.raises(LoomAlertDeliveryError):
+        asyncio.run(client.submit(alert_payload()))
+    assert len([reply for reply in slack.reply_texts if "No Loom triage session opened" in reply]) == 2
 
 
 def test_a_slack_failure_still_opens_the_triage_session():

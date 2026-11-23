@@ -85,6 +85,7 @@ class _Tracked:
     # each would repeat the same line per retry and per re-notification.
     linked_session: str | None = None
     resolved: bool = False
+    delivery_failed: bool = False
 
 
 class ThreadLog:
@@ -135,12 +136,25 @@ class ThreadLog:
         tracked = self._threads.get(key)
         if tracked is not None:
             tracked.resolved = True
+            tracked.delivery_failed = False
             self.mark_posted(key)
 
     def mark_linked(self, key: str, session_id: str) -> None:
         tracked = self._threads.get(key)
         if tracked is not None:
             tracked.linked_session = session_id
+
+    def mark_delivery_succeeded(self, key: str) -> None:
+        tracked = self._threads.get(key)
+        if tracked is not None:
+            tracked.delivery_failed = False
+
+    def mark_delivery_failed(self, key: str) -> bool:
+        tracked = self._threads.get(key)
+        if tracked is None or tracked.delivery_failed:
+            return False
+        tracked.delivery_failed = True
+        return True
 
 
 class SlackAnnouncer:
@@ -154,6 +168,12 @@ class SlackAnnouncer:
         # A notification group maps to one thread through firing and resolved
         # states, including a new alert instance from a replacement job.
         self._threads = ThreadLog(ttl=THREAD_TTL, max_entries=MAX_TRACKED_THREADS)
+
+    def mark_delivery_failed(self, thread_key: str) -> bool:
+        return self._threads.mark_delivery_failed(thread_key)
+
+    def mark_delivery_succeeded(self, thread_key: str) -> None:
+        self._threads.mark_delivery_succeeded(thread_key)
 
     async def announce(
         self,
@@ -173,6 +193,10 @@ class SlackAnnouncer:
             if tracked.resolved:
                 await self.post(client, "Firing again after resolution.", thread=tracked.thread)
                 self._threads.mark_firing(thread_key)
+                return tracked.thread
+            # A failed Loom delivery makes Grafana retry the same webhook for
+            # longer than the quiet period. Those retries are not new alerts.
+            if tracked.delivery_failed:
                 return tracked.thread
             # Grafana retries a failed webhook within seconds, and re-notifies an
             # unresolved alert on its repeat_interval. Both land here; only the
@@ -343,6 +367,7 @@ class LoomAlertClient:
             raise await self._report_delivery_failure(
                 client,
                 thread,
+                thread_key,
                 LoomAlertDeliveryError(
                     f"{err.request.url.host} returned HTTP {err.response.status_code} while delivering the alert"
                 ),
@@ -351,14 +376,17 @@ class LoomAlertClient:
             raise await self._report_delivery_failure(
                 client,
                 thread,
+                thread_key,
                 LoomAlertDeliveryError(f"could not reach {err.request.url.host} while delivering the alert"),
             ) from err
         except json.JSONDecodeError as err:
             raise await self._report_delivery_failure(
                 client,
                 thread,
+                thread_key,
                 LoomAlertDeliveryError("Loom returned an invalid JSON response"),
             ) from err
+        self._announcer.mark_delivery_succeeded(thread_key)
         await self._link_session(client, thread, thread_key, response)
         return response
 
@@ -396,6 +424,7 @@ class LoomAlertClient:
         self,
         client: httpx.AsyncClient,
         thread: SlackThread | None,
+        thread_key: str,
         error: LoomAlertDeliveryError,
     ) -> LoomAlertDeliveryError:
         """Say in the alert's own thread that no triage session opened.
@@ -404,7 +433,7 @@ class LoomAlertClient:
         incident. Returns the error for the caller to raise, so the webhook still
         fails and Grafana retries.
         """
-        if thread is not None:
+        if thread is not None and self._announcer.mark_delivery_failed(thread_key):
             await self._announcer.post(client, f"No Loom triage session opened for this alert: {error}", thread=thread)
         return error
 

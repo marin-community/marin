@@ -623,6 +623,9 @@ after twelve hours without a collection.
 the next afternoon across spring daylight saving time. The
 [storage runbook](../../scripts/ops/storage/README.md#coreweave-storage-telemetry)
 describes sampling requirements and forecast limits.
+If Loom delivery fails, the bridge keeps returning an error so Grafana retries,
+but reports the failure only once in the alert thread until delivery recovers.
+
 `B200ClusterUnderutilized` uses the same route when a cluster's Ready GB200
 GPUs stay idle for 30 minutes; the thresholds are the constants in
 `src/b200_utilization_alert.py`. A cluster with incomplete telemetry or an
