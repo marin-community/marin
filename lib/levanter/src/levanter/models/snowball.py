@@ -69,6 +69,7 @@ from levanter.grug.sharding import (
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.rms_norm import Implementation as RmsNormImplementation
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm
@@ -681,8 +682,9 @@ class SnowballAttention(eqx.Module):
         q, k, v = self._project_qkv(x, disable_rope=mode == "long", position_ids=pos_ids[:, None])
         token_axis = batch_info.new_token_dests.axes[0]
         kv_axes = (token_axis, Axis("kv_head", cfg.num_kv_heads), Axis("head_size", head_dim))
-        cache_k = reshard(k[:, 0], P(None, "model", None))
-        cache_v = reshard(v[:, 0], P(None, "model", None))
+        cache_sharding = P() if cfg.replay_precision == "zero_kl" else P(None, "model", None)
+        cache_k = reshard(k[:, 0], cache_sharding)
+        cache_v = reshard(v[:, 0], cache_sharding)
         cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
         if cfg.shared_attention_implementation == "fixed_schedule":
             out = _fixed_shared_attention_decode(q, cache, batch_info, pos_ids, use_long=mode == "long", cfg=cfg)
@@ -1616,7 +1618,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
         targets = next_token_ids(self.Pos.name, example.tokens)
         selected = hax.sum(hax.where(hax.nn.one_hot(targets, self.Vocab, dtype=bool), logits, 0), self.Vocab)
-        normalizers = hax.nn.logsumexp(logits, self.Vocab)
+        normalizers = hax.named(batch_invariant_logsumexp(logits.array), logits.axes[:-1])
         loss = normalizers - selected
         if logsumexp_weight:
             loss = loss + logsumexp_weight * hax.square(normalizers)
@@ -1646,7 +1648,8 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         for _ in self.transformer.blocks:
             cache = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype)
             # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
-            pages = reshard(cache.kv_pages.array, P(None, None, "model", None))
+            sharding = P() if cfg.replay_precision == "zero_kl" else P(None, None, "model", None)
+            pages = reshard(cache.kv_pages.array, sharding)
             caches.append(KvPageCache(hax.named(pages, cache.kv_pages.axes)))
         return ListCache(tuple(caches))
 
