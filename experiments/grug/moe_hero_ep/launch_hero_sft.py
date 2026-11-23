@@ -20,7 +20,6 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.mixture import StopStrategy
-from levanter.data.mixture_epoch import MixtureEpochPlan, epoch_weight_stages, plan_mixture_epoch
 from levanter.data.text.datasets import (
     ConcatDatasetComponent,
     DatasetComponent,
@@ -91,6 +90,8 @@ SFT_WANDB_PROJECT = "marin_moe_sft"
 # CoreWeave copies of gs://marin-us-central2/grug_sft/stores/full-ab-packed-2026.09.29.json, the 10.05 stores.
 SFT_STORES_MANIFEST = Path(__file__).with_name("hero_sft_stores_2026_09_29.json")
 SFT_TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
+# The 10.05 run's 64,000-sequence mixture blocks, rounded up to whole training steps.
+SFT_TARGET_BLOCK_SIZE = 64_000
 SFT_COMPONENT_PREFIX = "sft/source/"
 SFT_POOLED_COMPONENT = "sft/pooled"
 REPLAY_COMPONENT_PREFIX = "replay/"
@@ -137,6 +138,46 @@ def load_sft_stores(manifest: Path = SFT_STORES_MANIFEST) -> dict[str, SftStore]
     return stores
 
 
+@dataclass(frozen=True)
+class SftMixturePlan:
+    """One epoch of the SFT stores, spread evenly across complete mixture blocks."""
+
+    batch_size: int
+    block_size: int
+    num_blocks: int
+    sft_sequences: int
+
+    @property
+    def run_sequences(self) -> int:
+        return self.num_blocks * self.block_size
+
+    @property
+    def steps(self) -> int:
+        return self.run_sequences // self.batch_size
+
+    @property
+    def replay_fraction(self) -> float:
+        return 1.0 - self.sft_sequences / self.run_sequences
+
+    @property
+    def decay_steps(self) -> int:
+        return max(2, round(self.steps * SFT_DECAY_FRACTION))
+
+
+def plan_sft_mixture(stores: Mapping[str, SftStore], *, batch_size: int, replay_fraction: float) -> SftMixturePlan:
+    """Choose the block count whose replay share is closest to ``replay_fraction``."""
+    if not 0.0 < replay_fraction < 1.0:
+        raise ValueError(f"replay_fraction must be in (0, 1), got {replay_fraction}")
+    block_size = batch_size * math.ceil(SFT_TARGET_BLOCK_SIZE / batch_size)
+    sft_sequences = sum(store.packed_sequences for store in stores.values())
+    num_blocks = max(1, round(sft_sequences / ((1.0 - replay_fraction) * block_size)))
+    if sft_sequences >= num_blocks * block_size:
+        raise ValueError("The SFT epoch leaves no room for replay; lower the replay fraction")
+    return SftMixturePlan(
+        batch_size=batch_size, block_size=block_size, num_blocks=num_blocks, sft_sequences=sft_sequences
+    )
+
+
 def _store_component(store: SftStore) -> DatasetComponent:
     # The stores hold only a train split; a flat cache gives evaluation no validation split to look for.
     return DatasetComponent(
@@ -149,7 +190,7 @@ def _store_component(store: SftStore) -> DatasetComponent:
 
 
 def sft_components(
-    stores: Mapping[str, SftStore], plan: MixtureEpochPlan
+    stores: Mapping[str, SftStore], plan: SftMixturePlan
 ) -> tuple[dict[str, DatasetComponentBase], dict[str, int]]:
     """SFT components and the packed sequences each one contributes to the epoch.
 
@@ -173,9 +214,45 @@ def sft_components(
     return components, counts
 
 
+def one_epoch_weight_stages(
+    sft_counts: Mapping[str, int], replay_weights: Mapping[str, float], plan: SftMixturePlan
+) -> list[tuple[int, dict[str, float]]]:
+    """Per-block mixture weights that read each SFT component exactly once over the run.
+
+    Each block takes an even share of every SFT component's sequences and fills the rest with replay,
+    split by ``replay_weights`` with at least one draw per replay component. Stage steps count from the
+    mixture's start step (``LmDataConfig.mixture_start_step``).
+    """
+    if plan.block_size % plan.batch_size:
+        raise ValueError("Mixture block boundaries must fall on training steps")
+    if not replay_weights or any(weight <= 0 for weight in replay_weights.values()):
+        raise ValueError("Replay needs at least one positive-weight component")
+    replay_total = sum(replay_weights.values())
+    stages = []
+    for block in range(plan.num_blocks):
+        counts = {
+            name: (block + 1) * total // plan.num_blocks - block * total // plan.num_blocks
+            for name, total in sft_counts.items()
+        }
+        replay_draws = plan.block_size - sum(counts.values())
+        targets = {name: replay_draws * weight / replay_total for name, weight in replay_weights.items()}
+        replay_counts = {name: max(1, int(target)) for name, target in targets.items()}
+        remainder = replay_draws - sum(replay_counts.values())
+        if remainder < 0:
+            raise ValueError("Replay components do not fit in the mixture block")
+        for name in sorted(targets, key=lambda name: targets[name] % 1, reverse=True)[:remainder]:
+            replay_counts[name] += 1
+        counts.update(replay_counts)
+        assert sum(counts.values()) == plan.block_size
+        stages.append(
+            (block * plan.block_size // plan.batch_size, {name: n / plan.block_size for name, n in counts.items()})
+        )
+    return stages
+
+
 def sft_data_config(
     stores: Mapping[str, SftStore],
-    plan: MixtureEpochPlan,
+    plan: SftMixturePlan,
     *,
     start_step: int,
     replay: LmDataConfig,
@@ -191,7 +268,7 @@ def sft_data_config(
             continue
         components[REPLAY_COMPONENT_PREFIX + name] = replay.components[name]
         replay_weights[REPLAY_COMPONENT_PREFIX + name] = weight
-    stages = epoch_weight_stages(sft_counts, replay_weights, plan)
+    stages = one_epoch_weight_stages(sft_counts, replay_weights, plan)
     if collisions := components.keys() & validation.keys():
         raise ValueError(f"validation components collide with training components: {sorted(collisions)}")
     components.update(validation)
@@ -205,7 +282,6 @@ def sft_data_config(
         shuffle=True,
         block_cross_document_attention=True,
         mixture_block_size=plan.block_size,
-        mixture_length=plan.run_sequences,
         stop_strategy=StopStrategy.RESTART_STRATEGY,
         mixture_start_step=start_step,
     )
@@ -300,12 +376,7 @@ def build_sft_run(
         )
     batch_size = hero_rack_batch_size(model.max_seq_len) * dp_racks
     stores = load_sft_stores()
-    plan = plan_mixture_epoch(
-        {name: store.packed_sequences for name, store in stores.items()},
-        batch_size=batch_size,
-        replay_fraction=replay_fraction,
-    )
-    decay_steps = max(2, round(plan.steps * SFT_DECAY_FRACTION))
+    plan = plan_sft_mixture(stores, batch_size=batch_size, replay_fraction=replay_fraction)
     num_train_steps = start_step + plan.steps
     stop_step = num_train_steps if stop_after_steps is None else start_step + stop_after_steps
     if stop_step > num_train_steps:
@@ -321,7 +392,7 @@ def build_sft_run(
         learning_rate=muon_lr,
         adam_lr=adam_lr,
         warmup=0,
-        decay=decay_steps,
+        decay=plan.decay_steps,
         min_lr_ratio=SFT_MIN_LR_RATIO,
         weight_decay=0.0,
         gate_router_weight_decay=0.0,
@@ -365,7 +436,7 @@ def build_sft_run(
         plan.num_blocks,
         plan.block_size,
         plan.replay_fraction,
-        decay_steps,
+        plan.decay_steps,
         router_bias_mode.value,
         capacity_factor,
     )

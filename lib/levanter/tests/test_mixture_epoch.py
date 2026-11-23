@@ -46,6 +46,27 @@ async def test_native_epoch_reads_every_sft_item_once_including_store_smaller_th
         await mixture.getitem_async(first_index + plan.run_sequences)
 
 
+@pytest.mark.asyncio
+async def test_partial_final_block_covers_many_single_item_sources_without_exhausting_replay_early():
+    counts = {"sft/large": 7, **{f"sft/tiny/{index}": 1 for index in range(9)}}
+    plan = plan_mixture_epoch(counts, batch_size=2, replay_fraction=0.2, target_block_size=16)
+    stages = epoch_weight_stages(counts, {"replay": 1.0}, plan)
+    datasets = {name: ListAsyncDataset([(name, i) for i in range(count)]) for name, count in counts.items()}
+    datasets["replay"] = ListAsyncDataset([("replay", 0)])
+    mixture = MixtureDataset(
+        datasets,
+        [(step * 2, weights) for step, weights in stages],
+        plan.block_size,
+        key=17,
+        sequence_count=plan.run_sequences,
+    )
+    actual = await mixture.get_batch(list(range(plan.run_sequences)))
+    assert sorted(row for row in actual if row[0] != "replay") == sorted(
+        (name, i) for name, count in counts.items() for i in range(count)
+    )
+    assert len(actual) == 20
+
+
 def test_impossible_block_refuses_to_silently_drop_positive_sources():
     with pytest.raises(ValueError, match="cannot cover 3 positive-weight sources"):
         MixtureDataset(

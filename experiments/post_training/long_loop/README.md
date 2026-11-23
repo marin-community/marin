@@ -35,7 +35,8 @@ and appear separately in the capacity and exposure receipts. Corrections and
 filters belong to the pinned source version. The full-store path rejects runtime
 subsampling through `max_train_batches`, `experiment_budget` or `target_budget`.
 
-The planner used by the October 5 Hero SFT recipe assigns exact SFT quotas.
+The long-loop planner adapts the October 5 Hero SFT per-block quotas while
+keeping that historical recipe unchanged. It assigns exact SFT quotas.
 Replay fills its declared fraction of the final mixture, measured in packed
 sequences. Whole-batch rounding adds replay slots; it never repeats or drops
 SFT sequences. The final mixture block can be shorter

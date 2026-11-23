@@ -69,14 +69,14 @@ def epoch_weight_stages(
         raise ValueError("Epoch plan and source capacities disagree")
     stages = []
     remaining = allocate_mixture_counts(replay_weights, plan.run_sequences - plan.sft_sequences)
+    remaining_sft = dict(sequence_counts)
     for block in range(plan.num_blocks):
         start = block * plan.block_size
         stop = min(start + plan.block_size, plan.run_sequences)
-        counts = {
-            name: stop * total // plan.run_sequences - start * total // plan.run_sequences
-            for name, total in sequence_counts.items()
-        }
-        replay = allocate_mixture_counts(remaining, stop - start - sum(counts.values()), minimum_count=0)
+        sft_draws = stop * plan.sft_sequences // plan.run_sequences - start * plan.sft_sequences // plan.run_sequences
+        counts = allocate_mixture_counts(remaining_sft, sft_draws, minimum_count=0)
+        remaining_sft = {name: value - counts[name] for name, value in remaining_sft.items()}
+        replay = allocate_mixture_counts(remaining, stop - start - sft_draws, minimum_count=0)
         counts.update(replay)
         remaining = {name: value - replay[name] for name, value in remaining.items()}
         stages.append(
@@ -85,6 +85,6 @@ def epoch_weight_stages(
                 {name: count / (stop - start) for name, count in counts.items()},
             )
         )
-    if any(remaining.values()):
-        raise ValueError("Epoch allocation left replay quotas unconsumed")
+    if any(remaining.values()) or any(remaining_sft.values()):
+        raise ValueError("Epoch allocation left source quotas unconsumed")
     return stages
