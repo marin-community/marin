@@ -29,7 +29,7 @@ def require_agentx_devices(geometry: SnowballAgentxGeometry) -> None:
 def agentx_engine_config(
     geometry: SnowballAgentxGeometry, concurrency: int, *, max_rounds: int | None = None
 ) -> InferenceEngineConfig:
-    """Build the paged generation configuration used by the selected TPU replay."""
+    """Build the paged generation configuration for a native TPU profile."""
     if not 1 <= concurrency <= AGENTX_MAX_CONCURRENCY:
         raise ValueError(f"AgentX supports 1 to {AGENTX_MAX_CONCURRENCY} concurrent sequences")
     return InferenceEngineConfig(
@@ -39,11 +39,11 @@ def agentx_engine_config(
         window_cache_max_pages=geometry.window_pages,
         window_cache_retained_spans=geometry.retained_spans,
         max_retained_prompts=geometry.retained_prompts,
-        max_queued_tokens=max(geometry.decode_tokens, concurrency),
+        max_queued_tokens=max(geometry.max_tokens_per_round, concurrency),
         max_seqs_in_prefill=min(4, concurrency),
         max_prefill_size=AGENTX_CONTEXT,
         max_rounds=geometry.max_rounds if max_rounds is None else max_rounds,
-        max_tokens_per_round=geometry.decode_tokens,
+        max_tokens_per_round=geometry.max_tokens_per_round,
         prefill_bucket_sizes=geometry.prefill_buckets,
         decode_bucket_sizes=tuple(size for size in geometry.decode_buckets if size < concurrency),
         compute_dtype=jnp.bfloat16,

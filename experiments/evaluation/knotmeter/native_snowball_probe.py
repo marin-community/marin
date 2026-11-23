@@ -35,7 +35,7 @@ from levanter.models.snowball import SnowballConfig
 from levanter.tokenizers import load_tokenizer
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.inference.config import SNOWBALL_AGENTX_PROFILES
+from marin.inference.config import DEFAULT_SNOWBALL_AGENTX_PROFILE, SNOWBALL_AGENTX_PROFILES
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
 from marin.inference.snowball_agentx import (
     AGENTX_BATCH_TIMEOUT,
@@ -127,7 +127,7 @@ def main() -> None:
     parser.add_argument("--weights", required=True)
     parser.add_argument("--workload", required=True)
     parser.add_argument("--concurrency", type=int, default=128)
-    parser.add_argument("--profile", choices=tuple(SNOWBALL_AGENTX_PROFILES), default="snowball_agentx_v5p")
+    parser.add_argument("--profile", choices=tuple(SNOWBALL_AGENTX_PROFILES), default=DEFAULT_SNOWBALL_AGENTX_PROFILE)
     parser.add_argument("--max-rounds", type=int, default=None)
     parser.add_argument("--capture-routes", action="store_true")
     args = parser.parse_args()

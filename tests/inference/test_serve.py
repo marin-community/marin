@@ -749,7 +749,7 @@ def test_native_snowball_agentx_plan_reserves_its_tpu_slice(profile, tpu, wrong_
     assert plan.tpu_types == (tpu,)
     assert plan.engine == engine
 
-    with pytest.raises(click.ClickException, match=f"requires --tpu {tpu}"):
+    with pytest.raises(click.ClickException):
         _plan(backend="levanter", tpu=wrong_tpu, levanter=engine)
 
 

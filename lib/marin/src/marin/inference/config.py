@@ -9,9 +9,11 @@ Accelerator-heavy serving implementations translate them inside worker jobs.
 
 import json
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, TpuConfig
@@ -393,6 +395,7 @@ class VllmEngineConfig:
 
 DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE = 1
 LevanterServingProfile = Literal["standard", "snowball_agentx_v5p", "snowball_agentx_v6e"]
+DEFAULT_SNOWBALL_AGENTX_PROFILE: LevanterServingProfile = "snowball_agentx_v5p"
 
 
 @dataclass(frozen=True)
@@ -408,7 +411,7 @@ class SnowballAgentxGeometry:
     retained_spans: int
     retained_prompts: int
     max_rounds: int
-    decode_tokens: int
+    max_tokens_per_round: int
     prefill_buckets: tuple[int, ...]
     decode_buckets: tuple[int, ...]
 
@@ -417,36 +420,38 @@ class SnowballAgentxGeometry:
         return f"--xla_tpu_scoped_vmem_limit_kib={self.scoped_vmem_kib} --xla_tpu_use_enhanced_launch_barrier=true"
 
 
-SNOWBALL_AGENTX_PROFILES: dict[LevanterServingProfile, SnowballAgentxGeometry] = {
-    "snowball_agentx_v5p": SnowballAgentxGeometry(
-        tpu_type="v5p-8",
-        device_kind="TPU v5",
-        expert_shards=4,
-        scoped_vmem_kib=50_000,
-        max_pages=49_152,
-        window_pages=5_120,
-        retained_spans=2,
-        retained_prompts=512,
-        max_rounds=6,
-        decode_tokens=32,
-        prefill_buckets=(256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 49152),
-        decode_buckets=(4, 8, 16),
-    ),
-    "snowball_agentx_v6e": SnowballAgentxGeometry(
-        tpu_type="v6e-8",
-        device_kind="TPU v6 lite",
-        expert_shards=8,
-        scoped_vmem_kib=98_304,
-        max_pages=16_384,
-        window_pages=2_880,
-        retained_spans=1,
-        retained_prompts=128,
-        max_rounds=4,
-        decode_tokens=24,
-        prefill_buckets=(256, 512, 2048, 8192, 16384, 32768, 49152),
-        decode_buckets=(8, 16),
-    ),
-}
+SNOWBALL_AGENTX_PROFILES: Mapping[LevanterServingProfile, SnowballAgentxGeometry] = MappingProxyType(
+    {
+        DEFAULT_SNOWBALL_AGENTX_PROFILE: SnowballAgentxGeometry(
+            tpu_type="v5p-8",
+            device_kind="TPU v5",
+            expert_shards=4,
+            scoped_vmem_kib=50_000,
+            max_pages=49_152,
+            window_pages=5_120,
+            retained_spans=2,
+            retained_prompts=512,
+            max_rounds=6,
+            max_tokens_per_round=32,
+            prefill_buckets=(256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 49152),
+            decode_buckets=(4, 8, 16),
+        ),
+        "snowball_agentx_v6e": SnowballAgentxGeometry(
+            tpu_type="v6e-8",
+            device_kind="TPU v6 lite",
+            expert_shards=8,
+            scoped_vmem_kib=98_304,
+            max_pages=16_384,
+            window_pages=2_880,
+            retained_spans=1,
+            retained_prompts=128,
+            max_rounds=4,
+            max_tokens_per_round=24,
+            prefill_buckets=(256, 512, 2048, 8192, 16384, 32768, 49152),
+            decode_buckets=(8, 16),
+        ),
+    }
+)
 
 
 @dataclass(frozen=True)
