@@ -971,8 +971,9 @@ metadata and data-file SHA-256 pins are checked before the training allocation.
 
 The three-rack profile uses FlashInfer, PIECEWISE graphs and verified expert-block
 weight publication. Both profiles keep compilation and graphs enabled and use
-the published BF16 SkyRL wheel `marin-vllm-gpu-20261113-0ac9dcb157ee`, pinned
-in the `vllm` extra in [SkyRL dependencies](../../../vendor/skyrl/pyproject.toml).
+the published BF16 SkyRL wheel `marin-vllm-gpu-20261118-47a8e415bff1`, pinned
+in the `vllm` extra in [SkyRL dependencies](../../../vendor/skyrl/pyproject.toml)
+from `config/external/vllm/gpu.toml`.
 These are configuration ports. CPU validation does not establish GPU fit, serving readiness or throughput.
 
 The one-rack round excludes `dh1-r136-us-east-08a` through
@@ -1021,6 +1022,28 @@ a fresh version and `rl.execution.job_timeout_seconds: 7200`, then add `--smoke`
 Smoke uses two groups of eight samples, two rollout workers, no evaluation or
 best selection, a one-hour learning clock and a native save on every update.
 This does not authorize GPU submission. Mochi smokes depend on serving readiness.
+
+### Speculative decoding drafts
+
+Speculative decoding is off by default in every round. To serve a frozen draft
+during rollout, set `rl.draft` to a name registered in `round_runner.DRAFTS`; an
+unknown name fails. The runner injects the draft into
+`rl.recipe.generator.speculative_decoding` (an explicit block in the recipe
+conflicts with `rl.draft` and fails), and the resolved plan records a
+`draft_binding` with the draft's source, revision and the initializer its
+weights were trained against. Long-loop rounds start from round-specific SFT
+checkpoints — for example the Exp5 SFT step-527 handoff — while the registered
+DSpark draft was trained against the pinned 09.21 Datakit Snowball SFT
+initializer, so that binding is unmeasured on long-loop geometry until a
+matched plain-versus-draft gate passes there (median update time, rollout-group
+p95, acceptance length and fresh-policy KL on the same pinned data). No round
+may enable a draft by default, and no running round changes its recipe.
+
+The DSpark draft shares the rollout vLLM engines and needs dense-draft support
+with an expert-parallel target from the pinned serving wheel
+`marin-vllm-gpu-20261118-47a8e415bff1`. Keep compilation and CUDA graphs
+enabled; verify the serving pin stays consistent with the SkyRL lock
+(`tests/test_serving_pin.py`).
 
 `rounds/exp4-recovery.yaml` rebuilds the downstream RL recovery graph for version `2026.11.19.82` from a
 hash-pinned plan and completed SFT/handoff records. It preserves the recorded

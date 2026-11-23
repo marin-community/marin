@@ -59,11 +59,11 @@ from marinskyrl.distillation import (
     validate_generation_logprobs,
 )
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS
-from marinskyrl.hf_model import HuggingFaceModelCache
 from marinskyrl.remote_io import filesystem_and_path
 from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.runtime_options import WeightSyncTransport
 from marinskyrl.task_sources import DirectoryDataSource, data_source
+from skyrlrecipe.model_staging import HuggingFaceModelCache
 
 DEFAULT_DRAFT_MODEL_CACHE_TTL_DAYS = 14
 

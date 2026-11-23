@@ -38,12 +38,13 @@ from marinskyrl.checkpoint_paths import (
     policy_export_path,
     selected_export_checkpoint,
 )
-from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
+from marinskyrl.hf_model import validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
+from skyrlrecipe.model_staging import HuggingFaceModelCache
 
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.checkpoint_listing import (

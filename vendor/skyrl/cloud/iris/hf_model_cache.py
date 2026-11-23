@@ -30,7 +30,6 @@ from marinskyrl.hf_model import (
     TOKENIZER_CONFIG_NAME,
     TOKENIZER_JSON_NAME,
     hugging_face_hub_online,
-    immutable_model_cache_key,
     normalize_fast_tokenizer_metadata_bytes,
     validate_hf_model_weights,
 )
@@ -54,6 +53,7 @@ from marinskyrl.hugging_face_retry import (
 from marinskyrl.remote_io import open_output_stream
 from marinskyrl.resource_locator import join_resource_path, relative_resource_path
 from marinskyrl.speculative_decoding import is_hugging_face_commit
+from skyrlrecipe.model_staging import immutable_model_cache_key
 
 _CACHE_PREFIX = "marinskyrl/hf-models"
 _CACHE_POLL_INTERVAL = 10.0

@@ -16,7 +16,13 @@ from marin.rl.curriculum import PoolRow, consumed_route_quotas, validation_paylo
 
 from experiments.post_training.long_loop.archive import assert_best_rl_checkpoint
 from experiments.post_training.long_loop.launch_validation import validate_launch
-from experiments.post_training.long_loop.round_runner import adopted_round_rl, load_round
+from experiments.post_training.long_loop.round_runner import (
+    DRAFTS,
+    adopted_round_resolved_plan,
+    adopted_round_rl,
+    load_round,
+    round_draft,
+)
 from experiments.post_training.task_curation.exp4_curriculum import (
     SOURCE_ROUTES,
     exp4_rl_curriculum,
@@ -377,3 +383,58 @@ def test_adopted_exp5_round_uses_its_eleven_source_curriculum(local_round, tmp_p
         "pafitis/HARDMath_processed_training",
     ):
         assert buffer["source_routes"][raw] == "nonagentic"
+
+
+_DRAFT_NAME = "dspark-dr-doom-datakit-sft-0921"
+
+
+def _round_launch(round_spec, tmp_path):
+    terminal = adopted_round_rl(round_spec)
+    context = StepContext.for_run(
+        str(tmp_path / "draft-run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    return yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_draft_defaults_to_plain_decoding(local_round, tmp_path):
+    launch = _round_launch(local_round, tmp_path)
+    assert launch["skyrl"]["generator"].get("speculative_decoding") is None
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_draft_binding_injects_the_registered_dspark(local_round, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, draft=_DRAFT_NAME))
+    draft = round_draft(spec)
+    assert draft.trained_for_initializer.startswith("snowball-datakit-sft 2026.09.21 initializer")
+    terminal = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "draft-run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    document = terminal.build_config(context).launch_config_yaml
+    validate_launch(document, tmp_path / "draft-composed")
+    launch = yaml.safe_load((tmp_path / "draft-composed" / "compiled.yaml").read_text())["skyrl"]
+    assert launch["generator"]["speculative_decoding"] == {
+        "method": "dspark",
+        "model": {"source_uri": draft.source_uri, "source_identity": draft.source_identity},
+        "num_speculative_tokens": draft.num_speculative_tokens,
+    }
+    plan = adopted_round_resolved_plan(spec, source_revision="0" * 40, workspace=Path.cwd())
+    assert plan["draft_binding"] == dataclasses.asdict(draft)
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_rejects_unknown_draft_names(local_round):
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, draft="not-a-draft"))
+    with pytest.raises(ValueError, match="Unknown round draft binding"):
+        round_draft(spec)
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_rejects_a_registered_draft_alongside_an_explicit_block(local_round):
+    recipe = copy.deepcopy(local_round.rl.recipe)
+    recipe["generator"]["speculative_decoding"] = DRAFTS[_DRAFT_NAME].speculative_decoding()
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe, draft=_DRAFT_NAME))
+    with pytest.raises(ValueError, match="registered draft and an explicit"):
+        adopted_round_rl(spec)

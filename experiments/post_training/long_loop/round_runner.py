@@ -211,6 +211,8 @@ class RoundRl:
     selection_eligibility: str
     native_checkpoint: str | None = None
     gpu_variant: str = "GB200"
+    draft: str | None = None
+    """Registered speculative-decoding draft to serve during rollout; ``None`` keeps plain decoding."""
 
 
 @dataclass(frozen=True)
@@ -223,6 +225,53 @@ class AdoptedRlRound:
     storage: RoundStorage
     adopted_model: RoundAdoptedHf
     rl: RoundRl
+
+
+@dataclass(frozen=True)
+class RoundDraft:
+    """A registered speculative-decoding draft and the initializer it was trained against."""
+
+    name: str
+    trained_for_initializer: str
+    source_uri: str
+    source_identity: str
+    num_speculative_tokens: int
+
+    def speculative_decoding(self) -> dict:
+        return {
+            "method": "dspark",
+            "model": {"source_uri": self.source_uri, "source_identity": self.source_identity},
+            "num_speculative_tokens": self.num_speculative_tokens,
+        }
+
+
+# Drafts are registered with the initializer their weights were trained against. Long-loop
+# rounds start from round-specific SFT checkpoints, so a draft never binds by default: each
+# round must name one explicitly and the resolved plan records that provenance. A draft
+# trained against a different initializer is unmeasured on that round and stays behind its
+# gate (median update time, rollout-group p95, acceptance length, fresh-policy KL).
+DRAFTS = {
+    "dspark-dr-doom-datakit-sft-0921": RoundDraft(
+        name="dspark-dr-doom-datakit-sft-0921",
+        trained_for_initializer=(
+            "snowball-datakit-sft 2026.09.21 initializer "
+            "(models/snowball-datakit-sft-fe666478454e79fe6027a0bab0388d9abd68f51a, "
+            "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21)"
+        ),
+        source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
+        source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
+        num_speculative_tokens=4,
+    ),
+}
+
+
+def round_draft(spec: AdoptedRlRound) -> RoundDraft | None:
+    """Resolve the round's explicit draft binding; unknown names fail loudly."""
+    if spec.rl.draft is None:
+        return None
+    if spec.rl.draft not in DRAFTS:
+        raise ValueError(f"Unknown round draft binding: {spec.rl.draft}")
+    return DRAFTS[spec.rl.draft]
 
 
 @dataclass(frozen=True)
@@ -381,6 +430,19 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
     )
 
 
+def adopted_round_resolved_plan(spec: AdoptedRlRound, *, source_revision: str, workspace: Path) -> dict:
+    """The adopted round's resolved plan: the spec plus runtime identity and any draft binding."""
+    plan = {
+        **dataclasses.asdict(spec),
+        "marin_revision": source_revision,
+        "runtime_source": runtime_source_manifest(workspace, source_revision),
+    }
+    draft = round_draft(spec)
+    if draft is not None:
+        plan["draft_binding"] = dataclasses.asdict(draft)
+    return plan
+
+
 def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactStep:
     """Adopt a pinned HF export or a native RL checkpoint without an SFT stage."""
     model = spec.adopted_model
@@ -403,6 +465,14 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
     recipe = json.loads(json.dumps(rl.recipe))
     if "eval_drain" not in recipe["trainer"]["rollout_buffer"]:
         raise ValueError("Every adopted RL round must explicitly choose rollout_buffer.eval_drain: wait or abort")
+    draft = round_draft(spec)
+    if draft is not None:
+        generator = recipe.setdefault("generator", {})
+        if generator.get("speculative_decoding") is not None:
+            raise ValueError(
+                "A round cannot bind both a registered draft and an explicit generator.speculative_decoding block"
+            )
+        generator["speculative_decoding"] = draft.speculative_decoding()
     if rl.selection_eligibility not in {"covered", "complete_window"}:
         raise ValueError("Unknown checkpoint selection eligibility")
     adopted = ArtifactStep.adopt(
@@ -821,17 +891,9 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
             MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
         )
         terminal = adopted_round_rl(round_spec, smoke=smoke)
+        plan = adopted_round_resolved_plan(round_spec, source_revision=source_revision, workspace=workspace)
         validation_output.mkdir(parents=True, exist_ok=True)
-        (validation_output / "resolved-plan.json").write_text(
-            json.dumps(
-                {
-                    **dataclasses.asdict(round_spec),
-                    "marin_revision": source_revision,
-                    "runtime_source": runtime_source_manifest(workspace, source_revision),
-                },
-                indent=2,
-            )
-        )
+        (validation_output / "resolved-plan.json").write_text(json.dumps(plan, indent=2))
         validate_graph(
             terminal,
             validation_output,
