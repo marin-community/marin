@@ -11,6 +11,7 @@ import jax.random as jrandom
 import numpy as np
 import pytest
 from chex import assert_trees_all_close
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 import haliax as hax
 from haliax import NamedArray, Axis
@@ -514,3 +515,37 @@ def test_attention_paged_decode_ragged_fill_in_chunks():
 
     decoded_arr = hax.stack("batch", [outputs0_cat, outputs1_cat])
     assert_trees_all_close(full_out.array, decoded_arr.array, atol=tol, rtol=tol)
+
+
+@pytest.mark.parametrize("capacity", [8, 16])
+def test_kv_cache_updates_sharded_heads_in_order(capacity):
+    mesh = Mesh(np.array(jax.devices()[:1]), ("head",), (AxisType.Explicit,))
+    with jax.set_mesh(mesh):
+        cache_sharding = NamedSharding(mesh, P(None, None, "head", None))
+        pages = jax.device_put(jnp.zeros((3, 4, 2, 2)), cache_sharding)
+        cache = KvPageCache(hax.named(pages, ("page", "slot", "kv_head", "head_size")))
+
+        # The third token overwrites the first one, and padded rows must leave
+        # the otherwise valid location (0, 0) untouched.
+        destinations = hax.named(jnp.array([5, 9, 5] + [0] * (capacity - 3)), "position")
+        batch = PageBatchInfo(
+            slot_ids=hax.named(jnp.array([0]), "seq"),
+            page_indices=hax.named(jnp.array([[1, 2]]), ("seq", "page")),
+            seq_lens=hax.named(jnp.array([3]), "seq"),
+            cu_q_lens=hax.named(jnp.array([0, 3]), "seq"),
+            num_seqs=jnp.array(1),
+            new_token_dests=destinations,
+            page_size=4,
+        )
+        keys = np.arange(capacity * 2, dtype=np.float32).reshape(capacity, 1, 2) + 1
+        values = -keys
+        layout = NamedSharding(mesh, P(None, "head", None))
+        axes = ("position", "kv_head", "head_size")
+        updated = cache.update(
+            batch, hax.named(jax.device_put(keys, layout), axes), hax.named(jax.device_put(values, layout), axes)
+        )
+
+    expected = np.zeros((3, 4, 2, 2), dtype=np.float32)
+    expected[1, 1] = np.concatenate((keys[2], values[2]))
+    expected[2, 1] = np.concatenate((keys[1], values[1]))
+    np.testing.assert_array_equal(updated.kv_pages.array, expected)
