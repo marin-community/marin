@@ -24,11 +24,11 @@ from levanter.models.snowball import SnowballConfig
 from levanter.tokenizers import load_tokenizer
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+from marin.inference.config import SNOWBALL_AGENTX_EXPERT_SHARDS
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
 from marin.inference.snowball_agentx import (
     AGENTX_BATCH_TIMEOUT,
     AGENTX_CONTEXT,
-    AGENTX_EXPERT_SHARDS,
     agentx_engine_config,
     load_agentx_model,
     require_agentx_devices,
@@ -88,7 +88,9 @@ def main() -> None:
     receipt = read_record(args.workload)
     trainer = TrainerConfig(
         mp=jmp.get_policy("p=bf16,c=bf16"),
-        mesh=MeshConfig(axes={"replica": 1, "data": 1, "model": 1, "expert": AGENTX_EXPERT_SHARDS, "context": 1}),
+        mesh=MeshConfig(
+            axes={"replica": 1, "data": 1, "model": 1, "expert": SNOWBALL_AGENTX_EXPERT_SHARDS, "context": 1}
+        ),
         use_explicit_mesh_axes=True,
     )
     server_config = InferenceServerConfig(

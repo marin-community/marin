@@ -393,6 +393,8 @@ class VllmEngineConfig:
 
 DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE = 1
 LevanterServingProfile = Literal["standard", "snowball_agentx_v5p"]
+SNOWBALL_AGENTX_PROFILE: LevanterServingProfile = "snowball_agentx_v5p"
+SNOWBALL_AGENTX_EXPERT_SHARDS = 4
 SNOWBALL_AGENTX_LIBTPU_INIT_ARGS = "--xla_tpu_scoped_vmem_limit_kib=50000 --xla_tpu_use_enhanced_launch_barrier=true"
 
 
@@ -406,8 +408,11 @@ class LevanterEngineConfig:
     profile: LevanterServingProfile = "standard"
 
     def __post_init__(self) -> None:
-        if self.profile == "snowball_agentx_v5p" and (self.page_size != 128 or self.hbm_utilization != 0.8):
-            raise ValueError("The native Snowball AgentX profile uses 128-token pages and fixed KV capacity")
+        if self.profile == SNOWBALL_AGENTX_PROFILE:
+            if self.page_size != 128 or self.hbm_utilization != 0.8:
+                raise ValueError("The native Snowball AgentX profile uses 128-token pages and fixed KV capacity")
+            if self.expert_parallel_size not in (DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE, SNOWBALL_AGENTX_EXPERT_SHARDS):
+                raise ValueError("The native Snowball AgentX profile uses four expert shards")
         if self.expert_parallel_size < 1:
             raise ValueError("expert_parallel_size must be positive")
         if self.max_seqs <= 0:

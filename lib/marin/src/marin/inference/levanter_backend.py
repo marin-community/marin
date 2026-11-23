@@ -24,13 +24,17 @@ from levanter.utils.mesh import MeshConfig
 from transformers import PreTrainedTokenizerBase
 
 from marin.inference.backend import ModelSpec
-from marin.inference.config import DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE, LevanterEngineConfig
+from marin.inference.config import (
+    DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
+    SNOWBALL_AGENTX_EXPERT_SHARDS,
+    SNOWBALL_AGENTX_PROFILE,
+    LevanterEngineConfig,
+)
 from marin.inference.dashboard_server import BackgroundServer, bind_serving_socket, serve_app_background
 from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size, tool_chat_template
 from marin.inference.snowball_agentx import (
     AGENTX_BATCH_TIMEOUT,
     AGENTX_CONTEXT,
-    AGENTX_EXPERT_SHARDS,
     agentx_engine_config,
     load_agentx_model,
     require_agentx_devices,
@@ -116,20 +120,22 @@ class LevanterBackend:
 
     @property
     def _uses_native_agentx_profile(self) -> bool:
-        return self.config.profile == "snowball_agentx_v5p"
+        return self.config.profile == SNOWBALL_AGENTX_PROFILE
 
     @property
     def _expert_parallel_size(self) -> int:
-        return AGENTX_EXPERT_SHARDS if self._uses_native_agentx_profile else self.config.expert_parallel_size
+        return SNOWBALL_AGENTX_EXPERT_SHARDS if self._uses_native_agentx_profile else self.config.expert_parallel_size
 
     def _resolved_spec(self, spec: ModelSpec) -> ModelSpec:
         if self._uses_native_agentx_profile:
             require_agentx_devices()
-            if spec.num_chips not in (None, AGENTX_EXPERT_SHARDS) or spec.tensor_parallel_size not in (None, 1):
+            if spec.num_chips not in (None, SNOWBALL_AGENTX_EXPERT_SHARDS) or spec.tensor_parallel_size not in (None, 1):
                 raise ValueError("Native Snowball AgentX uses four expert shards and one tensor shard")
             if spec.dtype != "bfloat16" or spec.max_model_len not in (None, AGENTX_CONTEXT):
                 raise ValueError("Native Snowball AgentX uses BF16 weights and a 65536-token context")
-            return replace(spec, num_chips=AGENTX_EXPERT_SHARDS, tensor_parallel_size=1, max_model_len=AGENTX_CONTEXT)
+            return replace(
+                spec, num_chips=SNOWBALL_AGENTX_EXPERT_SHARDS, tensor_parallel_size=1, max_model_len=AGENTX_CONTEXT
+            )
         num_chips = spec.num_chips or jax.device_count()
         tensor_parallel_size = spec.tensor_parallel_size
         expert_parallel_size = self._expert_parallel_size
