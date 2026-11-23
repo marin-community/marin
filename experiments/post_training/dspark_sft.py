@@ -100,7 +100,7 @@ class OfflineDSpark:
 
 
 def artifacts(config: OfflineDSpark) -> tuple[ArtifactStep, ArtifactStep]:
-    """Bind the CPU dataset and the terminal vLLM checkpoint artifact."""
+    """Bind the prepared dataset and published DSpark draft artifact."""
 
     if not config.teacher.identity.strip():
         raise ValueError("Provide the completed SFT export's provenance identity")

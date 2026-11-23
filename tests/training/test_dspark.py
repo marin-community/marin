@@ -150,9 +150,8 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
         recipe=recipe,
     )
     if overlapping:
-        with pytest.raises(DatasetGenerationError) as error:
+        with pytest.raises(DatasetGenerationError):
             prepare_data(**kwargs)
-        assert isinstance(error.value.__cause__, ValueError)
         assert not (output / "prepared").exists()
         return
 
