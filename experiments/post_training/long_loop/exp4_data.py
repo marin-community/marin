@@ -229,9 +229,10 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
             for index, raw_task in part_result:
                 regenerated[index] = raw_task
     if len(regenerated) != GENERATED_ROW_COUNT or rejections:
+        details = json.dumps(rejections[:3], indent=1)
         raise ValueError(
             f"The regeneration kept {len(regenerated)} rows with {len(rejections)} rejections; "
-            f"the adopted label holds {GENERATED_ROW_COUNT}"
+            f"the adopted label holds {GENERATED_ROW_COUNT}: {details}"
         )
     for index, old in sorted(old_rows.items()):
         new = json.loads(regenerated[index])
