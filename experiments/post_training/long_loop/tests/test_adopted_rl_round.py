@@ -5,6 +5,7 @@ import copy
 import dataclasses
 import hashlib
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -456,8 +457,8 @@ def _exp5_style_pools(root, *, with_openresearcher: bool) -> dict:
     manifest["routes"][label] = "nonagentic"
     if with_openresearcher:
         manifest["openresearcher"] = {
-            "dataset_id": "OpenResearcher/OpenResearcher-Dataset",
-            "dataset_revision": "test-revision",
+            "dataset_id": "open-athena/openresearcher-openresearcher-dataset-service-20261121-v1",
+            "dataset_revision": "0c4f39584d7f0121e97f6ad4f4761749add56fef",
             "parquet_sha256": hashlib.sha256(content).hexdigest(),
         }
     else:
@@ -478,9 +479,9 @@ def _exp5_style_round(round_spec, *, with_openresearcher: bool):
 
 def _service_binding() -> OpenResearcherService:
     return OpenResearcherService(
-        dataset_id="OpenResearcher/OpenResearcher-Dataset",
-        dataset_revision="test-revision",
-        index_uri="s3://marin-us-east-08a/marin/users/benfeuer/openresearcher/index",
+        dataset_id="open-athena/openresearcher-openresearcher-dataset-service-20261121-v1",
+        dataset_revision="0c4f39584d7f0121e97f6ad4f4761749add56fef",
+        index_uri="s3://marin-us-east-08a/marin/rl-data/openresearcher/bm25-index/2026.11.15.1",
         parquet_sha256=hashlib.sha256(b"pinned OpenResearcher:OpenResearcher-Dataset pool").hexdigest(),
     )
 
@@ -526,3 +527,73 @@ def test_round_openresearcher_service_wires_machine_contract_and_retrieval_run(r
     assert machine["OpenResearcher/OpenResearcher-Dataset"]["backend"] == "daytona"
     buffer = launch["skyrl"]["trainer"]["rollout_buffer"]
     assert buffer["source_routes"]["OpenResearcher/OpenResearcher-Dataset"] == "nonagentic"
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_specdec_gate_arms_differ_only_in_the_draft_binding(round_inputs, local_round, tmp_path):
+    """Load the real gate round YAMLs onto local fixtures and compare their launch configs."""
+    model, data = round_inputs
+    plain = load_round(ROUND_DIR / "snowball-specdec-gate-plain.yaml")
+    dspark = load_round(ROUND_DIR / "snowball-specdec-gate-dspark.yaml")
+    assert plain.rl.draft is None and dspark.rl.draft is not None
+    manifest = _exp5_style_pools(data, with_openresearcher=True)
+    manifest["routes"] = dict(plain.rl.recipe["trainer"]["rollout_buffer"]["source_routes"])
+    (data / "manifest.json").write_text(json.dumps(manifest))
+    pins = {
+        name: hashlib.sha256((model / name).read_bytes()).hexdigest() for name in ("config.json", "export-manifest.json")
+    }
+    arms = []
+    for spec in (plain, dspark):
+        local = dataclasses.replace(
+            spec,
+            adopted_model=dataclasses.replace(
+                spec.adopted_model,
+                uri=str(model),
+                export_manifest_sha256=pins["export-manifest.json"],
+                config_sha256=pins["config.json"],
+                checkpoint_step=400407,
+            ),
+            rl=dataclasses.replace(
+                spec.rl,
+                pools={"uri": str(data)},
+                openresearcher_service=dataclasses.replace(
+                    spec.rl.openresearcher_service,
+                    parquet_sha256=hashlib.sha256((data / _OPENRESEARCHER_PATH).read_bytes()).hexdigest(),
+                ),
+            ),
+        )
+        arms.append(_round_launch(local, tmp_path))
+
+    def comparable(launch):
+        document = copy.deepcopy(launch)
+        text = json.dumps(document, sort_keys=True)
+        for arm in ("plain", "dspark"):
+            text = text.replace(f"snowball-specdec-gate-{arm}", "ARM")
+            text = text.replace(f"-4eng-{arm}", "-4eng-ARM")
+            text = text.replace(f"2026.11.23.{'1' if arm == 'plain' else '2'}", "VERSION")
+        document = json.loads(text)
+        document["run"].pop("attempt_id", None)
+        # The coordinator job name carries a per-arm fingerprint suffix; the draft makes the arms differ.
+        document["iris"]["job_name"] = re.sub(r"-[0-9a-f]+$", "-FINGERPRINT", document["iris"]["job_name"])
+        return document
+
+    plain_doc, dspark_doc = comparable(arms[0]), comparable(arms[1])
+    assert plain_doc["skyrl"]["generator"].get("speculative_decoding") is None
+    draft = dspark_doc["skyrl"]["generator"].pop("speculative_decoding")
+    assert draft["method"] == "dspark" and draft["num_speculative_tokens"] == 4
+
+    def differences(left, right, prefix=""):
+        if isinstance(left, dict) and isinstance(right, dict):
+            return [
+                d
+                for key in sorted(set(left) | set(right))
+                for d in differences(left.get(key), right.get(key), f"{prefix}.{key}")
+            ]
+        if isinstance(left, list) and isinstance(right, list) and len(left) == len(right):
+            pairs = [
+                differences(l, r, f"{prefix}[{index}]") for index, (l, r) in enumerate(zip(left, right, strict=False))
+            ]
+            return [d for group in pairs for d in group]
+        return [] if left == right else [(prefix, left, right)]
+
+    assert differences(plain_doc, dspark_doc) == []
