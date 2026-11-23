@@ -920,8 +920,10 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
     # name, which differs per node, so the exclusion trick does not transfer.
     _CLUSTER_ENV_DEFAULTS: dict[str, dict[str, str]] = {
         "cw-rno2a": {"NCCL_SOCKET_IFNAME": "^ibs,ibp,lo,docker,veth,cilium,lxc"},
-        "cw-us-east-02a": {"NCCL_IB_HCA": "ibp"},
     }
+    if args.cluster == "cw-us-east-02a":
+        cluster_config = _load_cluster_config(str(workspace / "lib/iris/config/cw-us-east-02a.yaml"))
+        _CLUSTER_ENV_DEFAULTS[args.cluster] = {"NCCL_IB_HCA": cluster_config["defaults"]["task_env"]["NCCL_IB_HCA"]}
     for _k, _v in _CLUSTER_ENV_DEFAULTS.get(args.cluster, {}).items():
         if _k not in env_vars:
             env_vars[_k] = _v
