@@ -257,7 +257,7 @@ workpiece without new model calls.
 (author, adversary or reviewer) is recorded as a `context_exceeded` completion, so a resumed visit replays the
 stop. This revision and later ones read every row earlier drivers wrote; earlier drivers reject that row. The
 earlier driver of this journal format raises while it reads the journal, before it claims or publishes anything,
-so the root stays as published (read from its code, not run: `CheckpointSink.claim` decodes the history before it swaps the head). No
+so the root stays as published: `CheckpointSink.claim` decodes the history before it swaps the head. No
 format number fences the drivers before this layout. So roots written by this revision or later must never be
 launched by an earlier driver, and a rollback of the binary uses a fresh output prefix.
 
