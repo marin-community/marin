@@ -206,7 +206,7 @@ def test_decode_buckets_preserve_generations_and_bound_kernel_token_shapes(monke
     run_decode = engine_module._run_generation_loop
 
     def record_prefill(state, model, sampler, work, *args):
-        prefill_sizes.append(work.queue.queued_tokens.size)
+        prefill_sizes.append((work.queue.queued_tokens.size, work.prompt_tokens.axis_size("seq")))
         return run_prefill(state, model, sampler, work, *args)
 
     def record_decode(state, model, sampler, capacity, *args):
@@ -240,5 +240,5 @@ def test_decode_buckets_preserve_generations_and_bound_kernel_token_shapes(monke
         result = engine.generate(requests)
 
     assert result.tokens == [[3, 3, 3], [3]]
-    assert prefill_sizes == [4]
+    assert prefill_sizes == [(4, 2)]
     assert decode_sizes == [1, 1]
