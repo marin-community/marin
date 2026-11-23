@@ -739,6 +739,16 @@ def test_resolve_serving_plan_picks_the_worker_extras_the_backend_needs(override
     assert plan.worker_extras == worker_extras
 
 
+def test_native_snowball_agentx_plan_reserves_its_v5p_slice():
+    engine = LevanterEngineConfig(profile="snowball_agentx_v5p", max_seqs=128)
+    plan = _plan(backend="levanter", tpu="v5p-8", levanter=engine)
+    assert plan.tpu_types == ("v5p-8",)
+    assert plan.engine == engine
+
+    with pytest.raises(click.ClickException, match="requires --tpu v5p-8"):
+        _plan(backend="levanter", tpu="v6e-8", levanter=engine)
+
+
 def test_gpu_plan_defaults_to_upstream_launcher():
     plan = _plan(gpu="H100x8")
     assert plan.engine == VllmEngineConfig(

@@ -42,6 +42,7 @@ import time
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import get_args
 
 import click
 import requests
@@ -64,12 +65,14 @@ from rigging.timing import Duration
 
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    SNOWBALL_AGENTX_LIBTPU_INIT_ARGS,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
     InferenceWorkerConfig,
     IrisConfig,
     LevanterEngineConfig,
+    LevanterServingProfile,
     ServedModelConfig,
     ServingGeometry,
     VllmEngineConfig,
@@ -112,6 +115,7 @@ _LEVANTER_ONLY_OPTIONS = {
     "max_seqs": "--max-seqs",
     "page_size": "--page-size",
     "hbm_utilization": "--hbm-utilization",
+    "levanter_profile": "--levanter-profile",
 }
 
 
@@ -159,6 +163,11 @@ def _resolve_serving_plan(
         raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
     if vllm.router is not None and (gpu is None or backend != "vllm"):
         raise click.ClickException("--session-router requires --gpu with the vLLM backend")
+    if backend == "levanter" and levanter.profile == "snowball_agentx_v5p":
+        if gpu is not None or tpu != "v5p-8":
+            raise click.ClickException("The Snowball AgentX profile requires --tpu v5p-8")
+        if not in_checkout:
+            raise click.ClickException("Run the Snowball AgentX profile from a Marin checkout")
     if gpu is not None:
         if not in_checkout:
             raise click.ClickException(
@@ -409,6 +418,7 @@ def _wait_and_report_endpoint(
 )
 @click.option("--max-seqs", type=int, default=16, help="Levanter backend: concurrent sequence slots.")
 @click.option("--page-size", type=int, default=128, help="Levanter backend: tokens per KV-cache page.")
+@click.option("--levanter-profile", type=click.Choice(get_args(LevanterServingProfile)), default="standard")
 @click.option(
     "--hbm-utilization",
     type=float,
@@ -526,6 +536,7 @@ def main(
     max_seqs: int,
     page_size: int,
     hbm_utilization: float,
+    levanter_profile: LevanterServingProfile,
     tensor_parallel_size: int | None,
     data_parallel_size: int | None,
     session_router: bool,
@@ -604,7 +615,9 @@ def main(
                 else None
             ),
         ),
-        levanter=LevanterEngineConfig(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
+        levanter=LevanterEngineConfig(
+            max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization, profile=levanter_profile
+        ),
         extras=extras,
     )
     if vllm_release is not None:
@@ -669,10 +682,16 @@ def main(
     setup_scripts = None
     if workspace_dir is None:
         setup_scripts = [_checkout_free_setup_script(_marin_core_version(), plan.worker_extras)]
+    agentx_environment = (
+        {"JAX_PLATFORMS": "tpu", "LIBTPU_INIT_ARGS": SNOWBALL_AGENTX_LIBTPU_INIT_ARGS}
+        if isinstance(plan.engine, LevanterEngineConfig) and plan.engine.profile == "snowball_agentx_v5p"
+        else None
+    )
     worker_environment = create_environment(
         workspace=str(workspace_dir or Path.cwd()),
         extras=plan.worker_extras,
         setup_scripts=setup_scripts,
+        env_vars=agentx_environment,
     )
     model_config = ServedModelConfig(
         weights=model,

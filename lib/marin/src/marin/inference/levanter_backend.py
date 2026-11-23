@@ -27,6 +27,14 @@ from marin.inference.backend import ModelSpec
 from marin.inference.config import DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE, LevanterEngineConfig
 from marin.inference.dashboard_server import BackgroundServer, bind_serving_socket, serve_app_background
 from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size, tool_chat_template
+from marin.inference.snowball_agentx import (
+    AGENTX_BATCH_TIMEOUT,
+    AGENTX_CONTEXT,
+    AGENTX_EXPERT_SHARDS,
+    agentx_engine_config,
+    load_agentx_model,
+    require_agentx_devices,
+)
 from marin.inference.vllm_server import (
     JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS,
     JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES,
@@ -49,10 +57,7 @@ LEVANTER_DTYPES = ("bfloat16", "float16", "float32")
 class SupportsPagedGeneration(Protocol):
     """A Levanter model the paged-decode inference engine can drive.
 
-    :meth:`LevanterBackend.serve` builds an ``InferenceEngine`` that calls ``initial_cache`` and
-    ``decode``. A model that implements only the full-forward ``LmHeadModel`` interface -- e.g.
-    Snowball, which has no paged decode for grug attention yet -- cannot be served through it, so
-    ``serve`` rejects it up front rather than after the (large) weight load.
+    :meth:`LevanterBackend.serve` checks for paged generation methods before loading weights.
     """
 
     def initial_cache(self, spec, *, dtype): ...
@@ -109,10 +114,25 @@ class LevanterBackend:
     port: int = 0
     name: str = "levanter"
 
+    @property
+    def _uses_native_agentx_profile(self) -> bool:
+        return self.config.profile == "snowball_agentx_v5p"
+
+    @property
+    def _expert_parallel_size(self) -> int:
+        return AGENTX_EXPERT_SHARDS if self._uses_native_agentx_profile else self.config.expert_parallel_size
+
     def _resolved_spec(self, spec: ModelSpec) -> ModelSpec:
+        if self._uses_native_agentx_profile:
+            require_agentx_devices()
+            if spec.num_chips not in (None, AGENTX_EXPERT_SHARDS) or spec.tensor_parallel_size not in (None, 1):
+                raise ValueError("Native Snowball AgentX uses four expert shards and one tensor shard")
+            if spec.dtype != "bfloat16" or spec.max_model_len not in (None, AGENTX_CONTEXT):
+                raise ValueError("Native Snowball AgentX uses BF16 weights and a 65536-token context")
+            return replace(spec, num_chips=AGENTX_EXPERT_SHARDS, tensor_parallel_size=1, max_model_len=AGENTX_CONTEXT)
         num_chips = spec.num_chips or jax.device_count()
         tensor_parallel_size = spec.tensor_parallel_size
-        expert_parallel_size = self.config.expert_parallel_size
+        expert_parallel_size = self._expert_parallel_size
         chips_per_expert_shard, remainder = divmod(num_chips, expert_parallel_size)
         if remainder or not chips_per_expert_shard:
             raise ValueError(f"expert_parallel_size={expert_parallel_size} does not divide the {num_chips}-chip slice.")
@@ -155,7 +175,7 @@ class LevanterBackend:
             model_config = dataclasses.replace(model_config, **dict(config_overrides))
         trainer = TrainerConfig(
             mp=jmp.get_policy(f"p={dtype},c={dtype}"),
-            mesh=inference_mesh(spec.num_chips, spec.tensor_parallel_size, self.config.expert_parallel_size),
+            mesh=inference_mesh(spec.num_chips, spec.tensor_parallel_size, self._expert_parallel_size),
             use_explicit_mesh_axes=model_config.requires_explicit_mesh_axes,
         )
         tokenizer = load_tokenizer(spec.tokenizer_source, revision=spec.tokenizer_revision)
@@ -175,7 +195,11 @@ class LevanterBackend:
         )
 
         with trainer.use_device_mesh():
-            if self.config.checkpoint_load_mode == "snowball_layerwise":
+            if self._uses_native_agentx_profile:
+                if not isinstance(model_config, SnowballConfig):
+                    raise ValueError("Native Snowball AgentX requires a Snowball checkpoint")
+                model = load_agentx_model(converter, checkpoint_ref, model_config, trainer.parameter_axis_mapping)
+            elif self.config.checkpoint_load_mode == "snowball_layerwise":
                 if not isinstance(model_config, SnowballConfig):
                     raise ValueError("Layerwise serving load requires a Snowball checkpoint")
                 model = load_snowball_serving_model(
@@ -219,20 +243,28 @@ class LevanterBackend:
             chat_template_content = tool_chat_template(loaded.tokenizer)
             # InferenceServer.create must build the engine on-mesh, so it runs inside load_model's
             # device-mesh context; the serve loop below then runs off-mesh, as before.
-            server = InferenceServer.create(
-                InferenceServerConfig(
-                    trainer=loaded.trainer,
-                    tokenizer=tokenizer_ref,
-                    model_name=spec.api_model,
-                    service=InferenceEngineConfig(
-                        max_seq_len=loaded.max_seq_len,
-                        max_seqs=self.config.max_seqs,
-                        page_size=self.config.page_size,
-                        hbm_utilization=self.config.hbm_utilization,
-                        max_queued_tokens=max(_MIN_QUEUED_TOKENS, self.config.max_seqs),
-                        compute_dtype=jnp.dtype(loaded.compute_dtype),
-                    ),
+            server_config = InferenceServerConfig(
+                trainer=loaded.trainer,
+                tokenizer=tokenizer_ref,
+                model_name=spec.api_model,
+                service=InferenceEngineConfig(
+                    max_seq_len=loaded.max_seq_len,
+                    max_seqs=self.config.max_seqs,
+                    page_size=self.config.page_size,
+                    hbm_utilization=self.config.hbm_utilization,
+                    max_queued_tokens=max(_MIN_QUEUED_TOKENS, self.config.max_seqs),
+                    compute_dtype=jnp.dtype(loaded.compute_dtype),
                 ),
+            )
+            if self._uses_native_agentx_profile:
+                server_config = dataclasses.replace(
+                    server_config,
+                    service=agentx_engine_config(self.config.max_seqs),
+                    batch_timeout=AGENTX_BATCH_TIMEOUT,
+                    initial_policy_id=str(checkpoint_ref),
+                )
+            server = InferenceServer.create(
+                server_config,
                 model=loaded.model,
                 tokenizer=loaded.tokenizer,
             )
