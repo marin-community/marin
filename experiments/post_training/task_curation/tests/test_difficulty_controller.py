@@ -182,7 +182,7 @@ def test_controller_recovers_catalog_connection_failure_before_reconciling(tmp_p
 
 
 def test_launcher_loads_provider_credentials_from_explicit_file(tmp_path, monkeypatch):
-    names = ("GLM_BULK_TOKEN", "TOGETHER_API_KEY", "HF_TOKEN", "DAYTONA_DATA_API_KEY")
+    names = ("GLM_BULK_TOKEN", "HF_TOKEN", "DAYTONA_DATA_API_KEY")
     secret_file = tmp_path / "credentials.env"
     secret_file.write_text("\n".join(f"{name}=file-{name}" for name in names))
     for name in names:
