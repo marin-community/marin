@@ -48,10 +48,14 @@ class StageAlert:
         }
 
 
-def emit_stage_event(alert: StageAlert, feeds: tuple[Path, ...] = (WATCHDOG_FEED,)) -> None:
-    """Append one stage event to each feed (created on first write)."""
+def emit_stage_event(alert: StageAlert, feeds: tuple[Path, ...] | None = None) -> None:
+    """Append one stage event to each feed (created on first write).
+
+    The sink resolves at call time so a test suite can repoint the module default
+    (see the task-curation conftest): tests never emit to the production feed.
+    """
     row = json.dumps(alert.to_row(), sort_keys=True) + "\n"
-    for feed in feeds:
+    for feed in feeds if feeds is not None else (WATCHDOG_FEED,):
         feed.parent.mkdir(parents=True, exist_ok=True)
         with feed.open("a", encoding="utf-8") as handle:
             handle.write(row)
@@ -62,7 +66,7 @@ def stage_key(release_id: str, stage: str) -> str:
     return f"atlas-release:{release_id}:{stage}"
 
 
-def stage_started(release_id: str, stage: str, evidence: dict, feeds: tuple[Path, ...] = (WATCHDOG_FEED,)) -> None:
+def stage_started(release_id: str, stage: str, evidence: dict, feeds: tuple[Path, ...] | None = None) -> None:
     emit_stage_event(
         StageAlert(
             key=stage_key(release_id, stage),
@@ -76,7 +80,7 @@ def stage_started(release_id: str, stage: str, evidence: dict, feeds: tuple[Path
     )
 
 
-def stage_finished(release_id: str, stage: str, evidence: dict, feeds: tuple[Path, ...] = (WATCHDOG_FEED,)) -> None:
+def stage_finished(release_id: str, stage: str, evidence: dict, feeds: tuple[Path, ...] | None = None) -> None:
     emit_stage_event(
         StageAlert(
             key=stage_key(release_id, stage),
@@ -90,7 +94,7 @@ def stage_finished(release_id: str, stage: str, evidence: dict, feeds: tuple[Pat
     )
 
 
-def stage_failed(release_id: str, stage: str, evidence: dict, feeds: tuple[Path, ...] = (WATCHDOG_FEED,)) -> None:
+def stage_failed(release_id: str, stage: str, evidence: dict, feeds: tuple[Path, ...] | None = None) -> None:
     emit_stage_event(
         StageAlert(
             key=stage_key(release_id, stage),

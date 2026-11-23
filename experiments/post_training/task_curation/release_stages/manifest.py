@@ -8,8 +8,12 @@ plan hashes — lives on these typed models and flows through the graph as artif
 fields. Stage worker source never carries such literals (``guard.py`` enforces it).
 """
 
+import hashlib
+import json
+
 from marin.execution.artifact import Artifact
 from pydantic import BaseModel
+from rigging.filesystem.storage_path import StoragePath
 
 
 class ArtifactRef(BaseModel):
@@ -87,6 +91,14 @@ class ReceiptRef(BaseModel):
 
     stage: str
     artifact: ArtifactRef
+
+
+def read_ref(ref: ArtifactRef) -> dict:
+    """Read and digest-verify one sealed JSON reference."""
+    payload = StoragePath(ref.uri).read_bytes()
+    if hashlib.sha256(payload).hexdigest() != ref.sha256:
+        raise ValueError(f"sealed reference digest mismatch: {ref.uri}")
+    return json.loads(payload)
 
 
 class ReleaseManifest(Artifact):

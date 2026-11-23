@@ -23,6 +23,7 @@ from experiments.post_training.task_curation.full_qc_inputs import InputConfig
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, HostedJudgeEndpoint
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
+from experiments.post_training.task_curation.release_stages import alerts as release_stage_alerts
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
 from experiments.post_training.task_curation.sample_qc_artifacts import SamplePanel
 from experiments.post_training.task_curation.tests.admission_fixtures import (
@@ -196,3 +197,14 @@ def difficulty_source(tmp_path):
         return source
 
     return build
+
+
+@pytest.fixture(autouse=True)
+def _stage_alert_sink(tmp_path, monkeypatch):
+    """Repoint the release-stage alert sink for every test.
+
+    The coordinator ruled (2026-11-23) that tests and fixture dry-runs must never
+    emit to the production ops feed: a stage run that forgets its ``feeds``
+    argument lands in this per-test file instead of the job-watchdog feed.
+    """
+    monkeypatch.setattr(release_stage_alerts, "WATCHDOG_FEED", tmp_path / "stage-alerts.jsonl")

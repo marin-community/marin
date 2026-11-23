@@ -40,13 +40,14 @@ from experiments.post_training.task_curation.catalog_identity import (
     canonical_snapshot_source,
 )
 from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
+from experiments.post_training.task_curation.release_stages.admission_check import review_admissions
 from experiments.post_training.task_curation.release_stages.history_staging import (
     DEFAULT_APPLET_ID,
     DEFAULT_SERVICE_URL,
     Query,
     history_staging_sizing,
 )
-from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load_derived_contract import load_contracts
@@ -83,6 +84,7 @@ class CatalogLoadInputs:
     measured_revision: str
     measured_sha256: str
     measured_schema_sha256: str
+    previously_available: tuple[str, ...] = ()
     migrations: tuple[str, ...] = ()
     service_url: str = DEFAULT_SERVICE_URL
     applet_id: str = DEFAULT_APPLET_ID
@@ -100,14 +102,6 @@ class CatalogLoadInputs:
                 raise ValueError(f"staging refs must include {required!r}")
         if self.expected_source_count <= 0 or self.expected_selected_panels <= 0:
             raise ValueError("expected counts must be positive")
-
-
-def read_ref(ref: ArtifactRef) -> dict:
-    """Read and digest-verify one sealed JSON reference."""
-    payload = StoragePath(ref.uri).read_bytes()
-    if hashlib.sha256(payload).hexdigest() != ref.sha256:
-        raise ValueError(f"sealed reference digest mismatch: {ref.uri}")
-    return json.loads(payload)
 
 
 def read_catalog_state(catalog_root: str, inputs: CatalogLoadInputs, publication: dict) -> list:
@@ -145,7 +139,13 @@ def verify_measured_dependency(inputs: CatalogLoadInputs) -> None:
 
 
 def run_dry_run(inputs: CatalogLoadInputs) -> dict:
-    """Validate every sealed reference and the catalog alignment with zero SQL."""
+    """Validate every sealed reference and the catalog alignment with zero SQL.
+
+    Coordinator design input (2026-11-23, after the catalog-load v1/v2 cluster
+    failures): the dry run also runs the load-time admission gate over every source
+    to be admitted and reports ALL blocked sources at once, so a blocked source
+    fails the dry run — never the cluster job.
+    """
     publication = read_ref(inputs.publication)
     contracts_document = read_ref(inputs.staging["contracts"])
     contract_rows = contracts_document if isinstance(contracts_document, list) else [contracts_document]
@@ -158,7 +158,14 @@ def run_dry_run(inputs: CatalogLoadInputs) -> dict:
     for position, migration in enumerate(inputs.migrations):
         if migration + ";" not in SCHEMA_SQL:
             raise ValueError(f"migration {position} is not part of the in-repo schema: {migration!r}")
-    read_catalog_state(inputs.catalog_root, inputs, publication)
+    snapshot_sources = read_catalog_state(inputs.catalog_root, inputs, publication)
+    backend_document = read_ref(ArtifactRef(**publication["backend"]))
+    survey = canonical_backend_survey(backend_document)
+    review_admissions(
+        {row.id: row.declaration.model_dump(mode="json") for row in snapshot_sources},
+        survey,
+        set(inputs.previously_available),
+    )
     return {
         "kind": "catalog-load-dry-run",
         "release_id": inputs.release_id,

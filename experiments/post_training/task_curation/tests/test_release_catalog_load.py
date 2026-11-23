@@ -87,9 +87,9 @@ def test_dry_run_refuses_measured_dependency_drift(tmp_path, monkeypatch):
         cl.run_dry_run(inputs)
 
 
-def test_dry_run_passes_with_aligned_state(tmp_path, monkeypatch):
-    contracts = [{"input": {"measured_tasks": 10}}]
-    inputs = _inputs(tmp_path, contract_rows=contracts)
+def _aligned_state(tmp_path, monkeypatch):
+    """The full aligned-state fixture: publication, catalog, measured module, review stub."""
+    inputs = _inputs(tmp_path, contract_rows=[{"input": {"measured_tasks": 10}}])
     monkeypatch.setattr(cl, "backend_schema_sha256", lambda: MEASURED_SCHEMA)
 
     source_file = tmp_path / "task_models.py"
@@ -114,7 +114,30 @@ def test_dry_run_passes_with_aligned_state(tmp_path, monkeypatch):
             return [{"id": "s1"}, {"id": "s2"}]
 
     monkeypatch.setattr(cl, "CurationCatalog", FakeCatalog)
-    monkeypatch.setattr(cl, "canonical_snapshot_source", lambda row: type("S", (), {"id": row["id"]})())
+    monkeypatch.setattr(
+        cl,
+        "canonical_snapshot_source",
+        lambda row: type(
+            "S",
+            (),
+            {
+                "id": row["id"],
+                "declaration": type("D", (), {"model_dump": lambda self, mode=None: {}})(),
+            },
+        )(),
+    )
+    reviewed = {}
+    monkeypatch.setattr(
+        cl,
+        "review_admissions",
+        lambda declarations, survey, available: reviewed.update(
+            {source_id: sorted(available) for source_id in declarations}
+        )
+        or None,
+    )
+    # The survey model itself is exercised in test_release_admission_check; this
+    # test pins the load-level wiring.
+    monkeypatch.setattr(cl, "canonical_backend_survey", lambda document: object())
 
     backend_path = tmp_path / "backend.json"
     backend_path.write_text(json.dumps({"sources": [{"source_id": "s1"}, {"source_id": "s2"}]}))
@@ -132,11 +155,30 @@ def test_dry_run_passes_with_aligned_state(tmp_path, monkeypatch):
             uri=str(publication_path), sha256=hashlib.sha256(publication_path.read_bytes()).hexdigest()
         ),
     )
+    return inputs, reviewed
 
+
+def test_dry_run_passes_with_aligned_state(tmp_path, monkeypatch):
+    inputs, reviewed = _aligned_state(tmp_path, monkeypatch)
     proof = cl.run_dry_run(inputs)
     assert proof["sql_writes"] == 0
     assert proof["target_load_id"] == TARGET
     assert proof["contracts"] == 1
+    # The dry run sweeps every source through the admission review (coordinator
+    # design input): the real sweep is behavior-tested in test_release_admission_check.
+    assert sorted(reviewed) == ["s1", "s2"]
+
+
+def test_dry_run_refuses_a_blocked_admission(tmp_path, monkeypatch):
+    """A blocked source fails the dry run — never the cluster job (2026-11-23)."""
+    inputs, _ = _aligned_state(tmp_path, monkeypatch)
+
+    def blocked_review(declarations, survey, available):
+        raise ValueError("Admission blocked for 1 source(s): s2: no surveyed production backend can run the source")
+
+    monkeypatch.setattr(cl, "review_admissions", blocked_review)
+    with pytest.raises(ValueError, match="Admission blocked"):
+        cl.run_dry_run(inputs)
 
 
 def test_verify_history_receipt_refuses_wrong_load(tmp_path):
