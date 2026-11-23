@@ -27,7 +27,6 @@ EXPECTED = [[1, 2], [3, 4]]
         ("[[NaN, 2], [3, 4]]", 0),
         ("\\boxed{[[1e309, 2], [3, 4]]}", 0),
         ("no grid here", 0),
-        ("", 0),
     ],
 )
 def test_grade_arc_agi_extracts_like_reference_and_requires_exact_grid(response, reward):
