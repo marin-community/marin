@@ -44,6 +44,15 @@ body {
   margin: 0;
 }
 
+/* iOS Safari zooms the page when a focused field's text is under 16px. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
 /* Markdown rendered inside assistant bubbles (v-html, so unscoped). */
 .markdown-body > :first-child {
   margin-top: 0;
