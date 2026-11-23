@@ -47,7 +47,20 @@ OPTIMIZER_CHECKPOINT_SHARDING = 'Literal["fully_reshardable", "dp_reshardable"]'
 TYPES = MappingProxyType(
     {
         "terminal_bench": "OpenMap | None",
-        "trainer.strategy": 'Literal["megatron"]',
+        "trainer.strategy": 'Literal["megatron", "levanter"]',
+        "trainer.policy.levanter_config.python_executable": "str | None",
+        "trainer.policy.levanter_config.command_timeout_seconds": "PositiveInt",
+        "trainer.policy.levanter_config.initialization_timeout_seconds": "PositiveInt",
+        "trainer.policy.levanter_config.coordinator_port": "Annotated[int, Field(ge=1, le=65535)]",
+        "trainer.policy.levanter_config.device_memory_fraction": "Annotated[int | float, Field(gt=0, le=1)]",
+        "trainer.policy.levanter_config.projection_block_size": "PositiveInt",
+        "trainer.policy.levanter_config.moe_capacity_factor": "Annotated[int | float, Field(gt=0)]",
+        "trainer.policy.levanter_config.mesh_axes.replica_dcn": "PositiveInt",
+        "trainer.policy.levanter_config.mesh_axes.replica": "PositiveInt",
+        "trainer.policy.levanter_config.mesh_axes.data": "PositiveInt",
+        "trainer.policy.levanter_config.mesh_axes.expert": "PositiveInt",
+        "trainer.policy.levanter_config.mesh_axes.model": "PositiveInt",
+        "trainer.policy.levanter_config.mesh_axes.context": "PositiveInt",
         "trainer.batch_builder": _literal(runtime_options.BatchBuilder),
         "trainer.hf_export_checkpoint": 'Literal["latest", "best"]',
         "trainer.policy.optimizer_config.lr_decay_steps": "int | None",
@@ -265,6 +278,8 @@ UNDECLARED = MappingProxyType(
 NAMES = MappingProxyType(
     {
         "trainer.policy.megatron_config": "PolicyMegatronConfig",
+        "trainer.policy.levanter_config": "PolicyLevanterConfig",
+        "trainer.policy.levanter_config.mesh_axes": "LevanterMeshAxes",
         "trainer.ref.megatron_config": "RefMegatronConfig",
         "trainer.policy.model": "PolicyModel",
         "trainer.ref.model": "RefModel",

@@ -433,6 +433,8 @@ def compose_skyrl_config(
     config = compose_config_groups(parsed.config_groups, config_name="ppo_base_config")
     OmegaConf.set_struct(config, False)
     config = OmegaConf.merge(config, _skyrl_config_sections(parsed, exp_args, hpc))
+    if config.trainer.strategy != "levanter":
+        del config.trainer.policy.levanter_config
     _resolve_max_in_flight(config)
     validate_nemotron_ultra_grading(config, parsed.distillation_plan)
     validate_objective(config)
