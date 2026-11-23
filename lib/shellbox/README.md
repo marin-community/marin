@@ -371,6 +371,10 @@ for prerequisites, accounting, crash recovery and explicit correctness tests.
 Async callers can await `verified_local_disk_pool(root)` from the same module;
 it runs the probe off the event loop and reuses the pool within a worker process
 and mount namespace. Harbor uses this path before acquiring LOCAL sandboxes.
+The allocator creates missing loop block nodes inside the pod and attaches each
+backing file atomically with kernel autoclear. Concurrent sandboxes can exceed
+the loop nodes present when the pod started; cleanup remains scoped to the
+allocation's own backing file.
 
 `Command.user` selects the execution user for one command. Docker accepts a
 username or UID string. An omitted user retains the image's user. ShellSim and

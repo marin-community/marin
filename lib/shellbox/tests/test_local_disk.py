@@ -4,8 +4,10 @@
 """Real loop/OverlayFS enforcement; run explicitly in a privileged Linux worker."""
 
 import asyncio
+import fcntl
 import json
 import os
+import stat
 import subprocess
 import sys
 from dataclasses import replace
@@ -13,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.local.disk import LocalDiskPool, verified_local_disk_pool
+from shellbox.backends.local.disk_lifecycle import LOOP_CTL_GET_FREE, LOOP_DEVICE_MAJOR
 from shellbox.backends.local.machine import LocalMachineFactory, check_local_environment
 from shellbox.machine import (
     Command,
@@ -50,6 +53,28 @@ async def test_local_disk_verified_pool_is_shared_by_concurrent_host_requests(tm
     )
     assert first is second
     assert disk_state(first.root) == {"loops": [], "mounts": [], "allocations": []}
+
+
+async def test_local_disk_allocates_beyond_initial_pod_device_nodes(tmp_path):
+    with Path("/dev/loop-control").open("rb") as control:
+        index = fcntl.ioctl(control, LOOP_CTL_GET_FREE)
+    device = Path(f"/dev/loop{index}")
+    if device.exists():
+        device.unlink()
+    disks = []
+    try:
+        pool = LocalDiskPool(tmp_path / "disks")
+        for _ in range(16):
+            disks.append(pool.create(64))
+        for index, disk in enumerate(disks):
+            (disk.data / "owner").write_text(str(index))
+        assert [(disk.data / "owner").read_text() for disk in disks] == [str(index) for index in range(16)]
+    finally:
+        for disk in reversed(disks):
+            disk.close()
+        if not device.exists():
+            os.mknod(device, stat.S_IFBLK | 0o600, os.makedev(LOOP_DEVICE_MAJOR, index))
+    assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
 
 
 @pytest.mark.parametrize("path", ["/app/fill", "/tmp/fill", "/dev/shm/fill", "/usr/fill"])
