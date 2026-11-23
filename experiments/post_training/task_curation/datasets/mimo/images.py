@@ -147,9 +147,13 @@ def task_tag(task_id: str) -> str:
     return suffix
 
 
-def registry_readback(package: str, tag: str) -> str:
+def registry_readback(package: str, tag: str, authfile: Path | None) -> str:
     """Resolve a pushed tag to its manifest digest by reading it back."""
-    output = run([SKOPEO, "inspect", "--raw", f"docker://{package}:{tag}"])
+    command = [SKOPEO, "--insecure-policy"]
+    if authfile is not None:
+        command += ["--authfile", str(authfile)]
+    command += ["inspect", "--raw", f"docker://{package}:{tag}"]
+    output = run(command)
     digest = hashlib.sha256(output.encode()).hexdigest()
     return f"sha256:{digest}"
 
@@ -291,7 +295,7 @@ def build_one(task: dict, config: BuildConfig, workroot: Path, authfile: Path | 
         if authfile is not None:
             push += ["--dest-authfile", str(authfile)]
         run(push, timeout=3600)
-        digest = registry_readback(config.package, tag)
+        digest = registry_readback(config.package, tag, authfile)
         shutil.rmtree(layout, ignore_errors=True)
 
     return BuildRecord(
@@ -414,9 +418,18 @@ def main() -> None:
     records = [record for record in existing.values()]
     workroot = Path(tempfile.gettempdir()) / "mimo-image-work"
     workroot.mkdir(parents=True, exist_ok=True)
+    failures = []
     if pending:
         with ThreadPoolExecutor(max_workers=config.concurrency) as executor:
-            for record in executor.map(lambda task: build_one(task, config, workroot, authfile, job), pending):
+            futures = {executor.submit(build_one, task, config, workroot, authfile, job): task for task in pending}
+            for future in list(futures):
+                task = futures[future]
+                try:
+                    record = future.result()
+                except BuildRejected as error:
+                    failures.append(f"{task['task_id']}: {str(error)[-400:]}")
+                    logger.error("build failed for %s: %s", task["task_id"], str(error)[-400:])
+                    continue
                 records = [item for item in records if item.task_id != record.task_id] + [record]
                 logger.info("built %s -> %s (source %s)", record.task_id, record.image, record.source)
     if authfile is not None:
@@ -424,6 +437,11 @@ def main() -> None:
 
     binding_path = write_outputs(output, records, config.package, release)
     logger.info("wrote %s with %d records", binding_path, len(records))
+    if failures:
+        raise BuildRejected(
+            f"{len(failures)} of {len(pending)} builds failed; the provenance covers the successes "
+            f"and a resume run rebuilds the rest: {failures[:3]}"
+        )
 
 
 if __name__ == "__main__":
