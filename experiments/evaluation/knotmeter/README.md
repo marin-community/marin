@@ -145,7 +145,7 @@ or GPU job failed. `recover` also exits nonzero for a failed GPU result, includi
 rejected submission. A completed diagnostic can exit zero with failed numerical
 checks; inspect validity and check states before selecting a recommendation.
 Capture records contain only timing and identity fields. If a pod expires, a retained scheduling
-time plus Iris's terminal observation gives a conservative end time. Missing
+time plus Iris's terminal observation gives an estimated end time. Missing
 timestamps remain unknown. Keep `run` attached for complete allocation tracking.
 `--no-wait` returns after submission; detached runs may lose required timestamps
 after Pod cleanup. Retain known usage and label estimates and unknowns. Incomplete
