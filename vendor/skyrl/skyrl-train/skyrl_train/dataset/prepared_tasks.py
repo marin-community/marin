@@ -5,6 +5,7 @@ import json
 from collections.abc import Mapping
 from contextlib import nullcontext
 from importlib.metadata import version
+from importlib.util import find_spec
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -19,12 +20,48 @@ from tokenizers.models import BPE
 from transformers import PreTrainedTokenizerBase
 from transformers.tokenization_utils_tokenizers import TokenizersBackend
 
-# Bump when selection validation, canonical task lowering, or prompt length semantics change.
-_CACHE_VERSION = 1
 _CACHE_KEY_METADATA = b"skyrl.prepared_task_key"
 # Large verifier payloads make a single row group too costly to decode on a cache hit.
 _ROW_GROUP_SIZE = 2048
 PROMPT_LENGTH_COLUMN = "_prompt_token_count"
+
+# Include the installed preparation code so experimental branches can share the cache safely.
+_PREPARATION_MODULES = (
+    "finestore.rl.strata",
+    "rigging.filesystem.path_validation",
+    "rolloutengine",
+    "shellbox",
+    "skyrl_gym",
+    "skyrl_train.config.rollout_validation",
+    "skyrl_train.dataset",
+    "skyrl_train.inference_engines.chat_template",
+    "skyrl_train.task_inputs",
+    "taskcompendium",
+    "verifyit",
+)
+
+
+def _preparation_code_digest() -> str | None:
+    digest = hashlib.sha256()
+    for name in _PREPARATION_MODULES:
+        spec = find_spec(name)
+        if spec is None or spec.origin is None or not spec.origin.endswith(".py"):
+            logger.debug("Cannot fingerprint prepared task implementation module {}", name)
+            return None
+        origin = Path(spec.origin)
+        paths = sorted(origin.parent.rglob("*.py")) if spec.submodule_search_locations is not None else [origin]
+        if not paths:
+            return None
+        for path in paths:
+            try:
+                with path.open("rb") as stream:
+                    file_digest = hashlib.file_digest(stream, "sha256").digest()
+            except OSError as error:
+                logger.debug("Cannot fingerprint prepared task implementation file {}: {}", path, error)
+                return None
+            digest.update(f"{name}/{path.relative_to(origin.parent).as_posix()}\0".encode())
+            digest.update(file_digest)
+    return digest.hexdigest()
 
 
 def prepared_task_cache_key(
@@ -43,6 +80,9 @@ def prepared_task_cache_key(
     tokenizer_key = _tokenizer_key(tokenizer, chat_template_kwargs)
     if tokenizer_key is None:
         return None
+    preparation_code_digest = _preparation_code_digest()
+    if preparation_code_digest is None:
+        return None
     # The manifest validates both populations, including files outside the launched split.
     inputs = sorted(
         {SELECTION_SUMMARY_FILENAME, SELECTION_MANIFEST_FILENAME, *definition.task_files, *definition.active_files}
@@ -53,7 +93,7 @@ def prepared_task_cache_key(
         with (directory / name).open("rb") as stream:
             digests[name] = hashlib.file_digest(stream, "sha256").hexdigest()
     provenance = {
-        "version": _CACHE_VERSION,
+        "preparation_code": preparation_code_digest,
         "dependencies": [version(package) for package in ("transformers", "tokenizers", "jinja2", "pydantic")],
         "selection": source.identity,
         "source": path.name,

@@ -1,6 +1,7 @@
 import json
 import os
 from dataclasses import replace
+from importlib.util import spec_from_file_location
 from pathlib import Path
 
 import pyarrow as pa
@@ -8,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 from marinskyrl.task_sources import PreparedTaskCacheSource
 from omegaconf import OmegaConf
+from skyrl_train import task_inputs
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
@@ -184,6 +186,27 @@ def test_prepared_selection_rebuilds_a_truncated_cache(prepared_selection):
     )
     assert [recovered[i] for i in range(len(recovered))] == [original[i] for i in range(len(original))]
     assert pq.read_metadata(cache_file).num_rows == 3
+
+
+def test_prepared_selection_recomputes_lengths_when_installed_lowering_changes(
+    prepared_selection, tmp_path, monkeypatch
+):
+    cache, configs = prepared_selection
+    installed_source = tmp_path / "task_inputs.py"
+    installed_source.write_bytes(Path(task_inputs.__file__).read_bytes())
+    monkeypatch.setattr(task_inputs, "__spec__", spec_from_file_location(task_inputs.__name__, installed_source))
+    original = SourceTaskDataset(
+        [cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache
+    )
+
+    with installed_source.open("a") as stream:
+        stream.write("\n# Another installed revision of task lowering.\n")
+    rebuilt = SourceTaskDataset(
+        [cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache
+    )
+
+    assert [rebuilt[i] for i in range(len(rebuilt))] == [original[i] for i in range(len(original))]
+    assert len(tuple(Path(cache.cache_dir).glob("*.parquet"))) == 2
 
 
 @pytest.mark.parametrize("changed", ["backend", "template", "template kwargs", "task settings", "provenance"])
