@@ -99,6 +99,9 @@ class InferenceEngineConfig:
     """Pack size for each decode loop iteration. If None, set to max_seqs """
 
     def __post_init__(self):
+        if self.max_rounds < 1:
+            raise ValueError("max_rounds must be positive")
+
         # this one is only required because of clones. If we really care, we could relax this
         if self.max_queued_tokens < self.max_seqs:
             raise ValueError("max_queued_tokens must be >= max_seqs")
@@ -994,7 +997,7 @@ class InferenceEngine:
             prompt_lengths[prefill_idx] = len(seq_tokens)
             prompt_tokens[prefill_idx, : len(seq_tokens)] = this_tokens
 
-            max_num_tokens[prefill_idx] = np.asarray(seq_params.max_num_tokens, dtype=np.int32).item()
+            max_num_tokens[prefill_idx] = min(int(seq_params.max_num_tokens), self.config.max_seq_len)
             temperatures[prefill_idx] = np.asarray(seq_params.temperature, dtype=np.float32).item()
             top_ps[prefill_idx] = np.asarray(seq_params.top_p, dtype=np.float32).item()
             prng_keys[prefill_idx] = np.asarray(seq_params.key, dtype=np.uint32)
@@ -1034,7 +1037,7 @@ class InferenceEngine:
                     clone_targets[clone_idx] = slot_id
                     prompt_lengths[clone_idx] = parent_length
                     # Clones reuse prompt tokens from their parent; no need to copy here.
-                    max_num_tokens[clone_idx] = np.asarray(child_params.max_num_tokens, dtype=np.int32).item()
+                    max_num_tokens[clone_idx] = max_num_tokens[prefill_idx]
                     temperatures[clone_idx] = np.asarray(child_params.temperature, dtype=np.float32).item()
                     top_ps[clone_idx] = np.asarray(child_params.top_p, dtype=np.float32).item()
                     prng_keys[clone_idx] = np.asarray(child_params.key, dtype=np.uint32)
@@ -1086,6 +1089,9 @@ class InferenceEngine:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
         """
+        if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
+            raise ValueError("Prompts must leave room for generation within max_seq_len")
+
         # validate we don't have any sequences with n_generations exceeding max_seqs
         max_needed = max(int(r.n_generations) for r in requests)
         if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
@@ -1149,11 +1155,8 @@ class InferenceEngine:
                         return False
             return True
 
-        stagnant_iters = 0
         decode_iteration = 0
-        for _ in range(self.config.max_seq_len // self.config.max_rounds):
-            if _all_done():
-                break
+        while not _all_done():
             # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
@@ -1193,13 +1196,8 @@ class InferenceEngine:
 
             decode_iteration += 1
 
-            # Safety: if nothing new was produced, avoid infinite loop
-            if new_tokens == 0 and int(jax.device_get(self.gen_state.decode_state.num_queued_tokens)) == 0:
-                stagnant_iters += 1
-            else:
-                stagnant_iters = 0
-            if stagnant_iters >= 2:
-                logger.warning("No progress in decoding for 2 consecutive iterations; breaking to avoid hang.")
+            if new_tokens == 0:
+                logger.warning("No progress in decoding with unfinished requests")
                 break
 
         # Assemble outputs in the order of the requests for this call
