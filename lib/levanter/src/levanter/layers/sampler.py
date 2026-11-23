@@ -97,9 +97,15 @@ class Sampler(eqx.Module):
         temperatures: NamedArray,
         *,
         top_ps: NamedArray,
+        num_samples: jax.Array,
         key: PRNGKeyArray,
     ) -> tuple[NamedArray, NamedArray]:
-        """Sample each position with its own key and nucleus cutoff."""
+        """Sample a fixed-width batch with a valid prefix of ``num_samples`` positions.
+
+        Padded positions use the full distribution so their cutoffs cannot force sorting.
+        """
+        positions = hax.arange(logits.resolve_axis("position"))
+        top_ps = hax.where(positions < num_samples, top_ps, 1.0)
         sample = hax.vmap(self, "position")
         # Branch before vmap so the full-distribution batch skips vocabulary sorting.
         return jax.lax.cond(
