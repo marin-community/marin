@@ -106,6 +106,11 @@ verdicts record them under each entry in `detail.criteria`. Each attempt contain
 and `completion_tokens` (`null` when the endpoint omits usage). An exhausted retry remains
 `infra_error`, with the available attempt diagnostics in `detail`.
 
+The `judge` labels rubric formats `prompt_template` into the user message by default. With
+`prompt_format = "json"` and no `prompt_template`, the user message is one JSON object with
+`question`, `reference`, and `candidate` keys, so candidate text cannot close a delimiter or
+impersonate another field. `system_prompt` is still formatted as a template.
+
 The `judge` pairwise rubric ports Arena-Hard's comparison with one baseline answer in `references`.
 It sends the judge two requests, with the baseline as assistant A and then as assistant B. Each
 reply's verdict is the last match of the first `verdict_patterns` entry that matches. `label_scores`
