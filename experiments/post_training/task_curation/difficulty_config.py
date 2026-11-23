@@ -15,6 +15,13 @@ TOGETHER_API_KEY_ENV = "TOGETHER_API_KEY"
 # start; a bundle naming any other provider credential fails the wave closed
 # at dispatch.
 TASK_PROVIDER_SECRETS: frozenset[str] = frozenset({TOGETHER_API_KEY_ENV})
+# The frozen verifier env var a native bundle uses to name its own grader
+# model, in LiteLLM provider form (for example together_ai/Qwen/Qwen3.5-9B).
+DECLARED_JUDGE_ENV_VAR = "REWARDKIT_JUDGE"
+DECLARED_JUDGE_PROVIDER_PREFIX = "together_ai/"
+# LiteLLM's Together base-URL override; the declared judge's calls read it, so
+# the wave points it at Harbor's in-guest relay to keep the credential host-side.
+TOGETHER_AI_API_BASE_ENV = "TOGETHER_AI_API_BASE"
 SNOWBALL_VLLM_RELEASE_TAG = "marin-vllm-gpu-20260924-01911be34fac"
 
 

@@ -41,6 +41,7 @@ from experiments.post_training.task_curation.difficulty_config import (
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import PreparedSource, prepare_source
 from experiments.post_training.task_curation.difficulty_protocol import (
+    DECLARED_JUDGE_PINS,
     PINS,
     TARGET_CLUSTER,
     serving_model,
@@ -53,6 +54,7 @@ from experiments.post_training.task_curation.difficulty_serving_probe import (
     probe_endpoint,
     probe_judge_endpoint,
 )
+from experiments.post_training.task_curation.difficulty_trials import attempt_judge_model
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, LocalJudgeEndpoint
 
 TOGETHER_BASE_URL = "https://api.together.xyz/v1"
@@ -229,14 +231,14 @@ def solver_endpoint(solver: Solver, settings: SamplingSettings, priority: int):
 
 
 @contextmanager
-def judge_serving(tier: JudgeTier | None, priority: int):
-    """Yield the campaign's judge route: the shared GLM relay, or one locally hosted tier.
+def judge_serving(tier: JudgeTier | None, priority: int, shared_model: str | None = None):
+    """Yield the campaign's judge route: the shared GLM relay, a declared judge, or one locally hosted tier.
 
     A tier is hosted for the whole campaign lifetime; the endpoint is validated
     against its tier pin before the first judged trial dispatches.
     """
     if tier is None:
-        yield TOGETHER_BASE_URL, TOGETHER_MODEL, require_secret(TOGETHER_API_KEY_ENV), []
+        yield TOGETHER_BASE_URL, shared_model or TOGETHER_MODEL, require_secret(TOGETHER_API_KEY_ENV), []
         return
     if tier not in JUDGE_TIER_SERVING:
         raise ValueError(f"Difficulty hosts no model configuration for judge tier {tier.value}")
@@ -278,15 +280,41 @@ def queue_judge_tier(judged_models: Iterable[str]) -> JudgeTier | None:
     return tier
 
 
-def batch_judge_tier(prepared: list[PreparedSource]) -> JudgeTier | None:
-    """The single judge tier this run must host, when its judged sources need one."""
+def batch_judge_route(prepared: list[PreparedSource]) -> tuple[JudgeTier | None, str | None]:
+    """The judge tier and shared route model this run must host, when its sources are judged.
+
+    A run version serves exactly one judge route. GLM-judged sources share the
+    Together route's model; a bundle's declared judge (REWARDKIT_JUDGE) must be
+    a qualified pin and cannot share its queue with GLM or a hosted tier, since
+    the shared relay forces one model.
+    """
     judged_models = {
-        task.judge_model
+        model
         for source in prepared
         for task in source.tasks
-        if task.judge_model is not None and task.reason is None
+        if (model := attempt_judge_model(task)) is not None and task.reason is None
     }
-    return queue_judge_tier(judged_models)
+    tiers = {
+        tier
+        for tier, definition in JUDGE_TIERS.items()
+        if definition.spec.model in judged_models and definition.spec.model != GLM_MODEL
+    }
+    declared = {model for model in judged_models if model in DECLARED_JUDGE_PINS}
+    tier_models = {definition.spec.model for definition in JUDGE_TIERS.values()}
+    unqualified = judged_models - tier_models - declared - {GLM_MODEL, TOGETHER_MODEL}
+    if unqualified:
+        raise ValueError(f"Judged models this lane has not qualified: {sorted(unqualified)}")
+    if len(tiers) > 1:
+        raise ValueError(f"One campaign serves one judge tier; split the source queue: {sorted(tiers)}")
+    if declared and (tiers or {GLM_MODEL, TOGETHER_MODEL} & judged_models):
+        raise ValueError("Declared judges require their own queue; the shared GLM route serves one model")
+    if len(declared) > 1:
+        raise ValueError(f"One campaign serves one judge route; split the source queue: {sorted(declared)}")
+    if tiers:
+        return next(iter(tiers)), None
+    if declared:
+        return None, next(iter(declared))
+    return None, None
 
 
 def require_daytona_connection_environment(daytona_api_key: str | None) -> None:
@@ -439,7 +467,9 @@ def main() -> None:
         )
         for source in prepared
     ]
-    has_judge = any(task.judge_model is not None and task.reason is None for source in prepared for task in source.tasks)
+    has_judge = any(
+        attempt_judge_model(task) is not None and task.reason is None for source in prepared for task in source.tasks
+    )
     for selected_solver in {args.solver, Solver.HOSTED} if has_judge else {args.solver}:
         selected_pin = PINS[selected_solver]
         template = Path(
@@ -498,9 +528,9 @@ def main() -> None:
             if args.solver == Solver.HOSTED
             else probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
         )
-        judge_tier = batch_judge_tier(prepared)
+        judge_tier, shared_judge_model = batch_judge_route(prepared)
         judge_route = (
-            judge_serving(judge_tier, priority_band_value(args.priority))
+            judge_serving(judge_tier, priority_band_value(args.priority), shared_judge_model)
             if has_judge
             else nullcontext((None, None, None, []))
         )
@@ -518,25 +548,47 @@ def main() -> None:
                             judge_api_key,
                             sampling_settings(Solver.HOSTED, []),
                         )
-                    judge_pin = PINS[Solver.HOSTED]
-                    judge_metadata = {
-                        "model": SOLVER_MODELS[Solver.HOSTED],
-                        "api_model": judge_api_model,
-                        "revision": (
-                            f"unexposed:{judge_probe['tools_thinking_probe']['completion']['system_fingerprint']}"
-                        ),
-                        "tokenizer": SOLVER_MODELS[Solver.HOSTED],
-                        "tokenizer_revision": judge_pin.revision,
-                        "chat_template_sha256": judge_pin.template_sha256,
-                        "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
-                        "recorded_temperature_deviation": (
-                            "Sources whose JudgeSpec declares temperature 0.0 are served at the protocol "
-                            "temperature 0.7; the deviation is recorded per attempt as judge_temperature."
-                        ),
-                        "token_budget": "original source request; production service enforces its served context",
-                        "basis": "Host override; original TaskSpec and requested judge parameters are retained.",
-                        "serving_probe": judge_probe,
-                    }
+                    declared_pin = None if shared_judge_model is None else DECLARED_JUDGE_PINS.get(shared_judge_model)
+                    if declared_pin is not None:
+                        judge_metadata = {
+                            "model": judge_api_model,
+                            "api_model": judge_api_model,
+                            "revision": declared_pin.revision,
+                            "tokenizer": judge_api_model,
+                            "tokenizer_revision": declared_pin.revision,
+                            "chat_template_sha256": declared_pin.template_sha256,
+                            "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
+                            "recorded_temperature_deviation": (
+                                "Sources whose JudgeSpec declares temperature 0.0 are served at the protocol "
+                                "temperature 0.7; the deviation is recorded per attempt as judge_temperature."
+                            ),
+                            "token_budget": "original source request; production service enforces its served context",
+                            "basis": (
+                                "Declared judge served on the shared Together route; the bundle's own grader "
+                                "model identity."
+                            ),
+                            "serving_probe": judge_probe,
+                        }
+                    else:
+                        judge_pin = PINS[Solver.HOSTED]
+                        judge_metadata = {
+                            "model": SOLVER_MODELS[Solver.HOSTED],
+                            "api_model": judge_api_model,
+                            "revision": (
+                                f"unexposed:{judge_probe['tools_thinking_probe']['completion']['system_fingerprint']}"
+                            ),
+                            "tokenizer": SOLVER_MODELS[Solver.HOSTED],
+                            "tokenizer_revision": judge_pin.revision,
+                            "chat_template_sha256": judge_pin.template_sha256,
+                            "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
+                            "recorded_temperature_deviation": (
+                                "Sources whose JudgeSpec declares temperature 0.0 are served at the protocol "
+                                "temperature 0.7; the deviation is recorded per attempt as judge_temperature."
+                            ),
+                            "token_budget": "original source request; production service enforces its served context",
+                            "basis": "Host override; original TaskSpec and requested judge parameters are retained.",
+                            "serving_probe": judge_probe,
+                        }
                 else:
                     definition = JUDGE_TIERS[judge_tier]
                     judge_probe = probe_judge_endpoint(

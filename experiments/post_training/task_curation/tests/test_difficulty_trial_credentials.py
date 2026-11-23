@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("harbor")
 
 from finestore.rl.difficulty import DifficultyGap, Solver, difficulty_gap_reason
+from harbor.utils.env import validate_task_environment
 
 from experiments.post_training.task_curation import difficulty_trials
 from experiments.post_training.task_curation.datasets.environments import LEAN_GRADER_PACKAGES
@@ -18,8 +19,10 @@ from experiments.post_training.task_curation.difficulty.importer import receipt_
 from experiments.post_training.task_curation.difficulty.state import GapReason
 from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
 from experiments.post_training.task_curation.difficulty_trials import (
+    attempt_judge_model,
     grader_infrastructure_reason,
     resolve_provider_secrets,
+    task_declared_judge_model,
     task_guest_environment,
     task_required_provider_secrets,
     trial_environment_options,
@@ -39,6 +42,22 @@ def judged_bundle(tmp_path):
     directory.mkdir()
     (directory / "task.toml").write_text(
         "[verifier]\n" "timeout_sec = 600.0\n" 'env = { TOGETHER_API_KEY = "${TOGETHER_API_KEY}" }\n'
+    )
+    (directory / "instruction.md").write_text("Original task")
+    (directory / "tests").mkdir()
+    (directory / "tests/test.sh").write_text("exit 0\n")
+    return directory
+
+
+@pytest.fixture
+def declared_judge_bundle(tmp_path):
+    """A native bundle whose verifier names its own Together judge and credential."""
+    directory = tmp_path / "rewardkit"
+    directory.mkdir()
+    (directory / "task.toml").write_text(
+        "[verifier]\n"
+        "timeout_sec = 600.0\n"
+        'env = { REWARDKIT_JUDGE = "together_ai/Qwen/Qwen3.5-9B", TOGETHER_API_KEY = "${TOGETHER_API_KEY}" }\n'
     )
     (directory / "instruction.md").write_text("Original task")
     (directory / "tests").mkdir()
@@ -168,6 +187,104 @@ def test_daytona_options_keep_the_composed_grader_machine_image():
         "registry_authfile": "auth.json",
         "grader_machine_image": pinned,
     }
+
+
+def test_declared_judge_model_parses_the_frozen_bundle(declared_judge_bundle):
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(declared_judge_bundle),
+        workload="native",
+        backend="daytona",
+        reason=None,
+        judge_model=None,
+    )
+    assert task_declared_judge_model(task) == "Qwen/Qwen3.5-9B"
+    assert attempt_judge_model(task) == "Qwen/Qwen3.5-9B"
+
+
+def test_declared_judge_outside_the_together_route_fails_closed(tmp_path):
+    directory = tmp_path / "rewardkit"
+    directory.mkdir()
+    (directory / "task.toml").write_text('[verifier]\nenv = { REWARDKIT_JUDGE = "openai/gpt-5" }\n')
+    (directory / "instruction.md").write_text("Original task")
+    (directory / "tests").mkdir()
+    (directory / "tests/test.sh").write_text("exit 0\n")
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(directory),
+        workload="native",
+        backend="local",
+        reason=None,
+        judge_model=None,
+    )
+    with pytest.raises(ValueError, match="outside the"):
+        attempt_judge_model(task)
+
+
+def test_unqualified_declared_judge_fails_closed(declared_judge_bundle):
+    spec = (declared_judge_bundle / "task.toml").read_text().replace("Qwen/Qwen3.5-9B", "Qwen/Unqualified-9B")
+    (declared_judge_bundle / "task.toml").write_text(spec)
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(declared_judge_bundle),
+        workload="native",
+        backend="local",
+        reason=None,
+        judge_model=None,
+    )
+    with pytest.raises(ValueError, match="has not qualified"):
+        attempt_judge_model(task)
+
+
+def test_task_spec_workload_declares_no_judge(declared_judge_bundle):
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(declared_judge_bundle),
+        workload="task_spec",
+        backend="local",
+        reason=None,
+        judge_model=None,
+    )
+    assert task_declared_judge_model(task) is None
+
+
+def test_prepared_judge_takes_precedence_over_the_declared_one(declared_judge_bundle):
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(declared_judge_bundle),
+        workload="native",
+        backend="local",
+        reason=None,
+        judge_model="zai-org/GLM-5.3",
+    )
+    assert attempt_judge_model(task) == "zai-org/GLM-5.3"
+
+
+def test_task_guest_environment_projects_the_declared_judge_relay(declared_judge_bundle, monkeypatch):
+    monkeypatch.setattr(difficulty_trials, "require_secret", lambda name: "resolved-" + name.lower())
+    resolved = resolve_provider_secrets(("TOGETHER_API_KEY",))
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(declared_judge_bundle),
+        workload="native",
+        backend="daytona",
+        reason=None,
+        judge_model=None,
+    )
+    granted = task_guest_environment(task, resolved)
+    assert granted == {
+        "TOGETHER_API_KEY": "EMPTY",
+        "TOGETHER_AI_API_BASE": "http://127.0.0.1:8787/v1",
+    }
+    # The sandbox guard must accept the projected guest environment, and the
+    # resolved credential's value must never appear in it.
+    validate_task_environment(granted, protected_values=frozenset({resolved["TOGETHER_API_KEY"]}))
 
 
 def _fake_storage_path(payloads: dict[str, str]):

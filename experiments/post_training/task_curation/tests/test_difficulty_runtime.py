@@ -368,3 +368,84 @@ def test_campaign_refuses_daytona_sources_without_the_connection_environment(mon
         },
     )
     difficulty_runtime.require_daytona_connection_environment("fixture-key")
+
+
+def _declared_judge_packet(tmp_path, judge: str = "together_ai/Qwen/Qwen3.5-9B"):
+    directory = tmp_path / "packet"
+    directory.mkdir()
+    (directory / "task.toml").write_text(
+        "[verifier]\n"
+        "timeout_sec = 600.0\n"
+        f'env = {{ REWARDKIT_JUDGE = "{judge}", TOGETHER_API_KEY = "${{TOGETHER_API_KEY}}" }}\n'
+    )
+    (directory / "instruction.md").write_text("Original task")
+    (directory / "tests").mkdir()
+    (directory / "tests/test.sh").write_text("exit 0\n")
+    return directory
+
+
+def _fixture_source(difficulty_source):
+    task_spec = TaskSpec.model_validate(json.loads(prebuilt_task("selected-task")["lowered_task_spec"])["task"])
+    return difficulty_source(task_spec)
+
+
+def _prepared_with_tasks(source, tasks):
+    return PreparedSource(sample=source.sample, sample_receipt=source.sample_receipt, tasks=tasks)
+
+
+def _native_task(path, **updates):
+    task = PreparedTask(
+        task_id="declared-task",
+        runtime_sha256="a" * 64,
+        path=str(path),
+        workload="native",
+        backend="daytona",
+        reason=None,
+        judge_model=None,
+    )
+    return task.model_copy(update=updates) if updates else task
+
+
+def test_declared_judge_serves_its_own_shared_route(tmp_path, difficulty_source):
+    source = _prepared_with_tasks(_fixture_source(difficulty_source), [_native_task(_declared_judge_packet(tmp_path))])
+    assert difficulty_runtime.batch_judge_route([source]) == (None, "Qwen/Qwen3.5-9B")
+
+
+def test_glm_judged_route_is_unchanged(tmp_path, difficulty_source):
+    source = _prepared_with_tasks(
+        _fixture_source(difficulty_source),
+        [_native_task(_declared_judge_packet(tmp_path), judge_model=difficulty_runtime.GLM_MODEL)],
+    )
+    assert difficulty_runtime.batch_judge_route([source]) == (None, None)
+
+
+def test_hosted_tier_route_is_unchanged(tmp_path, difficulty_source):
+    tier_model = next(iter(JUDGE_TIERS.values())).spec.model
+    source = _prepared_with_tasks(
+        _fixture_source(difficulty_source),
+        [_native_task(_declared_judge_packet(tmp_path), judge_model=tier_model)],
+    )
+    tier, shared = difficulty_runtime.batch_judge_route([source])
+    assert shared is None and tier is not None and JUDGE_TIERS[tier].spec.model == tier_model
+
+
+def test_declared_judge_cannot_share_the_glm_queue(tmp_path, difficulty_source):
+    packet = _declared_judge_packet(tmp_path)
+    source = _prepared_with_tasks(
+        _fixture_source(difficulty_source),
+        [
+            _native_task(packet),
+            _native_task(packet, judge_model=difficulty_runtime.GLM_MODEL),
+        ],
+    )
+    with pytest.raises(ValueError, match="own queue"):
+        difficulty_runtime.batch_judge_route([source])
+
+
+def test_unqualified_judge_model_fails_the_queue(tmp_path, difficulty_source):
+    source = _prepared_with_tasks(
+        _fixture_source(difficulty_source),
+        [_native_task(_declared_judge_packet(tmp_path, "together_ai/Qwen/Unqualified-9B"))],
+    )
+    with pytest.raises(ValueError, match="has not qualified"):
+        difficulty_runtime.batch_judge_route([source])

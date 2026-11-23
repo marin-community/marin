@@ -45,6 +45,29 @@ class SolverPin:
     gpus: int
 
 
+@dataclass(frozen=True)
+class DeclaredJudgePin:
+    """Tokenizer pins for a frozen bundle's own declared grader model."""
+
+    revision: str
+    template_sha256: str
+
+
+# Judges a frozen native bundle may declare (REWARDKIT_JUDGE) that this lane
+# serves on the shared Together route. Membership IS the qualification: each
+# entry carries the tokenizer pins verified against the pinned revision and the
+# fixture-judgement evidence from its qualification run
+# (s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-reconciler/validation/
+# qwen-judge-qualification-20261123/evidence.json). An unlisted declared judge
+# fails the wave closed instead of being silently re-judged by another model.
+DECLARED_JUDGE_PINS = {
+    "Qwen/Qwen3.5-9B": DeclaredJudgePin(
+        revision="c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        template_sha256="a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715",
+    ),
+}
+
+
 PINS = {
     Solver.SMALL: SolverPin(
         "b2cff646eb4bb1d68355c01b18ae02e7cf42d120",

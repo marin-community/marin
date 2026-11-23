@@ -33,6 +33,7 @@ from finestore.rl.difficulty import (
 from harbor.environments.docker_translate import MissingPreparedImageError
 from harbor.host_capabilities import (
     MODEL_CREDENTIALS,
+    MODEL_RELAY_PORT,
     HostCapabilities,
     host_capabilities_from_environment,
     model_guest_credentials,
@@ -56,11 +57,15 @@ from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFI
 from experiments.post_training.task_curation.datasets.environments import BUILDABLE_ENVIRONMENTS
 from experiments.post_training.task_curation.difficulty.launch import DATA_ADMISSION_COMMAND
 from experiments.post_training.task_curation.difficulty_config import (
+    DECLARED_JUDGE_ENV_VAR,
+    DECLARED_JUDGE_PROVIDER_PREFIX,
     TASK_PROVIDER_SECRETS,
+    TOGETHER_AI_API_BASE_ENV,
     CandidateRun,
 )
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedTask, grader_requires_multi_uid
+from experiments.post_training.task_curation.difficulty_protocol import DECLARED_JUDGE_PINS
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 from experiments.post_training.task_curation.environment import Environment
 
@@ -104,6 +109,34 @@ def resolve_provider_secrets(required: Iterable[str]) -> dict[str, str]:
     return {name: require_secret(name) for name in sorted(required)}
 
 
+def task_declared_judge_model(task: PreparedTask) -> str | None:
+    """The grader model a frozen native bundle declares for its own verifier, if any.
+
+    REWARDKIT_JUDGE names the judge in LiteLLM provider form; only qualified
+    declared judges are served, so an unqualified declaration fails closed
+    instead of being silently re-judged by the shared route's model.
+    """
+    if task.path is None or task.workload != "native":
+        return None
+    declared = dict(Task(task_dir=Path(task.path)).config.verifier.env).get(DECLARED_JUDGE_ENV_VAR)
+    if declared is None:
+        return None
+    if not declared.startswith(DECLARED_JUDGE_PROVIDER_PREFIX):
+        raise ValueError(
+            f"Task {task.task_id} declares judge {declared!r} outside the "
+            f"{DECLARED_JUDGE_PROVIDER_PREFIX} route this lane serves"
+        )
+    model = declared.removeprefix(DECLARED_JUDGE_PROVIDER_PREFIX)
+    if model not in DECLARED_JUDGE_PINS:
+        raise ValueError(f"Task {task.task_id} declares judge {model!r} this lane has not qualified")
+    return model
+
+
+def attempt_judge_model(task: PreparedTask) -> str | None:
+    """The judge model one attempt's grading uses: the prepared judge or the bundle's declared one."""
+    return task.judge_model or task_declared_judge_model(task)
+
+
 def task_guest_environment(task: PreparedTask, provider_secrets: Mapping[str, str]) -> dict[str, str]:
     """The guest environment for one task's provider credential templates.
 
@@ -122,7 +155,13 @@ def task_guest_environment(task: PreparedTask, provider_secrets: Mapping[str, st
         raise ValueError(
             f"Task {task.task_id} requires provider credentials the wave did not resolve: {sorted(missing)}"
         )
-    return model_guest_credentials({name: provider_secrets[name] for name in sorted(required)})
+    granted = model_guest_credentials({name: provider_secrets[name] for name in sorted(required)})
+    if task_declared_judge_model(task) is not None:
+        # The declared verifier judge calls Together through LiteLLM, which reads
+        # its base URL from this variable; point it at Harbor's in-guest relay so
+        # the judge's calls authenticate host-side and the credential stays there.
+        granted[TOGETHER_AI_API_BASE_ENV] = f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1"
+    return granted
 
 
 def task_spec_actor_image(task: PreparedTask) -> str | None:
@@ -694,11 +733,12 @@ def run_task(
 
         options = trial_environment_options(task, config.environment_options, config.daytona_provisioning, machine_image)
         authentication = {endpoint: "EMPTY"}
-        if task.judge_model is not None:
+        judge_model = attempt_judge_model(task)
+        if judge_model is not None:
             if judge_url is None or config.judge is None:
                 raise ValueError("A task judge requires the protocol's host-side relay")
             judge_endpoint = f"{judge_url}/{root.name}-{key}-{number}/v1"
-            options.update(model_endpoint=judge_endpoint, model_name=task.judge_model or config.judge.api_model)
+            options.update(model_endpoint=judge_endpoint, model_name=judge_model or config.judge.api_model)
             authentication[judge_endpoint] = "EMPTY"
         configuration = TrialConfig(
             task=TaskConfig(path=Path(task.path)),
