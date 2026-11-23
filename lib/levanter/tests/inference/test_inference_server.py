@@ -19,6 +19,7 @@ from levanter.layers.sampler import LogprobMode
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.models.lm_model import LmExample
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.policy_model import PolicyBatch, response_logprobs
 from levanter.testing.devices import use_cpu_devices
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
@@ -41,6 +42,7 @@ try:
         _compute_tokens,
     )
     from levanter.inference.openai_protocol import ChatMessage
+    from levanter.inference.policy_replay import BinaryRolloutChoice, prepare_binary_policy_batch
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -772,6 +774,7 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
         attention_implementation="reference",
     )
     server_config = InferenceServerConfig(
+        initial_policy_id="test-snowball-policy",
         service=InferenceEngineConfig(
             max_seq_len=32,
             max_pages=16,
@@ -782,6 +785,7 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
             max_rounds=2,
             page_size=2,
             compute_dtype=jnp.float32,
+            logprob_mode=LogprobMode.POLICY,
         ),
     )
     prompt = np.array([2, 7, 4, 9, 6], dtype=np.int32)
@@ -799,6 +803,7 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
                     response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
                     assert response.status_code == 200, response.text
                     _, tensors = decode_frame(response.content)
+                    rollout = BinaryRolloutChoice(response.content, 0)
                     messages = [{"role": "user", "content": "hi"}]
                     chat = client.post(
                         "/v1/chat/completions",
@@ -836,8 +841,34 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
                 LmExample(tokens, hax.ones(tokens.axes)), route_replay=replay, reduction=None
             )
 
+            padded = hax.named(jnp.asarray(np.pad(inputs, (2, 1))[None]), ("batch", "position"))
+            attended = hax.named(jnp.asarray([[0, 0] + [1] * len(inputs) + [0]]), padded.axes)
+            response_axes = (padded.resolve_axis("batch"), hax.Axis("response", 5))
+            objective = hax.named(jnp.asarray([[1, 1, 1, 1, 0]], dtype=jnp.float32), response_axes)
+            batch = PolicyBatch(
+                tokens=padded,
+                attention_mask=attended,
+                position_ids=hax.maximum(hax.cumsum(attended, "position") - 1, 0),
+                response_mask=objective,
+                advantages=objective,
+                policy_weights=objective / 4,
+                kl_weights=objective / 4,
+                old_logprobs=hax.zeros(response_axes),
+                reference_logprobs=None,
+            )
+            prepared = prepare_binary_policy_batch(model, batch, [rollout], policy_id="test-snowball-policy")
+            np.testing.assert_array_equal(prepared.old_logprobs.array[0, :-1], tensors["choice.0.policy_logprobs"])
+            np.testing.assert_allclose(
+                response_logprobs(model, prepared, block_size=8).array[0, :-1],
+                tensors["choice.0.policy_logprobs"],
+                atol=1e-5,
+                rtol=0,
+            )
+            with pytest.raises(ValueError):
+                prepare_binary_policy_batch(model, batch, [rollout], policy_id="stale-policy")
+
     np.testing.assert_allclose(
-        tensors["choice.0.behavior_logprobs"], -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
+        tensors["choice.0.policy_logprobs"], -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
     )
     wrong_inputs = inputs.copy()
     wrong_inputs[0] += 1

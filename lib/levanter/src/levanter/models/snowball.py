@@ -21,6 +21,8 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
+from functools import partial
+import math
 from typing import Any, Literal, NamedTuple, Optional, Type, cast
 
 import equinox as eqx
@@ -35,7 +37,7 @@ from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 
 import haliax as hax
-from haliax import Axis, NamedArray
+from haliax import Axis, NamedArray, NamedOrNumeric
 from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
@@ -57,6 +59,11 @@ from levanter.grug.attention._paged import (
     PagedAttentionImplementation,
     ragged_paged_attention_append,
 )
+from levanter.grug.attention.fixed_schedule import (
+    FixedScheduleSpec,
+    fixed_schedule_attention,
+    materialize_contiguous_kv,
+)
 from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp, validate_captured_experts
 from levanter.grug.sharding import (
     Pembed_vocab,
@@ -67,10 +74,20 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
+from levanter.kernels.pallas.fixed_schedule_linear import _BLOCK_SIZE as _FIXED_PROJECTION_TILE
+from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
+
+from levanter.kernels.pallas.autotune_utils import named_sharding_of
+from levanter.kernels.pallas.rms_norm import Implementation as RmsNormImplementation
+from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm
+from levanter.kernels.pallas.rms_norm.reference import MAX_FLATTENED_ROWS
+from levanter.kernels.pallas.xsa import xsa_forward
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache, StackedKvPageCache
 from levanter.metrics import Metric, ReductionType
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.loss import next_token_ids, next_token_loss_weight
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -230,6 +247,17 @@ class SnowballConfig(HFCompatConfig):
     qk_mult: float = _DEFAULT_QK_MULT
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
+    projection_implementation: Literal["native", "fixed_schedule"] = dataclasses.field(
+        default="native", metadata={"fingerprint_omit_default": True}
+    )
+    """Use fixed per-row dense projections in both learner and serving paths on TPUv4."""
+    replay_precision: Literal["standard", "zero_kl"] = dataclasses.field(
+        default="standard", metadata={"fingerprint_omit_default": True}
+    )
+    shared_attention_implementation: Literal["native", "fixed_schedule"] = dataclasses.field(
+        default="native", metadata={"fingerprint_omit_default": True}
+    )
+    """Use the bounded shared TPUv4 schedule for both paged attention and learner forward."""
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
@@ -252,6 +280,14 @@ class SnowballConfig(HFCompatConfig):
     tokenizer: Optional[str] = None
 
     def __post_init__(self) -> None:
+        if self.replay_precision == "zero_kl":
+            _validate_fixed_shared_attention_config(self)
+            if (
+                self.projection_implementation != "fixed_schedule"
+                or self.shared_attention_implementation != "fixed_schedule"
+                or self.moe_implementation != "ring"
+            ):
+                raise ValueError("Use SnowballConfig.with_zero_kl_replay() to select the complete replay profile")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.num_experts_per_token > self.num_experts:
@@ -270,6 +306,21 @@ class SnowballConfig(HFCompatConfig):
                 "pooled_transport_capacity_factor, which SnowballConfig does not set"
             )
         _ = self.inferred_head_dim
+
+    def with_zero_kl_replay(self) -> "SnowballConfig":
+        """Select shared TPUv4 arithmetic for the bounded four-slot replay fixture.
+
+        Use FP32 parameters and activations, BF16 serving KV, and highest native
+        matmul precision on both sides. Serving must return raw policy scores.
+        """
+        _validate_fixed_shared_attention_config(self)
+        return dataclasses.replace(
+            self,
+            replay_precision="zero_kl",
+            shared_attention_implementation="fixed_schedule",
+            projection_implementation="fixed_schedule",
+            moe_implementation="ring",
+        )
 
     @property
     def Embed(self) -> Axis:
@@ -408,24 +459,83 @@ def sigmoid_fp32(x: jax.Array) -> jax.Array:
     return jax.nn.sigmoid(x.astype(jnp.float32)).astype(x.dtype)
 
 
+def _replay_norm(cfg: SnowballConfig) -> RmsNormImplementation | None:
+    return "pallas_tpu" if cfg.replay_precision == "zero_kl" else None
+
+
+def _bounded_rms_norm(x: jax.Array, weight: jax.Array, eps: float, implementation: RmsNormImplementation) -> jax.Array:
+    rows = x.size // x.shape[-1]
+    if rows <= MAX_FLATTENED_ROWS:
+        return batch_invariant_rms_norm(x, weight, eps, implementation)
+    flat = x.reshape(rows, x.shape[-1])
+    sharding = named_sharding_of(flat)
+    chunks = []
+    for start in range(0, rows, MAX_FLATTENED_ROWS):
+        stop = start + MAX_FLATTENED_ROWS
+        chunk = flat.at[start:stop].get(out_sharding=sharding.spec) if sharding is not None else flat[start:stop]
+        chunks.append(batch_invariant_rms_norm(chunk, weight, eps, implementation))
+    return jnp.concatenate(chunks, axis=0).reshape(x.shape)
+
+
+def _normalize_qk(x: jax.Array, cfg: SnowballConfig) -> jax.Array:
+    implementation = _replay_norm(cfg)
+    if implementation is None:
+        return rms_norm(x)
+    original_sharding = named_sharding_of(x)
+    if original_sharding is not None and not original_sharding.mesh.empty:
+        row_axes = next(iter(original_sharding.spec), None)
+        x = reshard(x, P(row_axes, None, None, None))
+    weight = jnp.ones((x.shape[-1],), dtype=jnp.float32)
+    output = _bounded_rms_norm(x, weight, _QK_RMS_NORM_EPS, implementation)
+    if original_sharding is not None and not original_sharding.mesh.empty:
+        return reshard(output, original_sharding)
+    return output
+
+
 class RMSNorm(eqx.Module):
     """Parametric RMS norm (eps = layer_norm_eps = 1e-5)."""
 
     weight: jax.Array
     eps: float = eqx.field(static=True)
+    implementation: RmsNormImplementation | None = eqx.field(static=True, default=None)
 
     @staticmethod
-    def init(dim: int, eps: float) -> "RMSNorm":
-        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
+    def init(dim: int, eps: float, implementation: RmsNormImplementation | None = None) -> "RMSNorm":
+        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps, implementation=implementation)
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         weight = unshard(self.weight)
+        if self.implementation is not None:
+            if self.implementation == "pallas_tpu" and _context_axis() is not None:
+                raise ValueError("Batch-invariant TPU RMSNorm requires an unsharded context axis")
+            output = _bounded_rms_norm(x, weight, self.eps, self.implementation)
+            sharding = named_sharding_of(x)
+            return reshard(output, sharding) if sharding is not None and not sharding.mesh.empty else output
         dtype = x.dtype
         x = x.astype(jnp.float32)
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
         normed = x * jax.lax.rsqrt(variance + self.eps)
         return (normed * weight).astype(dtype)
+
+
+def _fixed_projection(x: jax.Array, weight: jax.Array) -> jax.Array:
+    contraction, output = weight.shape
+    pad_contract = -contraction % _FIXED_PROJECTION_TILE
+    pad_output = -output % _FIXED_PROJECTION_TILE
+    flat = x.reshape(-1, contraction)
+    if pad_contract:
+        flat = jnp.pad(flat, ((0, 0), (0, pad_contract)))
+    if pad_contract or pad_output:
+        weight = jnp.pad(weight, ((0, pad_contract), (0, pad_output)))
+        # Keep the padding adjoint outside the replicated-gradient collective.
+        weight = jax.lax.optimization_barrier(weight)
+    sharding = jax.typeof(flat).sharding if isinstance(flat, core.Tracer) else flat.sharding
+    if isinstance(sharding, NamedSharding):
+        flat = reshard(flat, P(next(iter(sharding.spec), None), None))
+        weight = reshard(weight, P())
+    projected = fixed_schedule_linear(flat, weight)[:, :output]
+    return projected.reshape((*x.shape[:-1], output))
 
 
 class GatedNorm(eqx.Module):
@@ -434,21 +544,31 @@ class GatedNorm(eqx.Module):
     w_down: jax.Array
     w_up: jax.Array
     fp32_activations: bool = eqx.field(static=True, default=False)
+    projection_implementation: Literal["native", "fixed_schedule"] = eqx.field(static=True, default="native")
 
     @staticmethod
     def init(
-        hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray, fp32_activations: bool = False
+        hidden_dim: int,
+        initializer_std: float,
+        *,
+        key: PRNGKeyArray,
+        fp32_activations: bool = False,
+        projection_implementation: Literal["native", "fixed_schedule"] = "native",
     ) -> "GatedNorm":
         k_down, k_up = random.split(key)
         return GatedNorm(
             w_down=_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std, P(None, None)),
             w_up=_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std, P(None, None)),
             fp32_activations=fp32_activations,
+            projection_implementation=projection_implementation,
         )
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         silu, sigmoid = (silu_fp32, sigmoid_fp32) if self.fp32_activations else (jax.nn.silu, jax.nn.sigmoid)
+        if self.projection_implementation == "fixed_schedule":
+            gate = sigmoid(_fixed_projection(silu(_fixed_projection(x, self.w_down)), self.w_up))
+            return x * _partition_match(gate.astype(x.dtype), x)
         gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
         gate_hidden = silu(gate_hidden)
         gate = sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
@@ -500,6 +620,9 @@ class SnowballAttention(eqx.Module):
         disable_rope: bool = False,
     ) -> Float[Array, "B S D"]:
         q, k, v = self._project_qkv(x, disable_rope=disable_rope)
+        if self.cfg.shared_attention_implementation == "fixed_schedule":
+            attn_out = _fixed_shared_attention(q, k, v, mask, cfg=self.cfg)
+            return self._project_output(x, attn_out, v)
         context = _context_axis()
         local_v = v
         if context is not None:
@@ -519,12 +642,17 @@ class SnowballAttention(eqx.Module):
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         head_dim = self.cfg.inferred_head_dim
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        def project(weight):
+            if self.cfg.projection_implementation == "fixed_schedule":
+                return _fixed_projection(x, weight)
+            return jnp.einsum("bsh,hd->bsd", x, weight)
 
-        q = rms_norm(q)
-        k = rms_norm(k)
+        q = rearrange(project(self.w_q), "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(project(self.w_k), "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(project(self.w_v), "... (m d) -> ... m d", d=head_dim)
+
+        q = _normalize_qk(q, self.cfg)
+        k = _normalize_qk(k, self.cfg)
         # Half-RoPE: rotary on the first half of head_dim only (second half is rope-free).
         if not disable_rope:
             half = head_dim // 2
@@ -536,26 +664,36 @@ class SnowballAttention(eqx.Module):
                 rope=self.cfg.rope,
                 position_ids=position_ids,
             )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+            q_tail, k_tail = q[..., half:], k[..., half:]
+            q = jnp.concatenate([_partition_match(q_rot, q_tail), q_tail], axis=-1)
+            k = jnp.concatenate([_partition_match(k_rot, k_tail), k_tail], axis=-1)
         return q * self.cfg.qk_mult, k, v
 
     def _project_output(self, x: jax.Array, attn_out: jax.Array, v: jax.Array) -> jax.Array:
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = _partition_match(aligned_v, attn_out)
         # Exclusive Self-Attention: subtract the component of y parallel to v, per head.
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        if self.cfg.replay_precision == "zero_kl":
+            attn_out = xsa_forward(attn_out, aligned_v, "pallas_tpu")
+        else:
+            dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: 2 * sigmoid(x @ attn_gate), one scalar per head.
         sigmoid = sigmoid_fp32 if self.cfg.fp32_activations else jax.nn.sigmoid
-        gate = 2 * sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        if self.cfg.projection_implementation == "fixed_schedule":
+            gate_logits = _fixed_projection(x, self.attn_gate)
+            gate = _partition_match((2 * sigmoid(gate_logits))[..., None], attn_out)
+        else:
+            gate = 2 * sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = jnp.reshape(
             attn_out,
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=_activation_spec("model"),
         )
+        if self.cfg.projection_implementation == "fixed_schedule":
+            return _partition_match(_fixed_projection(attn_out, self.w_o), x)
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_activation_spec())
 
     @named_call
@@ -576,6 +714,14 @@ class SnowballAttention(eqx.Module):
         head_dim = cfg.inferred_head_dim
         q, k, v = self._project_qkv(x, disable_rope=mode == "long", position_ids=pos_ids[:, None])
         token_axis = batch_info.new_token_dests.axes[0]
+        if cfg.shared_attention_implementation == "fixed_schedule":
+            kv_axes = (token_axis, Axis("kv_head", cfg.num_kv_heads), Axis("head_size", head_dim))
+            cache_sharding = P() if cfg.replay_precision == "zero_kl" else P(None, kv_axis, None)
+            cache_k = reshard(k[:, 0], cache_sharding)
+            cache_v = reshard(v[:, 0], cache_sharding)
+            cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
+            out = _fixed_shared_attention_decode(q, cache, batch_info, pos_ids, use_long=mode == "long", cfg=cfg)
+            return self._project_output(x, out, v), cache
         kv_heads = _inference_kv_heads(cfg, kv_axis)
         extra_heads = kv_heads - cfg.num_kv_heads
         kv_axes = (token_axis, Axis("kv_head", kv_heads), Axis("head_size", head_dim))
@@ -628,6 +774,244 @@ class SnowballAttention(eqx.Module):
         return self._project_output(x, out, v), cache
 
 
+def _fixed_shared_attention(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, *, cfg: SnowballConfig
+) -> jax.Array:
+    """Run the bounded four-slot fixed forward with a reference reverse mode."""
+    if not mask.is_causal or mask.segment_ids is not None:
+        raise ValueError("Snowball fixed shared attention requires an unsegmented causal mask")
+    return _fixed_shared_attention_with_vjp(q, k, v, mask, cfg)
+
+
+def _fixed_shared_attention_forward(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, *, cfg: SnowballConfig
+) -> jax.Array:
+    """Run the bounded four-slot fixed forward for a causal layer schedule."""
+    _validate_fixed_shared_attention_config(cfg)
+    if q.shape != (4, 256, cfg.num_heads, cfg.inferred_head_dim):
+        raise ValueError("Snowball fixed shared attention requires q shape [4, 256, Q, 128]")
+    expected_kv_shape = (4, 256, cfg.num_kv_heads, cfg.inferred_head_dim)
+    if k.shape != expected_kv_shape or v.shape != expected_kv_shape:
+        raise ValueError("Snowball fixed shared attention requires K/V shape [4, 256, KV, 128]")
+    spec = FixedScheduleSpec(
+        num_q_heads=cfg.num_heads,
+        num_kv_heads=cfg.num_kv_heads,
+        head_dim=cfg.inferred_head_dim,
+        sliding_window=None if mask.sliding_window is None else min(mask.sliding_window, 256),
+    )
+    page_indices = jnp.arange(spec.num_physical_pages, dtype=jnp.int32).reshape(spec.max_num_seqs, spec.pages_per_seq)
+    pages = materialize_contiguous_kv(k, v, page_indices, spec=spec)
+    positions = jnp.broadcast_to(jnp.arange(spec.max_kv_len, dtype=jnp.int32), (spec.max_num_seqs, spec.max_kv_len))
+    valid = jnp.ones((spec.max_num_seqs, spec.max_kv_len), dtype=jnp.bool_)
+    return fixed_schedule_attention(
+        q.astype(jnp.float32),
+        pages,
+        jnp.full((spec.max_num_seqs,), spec.max_kv_len, dtype=jnp.int32),
+        page_indices,
+        jnp.full((spec.max_num_seqs,), spec.max_kv_len, dtype=jnp.int32),
+        positions,
+        valid,
+        spec=spec,
+    )
+
+
+def _fixed_shared_attention_reference(
+    q: jax.Array, k: jax.Array, v: jax.Array, sliding_window: int | None
+) -> jax.Array:
+    """Evaluate the cast-aware contiguous grouped-query attention used by the VJP."""
+    if not get_abstract_mesh().empty:
+        # Training can annotate the singleton expert axis on sequence. Q and K
+        # form independent sequence dimensions, so contract with batch-only sharding.
+        q, k, v = (reshard(value, P("data", None, None, None)) for value in (q, k, v))
+    scale = jnp.asarray(1.0 / math.sqrt(q.shape[-1]), dtype=jnp.float32)
+    q_compute = q.astype(jnp.float32)
+    k_compute = k.astype(jnp.bfloat16)
+    v_compute = v.astype(jnp.bfloat16)
+    # Keep the BF16 head-reduction adjoint while making dot operands explicitly FP32.
+    k_aligned = align_kv_heads(k_compute, num_q_heads=q.shape[2]).astype(jnp.float32)
+    v_aligned = align_kv_heads(v_compute, num_q_heads=q.shape[2]).astype(jnp.float32)
+    scores = jnp.einsum(
+        "bqhd,bkhd->bhqk",
+        q_compute * scale,
+        k_aligned,
+        precision=jax.lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    )
+    positions = jnp.arange(q.shape[1])
+    allowed = positions[None, None, None, :] <= positions[None, None, :, None]
+    if sliding_window is not None:
+        allowed &= positions[None, None, None, :] > positions[None, None, :, None] - sliding_window
+    scores = jnp.where(allowed, scores, -1e9)
+    weights = jax.nn.softmax(scores, axis=-1)
+    return jnp.einsum(
+        "bhqk,bkhd->bqhd",
+        weights,
+        v_aligned,
+        precision=jax.lax.Precision.HIGHEST,
+        preferred_element_type=jnp.float32,
+    )
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(3, 4))
+def _fixed_shared_attention_with_vjp(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, cfg: SnowballConfig
+) -> jax.Array:
+    return _fixed_shared_attention_forward(q, k, v, mask, cfg=cfg)
+
+
+def _fixed_shared_attention_with_vjp_fwd(
+    q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, cfg: SnowballConfig
+) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
+    return _fixed_shared_attention_forward(q, k, v, mask, cfg=cfg), (q, k, v)
+
+
+def _fixed_shared_attention_with_vjp_bwd(
+    mask: AttentionMask,
+    cfg: SnowballConfig,
+    residuals: tuple[jax.Array, jax.Array, jax.Array],
+    cotangent: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    del cfg
+    q, k, v = residuals
+    _, pullback = jax.vjp(
+        lambda q_, k_, v_: _fixed_shared_attention_reference(q_, k_, v_, mask.sliding_window), q, k, v
+    )
+    cotangent = cotangent.astype(jnp.float32)
+    if not get_abstract_mesh().empty:
+        cotangent = reshard(cotangent, P("data", None, None, None))
+    dq, dk, dv = pullback(cotangent)
+    return dq.astype(q.dtype), dk.astype(k.dtype), dv.astype(v.dtype)
+
+
+_fixed_shared_attention_with_vjp.defvjp(_fixed_shared_attention_with_vjp_fwd, _fixed_shared_attention_with_vjp_bwd)
+
+
+def _fixed_shared_attention_decode(
+    q: jax.Array,
+    cache: KvPageCache,
+    batch_info: PageBatchInfo,
+    pos_ids: jax.Array,
+    *,
+    use_long: bool,
+    cfg: SnowballConfig,
+) -> jax.Array:
+    """Run fixed shared attention over the bounded cached four-slot layout."""
+    _validate_fixed_shared_attention_config(cfg)
+    spec = FixedScheduleSpec(
+        num_q_heads=cfg.num_heads,
+        num_kv_heads=cfg.num_kv_heads,
+        head_dim=cfg.inferred_head_dim,
+        sliding_window=None if use_long else min(cfg.sliding_window, 256),
+    )
+    if batch_info.page_indices.array.shape != (4, 2) or batch_info.slot_ids.array.shape != (4,):
+        raise ValueError("Snowball fixed shared decode requires four slots and two pages per slot")
+    if batch_info.page_size != spec.page_size:
+        raise ValueError("Snowball fixed shared decode requires page_size=128")
+    metadata = (batch_info.page_indices, batch_info.slot_ids, batch_info.seq_lens, batch_info.cu_q_lens)
+    if any(value.array.dtype != jnp.int32 for value in metadata):
+        raise ValueError("Snowball fixed shared decode requires int32 page and sequence metadata")
+    if batch_info.seq_lens.array.shape != (4,) or batch_info.cu_q_lens.array.shape != (5,):
+        raise ValueError("Snowball fixed shared decode requires four sequence lengths")
+    if pos_ids.shape != (q.shape[0],) or pos_ids.dtype != jnp.int32:
+        raise ValueError("Snowball fixed shared decode positions must be int32")
+    token_rows = jnp.arange(q.shape[0], dtype=jnp.int32)
+    starts = batch_info.cu_q_lens.array[:-1]
+    used = jnp.arange(spec.max_num_seqs, dtype=jnp.int32) < batch_info.num_seqs
+    sequences = jnp.clip(jnp.sum((token_rows[:, None] >= starts[None, :]) & used[None, :], axis=1) - 1, 0, 3)
+    safe_positions = jnp.clip(pos_ids, 0, spec.max_kv_len - 1)
+    position_valid = (pos_ids >= 0) & (pos_ids < spec.max_kv_len)
+    active = token_rows < batch_info.num_new_tokens
+    grid = jnp.zeros((4, 256, cfg.num_heads, cfg.inferred_head_dim), dtype=jnp.float32)
+    valid = jnp.zeros((4, 256), dtype=jnp.bool_)
+    q_update = q[:, 0].astype(jnp.float32)
+    q_sharding = jax.typeof(q_update).sharding if isinstance(q_update, core.Tracer) else q_update.sharding
+    if not isinstance(q_sharding, NamedSharding):
+        raise ValueError("Snowball fixed shared decode requires an Explicit query sharding")
+    q_spec = tuple(q_sharding.spec)
+    grid_sharding = NamedSharding(q_sharding.mesh, P(q_spec[0], None, q_spec[1], q_spec[2]))
+    grid = jax.sharding.reshard(grid, grid_sharding)
+    grid = jax.lax.with_sharding_constraint(grid, grid_sharding)
+    # The engine pads packed batches with INVALID rows. Drop their writes;
+    # clipping them into the grid could overwrite a real query in that slot.
+    write_positions = jnp.where(active & position_valid, pos_ids, spec.max_kv_len)
+    grid = grid.at[sequences, write_positions].set(q_update, mode="drop", out_sharding=grid_sharding)
+    valid = valid.at[sequences, write_positions].set(True, mode="drop")
+    counts = jnp.zeros((4, 256), dtype=jnp.int32).at[sequences, write_positions].add(1, mode="drop")
+    slots = batch_info.slot_ids.array
+    pages = batch_info.page_indices.array
+    needed = jnp.arange(spec.pages_per_seq)[None, :] * spec.page_size < batch_info.seq_lens.array[:, None]
+    visible_pages_valid = jnp.all(~(used[:, None] & needed) | ((pages >= 0) & (pages < spec.num_physical_pages)))
+    # Future pages may remain unallocated until a generated input reaches them.
+    # The fixed kernel still prefetches them, so provide an in-range address;
+    # its unchanged causal mask excludes these future keys from every query.
+    safe_pages = jnp.clip(pages, 0, spec.num_physical_pages - 1)
+    metadata_valid = (
+        (batch_info.num_seqs >= 0)
+        & (batch_info.num_seqs <= spec.max_num_seqs)
+        & (batch_info.cu_q_lens.array[0] == 0)
+        & (batch_info.num_new_tokens >= 0)
+        & (batch_info.num_new_tokens <= q.shape[0])
+        & jnp.all(
+            ~used
+            | (
+                (batch_info.cu_q_lens.array[1:] >= batch_info.cu_q_lens.array[:-1])
+                & (batch_info.cu_q_lens.array[1:] <= q.shape[0])
+            )
+        )
+        & jnp.all(~used | ((batch_info.seq_lens.array >= 0) & (batch_info.seq_lens.array <= 256)))
+        & jnp.all(~used | ((slots >= 0) & (slots < 4)))
+        & jnp.all((slots[:, None] != slots[None, :]) | ~used[:, None] | ~used[None, :] | jnp.eye(4, dtype=jnp.bool_))
+        & visible_pages_valid
+        & jnp.all(~active | position_valid)
+        & jnp.all(~active | (pos_ids < batch_info.seq_lens.array[jnp.clip(sequences, 0, 3)]))
+        & jnp.all(counts <= 1)
+    )
+    positions = jnp.broadcast_to(jnp.arange(256, dtype=jnp.int32), (4, 256))
+    out = fixed_schedule_attention(
+        grid,
+        cache.kv_pages.array,
+        jnp.full((4,), 256, dtype=jnp.int32),
+        safe_pages,
+        jnp.full((4,), 256, dtype=jnp.int32),
+        positions,
+        valid,
+        spec=spec,
+    )
+    out_sharding = NamedSharding(q_sharding.mesh, P(q_spec[0], q_spec[1], q_spec[2]))
+    out = out.at[sequences, safe_positions].get(out_sharding=out_sharding)[:, None, ...]
+    return jnp.where(metadata_valid, jnp.where(active[:, None, None, None], out, 0), jnp.nan)
+
+
+def _validate_fixed_shared_attention_config(cfg: SnowballConfig) -> None:
+    """Reject shapes outside the one qualified Snowball shared-forward fixture."""
+    expected = {
+        "hidden_dim": 128,
+        "intermediate_dim": 32,
+        "shared_expert_intermediate_dim": 32,
+        "num_experts": 2,
+        "num_experts_per_token": 1,
+        "num_layers": (1, 2),
+        "num_heads": 2,
+        "num_kv_heads": 1,
+        "head_dim": 128,
+        "vocab_size": 23,
+        "max_seq_len": 256,
+    }
+    actual = {name: cfg.inferred_head_dim if name == "head_dim" else getattr(cfg, name) for name in expected}
+    unsupported = {
+        name: (actual[name], value)
+        for name, value in expected.items()
+        if actual[name] not in (value if isinstance(value, tuple) else (value,))
+    }
+    if unsupported:
+        raise ValueError(f"Snowball fixed shared attention only supports the bounded fixture: {unsupported}")
+
+
+def _validate_fixed_shared_attention_public_mask(mask: AttentionMask) -> None:
+    if not mask.is_causal or mask.sliding_window is not None or mask.segment_ids is not None:
+        raise ValueError("Snowball fixed shared attention requires an unsegmented causal mask")
+
+
 def _partition_match(aligned_v: jax.Array, attn_out: jax.Array) -> jax.Array:
     """Match aligned_v's sharding to attn_out (backend attention can pick its own head sharding)."""
     sharding = jax.typeof(attn_out).sharding if isinstance(attn_out, core.Tracer) else attn_out.sharding
@@ -643,6 +1027,7 @@ class DenseMLP(eqx.Module):
     w_up: jax.Array
     w_down: jax.Array
     fp32_activations: bool = eqx.field(static=True, default=False)
+    projection_implementation: Literal["native", "fixed_schedule"] = eqx.field(static=True, default="native")
 
     @staticmethod
     def init(
@@ -652,6 +1037,7 @@ class DenseMLP(eqx.Module):
         *,
         key: PRNGKeyArray,
         fp32_activations: bool = False,
+        projection_implementation: Literal["native", "fixed_schedule"] = "native",
     ) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
         return DenseMLP(
@@ -659,15 +1045,20 @@ class DenseMLP(eqx.Module):
             w_up=_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std, P(_FSDP_AXES, "model")),
             w_down=_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std, P("model", _FSDP_AXES)),
             fp32_activations=fp32_activations,
+            projection_implementation=projection_implementation,
         )
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        silu = silu_fp32 if self.fp32_activations else jax.nn.silu
+        if self.projection_implementation == "fixed_schedule":
+            gate = _fixed_projection(x, self.w_gate)
+            up = _fixed_projection(x, self.w_up)
+            return _partition_match(_fixed_projection(silu(gate) * up, self.w_down), x)
         b, s, _ = x.shape
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        silu = silu_fp32 if self.fp32_activations else jax.nn.silu
         out_flat = jnp.einsum("tm,md->td", silu(gate) * up, self.w_down, out_sharding=_token_spec())
         return jax.lax.reshape(out_flat, (b, s, out_flat.shape[-1]), out_sharding=_activation_spec())
 
@@ -856,14 +1247,22 @@ class SnowballBlock(eqx.Module):
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballBlock":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         return SnowballBlock(
-            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, _replay_norm(cfg)),
             attn_gated_norm=GatedNorm.init(
-                cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key, fp32_activations=cfg.fp32_activations
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=gn_attn_key,
+                fp32_activations=cfg.fp32_activations,
+                projection_implementation=cfg.projection_implementation,
             ),
             attn=SnowballAttention.init(cfg, key=attn_key),
-            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, _replay_norm(cfg)),
             mlp_gated_norm=GatedNorm.init(
-                cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key, fp32_activations=cfg.fp32_activations
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=gn_mlp_key,
+                fp32_activations=cfg.fp32_activations,
+                projection_implementation=cfg.projection_implementation,
             ),
             mlp=SnowballMoEMLP.init(cfg, key=mlp_key),
             shared=DenseMLP.init(
@@ -872,6 +1271,7 @@ class SnowballBlock(eqx.Module):
                 cfg.initializer_std,
                 key=shared_key,
                 fp32_activations=cfg.fp32_activations,
+                projection_implementation=cfg.projection_implementation,
             ),
         )
 
@@ -1007,15 +1407,23 @@ class SnowballTransformer(eqx.Module):
         blocks = tuple(SnowballBlock.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return SnowballTransformer(
             token_embed=token_embed,
-            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, _replay_norm(cfg)),
             embed_gated_norm=GatedNorm.init(
-                cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key, fp32_activations=cfg.fp32_activations
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=embed_gn_key,
+                fp32_activations=cfg.fp32_activations,
+                projection_implementation=cfg.projection_implementation,
             ),
             output_proj=output_proj,
             blocks=blocks,
-            final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, _replay_norm(cfg)),
             final_gated_norm=GatedNorm.init(
-                cfg.hidden_dim, cfg.initializer_std, key=final_gn_key, fp32_activations=cfg.fp32_activations
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=final_gn_key,
+                fp32_activations=cfg.fp32_activations,
+                projection_implementation=cfg.projection_implementation,
             ),
             config=cfg,
         )
@@ -1046,6 +1454,8 @@ class SnowballTransformer(eqx.Module):
         cfg = self.config
         if mask is None:
             mask = AttentionMask.causal()
+        if cfg.shared_attention_implementation == "fixed_schedule":
+            _validate_fixed_shared_attention_public_mask(mask)
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
@@ -1137,6 +1547,17 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         """Read selected matrix slices for eligible small expert-parallel decode batches."""
         return dataclasses.replace(self, _selected_ep_decode=True)
 
+    def with_batch_invariant_rmsnorm(self, implementation: RmsNormImplementation) -> "SnowballLMHeadModel":
+        """Select the same weighted normalization for learner and paged decode."""
+        transformer = jax.tree.map(
+            lambda layer: (
+                dataclasses.replace(layer, implementation=implementation) if isinstance(layer, RMSNorm) else layer
+            ),
+            self.transformer,
+            is_leaf=lambda layer: isinstance(layer, RMSNorm),
+        )
+        return dataclasses.replace(self, transformer=transformer)
+
     @property
     def config(self) -> SnowballConfig:
         return self._config
@@ -1159,6 +1580,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
         return self._activations(input_ids, return_routes=False, attn_mask=attn_mask)[0]
+
+    def activations_with_replay(
+        self, input_ids: NamedArray, attn_mask: LmHeadAttentionMask, route_replay: SnowballRouteReplay
+    ) -> NamedArray:
+        """Compute hidden states with prepared expert IDs and live combine weights."""
+        return self._activations(input_ids, False, attn_mask, route_replay=route_replay)[0]
 
     def activations_with_routes(
         self, input_ids: NamedArray, attn_mask: LmHeadAttentionMask | NamedArray | None = None
@@ -1293,6 +1720,59 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             )
         }
 
+    def project_logits(self, activations: NamedArray) -> NamedArray:
+        if self.config.projection_implementation == "native":
+            return super().project_logits(activations)
+        logits = _fixed_projection(activations.array, self.transformer.output_proj)
+        return hax.named(logits, (*activations.axes[:-1], self.Vocab))
+
+    def fixed_policy_logprobs(self, activations: NamedArray, targets: NamedArray) -> NamedArray:
+        """Score target IDs with the fixed projection and policy normalization."""
+        logits = self.project_logits(activations).astype(jnp.float32)
+        selected, normalizers = self._fixed_target_logits(logits, targets)
+        return selected - normalizers
+
+    def _fixed_target_logits(self, logits: NamedArray, targets: NamedArray) -> tuple[NamedArray, NamedArray]:
+        selected = hax.sum(hax.where(hax.nn.one_hot(targets, self.Vocab, dtype=bool), logits, 0), self.Vocab)
+        normalizers = hax.named(batch_invariant_logsumexp(logits.array), logits.axes[:-1])
+        return selected, normalizers
+
+    def _loss_from_activations(
+        self,
+        example: LmExample,
+        activations: NamedArray | tuple[NamedArray, NamedOrNumeric],
+        *,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jnp.ndarray | NamedArray:
+        if self.config.projection_implementation == "native":
+            return super()._loss_from_activations(
+                example,
+                activations,
+                reduction=reduction,
+                reduction_axis=reduction_axis,
+                logsumexp_weight=logsumexp_weight,
+                loss_dtype=loss_dtype,
+                logit_soft_cap=logit_soft_cap,
+            )
+        hidden, aux_loss = split_activations(activations)
+        loss_type = example.loss_weight.dtype if example.loss_weight is not None else loss_dtype
+        logits = self.project_logits(hidden)
+        if loss_type is not None:
+            logits = logits.astype(loss_type)
+        if logit_soft_cap is not None:
+            logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
+        targets = next_token_ids(self.Pos.name, example.tokens)
+        selected, normalizers = self._fixed_target_logits(logits, targets)
+        loss = normalizers - selected
+        if logsumexp_weight:
+            loss = loss + logsumexp_weight * hax.square(normalizers)
+        weights = next_token_loss_weight(logits.resolve_axis(self.Pos.name), example.loss_weight)
+        return hax.nn.loss.reduce_loss(loss, reduction, reduction_axis, weight=weights) + aux_loss
+
     def get_lm_head(self) -> NamedArray:
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))
 
@@ -1316,7 +1796,8 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             Axis("kv_head", 2 * _inference_kv_heads(self.config, self._kv_axis)),
             Axis("head_size", self.config.inferred_head_dim),
         )
-        sharding = _current_sharding(P(None, None, self._kv_axis, None))
+        kv_axis = None if self.config.replay_precision == "zero_kl" else self._kv_axis
+        sharding = _current_sharding(P(None, None, kv_axis, None))
         pages = jnp.zeros(tuple(axis.size for axis in axes), dtype, out_sharding=sharding)
         return KvPageCache(hax.named(pages, axes))
 
@@ -1332,6 +1813,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         self, spec: PageTableSpec, *, dtype: jnp.dtype, window_cache_pages: int | None = None
     ) -> StackedKvPageCache | ListCache[KvPageCache]:
         """Allocate paged KV state on a serving mesh with context parallelism disabled."""
+        if self.config.replay_precision == "zero_kl":
+            if dtype != jnp.bfloat16 or self.transformer.token_embed.dtype != jnp.float32:
+                raise ValueError("The zero-KL replay profile requires FP32 compute and BF16 serving KV")
+            if window_cache_pages is not None:
+                raise ValueError("The zero-KL replay profile uses the complete cache for each layer")
+            return ListCache(tuple(self.initial_layer_cache(spec, dtype=dtype) for _ in self.transformer.blocks))
         if window_cache_pages is not None:
             specs = self.layer_cache_specs(spec, window_cache_pages)
             return ListCache(tuple(self.initial_layer_cache(layer, dtype=dtype) for layer in specs))
@@ -1429,7 +1916,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             capture_routes=capture_routes,
             fused_kv_tokens=(FUSED_KV_PREFILL_MAX_TOKENS if prefill else FUSED_KV_APPEND_MAX_TOKENS),
         )
-        if sample_indices is None:
+        if self.config.projection_implementation == "fixed_schedule":
+            rows = hax.named(hidden[:, 0], (*input_ids.axes, self.Embed))
+            if sample_indices is not None:
+                sampled = hidden[:, 0].at[sample_indices.array].get(out_sharding=P())
+                rows = hax.named(sampled, (*sample_indices.axes, self.Embed))
+            output = self.project_logits(rows)
+        elif sample_indices is None:
             logits = jnp.einsum(
                 "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
             )
@@ -1491,7 +1984,8 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             return hidden, ListCache(tuple(layers)), routes
 
         split_cache = isinstance(kv_cache, ListCache)
-        stacked_cache = _stack_layer_cache(kv_cache, self._kv_axis) if isinstance(kv_cache, ListCache) else kv_cache
+        kv_axis = None if self.config.replay_precision == "zero_kl" else self._kv_axis
+        stacked_cache = _stack_layer_cache(kv_cache, kv_axis) if split_cache else kv_cache
         cache_axes = stacked_cache.kv_pages.axes[1:]
 
         def layer_step(carry, layer_data):
@@ -1539,7 +2033,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
         caches = StackedKvPageCache(hax.named(cache_pages, stacked_cache.kv_pages.axes))
         routes = SnowballDecodeRoutes(expert_ids, token_valid) if expert_ids is not None else None
-        return hidden, _split_layer_cache(caches, self._kv_axis) if split_cache else caches, routes
+        return hidden, _split_layer_cache(caches, kv_axis) if split_cache else caches, routes
 
     def _inference_block(self, block: SnowballBlock, token_rows: int) -> SnowballBlock:
         expert_size = _mesh_axis_size(_current_mesh(), "expert")
@@ -1569,7 +2063,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         return dataclasses.replace(self, transformer=new_tf)
 
 
-def _split_layer_cache(cache: StackedKvPageCache, kv_axis: str) -> ListCache[KvPageCache]:
+def _split_layer_cache(cache: StackedKvPageCache, kv_axis: str | None) -> ListCache[KvPageCache]:
     pages = cache.kv_pages
     layer_sharding = P(None, None, kv_axis, None)
     return ListCache(
@@ -1580,7 +2074,7 @@ def _split_layer_cache(cache: StackedKvPageCache, kv_axis: str) -> ListCache[KvP
     )
 
 
-def _stack_layer_cache(caches: ListCache[KvPageCache], kv_axis: str) -> StackedKvPageCache:
+def _stack_layer_cache(caches: ListCache[KvPageCache], kv_axis: str | None) -> StackedKvPageCache:
     layer = Axis(_CACHE_LAYER_AXIS, len(caches))
     pages = hax.stack(layer, [cache.kv_pages for cache in caches])
     return StackedKvPageCache(hax.named(reshard(pages.array, P(None, None, None, kv_axis, None)), pages.axes))

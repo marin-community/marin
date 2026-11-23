@@ -28,6 +28,7 @@ from levanter.main.export_hf_to_lm import ImportHfConfig
 from levanter.main.export_hf_to_lm import main as import_hf_to_levanter
 from levanter.models.lm_model import LmConfig
 
+from marin.execution.fingerprint import default_fields_omitted_from_fingerprint
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.training.training import LevanterCheckpoint
@@ -142,7 +143,8 @@ def hf_to_levanter(
     tokenizer = tokenizer or hf_id
     tokenizer_revision = tokenizer_revision or hf_revision
     model_config = resolve_lm_config(model_type, hf_id, hf_revision)
-    model_config_json = draccus.encode(model_config)
+    omitted = default_fields_omitted_from_fingerprint(model_config)
+    model_config_json = {key: value for key, value in draccus.encode(model_config).items() if key not in omitted}
     name = f"checkpoints/hf-to-levanter/{get_directory_friendly_name(hf_id)}-{model_type}"
 
     def build_config(ctx: StepContext) -> HfToLevanterConfig:
