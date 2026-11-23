@@ -485,7 +485,7 @@ def _decode_for_sampling(
     tokens: NamedArray,
     positions: NamedArray,
     slots: NamedArray,
-    sample_indices: NamedArray,
+    sample_indices: NamedArray | None,
     routes: _CapturedRoutes | None,
     *,
     window_batch: PageBatchInfo | None,
@@ -494,18 +494,18 @@ def _decode_for_sampling(
     if routes is None:
         if window_batch is not None:
             assert isinstance(model, SnowballLMHeadModel)
-            if prefill:
+            if prefill and sample_indices is not None:
                 logits, cache = model.decode_for_sampling(
                     tokens, cache, binfo, positions, sample_indices, window_batch=window_batch
                 )
                 return logits, cache, None
             logits, cache = model.decode(tokens, cache, binfo, positions, window_batch=window_batch)
-        elif prefill and isinstance(model, _SelectedRowDecoder):
+        elif prefill and sample_indices is not None and isinstance(model, _SelectedRowDecoder):
             logits, cache = model.decode_for_sampling(tokens, cache, binfo, positions, sample_indices)
             return logits, cache, None
         else:
             logits, cache = model.decode(tokens, cache, binfo, positions)
-        return _gather_logits(logits, sample_indices), cache, None
+        return (logits if sample_indices is None else _gather_logits(logits, sample_indices)), cache, None
     if not isinstance(model, SnowballLMHeadModel):
         raise ValueError("Expert route capture requires a Snowball model")
     result = model.decode_with_routes(
@@ -514,6 +514,44 @@ def _decode_for_sampling(
     assert result.routes is not None
     routes = routes.append(result.routes.expert_ids, slots, positions, binfo.num_new_tokens)
     return result.logits, result.cache, routes
+
+
+def _sample_sharded_positions(
+    sampler: Sampler, logits: NamedArray, temperatures: NamedArray, top_ps: NamedArray, keys: jax.Array
+) -> tuple[NamedArray, NamedArray]:
+    sharding = named_sharding_of(logits.array)
+    if sharding is None or sharding.mesh.empty or not sharding.spec or sharding.spec[0] is None:
+        return hax.vmap(sampler, "position")(logits, temperatures, top_ps=top_ps, key=keys)
+
+    row_spec = PartitionSpec(sharding.spec[0])
+    logits_spec = PartitionSpec(sharding.spec[0], None)
+
+    def local_sample(local_logits, local_temps, local_top_ps, local_keys):
+        rows = hax.Axis("position", local_logits.shape[0])
+        tokens, scores = hax.vmap(sampler, "position")(
+            hax.named(local_logits, (rows, sampler.Vocab)),
+            hax.named(local_temps, rows),
+            top_ps=hax.named(local_top_ps, rows),
+            key=local_keys,
+        )
+        return tokens.array, scores.array
+
+    sample = jax.shard_map(
+        local_sample,
+        mesh=sharding.mesh,
+        in_specs=(logits_spec, row_spec, row_spec, row_spec),
+        out_specs=(row_spec, row_spec),
+        check_vma=False,
+    )
+    row_sharding = sharding.update(spec=row_spec)
+    tokens, scores = sample(
+        jax.reshard(logits.array, sharding.update(spec=logits_spec)),
+        jax.reshard(temperatures.array, row_sharding),
+        jax.reshard(top_ps.array, row_sharding),
+        jax.reshard(keys, row_sharding),
+    )
+    gathered = sharding.update(spec=PartitionSpec())
+    return hax.named(jax.reshard(tokens, gathered), "position"), hax.named(jax.reshard(scores, gathered), "position")
 
 
 def _prefill_kernel(
@@ -841,10 +879,16 @@ def _run_generation_loop(
 
         decode_state, binfo = decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
 
-        seq_lens = decode_state.seq_lens
-
         max_sample_indices = min(decode_state.page_table.max_seqs, max_tokens_per_round)
-        sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
+        sample_locally = (
+            isinstance(model, SnowballLMHeadModel)
+            and model.has_expert_sharded_kv
+            and decode_state.max_seqs > 1
+            and max_sample_indices == max_tokens_per_round
+        )
+        sample_indices = None
+        if not sample_locally:
+            sample_indices = _compute_sample_indices(pos_ids, slot_ids, decode_state.seq_lens, max_sample_indices)
 
         # Decode logits and sample new tokens
         gen_state, window_batch = gen_state.remap_window_pages(decode_state, binfo)
@@ -861,15 +905,24 @@ def _run_generation_loop(
         )
         outputs = dataclasses.replace(outputs, routes=routes)
 
-        num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
-        new_slot_ids = slot_ids["position", sample_indices]
-        new_pos_ids = pos_ids["position", sample_indices]
+        if sample_indices is None:
+            num_new_tokens = binfo.num_new_tokens
+            new_slot_ids, new_pos_ids = slot_ids, pos_ids
+        else:
+            num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
+            new_slot_ids = slot_ids["position", sample_indices]
+            new_pos_ids = pos_ids["position", sample_indices]
         prng_keys = decode_state.prng_keys_for(new_slot_ids, new_pos_ids)
 
         temps = decode_state.temperature["seq", new_slot_ids]
         top_ps = decode_state.top_p["seq", new_slot_ids]
 
-        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+        if sample_locally:
+            new_tokens, log_probs = _sample_sharded_positions(sampler, logits_at_samples, temps, top_ps, prng_keys)
+        else:
+            new_tokens, log_probs = hax.vmap(sampler, "position")(
+                logits_at_samples, temps, top_ps=top_ps, key=prng_keys
+            )
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)

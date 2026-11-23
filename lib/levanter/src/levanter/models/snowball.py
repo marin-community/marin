@@ -1108,6 +1108,10 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     _kv_axis: Literal["model", "expert"] = eqx.field(static=True, default="model")
     _selected_ep_decode: bool = eqx.field(static=True, default=False)
 
+    @property
+    def has_expert_sharded_kv(self) -> bool:
+        return self._kv_axis == "expert"
+
     def with_expert_sharded_kv(self) -> "SnowballLMHeadModel":
         """Shard paged KV heads across the expert axis during generation."""
         return dataclasses.replace(self, _kv_axis="expert")

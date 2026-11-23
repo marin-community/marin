@@ -53,6 +53,7 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.inference.snowball_loading import load_snowball_serving_model
 from levanter.layers.attention import AttentionMask
+from levanter.layers.sampler import LogprobMode
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
 from levanter.metrics import ReductionType
@@ -546,7 +547,7 @@ def test_snowball_paged_generation_matches_full_forward(
                 for name, value in model.to_state_dict().items():
                     np.testing.assert_array_equal(value, state[name])
             if selected_decode:
-                model = model.with_selected_ep_decode()
+                model = model.with_selected_ep_decode().with_expert_sharded_kv()
             if decode_mode == "unroll":
                 model = model.with_unrolled_decode()
             elif decode_mode in ("split_cache", "compact_window"):
@@ -1445,8 +1446,11 @@ def test_snowball_engine_capture_preserves_samples_and_predictor_routes(compact_
 
 @pytest.mark.tpu
 @pytest.mark.skipif(not _tpu_v3_available(), reason="BF16 RPA v3 requires v5p or v6e")
-@pytest.mark.parametrize("shard_kv_on_experts", [False, True])
-def test_snowball_bf16_tpu_paged_generation_matches_reference(shard_kv_on_experts):
+@pytest.mark.parametrize(
+    ("shard_kv_on_experts", "logprob_mode"),
+    [(False, LogprobMode.BEHAVIOR), (True, LogprobMode.BEHAVIOR), (True, LogprobMode.POLICY)],
+)
+def test_snowball_bf16_tpu_paged_generation_matches_reference(shard_kv_on_experts, logprob_mode):
     devices = jax.device_count()
     model_shards = 1 if shard_kv_on_experts else devices
     expert_shards = devices if shard_kv_on_experts else 1
@@ -1472,6 +1476,7 @@ def test_snowball_bf16_tpu_paged_generation_matches_reference(shard_kv_on_expert
             max_queued_tokens=max(8, 2 * expert_shards),
             max_seqs_in_prefill=max(4, expert_shards),
             max_prefill_size=256,
+            logprob_mode=logprob_mode,
         )
         rng = np.random.default_rng(32)
         prompts = [rng.integers(2, cfg.vocab_size, size=length).tolist() for length in (137, 41)]
@@ -1479,7 +1484,12 @@ def test_snowball_bf16_tpu_paged_generation_matches_reference(shard_kv_on_expert
             Request(
                 prompt,
                 request_id=i,
-                decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(len(prompt) + 4)),
+                decode_params=replace(
+                    SeqDecodingParams.default(),
+                    max_num_tokens=jnp.asarray(len(prompt) + 4),
+                    temperature=jnp.float32(0.7),
+                    top_p=jnp.float32(0.8),
+                ),
                 n_generations=1,
             )
             for i, prompt in enumerate(prompts)
