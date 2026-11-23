@@ -127,6 +127,24 @@ for seed in 0 1; do
     --data $T/data --synthetic synthetic_generic.parquet --items $ITEMS --extra $T/data/<set>.parquet \
     --extra $T/data/silver.parquet --extra $T/data/synthetic_ctx.parquet --output $T/train
 done
+
+# Whole catalog: locator table, scan (one Zephyr worker per shard; records over 5,000,000 characters
+# are read in overlapping pieces), scores on 30 GPUs, then the removal list at the cutoff.
+C=$T/catalog
+iris --cluster=cw-us-east-02a job run --extra=cpu --memory 32GB --cpu 4 --disk 50GB --enable-extra-resources \
+  --job-name decon-catalog-locate -- python -m experiments.datakit.decontam.encoder.catalog locate \
+  --stage1 $T/stage1 --items $ITEMS --output $C
+iris --cluster=cw-us-east-02a job run --extra=cpu --job-name decon-catalog-scan -- \
+  python -m experiments.datakit.decontam.encoder.catalog scan --sources experiments/datakit/decontam/encoder/sources.json \
+  --input-root s3://marin-us-east-02a/marin/normalized --output $C --records all --ram 32g
+for k in $(seq 0 29); do
+  iris --cluster=cw-us-east-02a job run $GPU --no-wait --job-name decon-catalog-score-p$k -- \
+    python -m experiments.datakit.decontam.encoder.catalog_score --output $C --scores $C/scores \
+    --models $T/train/<tag>-s0/model $T/train/<tag>-s1/model --items $ITEMS --part $k --parts 30
+done
+iris --cluster=cw-us-east-02a job run --extra=cpu --memory 32GB --cpu 8 --enable-extra-resources \
+  --job-name decon-catalog-collect -- python -m experiments.datakit.decontam.encoder.catalog collect \
+  --output $C --scores $C/scores --cutoff 0.5
 ```
 
 ## Model
@@ -153,7 +171,9 @@ where the stratum-weighted precision on a validation set is at least 0.75 and it
 stratified bootstrap 5% bound is at least 0.65. The floor follows the policy of removing every copy at
 a reasonable cost. The validation set that applies the rule must be drawn per eval family from catalog
 candidates: draws from the measure shards held few flags of the families that fail in the catalog
-(below). The removal check (set 20) then tests the removed records themselves.
+(below). The removal check (set 20) then applies the same rule to the removed records themselves, at
+the chosen cutoff and at 0.5, and the run keeps the lower one that passes. Set 23 chose 0.3; set 20
+failed at 0.3 and passed at 0.5, so the run removes at 0.5.
 
 ## Measured results
 
@@ -179,7 +199,8 @@ plain, parenthesized, extra-option, no-line-break and JSON-escaped (once and twi
 Markdown. Almost all misses are ZhoBLiMP: its items are two short Chinese sentences (97% shorter than a
 key), so a separator between them (a number, a JSON field name) breaks every window. In the planted
 stage-2 check (iteration 13, cutoff 0.9) no planted passage without its question was flagged; real
-records are less clean (see the limits).
+records are less clean (see the limits). With the template-free keys (`prepare --content`, `choose --tie
+shared`), stage 1 finds 95.98% (96.02% with the earlier keys on the same item table).
 
 **Validation.** Two sets, weighted to their pools, with an item-clustered stratified bootstrap 5% bound.
 Set 19: 1,239 pairs from 114 measure shards that no earlier step used (every flag of iteration 15, a
@@ -201,7 +222,33 @@ Minerva, Hendrycks math, ASDiv, GSM8K, HumanEval, ARC and RTE (54-125 flags each
 (0.26), DROP (0.13), QQP (0.08), QNLI (0.21), RACE (0.45), BBH (0.38), AGIEval (0.54), CareQA and
 Uncheatable (0.60) and FDA (0.00). Iteration 15 at 0.5 had BBQ at 0.15, BBH at 0.30 and CoLA at 0.
 
-CATALOG_RESULTS
+**Whole catalog (iteration 16).** The scan read every one of the 167,533 shards with no failure:
+18,974,236,438 records and 9.84e13 characters. Stage 1 gave 21,044,008 records a candidate (0.111%) and
+65,011,108 candidate pairs, all scored. The 293,105 records over 5,000,000 characters (6.2e12 characters,
+6% of the catalog; stack-v3 5.1e12 in 162,501 records) were read in a second pass, in pieces (`scan
+--records oversized`): 1,058,329 pairs, all scored.
+
+Set 20 checks the removals: 1,926 removed records, 20 per family and score band (below 0.5, 0.5 or
+more) and 199 drawn uniformly. The judges split on 221 (11.5%), which are left out. The planned estimate
+weights each family-band stratum by its removed records; but within a stratum the draw goes round robin
+over the family's evals, not in proportion to their removals, so the corrected estimate weights cells of
+(eval, band) instead.
+
+| Removed records | Records | Characters | Planned [5% bound] | Corrected [5% bound] | Uniform [5% bound] |
+|---|---|---|---|---|---|
+| Best score 0.3 or more | 321,339 (0.0017%) | 1.27e10 (0.013%) | 0.677 [0.620] | 0.699 [0.678] | 0.756 [0.705] (176) |
+| Best score 0.5 or more | 263,774 (0.0014%) | 9.75e9 (0.0099%) | 0.760 [0.692] | 0.789 [0.758] | 0.841 [0.795] (151) |
+
+0.3 fails the 0.75 floor under both weightings, so the run removes at 0.5. With the second pass, which
+removes 928 long records (8.8e10 characters; HumanEval 121, SQuAD 88, GSM8K 53, Uncheatable code 88; precision 0.803 [0.743] on 200 drawn uniformly (set 25)),
+the run removes 264,702 records (0.0014%) and 9.76e10 characters (0.093%; `removed-final-05.parquet`).
+Stack-v3 loses the most, 0.80% of its characters; no source loses more than 2%. Set 23 and set 20 disagree at 0.3 because removals concentrate in MMLU and ARC, whose
+precision in the 0.3-0.5 band is 0.20 and 0.30, while set 23 drew at most 60 flags per family. At 0.5,
+precision is 0.84-1.00 for the leaderboard evals (mostly MMLU-Pro), Hendrycks math, AGIEval, Minerva,
+ASDiv, HumanEval, PIQA, GSM8K, MRPC, HellaSwag, MedQA, CoLA, BBQ and FDA (12-20 labeled records each),
+0.68-0.71 for MMLU (81,303 removals), ARC (44,463), Uncheatable and CareQA, and below 0.6 for 16 families
+that hold 22,362 removals, among them SQuAD 0.54, RACE 0.58, SST-2 0.59, DROP 0.35, TurBLiMP 0.35, HLE
+0.33, QNLI 0.32, simple co-occurrence bias 0.11, SciCode 0.06 and QQP 0.05.
 
 **Exact rules on the same pairs.** On the real test pairs and on the earlier validation set, the block
 rule (`marin.datakit.item_match` in PR #10836: question, then every choice) finds 45% and 68% of the
@@ -211,11 +258,31 @@ a copy.
 
 ## Limits
 
+- **Stage 1 misses about a fifth of clear catalog copies.** On 3,020 records in 2,000 sampled catalog
+  shards that the block rule of PR #10836 marks (an eval question with all its choices), stage 1 gives a
+  candidate for 79.8%: MMLU 93%, HumanEval 100%, GSM8K 46%. Planted copies (G2) include the eval's prompt
+  text, so they did not show this. A rendered GSM8K question starts with "Question:", and the bare
+  question's windows occur in the reference shards (GSM8K copies are common), so the rarest window spans
+  the prompt and a record with the bare question lacks it. Two key options fix this (`rarest_key prepare
+  --content`, `choose --tie shared`); on the same 2,000 shards they raise the share to 99.0% (GSM8K 100%,
+  MMLU 98%) at 1.44 times the candidate pairs. `--content` leaves out of the candidate windows the prefix
+  and suffix that all of an eval's streams share; `--tie shared` breaks ties among equally rare windows by
+  the number of other items that hold the window. The catalog run above used the earlier keys; a rescan
+  with the new keys (`catalog-v11-full`) needs scoring and a removal check.
+- **Candidate load concentrates on shared question stems.** One Nemotron formal-logic shard holds 886,186
+  candidate pairs: 260 MMLU formal-logic and MMLU-Pro items keyed on one question stem ("which of the
+  following propositions is an immediate (one-step) consequence"), which 48,133 of its records hold.
+  Stage 2 flags 373 of its records at 0.3 (11 at 0.5); the 5 checked by hand are other instances of the
+  template. With `--tie shared` the shard has 89,043 pairs.
+- **1,052 items (0.07%) have no key:** every key stream is shorter than a window once reduced to letters
+  and digits (BBH 552: multi-step arithmetic and boolean expressions such as "not ( True ) and ( True )
+  is"; ZhoBLiMP 477; AGIEval 15, Gaokao math cloze items that are mostly LaTeX).
 - **ZhoBLiMP copies in a numbered or JSON layout are not found** (see the planted copies above).
-- **Records with a passage but not its question are flagged** for SQuAD, DROP, QQP, QNLI and RACE, and
-  BBH templates and FDA form text are flagged; these families have precision 0.00-0.45.
-- **Validation is small per family.** 10 families have at least 50 labeled flags; the others' precision
-  is a rough estimate.
+- **Records with a passage but not its question are removed** for SQuAD, DROP, QQP, QNLI and RACE: at
+  0.5 their removals have precision 0.05-0.58 (set 20), and they hold most of the 22,362 removals of the
+  16 families below 0.6.
+- **Validation is small per family.** Set 20 labels 12-20 removals per family and band, and sets 19 and
+  23 give 10 families at least 50 labeled flags; per-family precision is a rough estimate.
 - **Flags concentrate in dump records.** A record holding a whole eval can carry thousands of flagged
   pairs, so pair-weighted precision leans on a few records; the removal check measures records.
 - **One-sentence evals.** CoLA and SST-2 sentences found without their fixed prompt ("Does this sentence
@@ -224,7 +291,10 @@ a copy.
   Uncheatable document, a long code file) holds the item's key only if the copied part contains it.
 - **GPQA choice order is random.** lm-eval shuffles GPQA choices without a seed, so the question text,
   which shows the choices, changes between builds of the item table.
-- **Records over 5,000,000 characters are not read;** each shard's stats list their ids.
+- **Records over 5,000,000 characters are read in pieces** of that size that overlap by 9,000 characters
+  (`scan --records all`), so a hit and its excerpt lie in one piece; each shard's stats list their ids. An
+  item whose excerpt context is longer than the overlap (a long passage) can get a cut excerpt at a piece
+  edge.
 - **Cutting an excerpt is linear per record except in one rare case:** a stretch of more than 16,384
   characters with no whitespace, digit, punctuation or non-Latin letter whose body is not plain ASCII
   (fullwidth letters, combining marks, or LaTeX commands with nothing between them). There, H hits cost
