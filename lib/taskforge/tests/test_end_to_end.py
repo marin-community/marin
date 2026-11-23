@@ -843,9 +843,10 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
 
 
 def test_a_second_process_replays_a_provider_context_refusal_without_asking_again(tmp_path: Path) -> None:
-    """The provider refused the author's request for a full context window and the author stopped; a cold launch in
-    another process, whose provider would now answer, replays that stop from the journal and makes no provider call,
-    and so does an explicit resume: the settled stop decides what follows it."""
+    """A fresh process replays the recorded refusal without calling the recovered provider.
+
+    Both replay modes construct the same log in this revision.
+    """
     probe, root = [sys.executable, "-m", "lib.taskforge.tests.context_replay_probe"], Path(__file__).parents[3]
     stop = "('author stopped: context_limit after 1 turns: maximum context length exceeded',)"
     for mode, calls in (("record", 1), ("launch", 0), ("resume", 0)):
