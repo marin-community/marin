@@ -2375,6 +2375,20 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   runs on a separate attempt.
   [Matched-pair acceptance checker and proof][held-native-pair-acceptance]
 
+  The prepared `2026.11.23.90` run now has a local verifier for a
+  preemption after the step-1 checkpoint commits. It binds both captures to
+  the sealed source and Iris workspace. The verifier checks that the
+  successor restores step 1 and reinstalls a policy with the same digest
+  before admitting step 2. Keep the predecessor's resolved launch before
+  its successor overwrites the shared URI. Capture the step-2 index with entries `[1, 2]` before
+  terminal retention prunes it to `[2]`. The verifier reads panel 0
+  from the predecessor and panel 2 from the successor. It reports
+  requeue, restore, and the resumed policy-1 evaluation separately
+  from update timing. The local test reverified the frozen vLLM arm
+  and exercised checkpoint lineage with synthetic native captures.
+  The matched result requires the original H100 evidence from both
+  native updates.
+
   A CPU rehearsal interrupted final evaluation after step 2 had committed.
   A fresh learner restored identical state, and fresh serving installed
   the same policy-2 digest and reproduced the interrupted sample. The
