@@ -92,12 +92,20 @@ def _arrow_type(annotation: object) -> pa.DataType:
 
 
 def _most_derived_model(args: list[object]) -> object | None:
-    """The single union member that is a subclass of every other member, if one exists."""
+    """The single union member that is a subclass of every other family member, if one exists.
+
+    Members outside the inheritance family ride along for validation only (the
+    versioned snapshot reader's pre-lineage record never writes to the table), so
+    the storage schema comes from the most-derived member of the family.
+    """
     models = [
         arg for arg in args if isinstance(arg, type) and (issubclass(arg, BaseModel) or dataclasses.is_dataclass(arg))
     ]
     if len(models) != len(args):
         return None
+    family = [model for model in models if any(issubclass(model, other) for other in models if other is not model)]
+    if family:
+        models = family
     for candidate in models:
         if all(issubclass(candidate, other) for other in models):
             return candidate

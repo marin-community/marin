@@ -145,6 +145,7 @@ def mode_run(args, *, force_run_failed: bool) -> int:
 
 def mode_status(args) -> int:
     """Per-node artifact and preflight state under the release prefix."""
+    configure_coreweave_s3()
     plan = _plan_document(args)
     graph = release_graph(plan)
     landed = repo_head(REPO_ROOT)

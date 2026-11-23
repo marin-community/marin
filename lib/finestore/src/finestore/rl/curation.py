@@ -6,14 +6,14 @@
 import hashlib
 import json
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal, get_args, get_origin
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, model_validator
 
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
@@ -1396,10 +1396,141 @@ class AssessmentItem(CatalogRecord):
     repair_advisories: list[RepairAdvisory] = []
 
 
+# Snapshot declaration schema generations, oldest first. The versioned snapshot
+# reader (``snapshot_declaration_generation`` / ``normalize_snapshot_declaration``)
+# detects the generation by field shape and converts each named form to the
+# current schema — never by defaulting receipt-bearing fields, which would
+# fabricate evidence. Forms predating the typed receipt schema read as
+# :class:`PreLineageSnapshotDeclaration` records with every legacy field
+# preserved verbatim.
+SNAPSHOT_SCHEMA_PRE_LINEAGE = "pre-lineage"
+SNAPSHOT_SCHEMA_PRE_STAGE = "qualified-v1"
+SNAPSHOT_SCHEMA_CURRENT = "qualified-v2"
+
+# Fields every served declaration form carries, whatever its generation.
+_SNAPSHOT_CORE_FIELDS = (
+    "id",
+    "name",
+    "display_name",
+    "origin",
+    "family",
+    "status",
+)
+# A field whose presence marks the full (receipt-bearing) declaration forms.
+_FULL_FORM_MARKERS = ("actor_census_input", "current_release", "quality_result")
+
+
+class PreLineageSnapshotDeclaration(BaseModel):
+    """The pre-lineage served declaration form (the 2026-11-12 snapshot generations).
+
+    The typed core every pre-lineage form carries; fields the current schema has no
+    equivalent for are preserved verbatim in ``legacy_fields`` — nothing is
+    defaulted, converted or dropped. These snapshots predate the receipt schema, so
+    their declarations cannot become current :class:`QualifiedSourceDeclaration` rows
+    without re-measuring; a release that needs them goes through the release flow.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    name: str
+    display_name: str
+    origin: str
+    family: str
+    status: str
+    tags: list[str] = Field(default_factory=list)
+    task_count: int | None = None
+    notes: str = ""
+    dataset_id: str | None = None
+    dataset_revision: str | None = None
+    url: str | None = None
+    type: str | None = None
+    turns: str | None = None
+    is_benchmark: bool = False
+    kind: str | None = None
+    pipeline: PipelineReference | None = None
+    legacy_fields: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _split_legacy_fields(cls, value: Any) -> Any:
+        """Route every field the core does not declare into ``legacy_fields``."""
+        if not isinstance(value, dict):
+            return value
+        result = dict(value)
+        legacy = {key: result.pop(key) for key in list(result) if key not in PreLineageSnapshotDeclaration.model_fields}
+        result["legacy_fields"] = {**legacy, **(result.get("legacy_fields") or {})}
+        return result
+
+
+def snapshot_declaration_generation(declaration: dict) -> str:
+    """Detect which schema generation one served declaration document belongs to.
+
+    ``qualified-v2`` is the current schema; ``qualified-v1`` is the same full form
+    before Pending sources carried a computed stage (every served full-form snapshot
+    through the r39-era cuts); ``pre-lineage`` is everything older, which has no
+    receipt-bearing fields to convert.
+    """
+    if not isinstance(declaration, dict):
+        return SNAPSHOT_SCHEMA_PRE_LINEAGE
+    full_form = any(marker in declaration for marker in _FULL_FORM_MARKERS)
+    if full_form:
+        if declaration.get("status") == "Pending" and "stage" not in declaration:
+            return SNAPSHOT_SCHEMA_PRE_STAGE
+        return SNAPSHOT_SCHEMA_CURRENT
+    return SNAPSHOT_SCHEMA_PRE_LINEAGE
+
+
+def normalize_snapshot_declaration(
+    declaration: dict,
+    *,
+    pending_stage_of: Callable[[str], PendingStage] | None = None,
+) -> dict:
+    """Normalize one served declaration document to the current schema.
+
+    Returns the document as the :class:`SnapshotSource` ``declaration`` union should
+    receive it. A ``qualified-v1`` Pending row gains the stage the supplied
+    ``pending_stage_of`` callback computes from the measurement-receipt evidence —
+    the stage is evidence-computed, never hand-entered, so the callback is required
+    and a row whose id it cannot stage is refused. A ``pre-lineage`` row passes
+    through unchanged for the union's :class:`PreLineageSnapshotDeclaration` member.
+    Anything else raises with the generation named.
+    """
+    try:
+        QualifiedSourceDeclaration.model_validate(declaration)
+        return declaration
+    except ValidationError:
+        pass
+    try:
+        SourceDeclaration.model_validate(declaration)
+        return declaration
+    except ValidationError:
+        pass
+    generation = snapshot_declaration_generation(declaration)
+    if generation == SNAPSHOT_SCHEMA_PRE_STAGE:
+        if pending_stage_of is None:
+            raise ValueError(
+                "served snapshot declaration is pre-stage Pending (schema"
+                f" {SNAPSHOT_SCHEMA_PRE_STAGE}); supply pending_stage_of to compute the"
+                " stage from measurement-receipt evidence"
+            )
+        stage = pending_stage_of(declaration["id"])
+        normalized = {**declaration, "stage": stage.value}
+        QualifiedSourceDeclaration.model_validate(normalized)
+        return normalized
+    if generation == SNAPSHOT_SCHEMA_PRE_LINEAGE:
+        PreLineageSnapshotDeclaration.model_validate(declaration)
+        return declaration
+    raise ValueError(
+        f"served snapshot declaration fails the {generation!r} schema contract it was"
+        " detected as; refusing to guess a conversion"
+    )
+
+
 class SnapshotSource(CatalogRecord):
     snapshot_id: str
     id: str
-    declaration: QualifiedSourceDeclaration | SourceDeclaration
+    declaration: QualifiedSourceDeclaration | SourceDeclaration | PreLineageSnapshotDeclaration
     assessment_key: str | None
     latest_attempt_key: str | None
     latest_attempt_status: AssessmentStatus
@@ -1417,13 +1548,45 @@ class SnapshotSource(CatalogRecord):
         nulls are storage fill, not data: dropping them lets each row validate against
         its own era's contract instead of failing both union members.
         """
+        return _drop_era_fill(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _versioned_declaration(cls, value: Any, info: ValidationInfo) -> Any:
+        """Run the served declaration through the versioned snapshot reader.
+
+        Pydantic runs ``before`` validators in reverse definition order, so this runs
+        first: drop the era-fill nulls, then let the versioned reader detect the
+        row's schema generation and convert each named form to the current schema. A
+        pre-stage Pending row takes its stage from the evidence-computing callback
+        supplied in the validation context (``pending_stage_of``); a pre-lineage row
+        reads as a :class:`PreLineageSnapshotDeclaration` with its legacy fields
+        preserved verbatim.
+        """
         if not isinstance(value, dict) or not isinstance(value.get("declaration"), dict):
             return value
-        qualified_only = QualifiedSourceDeclaration.model_fields.keys() - SourceDeclaration.model_fields.keys()
-        declaration = {
-            name: item for name, item in value["declaration"].items() if not (item is None and name in qualified_only)
-        }
-        return {**value, "declaration": declaration}
+        pending_stage_of = (info.context or {}).get("pending_stage_of")
+        normalized = normalize_snapshot_declaration(
+            _drop_era_fill(value)["declaration"], pending_stage_of=pending_stage_of
+        )
+        return {**value, "declaration": normalized}
+
+
+def _drop_era_fill(value: Any) -> Any:
+    """Drop the struct-fill nulls the qualified schema writes over legacy declarations.
+
+    The inventory table pins the qualified declaration struct, so a legacy-era
+    declaration round-trips with explicit nulls in qualified-only columns. Those
+    nulls are storage fill, not data: dropping them lets each row validate against
+    its own era's contract instead of failing both union members.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get("declaration"), dict):
+        return value
+    qualified_only = QualifiedSourceDeclaration.model_fields.keys() - SourceDeclaration.model_fields.keys()
+    declaration = {
+        name: item for name, item in value["declaration"].items() if not (item is None and name in qualified_only)
+    }
+    return {**value, "declaration": declaration}
 
 
 def require_typed_status_fields(declaration: QualifiedSourceDeclaration) -> None:
@@ -1524,13 +1687,27 @@ class CurationCatalog:
         return CatalogSnapshot.model_validate({key: snapshot[key] for key in CatalogSnapshot.model_fields})
 
     def _records[T: CatalogRecord](
-        self, table: str, model: type[T], where: list[tuple[str, str, object]]
+        self, table: str, model: type[T], where: list[tuple[str, str, object]], context: Any = None
     ) -> Iterator[T]:
         for row in self.view.iter_rows(table, columns=list(model.model_fields), where=where):
-            yield model.model_validate(row)
+            yield model.model_validate(row, context=context)
 
-    def sources(self, snapshot_id: str) -> Iterator[SnapshotSource]:
-        return self._records(INVENTORY, SnapshotSource, [("snapshot_id", "==", snapshot_id)])
+    def sources(
+        self, snapshot_id: str, *, pending_stage_of: Callable[[str], PendingStage] | None = None
+    ) -> Iterator[SnapshotSource]:
+        """The snapshot's typed sources, read through the versioned snapshot reader.
+
+        ``pending_stage_of`` supplies the evidence-computed stage for pre-stage
+        Pending rows (schema ``qualified-v1``); without it, such a row refuses. The
+        callback comes from the caller's receipt registries — the catalog layer never
+        computes evidence itself.
+        """
+        return self._records(
+            INVENTORY,
+            SnapshotSource,
+            [("snapshot_id", "==", snapshot_id)],
+            context={"pending_stage_of": pending_stage_of},
+        )
 
     def assessment(self, pipeline_key: str) -> Assessment:
         row = self.view.point(ASSESSMENTS, pipeline_key=pipeline_key)
