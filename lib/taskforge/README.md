@@ -227,8 +227,9 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   with `author.context_tokens` and `adversary.context_tokens` as their prompt limits. There is no output cap;
   the prompt limit is the model's window.
 - **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
-  that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
-  reverting to the earlier submission if the hardening broke something.
+  out of band, too easy or too hard, gets one band-only revision round and is then accepted at its own placement,
+  tagged `accepted_with: too_easy` or `too_hard`. Only a faulted revision, or one at a placement the policy never
+  accepts (`band.accept_too_easy: false`), reverts to the stored fallback.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
 - **Adversary**: `adversary.roster` (brief names, each run as one adversary session; default
   `false_accept` and `false_reject`), `adversary.image`. The default user prompt renders `{brief}`, so each
