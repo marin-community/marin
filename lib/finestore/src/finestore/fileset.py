@@ -55,10 +55,16 @@ def fetch_file_set(root: str, local: str) -> set[str]:
             and stat.S_ISREG(local_stat.st_mode)
             and (descriptor.size is None or local_stat.st_size == descriptor.size)
         ):
-            with target.open("rb") as current:
-                if all(current.read(len(part)) == part for part in view.blob_parts(descriptor)) and not current.read(1):
-                    fetched.add(relative.as_posix())
-                    continue
+            try:
+                current = target.open("rb")
+            except OSError:
+                current = None
+            if current is not None:
+                with current:
+                    matches = all(current.read(len(part)) == part for part in view.blob_parts(descriptor))
+                    if matches and not current.read(1):
+                        fetched.add(relative.as_posix())
+                        continue
         with atomic_rename(str(target)) as staged:
             with pathlib.Path(staged).open("wb") as output:
                 for part in view.blob_parts(descriptor):

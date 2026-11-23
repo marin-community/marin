@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from pathlib import Path
 
 import pytest
 from finestore.fileset import FineStoreDirectory, fetch_file_set
@@ -85,6 +86,33 @@ def test_file_set_replaces_matching_symlink(tmp_path):
     assert not entry.is_symlink()
     assert entry.read_bytes() == b"cached"
     assert outside.read_bytes() == b"cached"
+
+
+def test_file_set_replaces_unreadable_local_file_and_continues(tmp_path, monkeypatch):
+    root = str(tmp_path / "remote")
+    with DataStore.open(root) as store:
+        store.write_object("a.textproto", b"new")
+        store.write_object("b.textproto", b"next")
+        store.flush()
+
+    local = tmp_path / "local"
+    local.mkdir()
+    blocked = local / "a.textproto"
+    blocked.write_bytes(b"old")
+    original_open = Path.open
+
+    def deny_local_read(path, mode="r", *args, **kwargs):
+        if path == blocked and mode == "rb":
+            raise PermissionError("unreadable cache entry")
+        return original_open(path, mode, *args, **kwargs)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(Path, "open", deny_local_read)
+        fetched = fetch_file_set(root, str(local))
+
+    assert fetched == {"a.textproto", "b.textproto"}
+    assert blocked.read_bytes() == b"new"
+    assert (local / "b.textproto").read_bytes() == b"next"
 
 
 def test_file_set_validates_inline_file_size(tmp_path):
