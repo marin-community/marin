@@ -38,7 +38,7 @@ The four-chip TPUv4 fixed-schedule fixture matched all evaluated FP32 logits
 between the learner, prefill, and cached decode. Max logprob error and
 full-vocabulary forward KL were both zero. The native Splash control had
 maximum absolute logit error 0.0004404 and maximum mean forward KL
-`7.56e-9` nats across the reported comparisons.
+`7.55e-9` nats across the reported comparisons.
 
 The production-engine replay A/B used the same requests and seeds at 32
 decode rounds. Generated tokens, sampled logprobs, and finish reasons
@@ -58,6 +58,14 @@ The mixed batch reached 754 versus 963 output tok/s, a 21.6% slowdown.
 All compared outputs still matched bit-for-bit.
 [Compact route buffer repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-compact-20261122)
 
+A separate terminal executable added a device dispatch for short scanned
+requests. It left throughput 11.4% lower for the homogeneous burst and 27.7%
+lower for mixed requests with capture enabled. Scanned models now capture
+terminal rows inline. Unrolled models share one terminal executable across
+prefill and decode buckets.
+[Separate terminal capture](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-terminal-20261122)
+· [Inline terminal capture](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-scan-inline-20261122)
+
 The full-model v5p-8 job runs both replay arms with raw policy scores enabled.
 Both use the same worker and pinned 64K AgentX traffic. The measured native
 and compiled vLLM gap is a separate acceptance gate.
@@ -70,8 +78,11 @@ and frozen prompts. Both arms request raw policy scores.
 · [Replay-off control](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-optimized-control-20261122)
 
 On CoreWeave, a four-GB200 smoke matched packed native and captured
-generation, including scores and terminal routes. The native and compiled
-vLLM AgentX jobs use the existing regional 67B checkpoint mirror.
+generation, including scores and terminal routes. Both full AgentX runs
+used the existing regional 67B checkpoint mirror at 64K and concurrency 128,
+with route capture off. Native generated 571.43 output tokens/s versus
+654.80 for compiled vLLM, a 12.7% throughput gap. Native p90 first-token
+latency was 0.665 s versus 1.047 s for compiled vLLM.
 [GB200 smoke](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-cw-gb200-smoke-20261122-v3)
 · [Native AgentX](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-cw-gb200-c128-agentx-20261122)
 · [Compiled vLLM AgentX](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-vllm-cw-gb200-c128-agentx-20261122)

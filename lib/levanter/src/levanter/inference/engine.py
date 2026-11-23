@@ -562,9 +562,13 @@ def _terminal_capture_rows(finished_count: int) -> int:
     return batch_shards * (1 << (partitions - 1).bit_length())
 
 
-@functools.partial(jax.jit, donate_argnums=0, static_argnames=("rows", "max_active_tokens"))
 def _capture_terminal_inputs(
-    gen_state: GenState, model: SnowballLMHeadModel, *, rows: int, max_active_tokens: int
+    gen_state: GenState,
+    model: SnowballLMHeadModel,
+    routes: _SnowballRouteBuffer,
+    *,
+    rows: int,
+    max_active_tokens: int,
 ) -> tuple[GenState, _SnowballRouteBuffer]:
     """Capture finished inputs before releasing their KV pages."""
     ds = gen_state.decode_state
@@ -586,8 +590,34 @@ def _capture_terminal_inputs(
         max_active_tokens=max_active_tokens,
         window_batch_info=window_info,
     )
-    routes = _SnowballRouteBuffer.init(model, rows).append(captured, slot_ids)
-    return dataclasses.replace(gen_state, decode_state=ds, cache=cache), routes
+    return dataclasses.replace(gen_state, decode_state=ds, cache=cache), routes.append(captured, slot_ids)
+
+
+@functools.partial(jax.jit, donate_argnums=0, static_argnames=("rows", "max_active_tokens"))
+def _run_terminal_capture(
+    gen_state: GenState, model: SnowballLMHeadModel, *, rows: int, max_active_tokens: int
+) -> tuple[GenState, _SnowballRouteBuffer]:
+    # Unrolled forwards can share this executable across all prefill and decode buckets.
+    return _capture_terminal_inputs(
+        gen_state, model, _SnowballRouteBuffer.init(model, rows), rows=rows, max_active_tokens=max_active_tokens
+    )
+
+
+def _capture_terminal_inline(
+    gen_state: GenState,
+    model: SnowballLMHeadModel,
+    routes: _SnowballRouteBuffer,
+    *,
+    rows: int,
+    max_active_tokens: int,
+) -> tuple[GenState, _SnowballRouteBuffer]:
+    finished = gen_state.decode_state.finished & gen_state.decode_state.sequences.used_mask
+
+    def capture(state):
+        gen_state, routes = state
+        return _capture_terminal_inputs(gen_state, model, routes, rows=rows, max_active_tokens=max_active_tokens)
+
+    return jax.lax.cond(hax.any(finished).scalar(), capture, lambda state: state, (gen_state, routes))
 
 
 def _prefill_kernel(
@@ -623,9 +653,12 @@ def _prefill_kernel(
     #     lens=decode_state.seq_lens.array,
     # )
     routes = None
+    terminal_rows = 0
     if capture_routes:
         assert isinstance(model, SnowballLMHeadModel)
-        routes = _SnowballRouteBuffer.init(model, tokens.axis_size("position"))
+        if model.config.inference_decode_implementation == "scan":
+            terminal_rows = _terminal_capture_rows(min(decode_state.max_seqs, max_seqs_in_prefill))
+        routes = _SnowballRouteBuffer.init(model, tokens.axis_size("position") + terminal_rows)
         use_selected_rows = model.config.projection_implementation == "native"
         logits, cache, captured = model.decode_with_route_captures(
             tokens,
@@ -704,6 +737,11 @@ def _prefill_kernel(
     #     queued=gen_state.decode_state.num_queued_tokens,
     # )
     if routes is not None:
+        if terminal_rows:
+            assert isinstance(model, SnowballLMHeadModel)
+            gen_state, routes = _capture_terminal_inline(
+                gen_state, model, routes, rows=terminal_rows, max_active_tokens=max_seqs_in_prefill
+            )
         return gen_state, _SnowballDecodeOutputs(outputs, routes)
     return gen_state, outputs
 
@@ -1091,9 +1129,12 @@ def _run_generation_loop(
         with_policy_logprobs=return_policy_logprobs,
     )
     routes = None
+    terminal_rows = 0
     if capture_routes:
         assert isinstance(model, SnowballLMHeadModel)
-        routes = _SnowballRouteBuffer.init(model, max_tokens_per_round * max_rounds)
+        if model.config.inference_decode_implementation == "scan":
+            terminal_rows = _terminal_capture_rows(gen_state.decode_state.max_seqs)
+        routes = _SnowballRouteBuffer.init(model, max_tokens_per_round * max_rounds + terminal_rows)
     split_cache = False
     keep_layers = isinstance(model, SnowballLMHeadModel) and model.config.inference_decode_token_layout == "replicated"
     if (
@@ -1129,6 +1170,15 @@ def _run_generation_loop(
         assert isinstance(final_gen_state.cache, ListCache)
         final_gen_state = dataclasses.replace(final_gen_state, cache=_stack_snowball_cache(final_gen_state.cache))
     if routes is not None:
+        if terminal_rows:
+            assert isinstance(model, SnowballLMHeadModel)
+            final_gen_state, routes = _capture_terminal_inline(
+                final_gen_state,
+                model,
+                routes,
+                rows=terminal_rows,
+                max_active_tokens=gen_state.decode_state.max_seqs,
+            )
         return final_gen_state, _SnowballDecodeOutputs(final_outputs, routes)
     return final_gen_state, final_outputs
 
@@ -2168,11 +2218,12 @@ class InferenceEngine:
         finished_slots = sorted(slot for slot in self.local_map if fins[slot])
         if replay is not None and finished_slots:
             assert isinstance(self.model, SnowballLMHeadModel)
-            rows = _terminal_capture_rows(len(finished_slots))
-            self.gen_state, terminal = _capture_terminal_inputs(
-                self.gen_state, self.model, rows=rows, max_active_tokens=min(rows, self.config.max_seqs)
-            )
-            replay.append(jax.device_get(terminal), self.local_map)
+            if self.model.config.inference_decode_implementation != "scan":
+                rows = _terminal_capture_rows(len(finished_slots))
+                self.gen_state, terminal = _run_terminal_capture(
+                    self.gen_state, self.model, rows=rows, max_active_tokens=min(rows, self.config.max_seqs)
+                )
+                replay.append(jax.device_get(terminal), self.local_map)
         for local_slot in finished_slots:
             rid, cid = self.local_map[local_slot]
             dr = self.results[rid][cid]
