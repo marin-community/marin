@@ -86,10 +86,12 @@ its standard response fields.
 | --- | ---: | ---: |
 | Compiled vLLM baseline | 549.46 | 1.339 |
 | Native, replay off | 570.53 | 1.340 |
-| Native, replay on | 442.62 | 2.153 |
+| Native replay, original archive and framing | 442.62 | 2.153 |
+| Native replay, original archive and byte-oriented framing | 463.50 | 1.577 |
+| Native replay, compact archive and byte-oriented framing | 518.90 | 1.619 |
 
-Replay lowered throughput by 22.4% against the native control and 19.4%
-against compiled vLLM. Both native jobs reported zero profiling errors.
+The initial replay lowered throughput by 22.4% against the native control and
+19.4% against compiled vLLM. Both jobs reported zero profiling errors.
 The replay arm cancelled one outstanding request at the drain deadline.
 Its median HTTP response was 33.4 MiB, compared with 15.3 KiB for the control.
 [Optimized replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-optimized-replay-20261122)
@@ -108,7 +110,16 @@ digest and still reads version 1 archives. A synthetic 64K capture with
 the 67B model's route dimensions shrank from 34.63 MiB to 15.13 MiB before
 base64 encoding. The fresh-process score and gradient tests and the OpenAI
 stream and binary endpoint checks passed.
-[Compact archive replay run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-compact-wire-replay-20261122)
+
+The compact AgentX run's median HTTP response dropped to 14.5 MiB and the
+median interval from final text to HTTP completion fell from 420 to 179 ms.
+All 366 measured requests completed with zero errors. Compact replay was
+5.6% behind compiled vLLM on output throughput and 9.0% behind native with
+replay off. Its p90 first token was 20.9% above compiled vLLM, 13 ms above
+the 20% limit. The eight-slot prefill follow-up changes only the number of
+sequences allowed in one prefill batch.
+[Compact archive replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-compact-wire-replay-20261122)
+· [Eight-slot prefill follow-up](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-eight-prefill-replay-20261122)
 
 On CoreWeave, a four-GB200 smoke matched packed native and captured
 generation, including scores and terminal routes. Both full AgentX runs
