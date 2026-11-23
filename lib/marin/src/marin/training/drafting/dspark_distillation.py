@@ -246,6 +246,7 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
         or decoder["hidden_size"] != recipe.data.shape.hidden_size
         or decoder["vocab_size"] != recipe.data.shape.vocab_size
         or decoder["num_hidden_layers"] != recipe.data.draft_layers
+        or decoder["intermediate_size"] != recipe.data.intermediate_size
         or config["speculators_config"]["proposal_methods"][0]["speculative_tokens"] != recipe.block_size
     ):
         raise ValueError("DSpark decoder or proposal dimensions disagree with the recipe")
@@ -458,6 +459,7 @@ def train_and_export(
     teacher_identity: str,
     prepared: str,
     recipe: DraftRecipe,
+    tokenizer_source: str | None = None,
 ) -> DSparkExport:
     """Stage the pinned inputs, train on an Iris worker, and publish the HF draft."""
 
@@ -485,6 +487,11 @@ def train_and_export(
 
         logger.info("Staging DSpark teacher %s", teacher_identity)
         source.download_to(str(teacher_path), recursive=True, batch_size=8)
+        if tokenizer_source is not None:
+            tokenizer_path = StoragePath(tokenizer_source)
+            for pattern in ("tokenizer*", "chat_template*", "special_tokens_map.json", "added_tokens.json"):
+                for file in (tokenizer_path / pattern).glob():
+                    file.download_to(str(teacher_path / file.name))
         logger.info("Training DSpark for %s at %s for %d optimizer steps", teacher_identity, output, steps)
         with _teacher_environment(teacher_path, recipe, hidden_states, teacher_devices) as server:
             train = _write_config_and_build_command(

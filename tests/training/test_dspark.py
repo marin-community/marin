@@ -12,6 +12,7 @@ import pytest
 import torch
 from datasets.exceptions import DatasetGenerationError
 from levanter.models.snowball import GRUG_MOE_ARCHITECTURE
+from marin.datakit.chat_normalize import CHAT_SCHEMA
 from marin.training.drafting.dspark_data import (
     EMBEDDING,
     FINAL_NORM,
@@ -98,35 +99,45 @@ def teacher(tmp_path: Path) -> Path:
     return root
 
 
-def _mix(tmp_path: Path, *, overlapping: bool) -> Path:
+def _mix(tmp_path: Path, *, overlapping: bool, harmony: bool) -> Path:
     def chat(prompt: str, answer: str) -> dict:
+        messages = [("system", "system"), ("user", prompt), ("assistant", answer)]
+        if not harmony:
+            return {"messages": [{"role": role, "content": content} for role, content in messages]}
         return {
+            "id": prompt,
             "messages": [
-                {"role": "system", "content": "system"},
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": answer},
-            ]
+                {
+                    "role": role,
+                    "channel": "final" if role == "assistant" else None,
+                    "content": [{"type": "text", "text": content}],
+                }
+                for role, content in messages
+            ],
         }
 
     train = tmp_path / "train" / "rows.parquet"
     val = tmp_path / "validation" / "rows.parquet"
     train.parent.mkdir()
     val.parent.mkdir()
-    pq.write_table(pa.Table.from_pylist([chat("prompt", "answer done")]), train)
+    schema = CHAT_SCHEMA if harmony else None
+    pq.write_table(pa.Table.from_pylist([chat("prompt", "answer done")], schema=schema), train)
     rows = [chat("held", "tag"), chat("prompt", "answer done" if overlapping else "done")]
-    pq.write_table(pa.Table.from_pylist(rows), val)
+    pq.write_table(pa.Table.from_pylist(rows, schema=schema), val)
     return tmp_path
 
 
 @pytest.mark.parametrize("overlapping", [False, True])
+@pytest.mark.parametrize("harmony", [False, True], ids=["openai", "datakit"])
 def test_prepare_data_masks_and_holds_out_rendered_rows(
-    tmp_path: Path, teacher: Path, recipe: DraftRecipe, overlapping: bool
+    tmp_path: Path, teacher: Path, recipe: DraftRecipe, overlapping: bool, harmony: bool
 ) -> None:
     storage = StoragePath(f"memory://{tmp_path.name}")
     output = storage / "output"
-    mix = _mix(tmp_path, overlapping=overlapping)
+    mix = _mix(tmp_path, overlapping=overlapping, harmony=harmony)
     for file in teacher.iterdir():
-        (storage / f"teacher/{file.name}").upload_from(str(file))
+        directory = "tokenizer" if harmony and file.name not in {"config.json", "model.safetensors"} else "teacher"
+        (storage / f"{directory}/{file.name}").upload_from(str(file))
     for name in ("train/rows.parquet", "validation/rows.parquet"):
         (storage / f"mix/{name}").upload_from(str(mix / name))
     kwargs = dict(
@@ -135,6 +146,7 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
         teacher_subdirectory="",
         mix=str(storage / "mix"),
         config=recipe.data,
+        tokenizer_source=str(storage / "tokenizer") if harmony else None,
     )
     if overlapping:
         with pytest.raises(DatasetGenerationError):

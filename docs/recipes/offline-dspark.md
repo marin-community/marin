@@ -12,9 +12,12 @@ gated norm and output projection to compute the distillation targets.
 | Mochi | 6144 | 48 | 2, 24, 45 | 48 |
 
 Taps count completed decoder blocks. The three feature taps feed the drafter.
-The last tap feeds the frozen teacher logits head. The draft has three
-full-attention Qwen3 layers, an FFN 1.5 times the teacher's width, a block
-size of 8, a rank-256 Markov head and a confidence head. It uses the most
+The last tap feeds the frozen teacher logits head. Snowball uses three
+full-attention Qwen3 layers and a 3,840-wide FFN. Mochi uses two layers and a
+6,144-wide FFN to limit the per-proposal cost at its wider residual dimension.
+The Mochi draft has approximately 770M parameters excluding the shared teacher
+embedding. Both drafts use a block size of 8, a rank-256 Markov head and a
+confidence head. Training retains the most
 frequent 32,000 supervised token IDs from training, with the corresponding
 frozen teacher head rows. Training runs for the lesser of `max_steps` and
 one packed epoch. Linear decay uses that same step count. The optimizer is
@@ -28,10 +31,11 @@ template. A Hub export needs only `"source": "hf://org/model@<full commit>"`.
 Marin's model download step stages that commit in regional storage. For a
 Marin export, give the completed artifact's fixed-version directory and the
 HF subdirectory. The runner adopts the existing directory as a dependency.
-Mochi supports CPU preflight and data preparation. GPU training requires
-ShortConv qualification.
+An archived export with a non-calendar directory can set `teacher.artifact_version`.
+Set `teacher.tokenizer_source` to an immutable `hf://org/repo@<full commit>`
+when the teacher export stores its tokenizer separately.
 
-Use a completed Marin artifact containing normalized chat Parquet shards
+Use a completed Marin artifact containing OpenAI-format or Datakit Harmony chat Parquet shards
 under `train/` and `validation/`. The shards must provide `messages` and may
 provide `chat_template_kwargs`. Set the mixture and holdout membership when
 building that artifact.
@@ -70,7 +74,33 @@ the teacher family is supported for training. Run `--stage prepare` on CPU
 to stage an uncached Hub teacher. Planning and preflight check the promoted
 vLLM wheel against the recipe's source pin.
 
-## Submit one Iris job
+## Prepare the Mochi agentic smoke mix
+
+The preset binds the retained BF16 Mochi Hero SFT step 400,407 export and the
+tokenizer pinned by the Mochi SFT recipe. The default three-step config uses a
+small sample of Nemotron tool calls, Nemotron reasoning-off instruction turns,
+and AgentTrove conversations. The first user prompt assigns each conversation
+to one split. Tool definitions and observations reach the teacher as context,
+and the template supervises assistant replies and tool calls. The selected
+archive shards and split are versioned by the artifact runner.
+[Mochi export record](https://github.com/marin-community/marin/issues/8089#issuecomment-6841382920)
+
+```bash
+export MARIN_PREFIX=s3://marin-us-east-02a/marin
+uv run --extra cpu --extra dedup python -m experiments.post_training.dspark_sft \
+  --preset mochi-agentic --stage prepare
+uv run --extra cpu python -m experiments.post_training.dspark_sft \
+  --preset mochi-agentic --stage preflight
+```
+
+`--data` binds a larger completed regional chat mix and selects a 4,000-step
+cap. The preset uses an 8,192-token packed sequence and 1,024 anchors per
+sequence. Mochi currently qualifies data preparation only. Its BF16 teacher
+requires a distributed GPU layout, and the promoted serving wheel needs a
+ShortConv state fix to verify proposals and recover after rejection.
+[ShortConv verifier fix](https://github.com/marin-community/vllm/pull/140)
+
+## Submit the Snowball Iris job
 
 Set `IRIS_TARGET_CLUSTER`, `IRIS_REGION`, `GPU_TYPE`, `GPU_COUNT` and
 `DSPARK_DISK` for the worker. Request the GPU count printed by preflight on

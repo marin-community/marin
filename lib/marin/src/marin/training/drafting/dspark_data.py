@@ -14,11 +14,13 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 import datasets
+import pyarrow as pa
 import pyarrow.parquet as pq
 from levanter.compat.hf_checkpoints import SAFE_TENSORS_INDEX_NAME, SAFE_TENSORS_MODEL
 from levanter.data.text.formats import ChatProcessor
 from levanter.models.snowball import GRUG_MOE_ARCHITECTURE, GRUG_MOE_MODEL_TYPE
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from openai_harmony import Message
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from safetensors import safe_open
@@ -71,10 +73,17 @@ class DraftDataConfig:
     mask_token_id: int
     max_sequence_length: int
     draft_layers: int = 3
+    draft_intermediate_size: int | None = None
 
     def __post_init__(self) -> None:
         if not 0 <= self.mask_token_id < self.shape.vocab_size:
             raise ValueError("The mask token must have an embedding in the teacher")
+        if self.draft_intermediate_size is not None and self.draft_intermediate_size <= 0:
+            raise ValueError("Draft intermediate size must be positive")
+
+    @property
+    def intermediate_size(self) -> int:
+        return self.draft_intermediate_size or 3 * self.shape.hidden_size // 2
 
 
 @dataclass(frozen=True)
@@ -164,7 +173,7 @@ def _draft_decoder_config(target: dict, config: DraftDataConfig) -> dict[str, st
         "num_key_value_heads": shape.num_key_value_heads,
         "head_dim": shape.head_dim,
         "vocab_size": shape.vocab_size,
-        "intermediate_size": 3 * shape.hidden_size // 2,
+        "intermediate_size": config.intermediate_size,
         "num_hidden_layers": config.draft_layers,
         "max_position_embeddings": target["max_position_embeddings"],
         "rms_norm_eps": target["rms_norm_eps"],
@@ -178,11 +187,11 @@ def _draft_decoder_config(target: dict, config: DraftDataConfig) -> dict[str, st
 
 
 def _teacher_inputs(
-    root: StoragePath, config: DraftDataConfig
+    root: StoragePath, config: DraftDataConfig, tokenizer_source: str | None = None
 ) -> tuple[dict[str, str | int | float | bool | None], MarinTokenizer]:
     decoder = _draft_decoder_config(json.loads((root / CONFIG_NAME).read_text()), config)
     _check_teacher_tensors(root, config.shape)
-    tokenizer = load_tokenizer(str(root))
+    tokenizer = load_tokenizer(tokenizer_source or str(root))
     if not tokenizer.chat_template or tokenizer.vocab_size > config.shape.vocab_size:
         raise ValueError("Teacher export needs its matching tokenizer and chat template")
     if tokenizer.encode(GRUG_MASK_TOKEN) != [config.mask_token_id]:
@@ -190,10 +199,12 @@ def _teacher_inputs(
     return decoder, tokenizer
 
 
-def inspect_teacher(root: StoragePath, config: DraftDataConfig) -> dict[str, str | int | float | bool | None]:
+def inspect_teacher(
+    root: StoragePath, config: DraftDataConfig, *, tokenizer_source: str | None = None
+) -> dict[str, str | int | float | bool | None]:
     """Validate pinned metadata and weight headers and return the draft decoder configuration."""
 
-    decoder, tokenizer = _teacher_inputs(root, config)
+    decoder, tokenizer = _teacher_inputs(root, config, tokenizer_source)
     ChatProcessor(tokenizer)  # Require a template that marks supervised spans.
     return decoder
 
@@ -203,6 +214,10 @@ def _chat_rows(files: list[StoragePath]) -> Iterator[dict]:
         with path.open("rb") as stream:
             parquet = pq.ParquetFile(stream)
             columns = ["messages"]
+            message_type = parquet.schema_arrow.field("messages").type
+            harmony = pa.types.is_list(message_type) and message_type.value_type.get_field_index("recipient") >= 0
+            if harmony:
+                from marin.datakit.chat_render import inference_messages  # noqa: PLC0415 - Datakit extra
             if "chat_template_kwargs" in parquet.schema_arrow.names:
                 columns.append("chat_template_kwargs")
             for batch in parquet.iter_batches(batch_size=64, columns=columns):
@@ -212,6 +227,8 @@ def _chat_rows(files: list[StoragePath]) -> Iterator[dict]:
                         kwargs = json.loads(kwargs)
                     if "chat_template" in kwargs:
                         raise ValueError(f"Per-row template override in {path}")
+                    if harmony:
+                        row["messages"] = list(inference_messages([Message.from_dict(m) for m in row["messages"]]))
                     row["chat_template_kwargs"] = kwargs
                     yield row
 
@@ -297,11 +314,12 @@ def prepare_data(
     teacher_subdirectory: str,
     mix: str,
     config: DraftDataConfig,
+    tokenizer_source: str | None = None,
 ) -> None:
     """Write the Speculators Arrow dataset with a trailing, disjoint holdout."""
 
     destination = StoragePath(output) / PREPARED_DIR
-    decoder, tokenizer = _teacher_inputs(StoragePath(teacher) / teacher_subdirectory, config)
+    decoder, tokenizer = _teacher_inputs(StoragePath(teacher) / teacher_subdirectory, config, tokenizer_source)
     train_files, val_files = inspect_mix(StoragePath(mix))
 
     with TemporaryDirectory(prefix="dspark-prepare-") as directory:
