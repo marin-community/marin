@@ -5,15 +5,14 @@
 
 from dataclasses import asdict
 
-from marin.evaluation.eval_policy import (
+from evalrecords.eval_policy import (
     SEPTEMBER_16_VERSION,
     SEPTEMBER_24_VERSION,
     policy_violations,
 )
-from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.records import EvalchemyRef, EvalRef, EvalTaskRef, ModelConfigRef, ModelRef
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.model_identity import comparison_model_name, model_config_digest
-from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, ModelConfigRef, ModelRef
 
 
 def _model(generation_kwargs: dict[str, bool | None] | None = None) -> ModelRef:
@@ -73,10 +72,9 @@ def test_legacy_policy_label_is_not_verified():
     assert policy_violations("eval-policy-updated", _model(), _math500(None))
 
 
-def test_model_configurations_have_distinct_comparison_identities():
-    first = _model({"enable_thinking": False})
-    second = _model({"enable_thinking": True})
-    assert comparison_model_name(first) != comparison_model_name(second)
-    assert comparison_model_name(first) == comparison_model_name(
-        first.model_copy(update={"config_digest": model_config_digest(first.config)})
-    )
+def test_unset_nccl_symmetric_memory_is_omitted_from_recorded_config():
+    # Records written before this setting existed have no such key. An unset value must serialize the
+    # same way, or the config digests stored in those records stop verifying.
+    config = _model().config
+    assert config is not None
+    assert "vllm_use_nccl_symm_mem" not in config.model_dump(mode="json")["serve"]

@@ -98,7 +98,16 @@ allocatable capacity, scheduling, and Pod state; hardware history remains in
 Capacity and task state come from Kubernetes nodes, Pods, and Kueue workloads.
 
 GPU Pods request `nvidia.com/gpu`. On clusters with `host_network: true`, they
-also request `rdma/ib` and use `ClusterFirstWithHostNet`. Coscheduled jobs add
+also request `rdma/ib` and use `ClusterFirstWithHostNet`. H100 nodes on
+`cw-us-east-02a` and `cw-rno2a` and GB200 nodes on `cw-us-east-08a` also carry a
+front-end Ethernet NIC whose RoCE functions (`mlx5_0`–`mlx5_8`) a pod sees beside
+the InfiniBand rails (`ibp0`–`ibp7` on H100, `ibp0`–`ibp3` on GB200) when it runs
+under the privileged container profile. NCCL then
+merges the RoCE functions into virtual NICs and routes channels over them, and
+those transfers fail with `IBV_WC_RETRY_EXC_ERR(12)`, so these clusters' `task_env`
+sets `NCCL_IB_HCA=ibp`. Check a new cluster's `NET/IB : Using` line under
+`NCCL_DEBUG=INFO` before reusing that setting: a value that matches no device
+makes NCCL fall back to TCP. Coscheduled jobs add
 Kueue topology annotations derived from
 `kubernetes_provider.kueue.topologies`, or from the CoreWeave defaults when the
 map is empty.
@@ -137,6 +146,30 @@ NVL72 gangs use stricter rack-aware placement:
   split evenly over the fewest racks with 10 to 16 replicas per rack slice.
   Valid examples include 20, 24, 32, and 48 replicas.
 
+Applications can request unequal local groups through the SDK:
+
+```python
+from iris.cluster.types import CoschedulingConfig
+
+CoschedulingConfig(group_by="nvlink.domain", group_sizes=(8, 16))
+```
+
+For a 24-task job, tasks 0–7 share one NVLink domain and tasks 8–23 share
+one NVLink domain. With one four-GPU task per host, these groups occupy
+eight and sixteen hosts. Kueue admits both groups as one workload. The groups may
+share a domain if they fit. Iris still retries and cancels the whole job.
+Each task keeps its global ordinal. Group sizes must be positive and sum to
+the task count. Explicit groups require the Kubernetes backend, a required
+topology level, and at most ten groups. `nvlink.domain` is a required level;
+preferred and sliced levels cannot be used with explicit groups. Each NVLink
+group is limited to 16 tasks. Omitting `group_sizes` keeps the existing rules above.
+
+The task status API exposes the assigned Node's topology labels in
+`attempt.topology`, including `ds.coreweave.com/nvlink.domain` for NVLink
+placement. The mapping is empty until Iris observes the assignment. It is
+recorded per attempt and retained after the Pod is deleted. These values
+describe scheduler placement; they do not measure physical connectivity.
+
 Invalid multi-rack shapes fail before submission rather than silently losing
 the one-slice-per-rack guarantee. The canonical arithmetic is in
 [`coreweave_topology.py`](../src/iris/cluster/platforms/k8s/coreweave_topology.py).
@@ -153,9 +186,13 @@ enables `TASRecomputeAssignmentWithinSchedulingCycle`, added in Kueue 0.18.2,
 so a workload's hostname assignment is recomputed when an earlier admission in
 the same scheduling cycle consumes that domain.
 
+When upgrading Kueue, check that unequal groups remain separate PodSets and
+that each PodSet's Pod indices start at zero. Iris uses preset role-hash
+annotations to keep those groups separate.
+
 #### TAS preemption and CPU spillover
 
-All Iris Pods use the topology-aware `cw-tas` ResourceFlavor. Its
+Iris Pods use topology-aware flavors. The shared `cw-tas` ResourceFlavor's
 `iris.kueue=true` selector covers every Iris-managed NodePool. Accelerator-free
 Pods request unconstrained TAS, so Kueue records their per-node CPU reservations
 in the same flavor as GPU gangs. The ClusterQueue's binding GPU and RDMA quotas
@@ -218,25 +255,43 @@ flowchart TD
     admit --> schedule[Kubernetes schedules Pods]
 ```
 
-Accelerator-free jobs use any compatible node by default. Iris does not expose
-a CPU-only placement constraint; rare jobs that require hard CPU-node placement
-must use Kubernetes-native scheduling outside Iris. GPU and RDMA resource
-requests exclude CPU nodes without an additional selector.
+Accelerator-free jobs prefer the physical CPU pool through the `iris-cpu`
+ResourceFlavor and may spill onto accelerator nodes through `cw-tas`. Iris does
+not expose a CPU-only placement constraint. GPU and RDMA resource requests
+exclude CPU nodes without an additional selector.
 
-Kueue requires every node in a TAS flavor to carry every level in the referenced
-Topology. CoreWeave supplies the physical hierarchy on accelerator nodes. Iris
-labels CPU NodePools with a synthetic `iris-cpu-only` fabric, superpod,
-leafgroup, and NVLink domain so unconstrained TAS can assign them at the hostname
-level. The synthetic values do not advertise GPU or RDMA resources.
+Kueue requires every topology label key to exist on a Node; an empty value is
+valid in Kueue v0.18.3. CoreWeave supplies physical fabric, superpod, leafgroup
+and NVLink-domain labels on accelerator Nodes. Its node metadata controller
+owns the `backend.coreweave.cloud/*` labels and can overwrite synthetic values.
+Do not repair CPU placement by patching those provider-owned labels.
 
-This layout replaces the selectorless, non-TAS `cw-cpu` flavor that caused
-[#7916](https://github.com/marin-community/marin/issues/7916). Kueue v0.18 could
-not reclaim those Pods during `cw-ib` topology fit; the general upstream case is
-tracked by
-[kubernetes-sigs/kueue#9992](https://github.com/kubernetes-sigs/kueue/issues/9992).
-When migrating from the split flavors, apply the NodePool labels before
-switching the ClusterQueue to `cw-tas`, then verify CPU nodes appear in Kueue's
-topology cache.
+`provisioning.coreweave.kueue.cpu_scale_group` selects the physical CPU pool for
+the `iris-cpu` ResourceFlavor: `cpu-erapids` on `cw-us-east-08a`, `cpu-genoa` on
+`cw-us-east-02a` and `cpu-turin` on `cw-rno2a`. That flavor uses the existing
+Iris scale-group selector and a separate `iris-cpu-hostname` Topology containing
+only `kubernetes.io/hostname`. Its GPU and RDMA quotas are zero. It is first in
+`iris-cq`'s resource group, so CPU-only work uses the physical CPU pool;
+requests that do not fit can still use `cw-tas`. All resources of a PodSet stay
+in one resource group and use one flavor. GPU and RDMA work retains the shared
+flavor and its binding quotas. CPU pool declarations on these clusters no
+longer set synthetic physical-topology labels.
+
+The CPU flavor is TAS and selects only the CPU pool. CPU spillover onto GPU
+Nodes stays in `cw-tas` so GPU TAS fit can reclaim it
+([#7916](https://github.com/marin-community/marin/issues/7916)). Both topologies
+end at hostname. Kueue v0.18.3's default-enabled `TASHandleOverlappingFlavors`
+accounts for any Node temporarily selected by both flavors; keep that gate
+enabled during rollout.
+
+See [CPU topology admission](../OPS.md#cpu-topology-admission) for the staged
+per-cluster apply procedure. No controller deployment is required for this
+Kueue admission change.
+
+Iris `region` constraints match the backend's advertised region. They do not
+become a Node selector: CoreWeave's `US-EAST-08A` backend has Nodes labelled
+`topology.kubernetes.io/region=US-EAST-08`. A required region mismatch is
+rejected before Pod creation; preferred regions do not restrict placement.
 
 TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
 same-cycle recomputation gate prevents two newly admitted Workloads from keeping
@@ -248,14 +303,15 @@ resource failure and Iris returns the attempt to `PENDING` for fresh admission.
 
 | Resource | Owner |
 | --- | --- |
-| CKS cluster and operator kubeconfig | CoreWeave and the cluster operator |
+| CKS cluster, operator kubeconfig, and sandbox RuntimeClasses | CoreWeave and the cluster operator |
 | Namespace, RBAC, NodePools, Kueue operator, ClusterQueue, ResourceFlavor, ingress, and DNS | `infra/pulumi` |
 | Pod and Workload priority classes, Kueue LocalQueue, controller ConfigMap, Deployment, Service, PDB, state volume, and Secrets | `K8sControllerProvider` |
 | Task Pods and their lifecycle | `K8sTaskProvider` |
 | Node scheduling and provisioning | Kubernetes and CoreWeave |
 
-`K8sControllerProvider.verify_prerequisites()` only checks that the
-Pulumi-owned resources exist. It does not create or repair them. Read the
+`K8sControllerProvider.verify_prerequisites()` checks selected controller
+prerequisites, including the configured sandbox RuntimeClass. It does not create
+or repair them. Read the
 [Pulumi guide](../../../infra/pulumi/README.md) before changing that substrate;
 a destructive NodePool plan can deprovision reserved hardware.
 
@@ -296,6 +352,7 @@ their Kubernetes service account inside the cluster.
 | `kubernetes_provider.controller_address` | In-cluster controller address injected into task Pods. |
 | `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
 | `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
+| `kubernetes_provider.sandbox_runtime_class` | RuntimeClass for SANDBOX pods; defaults to `gvisor`. See [Sandbox runtime](#sandbox-runtime). |
 
 An empty `kubernetes_provider.kubeconfig` means in-cluster authentication. That
 is the normal CoreWeave controller configuration.
@@ -556,6 +613,13 @@ reference](federation.md) for cross-cluster job semantics, the [Pulumi
 guide](../../../infra/pulumi/README.md) for infrastructure, and
 [`OPS.md`](../OPS.md) for live diagnosis.
 
+### Sandbox runtime
+
+SANDBOX pods use the RuntimeClass named by `kubernetes_provider.sandbox_runtime_class`;
+CoreWeave owns these classes and their handlers. Every CoreWeave cluster uses the
+`gvisor` class, which CoreWeave has deprecated;
+[#11343](https://github.com/marin-community/marin/issues/11343) tracks its replacement.
+
 ## Source map
 
 - [`backends/k8s/tasks.py`](../src/iris/cluster/backends/k8s/tasks.py) — task Pod
@@ -652,8 +716,8 @@ reprovisioning. Deploy the updated DaemonSet to enable it. This does not remove
 historical logs or impose retention on the NVMe directory.
 
 Task `/tmp`, workdirs, and outputs use private Kubernetes `emptyDir` volumes.
-CoreWeave puts kubelet/containerd storage on NVMe, including for Shellbox's
-gVisor sandbox profile. Shared caches use the configured NVMe `cache_dir`;
+CoreWeave puts kubelet/containerd storage on NVMe, including for SANDBOX
+pods. Shared caches use the configured NVMe `cache_dir`;
 sandbox tasks never receive those shared caches.
 
 For `NodeRuntimeFilesystemAlmostFull` or runtime ENOSPC, check bytes and inodes

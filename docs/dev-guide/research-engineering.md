@@ -58,7 +58,16 @@ upstream merges. Preserve published research commits and incorporate upstream
 changes through merges. Remove inherited CI workflows before the first push
 and reconcile workflows again after upstream merges; archive CI is opt-in.
 Never mirror-push the repository or merge the experimental source tree into
-the index branch. Add or update a small index entry on the default branch.
+the index branch. After publishing the initial notebook, open a PR to logbooks
+`main` that adds `index/<issue-number>-<topic>.md`, using the notebook's
+parent directory name. Include the current status and a commit-pinned notebook
+link. Follow the
+[logbooks index procedure](https://github.com/marin-community/marin-logbooks/blob/main/WORKFLOW.md#maintain-the-index).
+
+Update the same file through a PR when the work produces a material finding,
+changes direction, ends, or gains or loses a contribution link. Summarize the
+finding or decision when one is available. Keep detailed evidence in the
+notebook and the coordinating issue.
 
 ## Keep three levels of detail
 
@@ -100,6 +109,12 @@ raw notebook entries.
 Build contribution branches from current Marin and extract the chosen source
 changes. Leave notebook files, abandoned variants, and archive CI changes in
 logbooks. Split independent reusable fixes into their own PRs when useful.
+Link the coordinating issue in the body of each Marin contribution PR. Use a
+separate line with the full issue URL so it can be matched automatically.
+
+```text
+Research logbook: https://github.com/marin-community/marin-logbooks/issues/123
+```
 
 Before committing the extracted changes, have a separate, fresh reviewer
 inspect every piece of the proposed contribution, including code,

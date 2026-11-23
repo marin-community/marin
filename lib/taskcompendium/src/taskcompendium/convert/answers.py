@@ -12,7 +12,9 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from verifyit.grade import InvalidTask
 from verifyit.modes.extract import extract_boxed
+from verifyit.modes.grade_math import grade_math_candidate
 from verifyit.numeric import numeric_literal
 from verifyit.spec import (
     Constraint,
@@ -104,18 +106,29 @@ def math_type(expected: str) -> MathType:
 
 
 def math_answer_task(
-    row: RawRow, *, prompt: Any, answer: Any, evidence: Mapping[str, Any] | None = None
+    row: RawRow,
+    *,
+    prompt: Any,
+    answer: Any,
+    evidence: Mapping[str, Any] | None = None,
+    positive_symbols: tuple[str, ...] = (),
 ) -> TaskSpec | ImportRejection:
-    """Grade a symbolic math answer; a boxed reference is unwrapped."""
+    """Grade a symbolic math answer; a boxed reference is unwrapped.
+
+    Positive symbols must also be stated in the public prompt.
+    """
     problem, reference = _text(prompt), _text(answer)
     if problem is None:
         return source_defect("missing_prompt", "The problem must be a nonempty string")
     if reference is None:
         return source_defect("invalid_reference", "The reference answer must be a nonempty string")
     expected = extract_boxed(reference) or reference
-    return answer_task(
-        row, prompt=problem, spec=MathSpec(expected=expected, math_type=math_type(expected)), evidence=evidence
-    )
+    spec = MathSpec(expected=expected, math_type=math_type(expected), positive_symbols=positive_symbols)
+    try:
+        grade_math_candidate(spec, "")
+    except InvalidTask as error:
+        return source_defect("invalid_reference", str(error))
+    return answer_task(row, prompt=problem, spec=spec, evidence=evidence)
 
 
 def numeric_answer_task(

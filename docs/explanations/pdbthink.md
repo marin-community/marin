@@ -1,153 +1,125 @@
 # PDBThink evaluation
 
-Marin's `pdbthink` evaluation runs the original protein structural-reasoning
-benchmark through vendored Evalchemy. It is an in-distribution development eval
-under the [Marin evaluation policy](https://github.com/marin-community/marin/issues/10197).
-Exclude its questions and teacher completions from SFT data, and do not use its
-questions directly as RL training tasks. The separate
-[100k coordinate-task dataset](https://github.com/Open-Athena/pdbthink/blob/c00271fe049d60dc0d671b999d8c2fb595086166/docs/coordinate-task-generation.md)
+Marin's `pdbthink` evaluation runs the published PDBThink coordinate panel through
+TaskCompendium. It tests reasoning over supplied protein coordinates: distances,
+contacts, residue environments, interfaces and changes between structures.
+Answers are checked by the upstream parser and scorer without tools or an LLM judge.
+
+This adds structured 3D geometry to the ID evaluation suite. Biomedical question
+sets such as PubMedQA and MedQA mainly test knowledge and text interpretation;
+GenomeQA tests sequence tasks. PDBThink asks the model to derive answers from
+atom records supplied in the prompt. Its incremental value is this input and
+reasoning format. Correlation with downstream research performance has not been
+established.
+
+Use it as an in-distribution development evaluation under the
+[Marin evaluation policy](https://github.com/marin-community/marin/issues/10197).
+Upstream publishes the panel's prompts, answers and model traces, so it is not a
+contamination-resistant holdout. Exclude these questions and teacher completions
+from SFT data and do not use the questions directly as RL tasks. The separate
+[100k coordinate-task release](https://github.com/Open-Athena/pdbthink/blob/1bf06a464b2eab2f1e16c4dd16714314f225e196/docs/coordinate-task-generation.md)
 is outside this integration.
 
-Questions ask models to reason from supplied protein coordinates, for example
-to count residues, measure an atom-to-atom distance, or identify contacting
-residue pairs. A semantic question is one underlying problem; a render is that
-problem expressed using a particular coordinate format or control condition.
+## Pinned panel and scientific limits
 
-## Frozen benchmark
+The source and scorer use upstream commit
+[`1bf06a4`](https://github.com/Open-Athena/pdbthink/tree/1bf06a464b2eab2f1e16c4dd16714314f225e196),
+the latest upstream main revision checked on November 23, 2026. The panel is
+`coordinate-report-v5.0.0`: 88 questions across 19 families, each with one
+minimal-PDB rendering. It uses prompt v6 and scorer 1.2.0. Later report versions
+add model conditions while retaining this scientific panel.
 
-The source and scorer are pinned to
-[`c00271f`](https://github.com/Open-Athena/pdbthink/tree/c00271fe049d60dc0d671b999d8c2fb595086166).
-Building that revision's `configs/dataset_v1.yaml` produces 121 semantic
-questions and 253 renders: 158 minimal-PDB, 47 normalized-coordinate, and 48
-context-only prompts. All questions have upstream curation status `proposed`.
-This is a candidate benchmark, not an accepted final release.
+[Upstream revision 1.1](https://github.com/Open-Athena/pdbthink/blob/1bf06a464b2eab2f1e16c4dd16714314f225e196/docs/original-benchmark-v1.1.md)
+corrected residue mappings, interface wording, clash-topology eligibility and
+accepted contact sets. Subsequent changes preserve frozen system instructions
+and reject exports that merely relabel older prompts. All 88 imported prompts
+and answer keys match the
+[published artifacts](https://github.com/Open-Athena/pdbthink/tree/1bf06a464b2eab2f1e16c4dd16714314f225e196/docs/benchmark-report/questions)
+exactly.
 
-An independent audit of this revision confirmed 113 question/answer pairs,
-found one defective clash question, and left seven questions underdefined
-(six fold classifications and one mechanism question). The clash gold mistakes
-a covalent glycosylation bond for a nonbonded contact. The frozen scores retain
-all 121 questions; correcting the defect requires a new benchmark revision.
-The complete question ledger and supporting calculations are archived at
+This panel replaces the earlier Marin candidate bundle of 121 questions and
+253 renders. It contains no mechanism questions, normalized-coordinate variants
+or context-only controls, and excludes the defective 7WZ5 glycosylation-clash
+question identified in the earlier audit. Historical GLM scores on that bundle
+are not scores for this panel. The source/scorer code still shares the earlier
+scientific revision; a new commit alone does not establish that every scientific
+issue has been fixed.
+
+The S05 prompts still omit quantitative fold-classification thresholds. The
+upstream instance metadata marks all 88 questions `proposed`, and the panel has
+not received an independent human scientific review. Interpret results with
+these limits. The earlier audit is archived at
 `gs://marin-us-west1/evaluation/pdbthink/full-quality-audit-20261112`
 ([Filer](https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-west1%2Fevaluation%2Fpdbthink%2Ffull-quality-audit-20261112)).
 
-Minimal-PDB renders use the Protein Data Bank text format. Normalized-coordinate
-renders express the coordinates in tables; context-only controls omit them.
-The 158 minimal-PDB renders include 31 rotated controls, which change the
-coordinate frame while preserving the answer.
+The committed manifest records the source revision, scientific revision,
+dataset fingerprint, family counts and bundle SHA-256. Prompts and answer keys
+are kept in the evaluation data cache, outside Marin's Git repository.
 
-The frozen build uses dataset revision `1.1.0`, prompt version `v6`, and scorer
-version `1.2.0`. It includes the upstream corrections to contact answer sets,
-residue identifiers, geometric question criteria, and reversed-state wording.
-See the [upstream revision notes](https://github.com/Open-Athena/pdbthink/blob/c00271fe049d60dc0d671b999d8c2fb595086166/docs/original-benchmark-v1.1.md).
-Changed questions require fresh model responses; scores from older prompt
-versions are not directly comparable. Mechanism multiple-choice answers remain
-curated interpretations that coordinate calculations do not independently
-establish. The upstream generator produced four of its five requested clash questions
-after rejecting structures with unknown protein bond topology. Those four still
-include the glycosylation defect identified above.
-
-Marin records the source, config, definitions, structure and bundle hashes in its
-[manifest](https://github.com/marin-community/marin/blob/main/vendor/evalchemy/eval/chat_benchmarks/PDBThink/manifest.json).
-Prompts and gold answers live in the evaluation data cache and are not committed
-to Marin.
-
-## Run the evaluation
-
-The registered `--evals pdbthink` configuration reads the frozen bundle from
-`gs://marin-us-west1/evaluation/datasets`
-([Filer](https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-west1%2Fevaluation%2Fdatasets)).
-This private prefix has no temporary-cache expiry. The evaluation worker needs
-read access to it, including when the worker runs in another region. The bundle
-is about 3.7 MB.
+## Run
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
-  --model <registered-model-key> \
-  --evals pdbthink \
-  --dry-run
+  --model <registered-model-key> --evals pdbthink --dry-run
 ```
 
-Remove `--dry-run` to submit. A missing or changed bundle fails preparation before
-generation. See [Running evaluations](../tutorials/run-lm-evals.md) for model
-configuration and launch options.
+Remove `--dry-run` to submit. See [Running evaluations](../tutorials/run-lm-evals.md)
+for resource selection, model configuration and result inspection. Use a model
+configuration with its full supported context and output allowance; the catalog
+may use a smaller context for other evaluations. The complete panel must fit
+before inference starts. Oversized prompts fail preparation without cropping
+or silently reducing the evaluated population.
 
-## Rebuild or stage a separate cache
+Each question receives three completions at temperature 0.7, top-p 1 and disabled
+top-k. The system and user messages are preserved exactly. Each request uses the
+remaining model context after the full prompt and a 64-token reserve, unless an
+explicit run or model output limit is supplied. Output limits, tokenizer revision,
+request options, responses and grades are retained in the native archive.
+A `--limit` run is a smoke test, not a full-panel score.
 
-Build from a clean checkout of the pinned upstream revision. Run these commands
-inside that checkout; acquisition needs network access to the upstream structure
-sources, and subsequent build and validation use the cache:
+Requests specify `tools: null` and `tool_choice: none`. No tool is executed.
+Tool calls, refusals, malformed answers and output-limit finishes score zero.
+Only final answer content is graded; an unfinished reasoning trace cannot supply
+an answer. Transport failures remain unscored and make coverage incomplete.
+
+The headline `macro_accuracy` matches the upstream report: compute fully correct
+answer frequency within each family, then weight the 19 families equally.
+`micro_accuracy` weights questions equally. The auxiliary `score` retains the
+upstream partial-credit score, including set overlap. Three completions are
+averaged without pass@k selection. Upstream report conditions use one completion
+per question, so fresh Marin baselines have a different sampling count.
+
+## Data and reproduction
+
+The 1.4 MB immutable bundle is stored at
+`gs://marin-us-west1/evaluation/datasets/Open-Athena/pdbthink/1bf06a464b2eab2f1e16c4dd16714314f225e196/evaluation.json.gz`
+([Filer](https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-west1%2Fevaluation%2Fdatasets%2FOpen-Athena%2Fpdbthink%2F1bf06a464b2eab2f1e16c4dd16714314f225e196%2Fevaluation.json.gz)).
+Acquisition verifies its checksum and stages the source with the evaluation
+corpus. Workers need access to this private cache. Missing or changed bytes fail
+before inference.
+
+The frozen source dataset is archived beside the bundle as
+`source-dataset.tar.gz`
+([Filer](https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-west1%2Fevaluation%2Fdatasets%2FOpen-Athena%2Fpdbthink%2F1bf06a464b2eab2f1e16c4dd16714314f225e196%2Fsource-dataset.tar.gz)).
+Unpack it, then rebuild and verify the bundle with:
 
 ```bash
-git checkout --detach c00271fe049d60dc0d671b999d8c2fb595086166
-uv venv --python 3.12
-uv pip install --python .venv/bin/python '.[tokenizer]'
-uv run --no-sync structural-reasoning acquire --config configs/dataset_v1.yaml
-uv run --no-sync structural-reasoning build \
-  --config configs/dataset_v1.yaml --output datasets/marin-v1
-uv run --no-sync structural-reasoning validate --dataset datasets/marin-v1
+uv run --package marin-taskcompendium --extra pdbthink \
+  python -m taskcompendium.importers.pdbthink_prepare \
+  --dataset /path/to/report-coordinate-v5 \
+  --cache-prefix /path/to/evaluation-cache
 ```
 
-From the Marin repository, validate and stage the bundle:
+This validates the upstream dataset, checks its fingerprint, and requires the
+complete generated manifest to match before writing. Rebuilding
+`configs/dataset_v1.yaml` produces a different candidate cohort and must not be
+substituted for the published report panel.
 
-```bash
-uv run --project vendor/evalchemy --frozen --extra pdbthink \
-  python vendor/evalchemy/scripts/benchmarks/prepare_pdbthink.py \
-  --dataset /path/to/pdbthink/datasets/marin-v1 \
-  --cache-prefix /path/to/eval-cache
-```
+## Cost accounting
 
-The command rejects any build that differs from the frozen manifest and verifies
-the written bundle. It creates
-`Open-Athena/pdbthink/c00271fe049d60dc0d671b999d8c2fb595086166/evaluation.json.gz`
-under the cache prefix. For a distributed evaluation,
-use a private object-store prefix accessible to the evaluation worker in its
-region. Use `uv run fsutil cp` to copy an already prepared bundle to that prefix.
-Preserve the full `Open-Athena/pdbthink/<revision>/evaluation.json.gz` path
-beneath the destination prefix.
-
-Set `dataset_cache` in a copy of
-`experiments/evaluation/configs/evalchemy/pdbthink.yaml` to this cache prefix, then
-launch the copied configuration:
-
-```bash
-uv run python -m experiments.evaluation.cli launch \
-  --model <registered-model-key> \
-  --evalchemy-config /path/to/pdbthink.yaml \
-  --dry-run
-```
-
-Remove `--dry-run` to submit with the separate cache.
-
-## Generation and scoring
-
-Each render receives three sampled completions at temperature 0.7, preserving
-the upstream system and user messages. Requests omit `tools` and set
-`tool_choice: none`; vLLM rejects an empty tools array. An unexpected tool call
-scores zero. No tool execution or LLM judge is involved.
-
-Before the first request, Evalchemy counts every selected prompt with the served
-model's tokenizer and chat template. An oversized prompt fails the task; it is
-never cropped or silently skipped. Each output budget uses the remaining context
-after a 64-token safety margin, bounded by the YAML `max_tokens` cap when supplied.
-The saved results include per-render token budgets. A capped `--limit` run is a
-smoke test; use all 253 renders for a full benchmark score.
-
-The pinned upstream parser and scorer interpret `FINAL` answers, including
-numeric tolerances and partial credit for sets. Malformed answers, refusals and
-truncations score zero. Transport failures remain unscored infrastructure
-failures and make the run incomplete. Successful requests are reused on resume.
-
-The headline `macro_score` averages scores within each question family (a group
-of questions testing the same operation), then gives each family equal weight.
-It includes base minimal-PDB and normalized-coordinate
-renders and excludes context-only and rotated controls. Completions are averaged;
-there is no pass@k selection. The upstream report supplies protein-cluster
-bootstrap intervals, family scores, control comparisons, consistency, failure
-counts and mechanistic diagnostics under `pdbthink_report`. The frozen manifest
-and actual token budgets are saved under `pdbthink` in the task results.
-
-Context-control reports count distinct system/user message sequences by prompt
-hash. Some questions share an identical context-only prompt: the 48 control
-renders contain 34 distinct prompts. The report's `effective_sample_size` field
-counts those distinct prompts, rather than independent stochastic completions.
+Scoring is deterministic CPU work; LLM judge cost is zero. Inference cost depends
+on the model, serving topology and reasoning length. Report GPU-hours as the
+allocated GPU count multiplied by serving wall time, including startup and idle
+time. Retain token totals and full-panel coverage alongside accuracy. A dollar
+estimate requires the applicable GPU-hour rate; missing billing data is not a
+zero-cost run.

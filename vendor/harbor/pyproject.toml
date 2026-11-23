@@ -7,6 +7,8 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "marin-rigging",
+    "marin-shellbox",
     "pydantic>=2.11.7",
     "shortuuid>=1.0.13",
     "typer>=0.16.0",
@@ -37,13 +39,12 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona,sotopia]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,daytona,sotopia]", "gcsfs", "s3fs", "pydantic-settings"]
 qemu = ["marin-shellbox[qemu]"]
 shellsim = ["marin-shellbox[shellsim]"]
-sotopia = ["harbor[archive,telemetry]", "numpy", "scipy", "scikit-learn"]
+sotopia = ["harbor[archive]", "numpy", "scipy", "scikit-learn"]
 analysis = ["claude-agent-sdk>=0.1.17"]
 archive = ["marin-finestore"]
-telemetry = ["marin-rigging"]
 datasets = ["datasets>=4.4.1"]
 daytona = ["marin-shellbox[daytona]"]
 all = ["harbor[analysis,runtime,qemu,shellsim,datasets,tinker]"]
@@ -52,6 +53,7 @@ tinker = ["tinker>=0.14.0", "tinker-cookbook>=0.1.0"]
 [dependency-groups]
 test = [
     "harbor[shellsim]",
+    "marin-taskcompendium",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
     "pytest-cov>=7.0.0",
@@ -66,12 +68,17 @@ requires = ["uv_build>=0.8.4,<0.9.0"]
 build-backend = "uv_build"
 
 [tool.uv]
-constraint-dependencies = ["nltk>=3.10.4", "oauthlib>=4.0.1"]
+constraint-dependencies = ["nltk>=3.10.4", "oauthlib>=4.0.1", "soupsieve>=4.0.0"]
 # Mini-SWE's unused default model declares LiteLLM; our model uses OpenAI directly.
 exclude-dependencies = ["litellm"]
 default-groups = []
 # Local Rigging uses its development version while published FineStore pins a release floor.
-override-dependencies = ["marin-rigging"]
+override-dependencies = [
+    "marin-rigging",
+    # Torch pins an older NCCL; 2.32.6 fixes NVLSTree buffer corruption.
+    # https://github.com/NVIDIA/nccl/issues/2625
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
+]
 
 [tool.uv.build-backend]
 module-name = ["harbor", "harbor_config"]
@@ -81,6 +88,8 @@ marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
 marin-shellbox = { path = "../../lib/shellbox", editable = true }
 marin-finelog = { path = "../../lib/finelog", editable = true }
+marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
+marin-verifyit = { path = "../../lib/verifyit", editable = true }
 
 [tool.pytest.ini_options]
 timeout = 60

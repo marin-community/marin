@@ -265,6 +265,7 @@ def _column_record(column: Column) -> dict[str, object]:
         "trigram_index": column.trigram_index,
         "exact_values": list(column.exact_values),
         "value_counts": column.value_counts,
+        "catalog_bounds": column.catalog_bounds,
     }
 
 
@@ -361,7 +362,7 @@ def _print_record(record: dict[str, object], *, indent: int | None = None) -> No
     type=float,
     default=DEFAULT_REQUEST_TIMEOUT,
     show_default=True,
-    help="Seconds to wait for the query result. The server applies its own 10s deadline.",
+    help="Seconds to wait for the query result. The server applies its own 30s deadline.",
 )
 def query_cmd(
     name: str,

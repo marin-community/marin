@@ -20,19 +20,18 @@ Expected text that math-verify cannot parse raises ``InvalidTask``.
 import math
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
-from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+from verifyit.compat import StrEnum
 from verifyit.grade import (
     GradingInfraError,
     InvalidTask,
     Reward,
     empty_output_policy,
-    invalid_task,
     numeric_tolerance,
     read_output,
     scored,
@@ -57,39 +56,102 @@ def _timeout() -> int:
 _DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|times))\s*$")
 
 
-def _parse_with_unit_recovery(text: str) -> list:
-    """Retry without unit stripping when normalization deletes a trailing variable."""
+def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
+    """Parse math, retaining trailing variables that unit normalization removed."""
     from math_verify import parse  # noqa: PLC0415
     from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
 
-    latex = LatexExtractionConfig()
-    expression = ExprExtractionConfig()
-    parsed = parse(text, extraction_config=[latex, expression], parsing_timeout=_timeout(), raise_on_error=True)
+    configs = list(extraction_config or [LatexExtractionConfig(), ExprExtractionConfig()])
+    parsed = parse(text, extraction_config=configs, **kwargs)
     if not any(isinstance(item, str) and _DANGLING_OPERATOR.search(item) for item in parsed):
         return parsed
-    # For example, unit stripping changes p < s to p < by treating s as seconds.
     unitless = [
-        replace(latex, normalization_config=replace(latex.normalization_config, units=False)),
-        expression,
+        (
+            replace(config, normalization_config=replace(config.normalization_config, units=False))
+            if isinstance(config, LatexExtractionConfig)
+            else config
+        )
+        for config in configs
     ]
-    return parse(text, extraction_config=unitless, parsing_timeout=_timeout(), raise_on_error=True)
+    return parse(text, extraction_config=unitless, **kwargs)
 
 
 def _parse(text: str) -> list:
     """math-verify's parse of ``text`` as a LaTeX expression, else of the text as written."""
-    return _parse_with_unit_recovery(f"${strip_math_delimiters(text)}$") or _parse_with_unit_recovery(text)
+
+    timeout = _timeout()
+    return _math_verify_parse(
+        f"${strip_math_delimiters(text)}$", parsing_timeout=timeout, raise_on_error=True
+    ) or _math_verify_parse(text, parsing_timeout=timeout, raise_on_error=True)
+
+
+def _as_list(value: Any) -> list:
+    return value if isinstance(value, list) else [value]
+
+
+def _is_relation_chain(value: Any) -> bool:
+    from sympy import And  # noqa: PLC0415
+    from sympy.core.relational import Relational  # noqa: PLC0415
+
+    return isinstance(value, And) and all(isinstance(arg, Relational) for arg in value.args)
+
+
+def _is_undefined(value: Any) -> bool:
+    from sympy import Basic, S  # noqa: PLC0415
+
+    return isinstance(value, Basic) and value.has(S.NaN, S.ComplexInfinity)
 
 
 def _verify(expected: Any, candidate: Any, allow_set_relation_comp: bool = False) -> bool:
-    from math_verify import verify  # noqa: PLC0415
-
-    return verify(
-        expected,
-        candidate,
-        allow_set_relation_comp=allow_set_relation_comp,
-        timeout_seconds=_timeout(),
-        raise_on_error=True,
+    """Whether any expected parse equals any candidate parse."""
+    return any(
+        _verify_pair(gold, target, allow_set_relation_comp)
+        for gold in _as_list(expected)
+        for target in _as_list(candidate)
     )
+
+
+def _verify_pair(gold: Any, target: Any, allow_set_relation_comp: bool) -> bool:
+    from math_verify import verify  # noqa: PLC0415
+    from sympy import Eq, Ne  # noqa: PLC0415
+
+    if (_is_relation_chain(gold) or _is_relation_chain(target)) and (
+        not allow_set_relation_comp or _is_relation_chain(gold) == _is_relation_chain(target)
+    ):
+        # A chain a < b < c parses as a conjunction of relations, which SymPy
+        # deduplicates (m < -n < n < -m keeps two: n < -m is m < -n) and orders.
+        # math-verify zips two conjunctions in order with strict=True and raises
+        # when their lengths differ (huggingface/Math-Verify#93). Two conjunctions
+        # state the same constraints when each relation of one matches one of the other.
+        gold_relations = gold.args if _is_relation_chain(gold) else (gold,)
+        target_relations = target.args if _is_relation_chain(target) else (target,)
+        return all(
+            any(_verify_pair(g, t, allow_set_relation_comp) for t in target_relations) for g in gold_relations
+        ) and all(any(_verify_pair(g, t, allow_set_relation_comp) for g in gold_relations) for t in target_relations)
+    if isinstance(gold, Ne) or isinstance(target, Ne):
+        # math-verify's relation table lacks Unequality. a != b holds exactly where
+        # a = b fails, so two unequalities match when their equations do.
+        if not (isinstance(gold, Ne) and isinstance(target, Ne)):
+            return False
+        gold, target = Eq(gold.lhs, gold.rhs, evaluate=False), Eq(target.lhs, target.rhs, evaluate=False)
+    if _is_undefined(gold):
+        raise InvalidTask(f"the reference parses to an undefined value: {gold}")
+    if _is_undefined(target):
+        # math-verify refuses to compare nan or zoo; a reference that is defined
+        # cannot equal it.
+        return False
+    try:
+        return verify(
+            gold,
+            target,
+            allow_set_relation_comp=allow_set_relation_comp,
+            timeout_seconds=_timeout(),
+            raise_on_error=True,
+        )
+    except Exception as error:
+        # A comparison failure not handled above: neither a verdict on the answer nor
+        # a property of the task, so it surfaces instead of scoring silently.
+        raise GradingInfraError(f"math-verify could not compare: {type(error).__name__}: {error}") from error
 
 
 def _is_expression(parsed: list) -> bool:
@@ -97,30 +159,49 @@ def _is_expression(parsed: list) -> bool:
     return any(not isinstance(item, str) for item in parsed)
 
 
-def _split_members(text: str) -> list[str]:
-    """The comma-separated members of a sequence, ignoring commas nested inside brackets.
+def _scan_brackets(value: str) -> tuple[list[tuple[int, int]], int | None]:
+    """Walk ``value`` once, tracking bracket nesting.
 
-    One optional layer of enclosing brackets is dropped, so ``[1, 2]`` and ``1, 2`` read alike.
+    Returns the spans of the comma-separated top-level members — commas inside brackets
+    never split — and the index where the bracket stack first empties again, which for a
+    ``value[0]`` that opens a bracket is exactly where its pair closes.
     """
-    value = strip_math_delimiters(text)
-    for command in SIZE_COMMANDS:
-        value = value.replace(command, "")
-    value = value.strip()
-    if len(value) > 1 and value[0] in CLOSERS and value[-1] == CLOSERS[value[0]]:
-        value = value[1:-1]
-    members: list[str] = []
+    spans: list[tuple[int, int]] = []
     stack: list[str] = []
+    first_close: int | None = None
     start = 0
     for index, char in enumerate(value):
         if char in CLOSERS:
             stack.append(CLOSERS[char])
         elif stack and char == stack[-1]:
             stack.pop()
+            if not stack and first_close is None:
+                first_close = index
         elif char == "," and not stack:
-            members.append(value[start:index].strip())
+            spans.append((start, index))
             start = index + 1
-    members.append(value[start:].strip())
-    return members
+    spans.append((start, len(value)))
+    return spans, first_close
+
+
+def _split_members(text: str) -> list[str]:
+    """The comma-separated members of a sequence, ignoring commas nested inside brackets.
+
+    One optional layer of enclosing brackets is dropped, so ``[1, 2]`` and ``1, 2`` read alike,
+    but only when the first bracket opens the whole text — its balanced close at the last
+    character: ``[1, 2], [3, 4]`` keeps both bracketed members, and ``(1,2),(3,4)`` keeps both
+    parenthesized pairs.
+    """
+    value = strip_math_delimiters(text)
+    for command in SIZE_COMMANDS:
+        value = value.replace(command, "")
+    value = value.strip()
+    spans, first_close = _scan_brackets(value)
+    if len(value) > 1 and value[0] in CLOSERS and value[-1] == CLOSERS[value[0]] and first_close == len(value) - 1:
+        # The first opener encloses the whole text: the members are its interior's top level.
+        value = value[1:-1]
+        spans = _scan_brackets(value)[0]
+    return [value[start:end].strip() for start, end in spans]
 
 
 class MathMemberPolicy(StrEnum):
@@ -136,7 +217,6 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
     variable expressions as raw text; undefined expressions never become literal tokens.
     """
     from latex2sympy2_extended import NormalizationConfig  # noqa: PLC0415
-    from math_verify import parse  # noqa: PLC0415
     from math_verify.parser import LatexExtractionConfig  # noqa: PLC0415
     from sympy import Expr, Float, Rational, nan, oo, simplify, srepr, zoo  # noqa: PLC0415
 
@@ -162,7 +242,7 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
         else:
             parsed = [
                 value
-                for value in parse(
+                for value in _math_verify_parse(
                     f"${member}$", extraction_config=[strict_latex], parsing_timeout=_timeout(), raise_on_error=True
                 )
                 if not isinstance(value, str)
@@ -191,7 +271,7 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
 
 
 def _candidate_parse(parse: Callable[[], list]) -> list:
-    """Return parsed candidates, or an empty list for SymPy construction errors."""
+    """A candidate's parse, empty when SymPy cannot build its literal."""
     from sympy import SympifyError  # noqa: PLC0415
 
     try:
@@ -235,6 +315,36 @@ def _additive_constant_match(expected: list, candidate: list) -> bool:
     return False
 
 
+def _positive_symbol_match(expected: list, candidate: list, positive_symbols: tuple[str, ...]) -> bool:
+    """Prove scalar equality after applying only the contract's positive assumptions."""
+    from math_verify.utils import timeout  # noqa: PLC0415
+    from sympy import Expr, Symbol, simplify  # noqa: PLC0415
+    from sympy.matrices.expressions import MatrixExpr  # noqa: PLC0415
+
+    @timeout(_timeout())
+    def equal_under_assumptions(gold, target) -> bool:
+        replacements = {
+            symbol: Symbol(symbol.name, positive=True)
+            for symbol in gold.free_symbols | target.free_symbols
+            if symbol.name in positive_symbols
+        }
+        return simplify(gold.xreplace(replacements) - target.xreplace(replacements)) == 0
+
+    return any(
+        equal_under_assumptions(gold, target)
+        for gold in expected
+        for target in candidate
+        if isinstance(gold, Expr)
+        and isinstance(target, Expr)
+        and not isinstance(gold, MatrixExpr)
+        and not isinstance(target, MatrixExpr)
+        and gold.is_commutative
+        and target.is_commutative
+        and not _is_undefined(gold)
+        and not _is_undefined(target)
+    )
+
+
 def validate_math(spec: MathSpec) -> None:
     """Check the parsing policy; the reference itself is parsed only when grading."""
     empty_output_policy(spec)
@@ -242,6 +352,17 @@ def validate_math(spec: MathSpec) -> None:
         raise InvalidTask("allow_additive_constant must be boolean")
     if not isinstance(spec.profile, MathProfile) or not isinstance(spec.math_type, MathType):
         raise InvalidTask("unknown math parsing profile or math_type")
+    if (
+        not isinstance(spec.positive_symbols, tuple)
+        or any(
+            not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name)
+            for name in spec.positive_symbols
+        )
+        or len(set(spec.positive_symbols)) != len(spec.positive_symbols)
+    ):
+        raise InvalidTask("positive_symbols must contain unique symbol names")
+    if spec.positive_symbols and spec.math_type is not MathType.SCALAR:
+        raise InvalidTask("positive_symbols requires scalar math_type")
 
 
 def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
@@ -257,7 +378,6 @@ def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
 
 
 def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
-    from math_verify import parse  # noqa: PLC0415
     from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
     from math_verify.utils import timeout  # noqa: PLC0415
 
@@ -271,18 +391,20 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
         boxed = extract_boxed(candidate)
         candidate = f"\\boxed{{{boxed}}}" if boxed else ""
     gold_text = f"\\boxed{{{spec.expected}}}"
-    expected = parse(
+    expected = _math_verify_parse(
         gold_text, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
     )
     if not _is_expression(expected):
         raise InvalidTask("raw math profile could not parse the reference")
-    parsed = parse(
+    parsed = _math_verify_parse(
         candidate,
         extraction_config=[ExprExtractionConfig(), LatexExtractionConfig()],
         parsing_timeout=_timeout(),
         raise_on_error=True,
     )
     match = bool(parsed) and _verify(expected, parsed)
+    if not match and spec.positive_symbols:
+        match = _positive_symbol_match(expected, parsed, spec.positive_symbols)
     chosen = None
     if parsed:
         gold_strings = strings_of(expected)
@@ -292,7 +414,7 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
             prediction_strings[0],
         )
     if not match and spec.allow_additive_constant:
-        latex_prediction = parse(
+        latex_prediction = _math_verify_parse(
             candidate, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
         )
         match = _additive_constant_match(expected, latex_prediction)
@@ -307,19 +429,20 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     if spec.profile is MathProfile.RAW:
         return _grade_raw_math(spec, candidate)
     if spec.profile is MathProfile.BOXED:
-        from math_verify import parse, verify  # noqa: PLC0415
 
         if spec.math_type is not MathType.SCALAR:
             raise InvalidTask("boxed math profile requires scalar math_type")
-        expected = parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
+        expected = _math_verify_parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
         if not expected:
             raise InvalidTask("math-verify cannot parse boxed reference")
         parsed = _candidate_parse(
-            lambda: parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
+            lambda: _math_verify_parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
         )
         if not parsed:
             return scored(0.0, reason="missing_parse", expected_parsed=bool(expected), candidate_parsed=bool(parsed))
-        match = bool(verify(gold=expected, target=parsed, timeout_seconds=_timeout(), raise_on_error=True))
+        match = bool(_verify(expected, parsed))
+        if not match and spec.positive_symbols:
+            match = _positive_symbol_match(expected, parsed, spec.positive_symbols)
         if not match and spec.allow_additive_constant:
             match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
@@ -336,6 +459,8 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
         match = _members_match(expected, parsed)
     else:
         match = _verify(expected[0], parsed[0], allow_set_relation_comp=spec.math_type in SET_TYPES)
+        if not match and spec.positive_symbols:
+            match = _positive_symbol_match(expected[0], parsed[0], spec.positive_symbols)
     if not match and spec.allow_additive_constant and not is_list:
         match = _additive_constant_match(expected[0], parsed[0])
     return scored(float(bool(match)), extracted=candidate, expected=spec.expected)
@@ -362,79 +487,6 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
 def grade_math_text_candidate(spec: MathSpec, text: str) -> Reward:
     """Extract math under the task's parsing profile and grade the result."""
     return grade_math_candidate(spec, math_answer(spec, text))
-
-
-def _numeric_rows(value: object) -> list[list[float]]:
-    if not isinstance(value, (list, tuple)) or not value:
-        raise ValueError("numeric rows must be a nonempty matrix")
-    rows = []
-    for row in value:
-        if not isinstance(row, (list, tuple)) or not row:
-            raise ValueError("numeric rows must have nonempty columns")
-        if any(isinstance(cell, bool) or not isinstance(cell, (int, float)) for cell in row):
-            raise ValueError("matrix cells must be numeric")
-        converted = [float(cell) for cell in row]
-        if not all(math.isfinite(cell) for cell in converted):
-            raise ValueError("matrix cells must be finite")
-        if rows and len(converted) != len(rows[0]):
-            raise ValueError("numeric rows must be rectangular")
-        rows.append(converted)
-    return rows
-
-
-def grade_regression_candidate(expected: object, candidate: object, *, variance_floor: float) -> Reward:
-    """Grade groups of finite prediction matrices by pooled, uniform-output R².
-
-    Group counts and each group shape must match before rows are pooled. Within
-    each group, rows are observations and columns are outputs. A variance at or below
-    the task's explicit floor yields zero because normalized error is undefined.
-    Trusted references are validated before candidate data; no sklearn dependency.
-    """
-    try:
-        if isinstance(variance_floor, bool) or not math.isfinite(variance_floor) or variance_floor < 0:
-            raise ValueError("variance floor must be finite and nonnegative")
-        if not isinstance(expected, (list, tuple)) or not expected:
-            raise ValueError("reference must contain nonempty groups")
-        groups = [_numeric_rows(group) for group in expected]
-        truth = _numeric_rows([row for group in groups for row in group])
-        columns = list(zip(*truth, strict=True))
-        means = [math.fsum(column) / len(column) for column in columns]
-        variances = [
-            math.fsum((x - mean) ** 2 for x in column) / len(column) for column, mean in zip(columns, means, strict=True)
-        ]
-        deviations = [
-            math.fsum(abs(x - mean) for x in column) / len(column) for column, mean in zip(columns, means, strict=True)
-        ]
-    except (ValueError, TypeError, OverflowError) as error:
-        return invalid_task(str(error))
-    try:
-        if not isinstance(candidate, (list, tuple)) or len(candidate) != len(groups):
-            raise ValueError("prediction group count differs from reference")
-        predicted_groups = [_numeric_rows(group) for group in candidate]
-        for reference, prediction in zip(groups, predicted_groups, strict=True):
-            if len(prediction) != len(reference) or len(prediction[0]) != len(reference[0]):
-                raise ValueError("prediction group shape differs from reference")
-        prediction = [row for group in predicted_groups for row in group]
-        if any(variance <= variance_floor for variance in variances):
-            return scored(0, reason="undefined_variance")
-        errors = [
-            [actual - target for actual, target in zip(predicted, column, strict=True)]
-            for predicted, column in zip(zip(*prediction, strict=True), columns, strict=True)
-        ]
-        nmse = math.fsum(
-            math.fsum(x * x for x in error) / len(error) / variance
-            for error, variance in zip(errors, variances, strict=True)
-        ) / len(columns)
-        nmae = math.fsum(
-            math.fsum(abs(x) for x in error) / len(error) / deviation
-            for error, deviation in zip(errors, deviations, strict=True)
-        ) / len(columns)
-        r2 = 1.0 - nmse
-        if not all(math.isfinite(value) for value in (nmse, nmae, r2)):
-            raise ValueError("prediction metrics are nonfinite")
-    except (ValueError, OverflowError, ZeroDivisionError) as error:
-        return scored(0, reason="invalid_predictions", error=str(error))
-    return scored(max(0.0, r2), nmse=nmse, nmae=nmae, r2=r2)
 
 
 def grade_numeric_candidate_float(expected: float, value: float | None, *, tolerance_abs: float) -> Reward:

@@ -10,27 +10,27 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import openai
 import pytest
+from evalrecords.records import JudgeIdentity, TaskEvidence
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
 from marin.rollouts.evaluation import (
-    ATTEMPTS_TABLE,
-    RUN_OBJECT,
     EvaluationInfrastructureError,
     EvaluationRunConfig,
-    JudgeIdentity,
     ModelIdentity,
+    generation_turn,
     run_evaluation,
 )
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.likelihood import VllmLikelihood
-from rolloutengine.models import ModelTurn, RolloutLimits, TokenUsage
+from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
-from taskcompendium.evaluation.corpus import chat_item
+from taskcompendium.evaluation.corpus import chat_item, evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import (
     ChatGeneration,
@@ -58,6 +58,7 @@ from taskcompendium.models import (
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
+    TaskSpec,
     TextMessage,
 )
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -76,6 +77,48 @@ from zephyr.context import ZephyrContext
 def convert(row: RawRow, _context: ConversionContext):
     task = exact_answer_task(row, prompt=row.data["question"], answers=("red",), ignore_case=False)
     return task.model_copy(update={"tags": ("eval",)})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "tool_calls"])
+async def test_provider_response_preserves_failures_without_executing_tools(finish_reason):
+    requests = []
+    message = {
+        "role": "assistant",
+        "content": "FINAL: 2",
+        "reasoning_content": "reasoning",
+        "refusal": "provider refused",
+        "tool_calls": [{"id": "call", "type": "function", "function": {"name": "unexpected", "arguments": "{}"}}],
+    }
+
+    async def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "response",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "fixture",
+                "choices": [{"index": 0, "finish_reason": finish_reason, "message": message}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+            },
+        )
+
+    prompt = ({"role": "system", "content": "frozen system"}, {"role": "user", "content": "frozen question"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        async with openai.AsyncOpenAI(base_url="http://fixture/v1", api_key="fixture", http_client=http) as client:
+            turn = await generation_turn(
+                ModelRequest(prompt, {"extra_body": {"tool_choice": "auto"}}),
+                model=ChatModel(client, "fixture", 16),
+                operation=ChatGeneration(response_selection="provider_response"),
+            )
+    assert requests[0]["messages"] == list(prompt)
+    assert requests[0]["tools"] is None
+    assert requests[0]["tool_choice"] == "none"
+    assert json.loads(turn.text) == {"message": message, "finish_reason": finish_reason}
+    assert "tool_calls" not in turn.message
+    assert turn.metadata["evaluation_raw_message"] == message
 
 
 @pytest.fixture
@@ -177,6 +220,43 @@ async def test_driver_resume_rejects_a_different_model_or_selection(tmp_path, pu
         await run_evaluation(
             published_corpora, output, run_config.model_copy(update={"source_limit": 1}), model, machine_factories={}
         )
+
+
+@pytest.mark.asyncio
+async def test_driver_resumes_partial_archive_after_request_concurrency_and_task_evidence_change(
+    tmp_path, published_corpora, run_config
+):
+    calls = 0
+    recovered = False
+
+    async def model(_request):
+        nonlocal calls
+        calls += 1
+        if not recovered and calls > 1:
+            raise RuntimeError("interrupted transport")
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "results")
+    with pytest.raises(ExceptionGroup):
+        await run_evaluation(
+            published_corpora, output, run_config.model_copy(update={"concurrency": 1}), model, machine_factories={}
+        )
+    saved = list(ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE))
+    successful = [row for row in saved if row["grading"]["score"] == 1]
+    assert len(successful) == 1
+    completed = successful[0]
+    recovered = True
+    await run_evaluation(
+        published_corpora,
+        output,
+        run_config.model_copy(update={"concurrency": 3, "task_evidence": TaskEvidence.REFERENCE}),
+        model,
+        machine_factories={},
+    )
+    samples = list(ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE))
+    assert sum(row["grading"]["score"] == 1 for row in samples) == 8
+    assert sum((row["doc_id"], row["trial_id"]) == (completed["doc_id"], completed["trial_id"]) for row in samples) == 1
+    assert calls == 9
 
 
 def convert_mixed_row(row: RawRow, _context: ConversionContext):
@@ -335,7 +415,7 @@ def mixed_corpora(tmp_path):
                     }[benchmark],
                     sampling=(
                         Sampling(
-                            temperature=0.7 if benchmark == "chat" else 0,
+                            temperature=0.7 if benchmark == "chat" else None if benchmark == "sandbox" else 0,
                             top_p=None if benchmark == "sandbox" else 1,
                             top_k=9 if benchmark == "chat" else None,
                             max_tokens=8 if benchmark == "chat" else 6,
@@ -486,7 +566,10 @@ async def test_driver_zero_shot_fallback_reduces_output_cap_and_records_oversize
 
 
 @pytest.mark.asyncio
-async def test_driver_multimetric_submission_failure_saves_raw_response_without_component_scores(tmp_path, run_config):
+@pytest.mark.parametrize("task_evidence", list(TaskEvidence))
+async def test_driver_multimetric_submission_failure_saves_raw_response_without_component_scores(
+    tmp_path, run_config, task_evidence
+):
     corpus = publish_policy_corpus(tmp_path, [{"prompt": "Return an answer"}])
     raw_message = {
         "role": "assistant",
@@ -500,7 +583,9 @@ async def test_driver_multimetric_submission_failure_saves_raw_response_without_
         return ModelTurn(raw_message, (), (), None, "tool_calls", usage=TokenUsage(10, 1))
 
     output = str(tmp_path / "results")
-    config = run_config.model_copy(update={"verifier_machine": machine_runtime(backend="shellsim")})
+    config = run_config.model_copy(
+        update={"verifier_machine": machine_runtime(backend="shellsim"), "task_evidence": task_evidence}
+    )
     machines = {"shellsim": ShellSimMachineFactory()}
     await run_evaluation((corpus,), output, config, model, machine_factories=machines)
     reader = ReadView(output)
@@ -509,6 +594,13 @@ async def test_driver_multimetric_submission_failure_saves_raw_response_without_
     assert terminal[0]["outcome"] == "submission_failure"
     raw = json.loads(reader.read_blob(terminal[0]["result_blob"]))
     assert raw["conversations"][0]["steps"][0]["turn"]["metadata"]["evaluation_raw_message"] == raw_message
+    # Evidence always names its task in the immutable corpus; only embedded evidence copies it.
+    (case,) = evaluation_cases(corpus, source_rows={raw["item"]["source_row"]})
+    assert case.task.id == raw["item"]["task_id"]
+    if task_evidence is TaskEvidence.EMBEDDED:
+        assert TaskSpec.model_validate(raw["task"]) == case.task
+    else:
+        assert "task" not in raw
     assert raw["grade"]["status"] == "submission_failure"
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
     assert len(samples) == 1
@@ -884,6 +976,8 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
     sandbox_wire = next(
         body for _, body in endpoint.requests if body.get("messages", [{}])[-1].get("content") == "chat/sandbox"
     )
+    assert "temperature" not in sandbox_wire
+    assert "seed" not in sandbox_wire
     assert "top_p" not in sandbox_wire
     chat = [sample for sample in samples if sample.task == "chat"]
     assert len(chat) == 8
@@ -1001,3 +1095,39 @@ async def test_generation_failure_archives_provider_body_and_resumes_only_failed
         assert requests[-1] == requests[0]
         await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
         assert len(requests) == 9
+
+
+@pytest.mark.asyncio
+async def test_model_rendering_overrides_preserve_published_corpus_identity(tmp_path, mixed_corpora, run_config):
+    corpus = next(root for root in mixed_corpora if evaluation_protocol(root)[0].operation == "chat_generation")
+    published, _ = evaluation_protocol(corpus)
+    template_options = []
+    requests = []
+
+    class Tokenizer(CharacterTokenizer):
+        def apply_chat_template(self, conversation, **kwargs):
+            template_options.append(kwargs)
+            return super().apply_chat_template(conversation, **kwargs)
+
+    async def model(request):
+        requests.append(request)
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    config = run_config.model_copy(
+        update={
+            "chat_template_kwargs": {"reasoning_effort": "low"},
+            "thinking_off_template_kwargs": {"reasoning_effort": "none"},
+        }
+    )
+    output = str(tmp_path / "rendering")
+    await run_evaluation((corpus,), output, config, model, machine_factories={}, tokenizer=Tokenizer())
+    assert requests
+    assert all(
+        request.options["extra_body"]["chat_template_kwargs"] == {"reasoning_effort": "none"} for request in requests
+    )
+    assert template_options
+    assert all(
+        options["reasoning_effort"] == "none" and "enable_thinking" not in options for options in template_options
+    )
+    saved = json.loads(ReadView(output).read_blob(RUN_OBJECT))
+    assert saved["datasets"][0]["protocol"] == published.model_dump(mode="json")

@@ -21,7 +21,7 @@ from scripts.ci.dependency_update import (
     validated_pull_request,
 )
 from scripts.ci.dependency_update_policy import EXTERNAL_RUNTIME_POLICY, NATIVE_PACKAGE_POLICY, PullRequestPolicy
-from scripts.ci.package_release import PACKAGES, requirement_paths_for_packages
+from scripts.ci.package_release import PACKAGES, NativeBuild, lock_paths_recording
 
 EXPECTED_SHA = "a" * 40
 
@@ -175,11 +175,11 @@ def test_no_registered_github_checks_is_a_missing_gate_not_a_cli_failure(monkeyp
 
 def test_changed_files_are_sorted_and_restricted_to_the_policy() -> None:
     changed = validate_changed_files(
-        ["uv.lock", "vendor/evalchemy/uv.lock", "uv.lock"],
+        ["uv.lock", "vendor/skyrl/uv.lock", "uv.lock"],
         policy=EXTERNAL_RUNTIME_POLICY,
     )
 
-    assert changed == ("uv.lock", "vendor/evalchemy/uv.lock")
+    assert changed == ("uv.lock", "vendor/skyrl/uv.lock")
     with pytest.raises(ValueError):
         validate_changed_files(["uv.lock", "src/backdoor.py"], policy=EXTERNAL_RUNTIME_POLICY)
 
@@ -247,7 +247,9 @@ def test_publish_update_stages_the_allowlist_and_creates_an_app_pull_request(mon
     assert _git(repository, "show", f"{remote_sha}:uv.lock") == "published update"
 
 
-def test_native_package_policy_matches_every_compatibility_floor() -> None:
-    compatibility_floors = {path.as_posix() for path in requirement_paths_for_packages(PACKAGES)}
+def test_native_package_policy_matches_every_file_the_updater_writes() -> None:
+    builds = [package.build for package in PACKAGES.values() if isinstance(package.build, NativeBuild)]
+    compatibility_floors = {build.requirement_path.as_posix() for build in builds}
+    locks = {path.as_posix() for build in builds for path in lock_paths_recording(Path("."), build.requirement_owner)}
 
-    assert NATIVE_PACKAGE_POLICY.allowed_files == {"uv.lock", *compatibility_floors}
+    assert NATIVE_PACKAGE_POLICY.allowed_files == compatibility_floors | locks

@@ -493,8 +493,13 @@ def served(tmp_path):
     server.server_close()
 
 
-def test_url_download_stages_the_file_only_when_its_digest_matches(tmp_path, served):
+@pytest.mark.parametrize("source_kind", ["http", "local"])
+def test_url_download_stages_the_file_only_when_its_digest_matches(tmp_path, served, source_kind):
     url, data = served
+    if source_kind == "local":
+        source = tmp_path / "source.jsonl"
+        source.write_bytes(data)
+        url = str(source)
     good = UrlSource(url, hashlib.sha256(data).hexdigest(), "rows.jsonl", SourceFormat.JSONL)
     download_source(DownloadRequest(good, str(tmp_path / "good")), campaign=CampaignRuntime())
     assert (tmp_path / "good" / "rows.jsonl").read_bytes() == data

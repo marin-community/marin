@@ -98,7 +98,9 @@ def timeout_workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def run_probe(workspace: Path, configuration: str, body: str, cwd: str = "root") -> subprocess.CompletedProcess[str]:
+def run_probe(
+    workspace: Path, configuration: str, body: str, cwd: str = "root", extra_paths: tuple[Path, ...] = ()
+) -> subprocess.CompletedProcess[str]:
     test_dir = workspace / ("tests" if configuration == "root" else "lib/levanter/tests")
     test_dir.mkdir(parents=True, exist_ok=True)
     (test_dir / "conftest.py").write_text(CLOCK_CONFTEST)
@@ -125,6 +127,7 @@ def run_probe(workspace: Path, configuration: str, body: str, cwd: str = "root")
             "-q",
             f"--junitxml={workspace / 'probe.xml'}",
             str(test_file),
+            *(str(path) for path in extra_paths),
         ],
         cwd=workspace if cwd == "root" else workspace / "lib/levanter",
         env=environment,
@@ -133,6 +136,31 @@ def run_probe(workspace: Path, configuration: str, body: str, cwd: str = "root")
         timeout=20,
         check=False,
     )
+
+
+def test_collecting_iris_e2e_preserves_the_workspace_timeout(timeout_workspace: Path) -> None:
+    e2e = timeout_workspace / "lib/iris/tests/e2e"
+    e2e.mkdir(parents=True)
+    shutil.copyfile(REPO_ROOT / "lib/iris/tests/e2e/conftest.py", e2e / "conftest.py")
+    test_file = e2e / "test_cluster_probe.py"
+    test_file.write_text(
+        "import pytest\n\n@pytest.mark.requires_cluster\ndef test_cluster():\n"
+        "    raise AssertionError('cluster tests must remain excluded')\n"
+    )
+
+    result = run_probe(
+        timeout_workspace,
+        "root",
+        """\
+        def test_workspace_budget(clock):
+            clock.advance(31)
+            (OUTPUT / "completed").touch()
+        """,
+        extra_paths=(test_file,),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (timeout_workspace / "sentinels/completed").exists()
 
 
 @pytest.mark.parametrize("configuration", ["root", "levanter"])

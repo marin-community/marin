@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import click
-import requests
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import (
     DownloadConfig,
@@ -94,7 +93,6 @@ PIPELINE_VERSION = "2026.10.07.1"
 CURATION_VERSION = "2026.10.12.1"
 QUICK_VERSION = "2026.10.14.1"
 URL_CHUNK_BYTES = 1024 * 1024
-URL_TIMEOUT = 60
 IMAGE_MACHINE_CPUS = 4
 INPUT_OVERRIDES_REVISION = "2"
 
@@ -690,10 +688,9 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
         return
     digest = hashlib.sha256()
     destination = StoragePath(request.output_path) / source.filename
-    with requests.get(source.url, stream=True, timeout=URL_TIMEOUT) as response:
-        response.raise_for_status()
+    with StoragePath(source.url).open("rb") as response:
         with destination.open("wb", auto_mkdir=True) as stream:
-            for chunk in response.iter_content(URL_CHUNK_BYTES):
+            while chunk := response.read(URL_CHUNK_BYTES):
                 digest.update(chunk)
                 stream.write(chunk)
     if digest.hexdigest() != source.sha256:

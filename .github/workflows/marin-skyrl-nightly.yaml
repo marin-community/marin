@@ -14,6 +14,10 @@ on:
       target_cluster:
         description: "Iris cluster to federate the job to"
         default: cw-rno2a
+      grug_tests:
+        description: "Optional pytest target for the Grug Megatron H100 lane"
+        type: string
+        default: ""
 
 concurrency:
   group: marin-nightly
@@ -58,6 +62,7 @@ jobs:
       JOB_NAME: skyrl-nightly-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
       TARGET_CLUSTER: ${{ github.event.inputs.target_cluster || 'cw-rno2a' }}
       GRUG_CUTLASS_WEEKLY: ${{ (github.event.schedule == '0 9 * * 0' || inputs.grug_cutlass) && '1' || '0' }}
+      GRUG_MEGATRON_TESTS: ${{ github.event.inputs.grug_tests || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -95,6 +100,7 @@ jobs:
             --no-sync \
             --timeout "${{ matrix.iris_timeout }}" \
             -e GRUG_CUTLASS_WEEKLY "$GRUG_CUTLASS_WEEKLY" \
+            -e GRUG_MEGATRON_TESTS "$GRUG_MEGATRON_TESTS" \
             "${iris_args[@]}" \
             -- env -u PYTHONPATH -u UV_PROJECT_ENVIRONMENT -u UV_WORKING_DIRECTORY -u VIRTUAL_ENV \
             bash "${{ matrix.task_script }}" 2>&1 | tee "${{ matrix.log }}"

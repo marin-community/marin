@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from harbor.models.job.config import RetryConfig
+from rigging.task_errors import RetrySettings
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import ExceptionInfo, TrialResult
@@ -30,6 +30,7 @@ from harbor.trial.hooks import (
     emit_trial_hooks,
 )
 from harbor.trial.trial import Trial
+from harbor.utils.artifact_writer import ArtifactPersistenceError
 from harbor.utils.logger import logger
 
 
@@ -63,7 +64,7 @@ class TrialQueue:
     def __init__(
         self,
         n_concurrent: int,
-        retry_config: RetryConfig | None = None,
+        retry_config: RetrySettings | None = None,
         hooks: dict[TrialEvent, list[HookCallback]] | None = None,
         release_trial_payloads_in_memory: bool = False,
         planned_attempts: dict[str, int] | None = None,
@@ -79,7 +80,7 @@ class TrialQueue:
         self._n_concurrent = n_concurrent
         self._host_capabilities = host_capabilities
         self._guest_environment = dict(guest_environment)
-        self._retry_config = retry_config if retry_config is not None else RetryConfig()
+        self._retry_config = retry_config if retry_config is not None else RetrySettings()
         self._hooks = hooks
         self._release_trial_payloads_in_memory = release_trial_payloads_in_memory
         self._planned_attempts = planned_attempts or {}
@@ -240,8 +241,10 @@ class TrialQueue:
         trial_config: TrialConfig,
         attempt: int,
         result: TrialResult,
+        persisted: asyncio.Event,
     ) -> None:
         await persist_selected_result(trial_config, attempt, result)
+        persisted.set()
         await self._emit_hooks(
             TrialEvent.RESULT_PERSISTENCE_START,
             trial_config,
@@ -340,8 +343,9 @@ class TrialQueue:
 
         state.gate.active = False
         result = timeout_result(trial_config, attempt, state.trial, started_at)
+        persisted = asyncio.Event()
         publish_task = asyncio.create_task(
-            self._publish_timeout_result(trial_config, attempt, result)
+            self._publish_timeout_result(trial_config, attempt, result, persisted)
         )
         attempt_task.cancel()
         done, _ = await asyncio.wait(
@@ -353,6 +357,8 @@ class TrialQueue:
         else:
             publish_task.cancel()
             self._observe_task(publish_task)
+            if not persisted.is_set() and result.has_verifier_rewards:
+                raise ArtifactPersistenceError("Timed-out trial result did not finish persisting")
         return result
 
     async def _cancel_admitted_attempt(
@@ -436,7 +442,11 @@ class TrialQueue:
 
             if result.exception_info is None:
                 break
-            if not self._should_retry_exception(result.exception_info.exception_type):
+            # The archive rejects a final attempt whose teardown was not
+            # confirmed, so a failed attempt without completion always retries.
+            if result.completion is not None and not self._should_retry_exception(
+                result.exception_info.exception_type
+            ):
                 break
             if attempt == self._retry_config.max_retries:
                 break

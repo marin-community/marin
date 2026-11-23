@@ -73,36 +73,6 @@ def _current_process_rss_bytes() -> int | None:
     return rss * 1024
 
 
-CheckpointDebugStateProvider = Callable[[], Mapping[str, Any]]
-_DEBUG_CHECKPOINTER_STATE_PROVIDERS: dict[str, CheckpointDebugStateProvider] = {}
-_DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK = threading.Lock()
-
-
-def register_debug_checkpointer_state_provider(name: str, provider: CheckpointDebugStateProvider) -> None:
-    """Register a debug state provider that contributes extra checkpoint diagnostics."""
-    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
-        _DEBUG_CHECKPOINTER_STATE_PROVIDERS[name] = provider
-
-
-def unregister_debug_checkpointer_state_provider(name: str) -> None:
-    """Unregister a previously registered checkpoint debug state provider."""
-    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
-        _DEBUG_CHECKPOINTER_STATE_PROVIDERS.pop(name, None)
-
-
-def _collect_debug_checkpointer_state() -> dict[str, Any]:
-    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
-        providers = list(_DEBUG_CHECKPOINTER_STATE_PROVIDERS.items())
-
-    snapshots: dict[str, Any] = {}
-    for name, provider in providers:
-        try:
-            snapshots[name] = dict(provider())
-        except Exception as exc:
-            snapshots[name] = {"provider_error": f"{type(exc).__name__}: {exc}"}
-    return snapshots
-
-
 def _manager_debug_state(manager: GlobalAsyncCheckpointManager | None) -> dict[str, Any]:
     if manager is None:
         return {}
@@ -244,9 +214,6 @@ class _CheckpointProgressLogger:
         manager_state = _manager_debug_state(self.manager)
         if manager_state:
             state["manager"] = manager_state
-        extra_state = _collect_debug_checkpointer_state()
-        if extra_state:
-            state["providers"] = extra_state
         if rss_bytes is not None:
             self._publish("checkpoint_process_peak_rss_bytes", rss_bytes, event=event, phase=self.phase)
 
@@ -527,7 +494,7 @@ class Checkpointer:
         self.keep_params = keep_params
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
-        self._last_save_step = 0
+        self._last_save_step: int | None = None
         self._last_save_permanent = False
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
@@ -615,6 +582,22 @@ class Checkpointer:
         # saves a checkpoint for the next step, etc. This leads to partial checkpoints, no good.
         # we fix by having process 0 make the decision
         requested_retention = self._consume_checkpoint_request()
+        if force and step == self._last_save_step and self._last_save_permanent:
+            # The final hook must still surface a failed pending save before later hooks run.
+            self._manager.wait_until_finished()
+            return
+        if force and step == self._last_save_step and self.temporary_base_path is None:
+            # Promote the committed temporary save without rewriting its arrays or manifest.
+            self._manager.wait_until_finished()
+            # Match save_checkpoint's path so the temporary retention entry can be removed.
+            checkpoint_path = os.path.join(self.base_path, f"step-{step}")
+            _save_metadata(checkpoint_path, step, is_temporary=False, extra_metadata=self.metadata)
+            if jax.process_index() == 0:
+                self._temporary_checkpoints = [r for r in self._temporary_checkpoints if r.path != checkpoint_path]
+                self._prune_temporary_checkpoints(0)
+            self._last_save_permanent = True
+            return
+
         my_should_save = force or requested_retention is not None
         my_save_permanent_ckpt = force or requested_retention == CheckpointRetention.PERMANENT
 

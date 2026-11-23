@@ -7,6 +7,8 @@ import io
 import json
 import os
 import pathlib
+import subprocess
+import sys
 import tempfile
 from contextlib import contextmanager
 from datetime import timedelta
@@ -42,7 +44,6 @@ from levanter.checkpoint import (
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
-    _collect_debug_checkpointer_state,
     load_checkpoint_metadata,
     discover_checkpoint_candidates,
     discover_latest_checkpoint,
@@ -50,9 +51,7 @@ from levanter.checkpoint import (
     latest_checkpoint_path,
     load_checkpoint,
     load_checkpoint_or_initialize,
-    register_debug_checkpointer_state_provider,
     save_checkpoint,
-    unregister_debug_checkpointer_state_provider,
 )
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
@@ -664,19 +663,6 @@ def test_debug_checkpoint_nonprimary_serialization_failure_omits_total_telemetry
     assert not any(record["name"] == "checkpoint_total_duration_seconds" for record in checkpoint_records)
 
 
-def test_debug_checkpointer_state_providers_register_and_unregister():
-    provider_name = "unit-test-provider"
-    provider = lambda: {"weight_transfer": {"bytes": 123}}
-
-    try:
-        register_debug_checkpointer_state_provider(provider_name, provider)
-        assert _collect_debug_checkpointer_state()[provider_name] == {"weight_transfer": {"bytes": 123}}
-    finally:
-        unregister_debug_checkpointer_state_provider(provider_name)
-
-    assert provider_name not in _collect_debug_checkpointer_state()
-
-
 def test_checkpointer_config_rejects_invalid_debug_tracemalloc_settings():
     with pytest.raises(AssertionError, match="checkpoint debug tracemalloc_frames must be positive"):
         CheckpointerConfig(debug=CheckpointDebugConfig(tracemalloc_frames=0))
@@ -928,11 +914,12 @@ def test_checkpointer_commits_application_metadata_with_every_save(tmp_path):
 
     checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     checkpointer.on_step(tree=state, step=1)
-    checkpointer.save_final_checkpoint(tree=state, step=2)
-
+    checkpointer.wait_until_finished()
     temporary = load_checkpoint_metadata(str(tmp_path / "temporary" / "run1" / "step-1"))
-    permanent = load_checkpoint_metadata(str(tmp_path / "checkpoints" / "run1" / "step-2"))
     assert (temporary["placement"], temporary["is_temporary"]) == ({"fingerprint": "abc"}, True)
+
+    checkpointer.save_final_checkpoint(tree=state, step=2)
+    permanent = load_checkpoint_metadata(str(tmp_path / "checkpoints" / "run1" / "step-2"))
     assert (permanent["placement"], permanent["step"]) == ({"fingerprint": "abc"}, 2)
 
 
@@ -956,6 +943,76 @@ def test_final_checkpoint_waits_for_pending_temporary_save_and_restores_complete
     restored = load_checkpoint(jax.tree.map(jnp.zeros_like, state), path)
     assert_trees_all_equal(restored, state)
     assert load_checkpoint_metadata(path)["is_temporary"] is False
+
+
+_FORCED_SAVE_CRASH_SCRIPT = """
+import builtins
+import os
+import sys
+
+import jax.numpy as jnp
+
+from levanter.checkpoint import Checkpointer, CheckpointRetention
+
+checkpoint_dir, restart = sys.argv[1], sys.argv[2] == "restart"
+state = {"model": jnp.arange(4.0)}
+checkpointer = Checkpointer(checkpoint_dir, None, [])
+if not restart:
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.on_step(tree=state, step=1)
+    checkpointer.wait_until_finished()
+
+original_open = builtins.open
+
+def crash_on_manifest_open(file, mode="r", *args, **kwargs):
+    handle = original_open(file, mode, *args, **kwargs)
+    path = os.fspath(file)
+    if "w" in mode and os.path.basename(os.path.dirname(path)) == "step-1":
+        if os.path.basename(path).startswith("manifest.json"):
+            os._exit(137)
+    return handle
+
+builtins.open = crash_on_manifest_open
+checkpointer.on_step(tree=state, step=1, force=True)
+checkpointer.wait_until_finished()
+"""
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_forced_checkpoint_save_preserves_latest_checkpoint(tmp_path, restart):
+    checkpoint_dir = tmp_path / "checkpoints"
+    state = {"model": jnp.arange(4.0)}
+    if restart:
+        checkpointer = Checkpointer(checkpoint_dir, None, [])
+        checkpointer.on_step(tree=state, step=1, force=True)
+        checkpointer.wait_until_finished()
+
+    result = subprocess.run(
+        [sys.executable, "-c", _FORCED_SAVE_CRASH_SCRIPT, str(checkpoint_dir), "restart" if restart else "default"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == (137 if restart else 0), result.stderr
+    path = latest_checkpoint_path(checkpoint_dir)
+    assert path == str(checkpoint_dir / "step-1")
+    restored = load_checkpoint(jax.tree.map(jnp.zeros_like, state), path)
+    assert_trees_all_equal(restored, state)
+    if not restart:
+        assert load_checkpoint_metadata(path)["is_temporary"] is False
+
+
+def test_fresh_checkpointer_force_saves_step_zero(tmp_path):
+    state = {"model": jnp.arange(4.0)}
+    checkpointer = Checkpointer(tmp_path, None, [])
+    checkpointer.on_step(tree=state, step=0, force=True)
+    checkpointer.wait_until_finished()
+
+    path = latest_checkpoint_path(tmp_path)
+    assert path == str(tmp_path / "step-0")
+    restored = load_checkpoint(jax.tree.map(jnp.zeros_like, state), path)
+    assert_trees_all_equal(restored, state)
 
 
 def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):

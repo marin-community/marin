@@ -46,6 +46,7 @@ GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-tele
 GET /finelog/marin/alerts/training_optimizer     watched hero runs + optimizer-fault value(0|1)
 GET /finelog/marin/alerts/training_health        watched hero runs + degraded-signal value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
+GET /finelog/marin/alerts/b200_utilization       GB200 clusters + state + idle value(0|1)
 GET /iris/{cluster}/job_counts | jobs | workers | health
                                                     live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
@@ -607,9 +608,25 @@ stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod
 rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
-The CoreWeave storage-telemetry freshness warning and `TrainingRunHealthDegraded`
+The CoreWeave storage-telemetry freshness and growth warnings and `TrainingRunHealthDegraded`
 carry the explicit `notification=slack` exception, so they announce in Slack
 and open a session on the default `operator` channel.
+`CoreWeaveStorageQuotaPredicted` projects 24 hours ahead using the faster
+positive 24-hour or 72-hour usage trend against the live zone quota. These
+windows tolerate the observed 4–10-hour collection gaps; the projection
+includes the latest sample's age. The critical quota page reads measured
+usage from the same deduplicated query, and the telemetry warning fires
+after twelve hours without a collection.
+`CoreWeaveStorageHeadroomLow` uses `notification=storage-daily` to warn above
+80% current or projected quota use in `#marin-alerts` during the daily 15:00–16:00
+`America/Los_Angeles` window. Its 23-hour repeat interval permits a reminder
+the next afternoon across spring daylight saving time. The
+[storage runbook](../../scripts/ops/storage/README.md#coreweave-storage-telemetry)
+describes sampling requirements and forecast limits.
+`B200ClusterUnderutilized` uses the same route when a cluster's Ready GB200
+GPUs stay idle for 30 minutes; the thresholds are the constants in
+`src/b200_utilization_alert.py`. A cluster with incomplete telemetry or an
+unreadable node inventory does not fire, and its `state` label says why.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard panels rather than alert rules because they have expected benign
 causes. `severity=critical` routes to `ops-critical` (email

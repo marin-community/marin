@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a registry image as a gVisor Iris job and exec into its container."""
+"""Run a registry image as an Iris SANDBOX job and exec into its container."""
 
 import asyncio
 import base64
@@ -41,6 +41,7 @@ from shellbox.machine import (
     MachineSpec,
     MachineTerminated,
     NetworkPolicy,
+    ProcessScope,
     Result,
     UnsupportedMachineSpec,
     check_execution_requirements,
@@ -193,6 +194,9 @@ class IrisMachine:
             self._container_user = (uid, name)
         return self._container_user
 
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("Iris does not provide confirmed scoped descendant teardown")
+
     async def run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
@@ -299,7 +303,7 @@ class IrisMachine:
 
 
 class IrisMachineFactory:
-    """Submit a CPU-only gVisor job from a registry image.
+    """Submit a CPU-only Iris SANDBOX job from a registry image.
 
     Secret references are resolved only at job submission. A factory configured
     with secrets must be reserved for trusted private grading, never actor jobs.

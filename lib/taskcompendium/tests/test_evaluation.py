@@ -297,6 +297,38 @@ class CharacterTokenizer:
         return self.encode("".join(message["content"] for message in conversation))
 
 
+def test_strict_context_preflight_yields_nothing_before_an_overflow(corpus, tmp_path):
+    source, output, recipe, protocol = corpus
+    (source / "rows.jsonl").write_text(
+        "\n".join(json.dumps({"prompt": text}) for text in ("short", "x" * 1000, "short")) + "\n"
+    )
+    protocol = protocol.model_copy(update={"context_policy": ContextPolicy(overflow="error")})
+    publish((source, output, recipe, protocol), tmp_path)
+    decisions = select_cases(
+        str(output),
+        protocol,
+        dataset_id="strict",
+        context_window=100,
+        max_tokens=20,
+        limit=None,
+        tokenizer=CharacterTokenizer(),
+    )
+    with pytest.raises(ValueError, match="cannot fit"):
+        next(decisions)
+    selected = list(
+        select_cases(
+            str(output),
+            protocol,
+            dataset_id="smoke",
+            context_window=100,
+            max_tokens=20,
+            limit=1,
+            tokenizer=CharacterTokenizer(),
+        )
+    )
+    assert sum(decision.case is not None for decision in selected) == 1
+
+
 def publish_cohort(corpus, tmp_path, cohort):
     source, output, recipe, protocol = corpus
     rows = [
@@ -369,6 +401,28 @@ def test_source_selection_applies_limit_at_declared_stage(corpus, tmp_path, limi
     )
     assert [decision.record.source_ordinal for decision in decisions if decision.case is not None] == selected
     assert len(decisions) == 5
+
+
+def test_shuffled_selection_grows_a_fixed_sample_that_differs_from_source_order(corpus, tmp_path):
+    root, protocol = publish_cohort(corpus, tmp_path, CohortPolicy(order=CohortOrder.SHUFFLED))
+
+    def selected(limit):
+        decisions = select_cases(
+            root,
+            protocol,
+            dataset_id="colors",
+            context_window=1000,
+            max_tokens=20,
+            limit=limit,
+            tokenizer=CharacterTokenizer(),
+        )
+        ranked = [decision.record for decision in decisions if decision.case is not None]
+        return [record.source_ordinal for record in sorted(ranked, key=lambda record: record.rank)]
+
+    order = selected(None)
+    assert sorted(order) == [0, 1, 2, 3, 4]
+    assert order != [0, 1, 2, 3, 4]
+    assert [selected(limit) for limit in (1, 3)] == [order[:1], order[:3]]
 
 
 def test_grouped_selection_rejects_missing_active_stratum(corpus, tmp_path):

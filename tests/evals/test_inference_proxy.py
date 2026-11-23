@@ -36,6 +36,7 @@ from marin.inference.config import (
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
 from marin.inference.iris import (
     InferenceBackendState,
+    PreparedInference,
     RemoteInferenceSession,
     RemoteInferenceStartupError,
     remote_inference,
@@ -85,6 +86,12 @@ BROKER_LEASE_TIMEOUT_SECONDS = 300.0
 )
 def test_capability_url_redaction(url: str, expected: str) -> None:
     assert _redacted_url(url) == expected
+
+
+@pytest.fixture(autouse=True)
+def _no_model_cache(monkeypatch) -> None:
+    """Serving tests here use placeholder model ids; model cache preparation has its own tests."""
+    monkeypatch.setattr(iris_module, "prepare_hf_models", lambda model, engine, *_args, **_kwargs: (model, engine))
 
 
 def _json_bytes(payload: object) -> bytes:
@@ -150,7 +157,9 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=pipeline_size),
         worker_environment=create_environment(docker_image="test"),
-        serving_geometry=ServingGeometry(8, 1, pipeline_size, 8),
+        serving_geometry=ServingGeometry(
+            tensor_parallel_size=8, data_parallel_size=1, pipeline_parallel_size=pipeline_size, gpus_per_task=8
+        ),
     )
 
     with remote_inference(
@@ -301,7 +310,7 @@ def test_eval_inference_failed_cleanup_prevents_replacement(monkeypatch, failed_
     )
 
     with ExitStack() as stack, pytest.raises((RuntimeError, TimeoutError)):
-        _inference_session(stack, config)
+        _inference_session(stack, PreparedInference(config))
 
     assert len(jobs) == (1 if failed_cleanup == "direct_worker" else 2)
     assert len(groups) == (0 if failed_cleanup == "direct_worker" else 1)

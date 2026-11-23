@@ -38,14 +38,12 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-from taskcompendium.ejection import mark_unsolvable
-from taskcompendium.examples.ejection import ejection_examples
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.importers.evalchemy.code import convert_python
 from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
-    AnswerCall,
     AnswerType,
     AssistantToolCalls,
     CommandSemantics,
@@ -66,22 +64,20 @@ from taskcompendium.models import (
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
-    ShellToolBinding,
     Source,
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.models import CheckStatus
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import CheckStatus, RawRow
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
-from taskcompendium.runtime.models import RuntimeEvidence, Termination, grading_attempt
+from taskcompendium.runtime.models import RuntimeEvidence, grading_attempt
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import (
     CONTROL_PATH,
     OUTPUT_PATH,
     ShellFactory,
-    ShellToolConfig,
     upload_resources,
 )
 from taskcompendium.runtime.task_grading import grade_task
@@ -171,6 +167,54 @@ class FileMachines(DockerMachineFactory):
         return machine
 
 
+class CodePreparationMachine(FileMachine):
+    """Model a code grader whose preparation requires the staged answer."""
+
+    async def run(self, command: Command):
+        prepares = any("/tests/prepare.py" in argument for argument in command.argv)
+        runs = any("/app/program.py" in argument for argument in command.argv)
+        if prepares:
+            if self.files.get("/app/answer.txt") != b"7":
+                return Result(1, b"", b"answer unavailable", False, False, ExitReason.EXITED)
+            self.files["/app/program.py"] = b"prepared"
+        if runs:
+            if "/app/program.py" not in self.files:
+                return Result(1, b"", b"program unavailable", False, False, ExitReason.EXITED)
+            self.files["/app/reward.json"] = b'{"reward": 1.0}'
+        if prepares or runs:
+            return EXITED
+        return await super().run(command)
+
+
+class CodePreparationMachines(FileMachines):
+    async def create(self, spec):
+        machine = CodePreparationMachine()
+        self.machines.append(machine)
+        return machine
+
+
+@pytest.mark.asyncio
+async def test_python_code_grader_prepares_after_staging_answer():
+    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    row = RawRow(
+        id="code-0",
+        source=source,
+        data={
+            "evaluation_prompt": "Find the output.",
+            "code": "def f(x): return x",
+            "input": "7",
+            "output": "7",
+            "direction": "output",
+        },
+    )
+    task = convert_python(row, ConversionContext(inputs={}, grader_environment=GRADER_ENVIRONMENT), suite="cruxeval")
+    conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="7")))
+
+    result = await grade_in_sandbox(task, GradingAttempt(conversation), CodePreparationMachines(), GRADER_MACHINE)
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
+
+
 def test_resource_upload_preserves_nested_bytes_executable_modes_and_last_write(local_machine_environment):
     _, factory = local_machine_environment
     resources = (
@@ -205,8 +249,7 @@ def test_resource_upload_preserves_nested_bytes_executable_modes_and_last_write(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("entrypoint", ["factory", "episode"])
-def test_unresolved_actor_build_never_creates_a_machine(shell_task, entrypoint):
+def test_unresolved_actor_build_never_creates_a_machine(shell_task):
     requirements = shell_task.environment_requirements.model_copy(
         update={"docker_build": DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),))}
     )
@@ -214,10 +257,7 @@ def test_unresolved_actor_build_never_creates_a_machine(shell_task, entrypoint):
     machines = FileMachines()
     factory = ShellFactory(machines, GRADER_MACHINE, {}, 10, 1024)
     with pytest.raises(UnsupportedMachineSpec):
-        if entrypoint == "factory":
-            asyncio.run(factory.create(task))
-        else:
-            asyncio.run(run_episode(task, ScriptedActor(()), factory, max_steps=1, control="fixture"))
+        asyncio.run(factory.create(task))
     assert machines.machines == []
 
 
@@ -528,7 +568,7 @@ async def test_private_fixture_archive_removed_before_grading_or_grader_never_ru
         assert archive.is_file()
         assert not (tmp_path / "logs/verifier/verdict.json").exists()
     else:
-        assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+        assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
         assert not archive.exists()
 
 
@@ -613,7 +653,7 @@ def test_native_action_judge_exact_gate_receives_the_semantic_action(shell_task)
         attempt,
     )
 
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
 
 
 @pytest.mark.parametrize("state,reward", [('{"ready":true}', 1.0), ('{"ready":false}', 0.0)])
@@ -681,55 +721,6 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("task_owned", [False, True])
-async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task, task_owned):
-    binding = ShellToolConfig(name="terminal", command_parameter="cmd")
-    name, parameter = ("Bash", "script") if task_owned else (binding.name, binding.command_parameter)
-    task = shell_task.model_copy(
-        update={
-            "environment_requirements": EnvironmentRequirements(
-                command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem")
-            ),
-            "output_paths": ("/workspace/submission",),
-        }
-    )
-    if task_owned:
-        task = task.model_copy(
-            update={
-                "interaction_tools": (
-                    FunctionDefinition(
-                        name=name,
-                        parameters={
-                            "type": "object",
-                            "properties": {parameter: {"type": "string"}},
-                            "required": [parameter],
-                            "additionalProperties": False,
-                        },
-                    ),
-                ),
-                "tool_bindings": {name: ShellToolBinding(command_parameter=parameter)},
-            }
-        )
-    actor = ScriptedActor(
-        (
-            AssistantToolCalls(
-                calls=(
-                    ConversationToolCall(
-                        call_id="write",
-                        name=name,
-                        arguments={parameter: "mkdir -p submission/nested; printf answer > submission/nested/result"},
-                    ),
-                )
-            ),
-        )
-    )
-    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024, shell_tool=binding)
-    rollout = await run_episode(task, actor, factory, max_steps=2, control="fixture")
-    assert rollout.termination == Termination.FINAL_MESSAGE
-    assert rollout.evidence().files == {"/workspace/submission/nested/result": b"answer"}
-
-
-@pytest.mark.asyncio
 async def test_grader_setup_uses_prepared_cwd_before_explicit_grader_command(shell_task, tmp_path):
     grader = ScriptGrader(
         argv=("sh", "-c", 'test -f ../setup/prepared.csv && test "${PWD##*/}" = grading'),
@@ -745,7 +736,7 @@ async def test_grader_setup_uses_prepared_cwd_before_explicit_grader_command(she
     )
     task = shell_task.model_copy(update={"grader": grader, "output_paths": ()})
     result = await grade_in_sandbox(task, GradingAttempt(finished(task)), LocalGradingMachines(tmp_path), GRADER_MACHINE)
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
 
 
 @pytest.mark.asyncio
@@ -842,26 +833,6 @@ async def test_shell_commands_use_required_directory_and_variables(shell_task, m
         await environment.close()
 
 
-@dataclass(frozen=True)
-class UnavailableFactory:
-    @property
-    def identity(self):
-        return {"backend": "unavailable"}
-
-    async def create(self, task):
-        raise RuntimeError("Machine service unavailable")
-
-
-@pytest.mark.asyncio
-async def test_environment_failure_is_recorded_without_reward(script_grading_task):
-    rollout = await run_episode(
-        script_grading_task, ScriptedActor(()), UnavailableFactory(), max_steps=2, control="failure"
-    )
-    assert rollout.termination == Termination.INFRA_ERROR
-    assert rollout.artifacts == ()
-    assert rollout.detail == "Machine service unavailable"
-
-
 def test_nemo_import_accepts_untyped_source_messages_and_checks_actions():
     path = Path(__file__).parent / "fixtures/nemo/predicted-action.json"
     data = json.loads(path.read_text())
@@ -874,33 +845,24 @@ def test_nemo_import_accepts_untyped_source_messages_and_checks_actions():
 
 
 @pytest.mark.asyncio
-async def test_episode_stops_at_ejection_without_executing_or_continuing():
-    task = mark_unsolvable(ejection_examples(1, AnswerCall())[0])
-    task = task.model_copy(
-        update={
-            "environment_requirements": EnvironmentRequirements(
-                command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem")
-            ),
-            "output_paths": ("/workspace/continued",),
-        }
+async def test_grader_setup_cannot_overwrite_captured_candidate_files(shell_task, tmp_path):
+    grader = ScriptGrader(
+        argv=("sh", "-c", 'test "$(cat solution.txt)" = solved'),
+        cwd="/app",
+        answer_path=None,
+        reward=ExitCodeReward(),
+        environment=GRADER_ENVIRONMENT.model_copy(
+            update={
+                "working_directory": "/app",
+                "setup_commands": ("test ! -e solution.txt && echo initial > solution.txt",),
+            }
+        ),
     )
-    ejection = AssistantToolCalls(
-        calls=(ConversationToolCall(call_id="eject", name="eject_button", arguments={"reason": "No solution"}),)
+    task = shell_task.model_copy(update={"grader": grader, "output_paths": ("/app/solution.txt",)})
+    result = await grade_in_sandbox(
+        task,
+        GradingAttempt(finished(task), files={"/app/solution.txt": b"solved\n"}),
+        LocalGradingMachines(tmp_path),
+        GRADER_MACHINE,
     )
-    actor = ScriptedActor(
-        (
-            ejection,
-            AssistantToolCalls(
-                calls=(
-                    ConversationToolCall(call_id="write", name="shell", arguments={"command": "printf bad > continued"}),
-                )
-            ),
-        )
-    )
-    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024)
-    rollout = await run_episode(task, actor, factory, max_steps=2, control="ejection")
-    assert rollout.termination == Termination.FINAL_MESSAGE
-    assert rollout.events == (*task.context.events, ejection)
-    assert rollout.evidence().files == {}
-    result = grade_task(task, grading_attempt(ConversationTrace(events=rollout.events), rollout.evidence()))
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error

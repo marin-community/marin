@@ -16,7 +16,6 @@ updates:
       - "/experiments/mlx_export"
       - "/infra/grafana"
       - "/lib/finelog/rust"
-      - "/vendor/evalchemy"
       - "/vendor/harbor"
       - "/vendor/skyrl"
     schedule:

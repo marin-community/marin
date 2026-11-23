@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, bindparam, cast, func, insert, select
 
-from iris.cluster.controller import reads, writes
+from iris.cluster.controller import observability_rows, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import (
     constraints_to_json,
@@ -280,6 +280,7 @@ def insert_job_and_config(
         constraints_json=constraints_json,
         has_coscheduling=bool(has_cosched),
         coscheduling_group_by=cosched_group,
+        coscheduling_group_sizes=request.coscheduling.group_sizes,
         scheduling_timeout_ms=sched_timeout,
         max_task_failures=max_failures,
         entrypoint_json=entrypoint_json,
@@ -300,6 +301,7 @@ def insert_job_and_config(
         submit_argv_json=list(request.submit_argv),
         fail_if_exists=bool(request.fail_if_exists),
     )
+    observability_rows.record_job_submit(cur, job_id)
 
     workdir_files = dict(request.entrypoint.workdir_files)
     if workdir_files:

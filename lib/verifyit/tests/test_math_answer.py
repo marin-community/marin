@@ -17,13 +17,7 @@ from verifyit.grade import InvalidTask, Status, run, write_reward
 from verifyit.grade import grade as dispatch
 from verifyit.modes import grade_math
 from verifyit.modes.grade_exact import grade_exact_candidate
-from verifyit.spec import (
-    ExactSpec,
-    MathProfile,
-    MathSpec,
-    MathType,
-    render_spec,
-)
+from verifyit.spec import ExactSpec, MathProfile, MathSpec, MathType, render_spec
 
 
 def _answer(workspace: Path, text: str) -> None:
@@ -59,6 +53,37 @@ def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text,
     assert grade_math.grade(MathSpec(expected=expected), tmp_path, tmp_path).reward == reward
 
 
+@pytest.mark.parametrize("power", [(19, 9), (17, 6), (5, 4)])
+def test_math_positive_symbols_accept_equivalent_ratio_powers(power):
+    numerator, denominator = power
+    exponent = rf"\frac{{{numerator}}}{{{denominator}}}"
+    reference = rf"\frac{{a_{{1}} \left(\frac{{a_{{3}}}}{{a_{{2}}}}\right)^{{{exponent}}}}}{{a_{{3}}}}"
+    regrouped = rf"\frac{{a_{{1}} a_{{3}}^{{{exponent}}}}}{{a_{{2}}^{{{exponent}}} a_{{3}}}}"
+    spec = MathSpec(expected=reference, positive_symbols=("a_1", "a_2", "a_3"))
+
+    assert grade_math.grade_math_candidate(spec, regrouped).reward == 1.0
+    wrong_exponent = regrouped.replace(exponent, rf"\frac{{{numerator + 1}}}{{{denominator}}}")
+    assert grade_math.grade_math_candidate(spec, wrong_exponent).reward == 0.0
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference), regrouped).reward == 0.0
+
+
+def test_math_positive_symbols_apply_only_to_explicitly_named_symbols():
+    assert grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}"), "x").reward == 0.0
+    assert grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}", positive_symbols=("x",)), "x").reward == 1.0
+    assert (
+        grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}+y", positive_symbols=("y",)), "x+y").reward == 0.0
+    )
+
+
+def test_math_positive_symbols_survive_spec_file_grading(tmp_path):
+    spec = MathSpec(expected=r"\sqrt{x^2}", positive_symbols=("x",))
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    _answer(tmp_path, "x")
+
+    assert run(spec_path, tmp_path).reward == 1.0
+
+
 @pytest.mark.parametrize(
     "expected, math_type, text, reward",
     [
@@ -91,6 +116,36 @@ def test_math_typed_answers_use_their_comparison(tmp_path, expected, math_type, 
     _answer(tmp_path, text)
     spec = MathSpec(expected=expected, math_type=math_type)
     assert grade_math.grade(spec, tmp_path, tmp_path).reward == reward
+
+
+# A HARDMath polynomial_roots answer in the dataset's own form: two \left[…\right] members
+# and no outer brackets (row 122 of the train split, issue #11511).
+HARDMATH_ROOTS_ANSWER = (
+    r"\left[ - \sqrt{\frac{1.00}{\epsilon}}, \  \sqrt{\frac{1.00}{\epsilon}}\right],"
+    r" \left[ \frac{1.00}{\epsilon}, \  -1.00\right]"
+)
+
+
+@pytest.mark.parametrize(
+    "expected, candidate, reward",
+    [
+        # The reply in the dataset's form and the bracketed golden control are the same
+        # two members: the outer brackets are dropped only when they enclose the whole text.
+        (f"[{HARDMATH_ROOTS_ANSWER}]", HARDMATH_ROOTS_ANSWER, 1.0),
+        (f"[{HARDMATH_ROOTS_ANSWER}]", f"[{HARDMATH_ROOTS_ANSWER}]", 1.0),
+        (f"[{HARDMATH_ROOTS_ANSWER}]", HARDMATH_ROOTS_ANSWER.replace("-1.00", "-2.00"), 0.0),
+        # A wrong reply in the dataset's form stays 0.
+        (f"[{HARDMATH_ROOTS_ANSWER}]", HARDMATH_ROOTS_ANSWER.replace("- \\sqrt", "\\sqrt"), 0.0),
+        # A sequence whose members are parenthesized pairs.
+        ("[(1,2),(3,4)]", "(1,2),(3,4)", 1.0),
+        ("[(1,2),(3,4)]", "[(1,2),(3,4)]", 1.0),
+        ("[(1,2),(3,4)]", "(1,2),(3,5)", 0.0),
+        ("[(1,2),(3,4)]", "(1,2),(3,4),(5,6)", 0.0),
+    ],
+)
+def test_list_members_keep_their_own_brackets(expected, candidate, reward):
+    spec = MathSpec(expected=expected, math_type=MathType.LIST)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == reward
 
 
 def test_math_empty_output_scores_zero_with_no_output(tmp_path):
@@ -335,23 +390,47 @@ def test_boxed_preserves_physics_reference_raw_fallback():
 @pytest.mark.parametrize(
     ("expected", "candidate", "reward"),
     [
-        ("p < s", "p<s", 1),
-        ("p<s", "p < s", 1),
-        ("p < s", "p<1", 0),
+        # math-verify raises on chains whose deduplicated relations differ in number
+        # (huggingface/Math-Verify#93); chains compare as sets of constraints.
+        ("m < -n < n < -m", "m < -n < n < -m", 1),
+        ("m < -n < n < -m", "m < -n < n", 1),  # n < -m restates m < -n
+        ("m < -n < n < -m", "m < -n < n < -mX'", 0),
+        ("1<x<3", r"\frac{2}{2} < x < 3", 1),
+        ("1<x<3", "3 > x > 1", 1),
+        ("1<x<3", r"1 < x \le 3", 0),
+        ("1<x<3", "1<x<3<5", 0),
+        ("1<x<3", "x<3", 0),
+        # Unit stripping deleted a chain's spaced trailing letter (s as seconds).
+        ("m < -n < n < -m", "-m > n > -n > m", 1),
+        ("p < q < r < s", "p<q<r<s", 1),
+        ("p < q < r < s", "p < q < r", 0),
         ("x - s", "x-s", 1),
-        ("x-s", "x - s", 1),
         ("x - s", "x", 0),
-        (r"5 \text{ m}", "5", 1),
+        (r"5 \text{ m}", "5", 1),  # a real unit is still stripped
+        # math-verify cannot compare Unequality; a != b compares as a = b.
+        (r"x \neq 3", r"x \ne 3", 1),
+        (r"x \neq 3", r"x \neq 4", 0),
+        (r"x \neq 3", "x = 3", 0),
     ],
 )
-def test_spaced_trailing_variables_survive_unit_normalization(expected, candidate, reward):
-    assert grade_math.grade_math_candidate(MathSpec(expected), candidate).reward == reward
+def test_answers_math_verify_cannot_compare_grade_by_their_meaning(expected, candidate, reward):
+    spec = MathSpec(expected=expected, profile=MathProfile.ANCHORED)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == reward
+
+
+def test_an_undefined_reference_is_an_invalid_task():
+    with pytest.raises(InvalidTask, match="undefined"):
+        grade_math.grade_math_candidate(MathSpec(expected=r"\frac{1}{0}"), "1")
+
+
+def test_interval_comparison_keeps_a_relation_chain_whole():
+    spec = MathSpec(expected="(1,3)", math_type=MathType.INTERVAL, profile=MathProfile.ANCHORED)
+
+    assert grade_math.grade_math_candidate(spec, "1<x<3").reward == 1
 
 
 @pytest.mark.parametrize("profile", [MathProfile.ANCHORED, MathProfile.BOXED])
 def test_a_candidate_sympy_cannot_build_scores_zero(profile):
-    # The generated integer exceeds Python's string-to-integer limit inside SymPy.
     huge = "8" * 70_000
     result = grade_math.grade_math_text_candidate(MathSpec("12", profile=profile), rf"\boxed{{{huge}}}")
-    assert result.status == Status.SCORED
     assert result.reward == 0

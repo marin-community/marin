@@ -7,10 +7,17 @@ import asyncio
 import dataclasses
 import json
 from collections.abc import Mapping
-from enum import StrEnum
 from functools import partial
 from typing import Any
 
+from evalrecords.records import (
+    DEFAULT_EVALUATION_CONCURRENCY,
+    JudgeIdentity,
+    TaskEvidence,
+    TaskEvidenceSetting,
+    scoring_settings,
+)
+from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -70,10 +77,8 @@ from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 
-ATTEMPTS_TABLE = "evaluation_attempts"
-RUN_OBJECT = "evaluation/run.json"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.03"
+EVALUATION_EXECUTION_REVISION = "2026.11.23.1"
 
 
 class EvaluationInfrastructureError(RuntimeError):
@@ -97,43 +102,25 @@ class ModelIdentity(RunModel):
     serving: dict[str, str]
 
 
-class JudgeIdentity(RunModel):
-    deployment: str = Field(min_length=1)
-    models: dict[str, str]
-    default_model: str | None = None
-
-
 class EvaluationRunConfig(RunModel):
     model: ModelIdentity
     max_tokens: int = Field(gt=0)
     generation_extra_body: dict[str, Any] = Field(default_factory=dict)
-    concurrency: int = Field(default=64, gt=0)
+    chat_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
+    thinking_off_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
+    concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
     limits: RolloutLimits
     source_limit: int | None = Field(default=None, gt=0)
     seed: int | None = None
     task_machine: MachineRuntimeSpec | None = None
     verifier_machine: MachineRuntimeSpec | None = None
     judge: JudgeIdentity | None = None
+    task_evidence: TaskEvidenceSetting = TaskEvidence.EMBEDDED
 
 
-class AttemptPhase(StrEnum):
-    STARTED = "started"
-    FINISHED = "finished"
-
-
-class Attempt(RunModel):
-    dataset: str
-    task_id: str
-    source_row: str
-    trial: int
-    retry: int
-    phase: AttemptPhase
-    seed: int | None
-    outcome: Outcome | None
-    error: str | None
-    result_blob: str | None
-    prompt_tokens: int | None
-    completion_tokens: int | None
+def saved_task_fields(task: TaskSpec, mode: TaskEvidence) -> dict[str, Any]:
+    """The task fields saved with an attempt; the item always names the task in its corpus."""
+    return {"task": task.model_dump(mode="json")} if mode is TaskEvidence.EMBEDDED else {}
 
 
 def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig, trial: int) -> dict[str, Any]:
@@ -147,10 +134,11 @@ def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig
         extra["top_k"] = sampling.top_k
     extra.update(config.generation_extra_body)
     options: dict[str, Any] = {
-        "temperature": sampling.temperature,
         "max_tokens": min(config.max_tokens, sampling.max_tokens or config.max_tokens),
         "extra_body": extra,
     }
+    if sampling.temperature is not None:
+        options["temperature"] = sampling.temperature
     if sampling.top_p is not None:
         options["top_p"] = sampling.top_p
     if sampling.stop:
@@ -159,6 +147,18 @@ def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig
     if seed is not None:
         options["seed"] = seed
     return options
+
+
+def effective_protocol(protocol: EvaluationProtocol, config: EvaluationRunConfig) -> EvaluationProtocol:
+    """Use the same resolved chat policy for context admission and generation."""
+    sampling = protocol.sampling
+    if sampling is None or protocol.operation != "chat_generation":
+        return protocol
+    kwargs = {**config.chat_template_kwargs, **sampling.chat_template_kwargs}
+    if sampling.chat_template_kwargs.get("enable_thinking") is False and config.thinking_off_template_kwargs:
+        kwargs.pop("enable_thinking", None)
+        kwargs.update(config.thinking_off_template_kwargs)
+    return protocol.model_copy(update={"sampling": sampling.model_copy(update={"chat_template_kwargs": kwargs})})
 
 
 def _sample(
@@ -254,16 +254,33 @@ async def generation_turn(
 ) -> ModelTurn:
     """Keep raw channels and wire messages while selecting the source's grading text."""
     if isinstance(operation, ChatGeneration):
-        request = dataclasses.replace(request, messages=tuple(wire_messages(request.messages, operation)))
+        options = dict(request.options)
+        if operation.response_selection == "provider_response":
+            extra = dict(options.get("extra_body", {}))
+            if any(part.get("tools") or part.get("functions") for part in (options, extra)):
+                raise ValueError("Provider-response evaluation does not permit tools")
+            # Explicit null is accepted by vLLM, which rejects an empty tools array.
+            options["tools"] = None
+            options["tool_choice"] = "none"
+            options["extra_body"] = {**extra, "tools": None, "tool_choice": "none"}
+        request = dataclasses.replace(
+            request, messages=tuple(wire_messages(request.messages, operation)), options=options
+        )
     turn = await model(request)
     raw_message = dict(turn.message)
     if reasoning := turn.metadata.get("reasoning"):
         raw_message["reasoning"] = reasoning
     selection = operation.response_selection if isinstance(operation, ChatGeneration) else "combine"
+    if refusal := turn.metadata.get("refusal"):
+        raw_message["refusal"] = refusal
     content = completion_text(raw_message, turn.stop_reason, selection)
     return dataclasses.replace(
         turn,
-        message={**turn.message, "content": content},
+        message=(
+            {"role": "assistant", "content": content}
+            if selection == "provider_response"
+            else {**turn.message, "content": content}
+        ),
         text=content,
         metadata={
             **turn.metadata,
@@ -310,6 +327,7 @@ async def _score_likelihood(
     store: DataStore,
     attempt: Attempt,
     timeout: float | None,
+    evidence: TaskEvidence,
 ) -> Outcome:
     operation = case.item.operation
     assert isinstance(operation, ChoiceLikelihood | ContinuationLikelihood)
@@ -348,7 +366,7 @@ async def _score_likelihood(
     )
     primary = metrics.get(protocol.primary_metric)
     raw = {
-        "task": case.task.model_dump(mode="json"),
+        **saved_task_fields(case.task, evidence),
         "item": case.item.model_dump(mode="json"),
         "scores": [dataclasses.asdict(result) for result in results],
         "outcome": outcome,
@@ -479,7 +497,7 @@ async def _score_generation(
     sample = _sample(case, protocol, task, rollout, grade)
     turns = [step.turn for conversation in rollout.conversations for step in conversation.steps]
     raw = {
-        "task": task.model_dump(mode="json"),
+        **saved_task_fields(task, config.task_evidence),
         "item": case.item.model_dump(mode="json"),
         "grade": dataclasses.asdict(grade),
         "conversations": [dataclasses.asdict(conversation) for conversation in rollout.conversations],
@@ -564,9 +582,13 @@ async def run_evaluation(
         assert judge_connection is not None
         judge_connection = dataclasses.replace(judge_connection, default_model=config.judge.default_model or "")
     corpora = [(root, *evaluation_protocol(root)) for root in datasets]
-    if len({canonical_sha256(manifest.model_dump(mode="json")) for _, _, manifest in corpora}) != len(corpora):
+    if len({canonical_sha256(manifest.model_dump(mode="json", exclude_none=True)) for _, _, manifest in corpora}) != len(
+        corpora
+    ):
         raise ValueError("A run cannot include the same dataset snapshot twice")
     for _, protocol, _ in corpora:
+        if protocol.requires_judge and config.judge is None:
+            raise ValueError(f"An explicit judge is required by {protocol.benchmark}")
         if protocol.operation in ("choice_likelihood", "continuation_likelihood") and likelihood is None:
             raise ValueError(f"Likelihood scoring requires an explicit scorer: {protocol.benchmark}")
         if protocol.operation == "text_generation" and completion_model is None:
@@ -578,16 +600,20 @@ async def run_evaluation(
         "datasets": [
             {
                 "root": root,
-                "dataset": canonical_sha256(manifest.model_dump(mode="json")),
+                "dataset": canonical_sha256(manifest.model_dump(mode="json", exclude_none=True)),
                 "protocol": protocol.model_dump(mode="json"),
-                "manifest": manifest.model_dump(mode="json"),
+                "manifest": manifest.model_dump(mode="json", exclude_none=True),
             }
             for root, protocol, manifest in corpora
         ],
     }
-    identity = canonical_sha256(run)
+    identity = canonical_sha256({**run, "config": scoring_settings(run["config"])})
     previous = ReadView(output).read_blob(RUN_OBJECT)
-    if previous is not None and canonical_sha256(json.loads(previous)) != identity:
+    previous_run = json.loads(previous) if previous is not None else None
+    if (
+        previous_run is not None
+        and canonical_sha256({**previous_run, "config": scoring_settings(previous_run["config"])}) != identity
+    ):
         raise ValueError("Resume requires the identical model, corpora, protocol, selection and run settings")
     with DataStore.open(output) as store:
         EvaluationStore(store)
@@ -615,17 +641,22 @@ async def run_evaluation(
 
         async def produce() -> None:
             for root, protocol, manifest in corpora:
-                dataset_id = canonical_sha256(manifest.model_dump(mode="json"))
+                dataset_id = canonical_sha256(manifest.model_dump(mode="json", exclude_none=True))
+                published_protocol = protocol
+                protocol = effective_protocol(protocol, config)
                 records = []
                 selected = 0
                 for decision in select_cases(
                     root,
-                    protocol,
+                    published_protocol,
                     dataset_id=dataset_id,
                     context_window=config.model.context_window,
                     max_tokens=config.max_tokens,
                     limit=config.source_limit,
                     tokenizer=tokenizer,
+                    chat_template_kwargs=(
+                        protocol.sampling.chat_template_kwargs if protocol.sampling is not None else None
+                    ),
                 ):
                     records.append(decision.record.model_dump(mode="json"))
                     if len(records) >= 500 or decision.case is not None:
@@ -693,7 +724,7 @@ async def run_evaluation(
                 if isinstance(case.item.operation, ChoiceLikelihood | ContinuationLikelihood):
                     assert likelihood is not None
                     outcome = await _score_likelihood(
-                        case, protocol, likelihood, store, attempt, config.limits.attempt_timeout
+                        case, protocol, likelihood, store, attempt, config.limits.attempt_timeout, config.task_evidence
                     )
                     failures += outcome is Outcome.INFRA_ERROR
                     continue

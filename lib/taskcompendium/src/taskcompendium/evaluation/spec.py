@@ -12,7 +12,9 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ConversationInput
 
 EVALUATION_SCHEMA_VERSION = 3
-type ResponseSelection = Literal["combine", "final_or_complete_reasoning", "final_or_complete_boxed_reasoning"]
+type ResponseSelection = Literal[
+    "combine", "final_only", "final_or_complete_reasoning", "final_or_complete_boxed_reasoning", "provider_response"
+]
 
 
 class OperationKind(StrEnum):
@@ -87,8 +89,16 @@ Operation = Annotated[
 
 
 class CohortOrder(StrEnum):
+    """Candidate order before a limit.
+
+    ``SHUFFLED`` sorts rows by a hash of their source row, so a limit selects a fixed uniform sample. The hash
+    keys on the row's file position, so the sample is fixed per corpus revision: an upstream insert or delete
+    reshuffles which rows a limit selects, and also changes the protocol's expected population.
+    """
+
     SOURCE = "source"
     ROUND_ROBIN = "round_robin"
+    SHUFFLED = "shuffled"
 
 
 class LimitStage(StrEnum):
@@ -133,6 +143,7 @@ class ContextPolicy(EvaluationModel):
     """Resolve a generation budget and admit prompts using the run's tokenizer."""
 
     output_fit: OutputFit = OutputFit.SHRINK
+    overflow: Literal["exclude", "error"] = "exclude"
     context_reserve: int = Field(default=64, ge=0)
     output_budget: OutputBudget | None = None
     prefix_probe: PrefixProbe | None = None
@@ -158,7 +169,8 @@ class EvaluationItem(EvaluationModel):
 
 
 class Sampling(EvaluationModel):
-    temperature: float = Field(ge=0)
+    temperature: float | None = Field(ge=0)
+    """None preserves the served model's generation default."""
     top_p: float | None = Field(gt=0, le=1)
     """None preserves the served model's generation default."""
     top_k: int | None
@@ -169,7 +181,7 @@ class Sampling(EvaluationModel):
 
 
 class TrialPolicy(EvaluationModel):
-    """Legacy source repetitions use the same base-plus-trial seed for every source row."""
+    """An explicit base seed advances by trial; None inherits the serving default."""
 
     count: int = Field(gt=0)
     seed: int | None
@@ -240,6 +252,8 @@ class EvaluationProtocol(EvaluationModel):
     trials: TrialPolicy
     metrics: tuple[Metric, ...]
     primary_metric: str
+    num_fewshot: int | None = Field(default=None, ge=0)
+    requires_judge: bool = False
     summary: SummaryKind
     expected_population: int = Field(gt=0)
     context_window: int | None = Field(default=None, gt=0)

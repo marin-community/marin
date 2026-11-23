@@ -7,11 +7,14 @@ import asyncio
 import json
 import pickle
 import tarfile
+import time
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 import pytest
+import taskcompendium.runtime.grading as grading_runtime
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
@@ -66,6 +69,8 @@ from verifyit.spec import (
     parse_spec,
 )
 
+import rolloutengine.engine as engine_runtime
+import rolloutengine.event_delivery as event_delivery_runtime
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness
@@ -76,6 +81,8 @@ from rolloutengine.models import (
     LENGTH_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
+    ContextRecovery,
+    ContextRejected,
     ContextWindowExceeded,
     ConversationStarted,
     GenerationLimitReached,
@@ -304,8 +311,38 @@ def shell_harnesses(**options) -> dict:
 @pytest.mark.parametrize(
     "content", ["Solve the task.", [{"type": "text", "text": "Solve "}, {"type": "text", "text": "the task."}]]
 )
-async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answer, reward, content):
-    factory = RecordingShellSimFactory()
+async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answer, reward, content, monkeypatch):
+    clock = [0.0]
+    for module in (engine_runtime, grading_runtime):
+        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    class TimedMachine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def upload(self, source, target):
+            clock[0] += 3
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            clock[0] += 5
+            await self.machine.download(source, target)
+
+        async def run(self, command):
+            clock[0] += 11 if command.argv == ("sh", "/tests/grade.sh") else 1
+            return await self.machine.run(command)
+
+        async def close(self):
+            clock[0] += 100
+            await self.machine.close()
+
+    class TimedFactory(RecordingShellSimFactory):
+        async def create(self, spec):
+            clock[0] += 2
+            return TimedMachine(await super().create(spec))
+
+    factory = TimedFactory()
+    observer = RecordingObserver()
     model = ReplayModel([{"role": "assistant", "content": answer}])
     released = asyncio.Event()
 
@@ -324,11 +361,16 @@ async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answe
         model,
         {"local": factory},
         harnesses={"agent": AgentHarness(lambda context, complete: agent(context.machine, complete))},
+        observer=observer,
     ).run_task(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
     assert model.requests[0].messages == ({"role": "user", "content": content},)
     assert record.rollout.conversations[-1].response_token_ids == (20,)
     assert record.rollout.conversations[-1].loss_mask == (1,)
+    assert record.grade.verifier_setup_seconds == 13.0
+    assert record.rollout.metrics["timing/setup"] == 15.0
+    assert record.rollout.metrics["timing/grading"] == 20.0
+    assert [event.payload.duration for event in observer.events if isinstance(event.payload, Graded)] == [33.0]
     assert released.is_set()
     assert len(factory.machines) == 2
     for machine in factory.machines:
@@ -336,8 +378,17 @@ async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answe
             await machine.run(Command(("true",)))
 
 
-@pytest.mark.parametrize("arguments", ['["invalid"]', '"invalid"', "null", "42"])
-async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(arguments):
+@pytest.mark.parametrize(
+    ("arguments", "error"),
+    [
+        *(
+            (arguments, "Tool arguments must be a JSON object")
+            for arguments in ('["invalid"]', '"invalid"', "null", "42")
+        ),
+        ('{"command": "echo \\ud83d > /workspace/answer"}', "shell command must be valid Unicode text"),
+    ],
+)
+async def test_shell_rejects_invalid_arguments_and_grades_repaired_file(arguments, error):
     rejected = shell_call("unused", call_id="rejected")
     rejected["tool_calls"][0]["function"]["arguments"] = arguments
     model = ReplayModel([rejected, shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
@@ -346,9 +397,7 @@ async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(argume
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.rollout.conversations[-1].messages[1] == rejected
-    assert json.loads(record.rollout.conversations[-1].messages[2]["content"]) == {
-        "error": "Tool arguments must be a JSON object"
-    }
+    assert json.loads(record.rollout.conversations[-1].messages[2]["content"]) == {"error": error}
 
 
 async def test_shell_harness_cuts_each_command_output_at_its_limit():
@@ -483,54 +532,90 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
     assert len(factory.machines) == 1
 
 
-@pytest.mark.parametrize("compact", [False, True])
-async def test_agent_harness_receives_engine_turns_and_controls_next_history(compact):
+@pytest.mark.parametrize(
+    ("change", "continues"),
+    [
+        ("none", True),
+        ("reserialized", True),
+        ("cut-reserialized", False),
+        ("output-limit", True),
+        ("tools", False),
+        ("compaction", False),
+    ],
+)
+async def test_agent_harness_receives_engine_turns_and_controls_next_history(change, continues):
     first = ({"role": "user", "content": "Return 12."},)
     observation = {"role": "tool", "tool_call_id": "write", "content": "Written."}
+    first_options = {"tool_choice": "auto", "max_tokens": 128, "max_completion_tokens": 128}
+    next_options = dict(first_options)
+    if change == "output-limit":
+        next_options.update(max_tokens=96, max_completion_tokens=96, max_output_tokens=64)
+    if change == "tools":
+        next_options["tools"] = [{"type": "function", "function": {"name": "finish", "parameters": {}}}]
     received = []
+    sent_histories = []
     finished = asyncio.Event()
 
     async def agent(complete):
-        turn = await complete(Prompt(first, {"tool_choice": "auto"}))
+        turn = await complete(Prompt(first, first_options))
         received.append(turn)
+        message = turn.message
+        if change in {"reserialized", "cut-reserialized"}:
+            call = message["tool_calls"][0]
+            function = call["function"]
+            arguments = json.dumps(json.loads(function["arguments"]), separators=(",", ":"))
+            message = {
+                **message,
+                "reasoning_content": "",
+                "tool_calls": [{**call, "function": {**function, "arguments": arguments}}],
+            }
         history = (
-            ({"role": "user", "content": "File written. Finish."},) if compact else (*first, turn.message, observation)
+            ({"role": "user", "content": "File written. Finish."},)
+            if change == "compaction"
+            else (*first, message, observation)
         )
-        options = {} if compact else {"tool_choice": "auto"}
-        received.append(await complete(Prompt(history, options)))
+        sent_histories.append(history)
+        received.append(await complete(Prompt(history, next_options)))
         finished.set()
 
-    model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
+    class HistoryModel(ReplayModel):
+        async def complete(self, request):
+            turn = await super().complete(request)
+            if change == "cut-reserialized" and len(self.requests) == 1:
+                return replace(turn, stop_reason=LENGTH_STOP_REASON)
+            return turn
+
+    model = HistoryModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
     result = await engine(model, harnesses={"agent": AgentHarness(lambda _context, complete: agent(complete))}).run_task(
         rollout_spec(arithmetic_task(), harness="agent")
     )
 
     assert finished.is_set()
     assert result.grade.reward == 1.0
-    assert len(result.rollout.conversations) == (2 if compact else 1)
+    assert len(result.rollout.conversations) == (1 if continues else 2)
     assert [turn.response_token_ids for turn in received] == [(20,), (21,)]
     assert [turn.logprobs for turn in received] == [(-0.5,), (-0.5,)]
-    assert result.rollout.conversations[-1].loss_mask == ((1,) if compact else (1, 0, 0, 1))
-    assert model.requests[1].options == ({} if compact else {"tool_choice": "auto"})
-    assert model.requests[1].messages == (
-        ({"role": "user", "content": "File written. Finish."},)
-        if compact
-        else (*first, received[0].message, observation)
-    )
+    assert result.rollout.conversations[-1].loss_mask == ((1, 0, 0, 1) if continues else (1,))
+    assert [request.options for request in model.requests] == [first_options, next_options]
+    assert model.requests[1].messages == ((*first, received[0].message, observation) if continues else sent_histories[0])
 
 
-@pytest.mark.parametrize("compact", [False, True])
-async def test_agent_harness_replays_exact_tokens_on_later_turns(compact):
+@pytest.mark.parametrize("change", ["none", "compaction", "output-limit"])
+async def test_agent_harness_replays_exact_tokens_on_later_turns(change):
     first = ({"role": "user", "content": "Start."},)
     # The task's grader reads this chat, so the observation is a user message: the turn makes no tool call.
     observation = {"role": "user", "content": "Done."}
-    replay = (501, 502) if compact else (10, 11, 20, 90, 91)
+    restart = change != "none"
+    replay = (501, 502) if change == "compaction" else (10, 11, 20, 90, 91)
     requests = []
 
     async def agent(complete):
         turn = await complete(Prompt(first, {}))
-        messages = ({"role": "user", "content": "Finish."},) if compact else (*first, turn.message, observation)
-        await complete(Prompt(messages, {}, token_ids=replay))
+        messages = (
+            ({"role": "user", "content": "Finish."},) if change == "compaction" else (*first, turn.message, observation)
+        )
+        options = {"max_tokens": 64} if change == "output-limit" else {}
+        await complete(Prompt(messages, options, token_ids=replay))
 
     async def model(request):
         requests.append(request)
@@ -545,9 +630,9 @@ async def test_agent_harness_replays_exact_tokens_on_later_turns(compact):
     result = await rollout_engine.run_task(rollout_spec(arithmetic_task(), harness="agent"), model)
 
     assert result.grade.reward == 1.0
-    assert result.rollout.conversations[-1].prompt_token_ids == (replay if compact else (10, 11))
-    assert result.rollout.conversations[-1].response_token_ids == ((21,) if compact else (20, 90, 91, 21))
-    assert result.rollout.conversations[-1].loss_mask == ((1,) if compact else (1, 0, 0, 1))
+    assert result.rollout.conversations[-1].prompt_token_ids == (replay if restart else (10, 11))
+    assert result.rollout.conversations[-1].response_token_ids == ((21,) if restart else (20, 90, 91, 21))
+    assert result.rollout.conversations[-1].loss_mask == ((1,) if restart else (1, 0, 0, 1))
 
 
 async def test_agent_harness_is_cancelled_when_engine_generation_is_cancelled():
@@ -722,6 +807,8 @@ async def test_a_new_conversation_replaces_the_model_options(next_options):
     revised_messages = ({"role": "user", "content": "Return 12 without tools."},)
 
     class Restarting:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -1619,6 +1706,8 @@ async def test_token_budget_stops_model_requests_and_grades_the_last_response(us
 
 async def test_token_budget_skips_a_new_conversation_and_grades_the_last_response():
     class Restarting:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -2506,6 +2595,9 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
         )
     if expected_status == Outcome.INFRA_ERROR:
         assert record.grade.failure == GradingFailure.INVALID_REWARD
+    assert {key for key in record.rollout.metrics if key.startswith("timing/")} == (
+        {"timing/grading", "timing/setup"} if expected_reward is not None else set()
+    )
     if answer_type == AnswerType.FILE:
         assert record.rollout.conversations[-1].loss_mask == (1, 0, 0, 1)
         assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
@@ -2540,7 +2632,7 @@ def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
     """Payloads through the first turn of a rollout whose first response writes the answer file."""
     observation = model.requests[1].messages[-1]
     return [
-        AttemptStarted(),
+        AttemptStarted(SHELL, TraceMode.EXACT_TOKENS, "fixture"),
         MachineReady(0.0),
         ConversationStarted(model.requests[0].messages, model.requests[0].options, 0.0),
         ModelTurnCompleted(0, model.requests[1].messages[-2], "stop", 2, 1, None, {}, 0.0),
@@ -2552,25 +2644,33 @@ def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
 async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout():
     observer = RecordingObserver()
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+    started = time.time()
     record = await engine(model, {"local": FixtureImageFactory()}, observer=observer).run_task(
         rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), run_id="arithmetic/3"
     )
+    finished = time.time()
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert observer.payloads() == [
         *shell_turn_payloads(model),
         ModelTurnCompleted(1, record.rollout.conversations[-1].messages[-1], "stop", 5, 1, None, {}, 0.0),
         TransitionCompleted(1, True, (), 0.0),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
-        AttemptEnded("stop", None, None, 0.0),
+        AttemptEnded("stop", None, None, 0.0, 2, 9),
     ]
-    assert asdict(observer.events[-1]) == {
+    assert [event.index for event in observer.events] == list(range(len(observer.events)))
+    assert all(started <= event.emitted_at <= finished for event in observer.events)
+    assert asdict(replace(observer.events[-1], emitted_at=0.0)) == {
         "run_id": "arithmetic/3",
         "task_id": "arithmetic",
+        "index": len(observer.events) - 1,
+        "emitted_at": 0.0,
         "payload": {
             "stop_reason": "stop",
             "operation": None,
             "error": None,
             "duration": observer.events[-1].payload.duration,
+            "turns": 2,
+            "total_tokens": 9,
             "type": RolloutEventType.ATTEMPT_ENDED,
         },
     }
@@ -2591,11 +2691,58 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
             rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
         )
     assert interrupted.value.operation == RolloutOperation.MODEL
+    assert not any(key.startswith("timing/") for key in interrupted.value.rollout.metrics)
     assert observer.payloads() == [
         *shell_turn_payloads(model),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
-        AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0),
+        AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0, 1, 3),
     ]
+
+
+async def test_dropped_events_leave_index_gaps_and_delivered_events_keep_their_emit_time(monkeypatch):
+    monkeypatch.setattr(event_delivery_runtime, "EVENT_QUEUE_CAPACITY", 4)
+    gate = asyncio.Event()
+    room = asyncio.Event()
+    opened_at = []
+
+    class GatedObserver(RecordingObserver):
+        async def on_event(self, event: RolloutEvent) -> None:
+            await gate.wait()
+            await super().on_event(event)
+            if isinstance(event.payload, ToolCallCompleted):
+                room.set()
+
+    class Burst:
+        context_recovery = ContextRecovery.NEVER
+
+        def check(self, task, limits):
+            pass
+
+        async def run(self, context, session):
+            # No await separates the emits, so the blocked observer takes none of them and the queue overflows.
+            for call in range(10):
+                context.events.emit(ToolCallCompleted(f"burst-{call}", "burst", 0, False, 0.0))
+            opened_at.append(time.time())
+            gate.set()
+            # The first delivered burst event leaves a place in the queue, so this event is not dropped.
+            await room.wait()
+            context.events.emit(ToolCallCompleted("after", "burst", 0, False, 0.0))
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+
+    observer = GatedObserver()
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": Burst()}, observer=observer
+    ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
+
+    *burst, after = [event for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
+    call_ids = [event.payload.call_id for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
+    indexes = [event.index for event in observer.events]
+    missing = set(range(after.index)) - set(indexes)
+    assert indexes == sorted(indexes)
+    assert call_ids == [*(f"burst-{call}" for call in range(len(burst))), "after"]
+    assert 0 < len(missing) == 10 - len(burst) <= record.rollout.metrics["observer_dropped_events"]
+    # The observer received the burst after the gate opened, and each event has the time of its emit.
+    assert all(event.emitted_at <= opened_at[0] for event in burst)
 
 
 async def test_attempts_without_a_run_id_keep_their_events_apart():
@@ -2824,6 +2971,8 @@ async def test_a_harness_runs_alone_on_a_local_machine():
 
 async def test_a_harness_that_ignores_a_limit_runs_until_the_turn_deadline():
     class Stubborn:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -2904,6 +3053,8 @@ async def test_an_agent_that_does_not_stop_is_a_cleanup_error_and_is_kept_until_
 
 async def test_recorded_step_data_keeps_the_tool_deadline():
     class SlowTool:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -2922,6 +3073,8 @@ async def test_recorded_step_data_keeps_the_tool_deadline():
 @pytest.mark.parametrize("error", [RuntimeError, TimeoutError])
 async def test_a_harness_failure_after_the_turn_deadline_is_not_a_normal_stop(error):
     class FailingOnCancel:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -2944,6 +3097,8 @@ async def test_observations_recorded_before_a_new_conversation_stay_in_the_earli
     note = {"role": "user", "content": "Noted."}
 
     class Restarting:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3064,6 +3219,8 @@ def test_a_judge_connection_never_reaches_the_serialized_spec():
 
 async def test_a_harness_that_catches_its_tool_deadline_cannot_block_the_event_loop():
     class SwallowsDeadline:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3089,6 +3246,8 @@ async def test_a_harness_that_catches_its_tool_deadline_cannot_block_the_event_l
 @pytest.mark.parametrize("asks_again", [False, True])
 async def test_a_harness_that_catches_its_attempt_deadline_gets_no_more_turns(asks_again):
     class SwallowsDeadline:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3116,6 +3275,8 @@ async def test_a_harness_that_catches_its_attempt_deadline_gets_no_more_turns(as
 
 async def test_a_turn_with_recorded_observations_takes_no_reply():
     class RecordsThenReplies:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3163,6 +3324,8 @@ async def test_an_agent_waits_while_the_engine_grades():
 
 async def test_a_harness_that_fails_after_a_model_failure_is_a_harness_failure():
     class GivesUp:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3297,6 +3460,8 @@ async def test_final_observations_replace_a_cancelled_reply():
     final = {"role": "user", "content": "Final result."}
 
     class CancelsItsReply:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3317,6 +3482,8 @@ async def test_final_observations_replace_a_cancelled_reply():
 
 async def test_a_harness_cannot_change_the_record_after_its_turn_deadline():
     class RecordsLate:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3397,6 +3564,8 @@ async def test_a_cancelled_reply_starts_a_new_tool_deadline():
 
 async def test_a_harness_records_step_data_only_between_model_requests():
     class RecordsDuringARequest:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3469,6 +3638,8 @@ async def test_a_turn_after_the_model_turn_deadline_is_a_model_failure(answers):
 
 async def test_a_new_conversation_cut_off_by_the_end_of_the_harness_is_recorded_once():
     class StartsAgainInTheBackground:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3586,6 +3757,8 @@ async def test_a_length_cut_tool_call_is_graded_without_execution():
 
 
 class StartsTwice:
+    context_recovery = ContextRecovery.NEVER
+
     def check(self, task, limits):
         pass
 
@@ -3615,6 +3788,8 @@ async def test_a_model_failure_in_a_new_conversation_grades_the_earlier_one():
 
 class RecordsAfterARefusal:
     """Records a final reward after the session refuses the second request."""
+
+    context_recovery = ContextRecovery.NEVER
 
     def __init__(self, second: str):
         self.second = second
@@ -3665,6 +3840,8 @@ async def test_a_harness_records_a_final_reward_after_the_session_refuses_a_requ
 
 async def test_recording_after_a_failed_first_request_raises_the_refusal_again():
     class RecordsAfterAFailedFirstRequest:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3693,6 +3870,8 @@ async def test_a_pinned_prompt_that_does_not_start_with_the_served_tokens_is_not
     recorded = []
 
     class PinsOtherTokens:
+        context_recovery = ContextRecovery.NEVER
+
         def check(self, task, limits):
             pass
 
@@ -3750,11 +3929,15 @@ async def test_a_grading_failure_after_a_model_failure_keeps_the_model_failure()
     )
 
 
-async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one():
+@pytest.mark.parametrize("wrapped", [False, True], ids=["generation-limit", "transport-rejection"])
+async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one(wrapped):
     class LimitedModel(ReplayModel):
         async def complete(self, request):
             if self.requests:
-                raise GenerationLimitReached((70, 71))
+                error = GenerationLimitReached((70, 71))
+                if wrapped:
+                    raise ContextRejected(error, "Maximum context length exceeded") from error
+                raise error
             return await super().complete(request)
 
     record = await engine(
@@ -3763,7 +3946,9 @@ async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one()
     assert (record.rollout.stop_reason, record.grade.status, record.grade.reward) == ("length", Outcome.GRADED, 1.0)
     first, unserved = record.rollout.conversations
     assert (len(first.steps), unserved.steps, unserved.prompt_token_ids) == (1, (), (70, 71))
-    assert record.rollout.metrics == {"score": 1.0}
+    assert {key: value for key, value in record.rollout.metrics.items() if not key.startswith("timing/")} == {
+        "score": 1.0
+    }
 
 
 async def test_an_unlimited_agent_can_finish_beyond_the_old_turn_limit():
@@ -3790,7 +3975,8 @@ async def test_context_rejection_allows_a_shorter_request_without_ending_the_att
     async def model(request):
         if request.messages[-1].get("content") == "Oversized tool output":
             rejected.append(request)
-            raise ContextWindowExceeded("Maximum context length exceeded")
+            error = GenerationLimitReached((70, 71))
+            raise ContextRejected(error, "Maximum context length exceeded") from error
         return await replay.complete(request)
 
     async def agent(_context, complete):

@@ -12,12 +12,14 @@ from harbor.agents.terminus_2.tmux_session import (
     ModelInitiatedTmuxFailure,
     TmuxBatchProtocolError,
     TmuxCommandError,
+    TmuxExecTimeoutError,
     TmuxKeystrokeBatch,
     TmuxSession,
     TmuxSessionEndedError,
 )
 from harbor.environments.base import ExecResult
-from harbor_config import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
+from harbor_config.errors import ERROR_CATEGORIES
 from harbor_config.errors import is_resume_retryable
 
 
@@ -102,8 +104,23 @@ async def test_model_process_kill_is_scoreable(tmux_session, keystrokes):
     assert isinstance(caught.value.__cause__, TmuxBatchProtocolError)
     assert caught.value.result.return_code == 143
     name = type(caught.value).__name__
-    assert error_category(name) is ErrorCategory.AGENT
+    assert error_category(name, categories=ERROR_CATEGORIES) is ErrorCategory.AGENT
     assert not is_resume_retryable(name)
+
+
+async def test_bookkeeping_exec_timeout_is_retryable_infrastructure(tmux_session):
+    tmux_session.environment.exec = AsyncMock(
+        side_effect=TimeoutError("Sandbox command timed out")
+    )
+
+    with pytest.raises(TmuxExecTimeoutError) as caught:
+        await tmux_session.capture_pane()
+
+    # Terminus reports a TimeoutError to the model as its own command timing out.
+    assert not isinstance(caught.value, TimeoutError)
+    name = type(caught.value).__name__
+    assert error_category(name, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
+    assert is_resume_retryable(name)
 
 
 @pytest.mark.parametrize(
@@ -515,6 +532,18 @@ async def test_send_keys_and_capture_preserves_transport_exception(tmux_session)
         await tmux_session.send_keys_and_capture([_batch("echo hi\n")])
 
     assert exc_info.value is transport_error
+
+
+async def test_send_keys_and_capture_classifies_sandbox_timeout(tmux_session):
+    tmux_session.environment.exec = AsyncMock(
+        side_effect=TimeoutError("Sandbox command timed out")
+    )
+
+    with pytest.raises(TmuxExecTimeoutError) as exc_info:
+        await tmux_session.send_keys_and_capture([_batch("cargo build\n")])
+
+    assert error_category(type(exc_info.value).__name__, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
+    assert is_resume_retryable(type(exc_info.value).__name__)
 
 
 def test_tmux_session_rejects_invalid_batch_timeout_margin(mock_environment):

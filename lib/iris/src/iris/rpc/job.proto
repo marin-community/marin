@@ -302,6 +302,9 @@ message TaskAttempt {
   // container's own reason. Empty unless the attempt failed.
   string terminal_reason = 13;
   TaskOutputArchive output_archive = 14;
+  // Topology domains selected by the scheduler, keyed by node label. Empty
+  // until assigned or when the backend does not expose topology metadata.
+  map<string, string> topology = 15;
 }
 
 message ResourceUsage {
@@ -571,11 +574,13 @@ message ConstraintList {
   repeated Constraint constraints = 1;
 }
 
-// Coscheduling configuration for multi-host jobs.
-// When set, all tasks in the job must be scheduled atomically onto workers
-// that share the same value for the specified group_by attribute.
+// Admit and retry a multi-host job together at the requested topology level.
 message CoschedulingConfig {
   string group_by = 1;  // Attribute key to group workers by (e.g., "tpu-name")
+  // Partition task ordinals into groups, each confined to one group_by domain.
+  // Empty keeps the existing whole-job or platform-defined sliced placement.
+  // Groups share the job's atomic admission and retry lifecycle.
+  repeated int32 group_sizes = 2;
 }
 
 // ============================================================================
@@ -666,20 +671,22 @@ enum ContainerProfile {
   CONTAINER_PROFILE_DEFAULT = 2;        // status quo: SYS_PTRACE (+SYS_RESOURCE on TPU)
   CONTAINER_PROFILE_DOCKER_ACCESS = 3;  // DEFAULT + host docker socket (build / sibling containers)
   CONTAINER_PROFILE_PRIVILEGED = 4;     // privileged + broad caps (nested runtimes, e.g. gVisor)
-  // Temporary compatibility for running clients: gVisor with the legacy
-  // cluster environment, workspace bundles, caches and CLUSTER egress default.
+  // Temporary compatibility for running clients: the sandbox runtime with the
+  // legacy cluster environment, workspace bundles, caches and CLUSTER egress
+  // default.
   // New clients must use SANDBOX. The controller rollout owner removes this
   // once legacy submitters are upgraded and their profile-5 jobs finish.
   CONTAINER_PROFILE_GVISOR = 5 [deprecated = true];
-  // For model-controlled workloads. Runs the whole container under the gVisor
-  // runtime (docker --runtime=runsc / k8s runtimeClassName=gvisor), so
-  // in-container root gets the docker default cap set (setuid/apt work) while
-  // the intercepted guest kernel isolates the host. The task receives only the
+  // For model-controlled workloads. Runs the whole container under the
+  // cluster's sandbox runtime (docker --runtime=runsc / k8s runtimeClassName
+  // from kubernetes_provider.sandbox_runtime_class), so in-container root gets
+  // the docker default cap set (setuid/apt work) while the sandbox runtime
+  // isolates the host. The task receives only the
   // job's own env_vars and Iris task identity: no cluster task_env or injected
   // secrets, no controller address, no shared node cache mounts, and no
   // Kubernetes service account token. Its egress policy cannot be CLUSTER or
-  // ALLOWLIST. The job must carry no workspace bundle. CPU-only (runsc cannot
-  // pass a GPU/TPU through). Not elevated.
+  // ALLOWLIST. The job must carry no workspace bundle. CPU-only (Iris rejects
+  // accelerator requests for this profile). Not elevated.
   CONTAINER_PROFILE_SANDBOX = 6;
 }
 

@@ -9,7 +9,7 @@ a manifest that provides neither.
 """
 
 import pytest
-from iac.config import load_iris_config
+from iac.config import load_iris_config, load_provisioning
 from iac.coreweave.cluster import _nodepool_manifest
 from iac.nodepools import NodePoolSpec, derive_nodepools
 from iris.cluster.platforms.k8s.coreweave_topology import (
@@ -72,14 +72,39 @@ def test_derive_gb200_pool_is_rack_based():
 
 
 def test_derive_nodepools_assigns_unified_tas_labels():
-    pools = {p.name: p for p in derive_nodepools(load_iris_config("cw-us-east-08a"))}
+    config = load_iris_config("cw-us-east-08a")
+    provisioning = load_provisioning("cw-us-east-08a").coreweave
+    assert provisioning is not None
+    pools = {p.name: p for p in derive_nodepools(config, cpu_scale_group=provisioning.kueue.cpu_scale_group)}
     gb200 = pools["cw-use08a-gb200"]
     cpu = pools["cw-use08a-cpu-erapids"]
 
     assert all(pool.node_labels["iris.kueue"] == "true" for pool in pools.values())
     for topology_label in (CW_LABEL_FABRIC, CW_LABEL_SUPERPOD, CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN):
-        assert cpu.node_labels[topology_label] == "iris-cpu-only"
+        assert topology_label not in cpu.node_labels
         assert topology_label not in gb200.node_labels
+
+
+@pytest.mark.parametrize(
+    ("cluster", "cpu_pool", "scale_group_label"),
+    [
+        ("cw-us-east-08a", "cw-use08a-cpu-erapids", "iris-cw-use08a-scale-group"),
+        ("cw-us-east-02a", "cw-use02a-cpu-genoa", "iris-cw-use02a-scale-group"),
+        ("cw-rno2a", "cw-rno2a-cpu-turin", "iris-cw-rno2a-scale-group"),
+    ],
+)
+def test_derive_nodepools_drop_synthetic_labels_on_each_configured_cpu_pool(cluster, cpu_pool, scale_group_label):
+    config = load_iris_config(cluster)
+    provisioning = load_provisioning(cluster).coreweave
+    assert provisioning is not None
+    cpu_scale_group = provisioning.kueue.cpu_scale_group
+    pools = {p.name: p for p in derive_nodepools(config, cpu_scale_group=cpu_scale_group)}
+    cpu = pools[cpu_pool]
+
+    # The flavor's selector must match a label the CPU NodePool actually declares.
+    assert cpu.node_labels[scale_group_label] == cpu_scale_group
+    for topology_label in (CW_LABEL_FABRIC, CW_LABEL_SUPERPOD, CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN):
+        assert topology_label not in cpu.node_labels
 
 
 def test_derive_rejects_rack_pool_with_partial_rack():
