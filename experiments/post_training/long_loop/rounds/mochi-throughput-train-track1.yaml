@@ -112,7 +112,7 @@ rl:
         group_admission:
           stall_timeout: 18000
       rollout_buffer:
-        eval_drain: abort
+        eval_drain: priority
         source_routes:
           long-loop-smartie-swesmith: agentic
           PRIME-RL/Eurus-2-RL-Data: nonagentic

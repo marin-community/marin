@@ -213,6 +213,8 @@ def test_mochi_normalized_round_resolves_batch_optimizer_and_route_capacity(loca
     assert optimizer["optimizer_kwargs"]["adam_lr"] == 2.307692307692308e-6
     assert optimizer["max_grad_norm"] == 0.5
     buffer = trainer["rollout_buffer"]
+    assert buffer["eval_drain"] == "priority"
+    assert generator["engine_init_kwargs"]["scheduling_policy"] == "priority"
     assert buffer["max_staleness_steps"] == 3
     assert buffer["consumed_route_quotas"] == {"agentic": 22, "nonagentic": 42}
     assert buffer["max_in_flight"] >= 4 * trainer["train_batch_size"]
