@@ -35,6 +35,8 @@ For optimization ideas, start with
 and their repository skills. Inspect relevant code and current discussions;
 settings from another architecture or release may not transfer.
 
+## Numerical evidence and memory claims
+
 Treat benchmark validity, numerical/state checks, task quality and RL learning
 as separate claims. Run existing checks with their original checkpoint scope
 and tolerances. For example, Marin's
@@ -51,6 +53,15 @@ Method names establish method selection. This
 [Hero example](https://github.com/marin-community/marin-logbooks/blob/6acea60db03ab0a2c782e10dc9972c579866ddf7/logbooks/57-inference-perfmax/analysis/hero-fp8-01a1ec55/hero_weight_metadata.py)
 uses a native worker extension to check weight storage and separate KV/state
 views without reading tensor values.
+
+For a numerical failure, align raw token scores with the golden and a passing
+BF16 control. Check token IDs and score positions. See whether the limit is
+crossed by an observed probability gap or only by the top-k bound.
+Exercise new checks against retained responses before loading another model.
+For quantization, verify loaded weight storage and record activation and KV
+precision separately. For a memory claim, report stored parameter bytes or usable
+KV capacity with topology and throughput for both configurations. Label load-time
+memory separately.
 
 For an RL claim, use evidence for the actual trainer and rollout path: the same
 weights, token IDs, masks and sampling transformations. Means alone can hide

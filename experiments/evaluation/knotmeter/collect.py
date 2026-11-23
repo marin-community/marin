@@ -313,5 +313,8 @@ def refresh_costs(plan: TrialPlan) -> dict:
 
 def record_preparation_failure(plan: TrialPlan, error: str, *, gpu_job_absent: bool = True) -> None:
     """Preserve preparation/submission failures, including uncertain GPU admission."""
-    result = unmeasured_result(plan, "preparation-failed", cost_complete=gpu_job_absent) | {"error": error}
+    result = unmeasured_result(plan, "preparation-failed", cost_complete=gpu_job_absent) | {
+        "schema_version": 1,
+        "error": error,
+    }
     write_record(prefix_join(plan["trial_uri"], "result.json"), result)

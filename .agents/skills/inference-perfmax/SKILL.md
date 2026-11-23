@@ -90,14 +90,8 @@ a fresh server. Startup, checks, warmup and drain fall outside measured time.
 
 Use the preset's [shared checks](../../../experiments/evaluation/inference_correctness/README.md)
 against the actual settings. Reuse its immutable goldens across runtime changes.
-For a numerical failure, align raw token scores with the golden and a passing
-BF16 control. Check token IDs and score positions. See whether the limit is
-crossed by an observed probability gap or only by the top-k bound.
-Exercise new checks against retained responses before loading another model.
-For quantization, verify loaded weight storage and record activation and KV precision separately.
-For a memory claim, report stored parameter bytes or usable KV capacity with
-topology and throughput for both configurations. Label any load-time memory
-measurement separately.
+For numerical failures, quantization or memory claims, use the
+[numerical and memory reference](references/measurement.md#numerical-evidence-and-memory-claims).
 The runner checks before AgentX and resets caches before native warmup. Retain
 failed observations; missing required correctness evidence and failed checks block recommendations.
 They stop traffic unless `--measure-failed-checks` explicitly permits diagnostics.

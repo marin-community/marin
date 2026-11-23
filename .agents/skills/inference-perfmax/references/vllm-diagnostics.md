@@ -46,3 +46,16 @@ available.
 Preserve the observations that support or reject each hypothesis. A faster
 isolated kernel still needs matching correctness checks and a serving comparison
 to establish a useful improvement.
+
+For controlled prefill comparisons, inspect prompt tokens per rank as well as
+request counts. Equal counts can hide unequal work. Record cache hits,
+preemptions and whether earlier requests drained before the next wave.
+[DA7's measured example](https://github.com/marin-community/marin/pull/11320#issuecomment-7092800820)
+shows why these controls can change the conclusion.
+
+If iteration logs are missing with several API workers, inspect the installed
+logger factory. The [published `47a8e415bff1` factory](https://github.com/marin-community/vllm/blob/47a8e415bff17b9376f02d9b92edcc67e962eaee/vllm/v1/metrics/loggers.py#L1230-L1243)
+disables the default text logger in that case. A `vllm.stat_logger_plugins` hook
+can retain step details; use a logger in the `vllm` namespace under its
+[logging policy](https://github.com/marin-community/vllm/blob/47a8e415bff17b9376f02d9b92edcc67e962eaee/vllm/logger.py#L63-L78).
+Check emitted step coverage and reconcile token counts before interpreting it.
