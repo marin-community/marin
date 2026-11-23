@@ -334,7 +334,29 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         If `reduction` is None, the loss is returned unreduced as a `NamedArray` with axes
         (*batch axes, sequence_length).
         """
-        activations, aux_loss = split_activations(self.activations(example.tokens, example.attn_mask, key=key))
+        return self._compute_next_token_loss_from_activations(
+            example,
+            self.activations(example.tokens, example.attn_mask, key=key),
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
+        )
+
+    def _compute_next_token_loss_from_activations(
+        self,
+        example: LmExample,
+        activation_result: NamedArray | tuple[NamedArray, NamedOrNumeric],
+        *,
+        reduction: Optional[hax.ReductionFunction],
+        reduction_axis: Optional[hax.AxisSelection],
+        logsumexp_weight: Optional[float],
+        loss_dtype: Optional[jnp.dtype],
+        logit_soft_cap: Optional[float],
+    ) -> jnp.ndarray | NamedArray:
+        """Compute the shared next-token loss from a model activation result."""
+        activations, aux_loss = split_activations(activation_result)
 
         loss = maybe_fused_next_token_loss(
             self.Pos,

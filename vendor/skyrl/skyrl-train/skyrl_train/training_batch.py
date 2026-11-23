@@ -3,6 +3,7 @@
 import io
 import math
 import pickle
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Generic, Iterator, List, Optional, Protocol, Sequence, TypeVar, TypedDict
 
 import numpy as np
@@ -387,15 +388,33 @@ class TrainingInput(TypedDict, total=False):
     pair_roles: Optional[Float[torch.Tensor, "batch_size"]]  # noqa: F821
 
 
+@dataclass(frozen=True)
+class NativeSnowballRouteRows:
+    """Policy-bound binary routes, one complete payload per trajectory."""
+
+    policy_id: str
+    payloads: tuple[bytes, ...]
+
+
 class TrainingInputBatch(TensorBatch[TrainingInput]):
     """Training tensors with optional compact route rows kept outside the tensor dictionary."""
 
-    def __init__(self, *args, routed_expert_rows: RoutedExpertRows | None = None, **kwargs):
+    def __init__(
+        self, *args, routed_expert_rows: RoutedExpertRows | None = None,
+        native_snowball_routes: NativeSnowballRouteRows | None = None, **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.routed_expert_rows = routed_expert_rows
+        self.native_snowball_routes = native_snowball_routes
         self._validate_route_rows()
 
     def _validate_route_rows(self) -> None:
+        native = self.native_snowball_routes
+        if native is not None:
+            if self.routed_experts is not None:
+                raise ValueError("Choose one replay source for a training batch")
+            if not native.policy_id or len(native.payloads) != self.batch_size:
+                raise ValueError("Native replay requires one payload per trajectory and an expected policy ID")
         rows = self.routed_expert_rows
         if rows is None:
             return
@@ -422,22 +441,27 @@ class TrainingInputBatch(TensorBatch[TrainingInput]):
         selected = super().select(tensor_keys, metadata_keys)
         if ROUTED_EXPERTS_KEY in keys:
             selected.routed_expert_rows = self.routed_expert_rows
+        selected.native_snowball_routes = self.native_snowball_routes
         return selected
 
     def slice(self, start: int, end: int, step: int = 1) -> "TrainingInputBatch":
         sliced = super().slice(start, end, step)
         if self.routed_expert_rows is not None:
             sliced.routed_expert_rows = self.routed_expert_rows[slice(start, end, step)]
+        if (native := self.native_snowball_routes) is not None:
+            sliced.native_snowball_routes = replace(native, payloads=native.payloads[start:end:step])
         return sliced
 
     def __getstate__(self):
         state = super().__getstate__()
         state["routed_expert_rows"] = self.routed_expert_rows
+        state["native_snowball_routes"] = self.native_snowball_routes
         return state
 
     def __setstate__(self, state):
         super().__setstate__(state)
         self.routed_expert_rows = state["routed_expert_rows"]
+        self.native_snowball_routes = state.get("native_snowball_routes")
         self._validate_route_rows()
         return self
 
@@ -446,6 +470,8 @@ class TrainingInputBatch(TensorBatch[TrainingInput]):
         if self.routed_expert_rows is not None:
             rows = self.routed_expert_rows
             repeated.routed_expert_rows = RoutedExpertRows(rows.rows * repeats, rows.response_len, rows.num_experts)
+        if (native := self.native_snowball_routes) is not None:
+            repeated.native_snowball_routes = replace(native, payloads=native.payloads * repeats)
         return repeated
 
     def repeat_interleave(self, repeats: int) -> "TrainingInputBatch":
@@ -454,6 +480,10 @@ class TrainingInputBatch(TensorBatch[TrainingInput]):
             rows = self.routed_expert_rows
             repeated.routed_expert_rows = RoutedExpertRows(
                 tuple(row for row in rows.rows for _ in range(repeats)), rows.response_len, rows.num_experts
+            )
+        if (native := self.native_snowball_routes) is not None:
+            repeated.native_snowball_routes = replace(
+                native, payloads=tuple(payload for payload in native.payloads for _ in range(repeats))
             )
         return repeated
 
@@ -465,10 +495,20 @@ class TrainingInputBatch(TensorBatch[TrainingInput]):
         combined = super().cat(shards)
         if has_rows[0]:
             combined.routed_expert_rows = RoutedExpertRows.cat([shard.routed_expert_rows for shard in shards])
+        native = [shard.native_snowball_routes for shard in shards if shard.native_snowball_routes is not None]
+        if native:
+            policy = native[0].policy_id
+            if len(native) != len(shards) or any(rows.policy_id != policy for rows in native):
+                raise ValueError("Cannot concatenate native routes from different policies or replay modes")
+            combined.native_snowball_routes = NativeSnowballRouteRows(
+                policy, tuple(payload for rows in native for payload in rows.payloads)
+            )
         return combined
 
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, TrainingInputBatch) or not super().__eq__(other):
+            return False
+        if self.native_snowball_routes != other.native_snowball_routes:
             return False
         left, right = self.routed_expert_rows, other.routed_expert_rows
         if left is None or right is None:

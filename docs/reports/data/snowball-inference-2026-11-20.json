@@ -1,0 +1,241 @@
+{
+  "version": 1,
+  "as_of": "2026-11-20",
+  "accepted_commit": "fcc3167fef231ed2dacdd9e21cd48a564668e7ee",
+  "native_implementation_commit": "cca88c3d87e3b97a2774a6ecef329e8214c2bc9f",
+  "upstream_main_at_preflight": "eecb397a0c29ef3cf0c123028a53df304a249b77",
+  "shared_ancestor": "7405c96fe6ea3675d5a1bf7977d406cfc3887243",
+  "main_only_commits": 756,
+  "snapshot_only_implementation_commits": 42,
+  "hardware": [
+    {
+      "id": 0,
+      "kind": "TPU v4",
+      "platform": "tpu"
+    },
+    {
+      "id": 1,
+      "kind": "TPU v4",
+      "platform": "tpu"
+    },
+    {
+      "id": 2,
+      "kind": "TPU v4",
+      "platform": "tpu"
+    },
+    {
+      "id": 3,
+      "kind": "TPU v4",
+      "platform": "tpu"
+    }
+  ],
+  "model_config": {
+    "max_seq_len": 256,
+    "vocab_size": 23,
+    "hidden_dim": 128,
+    "intermediate_dim": 32,
+    "shared_expert_intermediate_dim": 32,
+    "num_experts": 2,
+    "num_experts_per_token": 1,
+    "num_layers": 2,
+    "num_heads": 2,
+    "num_kv_heads": 1,
+    "head_dim": 128,
+    "sliding_window": 128,
+    "layer_norm_eps": 1e-05,
+    "initializer_std": 0.0098821,
+    "qk_mult": 1.5703274004183787,
+    "rope": {
+      "theta": 10000.0,
+      "scaling_factor": null
+    },
+    "attention_implementation": "tpu_splash",
+    "inference_attention_implementation": "tpu",
+    "moe_implementation": "ring",
+    "projection_implementation": "fixed_schedule",
+    "gated_norm_implementation": "fixed_schedule",
+    "rms_norm_implementation": "pallas_tpu",
+    "qk_rms_norm_implementation": "pallas_tpu",
+    "shared_attention_implementation": "fixed_schedule",
+    "reference_checkpoint": null,
+    "tokenizer": null
+  },
+  "qualification": {
+    "status": "PASS_ACTUAL_FOUR_TPUV4_LOGPROB_NORMALIZER_REPAIR_AND_FULL_PARITY_GATE",
+    "fresh_process_weight_identity_verified": true,
+    "model_fingerprint": "f4be177fcab5286f1ad13bb6391e2a4e50d81bb019ed41df9e1aea0a812360ea",
+    "sequences": 15,
+    "generated_targets": 555,
+    "full_vocabulary_logit_elements_bitwise_equal": 56235,
+    "full_vocabulary_raw_logprob_elements_bitwise_equal": 12765,
+    "engine_sampled_raw_logprobs_bitwise_equal": 555,
+    "gradient_batches": 4,
+    "parameter_gradient_leaves_per_batch": 46,
+    "parameter_gradient_elements_per_batch": [
+      474628,
+      474628,
+      474628,
+      474628
+    ],
+    "max_gradient_abs_error": 4.1987732402049005e-08,
+    "max_weighted_loss_abs_error": 2.384185791015625e-07,
+    "performance_calls": 48
+  },
+  "tolerances": {
+    "loss": {
+      "rtol": 1e-05,
+      "atol": 1e-05
+    },
+    "gradient": {
+      "rtol": 0.0001,
+      "atol": 0.0001
+    }
+  },
+  "normalizer_checks": {
+    "counterexample_cases": 13,
+    "compiled_selected_cases": 3,
+    "mapped_and_nested_mapped_cases": 4,
+    "bitwise_mismatches": 0,
+    "old_normalizer_counterexample_mismatches": 23,
+    "vocabulary_sharding": "PASS"
+  },
+  "performance": [
+    {
+      "workload": "homogeneous_burst",
+      "requests": 4,
+      "generated_per_call": 516,
+      "arms": {
+        "1": {
+          "raw_latencies": [
+            0.5678731040097773,
+            0.5743583939911332,
+            0.5697523140115663,
+            0.6234508980123792,
+            0.5767841439810582
+          ],
+          "mean_latency": 0.5824437708011828,
+          "generated_tokens_per_second": 885.9224286839126
+        },
+        "32": {
+          "raw_latencies": [
+            0.16383911098819226,
+            0.1650433909962885,
+            0.16415884101297706,
+            0.16636182100046426,
+            0.1644062310224399
+          ],
+          "mean_latency": 0.1647618790040724,
+          "generated_tokens_per_second": 3131.792397119033
+        }
+      },
+      "latency_ratio_1_over_32": 3.5350639014428005,
+      "all_tokens_logprobs_finish_reasons_exact": true
+    },
+    {
+      "workload": "heterogeneous_pending_reuse",
+      "requests": 7,
+      "generated_per_call": 35,
+      "arms": {
+        "1": {
+          "raw_latencies": [
+            0.12485358500271104,
+            0.12523985601728782,
+            0.1294518649810925,
+            0.12588772500748746,
+            0.12383332499302924
+          ],
+          "mean_latency": 0.1258532712003216,
+          "generated_tokens_per_second": 278.1016310993636
+        },
+        "32": {
+          "raw_latencies": [
+            0.06892501300899312,
+            0.0729574509896338,
+            0.07185645197751,
+            0.0693408919905778,
+            0.06844587199157104
+          ],
+          "mean_latency": 0.07030513599165715,
+          "generated_tokens_per_second": 497.82991678094925
+        }
+      },
+      "latency_ratio_1_over_32": 1.7901006722361814,
+      "all_tokens_logprobs_finish_reasons_exact": true
+    },
+    {
+      "workload": "seeded_first_token_stop",
+      "requests": 4,
+      "generated_per_call": 4,
+      "arms": {
+        "1": {
+          "raw_latencies": [
+            0.02910685699316673,
+            0.028904746024636552,
+            0.02857348701218143,
+            0.03004398601478897,
+            0.028831207018811256
+          ],
+          "mean_latency": 0.029092056612716986,
+          "generated_tokens_per_second": 137.4945763803953
+        },
+        "32": {
+          "raw_latencies": [
+            0.028387865982949734,
+            0.029263596021337435,
+            0.02834369699121453,
+            0.03211793600348756,
+            0.028558357007568702
+          ],
+          "mean_latency": 0.02933429040131159,
+          "generated_tokens_per_second": 136.35918732914544
+        }
+      },
+      "latency_ratio_1_over_32": 0.991742299360895,
+      "all_tokens_logprobs_finish_reasons_exact": true
+    }
+  ],
+  "baseline_performance_comparison": [
+    {
+      "workload": "homogeneous_burst",
+      "same_tokens_and_finish_reasons": true,
+      "rounds32_mean_latency_before": 0.16599437100812792,
+      "rounds32_mean_latency_after": 0.1647618790040724
+    },
+    {
+      "workload": "heterogeneous_pending_reuse",
+      "same_tokens_and_finish_reasons": true,
+      "rounds32_mean_latency_before": 0.0702086379926186,
+      "rounds32_mean_latency_after": 0.07030513599165715
+    },
+    {
+      "workload": "seeded_first_token_stop",
+      "same_tokens_and_finish_reasons": true,
+      "rounds32_mean_latency_before": 0.029155502596404405,
+      "rounds32_mean_latency_after": 0.02933429040131159
+    }
+  ],
+  "raw_report_sha256": {
+    "normalizer": "45b909bc9fc5f591de1e51f75be495b56f1056efa0750f1fd693a3a7307dc8e3",
+    "producer": "55bdede92d7eb337105c5978aad425a016273460bf17e34ecc19da867a9ce1e0",
+    "consumer": "debb7e01ba61ab9115aca86b8dd3fdce51a468471fb1b4d3831528c17b5b2309",
+    "performance": "e097da7f53fa2874b3bb6296a5ee37082449f5fa3f7fcd8181738740ccd241cf",
+    "execution-ledger": "6c1d071ed395b3919a0b02493890ba7f00222059a5139b6e8cbf39890132b0e2"
+  },
+  "output_archive_sha256": "e54492c7df61cd6ae1c2267bad449d4dd6f1c7ceed93eb655fdf7cd4e01fa839",
+  "local_checks": {
+    "normalizer_cpu_tests": 30,
+    "four_cpu_device_sharding": "passed",
+    "sharded_gradient_max_abs_error": 0.0,
+    "changed_file_type_errors": 0,
+    "full_repository_type_errors": 24,
+    "full_repository_type_limits": "23 missing optional imports and one pre-existing Snowball diagnostic in unchanged files"
+  },
+  "limitations": [
+    "Two-layer RoPE/NoPE/window128,H128,E2top1,vocab23,4x256 bounded fixture; not production-size",
+    "Learner uses public model/loss on explicit4x256 packed transported prefixes; single-payload convenience helper is not qualified for fixed attention",
+    "Forward/logprob equality is bitwise; public-loss vs explicit-CE gradient comparison uses existing1e-4 tolerance",
+    "Full-vocabulary reference is independent public cached teacher-forcing, tied to actual engine sampled raw logprobs and route IDs/validity",
+    "Finite completed bursts; not sustained server throughput",
+    "No parameter update, optimizer state or external vLLM/SkyRL integration"
+  ]
+}

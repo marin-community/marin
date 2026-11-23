@@ -16,7 +16,9 @@ import jmp
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from levanter.inference.snowball_loading import load_snowball_serving_model
 from levanter.models.lm_model import LmHeadModel
+from levanter.models.snowball import SnowballConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from transformers import PreTrainedTokenizerBase
@@ -45,13 +47,7 @@ LEVANTER_DTYPES = ("bfloat16", "float16", "float32")
 
 @runtime_checkable
 class SupportsPagedGeneration(Protocol):
-    """A Levanter model the paged-decode inference engine can drive.
-
-    :meth:`LevanterBackend.serve` builds an ``InferenceEngine`` that calls ``initial_cache`` and
-    ``decode``. A model that implements only the full-forward ``LmHeadModel`` interface -- e.g.
-    Snowball, which has no paged decode for grug attention yet -- cannot be served through it, so
-    ``serve`` rejects it up front rather than after the (large) weight load.
-    """
+    """The model operations required by the paged inference engine."""
 
     def initial_cache(self, spec, *, dtype): ...
 
@@ -66,6 +62,7 @@ class LevanterServedModel:
     model_id: str
     chat_template_content: str | None
     uvicorn: BackgroundServer
+    server: InferenceServer
 
     @property
     def metrics_url(self) -> None:
@@ -112,7 +109,8 @@ class LevanterBackend:
         tensor_parallel_size = spec.tensor_parallel_size
         if tensor_parallel_size is None:
             attention_heads, key_value_heads = read_attention_heads(spec.weights, spec.revision)
-            tensor_parallel_size = select_tensor_parallel_size(attention_heads, num_chips, key_value_heads)
+            tensor_chips = num_chips // self.config.expert_parallel_size
+            tensor_parallel_size = select_tensor_parallel_size(attention_heads, tensor_chips, key_value_heads)
         return replace(spec, num_chips=num_chips, tensor_parallel_size=tensor_parallel_size)
 
     @contextmanager
@@ -147,7 +145,7 @@ class LevanterBackend:
             model_config = dataclasses.replace(model_config, **dict(config_overrides))
         trainer = TrainerConfig(
             mp=jmp.get_policy(f"p={dtype},c={dtype}"),
-            mesh=inference_mesh(spec.num_chips, spec.tensor_parallel_size),
+            mesh=inference_mesh(spec.num_chips, spec.tensor_parallel_size, self.config.expert_parallel_size),
             use_explicit_mesh_axes=model_config.requires_explicit_mesh_axes,
         )
         tokenizer = load_tokenizer(spec.tokenizer_source, revision=spec.tokenizer_revision)
@@ -167,13 +165,25 @@ class LevanterBackend:
         )
 
         with trainer.use_device_mesh():
-            model = converter.load_pretrained(
-                model_config.model_type,
-                ref=checkpoint_ref,
-                config=model_config,
-                dtype=trainer.mp.compute_dtype,
-                axis_mapping=trainer.parameter_axis_mapping,
-            )
+            if self.config.snowball_layerwise_load:
+                if not isinstance(model_config, SnowballConfig):
+                    raise ValueError("Layerwise serving load requires a Snowball checkpoint")
+                model = load_snowball_serving_model(
+                    converter,
+                    checkpoint_ref,
+                    model_config,
+                    dtype=trainer.mp.compute_dtype,
+                    axis_mapping=trainer.parameter_axis_mapping,
+                    pack_expert_weights=self.config.snowball_pack_expert_weights,
+                )
+            else:
+                model = converter.load_pretrained(
+                    model_config.model_type,
+                    ref=checkpoint_ref,
+                    config=model_config,
+                    dtype=trainer.mp.compute_dtype,
+                    axis_mapping=trainer.parameter_axis_mapping,
+                )
             yield LoadedLevanterModel(
                 model=model,
                 trainer=trainer,
@@ -183,7 +193,9 @@ class LevanterBackend:
             )
 
     @contextmanager
-    def serve(self, spec: ModelSpec) -> Iterator[LevanterServedModel]:
+    def serve(
+        self, spec: ModelSpec, *, model_config_overrides: Mapping[str, Any] | None = None
+    ) -> Iterator[LevanterServedModel]:
         # Reject models the inference engine cannot drive before the weight load: resolving the model
         # class from the HF config is cheap, loading the weights is not. (Forward-only scoring via
         # load_model has no such requirement.)
@@ -196,7 +208,7 @@ class LevanterBackend:
                 "paged initial_cache/decode), so it cannot be served through the Levanter inference "
                 "engine. Score it with LevanterBackend.load_model, or serve it with vLLM."
             )
-        with self.load_model(spec) as loaded:
+        with self.load_model(spec, model_config_overrides) as loaded:
             chat_template_content = tool_chat_template(loaded.tokenizer)
             # InferenceServer.create must build the engine on-mesh, so it runs inside load_model's
             # device-mesh context; the serve loop below then runs off-mesh, as before.
@@ -205,6 +217,7 @@ class LevanterBackend:
                     trainer=loaded.trainer,
                     tokenizer=tokenizer_ref,
                     model_name=spec.api_model,
+                    capture_routes=self.config.capture_routes,
                     service=InferenceEngineConfig(
                         max_seq_len=loaded.max_seq_len,
                         max_seqs=self.config.max_seqs,
@@ -212,6 +225,7 @@ class LevanterBackend:
                         hbm_utilization=self.config.hbm_utilization,
                         max_queued_tokens=max(_MIN_QUEUED_TOKENS, self.config.max_seqs),
                         compute_dtype=jnp.dtype(loaded.compute_dtype),
+                        return_policy_logprobs=self.config.return_policy_logprobs,
                     ),
                 ),
                 model=loaded.model,
@@ -229,33 +243,27 @@ class LevanterBackend:
                     model_id=spec.api_model,
                     chat_template_content=chat_template_content,
                     uvicorn=background,
+                    server=server,
                 )
         finally:
             server.shutdown()
 
 
-def inference_mesh(num_chips: int, tensor_parallel_size: int) -> MeshConfig:
-    """Build the serving mesh: ``model`` shards the model, ``data`` absorbs the rest of the slice.
-
-    A mesh must cover every chip, and Levanter shards attention heads and MLPs across the ``model``
-    axis, so the model axis is the tensor-parallel width and whatever chips remain land on
-    ``data``. When the chip count divides the model's head count the whole slice goes on the model
-    axis (``data`` is 1); a head count the slice cannot divide leaves chips over, and they
-    replicate the model rather than shard it — correct, but duplicated work.
-    """
-    data, remainder = divmod(num_chips, tensor_parallel_size)
+def inference_mesh(num_chips: int, tensor_parallel_size: int, expert_parallel_size: int = 1) -> MeshConfig:
+    """Assign the serving slice to tensor, expert, and data axes."""
+    if min(num_chips, tensor_parallel_size, expert_parallel_size) < 1:
+        raise ValueError("Serving mesh dimensions must be positive")
+    devices_per_replica = tensor_parallel_size * expert_parallel_size
+    data, remainder = divmod(num_chips, devices_per_replica)
     if remainder:
-        raise ValueError(f"tensor_parallel_size={tensor_parallel_size} does not divide the {num_chips}-chip slice.")
-    if data > 1:
-        logger.warning(
-            "tensor_parallel_size=%d does not span all %d chips; the model replicates %d ways.",
-            tensor_parallel_size,
-            num_chips,
-            data,
+        raise ValueError(
+            f"The serving mesh {tensor_parallel_size} x {expert_parallel_size} does not divide {num_chips} chips."
         )
-    # Snowball's explicit PartitionSpecs name both axes even when they do not shard this slice.
-    # Keep them on the serving mesh so its forward pass can reshard tokens and expert weights.
-    return MeshConfig(axes={"replica": 1, "data": data, "model": tensor_parallel_size, "expert": 1, "context": 1})
+    if data > 1:
+        logger.warning("The serving mesh uses %d model replicas across %d chips.", data, num_chips)
+    return MeshConfig(
+        axes={"replica": 1, "data": data, "model": tensor_parallel_size, "expert": expert_parallel_size, "context": 1}
+    )
 
 
 def validate_levanter_dtype(dtype: str) -> str:

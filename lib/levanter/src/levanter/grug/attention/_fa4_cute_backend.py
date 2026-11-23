@@ -84,6 +84,7 @@ def segmented_flash_attention_forward(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
     q_offset: jax.Array,
+    precise_values: bool = False,
 ) -> tuple[jax.Array, jax.Array]:
     """FA4/CuTe segmented attention forward entry point.
 
@@ -100,6 +101,7 @@ def segmented_flash_attention_forward(
         q_offset: Context-parallel shard offset, shape [1] int32. Local query ``i`` sits at
             global position ``i + q_offset``, which is the causal upper bound the kernel
             applies. The query slice must fit within K/V; unpartitioned queries use zero.
+        precise_values: Include residual probability products with the segmented CUDA kernel.
 
     Returns:
         ``(out, lse)`` where ``out`` has shape [B, Sq, Hq, Dv] and ``lse`` has
@@ -112,6 +114,8 @@ def segmented_flash_attention_forward(
         raise _optional_dependency_error() from exc
 
     if kernel_config.sm100_forward is not None:
+        if precise_values:
+            raise ValueError("Precise value accumulation requires the segmented CUDA kernel")
         config = kernel_config.sm100_forward
         # One sparse query block spans every Q stage in the upstream schedule.
         sparse = _packed_segment_forward_block_sparse_indices_with_full(
@@ -166,6 +170,7 @@ def segmented_flash_attention_forward(
         tile_m=forward_tile[0],
         tile_n=forward_tile[1],
         num_threads=num_threads,
+        precise_values=precise_values,
     )
     input_spec, output_spec = _cutlass_attention_forward_specs(
         modules,

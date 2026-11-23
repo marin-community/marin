@@ -169,6 +169,7 @@ def segmented_flash_attention_forward_launcher(
     tile_m: int = 128,
     tile_n: int = 64,
     num_threads: int = 128,
+    precise_values: bool = False,
 ) -> Any:
     """Build a JAX/CUTLASS-callable segmented FlashAttention forward launcher.
 
@@ -182,6 +183,7 @@ def segmented_flash_attention_forward_launcher(
         tile_m: Query tile size.
         tile_n: Key/value tile size.
         num_threads: CUDA threads per CTA.
+        precise_values: Include the residual from casting probabilities to the input dtype.
 
     Returns:
         A ``cute.jit`` launcher with the JAX ``cutlass_call`` signature:
@@ -756,6 +758,10 @@ def segmented_flash_attention_forward_launcher(
                 ),
             )
             tOrS = cute.make_tensor(rP.iterator, rP_mma_view)
+            if cutlass.const_expr(precise_values):
+                residual = cute.make_fragment_like(rP)
+                residual.store((acc_S.load() - rP.load().to(cutlass.Float32)).to(self._dtype))
+                tOrSResidual = cute.make_tensor(residual.iterator, rP_mma_view)
             cute.copy(
                 smem_copy_params.smem_tiled_copy_V,
                 smem_copy_params.tOsVt[None, None, 0],
@@ -775,6 +781,14 @@ def segmented_flash_attention_forward_launcher(
                     mma_params.tOrVt[None, None, k],
                     mma_params.acc_O,
                 )
+                if cutlass.const_expr(precise_values):
+                    cute.gemm(
+                        mma_params.tiled_mma,
+                        mma_params.acc_O,
+                        tOrSResidual[None, None, k],
+                        mma_params.tOrVt[None, None, k],
+                        mma_params.acc_O,
+                    )
 
         @cute.jit
         def softmax_rescale_O(

@@ -1,127 +1,59 @@
-# Native learner and inference integration
+# Native Snowball inference and learner handoff
 
-November 22, 2026, 16:17 PST snapshot. Branch:
-[`codex/dlwh-levanter-rl`](https://github.com/marin-community/marin/tree/codex/dlwh-levanter-rl).
-This branch contains the unified policy learner, pipeline backend, native
-Snowball learner, inference integration, and the validation/diagnostic work from
-this effort. The implementation inventory below is against frozen main
-`fda7484bbfe957c89d08b7d58dbaac3396d2f4bc`, inspected at `20a1f40b75`.
+The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
+and cached decode through a shared runtime. The Marin backend owns checkpoint
+and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
+sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
 
-Inference still runs in SkyRL's vLLM engines. The new work lets the JAX learner
-publish its compute-policy weights into those engines and verifies which policy
-produced returned tokens. This work has not added a native Snowball serving path
-or a public binary inference API.
+| Gate | Integrated path |
+| --- | --- |
+| Paged inference | Snowball initializes KV pages and runs prefill and decode with GPU and TPU implementations. Tests cover mixed requests, compact short-window KV, and reuse of retained prompt pages. |
+| Versioned installation | The runtime stages and checks candidate arrays before swapping model and version. Pause and version fences invalidate earlier admission and cache state. Both endpoints return the emitting policy identity and reject stale expectations. |
+| OpenAI and binary serving | Both endpoints accept exact prompt IDs and expose generated IDs, finish reasons, policy version, and separate policy and behavior scores. Each can return the Snowball route payload. |
+| Router replay | Capture uses the optimized forward and keeps route rows alongside retained prefixes. The learner can validate the emitted positions, align routes against padded rows, move them during packing, and consume them in differentiable policy scoring. |
+| Fixed-input qualification | The benchmark compares learner scoring, prefill and cached decode with fixed weights and input tokens. Report numerical KL separately from the reference-KL penalty used in the RL objective. |
 
-Levanter already has a paged inference engine and OpenAI server. The trainable
-Snowball model currently does not implement the `initial_cache` interface used
-by that engine, so native Snowball paged decode still needs implementation and
-qualification. The active quick loop uses vLLM throughout. See the existing
-[engine](lib/levanter/src/levanter/inference/engine.py),
-[OpenAI server](lib/levanter/src/levanter/inference/openai.py), and
-[Snowball model](lib/levanter/src/levanter/models/snowball.py).
-The existing Levanter server exposes chat/completions and text completions;
-its completion input schema accepts text rather than raw token IDs. Its SSE
-adapter emits completed generations rather than incremental decoding events.
-Those surfaces need separate compatibility and performance qualification.
+## Benchmarks
 
-## What is here
+The pinned AgentX workload uses the 67B-A2B v0.1 revision, 64K context, 128
+offered clients, and a 180-second measurement. The published inference source
+at `15bc5e751c` measured 575.55 versus 549.46 output tokens/s on v5p-8,
+583.52 versus 554.00 on v6e-8, and 621.18 versus 590.24 on 8× H100. These
+are the pre-integration native and compiled vLLM baselines. The integrated
+replay-on/off overhead and vLLM gap have their own measurements.
+[AgentX results and launch settings](docs/reports/snowball-inference-status-2026-11-20.md)
 
-| Area | Added in this branch | Existing infrastructure retained | Remaining work |
-| --- | --- | --- | --- |
-| Weight transfer | A Snowball JAX publication plan and Torch parent sender map sharded learner tensors into the existing expert-block inventory. Dense transfers are sliced and individual expert matrices are bounded; no HF checkpoint is written for each update. | SkyRL's expert-block installation, NCCL transport, receiver placement and publication fencing. | Qualify updated full-model weights after restart, measure transfer latency and staging memory, then reduce host staging/serialization where measurements justify it. |
-| Binary protocol | Length-prefixed pickle-protocol-5 frames carry NumPy arrays between the trusted local Torch parent and isolated JAX child. A dedicated response pipe keeps logs off the protocol. | Ray calls and the existing engine interfaces. | A binary/tensor inference request-response API, sharing semantics with the OpenAI adapter. The new learner IPC is a separate interface. |
-| OpenAI protocol | Generation receipts on the existing `generate` and chat paths record returned-token policy stamps, including retry handling and bounded accounting. | SkyRL's OpenAI HTTP bridge, vLLM engines, HTTP routing and pause/resume machinery. | One backend contract exercised through both binary and OpenAI adapters, with exact token IDs, logprob semantics, policy identity and optional routing metadata preserved. |
-| Router replay | No Levanter router-decision replay was added. Native configuration and batch validation reject it. | SkyRL/Megatron's existing replay facilities. | Carry captured MoE expert choices through rollout responses, batching, packing and the native model, and consume them in scoring and backward recomputation. |
-| KL disabled | The native quick-loop bridge requires KL loss and reward KL disabled, uses no reference actor/scores, and supplies zero KL weights. | The generic policy objective can also consume fixed-reference scores when configured separately. | Training-versus-serving distribution parity is a separate acceptance gate; disabling the KL penalty does not establish it. |
+The four-chip TPUv4 fixed-schedule fixture matched all evaluated FP32 logits
+between the learner, prefill, and cached decode. Max logprob error and
+full-vocabulary forward KL were both zero. The native Splash control had
+maximum absolute logit error 0.0004404 and maximum mean forward KL
+`7.56e-9` nats across the reported comparisons.
 
-The transfer path is JAX compute view → bounded host payload → Torch sender →
-existing expert-block/NCCL receivers → vLLM installation. It does not yet provide
-a direct JAX-to-vLLM GPU-buffer path. Receiver byte replay verifies installed
-weights; it does not replay the MoE router's expert choices.
+The production-engine replay A/B used the same requests and seeds at 32
+decode rounds. Generated tokens, sampled logprobs, and finish reasons
+matched bit-for-bit. Timing includes the serialized route payloads.
 
-Implementation:
-[publication plan](lib/marin/src/marin/rl/levanter_publication.py),
-[sender](vendor/skyrl/skyrl-train/skyrl_train/weight_sync/expert_block/levanter_sender.py),
-[local learner protocol](lib/marin/src/marin/rl/levanter_worker_protocol.py),
-[inference client and receipts](vendor/skyrl/skyrl-train/skyrl_train/inference_engines/inference_engine_client.py),
-[native batch contract](vendor/skyrl/skyrl-train/skyrl_train/workers/levanter_batch.py),
-[native configuration guards](vendor/skyrl/skyrl-train/skyrl_train/utils/utils.py).
+| TPUv4 fixture | Replay off (output tok/s) | Replay on (output tok/s) | Throughput change |
+| --- | ---: | ---: | ---: |
+| Homogeneous burst | 5,701 | 5,027 | −11.8% |
+| Mixed requests with slot reuse | 948 | 739 | −22.1% |
 
-## What we want from inference
+[TPUv4 qualification](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-qualification-20261122-v3)
 
-For native Levanter serving, implement and qualify Snowball's cache, prefill and
-decode interface, then its versioned weight-installation boundary. Reuse the
-learner's model, precision and routing contracts where possible.
+The full-model v5p-8 job runs both replay arms with raw policy scores enabled.
+Both use the same worker and pinned 64K AgentX traffic. The measured native
+and compiled vLLM gap is a separate acceptance gate.
+[Paired v5p-8 AgentX runs](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-replay-pair-20261122)
 
-Use one inference backend contract with a binary/tensor adapter for the training
-loop and an OpenAI-compatible adapter for agent and tool clients. Both should
-preserve the same prompt/completion token identity, positions, sampling settings,
-stop/truncation behavior, policy version and logprob definitions. Raw policy
-scores and sampling-distribution behavior scores need distinct fields. An
-adapter must expose unsupported capabilities explicitly.
+## Distributed rollout and publication
 
-Weight publication needs a complete, versioned transaction: freeze the learner
-snapshot, transfer the declared tensors, verify all receivers, install the
-version, then admit generation. Measure publication time and memory independently
-of rollout time. A successful transfer, a resumed engine and a response from the
-new policy are separate observations.
-
-For MoE router replay, preserve token/layer/top-k alignment and padding through
-both protocols and all batching transformations. Replay must work through the
-native forward and recomputation paths before it can be an inference-parity
-claim. The current Levanter bridge rejects `routed_experts` and
-`moe_router_replay`; accepting those fields without consuming them would be
-incorrect.
-
-“Zero KL” has two meanings. Zero reference-KL penalty is already the native
-quick-loop configuration: `use_kl_loss` and `use_kl_in_reward` are false. A zero coefficient alone
-does not remove the existing reference-model requirement when a KL flag remains
-enabled. Zero training/serving KL means that scoring and
-inference implement the same policy distribution. That requires a shared
-contract for tokens, routing, masks, positions, compute precision and sampling
-transforms. Test identical weights and fixed token sequences through training
-scoring, inference prefill and cached decode; report logprob differences and a
-stated KL measurement. Exact weight bytes alone do not prove equal
-distributions. Router replay can remove routing differences; other numerical
-differences still need measurement.
-
-Existing SkyRL importance-ratio diagnostics can compare selected-token learner
-and rollout logprobs at zero staleness, including absolute log-ratio mean, maximum
-and p99. These are sampled-token measurements, not full-vocabulary KL. The
-`policy/rollout_train_prob_diff_mean` metric averages `exp(log_ratio)`, so its
-perfect-match value is 1. See the existing
-[forward metrics](vendor/skyrl/skyrl-train/skyrl_train/batch_metrics.py) and
-[importance-ratio diagnostics](vendor/skyrl/skyrl-train/skyrl_train/utils/importance_ratio_diagnostics.py).
-No training/serving parity result is claimed here.
-
-## Evidence and open gates
-
-The running full-model diagnostic is `2026.11.22.3`, executing
-`baa10702aec4cfd62e0aebb2cef8c336974172ae`. Its accepted coordinator and GPU
-bundles match all 4,588 frozen source entries. All 670 materialized configuration
-fields match the frozen recipe after the two generated attempt identifiers and
-source-derived staging paths are accounted for.
-
-At the snapshot above, all four native learner processes had initialized the
-67,078,882,816-parameter model on 32 H100s with data4/expert8. Initial-state
-finiteness candidates and joint passing verdicts were present for every rank.
-All eight vLLM receivers reported zero byte mismatches for initial policy version
-0, comparing 19,687,358,464 bytes each. Returned generation carried stamp 1;
-the convention is weight version `v` → returned-token stamp `v + 1`.
-
-This establishes initial publication and returned generation. Updated-policy
-publication, full-model restart/continuation, and the matched 25-update
-Megatron/SkyRL-versus-native-Levanter comparison remain open. Tiny GPU checkpoints
-restore exactly, but a live update and a fresh-process update from the same saved
-state fail strict post-update state/score equality. Identical calls to one pure
-compiled gradient program can also differ. The short-sequence MHA fixture with
-64 values per attention head (D64) has a reproduced history-dependent NaN
-failure; the full model uses a separate D128/GQA4 path. These results do not establish training/serving
-zero KL, and no numerical tolerance has been relaxed.
-
-The next gates are full-model finite continuation plus updated publication and
-generation; a common two-protocol inference contract with router replay;
-fixed-input training/serving numerical qualification; and measured quality and
-performance for Megatron/SkyRL and native Levanter on the same quick-loop recipe.
-Detailed execution history and current run receipts
-are summarized in the [quick-loop status](experiments/post_training/inventory/levanter-quick-loop-status.md).
+The SkyRL quick-loop recipe uses its vLLM engine group and expert-block
+NCCL publication. Its initial full-model installation verified 19,687,358,464
+bytes per vLLM receiver on eight H100s and returned the weight version zero
+stamp of one. The native server has its own single-runtime staged install.
+The worker bridge accepts a version-bound native route payload per
+trajectory and preserves that binding through batch slicing and packing. The
+distributed driver still needs to launch native serving replicas and attach
+those payloads when it assembles the trajectories. Full-model updated-policy publication, restart and
+continuation, and matched 25-update comparisons remain qualification gates.
+[Quick-loop run status](experiments/post_training/inventory/levanter-quick-loop-status.md)

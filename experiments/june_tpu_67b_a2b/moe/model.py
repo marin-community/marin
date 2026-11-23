@@ -37,8 +37,10 @@ from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
+    PreparedMoERouteCapture,
     QBRoutedMoE,
     validate_moe_implementation,
+    validate_prepared_moe_route_capture,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, _mesh_axis_size, unshard
@@ -537,6 +539,7 @@ class MoEMLP(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         token_valid: Bool[Array, "B S"],
+        route_capture: PreparedMoERouteCapture | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
@@ -548,11 +551,21 @@ class MoEMLP(eqx.Module):
             router_bias=self.router_bias,
             expert_mlp=self.expert_mlp,
             mesh=get_abstract_mesh(),
+            route_capture=route_capture,
         )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, router_stats
+
+    def capture_routes(self, x: Float[Array, "B S D"], token_valid: Bool[Array, "B S"]) -> PreparedMoERouteCapture:
+        """Capture this layer's routes in June's flattened token order."""
+        return self.routed_moe.capture_routes(
+            rearrange(x, "b s d -> (b s) d"),
+            rearrange(token_valid, "b s -> (b s)"),
+            router=self.router,
+            router_bias=self.router_bias,
+        )
 
 
 class Block(eqx.Module):
@@ -592,6 +605,7 @@ class Block(eqx.Module):
         use_pko: bool = False,
         disable_long_rope: bool = False,
         position_ids: jax.Array | None = None,
+        route_capture: PreparedMoERouteCapture | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # lax.cond so the body has a uniform shape across scan iterations:
@@ -619,11 +633,52 @@ class Block(eqx.Module):
             batch_size=x.shape[0],
             sequence_length=x.shape[1],
         )
-        mlp_out, router_stats = self.mlp(mlp_in, token_valid)
+        mlp_out, router_stats = self.mlp(mlp_in, token_valid, route_capture=route_capture)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
         return x, router_stats
+
+    def capture_routes(
+        self,
+        x: Float[Array, "B S D"],
+        short_mask: AttentionMask | jax.Array,
+        long_mask: AttentionMask | jax.Array,
+        use_long_mask: Bool[Array, ""] | bool,
+        use_pko: bool,
+        disable_long_rope: bool,
+        position_ids: jax.Array | None,
+    ) -> tuple[Float[Array, "B S D"], PreparedMoERouteCapture]:
+        """Run one block and capture routes from its normalized MLP input."""
+        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_out = jax.lax.cond(
+            jnp.asarray(use_long_mask, dtype=jnp.bool_),
+            lambda _: self.attn(
+                attn_in,
+                long_mask,
+                use_pko=use_pko,
+                disable_rope=disable_long_rope,
+                qk_mult_scale=self.attn.cfg.qk_mult_long_scale,
+                position_ids=position_ids,
+            ),
+            lambda _: self.attn(
+                attn_in,
+                short_mask,
+                use_pko=False,
+                disable_rope=False,
+                qk_mult_scale=1.0,
+                position_ids=position_ids,
+            ),
+            operand=None,
+        )
+        x = x + attn_out
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        token_valid = token_validity_from_attention_mask(short_mask, batch_size=x.shape[0], sequence_length=x.shape[1])
+        capture = self.mlp.capture_routes(mlp_in, token_valid)
+        mlp_out, _ = self.mlp(mlp_in, token_valid, route_capture=capture)
+        if self.shared is not None:
+            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        return x + mlp_out, capture
 
 
 def _long_layer_schedule(num_layers: int) -> jax.Array:
@@ -691,6 +746,7 @@ class Transformer(eqx.Module):
         mask: AttentionMask | jax.Array | None = None,
         *,
         position_ids: jax.Array | None = None,
+        route_captures: tuple[PreparedMoERouteCapture, ...] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -707,6 +763,20 @@ class Transformer(eqx.Module):
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        token_valid = token_validity_from_attention_mask(
+            short_mask, batch_size=token_ids.shape[0], sequence_length=token_ids.shape[1]
+        ).reshape(-1)
+        if route_captures is not None:
+            if len(route_captures) != cfg.num_layers:
+                raise ValueError("route_captures must contain one capture per June Snowball layer")
+            if not isinstance(token_valid, jax.core.Tracer):
+                for route_capture in route_captures:
+                    validate_prepared_moe_route_capture(
+                        route_capture,
+                        token_valid,
+                        num_experts=cfg.num_experts,
+                        num_experts_per_token=cfg.num_experts_per_token,
+                    )
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -721,7 +791,14 @@ class Transformer(eqx.Module):
                 is_long = i % LONG_ATTENTION_INTERVAL == LONG_ATTENTION_INTERVAL - 1 or is_last
                 use_pko = is_long and not cfg.disable_pko
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope, position_ids
+                    hidden,
+                    short_mask,
+                    long_mask,
+                    is_long,
+                    use_pko,
+                    cfg.disable_long_rope,
+                    position_ids,
+                    None if route_captures is None else route_captures[i],
                 )
                 moe_router_stats.append(router_stats)
             router_metrics = {
@@ -739,17 +816,32 @@ class Transformer(eqx.Module):
 
             def _scan_layers(
                 carry_hidden: Float[Array, "B S D"],
-                scan_inputs: tuple[Block, Bool[Array, ""]],
+                scan_inputs: tuple[Block, Bool[Array, ""], PreparedMoERouteCapture | None],
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-                layer, layer_use_long_mask = scan_inputs
+                layer, layer_use_long_mask, route_capture = scan_inputs
                 return eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope, position_ids
+                    carry_hidden,
+                    short_mask,
+                    long_mask,
+                    layer_use_long_mask,
+                    False,
+                    cfg.disable_long_rope,
+                    position_ids,
+                    route_capture,
                 )
 
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers,
                 hidden,
-                xs=(self.stacked_blocks.stacked, mask_schedule),
+                xs=(
+                    self.stacked_blocks.stacked,
+                    mask_schedule,
+                    (
+                        jax.tree.map(lambda *captures: jnp.stack(captures), *route_captures)
+                        if route_captures is not None
+                        else None
+                    ),
+                ),
                 unroll=cfg.scan_unroll,
             )
             router_metrics = {
@@ -774,6 +866,35 @@ class Transformer(eqx.Module):
         hidden, _ = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
+    def capture_route_captures(
+        self, token_ids: Int[Array, "B S"], mask: AttentionMask | jax.Array | None = None
+    ) -> tuple[PreparedMoERouteCapture, ...]:
+        """Capture one prepared route batch per tuple block."""
+        if self.blocks is None:
+            raise ValueError("June Snowball route capture requires the tuple-block transformer path")
+        if mask is None:
+            mask = AttentionMask.causal()
+        cfg = self.config
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        hidden = self.token_embed.at[token_ids].get(out_sharding=_batch_spec())
+        hidden = self.embed_gated_norm(self.embed_norm(jax.lax.optimization_barrier(hidden)))
+        captures = []
+        for index, block in enumerate(self.blocks):
+            is_long = index % LONG_ATTENTION_INTERVAL == LONG_ATTENTION_INTERVAL - 1 or index == len(self.blocks) - 1
+            hidden, capture = block.capture_routes(
+                hidden,
+                short_mask,
+                long_mask,
+                is_long,
+                is_long and not cfg.disable_pko,
+                cfg.disable_long_rope,
+                None,
+            )
+            captures.append(capture)
+        return tuple(captures)
+
     def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
@@ -784,8 +905,9 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        route_captures: tuple[PreparedMoERouteCapture, ...] | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask, route_captures=route_captures)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 

@@ -6,7 +6,7 @@ Weights describe one complete optimizer mini-batch, including all its temporal
 microbatches and data ranks. The JAX process only names/shards these arrays.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -14,7 +14,7 @@ import torch
 from omegaconf import DictConfig
 
 from skyrl_train.objective.reduction import policy_data_weights
-from skyrl_train.training_batch import TrainingInputBatch
+from skyrl_train.training_batch import NativeSnowballRouteRows, TrainingInputBatch
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,7 @@ class LevanterBatchPayload:
     arrays: dict[str, np.ndarray | None]
     response_length: int
     global_step: int | None
+    native_routes: NativeSnowballRouteRows | None = None
 
     @property
     def batch_size(self) -> int:
@@ -31,11 +32,17 @@ class LevanterBatchPayload:
 
     def as_dict(self) -> dict[str, Any]:
         """Return a process payload without importing SkyRL in the consumer."""
-        return {
+        result = {
             "arrays": self.arrays,
             "response_length": self.response_length,
             "global_step": self.global_step,
         }
+        if self.native_routes is not None:
+            result.update(
+                route_capture_payloads=self.native_routes.payloads,
+                rollout_policy_id=self.native_routes.policy_id,
+            )
+        return result
 
 
 def _array(tensor: torch.Tensor, dtype: torch.dtype) -> np.ndarray:
@@ -46,7 +53,7 @@ def _array(tensor: torch.Tensor, dtype: torch.dtype) -> np.ndarray:
 def forward_payload(data: TrainingInputBatch) -> LevanterBatchPayload:
     """Preserve left-padded prompt/right-padded response scoring coordinates."""
     if data.routed_experts is not None:
-        raise ValueError("Levanter quick-loop bridge does not support router replay")
+        raise ValueError("Levanter replay requires Snowball payloads with token binding and QB thresholds")
     metadata = data.metadata or {}
     response_length = int(metadata["response_length"])
     tokens = data["sequences"]
@@ -71,6 +78,7 @@ def forward_payload(data: TrainingInputBatch) -> LevanterBatchPayload:
         },
         response_length=response_length,
         global_step=metadata.get("global_step"),
+        native_routes=data.native_snowball_routes,
     )
 
 
@@ -135,7 +143,8 @@ def policy_payload(data: TrainingInputBatch, algorithm: DictConfig) -> LevanterB
             raise ValueError(f"{name} must be finite at trainable positions")
         return _array(values, torch.float32)
 
-    return LevanterBatchPayload(
+    return replace(
+        payload,
         arrays=payload.arrays
         | {
             "advantages": sanitized("advantages"),
@@ -145,6 +154,4 @@ def policy_payload(data: TrainingInputBatch, algorithm: DictConfig) -> LevanterB
             "kl_weights": np.zeros(shape, dtype=np.float32),
             "loss_mask": _array(loss_mask, torch.float32),
         },
-        response_length=payload.response_length,
-        global_step=payload.global_step,
     )

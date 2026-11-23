@@ -41,11 +41,13 @@ from jaxlib import xla_client
 from levanter.checkpoint import load_checkpoint, load_checkpoint_metadata, save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.distributed import DistributedConfig
+from levanter.inference.snowball_engine_replay import align_snowball_policy_routes
+from levanter.inference.snowball_replay_payload import SnowballReplayPayload
 from levanter.kernels.pallas.fused_cross_entropy_loss.api import FixedCEPlan, FixedCESignature, prepare_fixed_ce_plan
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.policy import ClippedPolicyConfig
 from levanter.policy_learner import SpmdPolicyLearner
-from levanter.policy_model import PolicyBatch, policy_model_loss
+from levanter.policy_model import PolicyBatch, PolicyRouteCaptures, policy_model_loss
 from levanter.tensorstore_serialization import _transfer_shard_to_pageable_host
 from levanter.tracker.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -510,6 +512,28 @@ class NativePolicyRuntime:
             array = jax.make_array_from_callback(values.shape, sharding, lambda index: values[index])
             return hax.named(array, response_axes if response else axes)
 
+        replay = None
+        if (route_payloads := payload.get("route_capture_payloads")) is not None:
+            assert self.state is not None
+            selected, alpha = align_snowball_policy_routes(
+                self.state.model,
+                tuple(SnowballReplayPayload.from_bytes(data) for data in route_payloads),
+                policy_id=payload["rollout_policy_id"],
+                tokens=source["tokens"],
+                token_valid=source["attention_mask"],
+                position_ids=source["position_ids"],
+            )
+
+            def named_routes(values, suffix):
+                return hax.named(
+                    jax.make_array_from_callback(values.shape, sharding, lambda index: values[index]),
+                    (*axes, *suffix),
+                )
+
+            replay = PolicyRouteCaptures(
+                named_routes(selected, ("layer", "top_k")),
+                named_routes(alpha, ("layer",)),
+            )
         batch = PolicyBatch(
             tokens=named("tokens", response=False),
             attention_mask=named("attention_mask", response=False),
@@ -520,6 +544,7 @@ class NativePolicyRuntime:
             kl_weights=named("kl_weights", response=True),
             old_logprobs=named("old_logprobs", response=True),
             reference_logprobs=None,
+            route_captures=replay,
         )
         if diagnostics:
             _diagnostic_receipt("batch_prepare_end", tokens_shape=[batch_size, sequence_length])

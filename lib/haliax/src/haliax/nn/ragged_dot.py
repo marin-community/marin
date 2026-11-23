@@ -95,13 +95,21 @@ def _megablox_tile_size() -> tuple[int, int, int]:
     return _MEGABLOX_TILE_DEFAULT
 
 
-def _megablox_tiling(m: int, k: int, n: int) -> tuple[int, int, int]:
+def _megablox_tiling(
+    m: int, k: int, n: int, *, token_tile: int | None, output_tile: int | None
+) -> tuple[int, int, int]:
     """Choose a Megablox tile for the shape of each forward or VJP GMM."""
-    tile_size = _megablox_tile_size()
-    return min(m, tile_size[0]), min(k, tile_size[1]), min(n, tile_size[2])
+    tile_m, tile_k, tile_n = _megablox_tile_size()
+    return (
+        min(m, tile_m if token_tile is None else token_tile),
+        min(k, tile_k),
+        min(n, tile_n if output_tile is None else output_tile),
+    )
 
 
-def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _ragged_dot_megablox_impl(
+    lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array, token_tile: int | None, output_tile: int | None
+) -> jax.Array:
     if _gmm_megablox is None:
         raise NotImplementedError("megablox GMM is not available (TPU-only)")
     return _gmm_megablox(
@@ -109,7 +117,7 @@ def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.A
         rhs,
         group_sizes,
         preferred_element_type=lhs.dtype,
-        tiling=_megablox_tiling,
+        tiling=functools.partial(_megablox_tiling, token_tile=token_tile, output_tile=output_tile),
         interpret=jax.default_backend() == "cpu",
     )
 
@@ -133,6 +141,7 @@ def _triton_ragged_dot_kernel(
     @pl.when(start_m < hi)
     def _compute():
         span_m = pl.ds(start_m, block_m)
+        row_mask = (start_m + jnp.arange(block_m) < hi)[:, None]
         start_n = pl.program_id(1) * out_ref.shape[1]
         acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
         k = a_ref.shape[1]
@@ -142,10 +151,10 @@ def _triton_ragged_dot_kernel(
             span_k = pl.ds(start_k, block_k)
             if k % block_k:
                 contraction_mask = start_k + jnp.arange(block_k) < k
-                a = plgpu.load(a_ref.at[span_m, span_k], mask=contraction_mask[None, :], other=0.0)
+                a = plgpu.load(a_ref.at[span_m, span_k], mask=row_mask & contraction_mask[None, :], other=0.0)
                 b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])], mask=contraction_mask[:, None], other=0.0)
             else:
-                a = plgpu.load(a_ref.at[span_m, span_k])
+                a = plgpu.load(a_ref.at[span_m, span_k], mask=row_mask, other=0.0)
                 b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
             dtype = jnp.result_type(a, b)
             return acc + plgpu.dot(a.astype(dtype), b.astype(dtype))
@@ -153,7 +162,7 @@ def _triton_ragged_dot_kernel(
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
         # Tokamax's BlockRef masks logical output edges; raw Pallas refs do not.
-        store_mask = (start_m + jnp.arange(block_m) < hi)[:, None]
+        store_mask = row_mask
         if n % out_ref.shape[1]:
             store_mask &= (start_n + jnp.arange(out_ref.shape[1]) < n)[None, :]
         plgpu.store(
@@ -172,14 +181,16 @@ def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
 
 
 @functools.lru_cache(maxsize=None)
-def _triton_default_matmul(m: int, k: int, n: int, num_groups: int, dtype) -> Callable[..., jax.Array]:
+def _triton_default_matmul(
+    m: int, k: int, n: int, num_groups: int, dtype, *, block_sizes: tuple[int, int, int] | None = None
+) -> Callable[..., jax.Array]:
     """Build the default-layout kernel for one static shape.
 
     ``pl.pallas_call`` returns a fresh ``jax.jit`` wrapper per call and JAX's
     tracing cache is keyed on function identity, so building it inline re-traces
     the kernel and its index maps at every call site.
     """
-    block_m, block_n, block_k = _triton_default_block_sizes(m, k, n)
+    block_m, block_n, block_k = block_sizes or _triton_default_block_sizes(m, k, n)
     return pl.pallas_call(
         lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(
             a,
@@ -204,13 +215,27 @@ def _triton_default_matmul(m: int, k: int, n: int, num_groups: int, dtype) -> Ca
     )
 
 
-def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _triton_default_pallas_call(
+    lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array, *, block_sizes: tuple[int, int, int] | None = None
+) -> jax.Array:
     """Raw Pallas-Triton grouped matmul for the default ragged-dot layout."""
     m, k = lhs.shape
     num_groups, _, n = rhs.shape
     cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
-    matmul = _triton_default_matmul(m, k, n, num_groups, lhs.dtype)
+    matmul = _triton_default_matmul(m, k, n, num_groups, lhs.dtype, block_sizes=block_sizes)
     return matmul(lhs, rhs, cum_rows[:-1], cum_rows[1:])
+
+
+def triton_decode_ragged_dot(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+    """Run forward-only CUDA grouped matmul with small token tiles for decode."""
+    rows, width = lhs.shape
+    token_tile, contraction_tile = (16, 32) if rows <= 32 else (32, 64)
+    _, output_tile, _ = _triton_default_block_sizes(rows, width, rhs.shape[-1])
+    # The last expert can start anywhere in the input and read a full tile.
+    padded = jnp.pad(lhs, ((0, token_tile - 1), (0, 0)))
+    return _triton_default_pallas_call(
+        padded, rhs, group_sizes, block_sizes=(token_tile, output_tile, contraction_tile)
+    )[:rows]
 
 
 def _triton_ragged_contracting_dim_dot_kernel(
@@ -839,9 +864,16 @@ def _preferred_implementations(implementation: Implementation) -> tuple[Implemen
     return ("xla",)
 
 
-def _run_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _run_impl(
+    name: Implementation,
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    megablox_token_tile: int | None,
+    megablox_output_tile: int | None,
+) -> jax.Array:
     if name == "megablox":
-        return _ragged_dot_megablox_impl(lhs, rhs, group_sizes)
+        return _ragged_dot_megablox_impl(lhs, rhs, group_sizes, megablox_token_tile, megablox_output_tile)
     if name == "triton":
         return _ragged_dot_triton_impl(lhs, rhs, group_sizes, _triton_kernel_family())
     if name == "triton_group_grid":
@@ -859,6 +891,9 @@ def ragged_dot(
     group_sizes_: jax.Array,
     ar: bool = False,
     implementation: Implementation = "auto",
+    *,
+    megablox_token_tile: int | None = None,
+    megablox_output_tile: int | None = None,
 ) -> jax.Array:
     """Grouped matrix multiply with backend-dispatched ragged dot implementations.
 
@@ -871,6 +906,8 @@ def ragged_dot(
             ``"triton"`` forces GPU Pallas Triton kernels, of the family this GPU runs by
             default; ``"triton_group_grid"`` and ``"triton_tile_map"`` force one family. ``"megablox"`` forces
             TPU megablox. ``"xla"`` forces ``jax.lax.ragged_dot_general``.
+        megablox_token_tile: Optional tile size for the token dimension on TPU.
+        megablox_output_tile: Optional tile size for the output dimension on TPU.
 
     Returns:
         A [tokens, out] array.
@@ -884,7 +921,7 @@ def ragged_dot(
 
     for impl in _preferred_implementations(implementation):
         try:
-            out = _run_impl(impl, lhs_, rhs_, group_sizes_)
+            out = _run_impl(impl, lhs_, rhs_, group_sizes_, megablox_token_tile, megablox_output_tile)
             break
         except _AUTO_FALLBACK_EXCEPTIONS as exc:
             if implementation == "auto" and impl != "xla":
@@ -910,4 +947,4 @@ def ragged_dot(
     return out
 
 
-__all__ = ["Implementation", "ragged_dot"]
+__all__ = ["Implementation", "ragged_dot", "triton_decode_ragged_dot"]

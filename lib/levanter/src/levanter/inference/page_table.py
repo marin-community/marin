@@ -14,12 +14,20 @@ from levanter.inference.utils import INVALID, is_valid
 __all__ = ["PageTable", "PageTableSpec", "PageBatchInfo"]
 
 
+def kv_pages_for_request(prompt_tokens: int, max_sequence_tokens: int, choices: int, page_size: int) -> int:
+    """Bound KV usage across choices, which share only full prompt pages."""
+    shared = prompt_tokens // page_size
+    per_sequence = (max(prompt_tokens, max_sequence_tokens) + page_size - 1) // page_size
+    return shared + choices * (per_sequence - shared)
+
+
 @dataclasses.dataclass(frozen=True)
 class PageTableSpec:
     """Lightweight description of the layout required for allocating paged KV caches."""
 
     num_pages: int
     page_size: int
+    max_seqs: int
 
 
 class PageTable(eqx.Module):
@@ -56,7 +64,7 @@ class PageTable(eqx.Module):
         return self.page_size * self.pages_per_seq
 
     def spec(self) -> PageTableSpec:
-        return PageTableSpec(num_pages=self.num_pages, page_size=self.page_size)
+        return PageTableSpec(num_pages=self.num_pages, page_size=self.page_size, max_seqs=self.max_seqs)
 
 
 class PageBatchInfo(eqx.Module):
@@ -84,6 +92,18 @@ class PageBatchInfo(eqx.Module):
 
     def __post_init__(self):
         assert isinstance(self.num_seqs, jnp.ndarray), "num_seqs must be a JAX ndarray"
+
+    def with_seq_capacity(self, capacity: int) -> "PageBatchInfo":
+        """Trim padding when the caller bounds the number of active sequences."""
+        if capacity >= self.slot_ids.axis_size("seq"):
+            return self
+        return dataclasses.replace(
+            self,
+            slot_ids=self.slot_ids["seq", :capacity],
+            page_indices=self.page_indices["seq", :capacity],
+            seq_lens=self.seq_lens["seq", :capacity],
+            cu_q_lens=self.cu_q_lens["seq", : capacity + 1],
+        )
 
     def pages_and_slots(self):
         token_dests = self.new_token_dests

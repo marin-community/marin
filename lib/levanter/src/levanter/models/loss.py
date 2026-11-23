@@ -11,8 +11,8 @@ from jax.sharding import reshard
 import haliax as hax
 from haliax import NamedArray
 from haliax.core import flatten_all_axes_but
-from haliax.nn import cross_entropy_loss_and_log_normalizers
 from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_map
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
@@ -129,6 +129,8 @@ def next_token_loss(
     reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
+    logit_soft_cap: Optional[float] = None,
+    dtype: Optional[jnp.dtype] = None,
 ):
     """
     Compute the next token loss with optional logsumexp penalty.
@@ -147,6 +149,10 @@ def next_token_loss(
         NamedArray: computed loss
     """
     Pos = logits.resolve_axis(hax.axis_name(Pos))
+    if dtype is not None:
+        logits = logits.astype(dtype)
+    if logit_soft_cap is not None:
+        logits = hax.named(jnp.tanh(logits.array / logit_soft_cap) * logit_soft_cap, logits.axes)
 
     target_y = next_token_ids(Pos, true_ids)
     target_y_full = hax.nn.one_hot(target_y, Vocab, dtype=logits.dtype)
@@ -162,6 +168,18 @@ def next_token_loss(
         weight=loss_weight,
         logsumexp_weight=logsumexp_weight,
     )
+
+
+def cross_entropy_loss_and_log_normalizers(
+    pred_y: NamedArray, Label: hax.AxisSelector, target_y: NamedArray
+) -> tuple[NamedArray, NamedArray]:
+    """Compute unfused policy cross entropy with the serving normalization schedule."""
+    vocab = pred_y.resolve_axis(Label)
+    axis = pred_y.axes.index(vocab)
+    normalizers = batch_invariant_logsumexp(jnp.moveaxis(pred_y.array, axis, -1))
+    log_normalizers = hax.named(normalizers, tuple(a for a in pred_y.axes if a != vocab))
+    loss = hax.dot(target_y, log_normalizers - pred_y, axis=vocab)
+    return loss, log_normalizers
 
 
 def cross_entropy_and_logsumexp_penalty(

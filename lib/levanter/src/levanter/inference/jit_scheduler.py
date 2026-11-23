@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+from enum import IntEnum, auto
 
 import equinox as eqx
 import haliax as hax
@@ -15,12 +16,20 @@ from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.utils import (
     INVALID,
     get_unique_in_order,
-    is_invalid,
     is_stop_signal,
     is_valid,
     masked_set,
     purge,
 )
+
+
+class FinishReason(IntEnum):
+    """Per-sequence state retained from device termination through host results."""
+
+    RUNNING = 0
+    STOP = auto()
+    LENGTH = auto()
+    ABORT = auto()
 
 
 class PackedSequence(eqx.Module):
@@ -261,8 +270,6 @@ class SequenceTable(eqx.Module):
         current_lens = self.seq_lens
         active_mask_for_updated = hax.where(valid_updated, self.used_mask["seq", safe_updated], False)
 
-        num_updated_seqs = hax.sum(valid_updated).scalar().astype(jnp.int32)
-
         masked_seq_len = (masked_max_pos + 1) * active_mask_for_updated.astype(new_counts.dtype)
         new_lens = current_lens.at["seq", safe_updated].max(masked_seq_len, mode="drop")
         # jax.debug.print("masked_seq_len={msl} new_lens={nl} safe_updated={su}", msl=masked_seq_len, nl=new_lens, su=safe_updated)
@@ -274,65 +281,31 @@ class SequenceTable(eqx.Module):
         old_num_pages_needed = num_allocated_pages
         old_num_pages_needed = hax.where(valid_updated, old_num_pages_needed["seq", safe_updated], 0)
         new_num_pages_needed = hax.where(valid_updated, new_num_pages_needed["seq", safe_updated], 0)
-        # jax.debug.print("new_num_pages_needed={nnp} old_num_pages_needed={onp}", nnp=new_num_pages_needed, onp=old_num_pages_needed)
-        # jax.debug.print(
-        #     "nnp per seq: seq0={s0} seq1={s1} seq2={s2}",
-        #     s0=new_num_pages_needed["seq", 0],
-        #     s1=new_num_pages_needed["seq", 1],
-        #     s2=new_num_pages_needed["seq", 2],
-        # )
+        required = jnp.maximum(new_num_pages_needed.array - old_num_pages_needed.array, 0)
+        offsets = jnp.cumsum(required)
+        total_required = offsets[-1]
 
-        page_indices = self.page_indices
-        page_ref_counts = page_table.page_ref_counts
+        def allocate(state):
+            indices, refs = state
+            free = refs.array == 0
+            num_pages = page_table.num_pages
+            available = jnp.nonzero(free, size=num_pages, fill_value=num_pages)[0]
+            available = eqx.error_if(available, total_required > jnp.sum(free), "Out of free pages during allocation")
 
-        # NB seq_offset refers to the offset into updated_seqs, not the actual seq_id
-        def _alloc_pages_for_seq(seq_offset, carry):
-            indices, ref_counts = carry
-            num_needed = new_num_pages_needed["seq", seq_offset].scalar()
-            old_needed = old_num_pages_needed["seq", seq_offset].scalar()
-            seq_id = safe_updated["seq", seq_offset].scalar()
-            # jax.debug.print(
-            #     "alloc seq {seq_id} lookup nnp={nnp}", seq_id=seq_id, nnp=new_num_pages_needed["seq", seq_id]
-            # )
-            # jax.debug.print("alloc seq {seq_id} old_needed={old} num_needed={new}", seq_id=seq_id, old=old_needed, new=num_needed)
+            logical = jnp.arange(page_table.pages_per_seq)[None, :]
+            previous = old_num_pages_needed.array[:, None]
+            write = (previous <= logical) & (logical < new_num_pages_needed.array[:, None])
+            # Each sequence takes a disjoint run of the ascending free-page list.
+            ranks = (offsets - required)[:, None] + logical - previous
+            physical = available.at[jnp.where(write, ranks, num_pages)].get(mode="fill", fill_value=INVALID)
+            slots = jnp.where(write, safe_updated.array[:, None], self.max_seqs)
+            updated = indices.array.at[slots, logical].set(physical, mode="drop")
+            assigned = jnp.where(jnp.arange(num_pages) < total_required, available, num_pages)
+            updated_refs = refs.array.at[assigned].set(1, mode="drop")
+            return hax.named(updated, indices.axes), hax.named(updated_refs, refs.axes)
 
-            def body(page_idx, state):
-                indices, ref_counts = state
-                has_free = hax.any(ref_counts == 0).scalar()
-
-                ref_counts = eqx.error_if(ref_counts, ~has_free, "Out of free pages during allocation")
-
-                def do_alloc(state):
-                    indices, ref_counts = state
-                    # choose a page with the smallest ref count; when has_free, argmin will pick a zero-ref page
-                    free_page_idx = hax.argmin(ref_counts, "page")
-                    ref_counts = ref_counts.at["page", free_page_idx].add(1)
-                    indices = indices.at["seq", seq_id, "page", page_idx].set(free_page_idx)
-                    return indices, ref_counts
-
-                def no_alloc(state):
-                    # No-op; leave index INVALID so downstream gets INVALID destinations
-                    state = eqx.error_if(state, jnp.zeros(()) < 4, "INVALID!")
-                    return state
-
-                return jax.lax.cond(has_free, do_alloc, no_alloc, (indices, ref_counts))
-
-            return jax.lax.fori_loop(old_needed, num_needed, body, (indices, ref_counts))
-
-        def outer(i, carry):
-            page_indices, page_ref_counts = carry
-
-            def do_alloc(carry):
-                return _alloc_pages_for_seq(i, carry)
-
-            seq_id = updated_seqs["seq", i].scalar()
-            cond = is_valid(seq_id)
-            # jax.debug.print("outer iter {i}: seq_id={seq} is_valid={iv}", i=i, seq=seq_id, iv=is_valid(seq_id))
-
-            page_indices, page_ref_counts = jax.lax.cond(cond, do_alloc, lambda c: c, (page_indices, page_ref_counts))
-            return page_indices, page_ref_counts
-
-        page_indices, page_ref_counts = jax.lax.fori_loop(0, num_updated_seqs, outer, (page_indices, page_ref_counts))
+        base = (self.page_indices, page_table.page_ref_counts)
+        page_indices, page_ref_counts = jax.lax.cond(total_required > 0, allocate, lambda state: state, base)
 
         batch_info = self._create_batch_info(
             updated_seqs,
@@ -359,24 +332,13 @@ class SequenceTable(eqx.Module):
         seq_lens = new_lens["seq", safe_updated]
         seq_lens = hax.where(mask, seq_lens, INVALID)
 
-        token_dests = hax.full(token_slot_ids.shape, INVALID, dtype=jnp.int32)
-
-        def token_body(i, token_dests):
-            seq_id = token_slot_ids["position", i].scalar()
-            pos_id = token_pos_ids["position", i].scalar()
-
-            def assign(dest):
-                page_idx = pos_id // self.page_size
-                page_offset = pos_id % self.page_size
-                page = page_indices["seq", seq_id, "page", page_idx]
-                dest_value = hax.where(is_invalid(page), INVALID, page * self.page_size + page_offset)
-                return dest.at["position", i].set(dest_value)
-
-            seq_valid = (seq_id >= 0) & (seq_id < self.max_seqs) & is_valid(seq_id)
-            pos_valid = is_valid(pos_id)
-            return jax.lax.cond(seq_valid & pos_valid, assign, lambda d: d, token_dests)
-
-        token_dests = jax.lax.fori_loop(0, token_slot_ids.axis_size("position"), token_body, token_dests)
+        valid = is_valid(token_slot_ids) & (token_slot_ids < self.max_seqs) & is_valid(token_pos_ids)
+        safe_slots = hax.where(valid, token_slot_ids, 0)
+        safe_positions = hax.where(valid, token_pos_ids, 0)
+        pages = page_indices["seq", safe_slots, "page", safe_positions // self.page_size]
+        token_dests = hax.where(
+            valid & is_valid(pages), pages * self.page_size + safe_positions % self.page_size, INVALID
+        )
 
         batch_info = PageBatchInfo(
             slot_ids=updated_seqs,
@@ -432,34 +394,14 @@ class SequenceTable(eqx.Module):
     ) -> tuple["SequenceTable", "PageTable"]:
         assert finished_mask.ndim == 1
 
-        def dec_refcounts_for_seq(pages_row, ref_counts):
-            valid = is_valid(pages_row)
-
-            def body(i, rc):
-                def dec(rc):
-                    page = pages_row["page", i].scalar()
-                    return rc.at["page", page].add(-1)
-
-                return jax.lax.cond(valid["page", i].scalar(), dec, lambda x: x, rc)
-
-            updated = jax.lax.fori_loop(0, pages_row.axis_size("page"), body, ref_counts)
-            return hax.maximum(updated, hax.zeros_like(updated))
-
-        def body(i, state):
-            ref_counts, sequences = state
-
-            def do(state):
-                ref_counts, sequences = state
-                pages_row = sequences.page_indices["seq", i]
-                ref_counts = dec_refcounts_for_seq(pages_row, ref_counts)
-                sequences = sequences.release_slot(i)
-                return ref_counts, sequences
-
-            return jax.lax.cond(finished_mask[i], do, lambda s: s, (ref_counts, sequences))
-
-        ref_counts, sequences = jax.lax.fori_loop(0, self.max_seqs, body, (page_table.page_ref_counts, self))
-        new_page_table = dataclasses.replace(page_table, page_ref_counts=ref_counts)
-        return sequences, new_page_table
+        released = hax.named(finished_mask, "seq") & self.used_mask
+        pages = self.page_indices.array
+        destinations = jnp.where(released.array[:, None] & is_valid(pages), pages, page_table.num_pages)
+        ref_counts = page_table.page_ref_counts
+        # Each released sequence contributes one decrement per page, including shared pages.
+        updated = jnp.maximum(ref_counts.array.at[destinations].add(-1, mode="drop"), 0)
+        table = dataclasses.replace(page_table, page_ref_counts=hax.named(updated, ref_counts.axes))
+        return self.clear_slots(released), table
 
     @eqx.filter_jit(donate="all")
     def clone_pages_from(
@@ -574,8 +516,11 @@ class DecodeState(eqx.Module):
     tqueue: "TokenQueue"
     """token queue for pending decode work"""
 
-    # Cached finished flags per sequence (updated when tokens are enqueued)
-    finished: ht.bool_[NamedArray, "seq"]
+    finish_reasons: ht.i32[NamedArray, "seq"]
+
+    @property
+    def finished(self) -> ht.bool_[NamedArray, "seq"]:
+        return self.finish_reasons != FinishReason.RUNNING
 
     def reset(self):
         return DecodeState.init(
@@ -625,7 +570,7 @@ class DecodeState(eqx.Module):
             top_p=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
             prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
             tqueue=TokenQueue.init(max_queued_tokens),
-            finished=hax.zeros({"seq": max_seqs}, dtype=bool),
+            finish_reasons=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
         )
 
     @property
@@ -797,7 +742,7 @@ class DecodeState(eqx.Module):
                 if self.logprobs is not None
                 else None
             ),
-            finished=self.finished.at["seq", local_slot_id].set(False),
+            finish_reasons=self.finish_reasons.at["seq", local_slot_id].set(FinishReason.RUNNING),
         )
 
         if seq_params is not None:
@@ -849,7 +794,7 @@ class DecodeState(eqx.Module):
         logprobs = self.logprobs
         sequences = self.sequences
         counts = sequences.seq_lens
-        fins = self.finished
+        fins = self.finish_reasons
 
         # We'll also compute per-token absolute position ids to feed into the TokenQueue.
         pos_ids = hax.full_like(new_tokens, INVALID)
@@ -875,7 +820,10 @@ class DecodeState(eqx.Module):
                     padded = jnp.concatenate([jnp.full((stop_len,), INVALID, dtype=jnp.int32), row])
                     tail = jax.lax.dynamic_slice(padded, (pos + 1,), (stop_len,))
                     stop_done = is_stop_signal(hax.named(tail, axis=("position",)), self.stop_tokens["seq", sid]).array
-                f = f.at["seq", sid].set(len_done | stop_done)
+                reason = jnp.where(
+                    stop_done, FinishReason.STOP, jnp.where(len_done, FinishReason.LENGTH, FinishReason.RUNNING)
+                )
+                f = f.at["seq", sid].set(reason)
                 should_purge = should_purge.at["position", i].set(len_done | stop_done)
 
                 # record position id for this token in the outgoing queue payload
@@ -904,7 +852,7 @@ class DecodeState(eqx.Module):
         new_sequences = dataclasses.replace(sequences, seq_lens=counts)
 
         return dataclasses.replace(
-            self, tokens=tokens, logprobs=logprobs, sequences=new_sequences, tqueue=new_tqueue, finished=fins
+            self, tokens=tokens, logprobs=logprobs, sequences=new_sequences, tqueue=new_tqueue, finish_reasons=fins
         )
 
     def is_finished(self, slot_id: jnp.ndarray) -> jnp.ndarray:
@@ -1122,7 +1070,7 @@ class _DecodeOutputs(eqx.Module):
     A simple queue-like buffer for outputs emitted by the decode generation loop.
 
     Stores the flat stream of sampled token IDs and their corresponding local slot IDs, with an
-    optional logprob stream. Also carries a copy of the latest `finished` flags from `DecodeState`.
+    optional logprob stream. Also carries the terminal reasons from `DecodeState`.
 
     This mirrors the behavior of `TokenQueue` but is for host-side consumption of outputs rather than
     feeding work to the device.
@@ -1132,7 +1080,12 @@ class _DecodeOutputs(eqx.Module):
     slot_ids: ht.i32[NamedArray, "position"]
     logprobs: ht.Float[NamedArray, "position"] | None
     num_tokens: jax.Array
-    finished: ht.bool_[NamedArray, "seq"]
+    finish_reasons: ht.i32[NamedArray, "seq"]
+    policy_logprobs: NamedArray | None = None
+
+    @property
+    def finished(self) -> ht.bool_[NamedArray, "seq"]:
+        return self.finish_reasons != FinishReason.RUNNING
 
     @property
     def max_queued_tokens(self) -> int:
@@ -1143,13 +1096,18 @@ class _DecodeOutputs(eqx.Module):
         return self.tokens.axis_size("position") - self.num_tokens
 
     @staticmethod
-    def init(max_tokens: int, max_seqs: int, with_logprobs: bool = True) -> "_DecodeOutputs":
+    def init(
+        max_tokens: int, max_seqs: int, with_logprobs: bool = True, with_policy_logprobs: bool = False
+    ) -> "_DecodeOutputs":
         return _DecodeOutputs(
             tokens=hax.full({"position": max_tokens}, INVALID, dtype=jnp.int32),
             slot_ids=hax.full({"position": max_tokens}, INVALID, dtype=jnp.int32),
             logprobs=(hax.full({"position": max_tokens}, jnp.nan, dtype=jnp.float32) if with_logprobs else None),
             num_tokens=jnp.array(0, dtype=jnp.int32),
-            finished=hax.zeros({"seq": max_seqs}, dtype=bool),
+            finish_reasons=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
+            policy_logprobs=(
+                hax.full({"position": max_tokens}, jnp.nan, dtype=jnp.float32) if with_policy_logprobs else None
+            ),
         )
 
     def append(
@@ -1158,9 +1116,10 @@ class _DecodeOutputs(eqx.Module):
         new_slot_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
         new_logprobs: ht.Float[NamedArray, " position"],  # type: ignore[name-defined]
         num_new_tokens: int,
-        finished_snapshot: ht.bool_[NamedArray, "seq"],  # type: ignore[name-defined]
+        finish_reasons_snapshot: ht.i32[NamedArray, "seq"],  # type: ignore[name-defined]
+        new_policy_logprobs: NamedArray | None = None,
     ) -> "_DecodeOutputs":
-        """Append a batch of outputs and update the finished flags snapshot."""
+        """Append outputs and retain each sequence's first terminal reason."""
 
         new_tok_buf = masked_set(self.tokens, "position", self.num_tokens, new_tokens, num_new_tokens)
         new_sid_buf = masked_set(self.slot_ids, "position", self.num_tokens, new_slot_ids, num_new_tokens)
@@ -1168,13 +1127,18 @@ class _DecodeOutputs(eqx.Module):
             new_lp_buf = masked_set(self.logprobs, "position", self.num_tokens, new_logprobs, num_new_tokens)
         else:
             new_lp_buf = None
-        # Keep finished flags monotonic (once finished, always finished)
-        new_finished = self.finished | finished_snapshot
+        policy = self.policy_logprobs
+        if policy is not None:
+            assert new_policy_logprobs is not None
+            policy = masked_set(policy, "position", self.num_tokens, new_policy_logprobs, num_new_tokens)
+        # Preserve the first terminal reason while collecting multiple decode rounds.
+        new_reasons = hax.where(self.finished, self.finish_reasons, finish_reasons_snapshot)
         return dataclasses.replace(
             self,
             tokens=new_tok_buf,
             slot_ids=new_sid_buf,
             logprobs=new_lp_buf,
             num_tokens=self.num_tokens + num_new_tokens,
-            finished=new_finished,
+            finish_reasons=new_reasons,
+            policy_logprobs=policy,
         )

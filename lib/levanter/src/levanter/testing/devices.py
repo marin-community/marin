@@ -3,6 +3,10 @@
 
 """Device selection and CPU emulation for in-process JAX tests."""
 
+import os
+import subprocess
+import sys
+import textwrap
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -47,3 +51,18 @@ def use_test_devices(device_count: int) -> Iterator[list[jax.Device]]:
 
     with use_cpu_devices(device_count):
         yield jax.local_devices()
+
+
+def run_on_cpu_devices(script: str, *, device_count: int) -> None:
+    """Run a script in a fresh interpreter so XLA can set the CPU device count."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={device_count}"
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

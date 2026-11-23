@@ -8,6 +8,7 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 from haliax import AxisSelector, NamedArray
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
 
 __all__ = ["Sampler"]
 
@@ -86,10 +87,27 @@ class Sampler(eqx.Module):
             jnp.expand_dims(tokens.array.astype(jnp.int32), axis=-1),
             axis=-1,
         ).squeeze(-1)
-        log_z = jax.nn.logsumexp(sampling_logits_array, axis=-1)
+        log_z = batch_invariant_logsumexp(sampling_logits_array)
         log_prob_tokens = hax.named(selected_logits - log_z, tokens.axes)
 
         return tokens, log_prob_tokens
+
+    def sample_positions(
+        self,
+        logits: NamedArray,
+        temperatures: NamedArray,
+        *,
+        top_ps: NamedArray,
+        key: PRNGKeyArray,
+    ) -> tuple[NamedArray, NamedArray]:
+        """Sample positions with independent keys and skip vocabulary sorting when every cutoff is one."""
+        sample = hax.vmap(self, "position")
+        # Choose before vmap so JAX can skip the entire sort at runtime.
+        return jax.lax.cond(
+            hax.all(top_ps >= 1.0).scalar(),
+            lambda: sample(logits, temperatures, key=key),
+            lambda: sample(logits, temperatures, top_ps=top_ps, key=key),
+        )
 
     def _apply_top_p(
         self,
@@ -126,6 +144,9 @@ class Sampler(eqx.Module):
             [jnp.ones_like(keep_sorted[..., :1], dtype=bool), keep_sorted[..., :-1]],
             axis=-1,
         )
+        # top_p=1 is full-distribution sampling. The cutoff tolerance must not
+        # remove small tails or change the behavior logprobs consumed by RL.
+        keep_sorted = keep_sorted | (threshold >= 1.0)
         filtered_sorted_logits = jnp.where(keep_sorted, sorted_logits, -jnp.inf)
         inverse_permutation = jnp.argsort(sorted_indices, axis=-1)
         filtered_logits = jnp.take_along_axis(filtered_sorted_logits, inverse_permutation, axis=-1)

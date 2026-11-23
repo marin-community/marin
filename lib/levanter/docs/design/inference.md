@@ -1,92 +1,120 @@
-# Draft Design Document for Inference
+# Native Levanter inference
 
-> **Note**: This document contains the technical design and architecture for
-> the inference server.
+Levanter serves decoder models with a paged KV cache, continuous request
+admission, and JIT-compiled prefill and decode. Snowball uses the same model
+parameters and router as the learner, with paged attention and expert dispatch
+selected independently for serving.
 
-## References
+## Entry points
 
-* [JAX LLM Example](https://github.com/jax-ml/jax-llm-examples/blob/b282713880943cebe7183815918fb7dd60922b14/llama3/llama3_jax/model.py) <-- pretty basic kv cache, but easy to follow
-* [Fancier JAX LLM Example](https://github.com/jax-ml/jax-llm-examples/pull/22/files)
+| Layer | Responsibility |
+| --- | --- |
+| `marin.inference.levanter_backend.LevanterBackend` | Resolve the HF snapshot, tokenizer, device mesh and compute dtype, then own the server lifecycle. |
+| `levanter.inference.runtime.InferenceContext` | Normalize generation inputs, queue requests, fence policy versions and own the engine. |
+| `levanter.inference.openai` and `levanter.inference.binary` | Adapt HTTP JSON, SSE and tensor frames to the shared runtime. |
+| `levanter.inference.engine.InferenceEngine` | Admit requests, manage KV pages, and run compiled prefill and decode rounds. |
+| `levanter.models.snowball.SnowballLMHeadModel` | Implement cache allocation, paged forward, and the learner's full forward. |
 
-### MaxText
+For programmatic serving, pass a `ModelSpec` and `LevanterEngineConfig` to
+`LevanterBackend.serve`. The context manager performs mesh setup and checkpoint
+loading, starts the server and releases it on exit. For standalone entry points
+that already own a model and mesh, create an `InferenceServer` with an
+`InferenceServerConfig` and an `InferenceEngineConfig`. The engine config sets
+the context bound and physical page budget. Use `snowball_layerwise_load` for
+large HF checkpoints to bound the temporary weight-conversion memory to one
+layer.
 
-* [Page Manager](https://github.com/AI-Hypercomputer/maxtext/blob/eac885edb371e6141a2bb784f9060f816ce17b23/MaxText/inference/page_manager.py)
-* [Paged Attention](https://github.com/AI-Hypercomputer/maxtext/blob/main/MaxText/inference/paged_attention.py#L298)
-* [Jetstream](https://github.com/AI-Hypercomputer/JetStream) <-- session management and such
-* [MaxEngine](https://github.com/AI-Hypercomputer/maxtext/blob/main/MaxText/maxengine.py) <-- maxtext impl of jetstream protocol
+## Generation contract
 
-### EasyDel
+OpenAI text completions accept exact prompt IDs. Chat accepts
+`_skyrl_exact_prompt_token_ids` for clients that already own the tokenized
+conversation. With `return_token_ids`, the response returns the prompt and
+completion IDs. Each request starts at position zero. Its completion positions
+start at the prompt length. A request must leave space within the configured
+context and its output is capped by the remaining space.
 
-* [VSurge](https://github.com/erfanzar/EasyDeL/tree/main/easydel/inference/vsurge)
+Both protocols pass effective temperature, top-p, seed, stop tokens and choice
+count to the same engine. The scheduler emits the token that completes a stop
+sequence. Its finish reason and scores are aligned with those emitted IDs.
+Responses include the install version and immutable policy identity. Clients
+can pin either with `expected_model_version` or `expected_policy_id`. A request
+for a stale snapshot gets HTTP 409.
 
-### JAX Repo
+- `behavior_logprobs` gives selected-token scores under temperature and top-p.
+  Greedy behavior assigns the selected token log probability zero.
+- `policy_logprobs` gives selected-token scores on the untransformed cached
+  logits. Enable `InferenceEngineConfig.return_policy_logprobs` on the server
+  and request `return_policy_logprobs`. At temperature and top-p equal to one,
+  the sampler can reuse the behavior normalization.
+- OpenAI `logprobs` retains the API's sampled-token field. With greedy decoding
+  its value is the model score after the sampler's logit transform. The explicit
+  fields above distinguish raw policy and behavior scores.
 
-- [Ragged Paged Attention](https://github.com/jax-ml/jax/blob/main/jax/experimental/pallas/ops/tpu/ragged_paged_attention/kernel.py)
+Incremental chat SSE emits text during decoding and returns optional policy
+scores and route evidence in the final event. Requests for exact token IDs
+or OpenAI logprobs use buffered SSE. Aborted requests carry their emitting
+version and partial outputs.
 
-### Nano-VLLM
+### Binary requests
 
-torch, not much interesting here given jetstream. focused on batch inference I think?
+POST `/v1/levanter/generate` with content type
+`application/vnd.levanter.generate.v1`. Use `encode_frame` and `decode_frame`
+from `levanter.inference.binary`. A frame consists of the versioned magic,
+a big-endian 32-bit metadata length, UTF-8 JSON, and a safetensors tensor table.
 
-* https://github.com/GeeeekExplorer/nano-vllm/
+The request tensor table contains one one-dimensional int32
+`prompt_token_ids` tensor. JSON metadata is validated by `GenerateOptions`.
+The response echoes the prompt tensor and returns per-choice tensors under
+`choice.<index>.`. The choice metadata contains `finish_reason`,
+`model_version`, and `policy_id`. Output tensors carry token IDs, behavior
+scores, and optional policy scores and route bytes. The OpenAI route field
+uses base64 for the same route bytes.
 
-### SGLang
+## Policy installation
 
-* [SGLang](https://github.com/sgl-project/sglang)
+Call `InferenceServer.reload` with a snapshot loader, the expected current
+version, and a unique policy identity for the candidate snapshot. The loader
+can stage sharded candidate tensors while the old model serves. The runtime
+validates the tree, shapes, dtypes and shard placement and waits for device
+readiness before admission changes. At install it pauses admission, aborts or
+drains active requests, invalidates queued requests from the previous epoch,
+clears KV and prefix state, and commits the new model and version together.
+Failed staging preserves the previous serving version.
 
-## Architecture Overview
+A serving instance starts at version zero. Its policy identity names the
+snapshot across instances. Assign that identity from the publisher's snapshot
+manifest when coordinating refreshes across replicas.
 
-**Goal**: Expose Levanter models via an OpenAI-compatible HTTP API with streaming, batching, and scheduler-backed decoding. Reuse `src/levanter/main/sample_lm.py` and dependencies: `JitScheduler`, `DecodeState`, `PageTable`, `KvPageCache`, `Sampler`, tokenizer/HF loader, and `TrainerConfig` device mesh setup.
+## Router replay
 
-**Core Architecture**:
-- Reuse `run_generation_loop`, `_one_round`, and `GenState` patterns from `src/levanter/main/sample_lm.py` but extract into a reusable service.
-- Maintain decode state in a long-lived service object that owns: `JitScheduler`, `PageTable`, `KvPageCache`, `DecodeState`, `Sampler`, `tokenizer`, and the `LlamaLMHeadModel` (or other `LmHeadModel`).
-- Requests enqueue prompt tokens into the service; a background loop performs prefill+decode rounds and streams tokens back to callers.
-- Keep JIT-safety: no Python control flow in jitted sections; use existing named-jit and Equinox modules.
+Enable `InferenceServerConfig.capture_routes` for Snowball and request
+`return_route_captures` with one choice per prompt. Capture records the
+per-layer expert IDs, QB threshold and validity at the same forward that
+produces the cached logits. Captured prefix rows follow the retained KV
+pages and the active policy. A final route-only decode covers the terminal
+token before the scheduler releases the slot.
 
-## Technical Design
+The wire payload binds tokens, positions, sampling parameters, layer order
+and policy identity. `align_snowball_policy_routes` checks those coordinates
+against padded learner rows. `PolicyRouteCaptures` stores replay arrays on
+named batch and position axes. `pack_policy_batch` moves the route rows with
+the tokens and masks. `response_logprobs` passes them to Snowball for both
+forward scoring and backward recomputation. Current weights still determine
+router combine weights and differentiable activations.
 
-### Service Architecture
-The inference server is built around a `GenerationService` that encapsulates:
-- Model loading and initialization via `HFCheckpointConverter`
-- Tokenizer management
-- JAX device mesh configuration via `TrainerConfig`
-- KV cache management via `PageTable` and `KvPageCache`
-- Generation loop orchestration via `JitScheduler` and `DecodeState`
-- Sampling via `Sampler`
+## Qualification
 
-### API Design
-- **OpenAI Compatibility**: Follows OpenAI API v1 specification for `/v1/completions` and `/v1/chat/completions`
-- **Request Schema**: Supports `prompt`, `max_tokens`, `temperature`, `stop`, `seed` parameters
-- **Response Schema**: Returns structured responses with `choices`, `usage`, and metadata
-- **Error Handling**: Proper HTTP status codes and error messages
+Run fixed input sequences and frozen weights through the learner forward,
+prefill and one-token cached decode. Compare selected-token logprobs and
+full-vocabulary forward KL independently. Route replay controls the discrete
+router decisions. It leaves other sources of numerical error to the score
+comparison. Zero reference-KL penalty requires both the loss and reward KL
+flags off.
 
-### Performance Considerations
-- **JIT Compilation**: Warmup generation on startup to trigger JIT compilation
-- **Memory Management**: Efficient KV cache page allocation and deallocation
-- **Batching**: Support for concurrent requests with `JitScheduler`
-- **Streaming**: Server-Sent Events (SSE) for real-time token streaming
-
-## File/Code References
-- `src/levanter/main/sample_lm.py`: `SampleLmConfig`, `_load_model`, `GenState`, `run_generation_loop`, `_one_round`, `extract_outputs`.
-- `src/levanter/inference/jit_scheduler.py`: `JitScheduler`, `DecodeState`, `SeqDecodingParams`.
-- `levanter.inference.page_table.PageTable`, `levanter.layers.kv_cache.KvPageCache`.
-- `levanter.layers.sampler.Sampler`.
-- `levanter.models.llama.LlamaLMHeadModel` and `levanter.models.lm_model.LmHeadModel`.
-- `levanter.compat.hf_checkpoints.HFCheckpointConverter`, `load_tokenizer`.
-- `levanter.trainer.TrainerConfig` and `levanter.utils.jax_utils.use_cpu_device`.
-
-## Implementation Notes
-
-### Current Status
-- Basic FastAPI server with `/v1/completions` endpoint implemented
-- `GenerationService` with single-sequence generation working
-- Warmup JIT compilation on startup implemented
-- Health check endpoint (`/healthz`) functional
-- Accurate token counting using actual tokenizer instead of rough estimates
-- End-to-end testing completed successfully with tiny HF model on CPU
-
-### Key Design Decisions
-- **Optional Dependencies**: FastAPI and Uvicorn are optional `serve` dependencies
-- **Configuration**: Uses `draccus` for configuration management, consistent with other Levanter components
-- **Error Handling**: Comprehensive error reporting with proper HTTP status codes
-- **Logging**: Structured logging with configurable verbosity levels
+The production-engine A/B compares the same requests and seeds with route
+capture off and on, including payload serialization. The full AgentX test
+uses the same checkpoint, tokenizer, frozen sessions, context and concurrency
+as the compiled vLLM results. See the branch [integration
+handoff](https://github.com/marin-community/marin/blob/codex/dlwh-levanter-rl/INFERENCE_HANDOFF.md)
+and the [Snowball measurement
+report](../../../../docs/reports/snowball-inference-status-2026-11-20.md).

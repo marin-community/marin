@@ -396,6 +396,11 @@ class LevanterEngineConfig:
     max_seqs: int = 16
     page_size: int = 128
     hbm_utilization: float = 0.8
+    expert_parallel_size: int = 1
+    capture_routes: bool = False
+    return_policy_logprobs: bool = False
+    snowball_layerwise_load: bool = False
+    snowball_pack_expert_weights: bool = False
 
     def __post_init__(self) -> None:
         if self.max_seqs <= 0:
@@ -404,6 +409,10 @@ class LevanterEngineConfig:
             raise ValueError("page_size must be positive")
         if not 0 < self.hbm_utilization <= 1:
             raise ValueError("hbm_utilization must be in (0, 1]")
+        if self.expert_parallel_size < 1:
+            raise ValueError("expert_parallel_size must be positive")
+        if self.snowball_pack_expert_weights and not self.snowball_layerwise_load:
+            raise ValueError("Packing Snowball expert weights requires layerwise load")
 
 
 InferenceEngineConfig = VllmEngineConfig | LevanterEngineConfig

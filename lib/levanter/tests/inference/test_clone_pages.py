@@ -5,11 +5,12 @@ import dataclasses
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 import haliax as hax
 
 from levanter.inference.jit_scheduler import SequenceTable
-from levanter.inference.page_table import PageTable
+from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.layers.kv_cache import KvPageCache
 
 
@@ -93,3 +94,24 @@ def test_kv_cache_copy_page():
         np.asarray(kv2.kv_pages["page", dst_page, "kv_head", 1::2].array),
         np.asarray(kv.kv_pages["page", src_page, "kv_head", 1::2].array),
     )
+
+
+@pytest.mark.parametrize("token_capacity", [4, 16])
+def test_kv_cache_keeps_last_active_write_at_a_repeated_destination(token_capacity):
+    table = PageTable.init(max_pages=2, max_seqs=1, page_size=2, max_pages_per_seq=2)
+    cache = KvPageCache.init(table.spec(), hax.Axis("kv_head", 1), hax.Axis("head", 1))
+    batch = PageBatchInfo(
+        slot_ids=hax.named(jnp.array([0], jnp.int32), "seq"),
+        page_indices=hax.named(jnp.array([[0, 1]], jnp.int32), ("seq", "page")),
+        seq_lens=hax.named(jnp.array([4], jnp.int32), "seq"),
+        cu_q_lens=hax.named(jnp.array([0, 3], jnp.int32), "seq"),
+        num_seqs=jnp.array(1, jnp.int32),
+        new_token_dests=hax.named(jnp.array([0, 3, 0] + [3] * (token_capacity - 3), jnp.int32), "position"),
+        page_size=2,
+    )
+    keys = hax.named(
+        jnp.arange(1, token_capacity + 1, dtype=jnp.float32)[:, None, None], ("position", "kv_head", "head")
+    )
+    updated = cache.update(batch, keys, keys + 10)
+
+    np.testing.assert_array_equal(updated.kv_pages.array[..., 0], [[[3, 13], [0, 0]], [[0, 0], [2, 12]]])
