@@ -29,7 +29,6 @@ from marin.training.drafting.dspark_distillation import (
     HF_DRAFT_SUBDIRECTORY,
     DraftRecipe,
     DSparkExport,
-    require_qualified_teacher,
     require_supported_vllm_release,
     train_and_export,
 )
@@ -40,6 +39,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
 from experiments.models import ModelConfig, download_model
+from experiments.post_training.drafting import mochi
 from experiments.post_training.drafting.mochi_mix import smoke_mix
 
 
@@ -96,6 +96,7 @@ class OfflineDSpark:
     max_sequence_length: int = 32768
     max_anchors: int = 12288
     seed: int = DEFAULT_DRAFT_SEED
+    mochi_sample: mochi.Sample = mochi.Sample.ALL
 
     def training_recipe(self) -> DraftRecipe:
         shape, taps = _TARGETS[self.teacher.family]
@@ -170,28 +171,38 @@ def artifacts(
     fingerprint = prepared.fingerprint()
     prepared = replace(prepared, name=f"{prepared.name}/{fingerprint}", expected_fingerprint=fingerprint)
 
-    draft = apply(
-        f"checkpoints/dspark/{family}",
-        train_and_export,
-        version=_RECIPE_VERSION,
-        artifact_type=DSparkExport,
-        output=OUT,
-        teacher=teacher,
-        teacher_subdirectory=config.teacher.relative_path,
-        tokenizer_source=tokenizer,
-        teacher_identity=artifact_identity(teacher),
-        prepared=prepared,
-        recipe=recipe,
-    )
+    if config.teacher.family is TeacherFamily.MOCHI:
+        draft = mochi.checkpoint_step(
+            teacher,
+            config.teacher.relative_path,
+            prepared,
+            mochi.cached_recipe(recipe, config.mochi_sample),
+            _RECIPE_VERSION,
+            config.mochi_sample,
+        )
+    else:
+        draft = apply(
+            f"checkpoints/dspark/{family}",
+            train_and_export,
+            version=_RECIPE_VERSION,
+            artifact_type=DSparkExport,
+            output=OUT,
+            teacher=teacher,
+            teacher_subdirectory=config.teacher.relative_path,
+            tokenizer_source=tokenizer,
+            teacher_identity=artifact_identity(teacher),
+            prepared=prepared,
+            recipe=recipe,
+        )
     fingerprint = draft.fingerprint()
     return prepared, replace(draft, name=f"{draft.name}/{fingerprint}", expected_fingerprint=fingerprint)
 
 
 def _resolve_recipe(
-    config: str | None, preset: str | None, data: str | None, prefix: str
+    config: str | None, preset: str | None, data: str | None, prefix: str, *, steps: int | None = None
 ) -> tuple[OfflineDSpark, ArtifactStep]:
     if config is not None:
-        if preset is not None or data is not None:
+        if preset is not None or data is not None or steps is not None:
             raise click.UsageError("Use --config or --preset")
         recipe = draccus.decode(OfflineDSpark, json.loads(StoragePath(config).read_text()))
         return recipe, _adopt_input(recipe.data)
@@ -200,11 +211,12 @@ def _resolve_recipe(
         recipe = OfflineDSpark(
             teacher=MOCHI_STEP_400407,
             data=mix.path(prefix),
-            max_steps=3 if data is None else 4_000,
+            max_steps=steps if steps is not None else (3 if data is None else 4_000),
             teacher_replicas=8,
-            trainer_ranks=2,
+            trainer_ranks=1,
             max_sequence_length=8192,
             max_anchors=1024,
+            mochi_sample=mochi.Sample.SMOKE if data is None and steps is None else mochi.Sample.ALL,
         )
         return recipe, mix
     raise click.UsageError(f"Specify --config or --preset {_MOCHI_AGENTIC_PRESET}")
@@ -219,13 +231,16 @@ def _preflight(recipe: OfflineDSpark, teacher: ArtifactStep, prefix: str) -> dic
     tokenizer_ref = f"{tokenizer.hf_repo_id}@{tokenizer.hf_revision}" if tokenizer else None
     decoder = inspect_teacher(teacher_root, settings.data, tokenizer_source=tokenizer_ref)
     train, validation = inspect_mix(StoragePath(recipe.data))
+    total_gpus = settings.teacher_replicas
+    if recipe.teacher.family is TeacherFamily.SNOWBALL:
+        total_gpus += settings.trainer_ranks
     return {
         "decoder": decoder,
         "extraction_taps": settings.extraction_taps,
         "train_shards": len(train),
         "validation_shards": len(validation),
-        "gpus": settings.teacher_replicas + settings.trainer_ranks,
-        "training_supported": not settings.data.shape.sconv,
+        "gpus": total_gpus,
+        "trainer_ranks": settings.trainer_ranks,
     }
 
 
@@ -233,18 +248,18 @@ def _preflight(recipe: OfflineDSpark, teacher: ArtifactStep, prefix: str) -> dic
 @click.option("--config", help="Path or object storage URI of the DSpark JSON recipe.")
 @click.option("--preset", type=click.Choice((_MOCHI_AGENTIC_PRESET,)))
 @click.option("--data", help="Replace the named preset's smoke mix with a completed train/validation chat mix.")
+@click.option("--steps", type=click.IntRange(min=1), help="Optimizer step cap for the named preset.")
 @click.option("--stage", type=click.Choice(("plan", "preflight", "prepare", "train")), default="plan")
-def main(config: str | None, preset: str | None, data: str | None, stage: str) -> None:
+def main(config: str | None, preset: str | None, data: str | None, steps: int | None, stage: str) -> None:
     """Plan and preflight offline DSpark or execute it in one Iris GPU job."""
 
     if stage == "train" and "IRIS_TASK_ID" not in os.environ:
-        raise click.UsageError("Run the train stage with iris job run on one GPU worker")
+        raise click.UsageError("Submit the train stage through Iris")
     configure_coreweave_s3()
     prefix = marin_prefix()
-    recipe, mix = _resolve_recipe(config, preset, data, prefix)
+    recipe, mix = _resolve_recipe(config, preset, data, prefix, steps=steps)
     mix_root = StoragePath(recipe.data)
     if stage == "train":
-        require_qualified_teacher(recipe.training_recipe())
         locations = [mix_root, StoragePath(prefix)]
         if not recipe.teacher.source.startswith("hf://"):
             locations.append(StoragePath(recipe.teacher.source))
@@ -257,6 +272,17 @@ def main(config: str | None, preset: str | None, data: str | None, stage: str) -
     prepared, draft = artifacts(recipe, teacher=teacher, mix=mix)
     if stage == "preflight":
         click.echo(json.dumps(_preflight(recipe, teacher, prefix), indent=2))
+        return
+    if stage == "train" and recipe.teacher.family is TeacherFamily.MOCHI:
+        if mochi.train_mochi(
+            teacher=str(StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path),
+            prepared=prepared,
+            draft=draft,
+            recipe=mochi.cached_recipe(recipe.training_recipe(), recipe.mochi_sample),
+            prefix=prefix,
+            sample=recipe.mochi_sample,
+        ):
+            click.echo(str(StoragePath(draft.path(prefix)) / HF_DRAFT_SUBDIRECTORY))
         return
     terminal = prepared if stage == "prepare" else draft
     StepRunner().run([lower(terminal)], dry_run=stage == "plan")

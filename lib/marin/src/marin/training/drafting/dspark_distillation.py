@@ -27,6 +27,10 @@ from marin.training.drafting.dspark_data import (
     ARROW_DATASET_DIR,
     DRAFT_CONFIG_FILE,
     DRAFT_LAYER_TYPE,
+    EMBEDDING,
+    FINAL_NORM,
+    GATE_DOWN,
+    GATE_UP,
     LM_HEAD,
     PREPARED_DIR,
     SPLITS_FILE,
@@ -199,9 +203,9 @@ def require_supported_vllm_release() -> None:
 
 
 def require_qualified_teacher(recipe: DraftRecipe) -> None:
-    """Reject ShortConv teachers until their GPU training and serving paths are qualified."""
+    """Keep ShortConv teachers out of the single-worker training path."""
     if recipe.data.shape.sconv:
-        raise ValueError("ShortConv DSpark training requires GPU qualification of extraction and serving")
+        raise ValueError("ShortConv DSpark training requires the distributed teacher and cached states")
 
 
 def extraction_config(recipe: DraftRecipe, hidden_states: Path) -> tuple[dict, dict]:
@@ -361,7 +365,7 @@ def _write_config_and_build_command(
     *,
     train_ratio: float,
     steps: int,
-    endpoint: str,
+    endpoint: str | None,
 ) -> list[str]:
     train_config = {
         "speculator_type": _SPECULATOR_TYPE,
@@ -385,11 +389,11 @@ def _write_config_and_build_command(
             "prefetch_factor": 2,
         },
         "backend": {"hidden_states_path": str(hidden_states)},
-        "generation": {
-            "vllm_endpoint": endpoint,
-            "on_missing": "generate",
-            "on_generate": "delete",
-        },
+        "generation": (
+            {"vllm_endpoint": endpoint, "on_missing": "generate", "on_generate": "delete"}
+            if endpoint is not None
+            else {"on_missing": "raise"}
+        ),
         "loss": {
             # Dynamo cannot trace repeated calls to the pinned fused loss autotuner.
             "loss_implementation": _LOSS_IMPLEMENTATION,
@@ -451,6 +455,66 @@ def _prepare_trainer_inputs(
     return result["steps"], result["packages"]
 
 
+def _speculators_environment(devices: str) -> dict[str, str]:
+    env = {**os.environ, "HF_HUB_OFFLINE": "1", "CUDA_VISIBLE_DEVICES": devices}
+    env.pop("PYTHONPATH", None)
+    return env
+
+
+def train_cached_and_export(
+    *,
+    output: str,
+    teacher: str,
+    teacher_identity: str,
+    recipe: DraftRecipe,
+    scratch: Path,
+    split: PreparedSplits,
+) -> DSparkExport:
+    """Train on prepared Arrow data and indexed hidden states on the same worker."""
+
+    require_supported_vllm_release()
+    if min(split.train, split.validation) < recipe.trainer_ranks:
+        raise ValueError("Each prepared split needs at least one usable row per trainer rank")
+    source = StoragePath(teacher)
+    teacher_path = scratch / "teacher"
+    teacher_path.mkdir()
+    index = json.loads((source / SAFE_TENSORS_INDEX_NAME).read_text())
+    tensors = (EMBEDDING, LM_HEAD, FINAL_NORM, GATE_DOWN, GATE_UP)
+    weights = {name: index["weight_map"][name] for name in tensors}
+    for file in (CONFIG_NAME, *sorted(set(weights.values()))):
+        (source / file).download_to(str(teacher_path / file))
+    (teacher_path / SAFE_TENSORS_INDEX_NAME).write_text(json.dumps({"weight_map": weights}))
+
+    devices = _worker_gpu_devices().split(",")[: recipe.trainer_ranks]
+    env = _speculators_environment(",".join(devices))
+    data = scratch / "data"
+    training = scratch / "checkpoints"
+    python = _install_speculators(scratch, env)
+    steps, packages = _prepare_trainer_inputs(python, data, scratch, recipe, split.train, env)
+    train = _write_config_and_build_command(
+        teacher_path,
+        recipe,
+        python,
+        data,
+        scratch,
+        training,
+        scratch / "hidden_states",
+        train_ratio=split.train_ratio,
+        steps=steps,
+        endpoint=None,
+    )
+    subprocess.run(train, env=env, check=True)
+    return _publish_checkpoint(
+        output=StoragePath(output) / HF_DRAFT_SUBDIRECTORY,
+        training=training,
+        teacher_identity=teacher_identity,
+        recipe=recipe,
+        expected_steps=steps,
+        mapping=np.load(scratch / _D2T_FILE, allow_pickle=False),
+        packages=packages,
+    )
+
+
 def train_and_export(
     *,
     output: str,
@@ -472,8 +536,7 @@ def train_and_export(
     if min(split.train, split.validation) < recipe.trainer_ranks:
         raise ValueError("Each prepared split needs at least one usable row per trainer rank")
     teacher_devices, trainer_devices = _gpu_device_split(_worker_gpu_devices(), recipe)
-    trainer_env = {**os.environ, "HF_HUB_OFFLINE": "1", "CUDA_VISIBLE_DEVICES": trainer_devices}
-    trainer_env.pop("PYTHONPATH", None)
+    trainer_env = _speculators_environment(trainer_devices)
     with TemporaryDirectory(prefix="marin-dspark-") as directory:
         scratch = Path(directory)
         training = scratch / "checkpoints"

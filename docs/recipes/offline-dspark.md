@@ -93,11 +93,32 @@ uv run --extra cpu python -m experiments.post_training.dspark_sft \
   --preset mochi-agentic --stage preflight
 ```
 
-`--data` binds a larger completed regional chat mix and selects a 4,000-step
-cap. The preset uses an 8,192-token packed sequence and 1,024 anchors per
-sequence. Mochi currently qualifies data preparation only. Its BF16 teacher
-requires a distributed GPU layout, and the promoted serving wheel needs a
-ShortConv state fix to verify proposals and recover after rejection.
+## Submit the Mochi Iris job
+
+Submit two four-GB200 tasks. The distributed BF16 teacher runs with TP1 and
+DP8/EP8. It caches teacher features on the leader's local disk and shuts
+down before Speculators uses one of the leader's GPUs. The RunAI loader
+caps each process's CPU buffer at 8 GiB. The trainer stages only the
+teacher's embedding and final gated head shards.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --job-name mochi-dspark --target-cluster cw-us-east-08a --region us-east-08a \
+  --enable-extra-resources --replicas 2 --gpu GB200x4 \
+  --cpu 48 --memory 768GB --disk 600GB --timeout 7200 \
+  --sync-package marin-core --extra cpu -e TMPDIR /cache \
+  -- python -m experiments.post_training.dspark_sft --preset mochi-agentic --stage train
+```
+
+The default smoke trains three updates on 12 training and four validation
+conversations. Add `--steps 4000` to train for one packed epoch, capped at
+4,000 optimizer steps, over the complete frozen mix. The epoch uses an
+8,192-token sequence and up to 1,024 anchors. Use `--data` to provide a
+different completed regional mix. Size scratch for the cached tensors at
+48 KiB per input token, plus the trainer's staged weights and checkpoint.
+
+Serving Mochi drafts requires ShortConv state to survive rejected proposals.
+The promoted wheel needs the upstream fix for that verification path.
 [ShortConv verifier fix](https://github.com/marin-community/vllm/pull/140)
 
 ## Submit the Snowball Iris job
