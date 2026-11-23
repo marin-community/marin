@@ -68,7 +68,7 @@ def retain_artifacts(artifacts: Path, bundle: Path, prefix: str, *, name: str) -
 
 
 def pack_server_metrics(point: Path) -> None:
-    """Keep lossless server metrics within Iris's uncompressed task-output limit."""
+    """Losslessly compress server metrics and retain their checksums."""
     source = point / SERVER_METRICS_RELATIVE_PATH
     if not source.is_file():
         return
@@ -92,7 +92,7 @@ def pack_server_metrics(point: Path) -> None:
 
 
 def restore_server_metrics(point: Path) -> None:
-    """Restore the original metrics bytes for the unchanged result processor."""
+    """Restore compressed metrics and verify their recorded checksums."""
     source = point / SERVER_METRICS_RELATIVE_PATH
     encoded = source.with_suffix(".json.zst")
     if not encoded.exists():

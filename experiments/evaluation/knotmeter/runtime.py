@@ -4,7 +4,6 @@
 """Freeze Marin's serving runtime or an explicit build without adopting it."""
 
 import dataclasses
-import hashlib
 import json
 import platform
 import re
@@ -16,6 +15,7 @@ import draccus
 import requests
 from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE, VllmGpuRelease
 from marin.inference.vllm_release import load_vllm_gpu_release
+from marin.profiling.trace_summary import sha256_for_path
 
 from experiments.evaluation.knotmeter.artifacts import copy_file, write_record
 from experiments.evaluation.knotmeter.config import Runtime
@@ -75,8 +75,7 @@ def materialize_release(metadata: dict, output: Path) -> VllmGpuRelease:
         path = directory / wheel.url.rsplit("/", 1)[-1]
         if not path.is_file():
             copy_file(wheel.url, str(path))
-        with path.open("rb") as stream:
-            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        actual = sha256_for_path(path)
         if actual != wheel.sha256:
             raise ValueError("Experimental wheel checksum differs from its immutable manifest")
         write_record(

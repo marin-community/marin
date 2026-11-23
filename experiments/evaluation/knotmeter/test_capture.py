@@ -79,6 +79,7 @@ def test_capture_preserves_completion_and_original_failure(tmp_path, monkeypatch
     (logs / "stderr.log").write_text("fixture server\n")
     receipt_uri = f"{plan['trial_uri']}/attempts/capture-attempt/hosts/0/receipt.json"
     checkpoints = []
+    shutdown_error = RuntimeError("co-scheduled server shutdown failed")
 
     class ResetHandler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -113,7 +114,7 @@ def test_capture_preserves_completion_and_original_failure(tmp_path, monkeypatch
                 # Also lose the logs: that secondary capture fault must not
                 # replace the server shutdown error or discard the exports.
                 shutil.rmtree(logs)
-                raise RuntimeError("co-scheduled server shutdown failed")
+                raise shutdown_error
 
     with ThreadingHTTPServer(("127.0.0.1", 0), ResetHandler) as http:
         thread = threading.Thread(target=http.serve_forever)
@@ -125,8 +126,9 @@ def test_capture_preserves_completion_and_original_failure(tmp_path, monkeypatch
             if outcome == "success":
                 run_point(plan, tmp_path / "outputs/point", tmp_path / "restored/bundle", None)
             elif outcome == "shutdown-failure":
-                with pytest.raises(RuntimeError, match="co-scheduled server shutdown failed"):
+                with pytest.raises(RuntimeError) as stopped:
                     run_point(plan, tmp_path / "outputs/point", tmp_path / "restored/bundle", None)
+                assert stopped.value is shutdown_error
             else:
                 with pytest.raises(subprocess.CalledProcessError) as stopped:
                     run_point(plan, tmp_path / "outputs/point", tmp_path / "restored/bundle", None)
@@ -152,7 +154,7 @@ def test_capture_preserves_completion_and_original_failure(tmp_path, monkeypatch
         assert checkpoints[0]["capture_phase"] == "before-shutdown"
         assert checkpoints[0]["status"] == "measured"
     if outcome == "shutdown-failure":
-        assert record["error"] == "RuntimeError: co-scheduled server shutdown failed"
+        assert record["error"].endswith(str(shutdown_error))
         assert record["capture_errors"] and "shutdown_completed_unix" not in record
     elif outcome == "success":
         assert record["measured_unix"] <= record["shutdown_started_unix"] <= record["shutdown_completed_unix"]

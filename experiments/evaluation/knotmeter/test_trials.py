@@ -139,7 +139,7 @@ def test_probe_coordinator_stops_after_one_gpu_job(tmp_path, monkeypatch):
         def job_status(self, job_id):
             return SimpleNamespace(job_id=job_id, state=JobState.SUCCEEDED, execution_cluster_id="fixture")
 
-        def list_tasks(self, job_id):
+        def list_tasks(self, _job_id):
             return []
 
     client = Client()

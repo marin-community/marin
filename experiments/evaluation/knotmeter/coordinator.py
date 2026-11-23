@@ -14,6 +14,7 @@ from connectrpc.errors import ConnectError
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, JobName, ResourceSpec, gpu_device
 from iris.rpc import job_pb2
+from iris.rpc.proto_display import priority_band_value
 from marin.testing.inference.goldens import LookupStatus, lookup_reference, read_fixture
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration
@@ -49,9 +50,7 @@ def submit_point(client: IrisClient, plan: TrialPlan):
         coscheduling=(
             CoschedulingConfig(group_by="nvlink.domain") if profile.gpus.count > profile.gpus.per_host else None
         ),
-        priority_band={"batch": job_pb2.PRIORITY_BAND_BATCH, "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE}[
-            profile.priority
-        ],
+        priority_band=priority_band_value(profile.priority),
         scheduling_timeout=Duration.from_seconds(series["scheduling_timeout"]),
         timeout=Duration.from_seconds(series["task_timeout"]),
         max_retries_failure=series["max_retries_failure"],

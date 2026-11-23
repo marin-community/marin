@@ -83,7 +83,7 @@ class Check(Config):
     evidence: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def one_implementation(self) -> "Check":
+    def at_most_one_implementation(self) -> "Check":
         if self.fixture and self.command:
             raise ValueError("Use a shared fixture or an external command for a check")
         return self
@@ -115,7 +115,7 @@ class Profile(Config):
         )
 
     @model_validator(mode="after")
-    def valid_geometry(self) -> "Profile":
+    def valid_serving_profile(self) -> "Profile":
         if self.geometry.total_gpus != self.gpus.count:
             raise ValueError("GPU count must divide into tensor-parallel groups")
         if self.vllm.release and self.vllm.manifest:

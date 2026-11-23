@@ -24,6 +24,7 @@ from iris.cluster.constraints import Constraint, ConstraintOp, preemptible_const
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.resources.state import JobState, is_job_finished
 from iris.rpc import job_pb2
+from iris.rpc.proto_display import priority_band_value
 from marin.inference.vllm_release import vllm_gpu_wheel_for_architecture
 from marin.testing.inference.goldens import read_fixture
 from rigging.config_discovery import resolve_cluster_config
@@ -147,9 +148,7 @@ def submit_coordinator(client: IrisClient, plan: TrialPlan):
             ),
             preemptible_constraint(False),
         ],
-        priority_band={"batch": job_pb2.PRIORITY_BAND_BATCH, "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE}[
-            profile.priority
-        ],
+        priority_band=priority_band_value(profile.priority),
         scheduling_timeout=Duration.from_seconds(series["scheduling_timeout"]),
         timeout=Duration.from_seconds(
             series["scheduling_timeout"] + series["task_timeout"] * 3 + series["prepare_timeout"]

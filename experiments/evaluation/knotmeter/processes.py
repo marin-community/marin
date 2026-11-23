@@ -52,7 +52,7 @@ def logged_process(command: list[str], environment: dict[str, str], log: Path) -
 
 
 def stop_group(process: subprocess.Popen) -> None:
-    """Reap the command and stop its descendants before releasing the allocation."""
+    """Reap the command and stop remaining processes in its group."""
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -61,8 +61,11 @@ def stop_group(process: subprocess.Popen) -> None:
     try:
         process.wait(timeout=45)
     except subprocess.TimeoutExpired:
+        pass
+    # The group leader can exit while descendants ignore SIGTERM.
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=15)
+    process.wait(timeout=15)
 
 
 def run_logged(

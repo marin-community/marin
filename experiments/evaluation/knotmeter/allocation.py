@@ -121,7 +121,7 @@ def track_allocations(client: IrisClient, plan: TrialPlan) -> Iterator[None]:
 def allocation_cost(
     plan: dict, attempt_uid: str, pod_uid: str, iris_finished: float | None, gpus: int
 ) -> tuple[float | None, dict]:
-    """Use pod scheduling through termination, with an explicit bounded end fallback."""
+    """Return allocated GPU-seconds and measured, estimated or unknown timing evidence."""
     uri = prefix_join(plan["trial_uri"], f"attempts/{attempt_uid}/allocation.json")
     try:
         record = read_record(uri)

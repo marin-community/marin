@@ -189,9 +189,10 @@ def render_report(
         ):
             cost += " (estimated)"
         record_file = "plan.json" if result["job_state"] == "unrecorded" else "result.json"
+        record_uri = prefix_join(result["trial_uri"], record_file)
         weights = profile.get("weight_precision") or profile.get("quantization") or profile["serving"]["dtype"]
         lines.append(
-            f"| [{result['trial_id']}]({result['trial_uri']}/{record_file}) | "
+            f"| [{result['trial_id']}]({record_uri}) | "
             f"{result['manifest']['series']['stage']} | {runtime} | {weights} | "
             f"{result['job_state']} | "
             f"{result['manifest']['series']['concurrency']} | {profile['gpus']['count']} {profile['gpus']['type']} | "
