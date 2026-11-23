@@ -25,6 +25,7 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import VllmEngineConfig
 from marin.inference.iris import remote_inference
+from marin.inference.types import OpenAIEndpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SECRETS_DIR_ENV, forwarded_secrets, require_secret, secret_path
@@ -110,15 +111,16 @@ SERVING_PROBE_ATTEMPTS = 3
 
 
 def solver_pool_record(solver: Solver, registry: str) -> dict:
+    """Load a measured pool receipt and verify its frozen solver identity."""
     record = json.loads((StoragePath(registry) / f"{solver.value}.json").read_text())
     if record["model"] != SOLVER_MODELS[solver] or record["revision"] != PINS[solver].revision:
         raise ValueError("Solver pool differs from the protocol's pinned checkpoint")
     return record
 
 
-def solver_pool_connection(record: dict) -> tuple[str, str, str, list[str]]:
+def solver_pool_connection(record: dict) -> OpenAIEndpoint:
     address = iris_ctx().client.resolve_endpoint(record["endpoint_name"]).rstrip("/")
-    return address + "/v1", record["model"], "EMPTY", []
+    return OpenAIEndpoint(base_url=address + "/v1", model=record["model"], api_key="EMPTY")
 
 
 def probe_with_transient_retries(
@@ -544,11 +546,11 @@ def main() -> None:
         gpu_release = asdict(solver_vllm_release(args.solver))
     else:
         model_definition = gpu_release = None
-    route = (
-        nullcontext(solver_pool_connection(pool))
-        if pool is not None
-        else solver_endpoint(args.solver, settings, priority_band_value(args.priority))
-    )
+    if pool is not None:
+        connection = solver_pool_connection(pool)
+        route = nullcontext((connection.base_url, connection.model, connection.api_key or "EMPTY", []))
+    else:
+        route = solver_endpoint(args.solver, settings, priority_band_value(args.priority))
     with route as (
         endpoint,
         api_model,

@@ -2817,7 +2817,9 @@ nothing. Each attempt batch has at most 20 tasks. Sources explicitly intended
 for training plan before evaluation and unclassified sources; typed repair
 priority applies within each group. The controller admits at most two attempt
 batches per solver, with sixteen workers per batch. Attempt batches reserve four
-of 32 job slots; CPU repairs reserve one. Persistent engine and controller jobs
+of 40 job slots; CPU repairs reserve one and share at most eight slots. This
+leaves room for two attempt batches per solver while repairs are backlogged.
+Persistent engine and controller jobs
 are outside this work queue. A cell keeps at most one in-flight batch.
 Serving keeps compilation and CUDA graphs enabled.
 A cell with an attempt batch already in flight defers a second batch, in the

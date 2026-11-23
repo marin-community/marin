@@ -56,7 +56,8 @@ from experiments.post_training.task_curation.difficulty.state import (
     Outcome,
 )
 
-CONCURRENT_JOB_CAP = 32
+CONCURRENT_JOB_CAP = 40
+REPAIR_JOB_SLOT_CAP = 8
 ATTEMPT_JOB_SLOTS = 4
 ATTEMPT_JOBS_PER_SOLVER = 2
 LOGGER = logging.getLogger(__name__)
@@ -141,6 +142,7 @@ def execute_plan(
     """Persist submissions after successful submit; a lost reply is recovered by job name."""
     jobs = list(backend.jobs())
     slots = sum(job.slots for job in jobs if job.active)
+    repair_slots = sum(job.slots for job in jobs if job.active and job.solver is None)
     recorded = {row.action_id for row in rows if row.action_id}
     submitted, escalated, deferred = [], [], []
     ended = {row.action_id for row in rows if row.outcome == Outcome.FINISHED}
@@ -187,6 +189,9 @@ def execute_plan(
         if slots + required_slots > CONCURRENT_JOB_CAP:
             deferred.append(key)
             continue
+        if not isinstance(action, AttemptBatch) and repair_slots + required_slots > REPAIR_JOB_SLOT_CAP:
+            deferred.append(key)
+            continue
         reservation = action_gpu_hour_reservation(action)
         if (
             budget
@@ -219,6 +224,8 @@ def execute_plan(
         submitted.append(job_id)
         if isinstance(action, AttemptBatch):
             jobs.append(Job(job_id, JobState.PENDING, action.solver, required_slots))
+        else:
+            repair_slots += required_slots
         slots += required_slots
         reserved += reservation
     return {

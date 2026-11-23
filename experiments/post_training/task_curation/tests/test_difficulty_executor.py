@@ -20,7 +20,13 @@ from experiments.post_training.task_curation.difficulty.executor import (
     execute_plan,
 )
 from experiments.post_training.task_curation.difficulty.ledger import append_rows, read_rows
-from experiments.post_training.task_curation.difficulty.planner import action_id, plan
+from experiments.post_training.task_curation.difficulty.planner import (
+    AttemptBatch,
+    RebuildEnvironmentArtifact,
+    SourceAttempts,
+    action_id,
+    plan,
+)
 from experiments.post_training.task_curation.difficulty.state import (
     CellStatus,
     CoveragePolicy,
@@ -158,3 +164,27 @@ def test_budget_counts_recorded_spend_and_inflight_reservations_across_restart(t
     assert restarted == budget
     escalations = list((tmp_path / "ledger" / "v1" / "escalations").glob("*.json"))
     assert len(escalations) == 1
+
+
+def test_repair_backlog_preserves_two_attempt_lanes_per_solver(tmp_path):
+    ledger = str(tmp_path / "ledger")
+    sources = [replace(SOURCE, source_id=f"source-{index}") for index in range(9)]
+    repairs = [
+        RebuildEnvironmentArtifact(f"s3://fixtures/environment-{index}", ((source.source_id, Solver.SMALL),), ())
+        for index, source in enumerate(sources)
+    ]
+    attempts = [
+        AttemptBatch(
+            solver,
+            (SourceAttempts(source.source_id, source.registry_revision, (), "queue", "sha", ()),),
+            1,
+        )
+        for solver in Solver
+        for source in sources[:2]
+    ]
+    backend = JobStore(str(tmp_path / "jobs"))
+    result = execute_plan(repairs + attempts, [], sources, ledger, backend, EscalationLog(ledger))
+    accepted = {path.stem for path in (tmp_path / "jobs").glob("*.json")}
+    assert accepted == {action_id(action) for action in repairs[:8] + attempts}
+    assert result["deferred"] == [action_id(repairs[8])]
+    assert result["active_job_slots"] == 40

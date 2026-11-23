@@ -113,7 +113,7 @@ def finelog_outcomes(since: datetime) -> list[dict]:
 
 
 def ledger_outcomes(ledger: str, since: datetime, seen_partitions: set[str]) -> tuple[list[dict], set[str]]:
-    entries = list_entries(ledger.rstrip("/") + "/v1/rows/")
+    entries = list_entries(str(StoragePath(ledger) / "v1" / "rows"))
     selected = [
         entry.url
         for entry in entries

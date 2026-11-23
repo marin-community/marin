@@ -18,10 +18,8 @@ from shellbox.backends.daytona.connection import DaytonaConnection
 from experiments.post_training.task_curation.difficulty.launch import DATA_ADMISSION_COMMAND
 
 
-@pytest.mark.parametrize("started, expected_capacity", [(397, 1), (398, 0)])
-def test_data_gate_reads_all_inventory_and_reserves_twenty_percent_of_total(
-    monkeypatch, capsys, started, expected_capacity
-):
+@pytest.mark.parametrize("started, expected_capacity", [(163, 1), (164, 0)])
+def test_data_gate_reads_all_inventory_and_reserves_two_thirds_of_total(monkeypatch, capsys, started, expected_capacity):
     class Client:
         async def __aenter__(self):
             return self
