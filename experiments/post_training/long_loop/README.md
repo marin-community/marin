@@ -827,6 +827,19 @@ batch remains 64 prompts times eight samples, with gradient clip 0.5. Its MuonH
 optimizer follows Mochi's RL routing: main learning rate 1e-5, Adam fallback
 learning rate 2.307692307692308e-6, and CPU storage for MuonH momentum. Adam
 fallback state stays on the accelerator; AdamW CPU optimizer offload is disabled.
+The qualified trainer uses four eight-H100 hosts with TP1/PP2/CP4/EP16/ETP1
+(attention DP4, expert DP1). Declare this geometry in the round's role plan and
+Megatron geometry; the stage patch does not allocate hosts. Policy and reference
+use `all_gather` for context communication, preserving sliding-window attention
+with Snowball's five KV heads. Output projection uses 1,024-token chunks.
+The patch enables native warm-state sizing at 85,557 and 131,072 tokens before
+weight publication or rollouts, with a required 10% headroom on every rank.
+Qualification run `/benfeuer/mochi-exp6-muonh-memory-cp4-ep16-20261123-151`
+passed on all 32 ranks at both lengths; minimum headroom at 131,072 tokens was
+13.01 GB and peak reserved memory was 54.37 GB. Two retained-batch updates had
+zero replica checksum mismatches and rank-median learner durations of 164 and
+170 seconds for the two updates. These measurements used Exp5 SFT527 as
+an architecture control; the Exp6 model and curriculum remain launch inputs.
 Before a full run, use `trainer_memory_probe` to qualify the retained 64-by-eight
 batch after optimizer state is initialized. Require the native updates to apply
 and the warm sizing checks to leave at least 10% memory headroom, as described

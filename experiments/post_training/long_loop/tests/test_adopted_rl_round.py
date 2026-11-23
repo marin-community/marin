@@ -759,9 +759,38 @@ def test_exp6_pinned_patch_resolves_exact_context_staleness_and_snowball_optimiz
     patch = tmp_path / "exp6-rl.yaml"
     patch.write_bytes(source.read_bytes())
     pin = FilePin(str(patch), hashlib.sha256(patch.read_bytes()).hexdigest())
-    roles = {**local_round.rl.role_plan, "train_batch_size": 64, "policy_mini_batch_size": 64, "n_samples_per_prompt": 8}
+    roles = {
+        **local_round.rl.role_plan,
+        "policy_num_nodes": 4,
+        "policy_num_gpus_per_node": 8,
+        "num_inference_engines": 1,
+        "inference_engine_data_parallel_size": 8,
+        "inference_engine_expert_parallel_size": 8,
+        "train_batch_size": 64,
+        "policy_mini_batch_size": 64,
+        "n_samples_per_prompt": 8,
+    }
     authored = dataclasses.asdict(local_round)
-    authored["rl"].update(recipe_patch=dataclasses.asdict(pin), role_plan=roles)
+    authored["cluster"] = "cw-us-east-02a"
+    authored["rl"]["execution"].update(
+        cluster="cw-us-east-02a",
+        target_cluster="cw-us-east-02a",
+        cluster_config="lib/iris/config/cw-us-east-02a.yaml",
+        role_topology=None,
+        excluded_nvlink_domains=[],
+    )
+    authored["rl"].update(
+        gpu_variant="H100",
+        recipe_patch=dataclasses.asdict(pin),
+        role_plan=roles,
+        megatron={
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 2,
+            "context_parallel_size": 4,
+            "expert_model_parallel_size": 16,
+            "expert_tensor_parallel_size": 1,
+        },
+    )
     authored["rl"]["recipe"]["trainer"]["policy"]["megatron_config"]["optimizer_config_kwargs"] = {
         "optimizer_cpu_offload": True,
         "optimizer_offload_fraction": 1.0,
@@ -797,6 +826,26 @@ def test_exp6_pinned_patch_resolves_exact_context_staleness_and_snowball_optimiz
     assert not offload["optimizer_cpu_offload"]
     assert offload["optimizer_offload_fraction"] == 0.0
     assert not offload["overlap_cpu_optimizer_d2h_h2d"]
+    placement = trainer["placement"]
+    assert (placement["policy_num_nodes"], placement["policy_num_gpus_per_node"]) == (4, 8)
+    for role in ("policy", "ref"):
+        megatron = trainer[role]["megatron_config"]
+        assert (
+            megatron["tensor_model_parallel_size"],
+            megatron["pipeline_model_parallel_size"],
+            megatron["context_parallel_size"],
+            megatron["expert_model_parallel_size"],
+            megatron["expert_tensor_parallel_size"],
+        ) == (1, 2, 4, 16, 1)
+        assert megatron["transformer_config_kwargs"]["cp_comm_type"] == "all_gather"
+    megatron = trainer["policy"]["megatron_config"]
+    assert megatron["output_projection_chunk_size"] == 1024
+    assert megatron["memory_profile"] == {
+        "enabled": True,
+        "max_sequence_length": 131072,
+        "valid_token_counts": [85557],
+        "minimum_headroom_fraction": 0.1,
+    }
     patch.write_text(patch.read_text().replace("max_staleness_steps: 3", "max_staleness_steps: 4"))
     with pytest.raises(ValueError, match="Pinned file changed"):
         adopted_round_rl(spec)

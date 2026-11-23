@@ -31,10 +31,22 @@ trainer:
         offload_momentum: true
         expert_normalization: all_experts
     megatron_config:
+      output_projection_chunk_size: 1024
+      transformer_config_kwargs:
+        cp_comm_type: all_gather
+      memory_profile:
+        enabled: true
+        max_sequence_length: 131072
+        valid_token_counts: [85557]
+        minimum_headroom_fraction: 0.1
       optimizer_config_kwargs:
         optimizer_cpu_offload: false
         optimizer_offload_fraction: 0.0
         overlap_cpu_optimizer_d2h_h2d: false
+  ref:
+    megatron_config:
+      transformer_config_kwargs:
+        cp_comm_type: all_gather
 generator:
   n_samples_per_prompt: 8
 terminal_bench:
