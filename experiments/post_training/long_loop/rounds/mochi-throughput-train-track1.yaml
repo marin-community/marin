@@ -228,6 +228,8 @@ rl:
       trajectory_reward_shaping:
         enabled: true
         overlong:
+          l_max: 98304
+          l_cache: 16384
           penalty_scale: 0.0
         reasoning_span:
           penalty: 0.1

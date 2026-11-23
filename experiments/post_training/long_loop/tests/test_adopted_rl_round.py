@@ -169,6 +169,24 @@ def test_round_preserves_response_budget_for_train_eval_and_pi(local_round, tmp_
     assert agent["compaction_reserve_tokens"] == 98304
 
 
+@pytest.mark.parametrize("profile", ["throughput-train-track1"])
+def test_mochi_96k_round_aligns_overlong_window_with_response_cap(local_round, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    terminal = adopted_round_rl(local_round)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    validate_launch(terminal.build_config(context).launch_config_yaml, tmp_path / "composed", model_config=b"{}")
+    generator = yaml.safe_load((tmp_path / "composed" / "compiled.yaml").read_text())["skyrl"]["generator"]
+    assert generator["sampling_params"]["max_generate_length"] == 98304
+    assert generator["eval_sampling_params"]["max_generate_length"] == 98304
+    assert generator["trajectory_reward_shaping"]["overlong"] == {
+        "l_max": 98304,
+        "l_cache": 16384,
+        "penalty_scale": 0.0,
+    }
+
+
 def _write_schema1_model(tmp_path: Path, checkpoint_step: int) -> tuple[Path, dict[str, str]]:
     """A Snowball-style handoff export: schema-1 config and a direct step manifest."""
     model = tmp_path / "model-schema1"
