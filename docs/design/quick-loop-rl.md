@@ -2138,8 +2138,8 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   The original final-action grader scored all five zero. The replay also
   reproduced the function names and arguments of all 10 saved vLLM calls
   through the native parser and reproduced their original scores. The
-  two engines used the same declared sampling settings and independent
-  random draws. Compare the generated tokens and effective stop behavior
+  declared sampling settings matched across engine-specific samplers.
+  Compare the generated tokens and effective stop behavior
   before attributing the score gap to the response wrapper.
 
   Kueue evicted the trainer at 12:03 UTC to admit another workload in
