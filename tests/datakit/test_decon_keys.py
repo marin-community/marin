@@ -15,6 +15,7 @@ from marin.datakit.decon_keys import (
     Reading,
     Windows,
     _located,
+    candidate_windows,
     excerpt,
     hit_indices,
     item_stream,
@@ -284,3 +285,18 @@ def test_offset_lookups_in_a_long_stretch_without_spaces_after_a_header_take_one
     for position in range(0, len(reading.stream), len(reading.stream) // 500):
         reading.text_offset(position)
         assert time.monotonic() < deadline, "offset lookups search the whole stretch"
+
+
+def test_a_middle_key_finds_a_copy_without_the_prompt_wrapper_and_the_earliest_key_does_not():
+    question = "Question: Henry made two stops during his 60-mile bike trip. He first stopped after 20 miles."
+    stream = text_stream(question)
+    hashes, owners, offsets = candidate_windows([stream])
+    windows = Windows(hashes, owners, offsets, np.array(["gsm8k-0"]), np.array([KeyStream.QUESTION]))
+    # No window occurs in the reference sample, so the tie-break decides the key.
+    counts = np.zeros(len(hashes), dtype=np.int64)
+    record = "Solve this problem: Henry made two stops during his 60-mile bike trip. He first stopped after 20 miles."
+    held = set(window_hashes(text_stream(record)).tolist())
+    earliest = keys_table(windows, counts).column("key1_hash").to_pylist()[0]
+    middle = keys_table(windows, counts, middle=True).column("key1_hash").to_pylist()[0]
+    assert earliest not in held
+    assert middle in held
