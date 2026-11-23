@@ -25,7 +25,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request as HttpRequest, Response
 from fastapi.responses import StreamingResponse
 from openai.types import Completion, CompletionUsage, Model
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -37,6 +37,7 @@ from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoic
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
+from levanter.inference.binary import GENERATE_PATH, MEDIA_TYPE, encode_frame, read_generate_request
 from levanter.inference.engine import (
     InferenceEngine,
     InferenceEngineConfig,
@@ -52,6 +53,7 @@ from levanter.inference.openai_protocol import (
     TokensRequest,
     TokensResponse,
 )
+from levanter.inference.utils import INVALID
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
@@ -95,7 +97,7 @@ class InferenceRequest:
     max_tokens: int
     temperature: float
     top_p: float | None
-    stop_tokens: List[int] | None
+    stop_tokens: List[List[int]] | None
     seed: int | None
     future: asyncio.Future
     n_generations: int = 1
@@ -230,6 +232,8 @@ class InferenceContext:
         future: asyncio.Future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        *,
+        stop_token_sequences: List[List[int]] | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -242,7 +246,9 @@ class InferenceContext:
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
-            stop_tokens=stop_tokens,
+            stop_tokens=(
+                stop_token_sequences if stop_token_sequences is not None else ([stop_tokens] if stop_tokens else None)
+            ),
             seed=seed,
             future=future,
             n_generations=n_generations,
@@ -340,9 +346,9 @@ class InferenceContext:
             # Create stop tokens if specified
             stop_ids = None
             if req.stop_tokens:
-                stop_ids = hax.named(jnp.asarray(req.stop_tokens, dtype=jnp.int32), axis="position").broadcast_axis(
-                    {"stop_seq": 1}
-                )
+                width = max(map(len, req.stop_tokens))
+                padded = [seq + [INVALID] * (width - len(seq)) for seq in req.stop_tokens]
+                stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
 
             # dumb fallback seed if none provided
             if req.seed is None:
@@ -802,6 +808,56 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
+    prompt, options = await read_generate_request(request)
+    config = ctx.engine.config
+    max_prefill_size = config.max_prefill_size or config.max_seq_len
+    if prompt.size + options.max_tokens > config.max_seq_len or prompt.size > max_prefill_size:
+        raise HTTPException(status_code=400, detail="Prompt and generation must fit the configured context")
+    if options.n > config.max_seqs:
+        raise HTTPException(status_code=400, detail="Requested choices exceed the configured sequence capacity")
+    vocab_size = ctx.model.Vocab.size
+    if np.any((prompt < 0) | (prompt >= vocab_size)):
+        raise HTTPException(status_code=400, detail="Prompt contains an out-of-vocabulary token")
+    stops = options.stop_tokens
+    if stops and (
+        len(stops) > config.max_stop_seqs
+        or any(not 0 < len(seq) <= config.max_stop_tokens for seq in stops)
+        or any(not 0 <= token < vocab_size for seq in stops for token in seq)
+    ):
+        raise HTTPException(status_code=400, detail="Stop tokens exceed the configured capacity or vocabulary")
+
+    future = asyncio.get_running_loop().create_future()
+    ctx.submit_request(
+        prompt.tolist(),
+        options.max_tokens,
+        options.temperature,
+        options.top_p,
+        None,
+        options.seed,
+        future,
+        n_generations=options.n,
+        stop_token_sequences=stops,
+    )
+    try:
+        outputs = await future
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    tensors = {"prompt_token_ids": prompt}
+    choices = []
+    for choice, output in enumerate(outputs):
+        choices.append({"completion_tokens": output.completion_tokens})
+        prefix = f"choice.{choice}."
+        tensors[prefix + "token_ids"] = np.asarray(output.tokens, dtype=np.int32)
+        if output.logprobs is not None:
+            tensors[prefix + "behavior_logprobs"] = np.asarray(output.logprobs, dtype=np.float32)
+    return Response(
+        content=encode_frame({"choices": choices}, tensors),
+        media_type=MEDIA_TYPE,
+    )
+
+
 class InferenceServer:
     """Wraps a FastAPI server around the inference context.
 
@@ -885,6 +941,10 @@ class InferenceServer:
         @app.post("/v1/tokens", response_model=TokensResponse)
         async def fetch_tokens(request: TokensRequest) -> TokensResponse:
             return await _fetch_tokens(inference_context, request)
+
+        @app.post(GENERATE_PATH)
+        async def generate_binary(request: HttpRequest) -> Response:
+            return await _generate_binary(inference_context, request)
 
         return app
 
