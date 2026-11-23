@@ -2272,6 +2272,27 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   comparison.
   [Page batching source, binary frames and lowering][held-native-page-block-cpu]
 
+  A two-device CPU run applied both serving prototypes together and
+  completed two generate, grade, update and publish cycles. Each update
+  consumed two independently sampled quartets and 128 response targets.
+  The optimized actor dispatched one batch of eight, and the frozen actor
+  dispatched two batches of four. Both used production RLOO-N and the
+  fused learner scorer, and installed the same three weight identities.
+  The serving processes rejected stale requests and returned a fresh
+  sample under policy 2. Sixteen training replay frames and the terminal
+  frame matched after accounting for each configuration digest. The
+  independent learner scores stayed within 0.00048 of serving scores
+  with zero PPO clip crossings.
+  [Combined CPU loop, binary frames and receipts][held-native-composed-cpu]
+
+  The inventory launcher derives the serving model configuration from the
+  verified snapshot. That configuration is part of the replay binding.
+  To compare decode kernels on the same snapshot, carry the choice as a
+  serving-engine option in the typed initialization message and apply it
+  after restoring the verified weights. Apply the option on every install
+  and keep the original model binding in each frame. Compare both kernels
+  at the same admitted batch size so the result isolates decode.
+
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
   scores to the same typed frames from one original attempt. The first
@@ -2469,6 +2490,7 @@ arms. [Prior timing comparison][timing]
 [held-native-eight-slot-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-eight-slot-cpu-proof.tar.zst
 [held-native-length-aware-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-length-aware-batch-cpu-proof.tar.zst
 [held-native-page-block-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-blocked-paged-decode-cpu-proof.tar.zst
+[held-native-composed-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-composed-policy-loop-cpu-proof.tar.zst
 [held-publication-overlap]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fverified-publication-overlap-proof.tar.zst
 [iris-native-emission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122p
 [native-passing-diagnostic-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122p%2Findependently-verified-passing-diagnostic.json
