@@ -87,8 +87,12 @@ IMAGE_PREFIX = "iris-"
 VCPUS_PER_CORE = 2
 MIN_CORES = 0.5
 DEFAULT_MEMORY_GIB = 1
-# A launch waits this long for its image and for Daytona capacity before the attempt is retried.
-LAUNCH_TIMEOUT_SECONDS = 600
+# A launch fails, charging the task, when its image is not ready within this time.
+IMAGE_TIMEOUT_SECONDS = 600
+# Seconds one create request waits for its sandbox to start.
+CREATE_WAIT_SECONDS = 600
+# Daytona states of a sandbox that is still being provisioned.
+PROVISIONING_STATES = frozenset({"queued", "creating", "starting"})
 DELETE_TIMEOUT_SECONDS = 60
 # A deletion whose answer was lost is repeated this many times.
 DELETE_RETRIES = 3
@@ -100,6 +104,10 @@ TASK_TIMEOUT_SLACK_SECONDS = 600
 
 class AttemptCancelled(Exception):
     """The attempt left the desired set while it was being launched."""
+
+
+class SandboxNotStarted(Exception):
+    """Daytona did not start the sandbox within the create request's wait."""
 
 
 def sandbox_resources(resources: job_pb2.ResourceSpecProto) -> Resources:
@@ -172,8 +180,10 @@ def _is_capacity(error: BaseException) -> bool:
 
 
 def launch_failure_state(error: BaseException) -> int:
-    """A capacity failure retries the attempt for free (it is still ASSIGNED); any other charges the task."""
-    return job_pb2.TASK_STATE_WORKER_FAILED if _is_capacity(error) else job_pb2.TASK_STATE_FAILED
+    """A provider failure before the process starts retries for free (still ASSIGNED); others charge the task."""
+    if _is_capacity(error) or isinstance(error, SandboxNotStarted):
+        return job_pb2.TASK_STATE_WORKER_FAILED
+    return job_pb2.TASK_STATE_FAILED
 
 
 @dataclass
@@ -184,6 +194,8 @@ class _Attempt:
     launch: Future["_Launched"] = field(default_factory=Future)
     cancelled: threading.Event = field(default_factory=threading.Event)
     released: bool = False
+    # Set before the process start request: from then on user code may run.
+    start_requested: bool = False
     reported_running: bool = False
     exit_code: int | None = None
     error: str | None = None
@@ -200,6 +212,11 @@ class _Attempt:
     def check(self) -> None:
         if self.cancelled.is_set():
             raise AttemptCancelled(self.uid)
+
+    def pause(self, seconds: float) -> None:
+        """Wait ``seconds``, or less if the attempt is cancelled meanwhile."""
+        self.cancelled.wait(seconds)
+        self.check()
 
 
 @dataclass(frozen=True)
@@ -306,12 +323,17 @@ class DaytonaTaskProvider:
         )
 
     def _observe(self, attempt: _Attempt) -> TaskUpdate | None:
-        # The attempt stays ASSIGNED until its process starts, so a failed launch retries for free.
+        # The attempt stays ASSIGNED until its process may run, so a failed launch retries for free.
         if not attempt.launch.done():
             return None
         error = attempt.launch.exception()
+        if attempt.start_requested and not attempt.reported_running:
+            # Report RUNNING before any end, so that a failure charges the preemption budget.
+            attempt.reported_running = True
+            return self._update(attempt, job_pb2.TASK_STATE_RUNNING, status_message="")
         if error is not None:
-            return self._update(attempt, launch_failure_state(error), error=f"Daytona launch failed: {error}")
+            state = job_pb2.TASK_STATE_WORKER_FAILED if attempt.start_requested else launch_failure_state(error)
+            return self._update(attempt, state, error=f"Daytona launch failed: {error}")
         if attempt.finished.is_set():
             if attempt.exit_code is None:
                 return self._update(attempt, job_pb2.TASK_STATE_WORKER_FAILED, error=attempt.error)
@@ -323,10 +345,7 @@ class DaytonaTaskProvider:
                 exit_code=attempt.exit_code,
                 error=f"Task exited with status {attempt.exit_code}",
             )
-        if attempt.reported_running:
-            return None
-        attempt.reported_running = True
-        return self._update(attempt, job_pb2.TASK_STATE_RUNNING, status_message="")
+        return None
 
     def _cancel(self, attempt: _Attempt) -> None:
         """Stop the attempt's launch; its sandbox is deleted once the launch has settled."""
@@ -361,52 +380,55 @@ class DaytonaTaskProvider:
         while image.status not in ("ready", "failed", "error"):
             attempt.check()
             if monotonic() > deadline:
-                raise RuntimeError(f"Daytona image {reference} was not ready within {LAUNCH_TIMEOUT_SECONDS} s")
+                raise RuntimeError(f"Daytona image {reference} was not ready within {IMAGE_TIMEOUT_SECONDS} s")
             # One server long poll per request.
             image = self._client.images.get(image.id, wait="ready")
         if image.status != "ready":
             raise RuntimeError(f"Daytona image {reference} is {image.status}: {image.error}")
         return name
 
-    def _create(self, attempt: _Attempt, image: str, deadline: float) -> Sandbox:
-        """Create the attempt's sandbox, waiting for capacity until ``deadline``.
+    def _create(self, attempt: _Attempt, image: str) -> Sandbox:
+        """Create the attempt's sandbox, waiting for Daytona capacity as a pod waits for a node.
 
         A repeat with the same idempotency key returns the sandbox an earlier,
-        unanswered request created. If the launch gives up after such a request,
+        unanswered request created. If the launch stops after such a request,
         the sandbox is searched for by its attempt label and deleted.
         """
         run_req = attempt.run_req
         timeout_seconds = run_req.timeout.milliseconds // 1000 if run_req.timeout.milliseconds else 0
         ttl = self._config.sandbox_ttl_minutes * 60
-        backoff = ExponentialBackoff(initial=1, maximum=10, factor=2, jitter=0.5)
+        backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
         unanswered = False
-        while True:
-            try:
-                return self._client.create(
-                    image,
-                    # The cluster name is the search key that recovery deletes by; the label names the attempt.
-                    name=self._cluster_name,
-                    idempotency_key=f"{self._cluster_name}-{attempt.uid}",
-                    labels={CLUSTER_LABEL: self._cluster_name, ATTEMPT_LABEL: attempt.uid},
-                    resources=sandbox_resources(run_req.resources),
-                    user="root",
-                    lifecycle_policy={
-                        "timeout_seconds": (
-                            min(ttl, timeout_seconds + TASK_TIMEOUT_SLACK_SECONDS) if timeout_seconds else ttl
-                        ),
-                        "on_timeout": "delete",
-                    },
-                    wait_seconds=LAUNCH_TIMEOUT_SECONDS,
-                    create_timeout_seconds=LAUNCH_TIMEOUT_SECONDS,
-                )
-            except DaytonaError as error:
-                unanswered = unanswered or _is_ambiguous(error)
-                wait = max(backoff.next_interval(), error.retry_after_seconds or 0)
-                if not _is_capacity(error) or monotonic() + wait > deadline or attempt.cancelled.is_set():
-                    if unanswered:
-                        self._delete_attempt_sandboxes(attempt.uid)
-                    raise
-                sleep(wait)
+        try:
+            while True:
+                attempt.check()
+                try:
+                    return self._client.create(
+                        image,
+                        # The cluster name is the search key that recovery deletes by; the label names the attempt.
+                        name=self._cluster_name,
+                        idempotency_key=f"{self._cluster_name}-{attempt.uid}",
+                        labels={CLUSTER_LABEL: self._cluster_name, ATTEMPT_LABEL: attempt.uid},
+                        resources=sandbox_resources(run_req.resources),
+                        user="root",
+                        lifecycle_policy={
+                            "timeout_seconds": (
+                                min(ttl, timeout_seconds + TASK_TIMEOUT_SLACK_SECONDS) if timeout_seconds else ttl
+                            ),
+                            "on_timeout": "delete",
+                        },
+                        wait_seconds=CREATE_WAIT_SECONDS,
+                        create_timeout_seconds=CREATE_WAIT_SECONDS,
+                    )
+                except DaytonaError as error:
+                    unanswered = unanswered or _is_ambiguous(error)
+                    if not _is_capacity(error):
+                        raise
+                    attempt.pause(max(backoff.next_interval(), error.retry_after_seconds or 0))
+        except BaseException:
+            if unanswered:
+                self._delete_attempt_sandboxes(attempt.uid)
+            raise
 
     def _delete_attempt_sandboxes(self, uid: str) -> None:
         # The search is eventually consistent; the lifecycle policy deletes a sandbox it misses.
@@ -416,17 +438,19 @@ class DaytonaTaskProvider:
 
     def _launch(self, attempt: _Attempt) -> _Launched:
         run_req = attempt.run_req
-        deadline = monotonic() + LAUNCH_TIMEOUT_SECONDS
+        deadline = monotonic() + IMAGE_TIMEOUT_SECONDS
         attempt.check()
         image = self._ensure_image(attempt, run_req.task_image or self._config.default_task_image, deadline)
-        attempt.check()
-        sandbox = self._create(attempt, image, deadline)
+        sandbox = self._create(attempt, image)
         try:
+            if sandbox.state in PROVISIONING_STATES:
+                raise SandboxNotStarted(f"Daytona sandbox {sandbox.id} is still {sandbox.state}")
             if sandbox.state != "started":
                 raise RuntimeError(f"Daytona sandbox {sandbox.id} is {sandbox.state}: {sandbox.error}")
             attempt.check()
             self._upload_workdir(sandbox, run_req)
             attempt.check()
+            attempt.start_requested = True
             process = sandbox.process.start(
                 argv=["bash", "-lc", build_task_script(run_req)],
                 cwd=WORKDIR,
@@ -493,31 +517,36 @@ class DaytonaTaskProvider:
         resumes = 0
         backoff = ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
         try:
-            while True:
-                try:
-                    for event in process.stream_logs(cursor=cursor, encoding="base64"):
-                        if event.type == "log":
-                            source = "stderr" if event.frame.channel == "stderr" else "stdout"
-                            *lines, pending[source] = (pending[source] + decode_frame(event.frame.data)).split(b"\n")
-                            if lines:
-                                # Flush each frame's complete lines, so a quiet task still streams.
-                                self._logs.write_batch(key, [entry(source, line) for line in lines])
-                        elif event.type == "state":
-                            attempt.exit_code = exit_status(event.result)
-                        elif event.type == "warning":
-                            logger.warning("Daytona dropped output of attempt %s: %s", attempt.uid, event.message)
-                        cursor, resumes = event.cursor, 0
-                    break
-                except DaytonaConnectionError:
-                    resumes += 1
-                    if resumes > LOG_STREAM_RESUMES or attempt.cancelled.is_set():
-                        raise
-                    sleep(backoff.next_interval())
+            try:
+                while True:
+                    try:
+                        for event in process.stream_logs(cursor=cursor, encoding="base64"):
+                            if event.type == "log":
+                                source = "stderr" if event.frame.channel == "stderr" else "stdout"
+                                *lines, pending[source] = (pending[source] + decode_frame(event.frame.data)).split(b"\n")
+                                if lines:
+                                    # Flush each frame's complete lines, so a quiet task still streams.
+                                    self._logs.write_batch(key, [entry(source, line) for line in lines])
+                            elif event.type == "state":
+                                attempt.exit_code = exit_status(event.result)
+                            elif event.type == "warning":
+                                logger.warning("Daytona dropped output of attempt %s: %s", attempt.uid, event.message)
+                            cursor, resumes = event.cursor, 0
+                        break
+                    except DaytonaConnectionError:
+                        resumes += 1
+                        if resumes > LOG_STREAM_RESUMES or attempt.cancelled.is_set():
+                            raise
+                        sleep(backoff.next_interval())
+            except DaytonaError as error:
+                # The log is lost from here on; the exit status is read from the process record below.
+                logger.warning("Lost the log of Daytona attempt %s: %s", attempt.uid, error)
             if any(pending.values()):
                 self._logs.write_batch(key, [entry(source, rest) for source, rest in pending.items() if rest])
-            if attempt.exit_code is None:
-                # The stream ended without the state event; the process record still has it.
-                attempt.exit_code = exit_status(process.wait(timeout=DELETE_TIMEOUT_SECONDS))
+            while attempt.exit_code is None and not attempt.cancelled.is_set():
+                result = process.wait(timeout=DELETE_TIMEOUT_SECONDS)
+                if result.reason != "timed_out":
+                    attempt.exit_code = exit_status(result)
         except (DaytonaError, RuntimeError) as error:
             if attempt.exit_code is None:
                 attempt.error = f"Lost the Daytona process: {error}"

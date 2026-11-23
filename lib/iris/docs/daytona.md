@@ -41,17 +41,22 @@ The controller performs all provider I/O, so a sandbox never connects to it:
    `defaults.task_env`, the job's variables and the Iris variables, as a
    Kubernetes pod does.
 4. A thread follows the process log into finelog under the attempt's key and
-   resumes the stream from its cursor after a disconnect. Reconcile reports
-   `RUNNING` once the process starts, then the exit status.
+   resumes the stream from its cursor after a disconnect; if the stream stays
+   down, the exit status still comes from the process record. Reconcile
+   reports `RUNNING` once the process start is requested, then the exit status.
 5. When the attempt leaves the desired set (finished, cancelled or timed out),
    its launch stops and its sandbox is deleted. A restarted controller deletes
    the cluster's leftover sandboxes and the controller retries their attempts.
 
-The attempt stays `ASSIGNED` until its process starts. A launch waits up to 10
-minutes for its image and for Daytona capacity; a launch that runs out of
-capacity or loses Daytona's answers fails as `WORKER_FAILED` from `ASSIGNED`,
-which retries without charging the task. Any other launch failure, such as a
-failed image or an invalid workdir path, fails the attempt as `FAILED`.
+The attempt stays `ASSIGNED` until its process start is requested, so a launch
+failure before that retries without charging the task. While Daytona is full,
+the launch waits with backoff, as a pod waits for a node: nothing but
+cancellation ends that wait. A sandbox that has not started 10 minutes after its
+create request fails as `WORKER_FAILED` and retries for free. A failed image,
+an image not ready within 10 minutes, or an invalid workdir path fails the
+attempt as `FAILED`. A start request whose answer is lost fails the attempt
+after `RUNNING`, which charges the preemption budget, because the process may
+have run.
 
 `iris task exec` and Shellbox's Iris backend run commands in the attempt's
 sandbox.

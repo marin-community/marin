@@ -11,10 +11,9 @@ import zipfile
 from types import SimpleNamespace
 
 import pytest
+from daytona.v2 import ConnectionError as ProviderConnectionError
 from daytona.v2 import (
-    ConnectionError as ProviderConnectionError,
-)
-from daytona.v2 import (
+    DaytonaError,
     LimitExceededError,
     LogFrame,
     NotFoundError,
@@ -56,10 +55,10 @@ def log_event(index: int, channel: str, data: bytes) -> StreamLogFrameEvent:
 
 
 class FakeProcess:
-    """A process whose log is ``events``; the stream breaks once after event ``break_after``."""
+    """A process whose log is ``events``; the stream breaks ``breaks`` times at event ``break_after``."""
 
-    def __init__(self, events, break_after=None):
-        self.events, self.break_after = events, break_after
+    def __init__(self, events, break_after=None, breaks=1, result=EXITED):
+        self.events, self.break_after, self.breaks, self.result = events, break_after, breaks, result
         self.cursors: list[str | None] = []
 
     def stream_logs(self, *, cursor, encoding):
@@ -67,10 +66,13 @@ class FakeProcess:
         self.cursors.append(cursor)
         start = 0 if cursor is None else next(i for i, event in enumerate(self.events) if event.cursor == cursor) + 1
         for index, event in enumerate(self.events[start:], start):
-            if index == self.break_after:
-                self.break_after = None
+            if index == self.break_after and self.breaks:
+                self.breaks -= 1
                 raise ProviderConnectionError("stream reset")
             yield event
+
+    def wait(self, *, timeout):
+        return self.result
 
 
 class FakeSandbox:
@@ -101,6 +103,8 @@ class FakeSandbox:
 
     def _start(self, *, argv, cwd, env, tag):
         self.started = SimpleNamespace(argv=argv, env=env)
+        if self._client.start_error is not None:
+            raise self._client.start_error
         return self._client.process
 
 
@@ -110,6 +114,8 @@ class FakeDaytona:
         self.sandboxes: list[FakeSandbox] = []
         self.deleted: list[str] = []
         self.create_errors: list[Exception] = []
+        self.creates = 0
+        self.start_error: Exception | None = None
         self.by_key: dict[str, FakeSandbox] = {}
         self.image_requested = threading.Event()
         self.image_gate = threading.Event()
@@ -129,6 +135,7 @@ class FakeDaytona:
         return self._images[name]
 
     def create(self, image, *, idempotency_key, labels, resources, **_options):
+        self.creates += 1
         if self.create_errors and isinstance(self.create_errors[0], LimitExceededError):
             raise self.create_errors.pop(0)
         if idempotency_key not in self.by_key:
@@ -169,6 +176,7 @@ def bundle(tmp_path):
 @pytest.fixture
 def no_wait(monkeypatch):
     monkeypatch.setattr(tasks, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(tasks._Attempt, "pause", lambda attempt, _seconds: attempt.check())
 
 
 def provider_for(client, store, logs=None, cluster_env=None):
@@ -266,7 +274,16 @@ def test_daytona_attempt_runs_in_one_sandbox_and_reports_its_exit(bundle, result
     assert client.deleted == [sandbox.id]
 
 
-def test_daytona_log_stream_resumes_from_its_cursor_after_a_disconnect(bundle, no_wait):
+@pytest.mark.parametrize(
+    ("breaks", "cursors", "lines"),
+    [
+        (1, [None, "c0"], ["one", "two"]),
+        # The stream stays down: the log is cut, and the exit status comes from the process record.
+        (tasks.LOG_STREAM_RESUMES + 1, [None] + ["c0"] * tasks.LOG_STREAM_RESUMES, ["one"]),
+    ],
+    ids=["resumed", "lost"],
+)
+def test_daytona_log_disconnect_keeps_the_exit_status(bundle, no_wait, breaks, cursors, lines):
     store, bundle_id = bundle
     events = [
         log_event(0, "stdout", b"one\n"),
@@ -274,7 +291,7 @@ def test_daytona_log_stream_resumes_from_its_cursor_after_a_disconnect(bundle, n
         StreamLogStateEvent(result=EXITED, cursor="c2"),
         StreamLogEofEvent(cursor="c3"),
     ]
-    process = FakeProcess(events, break_after=1)
+    process = FakeProcess(events, break_after=1, breaks=breaks)
     client = FakeDaytona(process)
     logs = RecordedLogs()
     provider = provider_for(client, store, logs)
@@ -283,8 +300,8 @@ def test_daytona_log_stream_resumes_from_its_cursor_after_a_disconnect(bundle, n
     *_, final = final_update(provider)
 
     assert final.new_state == job_pb2.TASK_STATE_SUCCEEDED
-    assert process.cursors == [None, "c0"]
-    assert [entry.data for entry in logs.entries[f"{TASK}:0"]] == ["one", "two"]
+    assert process.cursors == cursors
+    assert [entry.data for entry in logs.entries[f"{TASK}:0"]] == lines
     provider.close()
 
 
@@ -305,26 +322,21 @@ def test_daytona_cancelled_launch_never_creates_a_sandbox(bundle):
 
 
 @pytest.mark.parametrize(
-    ("errors", "state", "sandboxes"),
+    ("errors", "state"),
     [
-        # Out of capacity until the launch gives up: the attempt is still ASSIGNED, so it retries for free.
-        ([LimitExceededError("concurrent sandbox limit reached", status_code=429)] * 2, "WORKER_FAILED", 0),
+        # Daytona is full: the launch waits for capacity, as a pod waits for a node.
+        ([LimitExceededError("concurrent sandbox limit reached", status_code=429)] * 2, "SUCCEEDED"),
         # Daytona created the sandbox but the answer was lost: the repeat returns the same sandbox.
-        ([ProviderConnectionError("connection reset")], "SUCCEEDED", 1),
-        # Every answer was lost: the launch gives up and finds the sandbox by its attempt label.
-        ([ProviderConnectionError("connection reset")] * 2, "WORKER_FAILED", 1),
+        ([ProviderConnectionError("connection reset")], "SUCCEEDED"),
+        # A refusal after a lost answer charges the task, and the sandbox is found by its label and deleted.
+        ([ProviderConnectionError("connection reset"), DaytonaError("bad request", status_code=400)], "FAILED"),
     ],
-    ids=["capacity", "lost-answer", "unanswered"],
+    ids=["capacity", "lost-answer", "refused-after-lost-answer"],
 )
-def test_daytona_create_waits_for_capacity_and_deletes_what_it_created(
-    bundle, no_wait, monkeypatch, errors, state, sandboxes
-):
+def test_daytona_create_retries_and_deletes_what_it_created(bundle, no_wait, errors, state):
     store, bundle_id = bundle
     client = FakeDaytona()
     client.create_errors = list(errors)
-    # The launch waits 600 s for capacity: two create requests fit in it.
-    clock = iter(range(0, 10_000, 300))
-    monkeypatch.setattr(tasks, "monotonic", lambda: next(clock))
     provider = provider_for(client, store)
 
     provider.reconcile(DirectReconcileRequest(tasks_to_run=[run_request(bundle_id)]))
@@ -333,10 +345,47 @@ def test_daytona_create_waits_for_capacity_and_deletes_what_it_created(
     provider.close()
 
     assert job_pb2.TaskState.Name(updates[-1].new_state) == f"TASK_STATE_{state}"
-    if state == "WORKER_FAILED":
-        assert all(update.new_state != job_pb2.TASK_STATE_RUNNING for update in updates)
-    assert len(client.sandboxes) == sandboxes
-    assert sorted(client.deleted) == [sandbox.id for sandbox in client.sandboxes]
+    (sandbox,) = client.sandboxes
+    assert client.deleted == [sandbox.id]
+
+
+def test_daytona_cancel_while_waiting_to_create_deletes_the_unanswered_sandbox(bundle, monkeypatch):
+    store, bundle_id = bundle
+    client = FakeDaytona()
+    client.create_errors = [ProviderConnectionError("connection reset")]
+    paused = threading.Event()
+    real_pause = tasks._Attempt.pause
+
+    def pause(attempt, seconds):
+        paused.set()
+        real_pause(attempt, 5)
+
+    monkeypatch.setattr(tasks._Attempt, "pause", pause)
+    provider = provider_for(client, store)
+    provider.reconcile(DirectReconcileRequest(tasks_to_run=[run_request(bundle_id)]))
+    assert paused.wait(timeout=5)
+
+    provider.reconcile(DirectReconcileRequest())
+    provider.close()
+
+    # No create follows the cancellation, and the sandbox of the unanswered request is gone.
+    assert client.creates == 1
+    assert client.deleted == [client.sandboxes[0].id]
+
+
+def test_daytona_lost_start_answer_charges_the_preemption_budget(bundle):
+    store, bundle_id = bundle
+    client = FakeDaytona()
+    client.start_error = ProviderConnectionError("connection reset")
+    provider = provider_for(client, store)
+
+    first = provider.reconcile(DirectReconcileRequest(tasks_to_run=[run_request(bundle_id)])).task_updates
+    updates = first + final_update(provider)
+
+    # The process may run, so the attempt is RUNNING before it fails: the retry is not free.
+    assert [update.new_state for update in updates] == [job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_WORKER_FAILED]
+    assert client.deleted == [client.sandboxes[0].id]
+    provider.close()
 
 
 def test_daytona_rejects_workdir_files_outside_the_workdir(bundle):
