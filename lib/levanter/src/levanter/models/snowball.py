@@ -50,7 +50,7 @@ from levanter.grug.attention import (
     attention,
     ragged_paged_attention,
 )
-from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp
+from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp, validate_captured_experts
 from levanter.grug.sharding import (
     Pembed_vocab,
     Plm_head,
@@ -638,6 +638,26 @@ class MoeForwardStats(eqx.Module):
         return self.sender_dropped + self.receiver_dropped
 
 
+class SnowballDecodeRoutes(eqx.Module):
+    """Expert IDs across the padded query rows and their validity mask."""
+
+    expert_ids: Array  # [layer, position, top_k]
+    token_valid: Array  # [position]
+
+
+class SnowballPagedResult(NamedTuple):
+    logits: NamedArray
+    cache: ListCache[KvPageCache]
+    routes: SnowballDecodeRoutes | None
+
+
+class SnowballRouteReplay(eqx.Module):
+    """Layer-ordered expert IDs and token validity from a packed rollout."""
+
+    expert_ids: Array  # [layers, *token_axes, top_k]
+    token_valid: NamedArray
+
+
 class MoeForwardOutput(NamedTuple):
     """One MoE-bearing forward's output with its optional observers.
 
@@ -705,6 +725,7 @@ class SnowballMoEMLP(eqx.Module):
         token_valid: Array | None = None,
         *,
         collect_counts: bool = False,
+        replay_experts: Array | None = None,
     ) -> MoeForwardOutput:
         b, s, _ = x.shape
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
@@ -717,10 +738,12 @@ class SnowballMoEMLP(eqx.Module):
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
         # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
-        biased_logits = router_logits + unshard(self.router_bias)
-        # Select top-(K+1) on biased logits; the (K+1)-th is only the QB threshold (unused at inference).
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        selected_experts = selected_experts[:, :-1]
+        if replay_experts is None:
+            biased_logits = router_logits + unshard(self.router_bias)
+            _, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+            selected_experts = selected_experts[:, :-1]
+        else:
+            selected_experts = reshard(replay_experts, P(_token_spec()[0], None))
         # Sigmoid combine weights on UNbiased logits for the selected experts, renormed to sum to 2.5.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
@@ -815,6 +838,7 @@ class SnowballBlock(eqx.Module):
         token_valid: Array | None = None,
         *,
         collect_counts: bool = False,
+        replay_experts: Array | None = None,
     ) -> MoeForwardOutput:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
@@ -826,7 +850,9 @@ class SnowballBlock(eqx.Module):
             lambda _: self.attn(attn_in, short_mask, disable_rope=False),
             operand=None,
         )
-        return self._after_attention(x, attn_out, return_routes, token_valid, collect_counts=collect_counts)
+        return self._after_attention(
+            x, attn_out, return_routes, token_valid, collect_counts=collect_counts, replay_experts=replay_experts
+        )
 
     def _after_attention(
         self,
@@ -836,10 +862,13 @@ class SnowballBlock(eqx.Module):
         token_valid: Array | None = None,
         *,
         collect_counts: bool = False,
+        replay_experts: Array | None = None,
     ) -> MoeForwardOutput:
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        routed = self.mlp._forward(mlp_in, return_routes, token_valid, collect_counts=collect_counts)
+        routed = self.mlp._forward(
+            mlp_in, return_routes, token_valid, collect_counts=collect_counts, replay_experts=replay_experts
+        )
         return MoeForwardOutput(x + (routed.output + self.shared(mlp_in)), routed.routes, routed.counts)
 
     def decode(
@@ -850,7 +879,9 @@ class SnowballBlock(eqx.Module):
         pos_ids: Array,
         use_long: Bool[Array, ""],
         token_valid: Array,
-    ) -> tuple[Array, KvPageCache]:
+        *,
+        return_routes: bool = False,
+    ) -> tuple[MoeForwardOutput, KvPageCache]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         attn_out, cache = jax.lax.cond(
             use_long,
@@ -858,7 +889,7 @@ class SnowballBlock(eqx.Module):
             lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="short"),
             operand=None,
         )
-        return self._after_attention(x, attn_out, return_routes=False, token_valid=token_valid).output, cache
+        return self._after_attention(x, attn_out, return_routes, token_valid), cache
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
@@ -928,6 +959,7 @@ class SnowballTransformer(eqx.Module):
         token_valid: Array | None = None,
         *,
         collect_counts: bool = False,
+        replay_experts: Array | None = None,
     ) -> MoeForwardOutput:
         cfg = self.config
         if mask is None:
@@ -950,11 +982,18 @@ class SnowballTransformer(eqx.Module):
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
         long_schedule = long_attention_layer_mask(num_blocks)
 
-        def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag):
-            layer, use_long = layer_and_flag
-            if token_valid is not None or collect_counts:
+        def _scan_layer(carry: Float[Array, "B S D"], layer_data):
+            layer, use_long, layer_replay = layer_data
+            if token_valid is not None or collect_counts or layer_replay is not None:
                 result = layer._forward(
-                    carry, short_mask, long_mask, use_long, return_routes, token_valid, collect_counts=collect_counts
+                    carry,
+                    short_mask,
+                    long_mask,
+                    use_long,
+                    return_routes,
+                    token_valid,
+                    collect_counts=collect_counts,
+                    replay_experts=layer_replay,
                 )
                 return result.output, (result.routes, result.counts)
             if return_routes:
@@ -963,7 +1002,9 @@ class SnowballTransformer(eqx.Module):
             return layer(carry, short_mask, long_mask, use_long), (None, None)
 
         # Bound routed-expert activation memory during the backward pass as well as forward.
-        hidden, (routes, counts) = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
+        hidden, (routes, counts) = jax.lax.scan(
+            jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule, replay_experts)
+        )
         return MoeForwardOutput(self.final_gated_norm(self.final_norm(hidden)), routes, counts)
 
 
@@ -1002,6 +1043,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
         return self._activations(input_ids, return_routes=False, attn_mask=attn_mask)[0]
+
+    def activations_with_replay(
+        self, input_ids: NamedArray, attn_mask: LmHeadAttentionMask, route_replay: SnowballRouteReplay
+    ) -> NamedArray:
+        """Compute hidden states with prepared expert IDs and live combine weights."""
+        return self._activations(input_ids, False, attn_mask, route_replay=route_replay)[0]
 
     def activations_with_routes(
         self, input_ids: NamedArray, attn_mask: LmHeadAttentionMask | NamedArray | None = None
@@ -1064,6 +1111,18 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         keys = reshard(keys, P(_BATCH_AXES, None))
         return AttentionMask.causal().with_segment_ids(query, keys)
 
+    def prepare_route_replay(self, expert_ids: Array, token_valid: NamedArray) -> SnowballRouteReplay:
+        """Validate a packed rollout's route IDs on the host before a learner JIT."""
+        expected = (self.config.num_layers, *token_valid.array.shape, self.config.num_experts_per_token)
+        ids = np.asarray(expert_ids)
+        if ids.shape != expected or ids.dtype.kind not in "iu" or token_valid.dtype != jnp.bool_:
+            raise ValueError(f"Expected integer expert IDs of shape {expected} and a boolean token mask")
+        active = np.broadcast_to(np.asarray(token_valid.array), ids.shape[:-1])
+        validate_captured_experts(ids[active], self.config.num_experts)
+        # Padding is excluded from dispatch, but gather still needs valid IDs.
+        ids = np.where(active[..., None], ids, np.arange(expected[-1], dtype=np.int32))
+        return SnowballRouteReplay(jnp.asarray(ids, dtype=jnp.int32), token_valid)
+
     def _activations(
         self,
         input_ids: NamedArray,
@@ -1071,6 +1130,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         attn_mask: LmHeadAttentionMask | NamedArray | None,
         *,
         collect_counts: bool = False,
+        route_replay: SnowballRouteReplay | None = None,
     ) -> tuple[NamedArray, Array | None, MoeDispatchCounts | None]:
         Pos = input_ids.resolve_axis(self.Pos.name)
         raw = input_ids.array
@@ -1080,22 +1140,46 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         tokens = reshard(raw.reshape(b, s), P(_BATCH_AXES, _context_axis()))
         # [B, S, D], and [L, B, S, K] with return_routes
         mask = self._attention_mask(input_ids, attn_mask)
-        result = self.transformer._forward(tokens, mask, return_routes, collect_counts=collect_counts)
+        token_valid = replay_experts = None
+        if route_replay is not None:
+            if route_replay.token_valid.axes != input_ids.axes:
+                raise ValueError("Route replay must use the learner's token axes")
+            token_valid = route_replay.token_valid.array.reshape(b, s)
+            replay_experts = route_replay.expert_ids.reshape(
+                self.config.num_layers, b * s, self.config.num_experts_per_token
+            )
+        result = self.transformer._forward(
+            tokens,
+            mask,
+            return_routes,
+            token_valid,
+            collect_counts=collect_counts,
+            replay_experts=replay_experts,
+        )
         hidden = (
             result.output.reshape(*lead, s, self.Embed.size) if lead else result.output.reshape(s, self.Embed.size)
         )
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
         return hax.named(hidden, out_axes), result.routes, result.counts
 
-    def next_token_loss_and_metrics(self, example: LmExample, *, key=None, **kwargs):
-        """Return loss and the dropped assignment fraction over all positions, including padding."""
-        activations, _, counts = self._activations(example.tokens, False, example.attn_mask, collect_counts=True)
+    def next_token_loss_and_metrics(
+        self, example: LmExample, *, key=None, route_replay: SnowballRouteReplay | None = None, **kwargs
+    ):
+        """Return loss and the fraction of routed assignments dropped. Replay counts valid positions."""
+        activations, _, counts = self._activations(
+            example.tokens, False, example.attn_mask, collect_counts=True, route_replay=route_replay
+        )
         assert counts is not None
         loss = self._loss_from_activations(example, activations, **kwargs)
-        assignments = example.tokens.array.size * self.config.num_experts_per_token * self.config.num_layers
+        num_tokens = (
+            float(example.tokens.array.size)
+            if route_replay is None
+            else jnp.sum(route_replay.token_valid.array, dtype=jnp.float32)
+        )
+        assignments = num_tokens * self.config.num_experts_per_token * self.config.num_layers
         return loss, {
             "moe/dropped_assignment_fraction": Metric.from_value(
-                counts.dropped.sum(dtype=jnp.float32) / float(assignments), ReductionType.MEAN
+                counts.dropped.sum(dtype=jnp.float32) / jnp.maximum(assignments, 1.0), ReductionType.MEAN
             )
         }
 
@@ -1139,6 +1223,36 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         Tokens occupy a flat position axis, with a valid prefix described by batch_info.
         Expert assignments are independent of other requests and padding.
         """
+        logits, caches, _ = self._decode(input_ids, kv_cache, batch_info, pos_ids, capture_routes=False)
+        return logits, caches
+
+    def decode_with_routes(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        sample_indices: NamedArray | None = None,
+    ) -> SnowballPagedResult:
+        """Return logits, updated cache, and the selected expert IDs for every query row.
+
+        The optional sample_indices limits only the vocabulary projection.
+        """
+        return self._decode(
+            input_ids, kv_cache, batch_info, pos_ids, capture_routes=True, sample_indices=sample_indices
+        )
+
+    def _decode(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        capture_routes: bool,
+        sample_indices: NamedArray | None = None,
+    ) -> SnowballPagedResult:
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Snowball decode requires matching flat token and position arrays")
         if len(kv_cache) != len(self.transformer.blocks):
@@ -1155,16 +1269,26 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         def layer_step(x, layer_data):
             block, pages, use_long = layer_data
             cache = KvPageCache(hax.named(pages, cache_axes))
-            x, cache = block.decode(x, cache, batch_info, pos_ids.array, use_long, token_valid)
-            return x, cache.kv_pages.array
+            result, cache = block.decode(
+                x, cache, batch_info, pos_ids.array, use_long, token_valid, return_routes=capture_routes
+            )
+            routes = None if result.routes is None else result.routes[:, 0]
+            return result.output, (cache.kv_pages.array, routes)
 
-        hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
+        hidden, (cache_pages, expert_ids) = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
-        logits = jnp.einsum(
-            "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
-        )
+        if sample_indices is None:
+            logits = jnp.einsum(
+                "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
+            )
+            output = hax.named(logits[:, 0], (*input_ids.axes, self.Vocab))
+        else:
+            sampled = hidden[:, 0].at[sample_indices.array].get(out_sharding=P())
+            logits = jnp.einsum("pd,dv->pv", sampled, self.transformer.output_proj, out_sharding=P())
+            output = hax.named(logits, (*sample_indices.axes, self.Vocab))
         caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
-        return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches
+        routes = SnowballDecodeRoutes(expert_ids, token_valid) if expert_ids is not None else None
+        return SnowballPagedResult(output, caches, routes)
 
     def _stacked_inference_blocks(self) -> SnowballBlock:
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)

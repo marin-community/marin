@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from enum import StrEnum
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -8,8 +10,14 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 from haliax import AxisSelector, NamedArray
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
 
-__all__ = ["Sampler"]
+__all__ = ["Sampler", "LogprobMode"]
+
+
+class LogprobMode(StrEnum):
+    BEHAVIOR = "behavior"
+    POLICY = "policy"
 
 
 class Sampler(eqx.Module):
@@ -28,9 +36,11 @@ class Sampler(eqx.Module):
     """
 
     Vocab: AxisSelector = eqx.field(static=True)
+    logprob_mode: LogprobMode = eqx.field(static=True)
 
-    def __init__(self, Vocab: hax.AxisSelector = "vocab"):
+    def __init__(self, Vocab: hax.AxisSelector = "vocab", *, logprob_mode: LogprobMode = LogprobMode.BEHAVIOR):
         self.Vocab = Vocab
+        self.logprob_mode = LogprobMode(logprob_mode)
 
     def __call__(
         self,
@@ -59,6 +69,8 @@ class Sampler(eqx.Module):
                 Sampled token indices with the same axes as *temperatures*.
             log_probs : NamedArray
                 Log-probabilities for each sampled token (same shape as *tokens*).
+                Behavior scores use the filtered, temperature-scaled distribution.
+                Policy scores use the original model distribution.
         """
 
         # Ensure float32 for numerical stability
@@ -78,15 +90,19 @@ class Sampler(eqx.Module):
         # Where temperature == 0, fall back to greedy choice
         tokens = hax.where(temperatures == 0, greedy, samples)
 
-        vocab_axis = sampling_logits.resolve_axis(self.Vocab)
-        vocab_axis_index = sampling_logits.axes.index(vocab_axis)
-        sampling_logits_array = jnp.moveaxis(sampling_logits.array, vocab_axis_index, -1)
+        score_logits = logits_f32 if self.logprob_mode == LogprobMode.POLICY else sampling_logits
+        vocab_axis = score_logits.resolve_axis(self.Vocab)
+        vocab_axis_index = score_logits.axes.index(vocab_axis)
+        score_logits_array = jnp.moveaxis(score_logits.array, vocab_axis_index, -1)
         selected_logits = jnp.take_along_axis(
-            sampling_logits_array,
+            score_logits_array,
             jnp.expand_dims(tokens.array.astype(jnp.int32), axis=-1),
             axis=-1,
         ).squeeze(-1)
-        log_z = jax.nn.logsumexp(sampling_logits_array, axis=-1)
+        if self.logprob_mode == LogprobMode.POLICY:
+            log_z = batch_invariant_logsumexp(score_logits_array)
+        else:
+            log_z = jax.nn.logsumexp(score_logits_array, axis=-1)
         log_prob_tokens = hax.named(selected_logits - log_z, tokens.axes)
 
         return tokens, log_prob_tokens

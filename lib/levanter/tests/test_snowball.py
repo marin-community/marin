@@ -48,6 +48,7 @@ from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
@@ -495,7 +496,8 @@ def test_snowball_fp32_activations_cover_every_sigmoid():
 
 
 @pytest.mark.parametrize("model_axis_size,expert_axis_size", [(1, 1), (2, 1), (1, 2)])
-def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size):
+@pytest.mark.parametrize("n_generations", [1, 2])
+def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size, n_generations):
     cfg = _tiny_config(num_layers=2, sliding_window=3)
     with use_cpu_devices(model_axis_size * expert_axis_size):
         mesh = compact_grug_mesh(model_axis_size=model_axis_size, expert_axis_size=expert_axis_size)
@@ -526,13 +528,18 @@ def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_
                         SeqDecodingParams.default(),
                         max_num_tokens=jnp.asarray(len(prompt) + num_new_tokens, dtype=jnp.int32),
                     ),
-                    n_generations=1,
+                    n_generations=n_generations,
                 )
                 for i, prompt in enumerate(prompts)
             ]
             result = engine.generate(requests)
             assert result.logprobs is not None
-            for prompt, generated, scores in zip(prompts, result.tokens, result.logprobs, strict=True):
+            for prompt, generated, scores in zip(
+                [prompt for prompt in prompts for _ in range(n_generations)],
+                result.tokens,
+                result.logprobs,
+                strict=True,
+            ):
                 assert len(generated) == num_new_tokens
                 full_tokens = prompt + generated
                 # The teacher-forced forward uses one copy per batch shard.
@@ -1265,3 +1272,93 @@ def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries(
             assert weight.sharding == want, (name, weight.sharding, want)
 
         assert initialized.memory_analysis().temp_size_in_bytes < replicated.memory_analysis().temp_size_in_bytes / 3
+
+
+def test_snowball_learner_loss_replays_expert_routes():
+    cfg = _tiny_config(num_layers=2, initializer_std=0.1)
+    with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(19))
+        tokens = hax.named(jnp.asarray([[3, 13, 7, 20, 21, 6]], dtype=jnp.int32), ("batch", "position"))
+        example = LmExample(tokens, hax.ones(tokens.axes, dtype=jnp.float32))
+        token_valid = hax.ones(tokens.axes, dtype=jnp.bool_)
+        _, stats = model.activations_with_stats(tokens, token_valid)
+        capture = model.prepare_route_replay(stats.routes, token_valid)
+        switched = model.prepare_route_replay((stats.routes + 1) % cfg.num_experts, token_valid)
+
+        def score(replay):
+            loss, _ = model.next_token_loss_and_metrics(example, route_replay=replay, reduction=None)
+            return loss.array
+
+        compiled = jax.jit(score)
+        expected = compiled(None)
+        replayed = compiled(capture)
+        other = compiled(switched)
+
+    np.testing.assert_allclose(replayed, expected, atol=1e-6, rtol=0)
+    assert np.max(np.abs(np.asarray(other - replayed))) > 1e-3
+
+
+def test_snowball_paged_routes_replay_into_learner():
+    cfg = _tiny_config(num_layers=2, initializer_std=0.1)
+    position = Axis("position", 6)
+    with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
+        prompt = hax.named(jnp.asarray([3, 13, 7, 20, 21, 0], dtype=jnp.int32), position)
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(19))
+        batch = PageBatchInfo(
+            slot_ids=hax.named(jnp.asarray([0]), "seq"),
+            page_indices=hax.named(jnp.asarray([[0, 1]]), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray([5]), "seq"),
+            cu_q_lens=hax.named(jnp.asarray([0, 5]), "seq"),
+            num_seqs=jnp.asarray(1),
+            new_token_dests=hax.named(jnp.asarray([0, 1, 2, 3, 4, -1]), position),
+            page_size=4,
+        )
+        cache = model.initial_cache(PageTableSpec(num_pages=2, page_size=4), dtype=jnp.float32)
+        logits, _, routes = eqx.filter_jit(model.decode_with_routes)(
+            prompt, cache, batch, hax.arange(position, dtype=jnp.int32)
+        )
+        assert routes is not None
+        replay = model.prepare_route_replay(routes.expert_ids, hax.named(routes.token_valid, position))
+        features, _, _ = model._activations(prompt, False, None, route_replay=replay)
+        replayed = hax.dot(features, model.get_lm_head(), axis=model.Embed)
+
+    np.testing.assert_array_equal(routes.token_valid, [True, True, True, True, True, False])
+    np.testing.assert_allclose(logits.array[:5], replayed.array[:5], atol=2e-5, rtol=2e-5)
+
+
+def test_snowball_engine_capture_preserves_samples_and_predictor_routes():
+    cfg = _tiny_config(num_layers=2)
+    with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(21))
+        engine = InferenceEngine.from_model_with_config(
+            model,
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=16,
+                max_pages=16,
+                max_rounds=2,
+                page_size=2,
+                compute_dtype=jnp.float32,
+                max_seqs=4,
+                max_queued_tokens=8,
+                max_seqs_in_prefill=4,
+                max_prefill_size=12,
+            ),
+        )
+        prompt = [2, 7, 4, 9, 6]
+        params = replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(len(prompt) + 4))
+        requests = [Request(prompt, request_id=10, decode_params=params, n_generations=2)]
+        plain = engine.generate(requests)
+        captured = engine.generate(requests, capture_routes=True)
+        assert captured.expert_routes is not None
+        assert captured.tokens == plain.tokens
+        np.testing.assert_allclose(captured.logprobs, plain.logprobs, atol=1e-5, rtol=0)
+        for generated, scores, routes in zip(captured.tokens, captured.logprobs, captured.expert_routes, strict=True):
+            tokens = hax.named(jnp.asarray([prompt + generated]), ("batch", "position"))
+            valid = hax.named(routes.valid[None], tokens.axes)
+            replay = model.prepare_route_replay(jnp.asarray(routes.expert_ids[:, None]), valid)
+            loss, _ = model.next_token_loss_and_metrics(
+                LmExample(tokens, hax.ones(tokens.axes)), route_replay=replay, reduction=None
+            )
+            np.testing.assert_array_equal(routes.valid, [True] * (len(prompt) + len(generated) - 1) + [False])
+            np.testing.assert_allclose(scores, -loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0)
