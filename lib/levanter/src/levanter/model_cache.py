@@ -32,13 +32,15 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 import fsspec
 from huggingface_hub import RepoFile, hf_hub_download, list_repo_tree, model_info
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
-from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.cluster_config import data_config, marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,9 @@ _LOCK_SUFFIX = ".lock"
 _HF_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 # How often losers re-check the completion marker while the winner populates.
 _DEFAULT_POLL_INTERVAL = 10.0
+# Lifecycle removes each object separately, so stop using the snapshot before
+# its oldest files can start disappearing.
+_MAX_EXPIRY_MARGIN = timedelta(days=1)
 
 # A populate callback streams the snapshot into ``cache_path`` on the given
 # filesystem. It must write every file but NOT the completion marker (the cache
@@ -76,15 +81,16 @@ def cache_to_prefix(
     metadata: CacheMetadata = CacheMetadata(),
     complete_marker: str = DEFAULT_COMPLETE_MARKER,
     poll_interval: float = _DEFAULT_POLL_INTERVAL,
+    fresh_after: datetime | None = None,
 ) -> str:
     """Populate *cache_path* once under a distributed lock and return it.
 
-    Fast path: if the completion marker already exists, return ``cache_path``
+    Fast path: if the completion marker is fresh, return ``cache_path``
     immediately. Otherwise acquire a distributed lock keyed on ``cache_path``:
 
     - The **winner** runs ``populate`` (which streams files straight into the
       cache filesystem), writes the marker last (so a crashed populate never
-      reads as a hit), and returns ``cache_path``.
+      reads as a hit), and returns ``cache_path``. A stale marker is refilled.
     - **Losers** block, polling for the marker every ``poll_interval`` seconds,
       then return ``cache_path`` once the winner finishes. If the holder dies
       without completing (its lease goes stale), a loser takes over and becomes
@@ -100,6 +106,7 @@ def cache_to_prefix(
         complete_marker: JSON filename (relative to ``cache_path``) written last to mark
             the cache complete.
         poll_interval: Seconds a blocked worker waits between marker re-checks.
+        fresh_after: Earliest lifecycle timestamp accepted for a completed snapshot.
 
     Returns:
         ``cache_path`` — a path the caller can load the snapshot from.
@@ -108,7 +115,7 @@ def cache_to_prefix(
     fs, _ = url_to_fs(cache_path)
     marker = f"{cache_path}/{complete_marker}"
 
-    if fs.exists(marker):
+    if _marker_fresh(fs, marker, fresh_after):
         logger.info("model cache hit: %s", cache_path)
         return cache_path
 
@@ -116,14 +123,14 @@ def cache_to_prefix(
     while not lock.try_acquire():
         # Another worker is populating the cache; block then re-check the marker
         # rather than piling another download onto HuggingFace.
-        if fs.exists(marker):
+        if _marker_fresh(fs, marker, fresh_after):
             logger.info("model cache populated by another worker: %s", cache_path)
             return cache_path
         time.sleep(poll_interval)
 
     try:
         # A prior holder may have finished while we were acquiring the lock.
-        if fs.exists(marker):
+        if _marker_fresh(fs, marker, fresh_after):
             logger.info("model cache populated while acquiring lock: %s", cache_path)
             return cache_path
         with lease_refresh(lock):
@@ -149,6 +156,7 @@ def cache_hf_model(
     revision: str | None = None,
     complete_marker: str = DEFAULT_COMPLETE_MARKER,
     poll_interval: float = _DEFAULT_POLL_INTERVAL,
+    fresh_after: datetime | None = None,
 ) -> str:
     """Mirror HuggingFace repo *model_id* to *cache_path* once under a distributed lock.
 
@@ -157,7 +165,8 @@ def cache_hf_model(
     completion marker, so the snapshot never has to fit on local disk. An incomplete
     prefix is checked against source file sizes and resumed under the same lock.
     The caller chooses ``cache_path``; use :func:`resolve_cached_model_path` when a branch
-    or tag must be resolved and included in the cache identity. Returns ``cache_path``.
+    or tag must be resolved and included in the cache identity. With ``fresh_after``,
+    surviving files are refreshed before the marker is replaced. Returns ``cache_path``.
 
     Args:
         cache_path: Destination prefix for the mirrored snapshot.
@@ -166,13 +175,15 @@ def cache_hf_model(
             the cache metadata.
         complete_marker: Filename written last to mark the cache complete.
         poll_interval: Seconds a blocked worker waits between marker re-checks.
+        fresh_after: Earliest lifecycle timestamp for reuse of the marker and files.
     """
     return cache_to_prefix(
         cache_path,
-        lambda fs, dest: _stream_hf_snapshot(fs, dest, model_id, revision, complete_marker),
+        lambda fs, dest: _stream_hf_snapshot(fs, dest, model_id, revision, complete_marker, fresh_after),
         metadata=CacheMetadata(source_revision=revision),
         complete_marker=complete_marker,
         poll_interval=poll_interval,
+        fresh_after=fresh_after,
     )
 
 
@@ -191,7 +202,8 @@ def resolve_cached_model_path(
     is part of the cache identity, so a branch or tag update produces a new snapshot. Object-store
     and local paths already name a loadable snapshot and are returned unchanged, as is *model*
     when ``cache_ttl_days`` is non-positive (mirroring disabled). An explicit 40-character commit
-    is used directly, so an existing cache remains loadable without contacting Hugging Face.
+    is used directly, so a fresh cache remains loadable without contacting Hugging Face.
+    Markers close to the bucket's lifecycle deadline are treated as misses.
 
     Args:
         model: HuggingFace repo id (``org/model`` or ``org/model@revision``), or an
@@ -211,10 +223,28 @@ def resolve_cached_model_path(
         return model
     repo, _, revision = pinned.partition("@")
     cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(pinned)}")
+    # marin_temp_bucket clamps TTLs above the configured maximum.
+    ttl_days = min(cache_ttl_days, max(data_config().ttl_days))
+    expiry_margin = min(_MAX_EXPIRY_MARGIN, timedelta(days=ttl_days / 4))
+    fresh_after = datetime.now(UTC) - timedelta(days=ttl_days) + expiry_margin
     if cache_mode is CacheMode.READ_ONLY:
         fs, _ = url_to_fs(cache_path)
-        return cache_path if fs.exists(f"{cache_path.rstrip('/')}/{complete_marker}") else model
-    return cache_hf_model(cache_path, repo, revision=revision, complete_marker=complete_marker)
+        marker = f"{cache_path.rstrip('/')}/{complete_marker}"
+        return cache_path if _marker_fresh(fs, marker, fresh_after) else model
+    return cache_hf_model(
+        cache_path, repo, revision=revision, complete_marker=complete_marker, fresh_after=fresh_after
+    )
+
+
+def _marker_fresh(fs: fsspec.AbstractFileSystem, marker: str, fresh_after: datetime | None) -> bool:
+    fs.invalidate_cache(marker)
+    if fresh_after is None:
+        return fs.exists(marker)
+    try:
+        timestamp = fs.created(marker) if StoragePath(marker).scheme == "gs" else fs.modified(marker)
+    except FileNotFoundError:
+        return False
+    return timestamp >= fresh_after
 
 
 def resolve_hf_model_ref(model: str, *, token: str | None = None) -> str | None:
@@ -249,7 +279,12 @@ def _cache_slug(model: str) -> str:
 
 
 def _stream_hf_snapshot(
-    fs: fsspec.AbstractFileSystem, dest: str, model_id: str, revision: str | None, complete_marker: str
+    fs: fsspec.AbstractFileSystem,
+    dest: str,
+    model_id: str,
+    revision: str | None,
+    complete_marker: str,
+    fresh_after: datetime | None,
 ) -> None:
     """Copy HF repo *model_id* into *dest*, excluding the completion marker.
 
@@ -268,6 +303,8 @@ def _stream_hf_snapshot(
         for file in files:
             remote_path = f"{dest}/{file.path}"
             if _has_expected_size(fs, remote_path, file.size):
+                if fresh_after is not None:
+                    StoragePath(remote_path).refresh_lifetime(before=fresh_after)
                 logger.info("model cache file hit: %s", remote_path)
                 continue
 
