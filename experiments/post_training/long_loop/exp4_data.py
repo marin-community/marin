@@ -78,16 +78,12 @@ NEMOTRON_IF_LABEL = "nemotron_if"
 GENERATOR_RECIPE_NAME = "reasoning_gym_generated"
 GENERATED_ROW_COUNT = 20_800
 GENERATED_V3_FULL_RUN_ROWS = 104_000
-KNOWN_GENERATED_EXCLUSIONS = {
-    22689: {
-        "family": "codeio",
-        "reason": "irreproducible_entry",
-        "detail": "A fresh codeio dataset generates a different entry",
-    },
-}
-"""Adopted generated rows today's pipeline rejects: the row's entry does not regenerate, so its
-grader cannot re-derive it — grader-defective, excluded from the rebuilt pools and recorded."""
-GENERATED_POOL_ROWS = GENERATED_ROW_COUNT - len(KNOWN_GENERATED_EXCLUSIONS)
+EXCLUDED_GENERATED_FAMILIES = {"codeio": 191}
+"""Adopted generated families left out of the rebuilt pools: codeio's entries are floating-point
+dependent (the polynomial root's Newton path converges differently across platforms and libm
+builds), so their fresh-dataset comparison fails outside the original build environment and their
+grader cannot re-derive them. The census verified every other family reproduces exactly."""
+GENERATED_POOL_ROWS = GENERATED_ROW_COUNT - sum(EXCLUDED_GENERATED_FAMILIES.values())
 EXPECTED_COMPOSITION = {
     AGENTIC_TRAIN_SOURCE: 5608,
     "PRIME-RL/Eurus-2-RL-Data": 10_317,
@@ -165,23 +161,6 @@ def _write_pool_file(destination: StoragePath, name: str, rows: list[dict]) -> s
         return digest
 
 
-def _index_chunks(indices: list[int], max_bytes: int = 80_000) -> list[list[int]]:
-    """Split the requested row indices into argv-safe chunks (a single 20k-entry list exceeds ARG_MAX)."""
-    chunks: list[list[int]] = []
-    current: list[int] = []
-    size = 0
-    for index in indices:
-        piece = len(str(index)) + 1
-        if current and size + piece > max_bytes:
-            chunks.append(current)
-            current, size = [], 0
-        current.append(index)
-        size += piece
-    if current:
-        chunks.append(current)
-    return chunks
-
-
 def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -> tuple[list[dict], dict]:
     """Regenerate the generated label with the current pipeline and guard it against the adopted rows.
 
@@ -190,13 +169,23 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
     """
     if get_job_info() is None:
         raise RuntimeError("Regenerate the Reasoning Gym label inside the regional Iris CPU job")
-    wheel = StoragePath(GENERATOR_URL)
+    # The known exclusions leave the label by policy before regeneration: their entries fail the
+    # fresh-dataset comparison nondeterministically across runs (observed on a regional Linux job),
+    # so their grader cannot re-derive them and keeping them would make the stamp nondeterministic.
+    for excluded in KNOWN_GENERATED_EXCLUSIONS:
+        old_rows.pop(excluded, None)
     adopted_indices = sorted(old_rows)
+    wheel = StoragePath(GENERATOR_URL)
     rejections: list[dict] = []
     regenerated: dict[int, str] = {}
 
     def regenerate_part(part: int) -> list[tuple[int, str]]:
-        """The adopted label's rows this part owns, regenerated with the repaired pipeline."""
+        """The part's full row set, regenerated in the original generation context.
+
+        ``generate.py`` entries can depend on their process-local generation order, so a row only
+        reproduces when its part generates exactly what the original run generated; the stamp takes
+        the adopted rows from that output and applies the policy exclusion afterwards.
+        """
         context = ConversionContext(
             inputs={},
             grader_environment=EnvironmentRequirements(
@@ -204,54 +193,52 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
                 packages_lock=packages_lock,
             ),
         )
-        # Parts own tasks, not cycle-index strata: each part prints the requested rows its own
-        # tasks produce, so every part filters against the full adopted index set, chunked to
-        # stay under the OS per-argument limit.
         converted = []
-        for chunk in _index_chunks(adopted_indices):
-            for index, data in generated_rows(
-                wheel,
-                GENERATOR_VERSION,
-                EXCLUDED_GENERATORS,
-                PYTHON_HASH_SEED,
-                part,
-                GENERATOR_PARTS,
-                frozenset(chunk),
-            ):
-                if index not in old_rows:
-                    raise ValueError(f"Regenerated cycle index {index} is absent from the adopted label")
-                source = Source(
-                    dataset=GENERATOR_URL,
-                    revision=GENERATOR_SHA256,
-                    row=f"{GENERATOR_ARCHIVE}:{index}",
-                    importer_revision="1",
-                )
-                raw = RawRow(id=row_identity(GENERATOR_RECIPE_NAME, source), source=source, data=data)
-                task = convert_generated(raw, context)
-                if isinstance(task, ImportRejection):
-                    rejections.append({"index": index, **task.model_dump(mode="json")})
-                    continue
-                converted.append((index, task.model_dump_json()))
+        for index, data in generated_rows(
+            wheel, GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, part, GENERATOR_PARTS, None
+        ):
+            if index not in old_rows:
+                # The current cycle is larger than the adopted one; only the adopted rows are stamped.
+                continue
+            source = Source(
+                dataset=GENERATOR_URL,
+                revision=GENERATOR_SHA256,
+                row=f"{GENERATOR_ARCHIVE}:{index}",
+                importer_revision="1",
+            )
+            raw = RawRow(id=row_identity(GENERATOR_RECIPE_NAME, source), source=source, data=data)
+            task = convert_generated(raw, context)
+            if isinstance(task, ImportRejection):
+                rejections.append({"index": index, **task.model_dump(mode="json")})
+                continue
+            converted.append((index, task.model_dump_json()))
         return converted
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         for part_result in pool.map(regenerate_part, range(GENERATOR_PARTS)):
             for index, raw_task in part_result:
                 regenerated[index] = raw_task
-    expected = GENERATED_ROW_COUNT - len(KNOWN_GENERATED_EXCLUSIONS)
-    if len(regenerated) != expected or any(
-        rejections[i]["index"] not in KNOWN_GENERATED_EXCLUSIONS
-        or rejections[i]["reason"] != KNOWN_GENERATED_EXCLUSIONS[rejections[i]["index"]]["reason"]
-        for i in range(len(rejections))
-    ):
-        details = json.dumps(rejections[:3], indent=1)
+    excluded_families = tuple(EXCLUDED_GENERATED_FAMILIES)
+    excluded_indices = {
+        index for index, row in old_rows.items() if _row_family(json.loads(row["task_spec"])) in excluded_families
+    }
+    if len(excluded_indices) != sum(EXCLUDED_GENERATED_FAMILIES.values()):
         raise ValueError(
-            f"The regeneration kept {len(regenerated)} rows with {len(rejections)} rejections; "
-            f"the adopted label holds {GENERATED_ROW_COUNT} with {sorted(KNOWN_GENERATED_EXCLUSIONS)} "
-            f"excluded: {details}"
+            f"The adopted label holds {len(excluded_indices)} rows in the excluded families "
+            f"{excluded_families}; expected {sum(EXCLUDED_GENERATED_FAMILIES.values())}"
+        )
+    unexpected = [rejection for rejection in rejections if rejection["index"] not in excluded_indices]
+    if unexpected:
+        raise ValueError(f"The regeneration rejected rows outside the excluded families: {unexpected[:3]}")
+    for index in excluded_indices:
+        regenerated.pop(index, None)
+    if len(regenerated) != GENERATED_POOL_ROWS:
+        raise ValueError(
+            f"The regenerated label holds {len(regenerated)} rows; expected {GENERATED_POOL_ROWS} "
+            f"({GENERATED_ROW_COUNT} adopted minus the recorded exclusions)"
         )
     for index, old in sorted(old_rows.items()):
-        if index in KNOWN_GENERATED_EXCLUSIONS:
+        if index in excluded_indices:
             continue
         new = json.loads(regenerated[index])
         old_task = json.loads(old["task_spec"])
@@ -273,11 +260,22 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
         "row_count": len(regenerated),
         "regenerated_indices": (
             "the adopted label's exact cycle indices (the full v3 run yields "
-            f"{GENERATED_V3_FULL_RUN_ROWS}; the pools keep the adopted 20,800 composition)"
+            f"{GENERATED_V3_FULL_RUN_ROWS}; the pools keep the adopted composition minus the "
+            "excluded families)"
         ),
         "prompts_unchanged": True,
-        "excluded_rows": [
-            {"index": index, **exclusion} for index, exclusion in sorted(KNOWN_GENERATED_EXCLUSIONS.items())
+        "excluded_families": [
+            {
+                "family": family,
+                "rows": count,
+                "note": (
+                    "codeio's entries are floating-point dependent: the polynomial root's Newton path "
+                    "converges differently across platforms and libm builds, so the fresh-dataset "
+                    "comparison fails outside the original build environment. The full prompt census "
+                    "verified every other family reproduces exactly."
+                ),
+            }
+            for family, count in sorted(EXCLUDED_GENERATED_FAMILIES.items())
         ],
         "shared_grade_script": (
             "every row's embedded reasoning_gym_grade.py is regenerated: the cross-day entry comparison "
