@@ -1229,7 +1229,10 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         *,
         sample_indices: NamedArray | None = None,
     ) -> SnowballPagedResult:
-        """Return the paged generation logits, updated cache, and selected IDs for that call."""
+        """Return logits, updated cache, and the selected expert IDs for every query row.
+
+        The optional sample_indices limits only the vocabulary projection.
+        """
         return self._decode(
             input_ids, kv_cache, batch_info, pos_ids, capture_routes=True, sample_indices=sample_indices
         )

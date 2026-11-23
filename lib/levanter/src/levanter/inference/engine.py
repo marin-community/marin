@@ -407,12 +407,36 @@ def _gather_logits(logits: NamedArray, indices: NamedArray) -> NamedArray:
     return hax.named(values, (*indices.axes, *logits.axes[1:]))
 
 
+def _route_dtype(model: SnowballLMHeadModel) -> jnp.dtype:
+    return jnp.dtype(jnp.uint8 if model.config.num_experts <= 256 else jnp.int32)
+
+
 def _capture_buffer(model: LmHeadModel, capacity: int) -> _CapturedRoutes:
     if not isinstance(model, SnowballLMHeadModel):
         raise ValueError("Expert route capture requires a Snowball model")
     config = model.config
-    dtype = jnp.uint8 if config.num_experts <= 256 else jnp.int32
-    return _CapturedRoutes.init(capacity, config.num_layers, config.num_experts_per_token, dtype)
+    return _CapturedRoutes.init(capacity, config.num_layers, config.num_experts_per_token, _route_dtype(model))
+
+
+def _decode_for_sampling(
+    model: LmHeadModel,
+    cache: PageCache,
+    binfo: PageBatchInfo,
+    tokens: NamedArray,
+    positions: NamedArray,
+    slots: NamedArray,
+    sample_indices: NamedArray,
+    routes: _CapturedRoutes | None,
+) -> tuple[NamedArray, PageCache, _CapturedRoutes | None]:
+    if routes is None:
+        logits, cache = model.decode(tokens, cache, binfo, positions)
+        return _gather_logits(logits, sample_indices), cache, None
+    if not isinstance(model, SnowballLMHeadModel):
+        raise ValueError("Expert route capture requires a Snowball model")
+    result = model.decode_with_routes(tokens, cache, binfo, positions, sample_indices=sample_indices)
+    assert result.routes is not None
+    routes = routes.append(result.routes.expert_ids, slots, positions, binfo.num_new_tokens)
+    return result.logits, result.cache, routes
 
 
 def _prefill_kernel(
@@ -443,18 +467,10 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    routes = None
-    if capture_routes:
-        assert isinstance(model, SnowballLMHeadModel)
-        result = model.decode_with_routes(tokens, gen_state.cache, binfo, pos_ids, sample_indices=sample_indices)
-        logits_at_samples, cache = result.logits, result.cache
-        assert result.routes is not None
-        routes = _capture_buffer(model, tokens.size).append(
-            result.routes.expert_ids, slot_ids, pos_ids, binfo.num_new_tokens
-        )
-    else:
-        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-        logits_at_samples = _gather_logits(logits, sample_indices)
+    route_buffer = _capture_buffer(model, tokens.size) if capture_routes else None
+    logits_at_samples, cache, routes = _decode_for_sampling(
+        model, gen_state.cache, binfo, tokens, pos_ids, slot_ids, sample_indices, route_buffer
+    )
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
     # jax.debug.print(
@@ -735,16 +751,10 @@ def _run_generation_loop(
         sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
 
         # Decode logits and sample new tokens
-        if outputs.routes is not None:
-            assert isinstance(model, SnowballLMHeadModel)
-            result = model.decode_with_routes(tokens, gen_state.cache, binfo, pos_ids, sample_indices=sample_indices)
-            logits_at_samples, cache = result.logits, result.cache
-            assert result.routes is not None
-            routes = outputs.routes.append(result.routes.expert_ids, slot_ids, pos_ids, binfo.num_new_tokens)
-            outputs = dataclasses.replace(outputs, routes=routes)
-        else:
-            logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-            logits_at_samples = _gather_logits(logits, sample_indices)
+        logits_at_samples, cache, routes = _decode_for_sampling(
+            model, gen_state.cache, binfo, tokens, pos_ids, slot_ids, sample_indices, outputs.routes
+        )
+        outputs = dataclasses.replace(outputs, routes=routes)
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
         new_slot_ids = slot_ids["position", sample_indices]
@@ -1146,8 +1156,12 @@ class InferenceEngine:
 
         Args:
             requests: Sequence of generation requests
-            step_callback: Optional callback function called at each decode iteration with iteration number
+            step_callback: Optional callback function called at each decode iteration with iteration number.
+            capture_routes: Retain the expert IDs used to score each Snowball choice. Routes align with
+                the prompt followed by its generated tokens, excluding the unscheduled terminal row.
         """
+        if capture_routes and not isinstance(self.model, SnowballLMHeadModel):
+            raise ValueError("Expert route capture requires a Snowball model")
         if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
             raise ValueError("Prompts must leave room for generation within max_seq_len")
 
@@ -1366,7 +1380,7 @@ class InferenceEngine:
         config = self.model.config
         prompt_length = len(request.prompt_tokens)
         length = prompt_length + generated
-        dtype = np.uint8 if config.num_experts <= 256 else np.int32
+        dtype = _route_dtype(self.model)
         experts = np.zeros((length, config.num_layers, config.num_experts_per_token), dtype=dtype)
         valid = np.zeros(length, dtype=bool)
         for positions, ids in chunks.get((request.request_id, 0), ()):
