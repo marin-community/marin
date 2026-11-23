@@ -15,9 +15,10 @@ from dataclasses import replace
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
-from taskforge.effects.events import StageCompleted
+from taskforge.effects.events import Committed, StageCompleted
 from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart, Transient, describe_exception
 from taskforge.effects.log import EventLog
+from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Stopped, Submitted
 from taskforge.model.content_hash import digest
 from taskforge.model.llm import Message, Role
@@ -42,8 +43,9 @@ from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
 from taskforge.stages.exits import Decided, Validated
-from taskforge.stages.rules import author_stopped
+from taskforge.stages.rules import author_stopped, default_review
 from taskforge.stages.solve_review import finding_lines
+from taskforge.stages.visits import Commitments
 
 
 def reasons(error: BaseException) -> tuple[str, ...]:
@@ -190,6 +192,24 @@ def advance(wp: Workpiece, stage: Stage, result: Exit, config: TaskforgeConfig) 
     raise ValueError(f"{stage} returned {type(result).__name__}, which has no transition")
 
 
+def compatibility(config: TaskforgeConfig, resources: Resources) -> str | None:
+    """Everything besides the entry workpiece that a visit's evidence and review depend on, or None (reuse nothing)
+    when a review rule or role has no stable identity; the stock stages are versioned by the journal format."""
+    if config.review is not default_review:
+        return None
+    roles = []
+    for role in (config.adversary, config.solve_review):
+        if not isinstance(harness := role.harness, AgenticHarness):
+            return None
+        session = (harness.max_prompt_tokens, harness.sampling, harness.nudge, harness.output_chars)
+        tools = tuple(tool.schema for tool in role.tools.values())
+        roles.append((role.name, session, tools, resources.inference_for(role.name).fingerprint()))
+    model = resources.decision_model
+    used = (resources.rollouts, resources.grading, *(() if model is None else (model,)))
+    fingerprints = tuple(resource.fingerprint() for resource in used)
+    return digest((config.policy, config.band, config.budget, tuple(roles), fingerprints, sorted(resources.factories)))
+
+
 async def run_workpiece(
     proposal: TaskProposal,
     config: TaskforgeConfig,
@@ -206,14 +226,24 @@ async def run_workpiece(
     config_digest = digest(config.policy)
     interrupted = False
     attempt = 1  # of the executing stage visit; a failed attempt replays the same stage and round
+    if (compat := compatibility(config, resources)) is None:
+        logging.warning(
+            "Workpiece %s reuses no committed visit: its review rule or a role has no stable identity", wp.id
+        )
+    commits = Commitments(log.records)
+    pending: Committed | None = None  # the executed visit a continuing review commits
     try:
         async with ctx.scope("workpiece"):
             install(ctx, resources)
             wp = replace(wp, id=await ctx.emit(NewId("workpiece")))
             while True:
                 reached(wp)
+                commits.extend(log.records)
+                visit = digest((stage, wp, compat)) if compat and stage in (Stage.VALIDATE, Stage.CONFIRM) else None
+                hit, entered = commits.visits.get(visit or ""), len(wp.evidence)
                 try:
-                    result = await STAGES[stage](ctx, wp, config, resources)
+                    # A committed visit returns its evidence and runs nothing: no call, scope, observer or read.
+                    result = Validated(hit.result) if hit else await STAGES[stage](ctx, wp, config, resources)
                 except* (Restart, Transient) as error:
                     logging.warning(
                         "Stage %s round %d attempt %d of %d: %s",
@@ -233,7 +263,14 @@ async def run_workpiece(
                     wp, following = advance(wp, stage, result, config)
                     if wp.round != previous_round:
                         await resources.close_round()
-                    await ctx.emit(StageCompleted(stage, config_digest, type(result).__name__, wp.round, wp.terminal))
+                    if isinstance(result, Validated):
+                        pending = Committed(visit, entered, result.result) if visit and not hit else None
+                    commit = pending if stage is Stage.REVIEW and following is not None else None
+                    marker = StageCompleted(stage, config_digest, type(result).__name__, wp.round, wp.terminal, commit)
+                    if commit is not None:
+                        commits.extend(log.records)
+                        commits.add(len(log.records) + 1, marker)  # checked before ``emit`` appends it
+                    await ctx.emit(marker)
                     if following is None:
                         break  # keep the terminal stage, which a hold raised while the scope exits records
                     stage = following

@@ -2268,12 +2268,17 @@ FORMAT_11_HELD = Path(__file__).parent / "fixtures" / "format11-author-held-root
 author turns and their commands, after its author reference row."""
 
 
-@pytest.mark.parametrize("fixture,found", [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11)])
+FORMAT_12_HELD = Path(__file__).parent / "fixtures" / "format12-author-held-root.json.gz"
+"""The whole root the format-12 writer (06b50d267a) published for the held first launch of ``held_after_stamp``."""
+
+
+@pytest.mark.parametrize("fixture,found", [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11), (FORMAT_12_HELD, 12)])
 async def test_a_held_earlier_format_root_is_refused_before_claim_and_the_report_still_reads_it(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, fixture: Path, found: int
 ) -> None:
-    """A format-10 root's author calls embedded a reference this writer does not reproduce, and a format-11 root's
-    author requests were worded otherwise; the driver refuses either untouched and names the ways on."""
+    """A format-10 root's author calls embedded a reference this writer does not reproduce, a format-11 root's author
+    requests were worded otherwise, and a format-12 root committed no reviewed visit; the driver refuses each untouched
+    and names the ways on."""
     destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), fixture)
     assert json.loads((destination / HEAD).read_text())["format"] == found
     before = tree(destination)

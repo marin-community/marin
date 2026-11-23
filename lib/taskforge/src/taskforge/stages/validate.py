@@ -92,7 +92,7 @@ async def solver_result(
             rollouts[trial] = result
         if (cause := trial_cause(result, spec.task)) is Cause.HELD:
             return TrialResult(trial, None, cause, result.grade.error or "")
-        return TrialResult(trial, result.grade, cause)
+        return TrialResult(trial, result.grade, cause, receipt=ctx.receipt(SolverRollout(spec, trial, attempt)))
     return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
 
 
@@ -544,8 +544,8 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
     base = tuple(trial for trial in round_.solver if not missing(trial))
     async with ctx.scope("confirm", bills=Billing.CONFIRMATION):
         ctx.observe(Resolved, grader_infra_unavailable)
-        recorded = {t.trial: ctx.recorded(SolverRollout(spec, t.trial, index)) for t in base}
-        rollouts = {trial: rollout for trial, rollout in recorded.items() if rollout is not None}
+        # Each base trial's own transcript, at its receipt; a trial without one stays without.
+        rollouts = {t.trial: ctx.recorded_at(t.receipt, SolverRollout(spec, t.trial, index)) for t in base if t.receipt}
         holds: list[BaseException] = []
         batch = solver_batch(
             ctx,

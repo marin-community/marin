@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal (format 12; its layout is in the README) under one fenced writer.
+"""Publish a workpiece's journal (format 13; its layout is in the README) under one fenced writer.
 
 Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
 advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.
@@ -31,13 +31,17 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFailed, Superseded, UnsupportedFormat
 from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
+from taskforge.stages.visits import Commitments
 
-JOURNAL_FORMAT = 12
-"""Format 12 words two author requests otherwise: a final revision's request ends with its ordinal (``This is final
+JOURNAL_FORMAT = 13
+"""Format 13 commits each visit a continuing review decided on (``stage.completed``'s ``committed``) and names each
+solver trial's row (``receipt``), so a later launch reuses that evidence. Every format-8 to format-13 root decodes
+for the usage report, but this writer claims only format 13: a format-12 root would decide again on re-observed
+evidence.
+Format 12 words two author requests otherwise: a final revision's request ends with its ordinal (``This is final
 revision N of M.``), and a too-easy placement's line no longer calls the round the one hardening attempt. Its rows
-decode as format 11's, so the usage report reads every format-8 to format-12 root, but this writer claims only
-format-12 roots: a resumed format-11 author would send requests its recorded calls did not, and buy answers its
-recorded sandbox history refuses.
+decode as format 11's, but a format-12 writer claimed no format-11 root: a resumed format-11 author would send
+requests its recorded calls did not, and buy answers its recorded sandbox history refuses.
 Format 11 records a ``schema.author_reference`` row: the TaskSpec and Control schemas a root's author is shown,
 generated once from the installed models and replayed by every later visit and launch. Format-10 readers cannot
 decode that row; at 11 they refuse the root as another format. A format-11 writer claimed no earlier root: their
@@ -69,7 +73,7 @@ submission named by digest; format 4 hydrated each trial without a detail and re
 Format 4 records adversary findings as a defect direction with observed and deserved grades; format 3 recorded an
 expected reward band, which cannot establish a deserved reward. Format 3 links sandbox rows to their environment
 owners; format 2 replayed them by content, without owners."""
-READABLE = frozenset({8, 9, 10, 11, JOURNAL_FORMAT})
+READABLE = frozenset({8, 9, 10, 11, 12, JOURNAL_FORMAT})
 """The head formats whose rows this code decodes, for the usage report; a writer claims only ``JOURNAL_FORMAT``."""
 FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "workpiece.json"})
 """Format 1 named events by module path and wrote these objects beside its stream; any one marks its root."""
@@ -275,6 +279,7 @@ class CheckpointSink(Sink):
         try:
             records = self.local.start(events)
             Owners(records)  # owner references, pairing, outcomes and continuity, before anything is claimed
+            Commitments(records)  # each committed visit's placement and receipts, as reconstruction checks them
         except LogFailure as error:
             raise CorruptJournal(f"{self.destination}: {error}") from error
         chunks, size = (journal.head.chunks, journal.head.size) if journal else ((), 0)

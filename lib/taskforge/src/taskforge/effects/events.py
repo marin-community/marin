@@ -28,6 +28,7 @@ from taskforge.model.content_hash import (
 from taskforge.model.content_hash import (
     json_value as json_value,
 )
+from taskforge.model.review import ValidationResult
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 
@@ -172,6 +173,16 @@ class ScopeExited(Event[None]):
 
 
 @dataclass(frozen=True, slots=True)
+class Committed:
+    """The visit (``digest((stage, entry workpiece, compatibility))``) a continuing review decided on, its evidence index
+    and evidence; a later launch entering it returns that evidence."""
+
+    visit: str
+    attempt: int
+    result: ValidationResult
+
+
+@dataclass(frozen=True, slots=True)
 class StageCompleted(Event[None]):
     kind = "stage.completed"
     stage: Stage | None
@@ -179,3 +190,4 @@ class StageCompleted(Event[None]):
     exit: str
     round: int = 0
     terminal: Terminal | None = None
+    committed: Committed | None = None

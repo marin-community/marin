@@ -114,7 +114,7 @@ def test_recorded_kinds_decoders_and_replay_digests_are_pinned() -> None:
         "inference": event_digest(request),
         "resolved": event_digest(resolved),
     } == {
-        "stage": "230238f1053d6ebfb3a54954281e736c301dcb21323bbc456f77d5e39500585d",
+        "stage": "bad3ae86554a0271af03eae04ff13c9697d84d908e5cad040fc9114d41108483",  # format 13: committed
         "command": "227b4531c6a0a3a00d43fa741cd010bd246b32d81c1237126231830b797279ba",
         "inference": "2709c75295b758602f82a1e114cfbf401cdba869c2d6620caaa851973f9887aa",
         "resolved": "052985a3615a19c16965da77e0bcd07d7741bf5b9f6f1a65ca4d8bd946ffc5e0",

@@ -588,7 +588,11 @@ async def test_a_control_outage_admits_no_further_solver_slot_and_resumes_only_w
     assert isinstance(held, BaseExceptionGroup) and held.split(DecisionModelUnavailable)[1] is None
     assert solved == 1
     resumed, solved, _ = await validated(proposal, FakeReader(), history, concurrency=1)
-    assert (resumed, solved) == (clean, 2)
+    assert isinstance(resumed, Validated) and isinstance(clean, Validated) and solved == 2
+    # The journals differ in length, so the rows each trial's receipt names do too; the evidence does not.
+    unreceipted = [replace(trial, receipt=None) for trial in (*resumed.result.solver, *clean.result.solver)]
+    assert replace(resumed.result, solver=()) == replace(clean.result, solver=())
+    assert unreceipted[: len(unreceipted) // 2] == unreceipted[len(unreceipted) // 2 :]
 
 
 async def test_an_outage_in_a_solver_slot_starts_no_waiting_slot_and_resumes_only_unfinished_slots(

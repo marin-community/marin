@@ -12,6 +12,7 @@ from typing import Protocol, cast
 from taskforge.effects.events import HANDLED_FAILURE, Event, Fingerprint, Resolved, ScopeEntered, ScopeExited, failure
 from taskforge.effects.issues import Restart, Unreproducible
 from taskforge.effects.log import Attempt, Billing, EventLog, Missing, Opened, Record, cached
+from taskforge.model.review import Receipt
 
 type Executor = Callable[..., Awaitable[object]]
 type Observer[E: Event[object]] = Callable[[E], Awaitable[None]]
@@ -109,6 +110,14 @@ class Context:
         holds none, so a reader of earlier evidence never buys it again."""
         value = self._log.lookup(event, self._handler(event)[2])
         return None if isinstance(value, Missing) else value
+
+    def receipt(self, event: Event[object]) -> Receipt | None:
+        """``EventLog.receipt`` under ``event``'s fingerprints."""
+        return self._log.receipt(event, self._handler(event)[2])
+
+    def recorded_at[T](self, receipt: Receipt, event: Event[T]) -> T:
+        """``EventLog.at`` under ``event``'s fingerprints."""
+        return cast(T, self._log.at(receipt, event, self._handler(event)[2]))
 
     async def emit[T](self, event: Event[T]) -> T:
         chain = self._chain.get()
