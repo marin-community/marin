@@ -284,8 +284,8 @@ encode and decode took 17.8 ms and 8.1 ms per frame. Choose a byte budget at
 the service boundary that admits this geometry. Measure frame lifetimes and
 RAM across concurrent production requests before increasing concurrency.
 
-The serving actor groups up to four training requests on the installed
-policy. The child bounds the batch by KV capacity and the existing 65 MiB
+The frozen H100 serving actor groups up to four training requests on the
+installed policy. The child bounds the batch by KV capacity and the existing 65 MiB
 IPC limit. It returns a separate replay frame for each request. Four
 synthetic full-context frames occupied 52.3 MiB in the IPC envelope. On
 four CPU devices, batched and serial calls matched exact tokens, per-layer
@@ -2218,14 +2218,26 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   prefill into packs within its token budget. On two CPU devices, the small
   model filled all eight slots over two prefills and returned the same
   sampled tokens, selected experts and sampling logprobs as two batches of
-  four. The production wire still enforces four requests. The CPU test raised that
-  count locally to check byte limits and confirmed that eight full-context
-  frames exceed the envelope. Decode already packs eight positions. Compare
-  one warmed batch of eight active requests with the measured 116.4 seconds
-  for two warmed batches of four on H100. Pin the short inputs and seeds and
-  check replay, occupancy and peak memory. The matched learner run uses the
-  pinned four-request configuration.
+  four. The frozen wire caps batches at four requests. The CPU test raised
+  that count locally and confirmed that eight full-context frames exceed
+  the 65 MiB envelope. Decode already packs eight positions.
   [Eight-slot CPU replay and wire checks][held-native-eight-slot-cpu]
+
+  An isolated prototype passes the installed limits to the actor over
+  typed IPC. The actor dispatches the longest FIFO prefix within the slot,
+  KV and reply budgets. The worker checks the batch again before generation.
+  On two CPU devices, eight short requests and a mix of two full-context
+  and six short requests each ran in one batch. Eight full-context
+  requests split into two batches of four. All 24 replay frames matched
+  the frozen four-request actor byte for byte. A direct oversized request
+  to the worker was rejected, and the worker returned another valid frame
+  under the same policy.
+  [Prototype source and CPU receipts][held-native-length-aware-cpu]
+
+  On H100, compare a warmed batch of eight active requests against the
+  measured 116.4 seconds for two warmed batches of four. Pin the short
+  inputs and seeds and check replay, occupancy and peak memory. The held
+  learner comparison uses the frozen four-request configuration.
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
@@ -2422,6 +2434,7 @@ arms. [Prior timing comparison][timing]
 [iris-held-native-admission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-admission-67b-h100-20261123b
 [held-native-admission-h100]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-admission-h100-profile-proof.tar.zst
 [held-native-eight-slot-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-eight-slot-cpu-proof.tar.zst
+[held-native-length-aware-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-length-aware-batch-cpu-proof.tar.zst
 [held-publication-overlap]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fverified-publication-overlap-proof.tar.zst
 [iris-native-emission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122p
 [native-passing-diagnostic-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122p%2Findependently-verified-passing-diagnostic.json
