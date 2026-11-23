@@ -5,16 +5,15 @@
 
 The dataclasses carry only the columns the app queries; values are the columns
 the real ``iris.controller_db__*`` namespaces hold. Every user is synthetic.
-The embedded Finelog server these rows land in stands in for the ``marin`` hub.
+The embedded Finelog server these rows land in stands in for the ``marin`` hub,
+and ``live_rows()`` stands in for the live controller reads.
 """
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
-JOBS = "iris.controller_db__jobs"
-JOB_CONFIG = "iris.controller_db__job_config"
-TASK_ATTEMPTS = "iris.controller_db__task_attempts"
+from infra.marina.apps.cluster_occupancy.backend.app import JOB_CONFIG, JOBS, TASK_ATTEMPTS
 
 CLUSTER_A = "cw-us-east-08a"
 CLUSTER_B = "cw-us-east-02a"
@@ -23,7 +22,6 @@ CLUSTER_UNMIRRORED = "cw-rno2a"
 # The window under test is [T0, T0 + 1h).
 T0 = datetime(2026, 11, 23, 6, 0, tzinfo=UTC)
 WINDOW_START_MS = int(T0.timestamp() * 1000)
-WINDOW_END_MS = WINDOW_START_MS + 60 * 60 * 1000
 
 RACK_122 = "DH1-122-US-EAST-08A"
 RACK_124 = "DH1-124-US-EAST-08A"
@@ -90,8 +88,12 @@ def seed_occupancy_fixtures(client) -> None:
             # The root job behind alice's training worker, running through the window.
             JobRow(CLUSTER_A, "root-1", "root-1", ALICE, "/alice/train-coordinator", 1, _at(-180), None, _at(-180)),
             # alice's worker: a stale mirror snapshot first, then the current one.
-            JobRow(CLUSTER_A, "job-1", "root-1", ALICE, "/alice/train-coordinator/worker-a", 99, _at(-180), None, _at(-10)),
-            JobRow(CLUSTER_A, "job-1", "root-1", ALICE, "/alice/train-coordinator/worker-a", 4, _at(-180), None, _at(-5)),
+            JobRow(
+                CLUSTER_A, "job-1", "root-1", ALICE, "/alice/train-coordinator/worker-a", 99, _at(-180), None, _at(-10)
+            ),
+            JobRow(
+                CLUSTER_A, "job-1", "root-1", ALICE, "/alice/train-coordinator/worker-a", 4, _at(-180), None, _at(-5)
+            ),
             # bob's batch eval finished 20 minutes into the window; its root finished
             # before the window, so the root-name lookup must ignore window membership.
             JobRow(CLUSTER_A, "root-4", "root-4", BOB, "/bob/eval-coordinator", 1, _at(-300), _at(-120), _at(-120)),
@@ -101,7 +103,17 @@ def seed_occupancy_fixtures(client) -> None:
             # bob's job finished exactly when the window starts: it held nothing inside.
             JobRow(CLUSTER_A, "job-6", "job-6", BOB, "/bob/boundary-end", 1, _at(-60), T0, _at(-30)),
             # carol's job starts exactly when the window ends: outside the window.
-            JobRow(CLUSTER_A, "job-7", "job-7", CAROL, "/carol/boundary-start", 1, T0 + timedelta(hours=1), None, T0 + timedelta(hours=1)),
+            JobRow(
+                CLUSTER_A,
+                "job-7",
+                "job-7",
+                CAROL,
+                "/carol/boundary-start",
+                1,
+                T0 + timedelta(hours=1),
+                None,
+                T0 + timedelta(hours=1),
+            ),
             # carol's CPU job runs on a GPU node but holds no GPUs.
             JobRow(CLUSTER_A, "job-8", "job-8", CAROL, "/carol/cpu-job", 1, _at(-20), None, _at(-20)),
             # 02a: a running coordinator, bob's interactive job, carol's short production job.
@@ -142,3 +154,63 @@ def seed_occupancy_fixtures(client) -> None:
     )
     for table in (jobs, configs, attempts):
         assert table.flush(timeout=60) is not None
+
+
+def _gpu_row(
+    job: str,
+    root: str,
+    user: str,
+    node: str,
+    count: int,
+    *,
+    band: int = 1,
+    variant: str = "H100",
+    started_ms: int = 1000,
+    rack: str = "",
+) -> dict:
+    """One live running-task row, as the controller's raw query returns it."""
+    return {
+        "root_job_id": root,
+        "user_id": user,
+        "job_id": job,
+        "priority_band": band,
+        "res_device_json": "{}" if count == 0 else f'{{"gpu": {{"variant": "{variant}", "count": {count}}}}}',
+        "node_name": node,
+        "started_at_ms": started_ms,
+        "topology_json": f'{{"ds.coreweave.com/nvlink.domain": "{rack}"}}' if rack else "{}",
+    }
+
+
+def live_rows() -> dict[str, list[dict]]:
+    """The current-moment scenario: who holds which node on which cluster."""
+    started_a = int(_at(-180).timestamp() * 1000)
+    started_b = int(_at(-30).timestamp() * 1000)
+    started_c = int(_at(-40).timestamp() * 1000)
+    started_d = int(_at(-90).timestamp() * 1000)
+    return {
+        CLUSTER_A: [
+            _gpu_row(
+                "job-1", "/alice/train-coordinator", ALICE, "n1", 4, variant="GB200", started_ms=started_a, rack=RACK_122
+            ),
+            _gpu_row(
+                "job-1", "/alice/train-coordinator", ALICE, "n1", 4, variant="GB200", started_ms=started_a, rack=RACK_122
+            ),
+            _gpu_row(
+                "job-2",
+                "/bob/eval-coordinator",
+                BOB,
+                "n2",
+                4,
+                band=3,
+                variant="GB200",
+                started_ms=started_b,
+                rack=RACK_122,
+            ),
+        ],
+        CLUSTER_B: [
+            _gpu_row("job-5", "/carol/prod-east", CAROL, "g1", 8, started_ms=started_c),
+        ],
+        CLUSTER_UNMIRRORED: [
+            _gpu_row("/dave/train", "/dave/train", "dave", "r1", 8, started_ms=started_d),
+        ],
+    }

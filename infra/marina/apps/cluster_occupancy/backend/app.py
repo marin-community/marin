@@ -17,32 +17,22 @@ Two read-only sources, one map per cluster:
 from __future__ import annotations
 
 import logging
-import math
 import os
 import threading
 import time
-from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 
-from connectrpc.errors import ConnectError
 from fastapi import FastAPI, HTTPException, Query
-from finelog.client import LogClient
-from finelog.types import is_retryable_error
 from marina.apps import RegisteredApi, Services, registered_api
-from marina.discovery import resolve_internal_ip
-from rigging.connect import IapAuth
-from rigging.credentials import iap_provider_for
+from marina.finelog import FinelogQueries
 
 from . import live
+from .views import RACK_JSON_KEY, Holder, NodeView, holder_sort_key, node_order
 
 logger = logging.getLogger(__name__)
 
-PROJECT = os.environ.get("OCCUPANCY_GCP_PROJECT", "hai-gcp-models")
-ZONE = os.environ.get("OCCUPANCY_GCP_ZONE", "us-central1-a")
-FINELOG_FILTER = "name = finelog-marin"
-FINELOG_PORT = 10001
 QUERY_TIMEOUT_MS = 20_000
 MAX_ROWS = 50_000
 
@@ -101,9 +91,9 @@ FROM "{TASK_ATTEMPTS}" WHERE cluster LIKE 'cw-%' AND coalesce(node_name, '') <> 
 def jobs_sql(start_ms: int, end_ms: int) -> str:
     """Jobs that held the cluster at any point in the window, one row per job.
 
-    Window membership follows the reference query: started before the window
-    ends and not finished before it starts. The per-job latest snapshot is
-    picked before the window filter so a finished job's older running-looking
+    A job is in the window when it started before the window ends and has not
+    finished before the window starts. The per-job latest snapshot is picked
+    before the window filter, so a finished job's older running-looking
     snapshot cannot survive.
     """
     return f"""WITH jobs AS ({JOBS_TABLE_SQL}),
@@ -157,6 +147,7 @@ def inventory_sql() -> str:
     capacity the controller data can support. Rack grouping is the node's
     NVLink domain, reported by CoreWeave on GB200 nodes.
     """
+    rack_key = RACK_JSON_KEY.replace("'", "''")
     return f"""WITH att AS ({ATTEMPTS_TABLE_SQL}),
 cfg AS ({CONFIG_TABLE_SQL}),
 gpu AS (
@@ -179,7 +170,7 @@ held AS (
 ),
 racks AS (
   SELECT cluster, node_name,
-         max(nullif(json_get(topology_json, 'ds.coreweave.com/nvlink.domain'), '')) AS rack
+         max(nullif(json_get(topology_json, '{rack_key}'), '')) AS rack
   FROM att GROUP BY cluster, node_name
 ),
 kinds AS (
@@ -193,110 +184,10 @@ JOIN kinds k ON k.cluster = h.cluster AND k.node_name = h.node_name
 GROUP BY h.cluster, h.node_name, r.rack, k.gpu_type"""
 
 
-class _Finelog:
-    """Process-wide Finelog client with GCE-backed endpoint resolution."""
-
-    def __init__(self, *, url: str | None, iap_cluster: str | None) -> None:
-        self._url = url
-        self._lock = threading.Lock()
-        self._source = url or FINELOG_FILTER
-        self._namespaces: list[str] = []
-        self._namespaces_at = 0.0
-        interceptors = tuple(IapAuth(iap_provider_for(iap_cluster)).interceptors()) if iap_cluster else ()
-        self._client = LogClient.connect(
-            url or FINELOG_FILTER,
-            resolver=self._resolve,
-            timeout_ms=QUERY_TIMEOUT_MS,
-            interceptors=interceptors,
-        )
-
-    @property
-    def source(self) -> str:
-        return self._source
-
-    def _resolve(self, _endpoint: str) -> str:
-        if self._url:
-            address = self._url
-        else:
-            ip = resolve_internal_ip(PROJECT, ZONE, FINELOG_FILTER, timeout=5.0)
-            address = f"http://{ip}:{FINELOG_PORT}"
-        with self._lock:
-            self._source = f"finelog-marin {address}" if not self._url else self._url
-        return address
-
-    def _call[Result](self, operation: Callable[[LogClient], Result]) -> Result:
-        """Retry one idempotent read after LogClient invalidates its transport."""
-        for attempt in range(2):
-            try:
-                return operation(self._client)
-            except Exception as error:
-                cause = error.__cause__
-                retryable = (
-                    isinstance(error, (ConnectionError, OSError, TimeoutError))
-                    or (isinstance(error, ConnectError) and is_retryable_error(error))
-                    or (isinstance(cause, ConnectError) and is_retryable_error(cause))
-                )
-                if attempt == 1 or not retryable:
-                    raise
-        raise AssertionError("unreachable")
-
-    def query(self, sql: str) -> list[dict[str, Any]]:
-        table = self._call(lambda client: client.query(sql, max_rows=MAX_ROWS))
-        return [_json_row(row) for row in table.to_pylist()]
-
-    def namespaces(self) -> list[str]:
-        with self._lock:
-            if time.monotonic() - self._namespaces_at < COVERAGE_TTL_SECONDS:
-                return list(self._namespaces)
-        infos = self._call(lambda client: client.list_namespaces())
-        names = sorted(info.namespace for info in infos)
-        with self._lock:
-            self._namespaces = names
-            self._namespaces_at = time.monotonic()
-        return list(names)
-
-
-def _json_row(row: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for key, value in row.items():
-        if isinstance(value, datetime):
-            stamp = value if value.tzinfo else value.replace(tzinfo=UTC)
-            out[key] = int(stamp.timestamp() * 1000)
-        elif isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
-            out[key] = None
-        else:
-            out[key] = value
-    return out
-
-
-@dataclass(frozen=True)
-class Holder:
-    """What one root job holds on one node during the window."""
-
-    user_id: str | None
-    job_id: str | None
-    root_job_id: str | None
-    root_name: str | None
-    priority_band: str | None
-    accelerator_type: str | None
-    gpus: int
-    started_ms: int | None
-    finished_ms: int | None
-
-
-@dataclass(frozen=True)
-class NodeView:
-    node_name: str
-    rack: str
-    gpu_type: str
-    capacity_gpus: int
-    holders: list[dict[str, Any]]
-
-
 class _Caches:
     """Coverage and node inventory, refreshed on short TTLs."""
 
-    def __init__(self, finelog: _Finelog) -> None:
+    def __init__(self, finelog: FinelogQueries) -> None:
         self._finelog = finelog
         self._lock = threading.Lock()
         self._coverage: tuple[float, list[dict[str, Any]]] | None = None
@@ -365,9 +256,7 @@ def _node_holders(
             entry["running"] = True
             entry["finished_ms"] = None
         elif not entry["running"]:
-            entry["finished_ms"] = (
-                finished if entry["finished_ms"] is None else max(entry["finished_ms"], finished)
-            )
+            entry["finished_ms"] = finished if entry["finished_ms"] is None else max(entry["finished_ms"], finished)
 
     holders: dict[tuple[str, str], list[Holder]] = {}
     for (cluster, job_id, node_name), entry in counted.items():
@@ -393,7 +282,11 @@ def _node_holders(
 
 
 def _legend(jobs: list[dict[str, Any]], start_ms: int, end_ms: int) -> list[dict[str, Any]]:
-    """GPU-hours per user across the visible window, following the reference query."""
+    """GPU-hours per user across the window.
+
+    A job contributes held GPUs for every second it overlaps the window, so a
+    job holding 16 GPUs for the full hour adds 16 GPU-hours to its user.
+    """
     per_user: dict[str, float] = {}
     for job in jobs:
         gpus = job.get("gpus") or 0
@@ -411,13 +304,63 @@ def _legend(jobs: list[dict[str, Any]], start_ms: int, end_ms: int) -> list[dict
     ]
 
 
+def _cluster_views(
+    inventory: list[dict[str, Any]],
+    by_coverage: dict[str, dict[str, Any]],
+    holders: dict[tuple[str, str], list[Holder]],
+    start_ms: int,
+    end_ms: int,
+) -> list[dict[str, Any]]:
+    """One view dict per cluster: state, coverage, and node views in order."""
+    extra = [cluster for cluster in sorted(by_coverage) if cluster not in KNOWN_CLUSTERS]
+    views = []
+    for cluster in (*KNOWN_CLUSTERS, *extra):
+        coverage_row = by_coverage.get(cluster)
+        state, reason = _cluster_state(coverage_row, start_ms, end_ms)
+        nodes = []
+        if state == STATE_MIRRORED:
+            for node in inventory:
+                if node["cluster"] != cluster:
+                    continue
+                nodes.append(
+                    asdict(
+                        NodeView(
+                            node_name=node["node_name"],
+                            rack=node["rack"],
+                            gpu_type=node["gpu_type"],
+                            capacity_gpus=node["capacity_gpus"],
+                            holders=sorted(holders.get((cluster, node["node_name"]), []), key=holder_sort_key),
+                        )
+                    )
+                )
+            nodes.sort(key=lambda node: node_order(node["rack"], node["node_name"]))
+        views.append(
+            {
+                "cluster": cluster,
+                "state": state,
+                "reason": reason,
+                "first_ms": coverage_row["first_ts"] if coverage_row else None,
+                "last_ms": coverage_row["last_ts"] if coverage_row else None,
+                "nodes": nodes,
+            }
+        )
+    return views
+
+
 def create_api(_services: Services) -> RegisteredApi:
     api = FastAPI()
-    finelog = _Finelog(
+    finelog = FinelogQueries(
         url=os.environ.get("OCCUPANCY_FINELOG_URL"),
         iap_cluster=os.environ.get("OCCUPANCY_IAP_CLUSTER"),
+        project=os.environ.get("OCCUPANCY_GCP_PROJECT", "hai-gcp-models"),
+        zone=os.environ.get("OCCUPANCY_GCP_ZONE", "us-central1-a"),
+        timeout_ms=QUERY_TIMEOUT_MS,
+        max_rows=MAX_ROWS,
     )
     caches = _Caches(finelog)
+    # The live reader is injected so tests and journeys can stand it in.
+    fixture_path = os.environ.get(live.LIVE_ROWS_FILE_ENV)
+    read_running_tasks = live.fixture_running_tasks(fixture_path) if fixture_path else live.running_tasks
 
     def unavailable(error: Exception) -> HTTPException:
         logger.warning("Finelog request failed: %s", error)
@@ -461,10 +404,10 @@ def create_api(_services: Services) -> RegisteredApi:
         for cluster, row in sorted(by_cluster.items()):
             if cluster not in KNOWN_CLUSTERS:
                 clusters.append({"cluster": cluster, "first_ms": row["first_ts"], "last_ms": row["last_ts"]})
-        starts = [c["first_ms"] for c in clusters if c["first_ms"] is not None]
-        ends = [c["last_ms"] for c in clusters if c["last_ms"] is not None]
-        earliest = min(starts) // STEP_MS * STEP_MS if starts else None
-        latest = max(ends) if ends else None
+        firsts = [c["first_ms"] for c in clusters if isinstance(c["first_ms"], int)]
+        lasts = [c["last_ms"] for c in clusters if isinstance(c["last_ms"], int)]
+        earliest = min(firsts) // STEP_MS * STEP_MS if firsts else None
+        latest = max(lasts) if lasts else None
         return {
             "window_hours": WINDOW_HOURS,
             "step_ms": STEP_MS,
@@ -487,7 +430,7 @@ def create_api(_services: Services) -> RegisteredApi:
         rows: list[dict[str, object]] = []
         for cluster in KNOWN_CLUSTERS:
             try:
-                cluster_rows = live.running_tasks(cluster)
+                cluster_rows = read_running_tasks(cluster)
             except Exception as error:
                 logger.warning("Live read failed for %s: %s", cluster, error)
                 clusters.append(
@@ -512,6 +455,24 @@ def create_api(_services: Services) -> RegisteredApi:
             )
         return {"as_of_ms": as_of_ms, "clusters": clusters, "legend": live.legend(rows)}
 
+    def _fetch_window(
+        start_ms: int, end_ms: int
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[tuple[str, str], str]]:
+        """Jobs, placements, and root names for the window from the mirror."""
+        jobs = run(jobs_sql(start_ms, end_ms)) if JOBS in namespaces() else []
+        placements = run(placements_sql(start_ms, end_ms)) if TASK_ATTEMPTS in namespaces() else []
+        root_identities = sorted(
+            {
+                (row["cluster"], row["root_job_id"])
+                for row in jobs
+                if row.get("root_job_id") and row["root_job_id"] != row["job_id"]
+            }
+        )
+        root_names: dict[tuple[str, str], str] = {}
+        if root_identities:
+            root_names = {(row["cluster"], row["job_id"]): row["name"] for row in run(root_names_sql(root_identities))}
+        return jobs, placements, root_names
+
     @api.get("/occupancy")
     def occupancy(start_ms: int = Query(...)) -> dict[str, Any]:
         """The map for the window [start_ms, start_ms + window hours)."""
@@ -519,66 +480,13 @@ def create_api(_services: Services) -> RegisteredApi:
             raise HTTPException(status_code=422, detail="start_ms must be a positive epoch-milliseconds value")
         end_ms = start_ms + WINDOW_HOURS * 3600 * 1000
 
-        jobs = run(jobs_sql(start_ms, end_ms)) if JOBS in namespaces() else []
-        placements = run(placements_sql(start_ms, end_ms)) if TASK_ATTEMPTS in namespaces() else []
+        jobs, placements, root_names = _fetch_window(start_ms, end_ms)
         jobs_by_id = {(row["cluster"], row["job_id"]): row for row in jobs}
-        root_identities = sorted(
-            {
-                (row["cluster"], row["root_job_id"] or row["job_id"])
-                for row in jobs
-                if row.get("root_job_id") and row["root_job_id"] != row["job_id"]
-            }
-        )
-        root_names: dict[tuple[str, str], str] = {}
-        if root_identities:
-            root_names = {
-                (row["cluster"], row["job_id"]): row["name"] for row in run(root_names_sql(root_identities))
-            }
-
-        inventory = caches.inventory() if TASK_ATTEMPTS in namespaces() else []
         holders = _node_holders(placements, jobs_by_id, root_names, start_ms)
+        inventory = caches.inventory() if TASK_ATTEMPTS in namespaces() else []
         coverage_rows = caches.coverage() if JOBS in namespaces() else []
-        by_cluster_coverage = {row["cluster"]: row for row in coverage_rows}
-
-        clusters: list[dict[str, Any]] = []
-        seen = set()
-        for cluster in (*KNOWN_CLUSTERS, *(c for c in sorted(by_cluster_coverage) if c not in KNOWN_CLUSTERS)):
-            if cluster in seen:
-                continue
-            seen.add(cluster)
-            coverage_row = by_cluster_coverage.get(cluster)
-            state, reason = _cluster_state(coverage_row, start_ms, end_ms)
-            nodes = []
-            if state == STATE_MIRRORED:
-                for node in inventory:
-                    if node["cluster"] != cluster:
-                        continue
-                    node_holders = sorted(
-                        (asdict(h) for h in holders.get((cluster, node["node_name"]), [])),
-                        key=lambda holder: (-holder["gpus"], holder["root_name"] or "", holder["job_id"] or ""),
-                    )
-                    nodes.append(
-                        asdict(
-                            NodeView(
-                                node_name=node["node_name"],
-                                rack=node["rack"],
-                                gpu_type=node["gpu_type"],
-                                capacity_gpus=node["capacity_gpus"],
-                                holders=node_holders,
-                            )
-                        )
-                    )
-                nodes.sort(key=lambda node: (node["rack"] == "", node["rack"], node["node_name"]))
-            clusters.append(
-                {
-                    "cluster": cluster,
-                    "state": state,
-                    "reason": reason,
-                    "first_ms": coverage_row["first_ts"] if coverage_row else None,
-                    "last_ms": coverage_row["last_ts"] if coverage_row else None,
-                    "nodes": nodes,
-                }
-            )
+        by_coverage = {row["cluster"]: row for row in coverage_rows}
+        clusters = _cluster_views(inventory, by_coverage, holders, start_ms, end_ms)
         return {
             "window": {"start_ms": start_ms, "end_ms": end_ms, "hours": WINDOW_HOURS},
             "clusters": clusters,

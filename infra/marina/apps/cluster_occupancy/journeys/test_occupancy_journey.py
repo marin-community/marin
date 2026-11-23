@@ -131,7 +131,7 @@ def test_slider_leaves_now_for_mirror_history(journey: Journey) -> None:
     for _ in range(6):
         slider.press("ArrowRight")
     # 03:30 UTC is 10:30 PM Eastern in November: mirror history, not live.
-    journey.sees("10:30 PM EST – 11:30 PM EST")
+    journey.sees("10:30 PM EST \u2013 11:30 PM EST")
     journey.sees("Data through")
     journey.sees("2:00 AM EST")
     journey.sees("No history — cw-rno2a is not mirrored to the hub.")
@@ -159,7 +159,7 @@ def test_picker_takes_eastern_wall_time(journey: Journey) -> None:
     picker = journey.page.get_by_label("Window start, US Eastern")
     picker.fill("2026-11-22T22:30")
     # 22:30 Eastern is 03:30 UTC, not 22:30 UTC.
-    journey.sees("10:30 PM EST – 11:30 PM EST")
+    journey.sees("10:30 PM EST \u2013 11:30 PM EST")
     journey.sees("No data before Nov 23, 2026, 12:20 AM EST — the mirror starts then.")
     # 08a is mirrored in this window, so the conversion worked.
     journey.sees("alice")

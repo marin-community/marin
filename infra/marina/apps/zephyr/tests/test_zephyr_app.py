@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from finelog.client import LogClient, StatsError
 from finelog.embedded import require_embedded_server
 from marina.db import UrlDatabase
+from marina.finelog import FinelogQueries
 from marina.preview import install_preview_sources
 from marina.server import MarinaConfig, create_app
 from marina.testing import SourceServices, isolated_database
@@ -188,7 +189,7 @@ def test_health_reports_source_and_namespaces(api, finelog):
 
 
 def test_finelog_read_retries_after_log_client_invalidates_its_transport():
-    finelog = backend._Finelog(url="http://finelog.invalid", iap_cluster=None)
+    finelog = FinelogQueries(url="http://finelog.invalid", iap_cluster=None)
     attempts = 0
 
     def read(_client: LogClient) -> str:

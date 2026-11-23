@@ -28,32 +28,7 @@ from infra.marina.tests import cluster_occupancy_fixtures as fx
 APP = Path(__file__).resolve().parents[1]
 APPLET_ID = tomllib.loads((APP / "applet.toml").read_text())["applet_id"]
 HOUR_MS = 60 * 60 * 1000
-
-
-def _gpu_row(job: str, root: str, user: str, node: str, count: int, *, band: int = 1, variant: str = "H100",
-             started_ms: int = 1000, rack: str = "") -> dict:
-    return {
-        "root_job_id": root,
-        "user_id": user,
-        "job_id": job,
-        "priority_band": band,
-        "res_device_json": "{}" if count == 0 else f'{{"gpu": {{"variant": "{variant}", "count": {count}}}}}',
-        "node_name": node,
-        "started_at_ms": started_ms,
-        "topology_json": f'{{"ds.coreweave.com/nvlink.domain": "{rack}"}}' if rack else "{}",
-    }
-
-
-LIVE_ROWS = {
-    fx.CLUSTER_A: [
-        _gpu_row("job-1", "root-1", fx.ALICE, "n1", 4, variant="GB200", rack="DH1-122-US-EAST-08A"),
-        _gpu_row("job-1", "root-1", fx.ALICE, "n1", 4, variant="GB200", rack="DH1-122-US-EAST-08A"),
-        _gpu_row("job-2", "root-4", fx.BOB, "n2", 4, band=3, variant="GB200"),
-        _gpu_row("job-3", "job-3", fx.CAROL, "n3", 0, band=2),
-    ],
-    fx.CLUSTER_B: [_gpu_row("job-4", "root-2a", fx.BOB, "g1", 8, band=2)],
-    fx.CLUSTER_UNMIRRORED: [_gpu_row("/dave/train", "/dave/train", "dave", "r1", 8)],
-}
+LIVE_ROWS = fx.live_rows()
 
 
 @pytest.fixture(scope="module")
@@ -68,9 +43,15 @@ def finelog(tmp_path_factory):
 
 
 @pytest.fixture()
-def api(finelog, monkeypatch):
+def clean_env(finelog, monkeypatch):
+    """Hub credentials without fixture seams, so a test can inject its own."""
     monkeypatch.setenv("OCCUPANCY_FINELOG_URL", finelog)
     monkeypatch.delenv("OCCUPANCY_IAP_CLUSTER", raising=False)
+    monkeypatch.delenv(live.LIVE_ROWS_FILE_ENV, raising=False)
+
+
+@pytest.fixture()
+def api(clean_env, monkeypatch):
     monkeypatch.setattr(live, "running_tasks", lambda cluster: LIVE_ROWS.get(cluster, []))
     app = backend.create_api(SourceServices(name="cluster_occupancy", data_url="file:///tmp/occupancy", database=None))
     return TestClient(app.app)
@@ -184,41 +165,17 @@ def test_health_lists_mirror_namespaces(api, finelog):
     assert set(body["namespaces_present"]) == {fx.JOBS, fx.JOB_CONFIG, fx.TASK_ATTEMPTS}
 
 
-def test_empty_hub_reports_every_cluster_as_no_data(tmp_path_factory, monkeypatch):
-    server = require_embedded_server()(log_dir=str(tmp_path_factory.mktemp("finelog-empty")))
-    try:
-        monkeypatch.setenv("OCCUPANCY_FINELOG_URL", f"http://127.0.0.1:{server.port}")
-        monkeypatch.delenv("OCCUPANCY_IAP_CLUSTER", raising=False)
-        app = backend.create_api(
-            SourceServices(name="cluster_occupancy", data_url="file:///tmp/occupancy", database=None)
-        )
-        api = TestClient(app.app)
-        body = _occupancy(api, fx.WINDOW_START_MS)
-        assert [cluster["state"] for cluster in body["clusters"]] == ["no_data"] * 3
-        assert all(cluster["reason"] == "not_mirrored" for cluster in body["clusters"])
-        assert body["legend"] == []
-        assert api.get("/health").json()["namespaces_present"] == []
-    finally:
-        server.stop()
-
-
-def test_marina_mount_serves_occupancy_api(finelog, monkeypatch, tmp_path, database_url):
-    monkeypatch.setenv("OCCUPANCY_FINELOG_URL", finelog)
-    monkeypatch.delenv("OCCUPANCY_IAP_CLUSTER", raising=False)
-    monkeypatch.setattr(live, "running_tasks", lambda cluster: LIVE_ROWS.get(cluster, []))
-    apps_dir = tmp_path / "apps"
-    apps_dir.mkdir()
-    source = apps_dir / "cluster_occupancy"
-    shutil.copytree(APP, source, ignore=shutil.ignore_patterns("web", "dist", "tests", "node_modules", "__pycache__"))
-    (source / "dist").mkdir()
-    (source / "dist/index.html").write_text("<h1>Cluster Occupancy</h1>")
-    with isolated_database(database_url) as local_url:
-        database = UrlDatabase(local_url)
-        install_preview_sources(apps_dir, database)
-        config = MarinaConfig(data_root=str(tmp_path / "data"), iap_audience=None, database=database)
-        with TestClient(create_app(config), client=("127.0.0.1", 40000)) as client:
-            body = client.get(f"/a/{APPLET_ID}/api/health").json()
-            assert set(body["namespaces_present"]) == {fx.JOBS, fx.JOB_CONFIG, fx.TASK_ATTEMPTS}
+def test_coverage_bounds_the_slider_to_the_mirror(api):
+    body = api.get("/coverage").json()
+    first_a = int(fx._at(-180).timestamp() * 1000)
+    last_a = int(fx._at(60).timestamp() * 1000)
+    last_b = int(fx._at(-10).timestamp() * 1000)
+    assert body["earliest_ms"] == first_a, "the earliest mirror write, floored to the step"
+    assert body["latest_ms"] == max(last_a, last_b)
+    assert body["now_ms"] >= body["latest_ms"], "the server clock is at or past the newest mirror write"
+    by_cluster = {cluster["cluster"]: cluster for cluster in body["clusters"]}
+    assert by_cluster[fx.CLUSTER_A]["first_ms"] == first_a
+    assert by_cluster[fx.CLUSTER_UNMIRRORED]["first_ms"] is None
 
 
 def test_now_view_reads_every_cluster_live(api):
@@ -236,32 +193,63 @@ def test_now_view_reads_every_cluster_live(api):
     # alice's two tasks on n1 aggregate into one holder with both GPUs summed.
     n1 = next(node for node in by_cluster[fx.CLUSTER_A]["nodes"] if node["node_name"] == "n1")
     assert len(n1["holders"]) == 1 and n1["holders"][0]["gpus"] == 8
-    assert n1["rack"] == "DH1-122-US-EAST-08A", "the live read still groups nodes by NVLink domain"
+    assert n1["rack"] == fx.RACK_122, "the live read still groups nodes by NVLink domain"
 
     # A CPU task holds no part of the GPU map.
     assert all(node["node_name"] != "n3" for node in by_cluster[fx.CLUSTER_A]["nodes"])
 
     assert body["legend"] == [
-        {"user_id": fx.BOB, "gpus": 12},
         {"user_id": fx.ALICE, "gpus": 8},
+        {"user_id": fx.CAROL, "gpus": 8},
         {"user_id": "dave", "gpus": 8},
+        {"user_id": fx.BOB, "gpus": 4},
     ], "legend merges the live clusters and drops users holding no GPUs"
 
 
-def test_now_view_marks_an_unreachable_controller(api, monkeypatch):
+def test_now_view_marks_an_unreachable_controller(clean_env, monkeypatch):
     def failing(cluster):
         if cluster == fx.CLUSTER_UNMIRRORED:
             raise ConnectionError("controller unreachable")
         return LIVE_ROWS.get(cluster, [])
 
     monkeypatch.setattr(live, "running_tasks", failing)
-    body = api.get("/now").json()
+    app = backend.create_api(SourceServices(name="cluster_occupancy", data_url="file:///tmp/occupancy", database=None))
+    body = TestClient(app.app).get("/now").json()
     by_cluster = {cluster["cluster"]: cluster for cluster in body["clusters"]}
     rno2a = by_cluster[fx.CLUSTER_UNMIRRORED]
     assert rno2a["state"] == "unavailable" and rno2a["reason"] == "controller_error" and rno2a["nodes"] == []
     assert by_cluster[fx.CLUSTER_A]["state"] == "live", "one unreachable controller does not blank the others"
 
 
-def test_coverage_reports_server_now(api):
-    body = api.get("/coverage").json()
-    assert body["now_ms"] > fx.WINDOW_START_MS
+def test_empty_hub_reports_every_cluster_as_no_data(clean_env, monkeypatch, tmp_path_factory):
+    server = require_embedded_server()(log_dir=str(tmp_path_factory.mktemp("finelog-empty")))
+    try:
+        monkeypatch.setenv("OCCUPANCY_FINELOG_URL", f"http://127.0.0.1:{server.port}")
+        app = backend.create_api(
+            SourceServices(name="cluster_occupancy", data_url="file:///tmp/occupancy", database=None)
+        )
+        api = TestClient(app.app)
+        body = _occupancy(api, fx.WINDOW_START_MS)
+        assert [cluster["state"] for cluster in body["clusters"]] == ["no_data"] * 3
+        assert all(cluster["reason"] == "not_mirrored" for cluster in body["clusters"])
+        assert body["legend"] == []
+        assert api.get("/health").json()["namespaces_present"] == []
+    finally:
+        server.stop()
+
+
+def test_marina_mount_serves_occupancy_api(finelog, clean_env, monkeypatch, tmp_path, database_url):
+    monkeypatch.setattr(live, "running_tasks", lambda cluster: LIVE_ROWS.get(cluster, []))
+    apps_dir = tmp_path / "apps"
+    apps_dir.mkdir()
+    source = apps_dir / "cluster_occupancy"
+    shutil.copytree(APP, source, ignore=shutil.ignore_patterns("web", "dist", "tests", "node_modules", "__pycache__"))
+    (source / "dist").mkdir()
+    (source / "dist/index.html").write_text("<h1>Cluster Occupancy</h1>")
+    with isolated_database(database_url) as local_url:
+        database = UrlDatabase(local_url)
+        install_preview_sources(apps_dir, database)
+        config = MarinaConfig(data_root=str(tmp_path / "data"), iap_audience=None, database=database)
+        with TestClient(create_app(config), client=("127.0.0.1", 40000)) as client:
+            body = client.get(f"/a/{APPLET_ID}/api/health").json()
+            assert set(body["namespaces_present"]) == {fx.JOBS, fx.JOB_CONFIG, fx.TASK_ATTEMPTS}

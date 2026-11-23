@@ -12,28 +12,23 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
-import threading
-import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from connectrpc.errors import ConnectError
 from fastapi import FastAPI, HTTPException, Query
-from finelog.client import LogClient
-from finelog.types import is_retryable_error
 from marina.apps import RegisteredApi, Services, registered_api
-from marina.discovery import resolve_internal_ip
-from rigging.connect import IapAuth
-from rigging.credentials import iap_provider_for
+from marina.finelog import FinelogQueries
 
 REDUCER_PAGE_SIZE = 20
 EXECUTION_LIMIT = 100
 EXECUTION_NAMESPACE = "zephyr.execution"
 STAGE_LOOKBACK_SECONDS = 60
+QUERY_TIMEOUT_MS = 12_000
+MAX_ROWS = 20_000
+QUERY_TIMEOUT_MS = 12_000
+MAX_ROWS = 20_000
 
 
 def sql_string(value: str) -> str:
@@ -109,14 +104,6 @@ MAX(payload_bytes) AS max_bytes FROM snapshots WHERE sample_rank = 1"""
 
 logger = logging.getLogger(__name__)
 
-PROJECT = os.environ.get("ZEPHYR_GCP_PROJECT", "hai-gcp-models")
-ZONE = os.environ.get("ZEPHYR_GCP_ZONE", "us-central1-a")
-FINELOG_FILTER = "name = finelog-marin"
-FINELOG_PORT = 10001
-QUERY_TIMEOUT_MS = 12_000
-MAX_ROWS = 20_000
-NAMESPACE_CACHE_TTL = 60.0
-
 
 @dataclass(frozen=True)
 class ExecutionPlanStage:
@@ -136,85 +123,6 @@ class ExecutionRecord:
     input_shards: int
     stages: tuple[ExecutionPlanStage, ...]
     plan_error: str | None = None
-
-
-class _Finelog:
-    """Process-wide Finelog client with GCE-backed endpoint resolution."""
-
-    def __init__(self, *, url: str | None, iap_cluster: str | None) -> None:
-        self._url = url
-        self._lock = threading.Lock()
-        self._source = ""
-        self._namespaces: list[str] = []
-        self._namespaces_at = 0.0
-        interceptors = tuple(IapAuth(iap_provider_for(iap_cluster)).interceptors()) if iap_cluster else ()
-        self._client = LogClient.connect(
-            url or FINELOG_FILTER,
-            resolver=self._resolve,
-            timeout_ms=QUERY_TIMEOUT_MS,
-            interceptors=interceptors,
-        )
-
-    @property
-    def source(self) -> str:
-        return self._source
-
-    def _resolve(self, _endpoint: str) -> str:
-        url = self._url
-        if url:
-            source = url
-            address = url
-        else:
-            ip = resolve_internal_ip(PROJECT, ZONE, FINELOG_FILTER, timeout=5.0)
-            source = f"finelog-marin internal {ip}:{FINELOG_PORT}"
-            address = f"http://{ip}:{FINELOG_PORT}"
-        with self._lock:
-            self._source = source
-        return address
-
-    def _call[Result](self, operation: Callable[[LogClient], Result]) -> Result:
-        """Retry one idempotent read after LogClient invalidates its transport."""
-        for attempt in range(2):
-            try:
-                return operation(self._client)
-            except Exception as error:
-                cause = error.__cause__
-                retryable = (
-                    isinstance(error, (ConnectionError, OSError, TimeoutError))
-                    or (isinstance(error, ConnectError) and is_retryable_error(error))
-                    or (isinstance(cause, ConnectError) and is_retryable_error(cause))
-                )
-                if attempt == 1 or not retryable:
-                    raise
-        raise AssertionError("unreachable")
-
-    def query(self, sql: str) -> list[dict[str, Any]]:
-        table = self._call(lambda client: client.query(sql, max_rows=MAX_ROWS))
-        return [_json_row(row) for row in table.to_pylist()]
-
-    def namespaces(self) -> list[str]:
-        with self._lock:
-            if time.monotonic() - self._namespaces_at < NAMESPACE_CACHE_TTL:
-                return list(self._namespaces)
-        infos = self._call(lambda client: client.list_namespaces())
-        names = sorted(info.namespace for info in infos)
-        with self._lock:
-            self._namespaces = names
-            self._namespaces_at = time.monotonic()
-        return list(names)
-
-
-def _json_row(row: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for key, value in row.items():
-        if isinstance(value, datetime):
-            stamp = value if value.tzinfo else value.replace(tzinfo=UTC)
-            out[key] = int(stamp.timestamp() * 1000)
-        elif isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
-            out[key] = None
-        else:
-            out[key] = value
-    return out
 
 
 def _execution_plan_stage(value: object) -> ExecutionPlanStage:
@@ -266,9 +174,13 @@ def _execution_window_start(record: ExecutionRecord) -> datetime:
 
 def create_api(_services: Services) -> RegisteredApi:
     api = FastAPI()
-    finelog = _Finelog(
+    finelog = FinelogQueries(
         url=os.environ.get("ZEPHYR_FINELOG_URL"),
         iap_cluster=os.environ.get("ZEPHYR_IAP_CLUSTER"),
+        project=os.environ.get("ZEPHYR_GCP_PROJECT", "hai-gcp-models"),
+        zone=os.environ.get("ZEPHYR_GCP_ZONE", "us-central1-a"),
+        timeout_ms=QUERY_TIMEOUT_MS,
+        max_rows=MAX_ROWS,
     )
 
     def unavailable(error: Exception) -> HTTPException:
