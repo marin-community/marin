@@ -164,10 +164,11 @@ def main() -> None:
         collect(args.output, args.scores or prefix_join(args.output, "scores"), args.cutoff)
     else:
         if args.files:
+            # A partial scan (a pilot, a rescan of a few shards) adds to the output; shards.json stays the catalog's.
             files = json.loads(StoragePath(args.files).read_text())
         else:
             files = catalog_shards(args.sources, args.input_root)
-        StoragePath(prefix_join(args.output, "shards.json")).write_text(json.dumps(files))
+            StoragePath(prefix_join(args.output, "shards.json")).write_text(json.dumps(files))
         logger.info("scan: %d shards", len(files))
         resources = ResourceConfig(cpu=1, ram=args.ram)
         context = ZephyrContext(name="decon-encoder-catalog", resources=resources, max_workers=args.max_workers)
