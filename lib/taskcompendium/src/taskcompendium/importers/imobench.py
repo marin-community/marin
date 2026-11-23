@@ -128,7 +128,7 @@ ANSWERBENCH_CATEGORIES = frozenset({"Algebra", "Combinatorics", "Geometry", "Num
 
 
 def answer_judge_spec(problem: str, answer: str) -> JudgeSpec:
-    """AnswerAutoGrader: the verdict is the box after the judge's <thinking> block."""
+    """Score the boxed verdict, ignoring the judge's thinking block."""
     return JudgeSpec(
         question=problem,
         references=(answer,),
@@ -150,7 +150,7 @@ def answer_judge_spec(problem: str, answer: str) -> JudgeSpec:
 
 
 def proof_judge_spec(problem: str, solution: str, guidelines: str) -> JudgeSpec:
-    """ProofAutoGrader: the final line awards 7, 6, 1 or 0 points, scored as a fraction of 7."""
+    """Score a <points> line as 7, 6, 1 or 0 points out of 7."""
     # Guidelines are literal LaTeX inside a format template; braces must survive formatting.
     template = PROOF_GRADER_TEMPLATE.replace("{guidelines}", guidelines.replace("{", "{{").replace("}", "}}"))
     return JudgeSpec(

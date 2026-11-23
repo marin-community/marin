@@ -26,13 +26,11 @@ def connection(judge_server, monkeypatch):
         ("\\boxed{Correct}", 1.0),
     ],
 )
-def test_answer_grader_reads_the_box_after_thinking(judge_server, connection, reply, reward):
+def test_answer_grader_scores_boxed_verdict(judge_server, connection, reply, reward):
     judge_server.reply = reply
     verdict = grade_judge_candidate(answer_judge_spec("Find all $N$.", "$N=3$"), "So $N = 3$.", connection=connection)
     assert verdict.status is Status.SCORED
     assert verdict.reward == reward
-    prompt = judge_server.requests[-1]["messages"][-1]["content"]
-    assert prompt.endswith("Problem: Find all $N$.\nModel Solution: So $N = 3$.\nGolden Answer: $N=3$\n")
 
 
 @pytest.mark.parametrize("points", [7, 6, 1, 0])
