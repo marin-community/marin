@@ -11,6 +11,7 @@ equal the reference exactly.
 """
 
 import json
+import math
 import re
 
 from verifyit.adapters.harbor_arc_agi_2 import grade_grids
@@ -18,6 +19,22 @@ from verifyit.grade import Reward, scored
 
 BOXED = re.compile(r"\\boxed\{(.*?)\}", re.DOTALL)
 CLOSING_TO_OPENING = {"]": "[", "}": "{"}
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError(f"non-finite number {text}")
+    return value
+
+
+def _reject_constant(name: str) -> None:
+    raise ValueError(f"non-finite number {name}")
+
+
+def _json_value(text: str) -> object:
+    """Parse ``text`` as JSON, raising ValueError on NaN or infinite numbers, which verdicts cannot record."""
+    return json.loads(text, parse_float=_finite_float, parse_constant=_reject_constant)
 
 
 def _list_of_lists(value: object) -> bool:
@@ -29,8 +46,8 @@ def _boxed_grid(response: str) -> list | None:
     if match is None:
         return None
     try:
-        value = json.loads(match.group(1).strip())
-    except json.JSONDecodeError:
+        value = _json_value(match.group(1).strip())
+    except ValueError:
         return None
     return value if _list_of_lists(value) else None
 
@@ -52,8 +69,8 @@ def _backscan_grid(response: str) -> list | None:
     else:
         return None
     try:
-        value = json.loads(response[start : end + 1])
-    except json.JSONDecodeError:
+        value = _json_value(response[start : end + 1])
+    except ValueError:
         return None
     return value if value and _list_of_lists(value) else None
 
