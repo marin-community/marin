@@ -5,10 +5,11 @@ November 22, 2026 (PST).
 For the implementation inventory and remaining transfer, protocol, router-replay
 and zero-KL work, see [inference integration status](../../../INFERENCE_HANDOFF.md).
 
-Four full-model training calls returned, and step-1/version-1 checkpoint
-metadata was committed. End-to-end update confirmation, fresh-process
-continuation, updated-weight publication and generation, and the matched
-25-update comparison remain unverified.
+The latest full-model run passed initial and step-one finite-state checks on all
+four native learners; model and Adam fingerprints changed and step-1/version-1
+checkpoint metadata was committed. It failed again at the five-second natural
+process-exit check. Fresh-process continuation, updated-weight publication and
+generation, and the matched 25-update comparison remain unverified.
 
 The latest eight-H100 diagnostic completed and its entire archive was audited.
 It separates two findings: identical calls to one compiled gradient program
@@ -17,9 +18,8 @@ can return NaN dQ on finite inputs after an intentional NaN-input call.
 Tiny-model checkpoint restoration is byte-exact. The strict tiny-model continued
 state/score comparison still fails; no tolerance has changed. The full-model
 validator checks exact restoration before resuming normal training. A separate
-full-model diagnostic is running to test finite updates, natural process exit,
-updated-weight publication and generation while retaining the failed tiny-model
-parity gate.
+full-model diagnostic tested finite updates, natural process exit, updated-weight
+publication and generation while retaining the failed tiny-model parity gate.
 
 Full-model BATCH diagnostic `2026.11.22.3` was submitted at 15:51 PST from
 `baa10702aec4cfd62e0aebb2cef8c336974172ae`, whose executable source is identical
@@ -31,6 +31,26 @@ bundles match all 4,588 frozen entries and 48 required runtime files. Automatic
 failure retries are zero; the unchanged coordinator/GPU preemption-retry budgets
 are 100/1,000, independently matching the previous full-model run. Startup and
 source verification do not establish finite updates, restoration or publication.
+
+The run failed at 16:30 PST during native shutdown before fresh-process restore.
+All four learners passed durable initial and step-one finite-state candidates
+and joint verdicts, with zero nonfinite model/Adam/RNG/step values. Their model
+and Adam fingerprints changed after the update. All seven cleanup phases,
+including public backend release, returned before shutdown acknowledgement and
+Python `atexit`; natural exit still exceeded the unchanged five-second limit.
+The uploaded exception record preserves that `TimeoutError`. All five GPU pods
+are gone; the coordinator's failed CPU pod is retained. No accelerator job is
+active. Updated-policy publication, restore and step two remain unverified.
+
+A subsequent ownership audit found that the module-global publication transform
+cache retains a JAX backend client after publisher release. Exact JAX 0.11.0 CPU
+weak-reference controls reproduce that lifetime extension. The transform factory
+is now cached per publisher, retaining the same 64-entry limit and tensor
+operations. Four fresh-process ownership/abort/isolation checks and two actual
+publication tests pass; required lint and type checks pass. This removes one
+demonstrated lifetime gap, with GPU exit cause and remedy still unproven. The
+five-second grace period, numerical code, transfer layouts and precision remain
+unchanged.
 
 BATCH smoke `2026.11.22.1`, from
 `8dde046e6980e120e13f577f0035be16c62d77f7`, failed at 00:56 PST during
@@ -89,12 +109,13 @@ exit-zero requirement and the existing five-second grace period. The `.22.1`
 GPU run completed these cleanup phases but still failed natural process exit;
 local restart success does not establish GPU restart acceptance.
 
-The next lifecycle candidate uses the documented
+A subsequent lifecycle candidate uses the documented
 [`jax.extend.backend.clear_backends`](https://docs.jax.dev/en/latest/_autosummary/jax.extend.backend.clear_backends.html)
 extension API from pinned JAX 0.11.0 to release backend clients while distributed
 coordination is still alive. A local CPU weak-reference check shows that cache
 cleanup alone retains a backend client and that this extension call releases
-it. The GPU finalizer that blocked `.22.1` remains unidentified. The five-second
+it. The `.22.3` full-model run completed this operation but still failed natural
+exit; the blocking GPU finalizer remains unidentified. The five-second
 natural-exit requirement remains unchanged.
 
 A separate tiny-model lifecycle driver compares the prior cleanup operations
@@ -284,8 +305,8 @@ copies are supplemental. Extra host-transfer cost remains
 unmeasured on the full model.
 
 Full-model sequence/window geometry and cross-host behavior remain separate
-gates. The new 40-H100 operational diagnostic is running; neither matched
-25-update comparison has been launched.
+gates. The new 40-H100 operational diagnostic failed after its first finite
+update; neither matched 25-update comparison has been launched.
 
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files

@@ -48,12 +48,22 @@ and compiled vLLM gap is a separate acceptance gate.
 ## Distributed rollout and publication
 
 The SkyRL quick-loop recipe uses its vLLM engine group and expert-block
-NCCL publication. Its initial full-model installation verified 19,687,358,464
-bytes per vLLM receiver on eight H100s and returned the weight version zero
-stamp of one. The native server has its own single-runtime staged install.
-The worker bridge accepts a version-bound native route payload per
-trajectory and preserves that binding through batch slicing and packing. The
-distributed driver still needs to launch native serving replicas and attach
-those payloads when it assembles the trajectories. Full-model updated-policy publication, restart and
-continuation, and matched 25-update comparisons remain qualification gates.
+NCCL publication. Run `2026.11.22.3` at `baa10702ae` completed one finite
+native learner update on 32 H100s. The initial publication verified
+19,687,358,464 bytes per receiver on eight inference H100s and returned
+generation stamp 1 for weight version 0. The run committed step-1/version-1
+checkpoint metadata and reached Python shutdown. It failed the validator's
+five-second natural exit deadline.
+
+Commit `768ea25030` bounds stage-transform caches to 64 entries per publisher
+and releases them with their owner. Fresh-process CPU tests verified release
+after normal and aborted publication, and kept exact publication bytes.
+The full-model GPU exit and restart remain to be tested with that repair.
+
+The native server stages and installs weights inside one runtime. The worker
+bridge accepts a version-bound native route payload per trajectory and
+preserves that binding through batching and policy scoring. The distributed
+driver still needs to launch native serving replicas and attach their payloads
+during trajectory assembly. Updated-policy publication, full-model restart,
+and a matched 25-update run remain open.
 [Quick-loop run status](experiments/post_training/inventory/levanter-quick-loop-status.md)
