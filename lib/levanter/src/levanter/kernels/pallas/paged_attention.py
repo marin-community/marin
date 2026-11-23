@@ -41,6 +41,8 @@ def tpu_paged_attention(
     sm_scale: float | jax.Array,
     sliding_window: int | None = None,
     soft_cap: float | None = None,
+    num_queries_per_block: int | None = None,
+    num_kv_pages_per_block: int | None = None,
 ) -> jax.Array:
     """Run upstream ragged attention on local grouped queries and interleaved pages."""
     if tpu_ragged_paged_attention is None or get_min_heads_per_blk is None:
@@ -72,6 +74,8 @@ def tpu_paged_attention(
         sm_scale=kernel_scale,
         sliding_window=sliding_window,
         soft_cap=soft_cap,
+        num_queries_per_block=num_queries_per_block,
+        num_kv_pages_per_block=num_kv_pages_per_block,
     )
     metadata = (
         jnp.maximum(kv_lens, 0),

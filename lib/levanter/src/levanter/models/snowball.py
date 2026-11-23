@@ -50,6 +50,13 @@ from levanter.grug.attention import (
     attention,
     ragged_paged_attention,
 )
+from levanter.grug.attention._paged import (
+    FUSED_KV_APPEND_MAX_TOKENS,
+    FUSED_KV_PREFILL_MAX_TOKENS,
+    RPA_V3_ALIGNMENT,
+    PagedAttentionImplementation,
+    ragged_paged_attention_append,
+)
 from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp, validate_captured_experts
 from levanter.grug.sharding import (
     Pembed_vocab,
@@ -141,7 +148,6 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 _GATED_NORM_RANK = 128
 # June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
 _CACHE_LAYER_AXIS = "layer"
-_STACKED_CACHE_SHARDING = P(None, None, None, "model", None)
 _LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
@@ -449,6 +455,16 @@ class GatedNorm(eqx.Module):
         return x * gate.astype(x.dtype)
 
 
+def _inference_kv_heads(config: SnowballConfig, kv_axis: str) -> int:
+    if kv_axis == "model":
+        return config.num_kv_heads
+    mesh = _current_mesh()
+    if _mesh_axis_size(mesh, "model") != 1:
+        raise ValueError("Expert-sharded KV requires model_axis_size=1")
+    expert_size = _mesh_axis_size(mesh, "expert")
+    return (config.num_kv_heads + expert_size - 1) // expert_size * expert_size
+
+
 class SnowballAttention(eqx.Module):
     """GQA + half-RoPE + XSA + per-head sigmoid gate (pinned production attention).
 
@@ -551,28 +567,64 @@ class SnowballAttention(eqx.Module):
         pos_ids: jax.Array,
         *,
         mode: Literal["short", "long"],
+        implementation: PagedAttentionImplementation | None = None,
+        kv_axis: Literal["model", "expert"] = "model",
+        fused_kv_tokens: int = FUSED_KV_APPEND_MAX_TOKENS,
     ) -> tuple[jax.Array, KvPageCache]:
         """Write the new keys and values, then attend over each request's cached prefix."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
         q, k, v = self._project_qkv(x, disable_rope=mode == "long", position_ids=pos_ids[:, None])
         token_axis = batch_info.new_token_dests.axes[0]
-        kv_axes = (token_axis, Axis("kv_head", cfg.num_kv_heads), Axis("head_size", head_dim))
-        cache_k = reshard(k[:, 0], P(None, "model", None))
-        cache_v = reshard(v[:, 0], P(None, "model", None))
-        cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
+        kv_heads = _inference_kv_heads(cfg, kv_axis)
+        extra_heads = kv_heads - cfg.num_kv_heads
+        kv_axes = (token_axis, Axis("kv_head", kv_heads), Axis("head_size", head_dim))
+        cache_k, cache_v = k[:, 0], v[:, 0]
         q = q.reshape(x.shape[0], cfg.num_kv_heads, cfg.num_heads // cfg.num_kv_heads, head_dim)
-        q = reshard(q, P(None, "model", None, None))
-        out = ragged_paged_attention(
-            q,
-            cache.kv_pages.array,
+        if extra_heads:
+            cache_k = jnp.pad(cache_k, ((0, 0), (0, extra_heads), (0, 0)))
+            cache_v = jnp.pad(cache_v, ((0, 0), (0, extra_heads), (0, 0)))
+            q = jnp.pad(q, ((0, 0), (0, extra_heads), (0, 0), (0, 0)))
+        cache_k = reshard(cache_k, P(None, kv_axis, None))
+        cache_v = reshard(cache_v, P(None, kv_axis, None))
+        q = reshard(q, P(None, kv_axis, None, None))
+        metadata = (
             batch_info.seq_lens.array,
             batch_info.page_indices.array,
             batch_info.cu_q_lens.array,
             batch_info.num_seqs,
-            sm_scale=head_dim**-0.5,
-            sliding_window=cfg.sliding_window if mode == "short" else None,
-        ).reshape(x.shape[0], 1, cfg.num_heads, head_dim)
+        )
+        sliding_window = cfg.sliding_window if mode == "short" else None
+        scale = head_dim**-0.5
+        if (
+            implementation == "tpu_v3"
+            and q.shape[0] <= fused_kv_tokens
+            and q.dtype == cache.kv_pages.dtype == jnp.bfloat16
+            and head_dim == batch_info.page_size == RPA_V3_ALIGNMENT
+        ):
+            out, pages = ragged_paged_attention_append(
+                q,
+                cache_k.astype(q.dtype),
+                cache_v.astype(q.dtype),
+                cache.kv_pages.array,
+                *metadata,
+                sm_scale=scale,
+                sliding_window=sliding_window,
+            )
+            cache = KvPageCache(hax.named(pages, cache.kv_pages.axes))
+        else:
+            cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
+            out = ragged_paged_attention(
+                q,
+                cache.kv_pages.array,
+                *metadata,
+                sm_scale=scale,
+                sliding_window=sliding_window,
+                implementation=implementation,
+            )
+        if kv_axis == "expert":
+            out = reshard(out, P(_BATCH_AXES, None, None, None))[:, : cfg.num_kv_heads]
+        out = out.reshape(x.shape[0], 1, cfg.num_heads, head_dim)
         return self._project_output(x, out, v), cache
 
 
@@ -883,11 +935,23 @@ class SnowballBlock(eqx.Module):
         token_valid: Array,
         *,
         return_routes: bool = False,
+        implementation: PagedAttentionImplementation | None = None,
+        kv_axis: Literal["model", "expert"] = "model",
+        fused_kv_tokens: int = FUSED_KV_APPEND_MAX_TOKENS,
     ) -> tuple[MoeForwardOutput, KvPageCache]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
 
         def attend(long_context: bool):
-            return self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="long" if long_context else "short")
+            return self.attn.decode(
+                attn_in,
+                cache,
+                batch_info,
+                pos_ids,
+                mode="long" if long_context else "short",
+                implementation=implementation,
+                kv_axis=kv_axis,
+                fused_kv_tokens=fused_kv_tokens,
+            )
 
         if isinstance(use_long, bool):
             attn_out, cache = attend(use_long)
@@ -1025,6 +1089,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     _config: SnowballConfig = eqx.field(static=True)
     _unroll_decode: bool = eqx.field(static=True, default=False)
     _split_decode_cache: bool = eqx.field(static=True, default=False)
+    _paged_attention: PagedAttentionImplementation | None = eqx.field(static=True, default=None)
+    _kv_axis: Literal["model", "expert"] = eqx.field(static=True, default="model")
+
+    def with_expert_sharded_kv(self) -> "SnowballLMHeadModel":
+        """Shard paged KV heads across the expert axis during generation."""
+        return dataclasses.replace(self, _kv_axis="expert")
+
+    def with_paged_attention(self, implementation: PagedAttentionImplementation) -> "SnowballLMHeadModel":
+        """Select the attention backend for cache-based generation."""
+        return dataclasses.replace(self, _paged_attention=implementation)
 
     def with_unrolled_decode(self) -> "SnowballLMHeadModel":
         """Return a model that unrolls its layer loop during token decode."""
@@ -1210,13 +1284,15 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if _context_axis() is not None:
             raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
-        kv_heads, head_size = Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim)
+        kv_heads, head_size = Axis("kv_head", _inference_kv_heads(cfg, self._kv_axis)), Axis(
+            "head_size", cfg.inferred_head_dim
+        )
         num_layers = len(self.transformer.blocks)
         if window_cache_pages is not None:
             if not self._split_decode_cache or num_long_attention_layers(num_layers) == num_layers:
                 raise ValueError("A compact window cache requires split decode and sliding-window layers")
             window_spec = dataclasses.replace(spec, num_pages=window_cache_pages)
-            layer_sharding = P(*_STACKED_CACHE_SHARDING[1:])
+            layer_sharding = P(None, None, self._kv_axis, None)
             layers = []
             for index in range(num_layers):
                 layer_spec = spec if _is_long_attention_layer(index, num_layers) else window_spec
@@ -1227,9 +1303,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         pages = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype).kv_pages
         stacked = pages.broadcast_axis(layer).rearrange((layer, ...))
         # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
-        stacked = hax.named(reshard(stacked.array, _STACKED_CACHE_SHARDING), stacked.axes)
+        stacked = hax.named(reshard(stacked.array, P(None, None, None, self._kv_axis, None)), stacked.axes)
         cache = StackedKvPageCache(stacked)
-        return _split_layer_cache(cache) if self._split_decode_cache else cache
+        return _split_layer_cache(cache, self._kv_axis) if self._split_decode_cache else cache
 
     @named_call
     def decode(
@@ -1316,6 +1392,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             unroll=unroll,
             window_batch=window_batch,
             capture_routes=capture_routes,
+            fused_kv_tokens=(FUSED_KV_PREFILL_MAX_TOKENS if prefill else FUSED_KV_APPEND_MAX_TOKENS),
         )
         if sample_indices is None:
             logits = jnp.einsum(
@@ -1338,6 +1415,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         unroll: bool,
         window_batch: PageBatchInfo | None,
         capture_routes: bool,
+        fused_kv_tokens: int,
     ) -> tuple[Array, StackedKvPageCache | ListCache[KvPageCache], SnowballDecodeRoutes | None]:
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Snowball decode requires matching flat token and position arrays")
@@ -1358,7 +1436,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                 use_long = _is_long_attention_layer(layer_index, num_layers)
                 layer_batch = window_batch if window_batch is not None and not use_long else batch_info
                 result, cache = self._inference_block(block).decode(
-                    hidden, cache, layer_batch, pos_ids.array, use_long, token_valid, return_routes=capture_routes
+                    hidden,
+                    cache,
+                    layer_batch,
+                    pos_ids.array,
+                    use_long,
+                    token_valid,
+                    return_routes=capture_routes,
+                    implementation=self._paged_attention,
+                    kv_axis=self._kv_axis,
+                    fused_kv_tokens=fused_kv_tokens,
                 )
                 hidden = result.output
                 layers.append(cache)
@@ -1369,7 +1456,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             return hidden, ListCache(tuple(layers)), routes
 
         split_cache = isinstance(kv_cache, ListCache)
-        stacked_cache = _stack_layer_cache(kv_cache) if isinstance(kv_cache, ListCache) else kv_cache
+        stacked_cache = _stack_layer_cache(kv_cache, self._kv_axis) if isinstance(kv_cache, ListCache) else kv_cache
         cache_axes = stacked_cache.kv_pages.axes[1:]
 
         def layer_step(carry, layer_data):
@@ -1378,7 +1465,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             layer_pages = jax.lax.dynamic_index_in_dim(pages, layer, keepdims=False)
             cache = KvPageCache(hax.named(layer_pages, cache_axes))
             result, cache = block.decode(
-                x, cache, batch_info, pos_ids.array, use_long, token_valid, return_routes=capture_routes
+                x,
+                cache,
+                batch_info,
+                pos_ids.array,
+                use_long,
+                token_valid,
+                return_routes=capture_routes,
+                implementation=self._paged_attention,
+                kv_axis=self._kv_axis,
+                fused_kv_tokens=fused_kv_tokens,
             )
             pages = jax.lax.dynamic_update_index_in_dim(pages, cache.kv_pages.array, layer, axis=0)
             routes = None if result.routes is None else result.routes[:, 0]
@@ -1406,7 +1502,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
         caches = StackedKvPageCache(hax.named(cache_pages, stacked_cache.kv_pages.axes))
         routes = SnowballDecodeRoutes(expert_ids, token_valid) if expert_ids is not None else None
-        return hidden, _split_layer_cache(caches) if split_cache else caches, routes
+        return hidden, _split_layer_cache(caches, self._kv_axis) if split_cache else caches, routes
 
     def _inference_block(self, block: SnowballBlock) -> SnowballBlock:
         expert_size = _mesh_axis_size(_current_mesh(), "expert")
@@ -1426,9 +1522,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         return dataclasses.replace(self, transformer=new_tf)
 
 
-def _split_layer_cache(cache: StackedKvPageCache) -> ListCache[KvPageCache]:
+def _split_layer_cache(cache: StackedKvPageCache, kv_axis: str) -> ListCache[KvPageCache]:
     pages = cache.kv_pages
-    layer_sharding = P(*_STACKED_CACHE_SHARDING[1:])
+    layer_sharding = P(None, None, kv_axis, None)
     return ListCache(
         tuple(
             KvPageCache(hax.named(reshard(layer, layer_sharding), pages.axes[1:]))
@@ -1437,10 +1533,10 @@ def _split_layer_cache(cache: StackedKvPageCache) -> ListCache[KvPageCache]:
     )
 
 
-def _stack_layer_cache(caches: ListCache[KvPageCache]) -> StackedKvPageCache:
+def _stack_layer_cache(caches: ListCache[KvPageCache], kv_axis: str) -> StackedKvPageCache:
     layer = Axis(_CACHE_LAYER_AXIS, len(caches))
     pages = hax.stack(layer, [cache.kv_pages for cache in caches])
-    return StackedKvPageCache(hax.named(reshard(pages.array, _STACKED_CACHE_SHARDING), pages.axes))
+    return StackedKvPageCache(hax.named(reshard(pages.array, P(None, None, None, kv_axis, None)), pages.axes))
 
 
 def _resize_axis(arr: jax.Array, axis: int, new_size: int, std: float, key) -> jax.Array:
