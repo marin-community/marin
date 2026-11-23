@@ -12,6 +12,7 @@ from haliax.partitioning import ResourceMapping
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.models.snowball import (
+    SnowballBlock,
     SnowballConfig,
     SnowballLMHeadModel,
     snowball_block_from_state_dict,
@@ -31,6 +32,7 @@ def load_snowball_serving_model(
     *,
     dtype: jnp.dtype,
     axis_mapping: ResourceMapping,
+    pack_expert_weights: bool = False,
 ) -> SnowballLMHeadModel:
     """Load a Snowball snapshot with device conversion memory bounded to one layer."""
     state_dict = converter.load_state_dict(ref, dtype)
@@ -40,11 +42,15 @@ def load_snowball_serving_model(
     vocab = Axis("vocab", config.vocab_size)
     template = eqx.filter_eval_shape(SnowballLMHeadModel.init, vocab, config, key=jax.random.PRNGKey(0))
     with hax.axis_mapping(axis_mapping):
-        return _convert_layers(template, state_dict, prefix)
+        return _convert_layers(template, state_dict, prefix, pack_expert_weights=pack_expert_weights)
 
 
 def _convert_layers(
-    template: SnowballLMHeadModel, state_dict: dict[str, jax.Array], prefix: str | None
+    template: SnowballLMHeadModel,
+    state_dict: dict[str, jax.Array],
+    prefix: str | None,
+    *,
+    pack_expert_weights: bool = False,
 ) -> SnowballLMHeadModel:
     """Convert a resident HF state dict one layer at a time, releasing the inputs."""
     layer_prefix = f"{prefix}.model.layers." if prefix else "model.layers."
@@ -63,9 +69,12 @@ def _convert_layers(
     state_dict.clear()
 
     convert_block = eqx.filter_jit(snowball_block_from_state_dict)
+    pack_block = eqx.filter_jit(SnowballBlock.with_packed_experts)
     blocks = []
     for block, weights in zip(transformer.blocks, weights_by_layer, strict=True):
         block = jax.block_until_ready(convert_block(block, weights, _LOCAL_LAYER_INDEX, prefix))
+        if pack_expert_weights:
+            block = jax.block_until_ready(pack_block(block))
         blocks.append(block)
         weights.clear()
     transformer = eqx.tree_at(lambda value: value.blocks, transformer, tuple(blocks))

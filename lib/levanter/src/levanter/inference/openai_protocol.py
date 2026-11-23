@@ -35,6 +35,8 @@ class ChatCompletionRequest(BaseModel):
     seed: int | None = None
     service_tier: str | None = None
     stop: str | list[str] | None = None
+    return_route_captures: bool = False
+    expected_policy_id: str | None = None
     stream: bool | None = None
     stream_options: dict[str, object] | None = None
     temperature: float = Field(default=1.0, description="Sampling temperature")

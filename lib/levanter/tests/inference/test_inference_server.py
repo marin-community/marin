@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import dataclasses
 import json
 import logging
@@ -754,8 +755,9 @@ def _assert_binary_policy_fence(client, server):
 
 
 def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
     cfg = SnowballConfig(
-        vocab_size=48,
+        vocab_size=len(tokenizer),
         hidden_dim=16,
         intermediate_dim=32,
         shared_expert_intermediate_dim=24,
@@ -765,17 +767,17 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
         num_heads=2,
         num_kv_heads=1,
         head_dim=8,
-        max_seq_len=16,
+        max_seq_len=32,
         sliding_window=4,
         attention_implementation="reference",
     )
     server_config = InferenceServerConfig(
         service=InferenceEngineConfig(
-            max_seq_len=16,
+            max_seq_len=32,
             max_pages=16,
             max_seqs=4,
             max_seqs_in_prefill=4,
-            max_prefill_size=12,
+            max_prefill_size=24,
             max_queued_tokens=8,
             max_rounds=2,
             page_size=2,
@@ -787,7 +789,7 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
         mesh = compact_grug_mesh()
         with jax.set_mesh(mesh):
             model = SnowballLMHeadModel.init(hax.Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(19))
-            server = InferenceServer.create(server_config, model, local_gpt2_tokenizer, mesh=mesh)
+            server = InferenceServer.create(server_config, model, tokenizer, mesh=mesh)
             try:
                 with TestClient(server.app) as client:
                     body = encode_frame(
@@ -797,6 +799,32 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
                     response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
                     assert response.status_code == 200, response.text
                     _, tensors = decode_frame(response.content)
+                    messages = [{"role": "user", "content": "hi"}]
+                    chat = client.post(
+                        "/v1/chat/completions",
+                        json={
+                            "model": server.config.model_name,
+                            "messages": messages,
+                            "max_tokens": 2,
+                            "temperature": 0,
+                            "stream": True,
+                            "return_route_captures": True,
+                        },
+                    )
+                    assert chat.status_code == 200
+                    events = [json.loads(line[6:]) for line in chat.text.splitlines() if line.startswith("data: {")]
+                    (final,) = [event for event in events if "levanter_route_frame" in event]
+                    frame = base64.b64decode(final["levanter_route_frame"], validate=True)
+                    metadata, stream_tensors = decode_frame(frame)
+                    expected_prompt = _compute_tokens([ChatMessage(**messages[0])], tokenizer, None, None)
+                    np.testing.assert_array_equal(stream_tensors["prompt_token_ids"], expected_prompt)
+                    streamed_ids = stream_tensors["choice.0.token_ids"]
+                    assert streamed_ids.size == metadata["choices"][0]["completion_tokens"] == 2
+                    _, stream_valid = choice_expert_routes(
+                        stream_tensors, 0, np.concatenate((expected_prompt, streamed_ids))
+                    )
+                    assert stream_valid[:-1].all() and not stream_valid[-1]
+
             finally:
                 server.inference_context.shutdown()
 
