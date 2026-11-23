@@ -203,9 +203,15 @@ async def run_load(
     return stats
 
 
+def normalize_base_url(url: str) -> str:
+    """The driver's convention: the OpenAI base URL always ends in /v1."""
+    url = url.rstrip("/")
+    return url if url.endswith("/v1") else f"{url}/v1"
+
+
 def resolve_base_url(arg: str | None) -> str:
     if arg:
-        return arg
+        return normalize_base_url(arg)
     from iris.client.client import iris_ctx
 
     client = iris_ctx().client
@@ -213,7 +219,7 @@ def resolve_base_url(arg: str | None) -> str:
         raise SystemExit("--base-url is required outside an Iris job")
     if not client.list_endpoint_instances(pool.ENDPOINT_NAME):
         raise SystemExit(f"pool endpoint {pool.ENDPOINT_NAME} is not registered")
-    return client.resolve_endpoint(pool.ENDPOINT_NAME)
+    return normalize_base_url(client.resolve_endpoint(pool.ENDPOINT_NAME))
 
 
 def main() -> None:
