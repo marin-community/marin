@@ -25,6 +25,7 @@ from megatron.core.transformer.enums import AttnBackend
 from omegaconf import OmegaConf
 from rigging.filesystem.storage_path import prefix_join
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
+from skyrl_train.io import io
 from skyrl_train.telemetry import record_event
 from skyrl_train.trainer_memory_profile import preserve_training_state, sizing_replay_routes, warm_state_profile
 from skyrl_train.distributed.dispatch import MeshRank

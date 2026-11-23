@@ -14,20 +14,16 @@ import json
 import pickle
 import time
 
-import megatron.core.parallel_state as mpu
 import ray
 import torch
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
+from skyrl_train.io import io
 from skyrl_train.projected_softmax import projected_token_statistics
 from skyrl_train.stable_softmax import token_entropy, token_logprobs
 from skyrl_train.utils.utils import initialize_ray
-from skyrl_train.workers.megatron.megatron_model_wrapper import MegatronModelWrapper
-from skyrl_train.workers.megatron.megatron_worker import MegatronPolicyWorkerBase
 from skyrl_train.workers.worker import PPORayActorGroup
 
-from experiments.post_training.long_loop.snowball_ray_replica_probe import run_ray_probe_task
-from experiments.post_training.long_loop.snowball_replica_probe import write_receipt
 from experiments.post_training.long_loop.trainer_memory_probe_config import compiled_config
 
 MODULE = "experiments.post_training.long_loop.trainer_memory_probe"
@@ -88,64 +84,7 @@ def compare_projection(hidden, weight, targets, project, *, temperature, fused):
     return {"passed": True, "tokens": hidden.shape[0], "tolerance": tolerance, "fused_main_gradient": fused, **metrics}
 
 
-class QualifyingWrapper(MegatronModelWrapper):
-    qualification = None
-
-    def _output_statistics(self, **kwargs):
-        if self.qualification is None:
-            hidden = kwargs["hidden_states"]
-            sequences, mask, packed, temperature = kwargs["context"]
-            targets = self._projection_targets(sequences, mask, packed, kwargs["config"])
-            layer = kwargs["output_layer"]
-            weight = layer.weight if kwargs["output_weight"] is None else kwargs["output_weight"]
-
-            def project(chunk, parameter):
-                logits, _ = layer(chunk.unsqueeze(1), weight=parameter, runtime_gather_output=False)
-                return kwargs["scale_logits"](logits).squeeze(1)
-
-            self.qualification = compare_projection(
-                hidden.reshape(-1, hidden.shape[-1]),
-                weight,
-                targets,
-                project,
-                temperature=temperature,
-                fused=kwargs["config"].gradient_accumulation_fusion,
-            )
-        return super()._output_statistics(**kwargs)
-
-
-class QualifyingWorker(MegatronPolicyWorkerBase):
-    def init_model(self, *args, **kwargs):
-        super().init_model(*args, **kwargs)
-        replay = self.model.router_replay
-        self.model = QualifyingWrapper(
-            self.cfg,
-            self.actor_module,
-            self.optimizer,
-            self.policy_loss_fn,
-            vocabulary_size=self.strategy.hf_config.vocab_size,
-            output_projection_chunk_size=self.cfg.trainer.policy.megatron_config.output_projection_chunk_size,
-        )
-        self.model.router_replay = replay
-        return {"rank": self._rank, "gpu_uuid": str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid)}
-
-    def qualify_real_batch(self, batch):
-        self.forward(batch)
-        report = {
-            "rank": self._rank,
-            "pipeline_last": mpu.is_pipeline_last_stage(ignore_virtual=True),
-            "projection": self.model.qualification,
-        }
-        if (
-            report["pipeline_last"]
-            and self.model._output_projection_chunk_size is not None
-            and report["projection"] is None
-        ):
-            raise RuntimeError("Last pipeline stage did not qualify the real-batch output projection")
-        return report
-
-
-def driver(args):
+def driver(args, worker_type):
     cfg = compiled_config(args)
     initialize_ray(cfg)
     placement = cfg.trainer.placement
@@ -154,7 +93,7 @@ def driver(args):
             cfg,
             placement.policy_num_nodes,
             placement.policy_num_gpus_per_node,
-            ray.remote(num_gpus=1)(QualifyingWorker),
+            ray.remote(num_gpus=1)(worker_type),
             num_gpus_per_actor=1,
             colocate_all=False,
             sequence_parallel_size=1,
@@ -171,9 +110,9 @@ def driver(args):
         del raw
         batch.metadata = {**batch.metadata, "global_step": 0}
         numerical = ray.get(actors.async_run_ray_method("mesh", "qualify_real_batch", batch))
-        write_receipt(
+        io.write_bytes_atomic(
             prefix_join(args.output_prefix, "real-batch-numerics.json"),
-            {"batch_uri": args.batch_uri, "batch_sha256": batch_sha256, "ranks": numerical},
+            json.dumps({"batch_uri": args.batch_uri, "batch_sha256": batch_sha256, "ranks": numerical}).encode(),
         )
         timings = []
         for index in range(2):
@@ -183,9 +122,9 @@ def driver(args):
             timings.append(
                 {"warm_optimizer": index > 0, "seconds": time.monotonic() - started, "rank_outputs": len(outputs)}
             )
-            write_receipt(
+            io.write_bytes_atomic(
                 prefix_join(args.output_prefix, "matched-batch-timing.json"),
-                {"variant": args.variant, "batch_sha256": batch_sha256, "timings": timings},
+                json.dumps({"variant": args.variant, "batch_sha256": batch_sha256, "timings": timings}).encode(),
             )
         memory = (
             ray.get(actors.async_run_ray_method("pass_through", "profile_train_memory"))
@@ -202,7 +141,7 @@ def driver(args):
             "timings": timings,
             "memory": memory,
         }
-        write_receipt(prefix_join(args.output_prefix, "receipt.json"), result)
+        io.write_bytes_atomic(prefix_join(args.output_prefix, "receipt.json"), json.dumps(result).encode())
         print(json.dumps({"qualification_passed": True, "policy_ranks": len(identities)}), flush=True)
     finally:
         ray.shutdown()
@@ -218,8 +157,15 @@ def main():
     parser.add_argument("--variant", required=True, choices=("chunked", "offload"))
     args = parser.parse_args()
     if args.driver:
-        driver(args)
+        # Megatron's CUDA extensions are optional for CPU driver admission tests.
+        from experiments.post_training.long_loop.trainer_memory_probe_worker import QualifyingWorker  # noqa: PLC0415
+
+        driver(args, QualifyingWorker)
         return
+    from experiments.post_training.long_loop.snowball_ray_replica_probe import (  # noqa: PLC0415 - GPU launcher
+        run_ray_probe_task,
+    )
+
     cfg = compiled_config(args)
     placement = cfg.trainer.placement
     run_ray_probe_task(
