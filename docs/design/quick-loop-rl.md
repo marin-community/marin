@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 1:50 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 2:07 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2141,12 +2141,25 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   two-CPU test reconciled all 16 typed frames and showed that the first
   repeat compiled another prefill executable. The initial H100 attempt
   stopped during policy installation because the snapshot fixture lacked its
-  compute dtype. The retry uses the verified BF16 metadata and is queued
-  for an eight-H100 host. Measure grading and tool overhead separately on
-  the full rollout.
+  compute dtype. The retry used the verified BF16 metadata and completed
+  on eight H100s. Policy installation took 174.8 seconds. The worker checked
+  16 binary replay frames and returned 512 sampled tokens per request. Cold
+  and repeat tokens and sampling logprobs matched byte for byte.
+
+  Cold batch service took 79.3 seconds and the first repeat took 67.9
+  seconds. Prefill compiled in both batches. Each subsequent batch took
+  58.2 seconds, with 57.0 seconds in synchronized decode and 1.1 seconds
+  in prefill. Encoding and writing the binary reply took under 10 ms per
+  batch, including encoding the replay frames. With eight requests queued,
+  the second four waited a median of 58.2 seconds behind the first four.
+  Decode and the four-request batch limit account for the delay on this
+  fixture. The probe times synchronized calls to a single serving process.
+  The matched run measures admission and update times end to end, including
+  Ray, grading, tools, the learner and policy publication.
   [Scoped serving diagnostic and CPU proof][held-native-admission-probe] ·
   [Fixture repair proof][held-native-admission-dtype] ·
-  [Regional H100 retry][iris-held-native-admission-retry]
+  [Successful H100 attempt][iris-held-native-admission-retry] ·
+  [Verified H100 profile archive][held-native-admission-h100]
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
@@ -2334,6 +2347,7 @@ arms. [Prior timing comparison][timing]
 [held-native-admission-probe]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Foffline-native-admission-probe.tar.zst
 [held-native-admission-dtype]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-admission-dtype-repair-proof.tar.zst
 [iris-held-native-admission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-admission-67b-h100-20261123b
+[held-native-admission-h100]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-admission-h100-profile-proof.tar.zst
 [held-publication-overlap]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fverified-publication-overlap-proof.tar.zst
 [iris-native-emission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122p
 [native-passing-diagnostic-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122p%2Findependently-verified-passing-diagnostic.json
