@@ -449,8 +449,8 @@ class Algorithm(Section):
 
 
 class RolloutBuffer(Section):
-    eval_drain: Literal["wait", "abort"] = field("wait")
-    "Existing rounds choose wait explicitly; abort discards in-flight groups and regenerates their prompts."
+    eval_drain: Literal["wait", "abort", "priority"] = field("wait")
+    "Wait drains rollouts; abort regenerates them; priority shares frozen serving weights with training."
     consumed_route_quotas: OpenMap = field({})
     "Exact consumed-group quotas, enforced at lease admission; full_batch only."
     source_routes: OpenMap = field({})

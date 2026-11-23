@@ -67,6 +67,7 @@ _T = TypeVar("_T")
 class EvalDrainStrategy(StrEnum):
     WAIT = "wait"
     ABORT = "abort"
+    PRIORITY = "priority"
 
 
 @dataclass(frozen=True)
@@ -287,6 +288,8 @@ class TrainingContext:
 
     async def prepare_evaluation(self) -> None:
         """Stop admissions and, when requested, revoke unfinished groups before cancelling them."""
+        if self.eval_drain is EvalDrainStrategy.PRIORITY:
+            return
         self.pause()
         if self.eval_drain is EvalDrainStrategy.WAIT or self._dispatcher is None:
             return
@@ -327,6 +330,8 @@ class TrainingContext:
 
     async def pause_and_drain(self) -> None:
         """Stop dispatching new generation and finish already submitted groups."""
+        if self.eval_drain is EvalDrainStrategy.PRIORITY:
+            return
         await self.prepare_evaluation()
         if self._running:
             await self.wait(asyncio.gather(*self._running.values()))

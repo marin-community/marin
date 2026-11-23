@@ -149,6 +149,7 @@ async def _model_turn(
     max_prompt_length: int | None,
     chat_template_kwargs: dict[str, Any],
     session_id: str,
+    priority: int = 0,
 ) -> ModelTurn:
     """Convert an inference response to the common exact-token record."""
     options = dict(request.options)
@@ -185,6 +186,7 @@ async def _model_turn(
                     max_context_length=max_context_length,
                     max_prompt_length=max_prompt_length,
                 )
+            model_input["priority"] = priority
             output = await client.generate(model_input)
     except GenerationBudgetExceededError as error:
         raise GenerationLimitReached(error.prompt_token_ids) from error
@@ -450,8 +452,10 @@ class TaskRolloutWorker:
         judge_connection: JudgeConnection | None = None,
         retrieval_service: str | None = None,
         eval_factories: Mapping[str, MachineFactory] | None = None,
+        evaluation_priority: int = 0,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
+        self.evaluation_priority = evaluation_priority
         self.model_client = model_client
         self.judge_connection = judge_connection
         self.retrieval_service = retrieval_service
@@ -604,6 +608,7 @@ class TaskRolloutWorker:
             self.trajectory_runner_cfg.backend, self.trajectory_runner_cfg.sampling_params
         )
         sampling.update(request.sampling_params or {})
+        priority = self.evaluation_priority if phase == "eval" else 0
         require_logprobs = logprobs_requested(request, self.trajectory_runner_cfg)
         max_input_length = int(self.trajectory_runner_cfg.max_input_length)
         max_context_length = generation_context_limit(self.trajectory_runner_cfg)
@@ -623,6 +628,7 @@ class TaskRolloutWorker:
                         max_prompt_length=max_input_length,
                         chat_template_kwargs=self.chat_template_kwargs,
                         session_id=session_id,
+                        priority=priority,
                     )
                 except (GenerationLimitReached, ContextLengthExceededError) as error:
                     raise ContextRejected(
@@ -855,4 +861,5 @@ class TaskRolloutWorkerSpec:
             judge_connection=judge,
             retrieval_service=self.config.environment.task_sessions.get("retrieval_service"),
             eval_factories=eval_factories,
+            evaluation_priority=-1 if self.config.trainer.rollout_buffer.eval_drain == "priority" else 0,
         )

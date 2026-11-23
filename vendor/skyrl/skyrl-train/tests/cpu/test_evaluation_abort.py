@@ -48,8 +48,10 @@ def local_actor(runner):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("strategy", [EvalDrainStrategy.WAIT, EvalDrainStrategy.ABORT])
-async def test_eval_drain_preserves_or_discards_groups_and_acknowledges_sandbox_cleanup(monkeypatch, telemetry_endpoint, strategy):
+@pytest.mark.parametrize("strategy", [EvalDrainStrategy.WAIT, EvalDrainStrategy.ABORT, EvalDrainStrategy.PRIORITY])
+async def test_eval_drain_preserves_or_discards_groups_and_acknowledges_sandbox_cleanup(
+    monkeypatch, telemetry_endpoint, strategy
+):
     buffer = RolloutBuffer(RolloutBufferConfig(1, 2, 1, BatchPolicy.FULL_BATCH, None, None))
     started = asyncio.Event()
     finish_generation = asyncio.Event()
@@ -122,6 +124,21 @@ async def test_eval_drain_preserves_or_discards_groups_and_acknowledges_sandbox_
         batch = await context.next_batch_metadata(stall_timeout=1)
         assert [group.uid for group in batch.groups] == ["0"]
         aborted_request = next(task for task in requests if task.prompt["uid"] == "1")
+        if strategy is EvalDrainStrategy.PRIORITY:
+            await context.prepare_evaluation()
+            await context.pause_and_drain()
+            assert context._submission_allowed.is_set()
+            assert not cleanup_started.is_set()
+            assert scored == ["0"]
+            assert buffer.snapshot().ready == []
+            finish_generation.set()
+            await asyncio.wait_for(cleanup_started.wait(), timeout=5)
+            release_cleanup.set()
+            await context.publish(2)
+            next_batch = await context.next_batch_metadata(stall_timeout=1)
+            assert [group.uid for group in next_batch.groups] == ["1"]
+            assert attempts["1"] == 1
+            return
         if strategy is EvalDrainStrategy.WAIT:
             drain = asyncio.create_task(context.pause_and_drain())
             await asyncio.sleep(0)  # Let drain reach its wait without advancing a wall clock.

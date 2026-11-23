@@ -23,7 +23,7 @@ from skyrl_train.trajectory_runners.model_clients import (
     REASONING_VIOLATIONS_KEY,
     DirectModelClient,
 )
-from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
+from skyrl_train.trajectory_runners.types import BatchMetadata, TaskRequestBatch, TokenProvenance, TrajectoryID
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
 from verifyit.reasoning_markup import ReasoningViolation
@@ -102,6 +102,7 @@ def task_inputs():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase,priority", [("train", 0), ("eval", -1)])
 @pytest.mark.parametrize(
     "response,parsed_channel,reward",
     [
@@ -111,7 +112,7 @@ def task_inputs():
     ],
 )
 async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed_channels(
-    task_inputs, response, parsed_channel, reward
+    task_inputs, response, parsed_channel, reward, phase, priority
 ):
     config, request = task_inputs
     context = ConversationInput(
@@ -129,7 +130,11 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
             "grader": package.grader,
         }
     )
-    request = replace(request, rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))
+    request = replace(
+        request,
+        rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),),
+        batch_metadata=BatchMetadata(3, phase),
+    )
     observed = []
 
     class Engine:
@@ -147,12 +152,14 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
             }
 
     worker = TaskRolloutWorker(
-        config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {}, shutdown_timeout=30
+        config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {},
+        shutdown_timeout=30, evaluation_priority=-1,
     )
     try:
         (result,) = await worker.generate(request)
     finally:
         await worker.shutdown()
+    assert observed[0]["priority"] == priority
     assert observed[0]["prompt_token_ids"] == [[1, 2]]
     assert observed[0].get("prompts") is None and "tools" not in observed[0]
     assert observed[0]["sampling_params"]["skip_special_tokens"] is False
@@ -405,6 +412,7 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
             "prompts": [list(prompt.messages)],
             "chat_completion_params": [dict(prompt.options)],
             "session_ids": ["assistant_prefix"],
+            "priority": -1,
             "sampling_params": {"max_generate_length": 10, "logprobs": 1},
             "max_context_length": 5,
             "max_prompt_length": 2,
@@ -414,6 +422,7 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
         [[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]]
     )
     assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
+    assert all(row["priority"] == -1 for row in submitted)
     assert all(row["sampling_params"]["skip_special_tokens"] is False for row in submitted)
     assert all(row["sampling_params"]["include_stop_str_in_output"] is True for row in submitted)
     assert output["prompt_ids"] == [[1, 2]]

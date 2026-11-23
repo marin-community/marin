@@ -282,6 +282,7 @@ class InferenceEngineClient(InferenceEngineInterface):
         session_ids = input_batch.get("session_ids")
         sampling_params = input_batch.get("sampling_params")
         per_prompt_sampling_params = input_batch.get("sampling_params_per_prompt")
+        priority = input_batch.get("priority", 0)
 
         if (prompts is None and prompt_token_ids is None) or (prompts is not None and prompt_token_ids is not None):
             raise ValueError("Either `prompts` or `prompt_token_ids` must be provided, but not both.")
@@ -321,6 +322,7 @@ class InferenceEngineClient(InferenceEngineInterface):
                 engine_idx=engine_idx,
                 original_prompt_ids=original_prompt_ids,
                 sampling_params=sampling_params,
+                priority=priority,
                 session_id=session_ids[0] if session_ids is not None else None,
                 per_prompt_sampling_params=(
                     per_prompt_sampling_params[0] if per_prompt_sampling_params is not None else None
@@ -347,6 +349,7 @@ class InferenceEngineClient(InferenceEngineInterface):
             engine_input = InferenceEngineInput(
                 prompt_token_ids=cur_prompt_token_ids,
                 sampling_params=sampling_params,
+                priority=priority,
                 session_ids=[session_ids[i] for i in prompt_ids] if session_ids is not None else None,
             )
             if per_prompt_sampling_params is not None:
@@ -368,6 +371,7 @@ class InferenceEngineClient(InferenceEngineInterface):
                 engine_input = InferenceEngineInput(
                     prompt_token_ids=cur_prompt_token_ids,
                     sampling_params=sampling_params,
+                    priority=priority,
                     session_ids=[session_ids[j] for j in indices_list[i]] if session_ids is not None else None,
                 )
                 if per_prompt_sampling_params is not None:
@@ -484,6 +488,7 @@ class InferenceEngineClient(InferenceEngineInterface):
         sampling_params: Optional[Dict[str, Any]],
         session_id: Hashable | None = None,
         per_prompt_sampling_params: Optional[PromptSamplingOverride] = None,
+        priority: int = 0,
     ) -> InferenceEngineOutput:
         """
         Generate a single response with retry mechanism.
@@ -550,6 +555,7 @@ class InferenceEngineClient(InferenceEngineInterface):
             engine_input = InferenceEngineInput(
                 prompt_token_ids=[new_prompt_ids],
                 sampling_params=cur_sampling_params,
+                priority=priority,
                 session_ids=[session_id] if session_id is not None else None,
             )
             if per_prompt_sampling_params is not None:

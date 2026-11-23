@@ -1380,7 +1380,9 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         result = await self.llm.add_lora(lora_request)
         return result
 
-    async def _collect_outputs(self, prompt_token_ids, request_id: str, sampling_params: SamplingParams):
+    async def _collect_outputs(
+        self, prompt_token_ids, request_id: str, sampling_params: SamplingParams, priority: int = 0
+    ):
         """Collect a single prompt's final output and the policy steps of its tokens."""
         # Check if LoRA is enabled and create LoRA request
         final_output = None
@@ -1401,6 +1403,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 sampling_params=sampling_params,
                 request_id=request_id,
                 lora_request=lora_request,
+                priority=priority,
             ):
                 final_output = request_output
 
@@ -1442,7 +1445,9 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 request_id = request_id_for_session(session_ids[index])
             request_ids.append(request_id)
             self._request_timings.start(request_id, None if session_ids is None else str(session_ids[index]))
-            task = asyncio.create_task(self._collect_outputs(prompt, request_id, row_sampling_params))
+            task = asyncio.create_task(
+                self._collect_outputs(prompt, request_id, row_sampling_params, input_batch.get("priority", 0))
+            )
             tasks.append(task)
         try:
             collected = await asyncio.gather(*tasks)

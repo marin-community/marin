@@ -86,6 +86,11 @@ def _iter_config_kwargs(node):
 
 
 def validate_training_settings(cfg: DictConfig) -> None:
+    if cfg.trainer.rollout_buffer.eval_drain == "priority":
+        if cfg.trainer.placement.colocate_all or cfg.generator.backend != "vllm":
+            raise ValueError("eval_drain=priority requires separate vLLM rollout engines")
+        if cfg.generator.engine_init_kwargs.get("scheduling_policy") != "priority":
+            raise ValueError("eval_drain=priority requires generator.engine_init_kwargs.scheduling_policy=priority")
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")
     runtime_values = {

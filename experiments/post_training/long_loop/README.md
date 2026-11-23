@@ -1176,17 +1176,34 @@ separate checks; a source rollout does not establish an optimizer update.
 `rounds/mochi-throughput-train-track1.yaml` aligns checkpoint, evaluation and
 best selection every three steps and evaluates the initial policy through the
 evaluation callback. Generation and agent budgets match the 30-minute recipe.
-The trainer pauses new rollout admission after acquiring an evaluation step's
-batch, before learner work. Every round explicitly selects
+For draining modes, the trainer pauses new rollout admission after acquiring an
+evaluation step's batch, before learner work. Every round explicitly selects
 `trainer.rollout_buffer.eval_drain`: `wait` lets submitted groups finish, while
 `abort` revokes their leases, cancels generation and waits for worker sandbox
 cleanup acknowledgement. Aborted groups never enter a training batch or its score
 metrics; their prompts are re-queued without spending a staleness retry. Late RPC
-arrivals and commits under revoked leases are rejected. The prepared Track 1 round
-uses `abort`; other rounds explicitly select `wait`. Runtime events record the
+arrivals and commits under revoked leases are rejected. Runtime events record the
 strategy and aborted/re-queued group count. Ordinary trajectory timeouts still
 run the verifier and retain its score.
 Pausing before batch acquisition could prevent rejected groups from being replaced.
+
+`priority` leaves training admission and in-flight groups active. Evaluation shares
+the same rollout workers and vLLM engines, using request priority `-1` versus
+training's `0` (lower values run first). Recipe composition derives
+`generator.engine_init_kwargs.scheduling_policy: priority` from this mode; a
+conflicting scheduler or colocated engines fails validation. This changes queue
+ordering, not the available KV memory or Harbor slots; running training requests
+can still compete for engine resources.
+
+After step-N weight sync, priority evaluation runs asynchronously with captured
+step-N identities. The next optimizer can proceed, but its weight sync and buffer
+policy publication wait for evaluation to complete. Best selection reuses the
+saved step-N checkpoint rather than saving newer optimizer weights under an old
+step. Keep checkpoint and evaluation cadence aligned when using best selection.
+Evaluation failures propagate through the next sync fence. Native timings retain
+`eval` at the evaluated step and `eval_sync_wait` at the blocked sync step.
+The prepared `.124` round changes only `.123`'s version and `eval_drain` to
+`priority`; its baseline evaluation remains synchronous.
 
 For separate policy and rollout GPUs, the cadence snapshot overlaps frozen-policy
 evaluation after weight sync. Best selection joins and reuses that snapshot before

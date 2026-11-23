@@ -344,6 +344,7 @@ class DirectModelClient:
                 "prompt_token_ids": [prompt_ids],
                 "session_ids": [session_id],
                 "sampling_params": sampling,
+                "priority": request.get("priority", 0),
             }
         )
         if output.get("prompt_ids") != [prompt_ids]:
@@ -420,6 +421,7 @@ class DirectModelClient:
                 **chat_options,
                 "include_stop_str_in_output": True,
             }
+            body["priority"] = request.get("priority", 0)
             body[EXACT_PROMPT_TOKEN_IDS_KEY] = prompt_ids
             if sampling_params.get("stop") is not None:
                 body["stop"] = sampling_params["stop"]

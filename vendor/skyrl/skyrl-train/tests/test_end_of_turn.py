@@ -248,3 +248,21 @@ def test_agent_output_cap_reaches_the_chat_server(options, effective_cap):
     assert request["max_completion_tokens"] == effective_cap
     assert "max_tokens" not in request
     assert output["generation_token_budgets"] == [effective_cap]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("priority", [0, -1])
+async def test_model_turn_preserves_phase_priority_through_chat_transport(priority):
+    serving = _InferenceClient([PLAN, END_OF_TURN], "stop")
+    turn = await _model_turn(
+        DirectModelClient(serving),
+        ModelRequest([{"role": "user", "content": "go"}], {"priority": 99}),
+        sampling_params={"max_tokens": 4},
+        max_context_length=32,
+        max_prompt_length=16,
+        chat_template_kwargs={},
+        session_id="priority-fixture",
+        priority=priority,
+    )
+    assert turn.response_token_ids == (PLAN, END_OF_TURN)
+    assert serving.chat_requests[0]["priority"] == priority

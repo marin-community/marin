@@ -1277,3 +1277,16 @@ def test_resolved_nccl_buffers_override_inherited_small_buffer(
         nccl_buffer_size_bytes=resolved.trainer.policy.nccl_buffer_size_bytes
     )
     assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "8388608"
+
+
+@pytest.mark.parametrize("mode", ["wait", "abort", "priority"])
+def test_eval_drain_recipe_derives_the_serving_scheduler_without_changing_sampling(mode):
+    raw = raw_launch_config()["skyrl"]
+    raw["generator"]["sampling_params"] = {"temperature": 0.7, "top_p": 0.9}
+    original_sampling = parse_rl_config(raw).generator["sampling_params"].copy()
+    raw["trainer"].setdefault("rollout_buffer", {})["eval_drain"] = mode
+    parsed = parse_rl_config(raw)
+    assert parsed.generator["sampling_params"] == original_sampling
+    assert parsed.generator.get("engine_init_kwargs", {}).get("scheduling_policy") == (
+        "priority" if mode == "priority" else None
+    )

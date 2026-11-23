@@ -475,7 +475,7 @@ class BestCheckpointCallback(TrainerCallback):
         model_uri = self.initial_model_uri
         model_format = "hf"
         if state.global_step:
-            await trainer.save_checkpoints()
+            await trainer.save_checkpoints(step=state.global_step)
             committed = join_resource_path(root, f"global_step_{state.global_step}", "trainer_state.pt")
             if not io.exists(committed):
                 raise ValueError("Best selection cannot publish before its native checkpoint is committed")
@@ -676,6 +676,7 @@ class EvaluationCallback(TrainerCallback):
                 val_set_name=name,
                 profile=profile,
                 evaluation_pool=pool,
+                global_step=state.global_step,
             )
             metrics.update(additional_evaluation_metrics(additional, name))
 

@@ -76,7 +76,7 @@ async def test_chat_completion_retry_keeps_exact_ids_and_optional_routes(capture
 
     engine = Engine()
     client = InferenceEngineClient([engine], object(), _make_min_cfg())
-    request = {"json": {"messages": [{"role": "user", "content": "Hi"}], "max_tokens": 3}}
+    request = {"json": {"messages": [{"role": "user", "content": "Hi"}], "max_tokens": 3, "priority": -1}}
     if capture in ("missing_routes", "wrong_prompt"):
         with pytest.raises(ValueError):
             await client.chat_completion(request)
@@ -84,6 +84,7 @@ async def test_chat_completion_retry_keeps_exact_ids_and_optional_routes(capture
     response = await client.chat_completion(request)
     choice = response["choices"][0]
 
+    assert all(row["json"]["priority"] == -1 for row in engine.requests)
     assert choice["token_ids"] == [11, 12, 13]
     assert engine.requests[1]["json"]["_skyrl_exact_prompt_token_ids"] == [1, 2, 11, 12]
     if capture == "routes":

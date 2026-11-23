@@ -113,9 +113,14 @@ def _validate_installed_agent_kwargs(terminal_bench: Mapping[str, Any]) -> None:
         raise ValueError(f"Unknown {agent['name']} recipe kwargs: {', '.join(unknown)}")
 
 
-def _materialize_context_budget(raw: Dict[str, Any], budget: ContextBudget) -> Dict[str, Any]:
-    """Populate launch-owned token limits from the authored request budget."""
+def _materialize_launch_settings(raw: Dict[str, Any], budget: ContextBudget) -> Dict[str, Any]:
+    """Populate launch-owned serving settings from the authored recipe."""
     materialized = copy.deepcopy(raw)
+    if materialized.get("trainer", {}).get("rollout_buffer", {}).get("eval_drain") == "priority":
+        options = materialized.setdefault("generator", {}).setdefault("engine_init_kwargs", {})
+        if options.get("scheduling_policy", "priority") != "priority":
+            raise ValueError("eval_drain=priority requires vLLM scheduling_policy=priority")
+        options["scheduling_policy"] = "priority"
     for path, value in budget.derived_values(materialized.get("terminal_bench")).items():
         set_path(materialized, path, value)
     serving_window_tokens = budget.effective_serving_window_tokens
@@ -188,7 +193,7 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
     _validate_installed_agent_kwargs(raw.get("terminal_bench") or {})
     distillation_plan = compile_distillation_plan(raw)
     entrypoint = RL_ENTRYPOINTS[recipe.entrypoint]
-    materialized_raw = _materialize_context_budget(raw, recipe.context_budget)
+    materialized_raw = _materialize_launch_settings(raw, recipe.context_budget)
     trainer = materialized_raw["trainer"]
     generator = materialized_raw["generator"]
     if recipe.trainer.policy.megatron_config.moe_router_replay:

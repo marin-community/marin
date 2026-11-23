@@ -60,6 +60,8 @@ class InferenceEngineInput(TypedDict):
     prompts: Optional[List[ConversationType]]
     prompt_token_ids: Optional[List[List[int]]]
     sampling_params: Optional[Dict[str, Any]]
+    # vLLM uses smaller values for higher scheduler priority.
+    priority: NotRequired[int]
     # Per-prompt token scoring overrides. Rollout sampling remains shared.
     sampling_params_per_prompt: NotRequired[List[PromptSamplingOverride]]
     session_ids: Optional[List[Hashable]]

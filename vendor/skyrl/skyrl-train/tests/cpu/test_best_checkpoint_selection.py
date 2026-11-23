@@ -165,7 +165,7 @@ async def test_delayed_best_selection_preserves_baseline_gates_after_resume(tmp_
     saved_steps = []
     current_step = 0
 
-    async def save_checkpoints():
+    async def save_checkpoints(*, step):
         saved_steps.append(current_step)
         (tmp_path / f"weights-{current_step}").write_text("checkpoint")
         checkpoint = tmp_path / f"global_step_{current_step}"
@@ -422,3 +422,100 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
     assert model.is_relative_to(output)
     assert (model / "rank_0.pt").read_bytes() == b"policy"
     assert json.loads((output / "exports/best_checkpoint.json").read_text()) == selected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", [False, True])
+async def test_next_sync_and_publish_wait_for_frozen_evaluation_and_select_its_checkpoint(
+    checkpoint_trainer,
+    tmp_path,
+    fail,
+):
+    trainer = checkpoint_trainer
+    trainer.cfg.trainer.rollout_buffer.eval_drain = "priority"
+    trainer._training_metrics_enabled = False
+    trainer._policy_version_step = trainer._inference_policy_step = 2
+    trainer.eval_dataset = object()
+    trainer.eval_trajectory_sink = None
+    trainer.tracker = SimpleNamespace(log=lambda *args, **kwargs: None)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    events = []
+
+    async def noop(*args, **kwargs):
+        pass
+
+    async def stop():
+        events.append("session-stopped")
+
+    async def evaluate(**kwargs):
+        assert kwargs["global_step"] == 2
+        started.set()
+        await release.wait()
+        if fail:
+            raise RuntimeError("evaluation failed")
+        return {"eval/all/num_attempted": 40, "eval/all/num_scored": 40, "eval/all/avg_verifier_score": 0.5}
+
+    async def publish(step):
+        events.append(("publish", step))
+
+    async def pause():
+        events.append("pause-generation")
+
+    async def sync():
+        events.append("sync-weights")
+
+    async def resume(**kwargs):
+        events.append(("resume-generation", kwargs["policy_step"]))
+
+    trainer.context.pause_and_drain = noop
+    trainer.context.publish = publish
+    trainer._begin_speculator_capture = noop
+    trainer.eval_trajectory_runner = SimpleNamespace(
+        set_trajectory_sink=lambda sink: None,
+        start_eval_session=noop,
+        stop_eval_session=stop,
+    )
+    trainer.eval = evaluate
+    trainer.inference_engine_client = SimpleNamespace(pause_generation=pause, resume_generation=resume)
+    trainer.sync_policy_weights_to_inference_engines = sync
+    trainer.callback_handler = CallbackHandler(
+        create_callbacks_from_config(
+            OmegaConf.create(
+                {
+                    "trainer": {
+                        "callbacks": [
+                            {"type": "checkpoint", "save_steps": 2},
+                            {"type": "evaluation", "eval_steps": 2},
+                            {
+                                "type": "best_checkpoint",
+                                "initial_model_uri": "base",
+                                "expected_tasks": 40,
+                                "minimum_scored_tasks": 40,
+                            },
+                        ]
+                    },
+                }
+            )
+        )
+    )
+    await trainer._run_step_end_callbacks(TrainerState(2, 0, 20, 20))
+    await started.wait()
+    # The next optimizer may finish while the serving policy remains frozen at 2.
+    trainer.global_step = trainer._policy_version_step = 3
+    await trainer._publish(3)
+    syncing = asyncio.create_task(trainer._sync_policy_for_rollouts(reason="training_step"))
+    await asyncio.sleep(0)  # Reach the evaluation fence, without a wall-clock delay.
+    assert events == []
+    assert not syncing.done()
+    release.set()
+    if fail:
+        with pytest.raises(ExceptionGroup, match="TaskGroup"):
+            await syncing
+        assert events == ["session-stopped"]
+        return
+    await syncing
+    assert events == ["session-stopped", ("publish", 3), "pause-generation", "sync-weights", ("resume-generation", 4)]
+    selected = json.loads((tmp_path / "best_checkpoint.json").read_text())
+    assert selected["step"] == trainer._last_evaluated_step == 2
+    assert not (tmp_path / "global_step_3").exists()

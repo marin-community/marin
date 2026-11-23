@@ -249,6 +249,8 @@ class RayPPOTrainer:
 
     # Set at startup when generator.weight_sync_transport is expert_block.
     _expert_block_sync: ExpertBlockSync | None = None
+    _pending_evaluation: asyncio.Task[None] | None = None
+    _deferred_policy_publish: int | None = None
     _policy_version_step: int | None = None
     first_optimizer_step_time: float | None = None
 
@@ -439,6 +441,7 @@ class RayPPOTrainer:
         profile: EvaluationProfile | None = None,
         val_set_name: str | None = None,
         evaluation_pool: EvaluationPool | None = None,
+        global_step: int | None = None,
     ) -> Dict[str, float]:
         """Evaluate the current policy with a named dataset and sampling profile."""
         profile = profile or EvaluationProfile()
@@ -453,7 +456,7 @@ class RayPPOTrainer:
                 eval_dataloader=dataloader,
                 trajectory_runner=self.eval_trajectory_runner,
                 cfg=cfg,
-                global_step=self.global_step,
+                global_step=self.global_step if global_step is None else global_step,
                 tokenizer=self.tokenizer,
                 trajectory_sink=self.eval_trajectory_sink,
                 val_set_name=val_set_name,
@@ -540,6 +543,14 @@ class RayPPOTrainer:
         # before any teardown awaits, including executor shutdown after asyncio.run.
         if self._exit_watchdog is None:
             self._exit_watchdog = self._start_exit_watchdog()
+        if self._pending_evaluation is not None:
+            self._pending_evaluation.cancel()
+            await self._guarded_async(
+                asyncio.gather(self._pending_evaluation, return_exceptions=True),
+                timeout=60,
+                label="Priority evaluation shutdown",
+            )
+            self._pending_evaluation = None
         if self._expert_block_sync is not None:
             await self._guarded_async(
                 self._expert_block_sync.close(),
@@ -668,6 +679,7 @@ class RayPPOTrainer:
 
     async def _finalize_training(self, *, completed_step: int, epoch: int) -> None:
         """Run train-end callbacks, evaluation, and saves at the last completed optimizer step."""
+        await self._join_priority_evaluation()
         await self._drain_checkpoint_upload()
         self.global_step = completed_step
         final_state = self._create_trainer_state(epoch=epoch)
@@ -802,8 +814,13 @@ class RayPPOTrainer:
             if evaluate:
                 if step_wall is not None:
                     step_wall.start("evaluation")
-                with Timer("eval", self.all_timings):
-                    await self._evaluate_and_log(state, commit=False)
+                if self.cfg.trainer.rollout_buffer.eval_drain == "priority":
+                    if self._pending_evaluation is not None:
+                        raise RuntimeError("Previous priority evaluation must finish before starting another")
+                    self._pending_evaluation = asyncio.create_task(self._run_priority_evaluation(state))
+                else:
+                    with Timer("eval", self.all_timings):
+                        await self._evaluate_and_log(state, commit=False)
                 self._control.should_evaluate = False
         finally:
             # Also join on evaluation failure/cancellation: a policy mutation
@@ -1123,6 +1140,7 @@ class RayPPOTrainer:
         memory the policy model releases. Separate engines keep serving rollouts, so they pause for the sync
         and their requests in flight resume on the new weights.
         """
+        await self._join_priority_evaluation()
         if not self._inference_engines_configured():
             return
         if self.cfg.trainer.algorithm.policy_loss_type == PolicyLossType.DPO and reason not in (
@@ -1490,6 +1508,10 @@ class RayPPOTrainer:
 
     async def _publish(self, step: int) -> None:
         """Open rollout leases for training step ``step``, whose policy weights the engines now hold."""
+        if self._pending_evaluation is not None and not self._pending_evaluation.done():
+            self._deferred_policy_publish = step
+            return
+        await self._join_priority_evaluation()
         await self._begin_speculator_capture(step)
         await self.context.publish(step)
 
@@ -1707,24 +1729,64 @@ class RayPPOTrainer:
             with Timer("update_ref_with_policy", self.all_timings):
                 await asyncio.to_thread(self.update_ref_with_policy)
 
-    @asynccontextmanager
-    async def _evaluation_session(self):
+    async def _join_priority_evaluation(self) -> None:
+        pending = self._pending_evaluation
+        if pending is None:
+            return
+        # This fence precedes even pause_generation: evaluation owns step-N serving weights
+        # while the independent trainer may already have optimized step N+1.
         try:
-            with Timer("eval_drain", self.all_timings if self.global_step else None):
+            with Timer("eval_sync_wait", self.all_timings):
+                await pending
+        finally:
+            self._pending_evaluation = None
+
+    async def _run_priority_evaluation(self, state: TrainerState) -> None:
+        timings = {}
+        with Timer("eval", timings):
+            await self._evaluate_and_log(state, commit=False, timings=timings)
+        publish_step_timings(timings, state.global_step)
+        logger.info(
+            "Priority evaluation completed: step={} duration_seconds={:.3f}", state.global_step, timings["eval"]
+        )
+        # A new buffer policy label must not become visible during the frozen session.
+        if self._deferred_policy_publish is not None:
+            step, self._deferred_policy_publish = self._deferred_policy_publish, None
+            await self._begin_speculator_capture(step)
+            await self.context.publish(step)
+
+    @asynccontextmanager
+    async def _evaluation_session(self, *, step: int | None = None, timings: dict | None = None):
+        step = self.global_step if step is None else step
+        priority = self.cfg.trainer.rollout_buffer.eval_drain == "priority"
+        try:
+            drain_timings = timings if timings is not None else self.all_timings if step else None
+            with Timer("eval_drain", drain_timings):
                 await self.context.pause_and_drain()
             async with evaluation_session(
-                self.eval_trajectory_runner, self.cfg, self.global_step, self.eval_trajectory_sink
+                self.eval_trajectory_runner, self.cfg, step, self.eval_trajectory_sink
             ) as pool:
-                if self._inference_engines_configured() and self._inference_policy_step != self.policy_version_step:
+                if priority:
+                    if self._inference_policy_step != step:
+                        raise RuntimeError(
+                            f"Priority evaluation needs serving policy {step}, got {self._inference_policy_step}"
+                        )
+                elif self._inference_engines_configured() and self._inference_policy_step != self.policy_version_step:
                     await self._sync_policy_for_rollouts(reason="evaluation")
                 yield pool
         finally:
-            await self.context.resume()
+            if not priority:
+                await self.context.resume()
 
-    async def _evaluate_and_log(self, state: TrainerState, *, commit: bool) -> None:
-        async with self._evaluation_session() as pool:
+    async def _evaluate_and_log(self, state: TrainerState, *, commit: bool, timings: dict | None = None) -> None:
+        async with self._evaluation_session(step=state.global_step, timings=timings) as pool:
             async with asyncio.TaskGroup() as tasks:
-                native = tasks.create_task(self.eval(evaluation_pool=pool))
+                options = (
+                    {"global_step": state.global_step}
+                    if self.cfg.trainer.rollout_buffer.eval_drain == "priority"
+                    else {}
+                )
+                native = tasks.create_task(self.eval(evaluation_pool=pool, **options))
                 additional = [
                     tasks.create_task(
                         self.callback_handler.collect_evaluation(callback, state, trainer=self, pool=pool)
@@ -1737,9 +1799,9 @@ class RayPPOTrainer:
         self._control = await self.callback_handler.call_event_async(
             "on_evaluate", state, self._control, metrics=eval_metrics, trainer=self
         )
-        self._log_metrics_stdout(eval_metrics, step=self.global_step, kind="eval")
-        self.tracker.log(eval_metrics, step=self.global_step, commit=commit)
-        self._last_evaluated_step = self.global_step
+        self._log_metrics_stdout(eval_metrics, step=state.global_step, kind="eval")
+        self.tracker.log(eval_metrics, step=state.global_step, commit=commit)
+        self._last_evaluated_step = state.global_step
 
     async def _run_pretraining_evaluation(self, state: TrainerState) -> None:
         # Pre-step evaluation must not be mixed into the first optimizer step's inclusive timers.
@@ -2851,14 +2913,17 @@ class RayPPOTrainer:
         actor_info: ActorInfo = model.actor_infos[rank]
         return actor_info.rank
 
-    async def save_checkpoints(self) -> None:
-        """Commit this step's checkpoint, reusing an already completed save."""
+    async def save_checkpoints(self, *, step: int | None = None) -> None:
+        """Commit the requested policy checkpoint, reusing a completed cadence save."""
+        step = self.global_step if step is None else step
         await self._join_checkpoint_save()
         await self._drain_checkpoint_upload()
         # Evaluation's best-checkpoint callback can follow a cadence save whose
         # commit marker was still uploading when evaluation began.
-        if self._last_saved_step == self.global_step:
+        if self._last_saved_step == step:
             return
+        if step != self.global_step:
+            raise ValueError(f"Evaluated step {step} must have a saved checkpoint before training advances")
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
         upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration

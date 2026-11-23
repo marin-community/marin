@@ -198,6 +198,7 @@ class RolloutWorkerPool:
         self._last_progress: list[float | None] = [None] * resources.num_workers
         self._routing = asyncio.Condition()
         self._eval_session_active = False
+        self._concurrent_evaluation = OmegaConf.select(spec.config, "trainer.rollout_buffer.eval_drain") == "priority"
 
     def set_trajectory_sink(self, sink: RetentionSink) -> None:
         """Retain trajectories inside each worker, where its runner produces them.
@@ -262,7 +263,7 @@ class RolloutWorkerPool:
         eval_step: int,
         val_set_name: str | None = None,
     ) -> None:
-        """Give evaluation priority, drain every worker, and begin one frozen session."""
+        """Begin evaluation, sharing workers only when serving has request priority enabled."""
         async with self._routing:
             if self._eval_session_active:
                 raise RuntimeError("an eval session is already active")
@@ -272,8 +273,9 @@ class RolloutWorkerPool:
                 "Evaluation session requested: run={} step={} workers={}", run_name, eval_step, len(self._actors)
             )
         try:
-            async with self._routing:
-                await self._routing.wait_for(lambda: not any(self._pending))
+            if not self._concurrent_evaluation:
+                async with self._routing:
+                    await self._routing.wait_for(lambda: not any(self._pending))
 
             async def start(actor):
                 await actor.start_eval_session.remote(run_name=run_name, eval_step=eval_step, val_set_name=val_set_name)
@@ -299,7 +301,7 @@ class RolloutWorkerPool:
 
     def _training_worker(self) -> int | None:
         """The least-loaded worker that may take training work now, if any."""
-        if self._eval_session_active:
+        if self._eval_session_active and not self._concurrent_evaluation:
             return None
         return min(range(len(self._actors)), key=self._pending.__getitem__, default=None)
 
