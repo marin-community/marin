@@ -23,41 +23,34 @@ Muon and the loss weights are 0.1 CE and 0.9 total variation.
 
 ## Bind the regional inputs
 
-Use the exact HF directory of a completed Snowball or Mochi SFT artifact,
-including its tokenizer and chat template. Record the producer's
-`name@version:fingerprint` and HF subdirectory as the teacher identity. For a
-staged Hub snapshot, record the repo and full commit SHA. Mochi accepts an
-explicit completed export for CPU preflight and data preparation. GPU
-training requires ShortConv qualification on the promoted wheel.
+Use a completed Snowball or Mochi SFT export with its tokenizer and chat
+template. A Hub export needs only `"source": "hf://org/model@<full commit>"`.
+Marin's model download step stages that commit in regional storage. A Marin
+export specifies the producer's artifact directory, the fingerprint in its
+`.artifact.json`, and the HF subdirectory. Mochi supports CPU preflight and
+data preparation. GPU training requires ShortConv qualification.
 
-Store a JSON object mapping the teacher's relative HF filenames to lowercase
-SHA-256 digests at a separate manifest URI. Include all safetensors shards,
-the weight index if sharded, the config, and every tokenizer and chat-template
-file. Generate the manifest from the completed export in its storage region.
-
-Use a versioned normalized Marin chat mixture with `messages` and optional
-`chat_template_kwargs` columns. At the mixture root, publish `dspark-mix.json`
-with two keys, `train` and `validation`. Each key maps relative Parquet
-filenames to their SHA-256 digests. Set the mixture proportions and holdout
-membership when selecting the shards.
+Use a completed Marin artifact containing normalized chat Parquet shards
+under `train/` and `validation/`. The shards must provide `messages` and may
+provide `chat_template_kwargs`. Set the mixture and holdout membership when
+building that artifact.
 
 Save the recipe as JSON and put it in the same region as the inputs and
 Iris worker. For example, a recipe for four GPUs assigns two to the teacher
-and two to Speculators. Replace each URI, identity and digest with the
+and two to Speculators. Replace each URI and fingerprint with the
 corresponding value for the selected export or mixture.
 
 ```json
 {
   "teacher": {
     "family": "snowball",
-    "identity": "checkpoints/snowball-sft@<version>:<fingerprint>/hf/step-<N>",
-    "directory": "s3://<regional-bucket>/<snowball-sft>/hf/step-<N>",
-    "manifest_uri": "s3://<regional-bucket>/<recipe-inputs>/teacher.json",
-    "manifest_sha256": "<teacher-manifest-sha256>"
+    "source": "s3://<regional-bucket>/<snowball-sft>/<version>",
+    "fingerprint": "<teacher-artifact-fingerprint>",
+    "relative_path": "hf/step-<N>"
   },
   "data": {
     "directory": "s3://<regional-bucket>/<versioned-chat-mix>",
-    "manifest_sha256": "<mix-manifest-sha256>"
+    "fingerprint": "<mix-artifact-fingerprint>"
   },
   "max_steps": 100,
   "teacher_replicas": 2,
@@ -75,10 +68,11 @@ uv run python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --s
 ```
 
 The default command prints the artifact graph. CPU preflight checks the
-teacher config, tensor headers, tokenizer and chat template, plus the
-pinned mix manifests. It reports the requested GPU count and whether the
-teacher family is supported for training. Planning and preflight check the
-promoted vLLM wheel against the recipe's source pin.
+teacher config, tensor headers, tokenizer, template, and the train and
+validation shard locations. It reports the requested GPU count and whether
+the teacher family is supported for training. Run `--stage prepare` on CPU
+to stage an uncached Hub teacher. Planning and preflight check the promoted
+vLLM wheel against the recipe's source pin.
 
 ## Submit one Iris job
 
@@ -106,8 +100,8 @@ exchange hidden states over the worker's local filesystem.
 The trainer uses Speculators' PyTorch implementation of the weighted CE/TV
 loss to avoid a tracing error in the fused loss autotuner.
 
-Preparation verifies the data shard digests, renders assistant masks with
-Levanter's SFT chat processor, and rejects exact rendered sequences shared
+Preparation renders assistant masks with Levanter's SFT chat processor and
+rejects exact rendered sequences shared
 across splits. For a large mix, `uv run --extra cpu` with `--stage prepare`
 builds the dataset in the storage region ahead of training. Runs with
 different step budgets, optimizer settings, or GPU counts reuse that
@@ -117,10 +111,10 @@ batches before staging the teacher weights.
 ## Serve the draft
 
 The Iris job prints the versioned `hf/` directory in object storage. It contains the
-Speculators config, serving weights, vocabulary offsets and
-`dspark-export.json` with input identities, package versions, validation
-metrics, actual steps, step budget and file digests. A complete export has
-this receipt. Stage the draft for vLLM and use the same teacher and tokenizer.
+Speculators config, serving weights and vocabulary offsets. The runner
+records dependency identities, configuration, package versions, actual
+steps and validation metrics in the parent artifact's `.artifact.json`.
+Stage the draft for vLLM and use the same teacher and tokenizer.
 Launch the promoted Marin wheel for Snowball with
 `--attention-backend FLASH_ATTN --moe-backend triton` and pass this JSON to
 `--speculative-config`.

@@ -8,18 +8,18 @@ import logging
 import math
 import os
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
 
 import numpy as np
 from levanter.compat.hf_checkpoints import SAFE_TENSORS_INDEX_NAME
-from levanter.compat.hf_export import write_export_json
 from rigging.filesystem.storage_path import StoragePath
 from safetensors import safe_open
 from transformers.utils import CONFIG_NAME
 
+from marin.execution.artifact import Artifact
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import InferenceModelConfig
 from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmLauncherWithEnvironment, VllmType
@@ -33,11 +33,8 @@ from marin.training.drafting.dspark_data import (
     TOKEN_FREQUENCIES_FILE,
     DraftDataConfig,
     PreparedSplits,
-    file_sha256,
     inspect_teacher,
-    stage_teacher,
     tensor_files,
-    verify_sha256,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,7 +43,7 @@ SPECULATORS_REPOSITORY = "https://github.com/atutej/speculators.git"
 SPECULATORS_REVISION = "77eaa2390cab54ff7e5315345137394ee44b7a98"
 VLLM_SOURCE_COMMIT = "47a8e415bff17b9376f02d9b92edcc67e962eaee"
 _TEACHER_PORT = 18000
-_EXPORT_RECEIPT = "dspark-export.json"
+HF_DRAFT_SUBDIRECTORY = "hf"
 _EPOCHS = 1
 _MARKOV_HEAD = "vanilla"
 _LOSS_IMPLEMENTATION = "eager"
@@ -127,13 +124,16 @@ class DraftRecipe:
         return (*self.feature_taps, self.data.shape.num_hidden_layers)
 
 
-@dataclass(frozen=True)
-class TrainingProvenance:
-    """Immutable identities of the teacher export and the selected data mix."""
+class DSparkExport(Artifact):
+    """Training results stored in the draft artifact's provenance record."""
 
-    teacher_identity: str
-    teacher_manifest_sha256: str
-    mix_manifest_sha256: str
+    hf_subdirectory: str = HF_DRAFT_SUBDIRECTORY
+    steps: int
+    validation: dict[str, float]
+    trainer_packages: dict[str, str]
+    speculators_revision: str
+    vllm_source_commit: str
+    loss_implementation: str = _LOSS_IMPLEMENTATION
 
 
 def gpu_device_split(visible_devices: str, recipe: DraftRecipe) -> tuple[str, str]:
@@ -274,12 +274,12 @@ def _publish_checkpoint(
     *,
     output: StoragePath,
     training: Path,
-    provenance: TrainingProvenance,
+    teacher_identity: str,
     recipe: DraftRecipe,
     expected_steps: int,
     mapping: np.ndarray,
     packages: dict,
-) -> None:
+) -> DSparkExport:
     checkpoint = training / str(_EPOCHS - 1)
     state = json.loads((checkpoint / "training_state.json").read_text())
     metrics = json.loads((checkpoint / "val_metrics.json").read_text())
@@ -291,7 +291,7 @@ def _publish_checkpoint(
         raise ValueError("DSpark training finished without the requested steps and finite validation metrics")
     config = validate_draft(checkpoint, recipe, mapping)
     # The training-time staging path is not a portable verifier identity.
-    config["speculators_config"]["verifier"]["name_or_path"] = provenance.teacher_identity
+    config["speculators_config"]["verifier"]["name_or_path"] = teacher_identity
     names = sorted(set(tensor_files(checkpoint).values()))
     index = checkpoint / SAFE_TENSORS_INDEX_NAME
     if index.is_file():
@@ -300,24 +300,14 @@ def _publish_checkpoint(
     output.mkdirs()
     for name in names:
         (output / name).upload_from(str(checkpoint / name))
-    config_path = output / CONFIG_NAME
-    config_path.write_text(json.dumps(config, indent=2) + "\n")
-    receipt = {
-        **asdict(provenance),
-        "speculators_revision": SPECULATORS_REVISION,
-        "vllm_source_commit": VLLM_SOURCE_COMMIT,
-        "trainer_packages": packages,
-        "loss_implementation": _LOSS_IMPLEMENTATION,
-        "step_budget": recipe.max_steps,
-        "steps": state["global_step"],
-        "validation": metrics,
-        "files": {
-            CONFIG_NAME: file_sha256(config_path),
-            **{name: file_sha256(checkpoint / name) for name in names},
-        },
-    }
-    # Readers use the receipt to distinguish partial uploads from a completed export.
-    write_export_json(output / _EXPORT_RECEIPT, receipt)
+    (output / CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
+    return DSparkExport(
+        steps=state["global_step"],
+        validation=metrics,
+        trainer_packages=packages,
+        speculators_revision=SPECULATORS_REVISION,
+        vllm_source_commit=VLLM_SOURCE_COMMIT,
+    )
 
 
 def _teacher_environment(teacher: Path, recipe: DraftRecipe, hidden_states: Path, devices: str) -> VllmEnvironment:
@@ -453,43 +443,26 @@ def _prepare_trainer_inputs(
     return result["steps"], result["packages"]
 
 
-def _verify_completed_export(export: StoragePath, provenance: TrainingProvenance) -> bool:
-    """Check a completed export, returning False only when its receipt is absent."""
-    receipt_path = export / _EXPORT_RECEIPT
-    if not receipt_path.isfile():
-        return False
-    receipt = json.loads(receipt_path.read_text())
-    if any(receipt[name] != value for name, value in asdict(provenance).items()):
-        raise ValueError(f"Existing DSpark export at {export} has different inputs")
-    for name, digest in receipt["files"].items():
-        verify_sha256(export / name, digest)
-    return True
-
-
 def train_and_export(
     *,
     output: str,
     teacher: str,
-    teacher_manifest: str,
-    provenance: TrainingProvenance,
+    teacher_subdirectory: str,
+    teacher_identity: str,
     prepared: str,
     recipe: DraftRecipe,
-) -> None:
-    """Stage the pinned inputs, train on an Iris worker, and publish the draft receipt last."""
+) -> DSparkExport:
+    """Stage the pinned inputs, train on an Iris worker, and publish the HF draft."""
 
     require_supported_vllm_release()
     require_qualified_teacher(recipe)
-    export = StoragePath(output) / "hf"
-    if _verify_completed_export(export, provenance):
-        return
-
-    source = StoragePath(teacher)
-    manifest = StoragePath(teacher_manifest)
+    export = StoragePath(output) / HF_DRAFT_SUBDIRECTORY
+    source = StoragePath(teacher) / teacher_subdirectory
     prepared_source = StoragePath(prepared) / PREPARED_DIR
     split = PreparedSplits(**json.loads((prepared_source / SPLITS_FILE).read_text()))
     if min(split.train, split.validation) < recipe.trainer_ranks:
         raise ValueError("Each prepared split needs at least one usable row per trainer rank")
-    decoder = inspect_teacher(source, manifest, provenance.teacher_manifest_sha256, recipe.data)
+    decoder = inspect_teacher(source, recipe.data)
     if json.loads((prepared_source / DRAFT_CONFIG_FILE).read_text()) != decoder:
         raise ValueError("Prepared draft config disagrees with the teacher")
 
@@ -507,9 +480,9 @@ def train_and_export(
         python = _install_speculators(scratch, trainer_env)
         steps, packages = _prepare_trainer_inputs(python, data, scratch, recipe, split.train, trainer_env)
 
-        logger.info("Staging verified DSpark inputs for %s", provenance.teacher_identity)
-        stage_teacher(source, manifest, provenance.teacher_manifest_sha256, teacher_path)
-        logger.info("Training DSpark for %s at %s for %d optimizer steps", provenance.teacher_identity, output, steps)
+        logger.info("Staging DSpark teacher %s", teacher_identity)
+        source.download_to(str(teacher_path), recursive=True, batch_size=8)
+        logger.info("Training DSpark for %s at %s for %d optimizer steps", teacher_identity, output, steps)
         with _teacher_environment(teacher_path, recipe, hidden_states, teacher_devices) as server:
             train = _write_config_and_build_command(
                 teacher_path,
@@ -524,10 +497,10 @@ def train_and_export(
                 endpoint=server.server_url,
             )
             subprocess.run(train, env=trainer_env, check=True)
-        _publish_checkpoint(
+        return _publish_checkpoint(
             output=export,
             training=training,
-            provenance=provenance,
+            teacher_identity=teacher_identity,
             recipe=recipe,
             expected_steps=steps,
             mapping=np.load(scratch / _D2T_FILE, allow_pickle=False),

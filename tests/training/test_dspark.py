@@ -21,10 +21,8 @@ from marin.training.drafting.dspark_data import (
     LM_HEAD,
     DraftDataConfig,
     GrugShape,
-    file_sha256,
     inspect_teacher,
     prepare_data,
-    stage_teacher,
 )
 from marin.training.drafting.dspark_distillation import DraftRecipe, extraction_config, gpu_device_split, validate_draft
 from rigging.filesystem.storage_path import StoragePath
@@ -97,13 +95,7 @@ def teacher(tmp_path: Path) -> Path:
         **{f"model.layers.{i}.input_layernorm.weight": np.ones((16,), dtype=np.float32) for i in range(4)},
     }
     save_file(weights, root / "model.safetensors")
-    _seal_teacher(root)
     return root
-
-
-def _seal_teacher(root: Path) -> None:
-    manifest = root / "dspark-teacher.json"
-    manifest.write_text(json.dumps({p.name: file_sha256(p) for p in root.iterdir() if p != manifest}))
 
 
 def _mix(tmp_path: Path, *, overlapping: bool) -> Path:
@@ -116,14 +108,13 @@ def _mix(tmp_path: Path, *, overlapping: bool) -> Path:
             ]
         }
 
-    train = tmp_path / "train.parquet"
-    val = tmp_path / "val.parquet"
+    train = tmp_path / "train" / "rows.parquet"
+    val = tmp_path / "validation" / "rows.parquet"
+    train.parent.mkdir()
+    val.parent.mkdir()
     pq.write_table(pa.Table.from_pylist([chat("prompt", "answer done")]), train)
     rows = [chat("held", "tag"), chat("prompt", "answer done" if overlapping else "done")]
     pq.write_table(pa.Table.from_pylist(rows), val)
-    (tmp_path / "dspark-mix.json").write_text(
-        json.dumps({"train": {train.name: file_sha256(train)}, "validation": {val.name: file_sha256(val)}})
-    )
     return tmp_path
 
 
@@ -136,15 +127,13 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
     mix = _mix(tmp_path, overlapping=overlapping)
     for file in teacher.iterdir():
         (storage / f"teacher/{file.name}").upload_from(str(file))
-    for name in ("train.parquet", "val.parquet", "dspark-mix.json"):
+    for name in ("train/rows.parquet", "validation/rows.parquet"):
         (storage / f"mix/{name}").upload_from(str(mix / name))
     kwargs = dict(
         output=str(output),
         teacher=str(storage / "teacher"),
-        teacher_manifest=str(storage / "teacher/dspark-teacher.json"),
-        teacher_sha256=file_sha256(teacher / "dspark-teacher.json"),
+        teacher_subdirectory="",
         mix=str(storage / "mix"),
-        mix_sha256=file_sha256(mix / "dspark-mix.json"),
         config=recipe.data,
     )
     if overlapping:
@@ -166,20 +155,14 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
     assert json.loads((prepared / "token_frequencies.json").read_text()) == {"3": 1, "5": 1}
 
 
-def test_completed_teacher_rejects_stale_weight_pin(teacher: Path, tmp_path: Path) -> None:
-    pin = file_sha256(teacher / "dspark-teacher.json")
-    weights = teacher / "model.safetensors"
-    payload = weights.read_bytes()
-    weights.write_bytes(payload[:-1] + bytes([payload[-1] ^ 1]))
-    with pytest.raises(ValueError, match="SHA-256"):
-        stage_teacher(
-            StoragePath(str(teacher)), StoragePath(str(teacher / "dspark-teacher.json")), pin, tmp_path / "staged"
-        )
+def test_teacher_preflight_rejects_an_incomplete_sharded_export(teacher: Path, recipe: DraftRecipe) -> None:
+    (teacher / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {EMBEDDING: "missing.safetensors"}}))
+    with pytest.raises(ValueError, match=r"missing\.safetensors"):
+        inspect_teacher(StoragePath(str(teacher)), recipe.data)
 
 
 def test_draft_export_uses_feature_taps_and_offset_mapping(tmp_path: Path, teacher: Path, recipe: DraftRecipe) -> None:
-    manifest = teacher / "dspark-teacher.json"
-    decoder = inspect_teacher(StoragePath(str(teacher)), StoragePath(str(manifest)), file_sha256(manifest), recipe.data)
+    decoder = inspect_teacher(StoragePath(str(teacher)), recipe.data)
     speculative, _ = extraction_config(recipe, tmp_path / "hidden_states")
     assert speculative["draft_model_config"]["hf_config"]["eagle_aux_hidden_state_layer_ids"] == [1, 3, 4]
     ckpt = tmp_path / "draft"

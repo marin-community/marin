@@ -3,31 +3,29 @@
 
 """Bind a completed Marin SFT export and a frozen chat mix to offline DSpark."""
 
-import hashlib
 import json
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
 import click
 import draccus
-from marin.execution.fingerprint import canonical_json
-from marin.execution.lazy import OUT, ArtifactStep, apply, lower
-from marin.execution.step_runner import StepRunner
+from marin.execution.artifact import Artifact, is_mutable_version, read_record
+from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity, lower
+from marin.execution.step_runner import StepRunner, check_cache
 from marin.training.drafting.dspark_data import (
     DraftDataConfig,
     GrugShape,
     inspect_mix,
     inspect_teacher,
     prepare_data,
-    require_sha256,
 )
 from marin.training.drafting.dspark_distillation import (
-    SPECULATORS_REVISION,
-    VLLM_SOURCE_COMMIT,
+    HF_DRAFT_SUBDIRECTORY,
     DraftRecipe,
-    TrainingProvenance,
+    DSparkExport,
     require_qualified_teacher,
     require_supported_vllm_release,
     train_and_export,
@@ -36,6 +34,8 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.cross_region import is_cross_region_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+
+from experiments.models import ModelConfig, download_model
 
 
 class TeacherFamily(StrEnum):
@@ -51,18 +51,17 @@ _FEATURE_TAPS = {
     TeacherFamily.SNOWBALL: (2, 12, 22),
     TeacherFamily.MOCHI: (2, 24, 45),
 }
-_RECIPE_VERSION = "2026.11.22.2"
+_RECIPE_VERSION = "2026.11.22.3"
 
 
 @dataclass(frozen=True)
 class CompletedSFT:
-    """Identity and storage directory of a completed HF SFT export."""
+    """A Hub commit or a completed Marin producer and its HF subdirectory."""
 
     family: TeacherFamily
-    identity: str
-    directory: str
-    manifest_uri: str
-    manifest_sha256: str
+    source: str
+    fingerprint: str | None = None
+    relative_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -70,7 +69,7 @@ class TrainingMix:
     """Versioned normalized Marin chat Parquet files in storage."""
 
     directory: str
-    manifest_sha256: str
+    fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -104,59 +103,82 @@ class OfflineDSpark:
         )
 
 
-def artifacts(config: OfflineDSpark) -> tuple[ArtifactStep, ArtifactStep]:
+def _completed_artifact(path: str, fingerprint: str) -> ArtifactStep:
+    if StoragePath(path).scheme not in ("gs", "s3") and not Path(path).is_absolute():
+        raise ValueError(f"Expected a gs:// or s3:// artifact root or an absolute local path, got {path}")
+    record = read_record(path)
+    if record is None or not check_cache(path):
+        raise ValueError(f"No completed Marin artifact at {path}")
+    if not record.name or not record.version or is_mutable_version(record.version):
+        raise ValueError(f"Expected a fixed-version producer at {path}")
+    if record.source is not None or record.fingerprint_payload is None:
+        raise ValueError(f"Use the completed producer's artifact directory at {path}")
+    if not fingerprint or record.fingerprint != fingerprint:
+        raise ValueError(f"Artifact fingerprint at {path} is {record.fingerprint}, expected {fingerprint}")
+    payload = json.loads(record.fingerprint_payload)
+
+    def missing_producer(_: object) -> None:
+        raise ValueError(f"The completed producer at {path} is no longer available")
+
+    return ArtifactStep(
+        name=record.name,
+        version=record.version,
+        artifact_type=Artifact,
+        build_config=lambda _: payload,
+        run=missing_producer,
+        override_path=path,
+        expected_fingerprint=fingerprint,
+    )
+
+
+def _teacher_artifact(teacher: CompletedSFT) -> ArtifactStep:
+    if ".." in Path(teacher.relative_path).parts or Path(teacher.relative_path).is_absolute():
+        raise ValueError("The HF export must be below its artifact root")
+    if teacher.source.startswith("hf://"):
+        repo, _, revision = teacher.source.removeprefix("hf://").partition("@")
+        if not re.fullmatch(r"[0-9a-f]{40}", revision) or repo.count("/") != 1:
+            raise ValueError("Specify the Hub teacher as hf://org/model@<full commit>")
+        return download_model(ModelConfig(hf_repo_id=repo, hf_revision=revision))
+    if teacher.fingerprint is None:
+        raise ValueError("Provide the producer fingerprint from the Marin teacher's .artifact.json")
+    return _completed_artifact(teacher.source, teacher.fingerprint)
+
+
+def artifacts(config: OfflineDSpark) -> tuple[ArtifactStep, ArtifactStep[DSparkExport]]:
     """Bind the prepared dataset and published DSpark draft artifact."""
 
     require_supported_vllm_release()
-    if not config.teacher.identity.strip():
-        raise ValueError("Provide the completed SFT export's provenance identity")
-    for name, path, digest in (
-        ("teacher", config.teacher.directory, config.teacher.manifest_sha256),
-        ("mix", config.data.directory, config.data.manifest_sha256),
-    ):
-        if StoragePath(path).scheme not in ("gs", "s3") and not Path(path).is_absolute():
-            raise ValueError(f"The {name} directory must be a gs:// or s3:// URI or an absolute local path")
-        require_sha256(digest)
-
     family = config.teacher.family.value
     recipe = config.training_recipe()
-    teacher = ArtifactStep.adopt(
-        f"dspark/teachers/{family}/{config.teacher.manifest_sha256}",
-        _RECIPE_VERSION,
-        config.teacher.directory,
-        config={"export_identity": config.teacher.identity},
-    )
-    mix = ArtifactStep.adopt(f"dspark/mixes/{config.data.manifest_sha256}", _RECIPE_VERSION, config.data.directory)
-    provenance = TrainingProvenance(config.teacher.identity, config.teacher.manifest_sha256, config.data.manifest_sha256)
-    data_key = hashlib.sha256(canonical_json((provenance, recipe.data)).encode()).hexdigest()
-    draft_key = hashlib.sha256(
-        canonical_json((data_key, recipe, SPECULATORS_REVISION, VLLM_SOURCE_COMMIT)).encode()
-    ).hexdigest()
+    teacher = _teacher_artifact(config.teacher)
+    mix = _completed_artifact(config.data.directory, config.data.fingerprint)
     prepared = apply(
-        f"dspark/data/{family}/{data_key}",
+        f"dspark/data/{family}",
         prepare_data,
         version=_RECIPE_VERSION,
         output=OUT,
         teacher=teacher,
-        teacher_manifest=config.teacher.manifest_uri,
-        teacher_sha256=config.teacher.manifest_sha256,
+        teacher_subdirectory=config.teacher.relative_path,
         mix=mix,
-        mix_sha256=config.data.manifest_sha256,
         config=recipe.data,
     )
+    fingerprint = prepared.fingerprint()
+    prepared = replace(prepared, name=f"{prepared.name}/{fingerprint}", expected_fingerprint=fingerprint)
 
     draft = apply(
-        f"checkpoints/dspark/{family}/{draft_key}",
+        f"checkpoints/dspark/{family}",
         train_and_export,
         version=_RECIPE_VERSION,
+        artifact_type=DSparkExport,
         output=OUT,
         teacher=teacher,
-        teacher_manifest=config.teacher.manifest_uri,
-        provenance=provenance,
+        teacher_subdirectory=config.teacher.relative_path,
+        teacher_identity=artifact_identity(teacher),
         prepared=prepared,
         recipe=recipe,
     )
-    return prepared, draft
+    fingerprint = draft.fingerprint()
+    return prepared, replace(draft, name=f"{draft.name}/{fingerprint}", expected_fingerprint=fingerprint)
 
 
 @click.command()
@@ -170,21 +192,26 @@ def main(config: str, stage: str) -> None:
     configure_coreweave_s3()
     recipe = draccus.decode(OfflineDSpark, json.loads(StoragePath(config).read_text()))
     settings = recipe.training_recipe()
-    prepared, draft = artifacts(recipe)
     prefix = marin_prefix()
-    teacher_root = StoragePath(recipe.teacher.directory)
-    manifest = StoragePath(recipe.teacher.manifest_uri)
     mix_root = StoragePath(recipe.data.directory)
     if stage == "train":
         require_qualified_teacher(settings)
-        for location in (teacher_root, manifest, mix_root, StoragePath(prefix)):
+        locations = [mix_root, StoragePath(prefix)]
+        if not recipe.teacher.source.startswith("hf://"):
+            locations.append(StoragePath(recipe.teacher.source))
+        for location in locations:
             if location.scheme not in ("gs", "s3"):
                 raise click.UsageError(f"Iris training requires a shared gs:// or s3:// location, got {location}")
             if is_cross_region_url(str(location)):
                 raise click.UsageError(f"Iris training requires regional inputs and output, got {location}")
+    prepared, draft = artifacts(recipe)
     if stage == "preflight":
-        decoder = inspect_teacher(teacher_root, manifest, recipe.teacher.manifest_sha256, settings.data)
-        train, validation = inspect_mix(mix_root, recipe.data.manifest_sha256)
+        teacher = prepared.deps[0]
+        if not check_cache(teacher.path(prefix)):
+            raise click.UsageError("Run the prepare stage to stage the pinned Hub teacher in Marin storage")
+        teacher_root = StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path
+        decoder = inspect_teacher(teacher_root, settings.data)
+        train, validation = inspect_mix(mix_root)
         click.echo(
             json.dumps(
                 {
@@ -202,7 +229,7 @@ def main(config: str, stage: str) -> None:
     terminal = prepared if stage == "prepare" else draft
     StepRunner().run([lower(terminal)], dry_run=stage == "plan")
     if stage == "train":
-        click.echo(str(StoragePath(draft.path(prefix)) / "hf"))
+        click.echo(str(StoragePath(draft.path(prefix)) / HF_DRAFT_SUBDIRECTORY))
 
 
 if __name__ == "__main__":

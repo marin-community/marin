@@ -3,12 +3,10 @@
 
 """Prepare assistant-masked conversations and inspect a frozen Grug teacher."""
 
-import hashlib
 import json
 import struct
 from collections import Counter
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from itertools import batched
 from pathlib import Path
@@ -76,46 +74,6 @@ class PreparedSplits:
     train_ratio: float
 
 
-def file_sha256(path: Path | StoragePath) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def require_sha256(value: str) -> None:
-    """Require a lowercase hexadecimal SHA-256 digest."""
-
-    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
-        raise ValueError(f"Expected a lowercase SHA-256 digest, got {value!r}")
-
-
-def verify_sha256(path: Path | StoragePath, expected: str) -> None:
-    require_sha256(expected)
-    if file_sha256(path) != expected:
-        raise ValueError(f"SHA-256 mismatch for {path}")
-
-
-def _bundle_files(root: StoragePath, files: dict[str, str]) -> dict[str, StoragePath]:
-    result = {}
-    for name, digest in files.items():
-        require_sha256(digest)
-        path = Path(name)
-        if not path.parts or path.is_absolute() or ".." in path.parts:
-            raise ValueError(f"Expected a relative file below {root}, got {name!r}")
-        source = root / name
-        if not source.isfile():
-            raise FileNotFoundError(str(source))
-        result[name] = source
-    return result
-
-
-def _manifest(path: StoragePath, expected: str) -> dict:
-    require_sha256(expected)
-    payload = path.read_bytes()
-    if hashlib.sha256(payload).hexdigest() != expected:
-        raise ValueError(f"SHA-256 mismatch for {path}")
-    return json.loads(payload)
-
-
 def tensor_files(root: Path) -> dict[str, str]:
     """Map tensor names to relative safetensors filenames."""
 
@@ -124,17 +82,6 @@ def tensor_files(root: Path) -> dict[str, str]:
         return json.loads(index.read_text())["weight_map"]
     with safe_open(root / _SAFETENSORS_FILE, framework="np") as weights:
         return dict.fromkeys(weights.keys(), _SAFETENSORS_FILE)
-
-
-def _teacher_files(
-    root: StoragePath, manifest: StoragePath, manifest_sha256: str
-) -> tuple[dict[str, StoragePath], dict[str, str]]:
-    hashes = _manifest(manifest, manifest_sha256)
-    files = _bundle_files(root, hashes)
-    for name in (CONFIG_NAME, "tokenizer.json", "tokenizer_config.json"):
-        if name not in files:
-            raise ValueError(f"Teacher manifest must include {name}")
-    return files, hashes
 
 
 def _tensor_header(path: StoragePath) -> dict:
@@ -146,18 +93,18 @@ def _tensor_header(path: StoragePath) -> dict:
     return json.loads(fs.cat_file(location, start=8, end=8 + size))
 
 
-def _check_teacher_tensors(files: dict[str, StoragePath], metadata: Path, shape: GrugShape) -> None:
+def _check_teacher_tensors(root: StoragePath, metadata: Path, shape: GrugShape) -> None:
     index = metadata / SAFE_TENSORS_INDEX_NAME
     if index.is_file():
         weights = json.loads(index.read_text())["weight_map"]
         headers = {}
     else:
         name = _SAFETENSORS_FILE
-        headers = {name: _tensor_header(files[name])}
+        headers = {name: _tensor_header(root / name)}
         weights = dict.fromkeys(headers[name], name)
-    missing = set(weights.values()) - files.keys()
-    if missing:
-        raise ValueError(f"Teacher manifest is missing weight shards: {sorted(missing)}")
+    for shard in set(weights.values()):
+        if Path(shard).name != shard or not (root / shard).isfile():
+            raise ValueError(f"Missing or invalid HF weight shard {shard!r} below {root}")
     for layer in range(shape.num_hidden_layers):
         if f"model.layers.{layer}.input_layernorm.weight" not in weights:
             raise ValueError(f"Teacher export is missing layer {layer}")
@@ -165,7 +112,7 @@ def _check_teacher_tensors(files: dict[str, StoragePath], metadata: Path, shape:
     def tensor_shape(tensor: str) -> tuple[int, ...]:
         shard = weights[tensor]
         if shard not in headers:
-            headers[shard] = _tensor_header(files[shard])
+            headers[shard] = _tensor_header(root / shard)
         return tuple(headers[shard][tensor]["shape"])
 
     gate_down = tensor_shape(GATE_DOWN)
@@ -179,22 +126,6 @@ def _check_teacher_tensors(files: dict[str, StoragePath], metadata: Path, shape:
     }.items():
         if tensor_shape(name) != expected:
             raise ValueError(f"Unexpected shape for teacher tensor {name}, expected {expected}")
-
-
-def _stage_file(source: StoragePath, destination: Path, digest: str) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    source.download_to(str(destination))
-    verify_sha256(destination, digest)
-
-
-def stage_teacher(root: StoragePath, manifest: StoragePath, manifest_sha256: str, destination: Path) -> None:
-    """Stage and verify only the files in the frozen HF export's manifest."""
-
-    files, hashes = _teacher_files(root, manifest, manifest_sha256)
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = [pool.submit(_stage_file, source, destination / name, hashes[name]) for name, source in files.items()]
-        for future in futures:
-            future.result()
 
 
 def _teacher_decoder(target: dict, config: DraftDataConfig) -> dict[str, str | int | float | bool | None]:
@@ -241,17 +172,18 @@ def _teacher_decoder(target: dict, config: DraftDataConfig) -> dict[str, str | i
 
 
 def _teacher_inputs(
-    root: StoragePath, manifest: StoragePath, manifest_sha256: str, config: DraftDataConfig
+    root: StoragePath, config: DraftDataConfig
 ) -> tuple[dict[str, str | int | float | bool | None], MarinTokenizer]:
-    files, hashes = _teacher_files(root, manifest, manifest_sha256)
     with TemporaryDirectory(prefix="dspark-metadata-") as directory:
         metadata = Path(directory)
-        for name, source in files.items():
-            if source.name.endswith(".safetensors"):
-                continue
-            _stage_file(source, metadata / name, hashes[name])
+        for source in root.ls():
+            if source.name.endswith((".json", ".jinja")) and source.isfile():
+                source.download_to(str(metadata / source.name))
+        templates = root / "chat_templates"
+        if templates.isdir():
+            templates.download_to(str(metadata / "chat_templates"), recursive=True)
         decoder = _teacher_decoder(json.loads((metadata / CONFIG_NAME).read_text()), config)
-        _check_teacher_tensors(files, metadata, config.shape)
+        _check_teacher_tensors(root, metadata, config.shape)
         tokenizer = load_tokenizer(str(metadata))
         if not tokenizer.chat_template or tokenizer.vocab_size > config.shape.vocab_size:
             raise ValueError("Teacher export needs its matching tokenizer and chat template")
@@ -260,18 +192,16 @@ def _teacher_inputs(
         return decoder, tokenizer
 
 
-def inspect_teacher(
-    root: StoragePath, manifest: StoragePath, manifest_sha256: str, config: DraftDataConfig
-) -> dict[str, str | int | float | bool | None]:
+def inspect_teacher(root: StoragePath, config: DraftDataConfig) -> dict[str, str | int | float | bool | None]:
     """Validate pinned metadata and weight headers and return the draft decoder configuration."""
 
-    decoder, tokenizer = _teacher_inputs(root, manifest, manifest_sha256, config)
+    decoder, tokenizer = _teacher_inputs(root, config)
     ChatProcessor(tokenizer)  # Require a template that marks supervised spans.
     return decoder
 
 
-def _chat_rows(files: dict[str, StoragePath]) -> Iterator[dict]:
-    for path in files.values():
+def _chat_rows(files: list[StoragePath]) -> Iterator[dict]:
+    for path in files:
         with path.open("rb") as stream:
             parquet = pq.ParquetFile(stream)
             columns = ["messages"]
@@ -289,9 +219,9 @@ def _chat_rows(files: dict[str, StoragePath]) -> Iterator[dict]:
 
 
 def _tokenized_rows(
-    files: dict[str, StoragePath], processor: ChatProcessor, config: DraftDataConfig
+    files: list[StoragePath], processor: ChatProcessor, config: DraftDataConfig
 ) -> Iterator[tuple[bytes, dict]]:
-    """Yield the clipped token-ID digest alongside its row for overlap checks."""
+    """Yield each row with its clipped token IDs for overlap checks."""
 
     for batch in batched(_chat_rows(files), 64):
         for row in processor(batch):
@@ -301,31 +231,24 @@ def _tokenized_rows(
                 continue
             if ids.min() < 0 or ids.max() >= config.shape.vocab_size:
                 raise ValueError("Rendered token ID is outside the teacher vocabulary")
-            key = hashlib.sha256(ids.astype("<i4", copy=False).tobytes()).digest()
+            key = ids.astype("<i4", copy=False).tobytes()
             yield key, {"input_ids": ids.tolist(), "loss_mask": mask.tolist(), "seq_len": len(ids)}
 
 
-def inspect_mix(
-    root: StoragePath, manifest_sha256: str, *, verify_shards: bool = False
-) -> tuple[dict[str, StoragePath], dict[str, StoragePath]]:
-    """Read the pinned split lists and optionally verify every shard digest."""
-
-    splits = _manifest(root / "dspark-mix.json", manifest_sha256)
-    train_files = _bundle_files(root, splits["train"])
-    val_files = _bundle_files(root, splits["validation"])
-    if not train_files or not val_files or set(splits["train"].values()) & set(splits["validation"].values()):
-        raise ValueError("The mix requires nonempty, distinct train and validation inputs")
-    if verify_shards:
-        for split, paths in (("train", train_files), ("validation", val_files)):
-            for name, path in paths.items():
-                verify_sha256(path, splits[split][name])
-    return train_files, val_files
+def inspect_mix(root: StoragePath) -> tuple[list[StoragePath], list[StoragePath]]:
+    """Find the train and validation Parquet shards of a completed mix."""
+    train, validation = (
+        sorted((root / split / "**" / "*.parquet").glob(), key=str) for split in ("train", "validation")
+    )
+    if not train or not validation:
+        raise ValueError(f"The mix at {root} needs Parquet shards under train/ and validation/")
+    return train, validation
 
 
 def _write_masked_dataset(
     prepared: Path,
-    train_files: dict[str, StoragePath],
-    val_files: dict[str, StoragePath],
+    train_files: list[StoragePath],
+    val_files: list[StoragePath],
     tokenizer: MarinTokenizer,
     config: DraftDataConfig,
 ) -> PreparedSplits:
@@ -373,20 +296,15 @@ def prepare_data(
     *,
     output: str,
     teacher: str,
-    teacher_manifest: str,
-    teacher_sha256: str,
+    teacher_subdirectory: str,
     mix: str,
-    mix_sha256: str,
     config: DraftDataConfig,
 ) -> None:
     """Write the Speculators Arrow dataset with a trailing, disjoint holdout."""
 
     destination = StoragePath(output) / PREPARED_DIR
-    if (destination / SPLITS_FILE).isfile():
-        return
-
-    decoder, tokenizer = _teacher_inputs(StoragePath(teacher), StoragePath(teacher_manifest), teacher_sha256, config)
-    train_files, val_files = inspect_mix(StoragePath(mix), mix_sha256, verify_shards=True)
+    decoder, tokenizer = _teacher_inputs(StoragePath(teacher) / teacher_subdirectory, config)
+    train_files, val_files = inspect_mix(StoragePath(mix))
 
     with TemporaryDirectory(prefix="dspark-prepare-") as directory:
         prepared = Path(directory) / PREPARED_DIR
@@ -398,5 +316,4 @@ def prepare_data(
                 target = destination / file.relative_to(prepared).as_posix()
                 target.parent.mkdirs()
                 target.upload_from(str(file))
-        # The artifact runner serializes writers. Publish the split descriptor last.
         (destination / SPLITS_FILE).write_text(json.dumps(asdict(splits), indent=2) + "\n")
