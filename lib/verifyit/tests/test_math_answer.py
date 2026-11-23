@@ -53,6 +53,37 @@ def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text,
     assert grade_math.grade(MathSpec(expected=expected), tmp_path, tmp_path).reward == reward
 
 
+@pytest.mark.parametrize("power", [(19, 9), (17, 6), (5, 4)])
+def test_math_positive_symbols_accept_equivalent_ratio_powers(power):
+    numerator, denominator = power
+    exponent = rf"\frac{{{numerator}}}{{{denominator}}}"
+    reference = rf"\frac{{a_{{1}} \left(\frac{{a_{{3}}}}{{a_{{2}}}}\right)^{{{exponent}}}}}{{a_{{3}}}}"
+    regrouped = rf"\frac{{a_{{1}} a_{{3}}^{{{exponent}}}}}{{a_{{2}}^{{{exponent}}} a_{{3}}}}"
+    spec = MathSpec(expected=reference, positive_symbols=("a_1", "a_2", "a_3"))
+
+    assert grade_math.grade_math_candidate(spec, regrouped).reward == 1.0
+    wrong_exponent = regrouped.replace(exponent, rf"\frac{{{numerator + 1}}}{{{denominator}}}")
+    assert grade_math.grade_math_candidate(spec, wrong_exponent).reward == 0.0
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference), regrouped).reward == 0.0
+
+
+def test_math_positive_symbols_apply_only_to_explicitly_named_symbols():
+    assert grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}"), "x").reward == 0.0
+    assert grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}", positive_symbols=("x",)), "x").reward == 1.0
+    assert (
+        grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}+y", positive_symbols=("y",)), "x+y").reward == 0.0
+    )
+
+
+def test_math_positive_symbols_survive_spec_file_grading(tmp_path):
+    spec = MathSpec(expected=r"\sqrt{x^2}", positive_symbols=("x",))
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    _answer(tmp_path, "x")
+
+    assert run(spec_path, tmp_path).reward == 1.0
+
+
 @pytest.mark.parametrize(
     "expected, math_type, text, reward",
     [

@@ -28,7 +28,7 @@ from rigging.secrets import get_secret
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.tracker import Tracker, TrackerConfig
+from levanter.tracker.tracker import Tracker, TrackerConfig, artifact_size_bytes
 from levanter.utils import jax_utils
 
 logger = logging.getLogger(__name__)
@@ -50,25 +50,8 @@ class _WandbInitStatus(TypedDict):
     metadata: dict[str, Any] | None
 
 
-def _artifact_size_bytes(artifact_path: str | os.PathLike[str]) -> int:
-    """Return the number of regular-file bytes that W&B would upload for a path."""
-    path = os.fspath(artifact_path)
-    if os.path.isfile(path):
-        return os.path.getsize(path)
-    if not os.path.isdir(path):
-        raise FileNotFoundError(path)
-
-    total = 0
-    for directory, _, filenames in os.walk(path):
-        for filename in filenames:
-            file_path = os.path.join(directory, filename)
-            if not os.path.islink(file_path):
-                total += os.path.getsize(file_path)
-    return total
-
-
 def _validate_wandb_artifact_size(artifact_path: str | os.PathLike[str], *, artifact_name: str | None = None) -> None:
-    size = _artifact_size_bytes(artifact_path)
+    size = artifact_size_bytes(artifact_path)
     if size > MAX_WANDB_ARTIFACT_BYTES:
         display_name = artifact_name or os.path.basename(os.fspath(artifact_path)) or "artifact"
         raise ValueError(
@@ -197,16 +180,15 @@ class WandbTracker(Tracker):
             return
         self.run.summary.update(self._prepare_summary(metrics))
 
-    def validate_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None) -> None:
-        """Reject an artifact that would exceed Marin's W&B storage limit."""
-        del type
-        artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
-        _validate_wandb_artifact_size(artifact_path, artifact_name=artifact_name)
+    @property
+    def max_artifact_bytes(self) -> Optional[int]:
+        return MAX_WANDB_ARTIFACT_BYTES
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         if self._suppress_logging:
             return
-        self.validate_artifact(artifact_path, name=name, type=type)
+        if self.skip_artifact_over_limit(artifact_path, name=name):
+            return
         artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
         self.run.log_artifact(
             artifact_path,
@@ -718,94 +700,6 @@ def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:
         truncated,
     )
     return truncated
-
-
-_WANDB_RUN_NAME_MAX_LENGTH = 64
-_WANDB_RUN_NAME_MIN_PREFIX_LENGTH = 24
-_WANDB_RUN_NAME_AGGRESSIVE_TRUNCATION_CHARS = 16
-_WANDB_RUN_NAME_SUFFIX_MARKERS = ("_seed", "-seed", "_step", "-step")
-
-
-def _preferred_wandb_suffix_start(name: str) -> int | None:
-    """Return the preferred suffix start for a truncated W&B run name.
-
-    We prefer underscore-delimited semantic tails like ``lr7.5e-7_seed2`` or
-    ``foo_step400``. This avoids splitting on the ``-`` inside scientific
-    notation, which would corrupt names like ``lr7.5e-7``.
-    """
-    for marker in _WANDB_RUN_NAME_SUFFIX_MARKERS:
-        marker_start = name.rfind(marker)
-        if marker_start == -1:
-            continue
-
-        prior_slash = name.rfind("/", 0, marker_start)
-        prior_underscore = name.rfind("_", 0, marker_start)
-        if prior_underscore > prior_slash:
-            return prior_underscore
-        return marker_start
-
-    last_underscore = name.rfind("_")
-    if last_underscore == -1:
-        return None
-
-    prior_slash = name.rfind("/", 0, last_underscore)
-    second_last_underscore = name.rfind("_", 0, last_underscore)
-    if second_last_underscore > prior_slash:
-        return second_last_underscore
-
-    return last_underscore
-
-
-def truncate_wandb_run_name(name: str) -> str:
-    """Truncate a run name to fit within W&B's run-name length limit.
-
-    W&B rejects run names longer than 64 characters. This trims an over-long name
-    while preserving a readable prefix and the trailing semantic suffix (e.g.
-    ``lr7.5e-7_seed2``), avoiding splits inside scientific-notation tails, and logs
-    a warning so the truncation is visible. Exposed as a public helper so callers
-    (e.g. experiment configs) share one run-name policy.
-    """
-    if len(name) <= _WANDB_RUN_NAME_MAX_LENGTH:
-        return name
-
-    old_name = name
-    suffix_start = _preferred_wandb_suffix_start(name)
-
-    if suffix_start is None:
-        name = name[:_WANDB_RUN_NAME_MAX_LENGTH]
-        preserved_suffix = ""
-    else:
-        suffix = name[suffix_start:]
-        preserved_suffix = suffix
-        if len(suffix) >= _WANDB_RUN_NAME_MAX_LENGTH:
-            name = name[:_WANDB_RUN_NAME_MAX_LENGTH]
-            preserved_suffix = ""
-        else:
-            prefix_budget = _WANDB_RUN_NAME_MAX_LENGTH - len(suffix)
-            prefix = name[:prefix_budget]
-
-            # Prefer trimming at a token boundary so the retained prefix stays readable.
-            boundary = max(prefix.rfind("_"), prefix.rfind("/"))
-            if boundary >= _WANDB_RUN_NAME_MIN_PREFIX_LENGTH:
-                prefix = prefix[:boundary]
-
-            name = prefix + suffix
-
-    logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
-
-    removed_chars = len(old_name) - len(name)
-    retained_prefix_len = len(name) - len(preserved_suffix)
-    if (
-        removed_chars >= _WANDB_RUN_NAME_AGGRESSIVE_TRUNCATION_CHARS
-        or retained_prefix_len < _WANDB_RUN_NAME_MIN_PREFIX_LENGTH
-    ):
-        logger.warning(
-            "W&B run name %r required aggressive truncation to %r. Consider shortening the explicit name.",
-            old_name,
-            name,
-        )
-
-    return name
 
 
 def _default_wandb_artifact_name(artifact_path: Any) -> str:
