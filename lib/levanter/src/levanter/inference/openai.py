@@ -80,6 +80,8 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
+_EVENT_STREAM = "text/event-stream"
+_CHAT_CHUNK = "chat.completion.chunk"
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
 
 
@@ -533,6 +535,10 @@ def _health_check() -> dict:
     return {"status": "healthy", "service": "levanter-inference"}
 
 
+def _chat_completion_id() -> str:
+    return f"chatcmpl-{uuid.uuid4().hex[:8]}"
+
+
 def _sse_event(payload: str) -> str:
     return f"data: {payload}\n\n"
 
@@ -567,7 +573,7 @@ def _chat_completion_events(
         for chunk_choice in chunks:
             chunk = ChatCompletionChunk(
                 id=completion.id,
-                object="chat.completion.chunk",
+                object=_CHAT_CHUNK,
                 created=completion.created,
                 model=completion.model,
                 choices=[chunk_choice],
@@ -576,7 +582,7 @@ def _chat_completion_events(
     if include_usage:
         usage = ChatCompletionChunk(
             id=completion.id,
-            object="chat.completion.chunk",
+            object=_CHAT_CHUNK,
             created=completion.created,
             model=completion.model,
             choices=[],
@@ -928,7 +934,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
             request,
             prompt,
             await future,
-            completion_id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+            completion_id=_chat_completion_id(),
             created=int(time.time()),
         )
     except HTTPException:
@@ -958,8 +964,8 @@ async def _stream_chat_completion(
     prompt, future = _submit_chat_completion(ctx, request, on_tokens)
     future.add_done_callback(on_done)
     header = ChatCompletionChunk(
-        id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-        object="chat.completion.chunk",
+        id=_chat_completion_id(),
+        object=_CHAT_CHUNK,
         created=int(time.time()),
         model=request.model,
         choices=[],
@@ -1013,7 +1019,7 @@ async def _stream_chat_completion(
             closed.set()
             future.cancel()
 
-    return StreamingResponse(events(), media_type="text/event-stream")
+    return StreamingResponse(events(), media_type=_EVENT_STREAM)
 
 
 def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
@@ -1177,14 +1183,14 @@ class InferenceServer:
             if not request.stream:
                 return completion
             events = _chat_completion_events(completion, include_usage=include_usage)
-            return StreamingResponse(events, media_type="text/event-stream")
+            return StreamingResponse(events, media_type=_EVENT_STREAM)
 
         @app.post("/v1/completions", response_model=Completion)
         async def create_completion(request: CompletionRequest):
             completion = await _create_completion(inference_context, request)
             if not request.stream:
                 return completion
-            return StreamingResponse(_completion_events(completion), media_type="text/event-stream")
+            return StreamingResponse(_completion_events(completion), media_type=_EVENT_STREAM)
 
         @app.post("/v1/tokens", response_model=TokensResponse)
         async def fetch_tokens(request: TokensRequest) -> TokensResponse:

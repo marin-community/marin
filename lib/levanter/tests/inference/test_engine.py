@@ -177,7 +177,7 @@ def test_continuous_generation_finishes_a_new_short_request_while_the_first_is_a
             if not incoming:
                 return []
             assert free_slots == 1
-            assert engine.results[10][0].tokens_decoded > 0 and not engine.results[10][0].done
+            assert updates and 10 not in completed
             return [incoming.pop()]
 
         def record_tokens(request_id, choice, tokens):
