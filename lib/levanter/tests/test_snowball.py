@@ -45,6 +45,7 @@ from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.grug.attention._paged import _tpu_v3_available
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
@@ -1378,3 +1379,62 @@ def test_snowball_engine_capture_preserves_samples_and_predictor_routes(compact_
             )
             np.testing.assert_array_equal(routes.valid, [True] * (len(prompt) + len(generated) - 1) + [False])
             np.testing.assert_allclose(scores, -loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0)
+
+
+@pytest.mark.tpu
+@pytest.mark.skipif(not _tpu_v3_available(), reason="BF16 RPA v3 requires v5p or v6e")
+@pytest.mark.parametrize("shard_kv_on_experts", [False, True])
+def test_snowball_bf16_tpu_paged_generation_matches_reference(shard_kv_on_experts):
+    devices = jax.device_count()
+    model_shards = 1 if shard_kv_on_experts else devices
+    expert_shards = devices if shard_kv_on_experts else 1
+    kv_heads = max(1, expert_shards - 1) if shard_kv_on_experts else devices
+    cfg = _tiny_config(
+        num_layers=2,
+        max_seq_len=256,
+        sliding_window=8,
+        num_heads=4 * kv_heads,
+        num_kv_heads=kv_heads,
+        head_dim=128,
+    )
+    with jax.set_mesh(compact_grug_mesh(model_axis_size=model_shards, expert_axis_size=expert_shards)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(17))
+        model = jmp.get_policy("p=bf16,c=bf16").cast_to_compute(model)
+        config = InferenceEngineConfig(
+            max_seq_len=256,
+            max_pages=48,
+            max_rounds=2,
+            page_size=128,
+            compute_dtype=jnp.bfloat16,
+            max_seqs=max(4, expert_shards),
+            max_queued_tokens=max(8, 2 * expert_shards),
+            max_seqs_in_prefill=max(4, expert_shards),
+            max_prefill_size=256,
+        )
+        rng = np.random.default_rng(32)
+        prompts = [rng.integers(2, cfg.vocab_size, size=length).tolist() for length in (137, 41)]
+        requests = [
+            Request(
+                prompt,
+                request_id=i,
+                decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(len(prompt) + 4)),
+                n_generations=1,
+            )
+            for i, prompt in enumerate(prompts)
+        ]
+        expected = InferenceEngine.from_model_with_config(
+            model.with_paged_attention("reference"), tokenizer=None, config=config
+        ).generate(requests)
+        fast_model = model.with_paged_attention("tpu_v3")
+        if shard_kv_on_experts:
+            fast_model = fast_model.with_expert_sharded_kv()
+        fast_model = fast_model.with_split_decode_cache()
+        config = replace(config, window_cache_max_pages=max(4, expert_shards) * 2 + 2 + max(4, expert_shards))
+        engine = InferenceEngine.from_model_with_config(fast_model, tokenizer=None, config=config)
+        actual = engine.generate(requests, capture_routes=True)
+        assert actual.expert_routes is not None
+        for prompt, generated, routes in zip(prompts, actual.tokens, actual.expert_routes, strict=True):
+            np.testing.assert_array_equal(routes.valid, [True] * (len(prompt) + len(generated) - 1) + [False])
+    assert actual.tokens == expected.tokens
+    assert actual.total_generated == 8
+    np.testing.assert_allclose(actual.logprobs, expected.logprobs, atol=2e-2, rtol=0)
