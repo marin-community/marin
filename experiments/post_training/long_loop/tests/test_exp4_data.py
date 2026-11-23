@@ -10,6 +10,8 @@ from taskcompendium.models import Source
 from experiments.post_training.long_loop.exp4_data import (
     EXPECTED_COMPOSITION,
     FIVE_FAMILY_COUNTS,
+    GENERATED_POOL_ROWS,
+    KNOWN_GENERATED_EXCLUSIONS,
     NEMOTRON_IF_RECIPE_VERSION,
     TIME_INTERVALS_ROWS,
     _cycle_index,
@@ -25,11 +27,22 @@ from experiments.post_training.task_curation.datasets.long_loop_rl import (
 
 def test_expected_composition_names_every_pool_label_at_the_adopted_counts():
     assert EXPECTED_COMPOSITION["long-loop-smartie-swesmith"] == 5608
-    assert EXPECTED_COMPOSITION[REASONING_GYM_LABEL] == 20_800
+    assert EXPECTED_COMPOSITION[REASONING_GYM_LABEL] == 20_799
     assert EXPECTED_COMPOSITION["nemotron_if"] == 56_083
-    assert sum(EXPECTED_COMPOSITION.values()) == 161_691
+    assert sum(EXPECTED_COMPOSITION.values()) == 161_690
     # The blend-sourced labels keep the adopted release's exact per-source rows.
     assert EXPECTED_COMPOSITION["open-thoughts/TaskTrove"] == 24_033
+
+
+def test_the_known_generated_exclusion_is_the_irreproducible_codeio_row():
+    assert KNOWN_GENERATED_EXCLUSIONS == {
+        22689: {
+            "family": "codeio",
+            "reason": "irreproducible_entry",
+            "detail": "A fresh codeio dataset generates a different entry",
+        }
+    }
+    assert GENERATED_POOL_ROWS == 20_799
 
 
 def test_row_identity_derives_the_pipeline_task_id_from_the_source():

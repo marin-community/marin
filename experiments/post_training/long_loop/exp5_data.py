@@ -33,7 +33,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
 
 from experiments.post_training.long_loop.exp4_data import (
-    GENERATED_ROW_COUNT,
+    GENERATED_POOL_ROWS,
     GENERATED_V3_FULL_RUN_ROWS,
     NEMOTRON_IF_LABEL,
     NEMOTRON_IF_RECIPE_VERSION,
@@ -110,7 +110,7 @@ EXPECTED_COMPOSITION = {
     "PRIME-RL/Eurus-2-RL-Data": 10_317,
     "nvidia/Nemotron-RL-Ultra-Training-Blends": 12_426,
     "nvidia/OpenScience": 20_790,
-    GENERATED_LABEL: GENERATED_ROW_COUNT,
+    GENERATED_LABEL: GENERATED_POOL_ROWS,
     "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": 11_634,
     "open-thoughts/TaskTrove": 24_033,
     NEMOTRON_IF_LABEL: NEMOTRON_KEPT_ROWS,
@@ -384,7 +384,8 @@ def prepare_pool(
                         "upstream_admitted_count": GENERATED_V3_FULL_RUN_ROWS,
                         "version": (
                             "reasoning_gym-0.1.25 generated v3 at the adopted 20,800 cycle indices (the full "
-                            "v3 run yields 104,000; the pools keep the adopted composition)"
+                            "v3 run yields 104,000; the pools keep the adopted composition minus the recorded "
+                            "grader-defective exclusion)"
                         ),
                     },
                     "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": {

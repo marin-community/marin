@@ -78,6 +78,16 @@ NEMOTRON_IF_LABEL = "nemotron_if"
 GENERATOR_RECIPE_NAME = "reasoning_gym_generated"
 GENERATED_ROW_COUNT = 20_800
 GENERATED_V3_FULL_RUN_ROWS = 104_000
+KNOWN_GENERATED_EXCLUSIONS = {
+    22689: {
+        "family": "codeio",
+        "reason": "irreproducible_entry",
+        "detail": "A fresh codeio dataset generates a different entry",
+    },
+}
+"""Adopted generated rows today's pipeline rejects: the row's entry does not regenerate, so its
+grader cannot re-derive it — grader-defective, excluded from the rebuilt pools and recorded."""
+GENERATED_POOL_ROWS = GENERATED_ROW_COUNT - len(KNOWN_GENERATED_EXCLUSIONS)
 EXPECTED_COMPOSITION = {
     AGENTIC_TRAIN_SOURCE: 5608,
     "PRIME-RL/Eurus-2-RL-Data": 10_317,
@@ -87,7 +97,7 @@ EXPECTED_COMPOSITION = {
     "open-thoughts/TaskTrove": 24_033,
     NEMOTRON_IF_LABEL: NEMOTRON_KEPT_ROWS,
 }
-EXPECTED_COMPOSITION[TEACHER_ROUTE_LABELS[GENERATOR_URL]] = GENERATED_ROW_COUNT
+EXPECTED_COMPOSITION[TEACHER_ROUTE_LABELS[GENERATOR_URL]] = GENERATED_POOL_ROWS
 FIVE_FAMILIES = ("complex_arithmetic", "coin_flip", "game_of_life_halting", "propositional_logic", "puzzle24")
 FIVE_FAMILY_COUNTS = {
     "coin_flip": 215,
@@ -228,11 +238,17 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
         for part_result in pool.map(regenerate_part, range(GENERATOR_PARTS)):
             for index, raw_task in part_result:
                 regenerated[index] = raw_task
-    if len(regenerated) != GENERATED_ROW_COUNT or rejections:
+    expected = GENERATED_ROW_COUNT - len(KNOWN_GENERATED_EXCLUSIONS)
+    if len(regenerated) != expected or any(
+        rejections[i]["index"] not in KNOWN_GENERATED_EXCLUSIONS
+        or rejections[i]["reason"] != KNOWN_GENERATED_EXCLUSIONS[rejections[i]["index"]]["reason"]
+        for i in range(len(rejections))
+    ):
         details = json.dumps(rejections[:3], indent=1)
         raise ValueError(
             f"The regeneration kept {len(regenerated)} rows with {len(rejections)} rejections; "
-            f"the adopted label holds {GENERATED_ROW_COUNT}: {details}"
+            f"the adopted label holds {GENERATED_ROW_COUNT} with {sorted(KNOWN_GENERATED_EXCLUSIONS)} "
+            f"excluded: {details}"
         )
     for index, old in sorted(old_rows.items()):
         new = json.loads(regenerated[index])
@@ -258,6 +274,9 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
             f"{GENERATED_V3_FULL_RUN_ROWS}; the pools keep the adopted 20,800 composition)"
         ),
         "prompts_unchanged": True,
+        "excluded_rows": [
+            {"index": index, **exclusion} for index, exclusion in sorted(KNOWN_GENERATED_EXCLUSIONS.items())
+        ],
         "shared_grade_script": (
             "every row's embedded reasoning_gym_grade.py is regenerated: the cross-day entry comparison "
             "(#11951) and the repaired verifyit scorers (#11987)"
@@ -429,7 +448,8 @@ def prepare_pool(*, output: str, agentic: str, blend: str, nemotron: str, grader
                         "upstream_admitted_count": GENERATED_V3_FULL_RUN_ROWS,
                         "version": (
                             "reasoning_gym-0.1.25 generated v3 at the adopted 20,800 cycle indices (the full "
-                            "v3 run yields 104,000; the pools keep the adopted composition)"
+                            "v3 run yields 104,000; the pools keep the adopted composition minus the recorded "
+                            "grader-defective exclusion)"
                         ),
                     },
                     "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": {
