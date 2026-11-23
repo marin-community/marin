@@ -111,7 +111,7 @@ For text and numeric tasks, the `AnswerCall` format adds `submit_answer(answer: 
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Acquiring these results requires an actor runtime. These tasks still declare an `answer_format`, but grading does not read it. `file` and `workspace_state` answers require a grader with an environment. In-process grading uses supplied evidence; the optional TaskCompendium episode runtime captures declared output files. The `structured_exact` mode compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`); booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types.
+`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Acquiring these results requires an actor runtime. These tasks still declare an `answer_format`, but grading does not read it. `file` and `workspace_state` answers require a grader with an environment. In-process grading uses supplied evidence; the TaskCompendium shell runtime captures declared output files. The `structured_exact` mode compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`); booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types.
 
 `answer_type=json` is a JSON answer from the model, independent of environment state. `JsonValueAnswer` parses the complete final chat text into a `JsonSubmission` for `structured_exact`. `StateSubmission` is evidence acquired from an environment by its runtime. `structured_exact` accepts either. The `JsonAnswer` format instead unwraps an `answer` string for text or numeric tasks, or a JSON number for numeric tasks. Both JSON formats accept one Markdown code fence enclosing the whole reply and reject extra prose, duplicate keys at every nesting level, and nonfinite numbers. Tool-call arguments are decoded before entering the conversation evidence. Runtimes own provider-response decoding and may report malformed tool-call arguments as a structural submission failure with reward `0.0`. Both historical and final calls contain typed argument objects.
 
@@ -335,9 +335,7 @@ unadvertised ejections, and continuation after ejection are `submission_failure`
 `0.0`. Completed ejection calls in the source conversation are historical input.
 
 `answer_submission` dispatches ejection before the normal answer-format extractor, without
-passing expected answers or solvability labels into extraction. The episode runtime preserves
-the terminal call and stops before executing it or any other call in its batch. Runtime
-failures remain infrastructure errors without a reward.
+passing expected answers or solvability labels into extraction.
 
 Generate paired missing-information, contradictory-constraint, and guideline examples as
 serialized TaskSpecs:
