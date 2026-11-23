@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 4:54 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 5:08 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -1819,7 +1819,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   in 92.0 seconds. All eight serving ranks verified policy 0 in 150.7
   seconds with zero mismatches across 157,498,867,712 bytes. The run
   scored the 100-task baseline in 19.2 seconds and admitted the first 32
-  groups at zero staleness. It is writing the exact-restoration checkpoint.
+  groups at zero staleness. The retained baseline matched all 100 task IDs
+  and prompt token sequences from the previous attempt. The mean verifier
+  score changed from 0.18 to 0.23 on the fresh generation.
+  Three learner ranks completed their local checkpoint writes. Thirty
+  minutes after the first finished, the JAX TensorStore barrier reported
+  that rank 1 had yet to arrive. The OCDBT manifest had changed three
+  seconds before the error. The completion marker was absent, and the
+  attempt ended with zero accepted updates. Scope the next deadline
+  change to the supplemental validation save and retain the exact
+  fresh-process state comparison.
   [Fresh held vLLM child][iris-held-vllm-retry]
 
   The native coordinator lost its first slot before the GPU group was
