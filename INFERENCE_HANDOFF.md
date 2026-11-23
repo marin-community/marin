@@ -58,7 +58,10 @@ five-second natural exit deadline.
 Commit `768ea25030` bounds stage-transform caches to 64 entries per publisher
 and releases them with their owner. Fresh-process CPU tests verified release
 after normal and aborted publication, and kept exact publication bytes.
-The full-model GPU exit and restart remain to be tested with that repair.
+Run `2026.11.22.4` is testing the repair from `768ea25030` with two updates
+on 40 H100s. At 17:09 PST, all five GPU tasks were running and both staged
+bundles matched their frozen source and runtime inventories. Process exit
+and restart qualification remain open.
 
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and
