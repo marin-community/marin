@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 8:12 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 8:20 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched frozen comparison is complete. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 67B live swap and real tool-turn replay passed. The held native arm scored all 100 baseline tasks, with 89 prompt token sequences matching vLLM exactly. The latest completed full-context scoring run found one ratio outside the permitted range across 32,768 sampled tokens. | Align tool-prompt rendering, complete the held comparison and resolve the full-context scoring discrepancy. |
+| Native inventory backend | The 67B live swap and real tool-turn replay passed. The held native arm scored all 100 baseline tasks, with 89 prompt token sequences matching vLLM exactly. The latest completed full-context scoring run reproduced three ratios outside the permitted range across 32,768 sampled tokens. | Validate the renderer repair on H100, complete the held comparison and resolve the full-context scoring discrepancy. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Verify the full native handoff at 67B. The frozen H100 comparison uses its original worker transport. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -1978,6 +1978,14 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   100 tasks before accepting a matched reward comparison.
   [Baseline prompt audit][held-native-baseline-prompt-audit]
 
+  A one-file native renderer repair reproduced all 100 original vLLM prompt
+  token arrays with the pinned tokenizer on CPU. It changed the 11 tool
+  prompts and kept the 89 other arrays. The exact continuation test
+  preserves already sampled token IDs. The offline artifact plan holds
+  the learner, data, seed and 40-H100 role plan fixed. Require exact
+  live-panel prompt parity and an audit of the source delta to reuse the
+  completed vLLM arm.
+
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
   scores to the same typed frames from one original attempt. The first
@@ -1992,7 +2000,17 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   The retry verified policy 2 in 154.7 seconds and returned all four
   full-context trajectories after 1,492.1 seconds. The optional head
   diagnostic rejected one predictor with conflicting score observations.
-  The ordinary fused scorer reads the original returned frames.
+  The short tool-turn scorer passed all 167 sampled targets and masked
+  46 tool observation tokens. The ordinary full-context scorer found
+  two ratios below 0.8 and one above 1.2, with extrema 0.5553 and 1.2350.
+  Independent recomputation from the original arrays reproduced all three.
+  The four replay frames and raw score arrays also matched an earlier
+  failed attempt byte for byte. A scratch CPU diagnostic now links the
+  head vector and score to the exact decoder output row used for the
+  emitted token. It preserved all four ordinary frames and their scores.
+  The equivalent H100 diagnostic and a passing full-context score remain
+  required.
+  [Verified score evidence][native-full-context-ratio-evidence]
   [Original calibration][iris-native-serving-eval-first] ·
   [Revised calibration][iris-native-serving-eval-retry] ·
   [Verified calibration archive][native-serving-eval-archive] ·
@@ -2122,6 +2140,7 @@ arms. [Prior timing comparison][timing]
 [iris-native-install-deadline-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122n
 [checkpoint-first-cpu-proof]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-checkpoint-first-cpu-proof.tar.zst
 [held-native-baseline-prompt-audit]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-aa86eb747b53%2Fverified-baseline-prompt-mismatch.json
+[native-full-context-ratio-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122n%2Fverified-ordinary-fused-evidence.json
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
 [iris-native-head-comparison]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused
 [iris-held-native-repaired]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-ac90c03-in-424011b4-2026.11.22.1-coordinator-f7d86071
