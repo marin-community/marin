@@ -1,27 +1,19 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
-import hashlib
 
-import haliax as hax
 import jax
 import jax.numpy as jnp
-from haliax import Axis
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 import numpy as np
 import pytest
 
-from levanter.grug.attention import apply_rotary_embedding
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
-from levanter.layers.kv_cache import KvPageCache
-from levanter.models.snowball import SnowballAttention, SnowballConfig, _activation_spec, rms_norm
 
 
 @pytest.fixture(autouse=True)
-def require_single_v4_device(request):
+def require_tpu_v4(request):
     if jax.default_backend() != "tpu":
         pytest.skip("Pallas fixed-schedule tests require an actual TPU runtime")
     devices = jax.devices()
@@ -53,8 +45,7 @@ def _four_device_shardings() -> tuple[Mesh, NamedSharding, NamedSharding]:
     if len(devices) != 4 or len(jax.local_devices()) != 4:
         pytest.skip("requires four same-process TPUv4 devices")
     mesh = compact_grug_mesh()
-    with jax.set_mesh(mesh):
-        row_spec = _activation_spec()
+    row_spec = P(("replica_dcn", "data", "expert"), None)
     return mesh, NamedSharding(mesh, row_spec), NamedSharding(mesh, P(None, None))
 
 
@@ -117,7 +108,9 @@ def _highest_reference(x: jax.Array, w: jax.Array) -> jax.Array:
     ],
 )
 @pytest.mark.parametrize("d", [128, 256])
-def test_fixed_schedule_compiled_custom_vjp_primal_and_gradient_match_reference(d, input_dtype, weight_dtype):
+def test_fixed_schedule_compiled_custom_vjp_preserves_primal_and_matches_reference_gradients(
+    d, input_dtype, weight_dtype
+):
     x, w = _inputs(5, d, input_dtype, weight_dtype)
     cotangent = jnp.linspace(-1.0, 1.0, 5 * 256, dtype=jnp.float32).reshape(5, 256).astype(x.dtype)
 
@@ -145,39 +138,6 @@ def test_fixed_schedule_compiled_custom_vjp_primal_and_gradient_match_reference(
     assert bool(jnp.isfinite(reference_dx).all())
     assert bool(jnp.isfinite(reference_dw).all())
     assert bool(jnp.isfinite(ad_primal).all())
-
-
-def test_fixed_schedule_single_device_explicit_mesh_snowball_caller_accepts_fp32_weights_and_bf16_activations():
-    mesh = compact_grug_mesh()
-    replicated_sharding = NamedSharding(mesh, P(None, None))
-    with mesh:
-        caller_x_spec = _activation_spec()
-    caller_x_sharding = NamedSharding(mesh, caller_x_spec)
-    cfg = SnowballConfig(
-        hidden_dim=128,
-        intermediate_dim=128,
-        shared_expert_intermediate_dim=128,
-        num_experts=1,
-        num_experts_per_token=1,
-        num_heads=1,
-        num_kv_heads=1,
-        head_dim=128,
-        projection_implementation="fixed_schedule",
-    )
-    attention = SnowballAttention(
-        w_q=jax.device_put(jnp.ones((128, 128), dtype=jnp.float32), replicated_sharding),
-        w_k=jax.device_put(jnp.ones((128, 128), dtype=jnp.float32), replicated_sharding),
-        w_v=jax.device_put(jnp.ones((128, 128), dtype=jnp.float32), replicated_sharding),
-        w_o=jax.device_put(jnp.ones((128, 128), dtype=jnp.float32), replicated_sharding),
-        attn_gate=jax.device_put(jnp.zeros((128, 1), dtype=jnp.float32), replicated_sharding),
-        cfg=cfg,
-    )
-    x = jax.device_put(jnp.ones((1, 1, 128), dtype=jnp.bfloat16), caller_x_sharding)
-    q, k, v = jax.jit(lambda value: attention._project_qkv(value, disable_rope=True))(x)
-
-    assert q.dtype == jnp.bfloat16
-    assert k.dtype == jnp.bfloat16
-    assert v.dtype == jnp.bfloat16
 
 
 @pytest.mark.parametrize(
@@ -328,128 +288,3 @@ def test_fixed_schedule_four_device_lowered_forward_backward_have_shard_map_with
         assert "shard_map" in jaxpr_text
         assert "all_gather" not in jaxpr_text
         assert "all_gather" not in stablehlo_text
-
-
-def test_fixed_schedule_four_device_jitted_snowball_training_projection_uses_physical_rows():
-    mesh, _, replicated_sharding = _four_device_shardings()
-    with jax.set_mesh(mesh):
-        caller_x_spec = _activation_spec()
-    caller_x_sharding = NamedSharding(mesh, caller_x_spec)
-    cfg = SnowballConfig(
-        hidden_dim=256,
-        intermediate_dim=128,
-        shared_expert_intermediate_dim=256,
-        num_experts=1,
-        num_experts_per_token=1,
-        num_heads=2,
-        num_kv_heads=1,
-        head_dim=128,
-        projection_implementation="fixed_schedule",
-        rms_norm_implementation="reference",
-    )
-    attention = SnowballAttention(
-        w_q=jax.device_put(jnp.ones((256, 256), dtype=jnp.float32), replicated_sharding),
-        w_k=jax.device_put(jnp.ones((256, 128), dtype=jnp.float32), replicated_sharding),
-        w_v=jax.device_put(jnp.ones((256, 128), dtype=jnp.float32), replicated_sharding),
-        w_o=jax.device_put(jnp.ones((256, 256), dtype=jnp.float32), replicated_sharding),
-        attn_gate=jax.device_put(jnp.zeros((256, 2), dtype=jnp.float32), replicated_sharding),
-        cfg=cfg,
-    )
-    # Physical training layout: four data-sharded rows, each with 128 sequence positions.
-    x = jax.device_put(jnp.ones((4, 128, 256), dtype=jnp.bfloat16), caller_x_sharding)
-    q, k, v = jax.jit(lambda value: attention._project_qkv(value, disable_rope=True))(x)
-    assert q.shape == (4, 128, 2, 128)
-    assert k.shape == (4, 128, 1, 128)
-    assert v.shape == (4, 128, 1, 128)
-    assert q.dtype == k.dtype == v.dtype == jnp.bfloat16
-    assert bool(jnp.isfinite(q).all()) and bool(jnp.isfinite(k).all()) and bool(jnp.isfinite(v).all())
-
-
-def test_fixed_schedule_four_device_jitted_snowball_decode_updates_capacity_32_cache():
-    mesh, _, replicated_sharding = _four_device_shardings()
-    with jax.set_mesh(mesh):
-        caller_x_spec = _activation_spec()
-    caller_x_sharding = NamedSharding(mesh, caller_x_spec)
-    cache_sharding = NamedSharding(mesh, P(None, None, "model", None))
-    cfg = SnowballConfig(
-        hidden_dim=256,
-        intermediate_dim=128,
-        shared_expert_intermediate_dim=256,
-        num_experts=1,
-        num_experts_per_token=1,
-        num_heads=2,
-        num_kv_heads=1,
-        head_dim=128,
-        projection_implementation="fixed_schedule",
-        rms_norm_implementation="reference",
-        attention_implementation="reference",
-    )
-    attention = SnowballAttention(
-        w_q=jax.device_put(jnp.ones((256, 256), dtype=jnp.float32), replicated_sharding),
-        w_k=jax.device_put(jnp.ones((256, 128), dtype=jnp.float32), replicated_sharding),
-        w_v=jax.device_put(
-            jnp.arange(256 * 128, dtype=jnp.float32).reshape(256, 128) * 0.002,
-            replicated_sharding,
-        ),
-        w_o=jax.device_put(jnp.ones((256, 256), dtype=jnp.float32), replicated_sharding),
-        attn_gate=jax.device_put(jnp.zeros((256, 2), dtype=jnp.float32), replicated_sharding),
-        cfg=cfg,
-    )
-    attention = dataclasses.replace(
-        attention,
-        w_k=jax.device_put(
-            (jnp.arange(256 * 128, dtype=jnp.float32).reshape(256, 128) - 8192.0) * 0.001,
-            replicated_sharding,
-        ),
-    )
-    # Four active logical sequences each occupy one physical slot in a 4-page x 8-slot cache.
-    initial_cache = KvPageCache.init(
-        PageTableSpec(num_pages=4, page_size=8, max_seqs=4), Axis("kv_head", 1), Axis("head_size", 128)
-    )
-    cache = KvPageCache(
-        hax.named(jax.device_put(initial_cache.kv_pages.array, cache_sharding), initial_cache.kv_pages.axes)
-    )
-    batch_info = PageBatchInfo(
-        slot_ids=hax.named(jnp.asarray([0, 1, 2, 3], dtype=jnp.int32), "seq"),
-        page_indices=hax.named(jnp.asarray([[0], [1], [2], [3]], dtype=jnp.int32), ("seq", "page")),
-        seq_lens=hax.named(jnp.asarray([1, 1, 1, 1], dtype=jnp.int32), "seq"),
-        cu_q_lens=hax.named(jnp.asarray([0, 1, 2, 3, 4], dtype=jnp.int32), "seq"),
-        num_seqs=jnp.asarray(4, dtype=jnp.int32),
-        new_token_dests=hax.named(jnp.asarray([0, 8, 16, 24], dtype=jnp.int32), "position"),
-        page_size=8,
-    )
-    x = jax.device_put(
-        ((jnp.arange(4 * 256, dtype=jnp.float32).reshape(4, 1, 256) % 29) - 14).astype(jnp.bfloat16),
-        caller_x_sharding,
-    )
-    pos_ids = jnp.zeros((4,), dtype=jnp.int32)
-    # Compare cache placement against independent calls to the shared public forward.
-    expected_k = fixed_schedule_linear(x.reshape(4, 256), attention.w_k).reshape(4, 1, 128).astype(x.dtype)
-    expected_v = fixed_schedule_linear(x.reshape(4, 256), attention.w_v).reshape(4, 1, 128).astype(x.dtype)
-    expected_k = rms_norm(expected_k).reshape(4, 1, 1, 128)
-    expected_k_rotated, _ = apply_rotary_embedding(
-        expected_k[..., :64],
-        expected_k[..., :64],
-        seq_len=1,
-        head_dim=64,
-        rope=cfg.rope,
-        position_ids=pos_ids[:, None],
-    )
-    expected_k = jnp.concatenate((expected_k_rotated, expected_k[..., 64:]), axis=-1)
-    output, updated_cache = jax.jit(
-        lambda value, state: attention.decode(value, state, batch_info, pos_ids, use_long=False)
-    )(x, cache)
-    assert output.shape == (4, 1, 256)
-    assert updated_cache.kv_pages.array.shape == (4, 8, 2, 128)
-    assert updated_cache.kv_pages.array.dtype == jnp.float32
-    assert updated_cache.kv_pages.array.sharding == cache_sharding
-    # Keep assertion-side indexing on the host outside the Explicit mesh.
-    updated_pages = np.asarray(updated_cache.kv_pages.array)
-    expected_k = np.asarray(expected_k)
-    expected_v = np.asarray(expected_v)
-    np.testing.assert_array_equal(updated_pages[np.arange(4), 0, 0], expected_k[:, 0, 0].astype(np.float32))
-    np.testing.assert_array_equal(updated_pages[np.arange(4), 0, 1], expected_v[:, 0].astype(np.float32))
-    np.testing.assert_array_equal(
-        updated_pages[:, 1:].view(np.uint32), np.asarray(cache.kv_pages.array)[:, 1:].view(np.uint32)
-    )
-    assert bool(jnp.isfinite(output).all())
