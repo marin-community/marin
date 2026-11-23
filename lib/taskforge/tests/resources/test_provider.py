@@ -351,7 +351,7 @@ class Trickle(httpx.AsyncByteStream):
             yield b" "
 
 
-# Review 2026-11-23: the end-to-end trickle test showed a body was cut, but not at which deadline: a hook bound of
+# Regression: the end-to-end trickle test showed a body was cut, but not at which deadline: a hook bound of
 # 750 ms in place of the configured 50 ms still passed. The configured stall timeout bounds the whole body.
 @pytest.mark.parametrize(("stall_timeout", "drained"), [(10.0, False), (150.0, True)])
 async def test_an_error_body_is_read_whole_within_the_configured_stall_timeout(

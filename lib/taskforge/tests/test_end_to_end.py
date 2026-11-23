@@ -3222,7 +3222,7 @@ class LocalIrisEnvs(EnvFactory):
 
 # Regression: a lost WebSocket upgrade reply reran the command in the same sandbox, and a
 # missing `wc` or an OOM-killed sandbox during capture held only after three sandboxes with one append each.
-# Review 2026-11-21 (iris timeout follow-up 3): after a lone `timer 137` was classified as OOM or unknown, a failed
+# Regression: after a lone `timer 137` was classified as OOM or unknown, a failed
 # TerminateJob (503 or 403) replaced that outcome with the bare transport error, and the run left through the bug path.
 TIMER_KILL_CANCEL_FAILS = [
     (
