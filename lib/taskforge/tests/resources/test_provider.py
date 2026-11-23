@@ -308,6 +308,37 @@ async def test_cancelling_a_solver_rollout_propagates() -> None:
         await running
 
 
+class Trickle(httpx.AsyncByteStream):
+    """An error body of seven bytes, each three virtual seconds after the last: 21 seconds in all."""
+
+    def __init__(self, time: LoopTime) -> None:
+        self.time = time
+
+    async def __aiter__(self):  # type: ignore[override]
+        for _ in range(7):
+            await self.time.sleep(3)
+            yield b" "
+
+
+# Review 2026-11-23: the end-to-end trickle test showed a body was cut, but not at which deadline: a hook bound of
+# 750 ms in place of the configured 50 ms still passed. The configured stall timeout bounds the whole body.
+@pytest.mark.parametrize(("stall_timeout", "drained"), [(10.0, False), (150.0, True)])
+async def test_an_error_body_is_read_whole_within_the_configured_stall_timeout(
+    stall_timeout: float, drained: bool
+) -> None:
+    time = LoopTime()
+    source = FixedEndpoint(GlmEndpoint("http://fake/v1", "fake", Pool.HIGH))
+    provider = glm_provider.GlmProvider(source, "glm-5.3", stall_timeout, 1)
+    request = httpx.Request("POST", "http://fake/v1/chat/completions")
+    response = httpx.Response(503, stream=Trickle(time), request=request)
+    if drained:
+        await provider._read_error_body(response)
+        assert response.content == b" " * 7
+    else:
+        with pytest.raises(httpx.ReadTimeout, match=f"error body unread in {stall_timeout}s"):
+            await provider._read_error_body(response)
+
+
 async def test_endpoint_request_body_has_no_client_output_allowance(monkeypatch: pytest.MonkeyPatch) -> None:
     bodies: list[dict[str, object]] = []
 

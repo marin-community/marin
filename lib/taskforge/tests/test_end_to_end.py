@@ -1061,14 +1061,14 @@ async def test_a_trickling_error_body_holds_the_workpiece_within_the_availabilit
                 replace(built, envs=Envs(), inference=client, role_inference={**built.role_inference, "author": client}),
             )
             await driver.one(driver_args)
-        # Every attempt's connection closed before its body ended; none was read to the end.
+        # Every attempt was cut before its body completed (test_provider pins the configured deadline).
         assert all(fake.cut.acquire(timeout=CUT_SEEN) for _ in fake.requests), "an error body was read to its end"
     destination = tmp_path / "out" / driver.proposal_key(driver_args.proposals)
     workpiece = published_workpiece(destination)
     assert (workpiece.terminal, solver_slots(destination)) == (Terminal.HELD, [])
     resolved = [record.event for record in history(destination) if isinstance(record.event, Resolved)]
     assert not [event for event in resolved if isinstance(event.request, InferenceRequest)]
-    # Each stage attempt ended when its window closed, not when a body did.
+    # Each stage attempt ended when its window closed, not when a body completed.
     assert (len(fake.requests), fake.health_polls) == (2 * STAGE_REPLAY_ATTEMPTS, STAGE_REPLAY_ATTEMPTS)
     assert clock.waits == [1800.0] * 2 * STAGE_REPLAY_ATTEMPTS
 

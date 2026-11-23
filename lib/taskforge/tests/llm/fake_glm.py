@@ -131,10 +131,11 @@ def _handler(fake: FakeGlm) -> type[BaseHTTPRequestHandler]:
                     self.wfile.write(b" ")
                     self.wfile.flush()
                     time.sleep(TRICKLE_INTERVAL)
+                self.wfile.write(body.encode())
             except (BrokenPipeError, ConnectionResetError):
+                if not trickle:
+                    raise
                 fake.cut.release()
-                return
-            self.wfile.write(body.encode())
 
         def do_GET(self) -> None:
             assert self.path == "/health"
