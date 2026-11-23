@@ -30,7 +30,6 @@ from taskforge.effects.events import Resolved, ScopeExited
 from taskforge.effects.issues import ContextExceeded, Restart
 from taskforge.effects.log import EventLog, Record, decode
 from taskforge.llm.client import ContextExhausted, ModelClient, Progress, Segment
-from taskforge.llm.client import FinishReason as ProviderFinish
 from taskforge.llm.policy import GLM_5_3, ModelProfile, RetryPolicy
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
@@ -570,7 +569,7 @@ def test_a_provider_serving_another_model_than_its_role_declares_is_refused(role
 
 
 ANSWER = replace(
-    provider_completion(), content="SCORE: 1", tool_calls=(), finish_reason=ProviderFinish.STOP, continuations=0
+    provider_completion(), content="SCORE: 1", tool_calls=(), finish_reason=FinishReason.STOP, continuations=0
 )
 
 
