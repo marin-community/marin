@@ -275,9 +275,8 @@ def build_resources(
     execution = digest((settings, command_timeout, policy.setting("sandbox.output_budget_mb", int)))
     solver = clients["solver"]
     sampling = policy_sampling(policy, solver.profile.sampling)
-    # Provider settings (provider.*, pools) shape how a request is served, not what it returns, so replay keys carry
-    # the model, the role, what the request itself records and a non-default profile's identity. A replayed rollout or
-    # grade skips the inference inside it, so its own key carries the non-default profiles of the roles that shaped it.
+    # Replay keys carry the model, role, request and non-default profile identity. Rollout and grade keys also carry
+    # non-default profiles of roles whose inference a replayed outer result skips.
     inference = {role: GlmInference(client, role) for role, client in clients.items()}
     profile = solver.profile.replay_identity()
     judge = clients["judge"].profile.replay_identity() if "judge" in clients else None

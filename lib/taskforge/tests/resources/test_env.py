@@ -161,7 +161,6 @@ async def test_environment_writes_binary_files_and_runs_commands_under_its_defin
     result = await run_command(RunCommand(COMMAND, 5), original, notify=Notes())
     assert (result.exit_code, result.stdout, result.stderr) == (7, "hello", "err")
     assert await original.read(OUTPUT) == b"changed"
-    # Position in the owner's history, not a chain of effects, identifies what a replay reconstructs.
     assert original.fingerprint() == initial
     await original.close()
     with pytest.raises(Restart):
