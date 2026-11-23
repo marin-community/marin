@@ -546,7 +546,7 @@ def test_snowball_paged_generation_matches_full_forward(
                 for name, value in model.to_state_dict().items():
                     np.testing.assert_array_equal(value, state[name])
             if selected_decode:
-                model = model.with_selected_ep_decode()
+                model = model.with_selected_ep_decode().with_expert_sharded_kv()
             if decode_mode == "unroll":
                 model = model.with_unrolled_decode()
             elif decode_mode in ("split_cache", "compact_window"):
