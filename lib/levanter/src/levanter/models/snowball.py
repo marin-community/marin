@@ -20,6 +20,7 @@ guards against drift.
 """
 
 import dataclasses
+from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import partial
 import math
@@ -1660,6 +1661,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         ids = np.where(active[..., None], ids, np.arange(expected[-1], dtype=np.int32))
         return SnowballRouteReplay(jnp.asarray(ids, dtype=jnp.int32), token_valid)
 
+    def _policy_matmul_precision(self):
+        if self.config.replay_precision == "zero_kl":
+            return jax.default_matmul_precision("highest")
+        return nullcontext()
+
     def _activations(
         self,
         input_ids: NamedArray,
@@ -1685,14 +1691,15 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             replay_experts = route_replay.expert_ids.reshape(
                 self.config.num_layers, b * s, self.config.num_experts_per_token
             )
-        result = self.transformer._forward(
-            tokens,
-            mask,
-            return_routes,
-            token_valid,
-            collect_counts=collect_counts,
-            replay_experts=replay_experts,
-        )
+        with self._policy_matmul_precision():
+            result = self.transformer._forward(
+                tokens,
+                mask,
+                return_routes,
+                token_valid,
+                collect_counts=collect_counts,
+                replay_experts=replay_experts,
+            )
         hidden = (
             result.output.reshape(*lead, s, self.Embed.size) if lead else result.output.reshape(s, self.Embed.size)
         )
@@ -1906,16 +1913,17 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         capture_routes: bool = False,
     ) -> SnowballPagedResult:
         unroll = window_batch is not None or (self._unroll_decode and not prefill)
-        hidden, caches, routes = self._decode_hidden(
-            input_ids,
-            kv_cache,
-            batch_info,
-            pos_ids,
-            unroll=unroll,
-            window_batch=window_batch,
-            capture_routes=capture_routes,
-            fused_kv_tokens=(FUSED_KV_PREFILL_MAX_TOKENS if prefill else FUSED_KV_APPEND_MAX_TOKENS),
-        )
+        with self._policy_matmul_precision():
+            hidden, caches, routes = self._decode_hidden(
+                input_ids,
+                kv_cache,
+                batch_info,
+                pos_ids,
+                unroll=unroll,
+                window_batch=window_batch,
+                capture_routes=capture_routes,
+                fused_kv_tokens=(FUSED_KV_PREFILL_MAX_TOKENS if prefill else FUSED_KV_APPEND_MAX_TOKENS),
+            )
         if self.config.projection_implementation == "fixed_schedule":
             rows = hax.named(hidden[:, 0], (*input_ids.axes, self.Embed))
             if sample_indices is not None:
