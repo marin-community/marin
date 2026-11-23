@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 7:27 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 7:36 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -694,14 +694,23 @@ reader loads addressable slices and can elect one reader per replicated
 shard. Snowball supports model-only restore with fresh Adam state.
 [Converter][hf-to-native-converter] · [Native shard reader][native-shard-reader] · [Model-only restore][model-only-restore]
 
-The current fresh-process restore first initializes from HF and then
-loads the native optimizer checkpoint. A two-rank CPU probe constructed
-the abstract trainer state from architecture metadata, assigned Adam's
-pinned-host layout, and restored directly into it. With the HF weight
-file absent, both fresh processes reproduced the model, Adam, RNG,
-step and averaging fingerprints and matched the next optimizer update.
-The original startup failed without that weight file. Measure the
-restart savings on H100 before using this path for the inventory job.
+The current fresh-process restore initializes from HF before loading the
+native optimizer checkpoint. In the accepted maintained vLLM run, all four
+learners logged two passes over the same 39 files. One pass covers about
+125 GiB of logical object data per host, or about 500 GiB across the learners.
+The logs record file sizes and read starts. Measure wire traffic separately.
+
+A scratch test on the maintained source restored the complete checkpoint
+with the HF initializer directory unavailable. The save receipt provided
+each leaf's concrete sharding and memory kind. Inferring those from the model
+shape alone gave the replicated router bias a different layout. The real
+typed worker verified exact model, Adam, RNG, step and averaging state in
+fresh one- and two-process CPU runs, retained Adam's pinned-host placement
+and matched the next update. The worker rejected an incorrect initializer,
+model binding or Adam fingerprint, and missing completion metadata. Existing
+checkpoints from this pilot lack the new save receipt. Measure the restart
+savings and verify exact state on H100 before adopting the path.
+[Checkpoint-first CPU proof][checkpoint-first-cpu-proof]
 
 The prior handoffs preserve the `2026.11.20.9` and `2026.11.20.8` source,
 along with the held serving comparison. The restored serving plans reproduce
@@ -1950,7 +1959,9 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   149.4 seconds and serving install took 244.5 seconds. Kueue preempted
   the CPU coordinator as baseline evaluation began. This child recorded
   no scored baseline tasks or optimizer updates. Iris admitted the
-  replacement on the same 40-H100 layout.
+  replacement on the same 40-H100 layout. All 40 ranks passed NCCL.
+  The last learner finished streaming the HF export in about 30 minutes
+  and all four workers reported ready.
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
   scores to the same typed frames from one original attempt. The first
@@ -1959,15 +1970,17 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   held native coordinator. The replacement stopped at the 1,800-second
   policy-2 install deadline. The original task archive contains both
   tool-turn frames and the install timeout. The full-context group and
-  scorer never ran. Retry with a separate deadline for that install while
-  retaining the tool replay, generation bounds and PPO thresholds.
+  scorer never ran. A new eight-H100 retry uses 3,600 seconds for the
+  live policy-2 install. It resets the original deadline before the next
+  RPC. The tool replay, generation bounds and PPO thresholds carry over.
   [Original calibration][iris-native-serving-eval-first] ·
   [Revised calibration][iris-native-serving-eval-retry] ·
   [Verified calibration archive][native-serving-eval-archive] ·
   [First matched native child][iris-held-native-validation-retry] ·
   [Matched native replacement][iris-held-native-validation-replacement] ·
   [Same-attempt score diagnostic][iris-native-same-attempt-score] ·
-  [Original install-timeout archive][native-same-attempt-timeout-archive]
+  [Original install-timeout archive][native-same-attempt-timeout-archive] ·
+  [Scoped install retry][iris-native-install-deadline-retry]
 
   Both plans use a 24,576-token serving limit and a 16,896-token request
   limit. Native uses the cache geometry from the 67B live-swap run. Use the same learner, selection and fixed panel to
@@ -2086,6 +2099,8 @@ arms. [Prior timing comparison][timing]
 [iris-held-native-validation-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-coordinator-1f166fa9%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-aa86eb747b53
 [iris-native-same-attempt-score]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122m%2Fnative-native-fused-20261122m-tool-fused
 [native-same-attempt-timeout-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122m%2Fb14120ce5f263e2c-original-task-outputs.tar.zst
+[iris-native-install-deadline-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122n
+[checkpoint-first-cpu-proof]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-checkpoint-first-cpu-proof.tar.zst
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
 [iris-native-head-comparison]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused
 [iris-held-native-repaired]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-ac90c03-in-424011b4-2026.11.22.1-coordinator-f7d86071
