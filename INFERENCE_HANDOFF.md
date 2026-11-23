@@ -79,9 +79,15 @@ Commit `768ea25030` bounds stage-transform caches to 64 entries per publisher
 and releases them with their owner. Fresh-process CPU tests verified release
 after normal and aborted publication, and kept exact publication bytes.
 Run `2026.11.22.4` is testing the repair from `768ea25030` with two updates
-on 40 H100s. At 17:09 PST, all five GPU tasks were running and both staged
-bundles matched their frozen source and runtime inventories. Process exit
-and restart qualification remain open.
+on 40 H100s. The coordinator was scheduler-preempted and restarted under its
+existing retry policy; all five original GPU pods are gone. Current child
+`2026.11.22.4-a7ebaaff0409`, submitted at 17:24 PST, had all five tasks running
+at 17:31 PST with zero child failures or preemptions. Its accepted bundle matches
+all 4,590 frozen source entries and 49 required runtime files; all 670 materialized
+configuration fields match the frozen recipe. Progress from the interrupted
+attempt is kept separate. Process exit and restart qualification remain open.
+This run covers source `768ea25030`; it does not qualify the newer native
+inference integration now on this branch.
 
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and

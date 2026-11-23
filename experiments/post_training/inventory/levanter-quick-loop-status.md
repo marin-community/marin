@@ -56,11 +56,19 @@ Controlled follow-up `2026.11.22.4` is running from
 `768ea250307c746f95464a81ab5944338c8ddc5c` with the owned-cache repair. Its
 coordinator is
 `/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.22.4-coordinator-4367d39b`;
-the GPU child suffix is `2026.11.22.4-a686371921e7`. At 17:09 PST all five GPU
+the original GPU child suffix was `2026.11.22.4-a686371921e7`. At 17:09 PST all five GPU
 tasks were running with zero failures/preemptions. Both accepted bundles match
 all 4,590 frozen source entries and 49 required runtime files. The two-update,
 40-H100 BATCH recipe, numerical settings and five-second exit requirement are
 unchanged; no remedy or completed update is established by startup.
+
+The coordinator was scheduler-preempted and automatically retried. The original
+GPU gang was stopped with `Parent task retried`; all five old GPU pods are gone.
+Current child `2026.11.22.4-a7ebaaff0409` was submitted at 17:24 PST and had all
+five tasks running at 17:31 PST, with zero child failures/preemptions. Its new
+accepted bundle again matches all 4,590 entries and 49 required files; all 670
+materialized config fields match the frozen recipe. The coordinator's cumulative
+preemption count is one. Previous-attempt progress is not carried forward.
 
 BATCH smoke `2026.11.22.1`, from
 `8dde046e6980e120e13f577f0035be16c62d77f7`, failed at 00:56 PST during
