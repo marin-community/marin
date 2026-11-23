@@ -14,7 +14,7 @@ in these two modules alone.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from evalrecords.eval_stats import (
@@ -328,11 +328,6 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         ),
         protocol_identity=next(iter(identities)) if declared and len(identities) == 1 else None,
     )
-
-
-def measurements_from_records(records: Iterable[EvalRunRecord]) -> list[Measurement]:
-    """Every record's benchmark measurement, skipping records that produced no primary metric."""
-    return [measurement for record in records if (measurement := measurement_from_record(record)) is not None]
 
 
 def declared_metric_gap(record: EvalRunRecord) -> str | None:
