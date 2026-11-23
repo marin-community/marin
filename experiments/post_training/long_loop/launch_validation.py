@@ -102,7 +102,7 @@ def validate_before_allocation(
         validation = validate_launch(document, Path(directory))
     launch = yaml.safe_load(document)
     sessions = launch["skyrl"]["environment"]["task_sessions"]
-    names = {"CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "DAYTONA_TARGET"}
+    names = {"CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "WANDB_API_KEY"}
     for settings in (
         sessions.get("remote_judge") or {},
         sessions.get("daytona") or {},
@@ -122,7 +122,16 @@ def validate_before_allocation(
             target_cluster=None if nested else iris["target_cluster"],
             container_profile=iris.get("container_profile"),
         ),
-        environment=create_environment(extras=["cpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE),
+        environment=create_environment(
+            extras=["cpu"],
+            secrets=secrets,
+            env_vars={
+                name: value
+                for name in ("DAYTONA_TARGET", "DAYTONA_API_URL")
+                if (value := os.environ.get(name)) is not None
+            },
+            secret_behavior=SecretBehavior.ISOLATE,
+        ),
         timeout=Duration.from_minutes(30),
     )
     context = (

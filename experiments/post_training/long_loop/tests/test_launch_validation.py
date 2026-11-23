@@ -154,6 +154,7 @@ def test_regional_preflight_rejects_unreadable_prepared_inputs(tmp_path):
 def test_judged_evaluation_forwards_configured_key_without_ambient_credentials(tmp_path, monkeypatch):
     monkeypatch.setattr("experiments.evaluation.micro210_policy.POLICY_REFERENCE", policy_fixture_reference())
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    monkeypatch.setenv("DAYTONA_TARGET", "us")
     monkeypatch.delenv("JUDGE_API_KEY", raising=False)
     monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "empty-secret-bundle"))
     credential = tmp_path / "judge-key"
@@ -174,4 +175,8 @@ def test_judged_evaluation_forwards_configured_key_without_ambient_credentials(t
         judge.run_judged(judge.JudgedEvaluation(config.skyrl, replace(MICRO210_JUDGE, credential=f"file:{credential}")))
     environment = client.submit.call_args.kwargs["environment"]
     assert environment.secrets["JUDGE_API_KEY"] == "configured-judge-key"
+    assert environment.secrets["WANDB_API_KEY"] == "offline-fixture"
+    assert "WANDB_API_KEY" not in environment.env_vars
+    assert environment.env_vars["DAYTONA_TARGET"] == "us"
+    assert "DAYTONA_TARGET" not in environment.secrets
     assert "JUDGE_API_KEY" not in environment.env_vars

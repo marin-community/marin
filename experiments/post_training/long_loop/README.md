@@ -1122,7 +1122,11 @@ The run-owned service is ready before RL GPU allocation. A regional CPU
 preflight lowers one task per training input and one per validation source,
 then checks the actual machine factories and harnesses without provisioning
 sandboxes or starting inference. Its receipt records source, task ID, phase and
-machine bindings. An unsupported binding fails the parent before GPU allocation.
+machine bindings. The isolated CPU child receives the parent's W&B, Hugging Face,
+object-store, Daytona and judge secrets. An unsupported binding or missing
+required credential fails the parent before GPU allocation. Daytona target and
+API URL remain nonsecret environment settings so native clients read the
+configured route.
 
 The full-index OpenResearcher admission pin runs on LOCAL/Iris. Daytona RL uses
 `open-athena/openresearcher-openresearcher-dataset-service-20261121-v1` at
