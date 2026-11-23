@@ -2232,11 +2232,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   [Verified first-update restore][held-native-step1-restore] ·
   [Accepted vLLM attempt][iris-held-vllm-validation-replacement]
 
-  The 16:36 UTC scheduling snapshot found six idle eight-H100 hosts in
-  one leafgroup that met the CPU, RDMA, and disk requirements. Across any
-  five, the highest uniform available RAM was 3.8 GiB per host. This
-  snapshot offered no fit for the sealed request or for the sampled
-  working sets.
+  The sealed request treats a common leafgroup as a preference. Kueue
+  checks wider topology domains when a leafgroup cannot fit all five
+  pods. At 18:52 UTC, eight idle hosts in one superpod met the full
+  request across leafgroups of four, two, and two. At 18:53 UTC, the
+  existing GPU reservations were already bound to pods and accounted
+  for in the capacity scan. This was a physical fit at the time of
+  inspection. Admission requires a live Kueue assignment, and the
+  BATCH request remains subject to preemption. Record the realized
+  topology alongside the rollout and learner timing.
+  [Kueue v0.18.3 topology scheduling][kueue-preferred-topology]
 
   Regional telemetry recorded 32 group calls and 128 model waits in the
   first lease. Five group calls finished just after the 1,800-second model
@@ -2706,6 +2711,7 @@ arms. [Prior timing comparison][timing]
   consumers.
 
 [learner-status]: https://github.com/marin-community/marin/blob/b8aa9e2af13d991b45c64e036cd0b4885222a118/experiments/post_training/inventory/levanter-quick-loop-status.md
+[kueue-preferred-topology]: https://github.com/kubernetes-sigs/kueue/blob/v0.18.3/site/content/en/docs/concepts/topology_aware_scheduling.md#user-facing-apis
 [launch-handoff]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fhandoff%2F2026.11.21.1%2Fquick-loop-launch-handoff.tar.zst
 [iris-smoke]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-coordinator-2ea612c2%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.5-a8ae164919e7
 [iris-smoke-rerun]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.20.8-coordinator-5050ee06
