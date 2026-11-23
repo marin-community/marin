@@ -92,6 +92,7 @@ class Micro210ServingProfile:
 
 class ServingProfileName(StrEnum):
     POLICY = "policy"
+    SNOWBALL_H100_EAST02A = "snowball-h100-cw-us-east-02a"
     MOCHI_GB200 = "mochi-gb200-cw-us-east-08a"
 
 
