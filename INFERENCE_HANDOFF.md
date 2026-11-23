@@ -4,7 +4,7 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
-This report describes the integrated code at `e7ffcd3ac1`. The experimental
+This report describes the integrated code at `94f1d6b171`. The experimental
 shutdown observer and Ray smoke below use a separate local worktree at
 `f5e53f48b8`; those observer changes are outside this published branch.
 
@@ -217,6 +217,19 @@ qualify optimizer updates and resumed continuation. The earlier strict paired
 failure remains unresolved.
 [Compiler-profile diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-raw-repeat-determinism-2026-11-23-1)
 
+The next eight-H100 run at `94f1d6b171` used the deterministic compiler profile
+with the unchanged warm-process versus fresh-process checkpoint oracle.
+It passed all 18 strict checks. An independent audit decoded all 411 checkpoint
+arrays and found them finite. After the same frozen second batch, the two
+branches matched byte-for-byte in model, Adam, RNG, step and all 32 policy
+scores. Model averaging was disabled. Both native processes exited naturally
+with code zero under the unchanged five-second post-ACK deadline. The complete
+archive and both task and uploader exits were verified. This qualifies the
+instrumented two-layer MoE fixture under that explicit compiler profile;
+the baseline-profile failures, production Ray path and full-model continuation
+remain separate.
+[Strict paired checkpoint qualification](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-deterministic-paired-qualification-2026-11-23-1)
+
 A single-H100 test of the FA4/CuTe attention backward fallback, with head
 dimension 64 and multi-head attention, reproduced NaN query gradients on finite
 inputs after a deliberately NaN output-gradient call. Clearing K padding alone failed. A broader patch loads
@@ -257,12 +270,17 @@ A one-H100 smoke at the same unpublished source exercised the genuine Ray
 receipts record one finite update, a natural exit from the original native
 process, a new native process, and identical saved/restored model, Adam, RNG,
 step and model-averaging fingerprints. It then failed the strict restored-score
-check before update two. The driver did not persist the restored scores, so
-the available evidence cannot separate score dtype, score bytes and scoring
-state at that check. A bounded forensic backup retained the receipts but omitted
-three large model/checkpoint files. The failed job was cancelled and its pod
-removed. This smoke does not qualify resumed training or full-model restart.
+check before update two. The initial driver did not persist the restored scores.
+A follow-up with saved operands confirmed that all four finite FP32 scores
+differed despite identical dtype, shape, recorded state and forward inputs.
+The maximum absolute difference was `0.0001192093`, or 500 FP32 ULPs.
+Independent decoding confirmed the differences and the numerical-failure
+classification. Bounded forensic backups retained the score operands and
+receipts but omitted three large model/checkpoint files. Both failed jobs were
+cancelled and their pods removed. Neither run reached update two or final close;
+the baseline-profile Ray lifecycle remains unqualified.
 [Ray checkpoint smoke](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-hostworker-default-off-20261123-1)
+· [Ray score operands](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-hostworker-default-off-20261123-2)
 
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and
