@@ -24,6 +24,8 @@ from typing import Any, cast, override
 
 import pytest
 from botocore.exceptions import ClientError, IncompleteReadError
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.llm.fake_glm import serving
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
@@ -544,13 +546,18 @@ async def test_stage_restart_replays_on_fresh_machine_without_repeating_inferenc
     assert len(resource.inference.requests) == len(script())
 
 
+# Pilot 2026-11-21 (d09): the causes of the replayed attempts before a hold reached only the driver log.
 async def test_stage_restart_stops_after_three_attempts_with_cause(proposal: TaskProposal) -> None:
     envs = Envs(fail=True)
     resource = resources(envs, script())
-    result = await run_workpiece(proposal, config(), resource, EventLog(), install=install)
+    log = EventLog()
+    result = await run_workpiece(proposal, config(), resource, log, install=install)
     assert result.terminal == Terminal.HELD
     assert len(envs.created) == 3
     assert "fake machine died" in str(result.decisions[-1])
+    notes = [record.event.msg for record in log.records if isinstance(record.event, Note)]
+    assert [note.split(":")[0] for note in notes] == [f"Stage author round 0 attempt {n} of 3" for n in (1, 2, 3)]
+    assert all("fake machine died" in note for note in notes)
 
 
 @pytest.mark.parametrize("command", ["one", "run"])
@@ -2675,29 +2682,65 @@ class SandboxController(LocalController):
 class LocalIrisEnvs(EnvFactory):
     """Each environment is a fresh local Iris sandbox in its own directory with the same scripted faults."""
 
-    def __init__(self, root: Path, faults: Sequence[Injection], prelude: str = "") -> None:
-        self.root, self.faults, self.prelude = root, faults, prelude
+    def __init__(
+        self, root: Path, faults: Sequence[Injection], prelude: str = "", cancel_error: Exception | None = None
+    ) -> None:
+        self.root, self.faults, self.prelude, self.cancel_error = root, faults, prelude, cancel_error
         self.created: list[Path] = []
+
+    def cancel(self) -> None:
+        if self.cancel_error is not None:
+            raise self.cancel_error
 
     @override
     async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
         workdir = self.root / f"sandbox-{len(self.created)}"
         workdir.mkdir(parents=True)
         self.created.append(workdir)
-        machine = local_iris_machine(workdir, SandboxController(workdir, self.faults, self.prelude))
+        machine = local_iris_machine(workdir, SandboxController(workdir, self.faults, self.prelude), self.cancel)
         return ShellboxEnv(machine, "image", AsyncExitStack())
 
 
 # Review 2026-11-20 (follow-up 3): a lost WebSocket upgrade reply reran the command in the same sandbox, and a
 # missing `wc` or an OOM-killed sandbox during capture held only after three sandboxes with one append each.
+# Review 2026-11-21 (iris timeout follow-up 3): after a lone `timer 137` was classified as OOM or unknown, a failed
+# TerminateJob (503 or 403) replaced that outcome with the bare transport error, and the run left through the bug path.
+TIMER_KILL_CANCEL_FAILS = [
+    (
+        (("command", Fault.TIMER_KILLED, True), ("status", Fault.OOM_KILLED, False)),
+        1,
+        "OOMKilled",
+        ConnectError(code, "TerminateJob failed"),
+    )
+    for code in (Code.UNAVAILABLE, Code.PERMISSION_DENIED)
+] + [
+    (
+        (("command", Fault.TIMER_KILLED, True),),
+        STAGE_REPLAY_ATTEMPTS,
+        "timer 137",
+        ConnectError(code, "TerminateJob failed"),
+    )
+    for code in (Code.UNAVAILABLE, Code.PERMISSION_DENIED)
+]
+
+
 @pytest.mark.parametrize(
-    "faults,prelude,sandboxes,cause",
+    "faults,prelude,sandboxes,cause,cancel_error",
     [
-        ((("command", Fault.SETUP_FAILED, True),), "", STAGE_REPLAY_ATTEMPTS, "command outcome unknown"),
-        ((), "wc() { echo 'wc: not found' >&2; return 127; }; ", 1, "wc: not found"),
-        ((("stdout-size", Fault.OOM_KILLED, True),), "", 1, "OOMKilled"),
+        ((("command", Fault.SETUP_FAILED, True),), "", STAGE_REPLAY_ATTEMPTS, "command outcome unknown", None),
+        ((), "wc() { echo 'wc: not found' >&2; return 127; }; ", 1, "wc: not found", None),
+        ((("stdout-size", Fault.OOM_KILLED, True),), "", 1, "OOMKilled", None),
+        *((faults, "", sandboxes, cause, error) for faults, sandboxes, cause, error in TIMER_KILL_CANCEL_FAILS),
     ],
-    ids=["lost-upgrade-reply", "capture-without-wc", "capture-oom-killed"],
+    ids=[
+        "lost-upgrade-reply",
+        "capture-without-wc",
+        "capture-oom-killed",
+        "timer-kill-oom-cancel-503",
+        "timer-kill-oom-cancel-403",
+        "timer-kill-unknown-cancel-503",
+        "timer-kill-unknown-cancel-403",
+    ],
 )
 async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
     driver_args: Namespace,
@@ -2707,8 +2750,9 @@ async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
     prelude: str,
     sandboxes: int,
     cause: str,
+    cancel_error: Exception | None,
 ) -> None:
-    envs = LocalIrisEnvs(tmp_path / "sandboxes", faults, prelude)
+    envs = LocalIrisEnvs(tmp_path / "sandboxes", faults, prelude, cancel_error)
     counted = (call("shell", {"command": "echo ran >> counter", "timeout": 5}, "inspect"), *script()[1:])
 
     @asynccontextmanager
