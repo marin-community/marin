@@ -238,7 +238,6 @@ async def run_workpiece(
             wp = replace(wp, id=await ctx.emit(NewId("workpiece")))
             while True:
                 reached(wp)
-                commits.extend(log.records)
                 visit = digest((stage, wp, compat)) if compat and stage in (Stage.VALIDATE, Stage.CONFIRM) else None
                 hit, entered = commits.visits.get(visit or ""), len(wp.evidence)
                 try:
@@ -268,8 +267,8 @@ async def run_workpiece(
                     commit = pending if stage is Stage.REVIEW and following is not None else None
                     marker = StageCompleted(stage, config_digest, type(result).__name__, wp.round, wp.terminal, commit)
                     if commit is not None:
-                        commits.extend(log.records)
-                        commits.add(len(log.records) + 1, marker)  # checked before ``emit`` appends it
+                        records = log.records
+                        commits.add(records, len(records) + 1, marker)
                     await ctx.emit(marker)
                     if following is None:
                         break  # keep the terminal stage, which a hold raised while the scope exits records

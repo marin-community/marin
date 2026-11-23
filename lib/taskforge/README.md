@@ -157,9 +157,10 @@ resolution under re-executed sandbox fingerprints or a failure with an errno-nam
 row carries any of these, so cached results never enter an owner's history; references name an earlier
 open row or unanswered request of the same sandbox definition; and an answered request matches the
 request and outcome its owner already established at that position. A commitment rides only a continuing review
-right after its visit's stage, agrees with any earlier one for its visit, and lists its trials in order, each receipt
-once and naming an earlier physical solver resolution of exactly that slot, task and attempt (a confirmation's carried
-trials an earlier attempt) under the fingerprint the receipt records. A request left unanswered may differ
+right after its visit's stage, agrees with any earlier one for its visit, and lists its trials in order. Each trial's
+receipt names the physical resolution of the solver request that visit itself issued for the slot, under the
+fingerprint it issued it with, and its grade and cause are that resolution's; a confirmation's carried trials are the
+shipped round's committed ones. A request left unanswered may differ
 from the recording, which is how a held divergence looks.
 A storage hiccup never costs paid model work; only an explicit refusal stops the writer
 (`checkpoint.is_transient_storage_error`). A refusal is an HTTP 4xx other than 408 and 429 (denied
@@ -214,7 +215,7 @@ stage. A refusal of a slot's first read still restarts the stage, as before.
 A validation or confirmation visit that a continuing review decided on is committed: that review's `stage.completed`
 row carries the visit's identity (its stage, the workpiece it entered with and the run's compatibility digest) and its
 typed evidence, whose solver trials each name the journal row their result was bought at (`receipt`; none for a slot
-whose output budget ran out twice, so its transcript stays absent). A later launch that enters the same visit takes
+whose output budget ran out twice, the only case with no row; a slot-local refusal keeps its row). A later launch that enters the same visit takes
 that evidence and buys nothing inside it again: no solver, control, adversary or solve-review call, no stage duration
 sample, observer notification, sandbox reopen or decision-model answer; the pure review rule then decides again.
 The compatibility digest covers the whole policy, the band and budget, the adversary's and solve-review's effective

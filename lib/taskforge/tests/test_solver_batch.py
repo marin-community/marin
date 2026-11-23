@@ -221,6 +221,18 @@ def rejected() -> RolloutInterrupted:
 REFUSED = "RequestRejected: model server rejected request with HTTP 400: malformed request"
 
 
+def bought(log: EventLog, trial: int) -> int:
+    """The row of the one physical resolution of ``trial``'s slot: a held slot's receipt."""
+    (row,) = (
+        record.sequence
+        for record in log.records
+        if isinstance(event := record.event, Resolved)
+        and not event.replayed
+        and event.request == SolverRollout(SPEC, trial, 0)
+    )
+    return row
+
+
 def lost() -> RolloutInterrupted:
     error = RolloutInterrupted(Rollout("lost", (), "interrupted"), RolloutOperation.ADVANCE)
     error.__cause__ = MachineTerminated("pod lost")
@@ -229,10 +241,10 @@ def lost() -> RolloutInterrupted:
 
 async def test_a_held_slot_is_typed_missing_evidence_beside_its_finished_siblings() -> None:
     engine = Slots(failures={1: rejected()})
-    ctx, _ = context(engine)
+    ctx, log = context(engine)
     results = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
     await ctx.drain()
-    assert results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
+    assert results[1] == TrialResult(1, None, Cause.HELD, REFUSED, receipt=bought(log, 1))
     assert [trial.grade and trial.grade.reward for trial in (results[0], results[2])] == [1.0, 1.0]
 
 
@@ -249,7 +261,9 @@ async def test_a_held_slot_survives_a_sibling_restart_and_replays_without_runnin
     replayed, _ = context(again, log.records)
     results = await solver_batch(replayed, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
     await replayed.drain()
-    assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
+    assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(
+        1, None, Cause.HELD, REFUSED, receipt=bought(log, 1)
+    )
 
 
 # Review 2026-11-21: generation reaching its limit before the first response is a completed, failed
@@ -330,7 +344,7 @@ async def test_a_refusal_at_a_length_stop_stays_held_and_is_replaced_only_on_exp
     ctx, log = context(Slots(failures={0: refused_at_length()}))
     (held,) = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT, max_missing=1)
     await ctx.drain()
-    assert held == TrialResult(0, None, Cause.HELD, REFUSED)
+    assert held == TrialResult(0, None, Cause.HELD, REFUSED, receipt=bought(log, 0))
     unasked = Slots(failures={0: AssertionError("a held slot ran without --resume-held")})
     replayed, _ = context(unasked, log.records)
     assert await solver_batch(
@@ -439,7 +453,9 @@ async def test_a_refusal_beside_a_decision_model_outage_is_settled_before_the_ba
     resumed, _ = context(again, log.records)  # an ordinary launch, never --resume-held
     results = await solver_batch(resumed, SPEC, "validation", 0, (), 0, 3, concurrency=3, heartbeat=HEARTBEAT)
     await resumed.drain()
-    assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(1, None, Cause.HELD, REFUSED)
+    assert again.executed == ["arithmetic:2:0"] and results[1] == TrialResult(
+        1, None, Cause.HELD, REFUSED, receipt=bought(log, 1)
+    )
 
 
 # Review 2026-11-21: an operator retried a refused slot, the replacement met a decision-

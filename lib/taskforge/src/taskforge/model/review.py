@@ -313,21 +313,13 @@ class BandRules:
 
 
 @dataclass(frozen=True, slots=True)
-class Receipt:
-    """The journal row of the physical resolution a slot's result came from, and that row's full replay key."""
-
-    sequence: int
-    key: str
-
-
-@dataclass(frozen=True, slots=True)
 class TrialResult:
     trial: int
     grade: GradeResult | None
     cause: Cause | None = None
     detail: Annotated[str, OMIT_EMPTY] = ""
-    receipt: Annotated[Receipt | None, OMIT_NONE] = field(default=None, kw_only=True)
-    """None when no resolution produced the result: its transcript is absent."""
+    receipt: Annotated[int | None, OMIT_NONE] = field(default=None, kw_only=True)
+    """The journal row of the physical resolution the result came from; None only when no row exists."""
 
 
 @dataclass(frozen=True, slots=True)

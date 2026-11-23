@@ -143,13 +143,15 @@ def launch(
     solver: Paid,
     grader: Grader | None = None,
     inference: FakeInference | None = None,
+    rollouts: str | None = None,
 ) -> Launch:
+    """``rollouts`` names another solver configuration digest, so every slot resolves under another fingerprint."""
     grader, reviewer = grader or Grader(), CleanReviewer()
     live = resources(Envs(), AUTHOR)
     bundle = replace(
         live,
         inference=inference or live.inference,
-        rollouts=replace(live.rollouts, engine=solver),
+        rollouts=replace(live.rollouts, engine=solver, config_digest=rollouts or live.rollouts.config_digest),
         grading=GradingResource(grader, "grader"),
         role_inference={"solve_review": reviewer},
     )
@@ -343,39 +345,54 @@ async def test_only_a_changed_effective_reviewer_sampling_reopens_the_visit(
     assert [slot for slot in second.solver.runs if slot[1] == 0] == []  # the solver slots replay from the cache
 
 
-def receipts(row: dict[str, Any]) -> list[dict[str, Any]]:
-    return [trial["receipt"] for trial in row["event"]["payload"]["committed"]["result"]["solver"]]
-
-
-@pytest.mark.parametrize("damage", ["another row", "a sibling slot", "another replay key"])
-async def test_a_malformed_commitment_receipt_leaves_the_held_head_byte_identical(launches: Driver, damage: str) -> None:
-    assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
-    lines = published_events(launches.root).splitlines(keepends=True)
-    [at] = [
-        n
-        for n, line in enumerate(lines)
-        if (row := json.loads(line))["event"].get("type") == StageCompleted.kind
-        and row["event"]["payload"].get("committed")
+def committed_trials(lines: Sequence[bytes]) -> list[tuple[int, dict[str, Any], list[dict[str, Any]]]]:
+    """Each committed marker's line index, row and stored solver trials, in journal order."""
+    rows = [(n, json.loads(line)) for n, line in enumerate(lines)]
+    return [
+        (n, row, row["event"]["payload"]["committed"]["result"]["solver"])
+        for n, row in rows
+        if row["event"].get("type") == StageCompleted.kind and row["event"]["payload"].get("committed")
     ]
-    row = json.loads(lines[at])
-    first, second = receipts(row)
-    if damage == "another row":
-        first["sequence"] = 1
-    elif damage == "another replay key":  # the right slot's row, under a fingerprint it was not bought with
-        first["key"] = "0" * 64
-    else:  # a same-type resolution of the wrong slot, under its own valid key
-        (first["sequence"], first["key"]), (second["sequence"], second["key"]) = (
-            (second["sequence"], second["key"]),
-            (first["sequence"], first["key"]),
-        )
+
+
+async def refuses_the_damaged_root(launches: Driver, lines: list[bytes], at: int, row: dict[str, Any]) -> None:
+    """Republish ``row`` at line ``at``; the next launch must refuse before claim and leave the tree as it was."""
     lines[at] = json.dumps(row, sort_keys=True).encode() + b"\n"
     republish(launches.root, b"".join(lines))
     before = tree(launches.root)
     launches.monkeypatch.setattr(driver, "runtime", unexpected_runtime)
-    with pytest.raises(LogFailure, match="receipt names no physical resolution of its slot") as raised:
+    with pytest.raises(
+        LogFailure, match=r"trial \d+'s (receipt names no resolution its visit issued|grade or cause)"
+    ) as e:
         await driver.one(launches.args)
-    assert driver.exit_code(raised.value) == driver.CORRUPT
+    assert driver.exit_code(e.value) == driver.CORRUPT
     assert tree(launches.root) == before
+
+
+@pytest.mark.parametrize("damage", ["another row", "a sibling slot", "a changed grade"])
+async def test_a_malformed_commitment_leaves_the_held_head_byte_identical(launches: Driver, damage: str) -> None:
+    assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
+    lines = published_events(launches.root).splitlines(keepends=True)
+    [(at, row, (first, second))] = committed_trials(lines)
+    if damage == "another row":
+        first["receipt"] = 1
+    elif damage == "a sibling slot":  # a same-type resolution of the wrong slot
+        first["receipt"], second["receipt"] = second["receipt"], first["receipt"]
+    else:  # the right slot's own row, under a grade it did not give
+        first["grade"]["reward"] = 0.75
+    await refuses_the_damaged_root(launches, lines, at, row)
+
+
+async def test_a_real_receipt_from_another_fingerprint_is_refused_before_claim(launches: Driver) -> None:
+    """Regression: a receipt naming a genuine physical resolution of the same (trial, attempt), bought under another
+    rollout fingerprint, passed claim; confirmation found it only after the head swap and published a manual hold."""
+    assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
+    assert await launches.run(launch(Paid(outage={(2, 1)}), rollouts="another")) == driver.DEFERRED
+    lines = published_events(launches.root).splitlines(keepends=True)
+    (_, _, (old, _)), (at, row, (new, _)) = committed_trials(lines)
+    assert (old["trial"], old["receipt"] != new["receipt"]) == (new["trial"], True)
+    new["receipt"] = old["receipt"]
+    await refuses_the_damaged_root(launches, lines, at, row)
 
 
 def diagnosed(trial: int, attempt: int) -> GradeResult:

@@ -64,7 +64,13 @@ from taskforge.resources.bundle import Resources
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import sandbox_limits
-from taskforge.stages.classify import CAUSE_DECISIONS, grade_cause, grader_infra_unavailable, trial_cause
+from taskforge.stages.classify import (
+    CAUSE_DECISIONS,
+    budget_exhausted,
+    grade_cause,
+    grader_infra_unavailable,
+    trial_cause,
+)
 from taskforge.stages.exits import Validated
 from taskforge.stages.rules import actionable, assess, earlier_findings, missing, shipped
 from taskforge.stages.solve_review import earlier_reports, evidence, shipped_notes, solve_review
@@ -88,12 +94,13 @@ async def solver_result(
         except OutputBudgetExhausted:
             ctx.notify(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
             continue
+        receipt = ctx.receipt(SolverRollout(spec, trial, attempt))  # this outcome's own row, read before any other runs
         if rollouts is not None:
             rollouts[trial] = result
         if (cause := trial_cause(result, spec.task)) is Cause.HELD:
-            return TrialResult(trial, None, cause, result.grade.error or "")
-        return TrialResult(trial, result.grade, cause, receipt=ctx.receipt(SolverRollout(spec, trial, attempt)))
-    return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
+            return TrialResult(trial, None, cause, result.grade.error or "", receipt=receipt)
+        return TrialResult(trial, result.grade, cause, receipt=receipt)
+    return budget_exhausted(trial)
 
 
 async def solver_batch(
@@ -545,7 +552,11 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
     async with ctx.scope("confirm", bills=Billing.CONFIRMATION):
         ctx.observe(Resolved, grader_infra_unavailable)
         # Each base trial's own transcript, at its receipt; a trial without one stays without.
-        rollouts = {t.trial: ctx.recorded_at(t.receipt, SolverRollout(spec, t.trial, index)) for t in base if t.receipt}
+        rollouts = {
+            t.trial: ctx.recorded_at(t.receipt, SolverRollout(spec, t.trial, index))
+            for t in base
+            if t.receipt is not None
+        }
         holds: list[BaseException] = []
         batch = solver_batch(
             ctx,

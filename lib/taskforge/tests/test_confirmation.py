@@ -13,6 +13,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from itertools import pairwise
 from pathlib import Path, PurePosixPath
 from typing import override
 
@@ -52,7 +53,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, ScopeEntered, ScopeExited, StageCompleted
-from taskforge.effects.issues import ContextExceeded, DecisionModelUnavailable
+from taskforge.effects.issues import ContextExceeded, DecisionModelUnavailable, LogFailure
 from taskforge.effects.log import Billing, EventLog, JsonlSink, Record, Status, decode, fold
 from taskforge.harness.protocol import Stopped, StopReason, Submitted, ToolResult
 from taskforge.harness.tools.evidence import (
@@ -110,6 +111,7 @@ from taskforge.resources.rollouts import Engine, SolverRollout
 from taskforge.stages.classify import grade_cause
 from taskforge.stages.rules import CONFIRMATION_REVISION_FAILED, default_review, tagged
 from taskforge.stages.solve_review import earlier_reports, evidence, solve_review
+from taskforge.stages.visits import Commitments
 from taskforge.wiring import build_config, install
 
 CONFIRMED = {**SETTINGS, "solver.k": 3, "solver.confirmation_k": 5}
@@ -838,6 +840,30 @@ async def test_an_invalid_confirmation_grade_sends_the_task_back_through_the_dri
     assert isinstance(final, Accept) and "Confirmation: 4 of 8 trials solved: in_band" in final.reasons
 
 
+async def test_a_confirmation_commitment_carries_only_the_shipped_rounds_own_trials(proposal: TaskProposal) -> None:
+    """A confirmation's carried trials are the shipped round's committed ones; a carried trial it did not commit, here
+    one with another reward, is refused."""
+    engine, reviewer, log = Trials(invalid_in_confirmation), Reviewer(), EventLog()
+    await run_workpiece(proposal, setup(), bundle(engine, reviewer, (*script(), *RESUBMIT)), log, install=install)
+    records = list(log.records)
+    Commitments(records)
+    markers = [(n, record.event) for n, record in enumerate(records) if isinstance(record.event, StageCompleted)]
+    [(at, marker)] = [
+        (n, marker)
+        for (_, visit), (n, marker) in pairwise(markers)
+        if visit.stage is Stage.CONFIRM and marker.committed is not None
+    ]
+    commit = marker.committed
+    assert commit is not None
+    carried, *rest = commit.result.solver
+    assert carried.grade is not None and carried.receipt is not None
+    forged = replace(carried, grade=replace(carried.grade, reward=0.75))
+    result = replace(commit.result, solver=(forged, *rest))
+    records[at] = replace(records[at], event=replace(marker, committed=replace(commit, result=result)))
+    with pytest.raises(LogFailure, match=f"trial {carried.trial} names a slot its visit never resolved"):
+        Commitments(records)
+
+
 class Outages(Trials):
     """``Trials``, with an ``outage`` slot interrupted by a decision-model outage."""
 
@@ -1448,6 +1474,7 @@ async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
     clients = [live.inference, *live.role_inference.values()]
     assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
     assert payers(root, replayed=False) == PAID  # the cold rerun paid for nothing
+    assert charged(await report(str(root))) == CHARGED
     # Twelve resolutions, none naming a payer: the committed validation visit replays nothing inside it.
     replayed = payers(root, replayed=True)
     assert sum(replayed.values()) == 12 and {payer for _, payer in replayed} == {None}

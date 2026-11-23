@@ -20,7 +20,7 @@ from taskcompendium.models import NoGrader, TaskSpec
 from taskforge.effects.events import Resolved
 from taskforge.effects.issues import Hold
 from taskforge.effects.log import Record
-from taskforge.model.review import Cause, Incomplete, Modify, Reject, Retry
+from taskforge.model.review import Cause, Incomplete, Modify, Reject, Retry, TrialResult
 from taskforge.model.verdict import grader_checks
 from taskforge.resources.rollouts import refused
 
@@ -45,6 +45,11 @@ CAUSE_DECISIONS = MappingProxyType(
         Cause.VERIFIER_SKIPPED: Modify,
     }
 )
+
+
+def budget_exhausted(trial: int) -> TrialResult:
+    """A solver slot whose output budget ran out on both of its attempts: the one trial with no journal row."""
+    return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
 
 
 def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | None:
