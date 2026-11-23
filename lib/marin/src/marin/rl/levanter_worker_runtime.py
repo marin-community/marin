@@ -57,6 +57,7 @@ from numpy._core import multiarray as np_multiarray
 
 from marin.rl.levanter_compile_diagnostics import _memory_stats, capture_compile, capture_failure, scientific_xla_flags
 from marin.rl.levanter_publication import SnowballPublication
+from marin.rl.levanter_shutdown_observer import publish_ack_marker, validated_ack_marker
 from marin.rl.levanter_worker_protocol import read_frame, write_frame
 
 _DIAGNOSTIC_STALL_SECONDS = 120.0
@@ -420,6 +421,7 @@ class NativePolicyRuntime:
         self._compiler_evidence = None
         self.numpy_allocation_policy = None
         self._closed = False
+        self._shutdown_observer_marker = None
 
     def initialize(self, config: dict) -> dict:
         if self.trainer is not None:
@@ -1144,7 +1146,19 @@ class NativePolicyRuntime:
         gc.collect()
 
     def shutdown_receipt(self, event: str, **fields) -> None:
-        if not self.settings.get("runtime", {}).get("validate_checkpoint_roundtrip", False):
+        marker_error = None
+        if event == "shutdown_ack_written" and self._shutdown_observer_marker is not None:
+            try:
+                publish_ack_marker(
+                    self._shutdown_observer_marker,
+                    process_id=self.settings.get("distributed", {}).get("process_id"),
+                )
+            except Exception as error:
+                # The binary ACK has already been flushed. A missing marker
+                # fails observation, but must not change the original exit path.
+                marker_error = type(error).__name__
+                fields["observer_marker_error_type"] = marker_error
+        if not self.settings.get("runtime", {}).get("validate_checkpoint_roundtrip", False) and marker_error is None:
             return
         if sys.stderr is None:
             return
@@ -1256,6 +1270,10 @@ class NativePolicyRuntime:
             multihost_utils.sync_global_devices("skyrl-policy-barrier")
             return {"version": self.version}
         if method == "shutdown":
+            if payload.get("diagnostic_shutdown_observer") is not None:
+                if not self.settings.get("runtime", {}).get("diagnostic_shutdown_observer", False):
+                    raise ValueError("Shutdown observer was not explicitly enabled")
+                self._shutdown_observer_marker = validated_ack_marker(payload)
             self.close()
             return None
         raise ValueError(f"Unknown learner operation {method}")

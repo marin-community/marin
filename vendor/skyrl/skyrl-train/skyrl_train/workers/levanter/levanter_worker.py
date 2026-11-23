@@ -17,6 +17,7 @@ from omegaconf import OmegaConf
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from marin.rl.levanter_worker_protocol import LearnerProcess
+from marin.rl.levanter_shutdown_observer import ShutdownObserver, observation_completed
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.distributed.dispatch import ActorInfo, MeshRank, concatenate_outputs_after_mesh_dispatch
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
@@ -116,6 +117,7 @@ class LevanterHostWorker:
         self.process_id = process_id
         self.local_device_count = cfg.trainer.placement.policy_num_gpus_per_node
         self.child = None
+        self._shutdown_observer = None
         self.sender = None
         self.coordinator_address = None
         self.initialization_config = None
@@ -132,6 +134,8 @@ class LevanterHostWorker:
         self.coordinator_address = coordinator_address
 
     def init_model(self, model_path: str, num_training_steps: int):
+        if self._shutdown_observer is not None:
+            raise RuntimeError("Observer ownership retained; child replacement is blocked")
         self._initial_finite = None
         self._finite_state_receipts = {}
         self.initialization_config = _runtime_config(
@@ -144,6 +148,8 @@ class LevanterHostWorker:
         return receipt
 
     def _start_child(self):
+        if self._shutdown_observer is not None:
+            raise RuntimeError("Observer ownership retained; child replacement is blocked")
         self._initial_finite = None
         runtime = self.cfg.trainer.policy.levanter_config
         environment = _child_environment(
@@ -334,6 +340,46 @@ class LevanterHostWorker:
         output.metadata = {"train_status": status}
         return output
 
+    def _prepare_shutdown_observer(self):
+        if self.process_id != 0 or not self.cfg.trainer.policy.levanter_config.get("diagnostic_shutdown_observer", False):
+            return
+        if self._shutdown_observer is not None:
+            raise RuntimeError("A shutdown observer already owns this child")
+        destination = os.environ.get("SKYRL_DEBUG_ARTIFACT_DIR") or os.environ.get("IRIS_OUTPUT_DIR")
+        if not destination:
+            raise RuntimeError("Shutdown observation requires a local artifact directory")
+        self._shutdown_observer = ShutdownObserver(self.child.process, Path(destination), self.process_id)
+        try:
+            self._shutdown_observer.wait_ready()
+        except BaseException as error:
+            self._retire_shutdown_observer(error, cancel=True)
+            raise
+
+    def _retire_shutdown_observer(self, primary=None, *, cancel=False):
+        observer = self._shutdown_observer
+        if observer is None:
+            return
+        try:
+            receipt = observer.retire(cancel=cancel)
+            self._shutdown_observer = None
+            if not cancel and not observation_completed(receipt):
+                raise RuntimeError("Native shutdown observation did not complete; diagnostic is nonqualifying")
+        except Exception as error:
+            if primary is None:
+                raise
+            primary.add_note(f"Shutdown observer failure: {error!r}")
+
+    def _shutdown_child(self):
+        observer = self._shutdown_observer
+        payload = {} if observer is None else observer.payload()
+        try:
+            result = self.child.request("shutdown", payload)
+        except BaseException as error:
+            self._retire_shutdown_observer(error, cancel=True)
+            raise
+        self._retire_shutdown_observer()
+        return result
+
     def validate_checkpoint_roundtrip(self, before_model: dict, train_status: dict) -> dict:
         """Restore the first updated policy in a fresh JAX child, keeping serving alive."""
         if "initial" not in self._finite_state_receipts:
@@ -358,8 +404,15 @@ class LevanterHostWorker:
             "validate_model_change",
             {"before": before_model, "after": saved["state_fingerprints"]["components"]["model"]},
         )
-        self.child.request("barrier", {})
-        self.child.request("shutdown", {})
+        # Cold attach must finish before peers leave the existing barrier.
+        # Otherwise their five-second exit windows could expire before our sample.
+        try:
+            self._prepare_shutdown_observer()
+            self.child.request("barrier", {})
+            self._shutdown_child()
+        except BaseException as error:
+            self._retire_shutdown_observer(error, cancel=True)
+            raise
         old_exit_code = self.child.process.returncode
         self.child.close()
         self.child = None
@@ -442,10 +495,13 @@ class LevanterHostWorker:
     def close_telemetry(self) -> None:
         if self.child is not None:
             try:
-                self.child.request("shutdown", {})
+                self._shutdown_child()
             finally:
-                self.child.close()
-                self.child = None
+                # Unknown observer teardown retains ownership; never race a new
+                # numeric attach or release the child reservation on this path.
+                if self._shutdown_observer is None:
+                    self.child.close()
+                    self.child = None
 
 
 _HostActor = ray.remote(LevanterHostWorker)

@@ -160,6 +160,7 @@ class PolicyLevanterConfig(Section):
     command_timeout_seconds: PositiveInt = field(1800)
     initialization_timeout_seconds: PositiveInt = field(1800)
     validate_checkpoint_roundtrip: bool = field(False)
+    diagnostic_shutdown_observer: bool = field(False)
     coordinator_port: Annotated[int, Field(ge=1, le=65535)] = field(29590)
     device_memory_fraction: Annotated[int | float, Field(gt=0, le=1)] = field(0.9)
     allocator: Literal["bfc", "vmm"] = field("bfc")

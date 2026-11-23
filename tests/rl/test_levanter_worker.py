@@ -9,12 +9,16 @@ import gzip
 import hashlib
 import json
 import os
+import select
 import shlex
+import shutil
+import signal
 import socket
 import subprocess
 import sys
 from contextlib import contextmanager
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 
 import equinox as eqx
@@ -38,6 +42,7 @@ from levanter.trainer import WrappedLossFunction
 from levanter.utils.mesh import MeshConfig
 from marin.rl.levanter_worker_protocol import LearnerProcess
 from marin.rl.levanter_worker_runtime import NativePolicyRuntime, _state_fingerprint
+from marin.rl.native_shutdown.stack_safety import direct_children, identity
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
@@ -1092,3 +1097,231 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
         np.testing.assert_array_equal(arrays["old_logprobs"], scores)
         _same_request(children, "shutdown", {})
         assert all(child.process.returncode == 0 for child in children)
+
+
+def test_shutdown_ack_marker_is_atomic_immutable_and_framework_free(tmp_path):
+    marker = {"pid": os.getpid(), "starttime": 1, "nonce": "a" * 32, "ack_path": str(tmp_path / "ack.json")}
+    script = """
+import json, sys
+from marin.rl.levanter_shutdown_observer import publish_ack_marker
+assert 'jax' not in sys.modules and 'torch' not in sys.modules
+marker = json.loads(sys.argv[1])
+publish_ack_marker(marker, process_id=0)
+first = open(marker['ack_path'], 'rb').read()
+try:
+    publish_ack_marker(marker, process_id=0)
+except FileExistsError:
+    pass
+else:
+    raise AssertionError('An existing acknowledgement was overwritten')
+assert open(marker['ack_path'], 'rb').read() == first
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, json.dumps(marker)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env={**os.environ, "JAX_PLATFORMS": "must-not-create-a-backend"},
+    )
+    assert result.returncode == 0, result.stderr
+    row = json.loads((tmp_path / "ack.json").read_text())
+    assert row["event"] == "shutdown_ack_written" and row["nonce"] == marker["nonce"]
+    assert row["pid"] == marker["pid"] and row["monotonic_ns"] > 0
+    assert not (tmp_path / "ack.pending").exists()
+
+
+@pytest.mark.parametrize("enabled,blocked", [(False, False), (True, False), (True, True)])
+def test_real_protocol_shutdown_publishes_only_opt_in_ack_marker(tmp_path, capfd, enabled, blocked):
+    if enabled and sys.platform != "linux":
+        pytest.skip("Enabled marker validates the actual Linux /proc process identity")
+    module = tmp_path / "native_marker_fixture.py"
+    module.write_text(
+        """
+from marin.rl.levanter_worker_runtime import NativePolicyRuntime, main
+
+def factory():
+    runtime = NativePolicyRuntime()
+    runtime.settings = {'runtime': {'diagnostic_shutdown_observer': True}, 'distributed': {'process_id': 0}}
+    return runtime
+
+if __name__ == '__main__':
+    main(factory)
+"""
+    )
+    marker_dir = tmp_path / "marker"
+    marker_dir.mkdir(mode=0o700)
+    if blocked:
+        (marker_dir / "ack.pending").write_text("occupied")
+    child = LearnerProcess(
+        sys.executable,
+        environment={
+            **os.environ,
+            "PYTHONPATH": str(tmp_path) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+            "JAX_PLATFORMS": "must-not-create-a-backend",
+        },
+        timeout_seconds=30,
+        runtime_module="native_marker_fixture",
+    )
+    try:
+        payload = (
+            {}
+            if not enabled
+            else {
+                "diagnostic_shutdown_observer": {
+                    "pid": child.process.pid,
+                    "starttime": identity(child.process.pid).starttime,
+                    "nonce": "b" * 32,
+                    "ack_path": str(marker_dir / "ack.json"),
+                }
+            }
+        )
+        assert child.request("shutdown", payload) is None
+        assert child.process.returncode == 0
+        if blocked:
+            assert not (marker_dir / "ack.json").exists()
+            assert (marker_dir / "ack.pending").read_text() == "occupied"
+            rows = [
+                json.loads(line.split(" ", 1)[1])
+                for line in capfd.readouterr().err.splitlines()
+                if line.startswith("native_shutdown_receipt ")
+            ]
+            assert rows[-1]["observer_marker_error_type"] == "FileExistsError"
+        elif enabled:
+            row = json.loads((marker_dir / "ack.json").read_text())
+            assert row["pid"] == child.process.pid and row["nonce"] == "b" * 32
+            assert row["event"] == "shutdown_ack_written"
+        else:
+            assert list(marker_dir.iterdir()) == []
+    finally:
+        child.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Requires actual Linux pidfds and /proc")
+def test_guardian_owner_gone_before_pidfd_open_terminates_only_bound_target(tmp_path):
+    # Deliberately omit PDEATHSIG in this target: the guardian must enforce the
+    # ownership contract itself, rather than accidentally passing via the kernel.
+    waiting = "import sys; sys.stdin.buffer.read()"
+    owner = subprocess.Popen([sys.executable, "-c", waiting], stdin=subprocess.PIPE)
+    target = subprocess.Popen([sys.executable, "-c", waiting], stdin=subprocess.PIPE)
+    sentinel = subprocess.Popen([sys.executable, "-c", waiting], stdin=subprocess.PIPE)
+    try:
+        expected_owner = identity(owner.pid)
+        expected_target = identity(target.pid)
+        owner.communicate(timeout=5)
+        assert not Path(f"/proc/{owner.pid}").exists()
+        config = {
+            "pid": expected_target.pid,
+            "starttime": expected_target.starttime,
+            "pgrp": expected_target.pgrp,
+            "owner_pid": expected_owner.pid,
+            "owner_starttime": expected_owner.starttime,
+            "nonce": "d" * 32,
+            "debugger_log_path": str(tmp_path / "debugger.log"),
+            "guardian_receipt_path": str(tmp_path / "guardian.json"),
+            "lldb_receipt_path": str(tmp_path / "absent-lldb.json"),
+        }
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps(config))
+        guardian = Path(__file__).parents[2] / "lib/marin/src/marin/rl/native_shutdown/observer_guardian.py"
+        result = subprocess.run(
+            [sys.executable, "-I", str(guardian), "--config", str(config_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        row = json.loads((tmp_path / "guardian.json").read_text())
+        assert result.returncode != 0 and row["status"] == "error"
+        assert row["debugger_started"] is False
+        # This returns only after the guardian's pidfd reported target exit. The
+        # parent alone subsequently reaps its native child; the guardian does not.
+        assert row["orphan_target_kill_sent"] and row["orphan_target_exit_observed"]
+        exited = os.waitid(os.P_PID, target.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        assert exited is not None and exited.si_status == signal.SIGKILL
+        assert target.wait(timeout=2) == -signal.SIGKILL
+        assert sentinel.poll() is None
+    finally:
+        for child in (owner, target, sentinel):
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=5)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "linux", reason="Requires actual Linux pidfds, LLDB and /proc")
+def test_public_worker_retry_keeps_original_child_after_missing_observer_receipt(tmp_path, monkeypatch):
+    if not Path("/usr/bin/lldb").is_file() or shutil.which("timeout") is None:
+        pytest.skip("Requires the Linux observer image's LLDB and GNU timeout")
+    host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
+    config = host.OmegaConf.load(Path(host.__file__).parents[2] / "config/ppo_base_config.yaml")
+    config.trainer.placement.colocate_all = False
+    config.trainer.algorithm.use_kl_loss = False
+    config.trainer.policy.levanter_config.diagnostic_shutdown_observer = True
+    # A subprocess-boundary sentinel makes an unintended replacement observable
+    # without running a second learner or touching any accelerator.
+    created = tmp_path / "replacement-created"
+    replacement = tmp_path / "replacement-python"
+    replacement.write_text("#!/bin/sh\nprintf created > " + shlex.quote(str(created)) + "\nexit 70\n")
+    replacement.chmod(0o700)
+    config.trainer.policy.levanter_config.python_executable = str(replacement)
+    worker = host.LevanterHostWorker(config, 0)
+    worker.initialization_config = host._runtime_config(
+        config,
+        model_path="unused-local-path",
+        num_training_steps=1,
+        process_id=0,
+        coordinator_address="unused-local-address",
+    )
+    # An uninitialized actual protocol child is an ownership control only. This
+    # neither initializes a CPU model nor changes HostWorker's accelerator policy.
+    child = LearnerProcess(
+        sys.executable, environment={**os.environ, "JAX_PLATFORMS": "must-not-create-a-backend"}, timeout_seconds=30
+    )
+    worker.child = child
+    monkeypatch.setenv("SKYRL_DEBUG_ARTIFACT_DIR", str(tmp_path))
+    receipt_path = None
+    saved_receipt = None
+    try:
+        worker._prepare_shutdown_observer()
+        observer = worker._shutdown_observer
+        Path(observer.config["cancel_path"]).touch()
+        observer.guardian.wait(timeout=3)
+        receipt_path = Path(observer.config["guardian_receipt_path"])
+        saved_receipt = receipt_path.read_bytes()
+        assert json.loads(saved_receipt)["safe_cleanup"] is True
+        # Actual filesystem loss reproduces unknown cleanup in the public worker;
+        # the tracer itself is already safely retired, so this control can recover.
+        receipt_path.unlink()
+        with pytest.raises(FileNotFoundError):
+            worker._retire_shutdown_observer(cancel=True)
+        # Let the original process exit on real EOF, but preserve its unreaped
+        # numeric PID while ownership is unknown. A hidden poll/close would reap
+        # this zombie and is observable through waitid(WNOWAIT), without mocks.
+        descriptor = os.pidfd_open(child.process.pid, 0)
+        try:
+            child.process.stdin.close()
+            assert select.select([descriptor], [], [], 30)[0]
+        finally:
+            os.close(descriptor)
+        before = os.waitid(os.P_PID, child.process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        assert before is not None and before.si_status == 0
+        owned_before_retry = direct_children()
+        with pytest.raises(RuntimeError):
+            worker.init_model("unused-local-path", 1)
+        with pytest.raises(RuntimeError):
+            worker._start_child()
+        with pytest.raises(RuntimeError):
+            worker.close_telemetry()
+        assert not created.exists()
+        assert direct_children() == owned_before_retry
+        assert worker.child is child and child.process.returncode is None
+        after = os.waitid(os.P_PID, child.process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        assert after is not None and after.si_pid == before.si_pid and after.si_status == 0
+    finally:
+        if saved_receipt is not None:
+            receipt_path.write_bytes(saved_receipt)
+            worker._retire_shutdown_observer(cancel=True)
+        # Recover only after the real safe teardown proof has been restored.
+        if worker._shutdown_observer is None:
+            child.close()
+        else:
+            raise RuntimeError("Unknown observer cleanup; isolated integration task teardown is required")
