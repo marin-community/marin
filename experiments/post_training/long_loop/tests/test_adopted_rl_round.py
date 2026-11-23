@@ -25,6 +25,7 @@ from experiments.post_training.long_loop.round_runner import (
     load_round,
     round_draft,
 )
+from experiments.post_training.long_loop.run_spec import FilePin
 from experiments.post_training.task_curation.exp4_curriculum import (
     SOURCE_ROUTES,
     exp4_rl_curriculum,
@@ -532,26 +533,26 @@ def test_round_openresearcher_service_wires_machine_contract_and_retrieval_run(r
 @pytest.mark.parametrize("profile", ["one-rack"])
 def test_specdec_gate_arms_differ_only_in_the_draft_binding(round_inputs, local_round, tmp_path):
     """Load the real gate round YAMLs onto local fixtures and compare their launch configs."""
-    model, data = round_inputs
+    _, data = round_inputs
     plain = load_round(ROUND_DIR / "snowball-specdec-gate-plain.yaml")
     dspark = load_round(ROUND_DIR / "snowball-specdec-gate-dspark.yaml")
     assert plain.rl.draft is None and dspark.rl.draft is not None
     manifest = _exp5_style_pools(data, with_openresearcher=True)
     manifest["routes"] = dict(plain.rl.recipe["trainer"]["rollout_buffer"]["source_routes"])
     (data / "manifest.json").write_text(json.dumps(manifest))
-    pins = {
-        name: hashlib.sha256((model / name).read_bytes()).hexdigest() for name in ("config.json", "export-manifest.json")
-    }
+    _, hf, config_sha, manifest_sha, seal = _certified_export_fixture(tmp_path)
     arms = []
     for spec in (plain, dspark):
         local = dataclasses.replace(
             spec,
             adopted_model=dataclasses.replace(
                 spec.adopted_model,
-                uri=str(model),
-                export_manifest_sha256=pins["export-manifest.json"],
-                config_sha256=pins["config.json"],
-                checkpoint_step=400407,
+                uri=str(hf),
+                export_manifest_sha256=None,
+                config_sha256=config_sha,
+                checkpoint_step=527,
+                model_manifest_sha256=manifest_sha,
+                certification_seal=seal,
             ),
             rl=dataclasses.replace(
                 spec.rl,
@@ -597,3 +598,118 @@ def test_specdec_gate_arms_differ_only_in_the_draft_binding(round_inputs, local_
         return [] if left == right else [(prefix, left, right)]
 
     assert differences(plain_doc, dspark_doc) == []
+
+
+def _certified_export_fixture(tmp_path):
+    """Build a certified step-527 export: seal, receipts, staging manifest and an HF export."""
+    root = tmp_path / "sft"
+    checkpoint = root / "checkpoints/step-527"
+    checkpoint.mkdir(parents=True)
+    hf = root / "hf/step-527"
+    hf.mkdir(parents=True)
+    receipts = root / "recovery/finalization-527"
+    receipts.mkdir(parents=True)
+
+    def write(path, document):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = json.dumps(document).encode()
+        path.write_bytes(raw)
+        return hashlib.sha256(raw).hexdigest()
+
+    config_sha = write(
+        hf / "config.json",
+        {"grugmoe_artifact_schema_version": 3, "num_hidden_layers": 96, "num_attention_heads": 96, "num_experts": 384},
+    )
+    manifest_sha = write(
+        hf / ".marinskyrl-model-manifest.json",
+        {
+            "format_version": 1,
+            "model_id": None,
+            "revision": None,
+            "tokenizer_mode": "embedded",
+            "identity": "sha256:" + "a" * 64,
+            "files": [{"path": "config.json", "sha256": config_sha, "size": 1}],
+        },
+    )
+    completion = root / "telemetry/completion.json"
+    completion_sha = write(completion, {"checkpoint": str(checkpoint), "step": 527, "completed_updates": 528})
+    native_sha = write(
+        receipts / "native-checkpoint.json",
+        {"checkpoint": str(checkpoint), "step": 527, "is_temporary": False, "verdict": "full"},
+    )
+    hf_sha = write(
+        receipts / "hf-export.json",
+        {
+            "native_checkpoint": str(checkpoint),
+            "source": str(hf),
+            "step": 527,
+            "verdict": "full_hash_and_index",
+            "files": [{"path": "config.json", "sha256": config_sha}],
+        },
+    )
+    seal_sha = write(
+        receipts / "seal.json",
+        {
+            "status": "COMPLETE",
+            "step": 527,
+            "completed_updates": 528,
+            "native_checkpoint": str(checkpoint),
+            "hf_export": str(hf),
+            "completion_receipt": str(completion),
+            "completion_sha256": completion_sha,
+            "native_receipt_sha256": native_sha,
+            "hf_receipt_sha256": hf_sha,
+        },
+    )
+    return root, hf, config_sha, manifest_sha, FilePin(str(receipts / "seal.json"), seal_sha)
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_adopts_a_certified_export_through_the_seal(round_inputs, local_round, tmp_path):
+    model_dir, _ = round_inputs
+    _, hf, config_sha, manifest_sha, seal = _certified_export_fixture(tmp_path)
+    spec = dataclasses.replace(
+        local_round,
+        adopted_model=dataclasses.replace(
+            local_round.adopted_model,
+            uri=str(hf),
+            export_manifest_sha256=None,
+            config_sha256=config_sha,
+            checkpoint_step=527,
+            model_manifest_sha256=manifest_sha,
+            certification_seal=seal,
+        ),
+    )
+    assert adopted_round_rl(spec) is not None
+    # A seal pin that no longer matches fails the pinned read, not the step check.
+    tampered = dataclasses.replace(
+        spec.adopted_model,
+        certification_seal=FilePin(seal.path, hashlib.sha256(b"tampered").hexdigest()),
+    )
+    with pytest.raises(ValueError, match="Pinned file changed"):
+        adopted_round_rl(dataclasses.replace(spec, adopted_model=tampered))
+    # A seal certifying a different step fails the strict step check.
+    moved = dataclasses.replace(
+        spec.adopted_model,
+        certification_seal=FilePin(seal.path, seal.sha256),
+        checkpoint_step=400407,
+    )
+    with pytest.raises(ValueError, match="does not certify the adopted checkpoint step"):
+        adopted_round_rl(dataclasses.replace(spec, adopted_model=moved))
+    # The legacy route still rejects the foreign export manifest's step.
+    legacy = dataclasses.replace(
+        spec,
+        adopted_model=dataclasses.replace(
+            spec.adopted_model,
+            uri=str(model_dir),
+            checkpoint_step=527,
+            certification_seal=None,
+            export_manifest_sha256=pins_export_manifest(model_dir),
+        ),
+    )
+    with pytest.raises(ValueError, match="checkpoint step changed"):
+        adopted_round_rl(legacy)
+
+
+def pins_export_manifest(model_dir):
+    return hashlib.sha256((model_dir / "export-manifest.json").read_bytes()).hexdigest()

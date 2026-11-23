@@ -1055,6 +1055,19 @@ contract, rides the judge credential source, and starts an attempt-owned
 retrieval service around the RL run. A binding without the route — or the
 route without a binding — fails; the resolved plan records the binding.
 
+### Adopting a certified SFT export
+
+An adopted RL round binds its model one of two ways, never both. The default
+pins `export_manifest_sha256` and takes the checkpoint step from that export
+manifest. A certified export instead pins `model_manifest_sha256` (the
+`.marinskyrl-model-manifest.json` staging manifest beside the export) and
+`certification_seal` (path and SHA-256 of the certification seal); the runner
+verifies the seal is COMPLETE, certifies exactly the declared checkpoint step
+and completed updates, matches the native checkpoint, HF export path and
+receipts against it, and refuses temporary or inconsistent outputs. This
+route exists because an export's `export-manifest.json` can predate the
+certified weights — the step evidence is the seal, never that manifest.
+
 `rounds/exp4-recovery.yaml` rebuilds the downstream RL recovery graph for version `2026.11.19.82` from a
 hash-pinned plan and completed SFT/handoff records. It preserves the recorded
 72-hour job limit and 12-hour learning budget for historical reproduction.

@@ -95,6 +95,7 @@ from experiments.post_training.task_curation.exp4_curriculum import (
 )
 from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.sft.launcher import SFTSpec
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 MICRO210_PLACEHOLDER_URI = "s3://unresolved/terminal"
 MICRO210_PLACEHOLDER_SHA = "sha256:" + "0" * 64
@@ -170,11 +171,13 @@ class RoundAdoptedHf:
     name: str
     version: str
     uri: str
-    export_manifest_sha256: str
     config_sha256: str
     checkpoint_step: int
     tokenizer_uri: str
     tokenizer_revision: str
+    export_manifest_sha256: str | None = None
+    model_manifest_sha256: str | None = None
+    certification_seal: FilePin | None = None
 
 
 @dataclass(frozen=True)
@@ -451,19 +454,77 @@ def adopted_round_resolved_plan(spec: AdoptedRlRound, *, source_revision: str, w
     return plan
 
 
+def verified_certified_export(model: RoundAdoptedHf) -> None:
+    """Adopt a certified SFT export: the seal proves the checkpoint step, the staging manifest binds the payload.
+
+    The export manifest of a certified export may predate the certified weights (the Exp5
+    step-527 export carries the exp4 handoff's manifest), so the step evidence is the
+    hash-pinned certification seal and its native/HF/completion receipts — never the
+    export manifest.
+    """
+    seal = read_pin(model.certification_seal, Path.cwd())
+    if seal["status"] != "COMPLETE":
+        raise ValueError("The SFT certification is not complete")
+    step = seal["step"]
+    if step != model.checkpoint_step or seal["completed_updates"] != step + 1:
+        raise ValueError("The certification seal does not certify the adopted checkpoint step")
+    checkpoint = StoragePath(seal["native_checkpoint"])
+    root = checkpoint.parent.parent
+    if (
+        checkpoint != root / f"checkpoints/step-{step}"
+        or seal["hf_export"] != str(root / f"hf/step-{step}")
+        or seal["hf_export"] != model.uri
+        or (root.scheme == "s3" and "tmp" in root.segments)
+    ):
+        raise ValueError("The certification seal identifies inconsistent or temporary outputs")
+    receipts = StoragePath(model.certification_seal.path).parent
+    completion = read_pin(FilePin(seal["completion_receipt"], seal["completion_sha256"]), Path.cwd())
+    native = read_pin(FilePin(str(receipts / "native-checkpoint.json"), seal["native_receipt_sha256"]), Path.cwd())
+    hf = read_pin(FilePin(str(receipts / "hf-export.json"), seal["hf_receipt_sha256"]), Path.cwd())
+    if (
+        completion["checkpoint"] != str(checkpoint)
+        or completion["step"] != step
+        or native["checkpoint"] != str(checkpoint)
+        or native["step"] != step
+        or native["is_temporary"]
+        or native["verdict"] != "full"
+        or hf["native_checkpoint"] != str(checkpoint)
+        or hf["source"] != seal["hf_export"]
+        or hf["step"] != step
+        or hf["verdict"] != "full_hash_and_index"
+    ):
+        raise ValueError("The native, HF and completion receipts do not certify the same SFT checkpoint")
+    manifest = pinned_json(prefix_join(model.uri, MODEL_MANIFEST_FILENAME), model.model_manifest_sha256)
+    if (
+        manifest.get("format_version") != 1
+        or not manifest.get("files")
+        or not str(manifest.get("identity", "")).startswith("sha256:")
+    ):
+        raise ValueError("The certified export's model manifest does not bind its payload files")
+
+
 def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactStep:
     """Adopt a pinned HF export or a native RL checkpoint without an SFT stage."""
     model = spec.adopted_model
-    manifest = pinned_json(prefix_join(model.uri, "export-manifest.json"), model.export_manifest_sha256)
     config = pinned_json(prefix_join(model.uri, "config.json"), model.config_sha256)
     if config["grugmoe_artifact_schema_version"] not in (1, 3):
         raise ValueError("RL adoption requires a schema-1 or schema-3 HF export")
-    if "request" in manifest:
-        recorded_step = int(manifest["request"]["config"]["checkpoint"].rsplit("/step-", 1)[-1])
+    if (model.export_manifest_sha256 is None) == (model.certification_seal is None):
+        raise ValueError(
+            "Adopt an HF export through its export manifest or through its certification seal with the model manifest"
+        )
+    if model.certification_seal is not None:
+        if model.export_manifest_sha256 is not None or model.model_manifest_sha256 is None:
+            raise ValueError("Certified-export adoption binds the model manifest, not the export manifest")
+        verified_certified_export(model)
     else:
-        recorded_step = int(manifest["step"])
-    if recorded_step != model.checkpoint_step:
-        raise ValueError("Adopted HF export checkpoint step changed")
+        manifest = pinned_json(prefix_join(model.uri, "export-manifest.json"), model.export_manifest_sha256)
+        if "request" in manifest:
+            recorded_step = int(manifest["request"]["config"]["checkpoint"].rsplit("/step-", 1)[-1])
+        else:
+            recorded_step = int(manifest["step"])
+        if recorded_step != model.checkpoint_step:
+            raise ValueError("Adopted HF export checkpoint step changed")
     rl = spec.rl
     roles = draccus.decode(SkyRLRolePlan, rl.role_plan)
     execution = runtime_execution(rl.execution)
@@ -600,6 +661,8 @@ def adopted_round_evaluation(spec: AdoptedHfRound) -> ArtifactStep:
     if spec.evaluation != "frozen-micro210":
         raise ValueError("Adopted evaluation rounds require frozen-micro210")
     model = spec.adopted_model
+    if model.export_manifest_sha256 is None:
+        raise ValueError("Adopted evaluation rounds bind the export manifest")
     manifest = pinned_json(prefix_join(model.uri, "export-manifest.json"), model.export_manifest_sha256)
     config = pinned_json(prefix_join(model.uri, "config.json"), model.config_sha256)
     if not manifest["request"]["config"]["checkpoint"].endswith(f"/step-{model.checkpoint_step}"):

@@ -10,11 +10,14 @@ adopted_model:
   name: snowball-specdec-gate/adopted-exp5-sft
   version: 2026.11.22.1
   uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp5/long-loop-exp5/round5/sft/2026.11.21.113/hf/step-527
-  export_manifest_sha256: dbb03bd43db0d110956f3e33b548246b0e70527f4326ab4d0787b45b6d217278
   config_sha256: bf3da5aaf9ae83084fd704d53dea5eefa93bea5b4b8d300eff5c18f617fd878b
   checkpoint_step: 527
   tokenizer_uri: marin-community/marin-tokenizer-tools
   tokenizer_revision: 3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
+  model_manifest_sha256: 4614aac5c1c42bafada15df52a44e01ac778b5e68966ce1a9bcda526f2cffe6e
+  certification_seal:
+    path: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp5/long-loop-exp5/round5/sft/2026.11.21.113/recovery/finalization-527-20261122/seal.json
+    sha256: 935f34393e6cd26844dd72c0ce439a3a1e1d4336aed7adae50cfe5b3ce52b790
 rl:
   gpu_variant: GB200
   role_plan:
