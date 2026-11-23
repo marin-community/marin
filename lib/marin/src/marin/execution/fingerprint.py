@@ -98,7 +98,14 @@ class _FingerprintEncoder(json.JSONEncoder):
 
     def default(self, o):
         if dataclasses.is_dataclass(o) and not isinstance(o, type):
-            return dataclasses.asdict(o)
+            fields = {}
+            for field in dataclasses.fields(o):
+                value = getattr(o, field.name)
+                if field.metadata.get("fingerprint_omit_default") and field.default is not dataclasses.MISSING:
+                    if value == field.default:
+                        continue
+                fields[field.name] = value
+            return fields
         if isinstance(o, Enum):
             return o.value
         if isinstance(o, timedelta):
@@ -163,7 +170,12 @@ def _canonical_key(o: object) -> str:
 
 
 def canonical_json(config: object) -> str:
-    """The canonical, deterministic JSON for ``config`` — the bytes a fingerprint hashes."""
+    """Encode configuration deterministically for hashing.
+
+    A dataclass field with ``fingerprint_omit_default`` metadata may introduce
+    an opt-in setting without changing existing fingerprints. Use a constant,
+    equality-comparable default that preserves existing behavior.
+    """
     return json.dumps(config, sort_keys=True, cls=_FingerprintEncoder)
 
 
