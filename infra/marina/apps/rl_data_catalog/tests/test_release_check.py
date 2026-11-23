@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 import requests
+from finestore.rl.status_taxonomy import taxonomy_tables
 from marina.client import MarinaRequestError
 
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
@@ -258,3 +259,17 @@ def test_release_cli_fails_closed_with_history_timeout_sql_and_bindings(tmp_path
     message = recorded["error"]["message"]
     assert "504" in message and "query exceeded its statement timeout" in message
     assert "pipeline_0" in message and "retained-source" in message and "md5(packet)" in message
+
+
+class _NotFoundReader:
+    """A reader whose served revision predates the checked release's endpoints."""
+
+    def get(self, path: str) -> dict[str, Any]:
+        raise MarinaRequestError(404, "Not Found")
+
+
+def test_browser_api_response_serves_the_candidate_taxonomy_when_the_served_revision_lacks_it():
+    status, tables = release_check.browser_api_response(_NotFoundReader(), "api/taxonomy", [])
+    assert status == 200
+    assert tables == taxonomy_tables()
+    assert set(tables) == {"status", "stage", "reason", "use", "method", "format"}

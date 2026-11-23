@@ -12,6 +12,7 @@ status, stage, reason or column-value labels.
 """
 
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -441,6 +442,24 @@ FORMAT_EXPLANATIONS: dict[str, ValueExplanation] = {
         meaning="The served payload rows are MarinSkyRL blend records.",
     ),
 }
+
+
+def taxonomy_tables() -> dict[str, Any]:
+    """The canonical status, stage, reason and Use/Method/Format explanation tables.
+
+    The Atlas ``/api/taxonomy`` endpoint serves exactly this document and every
+    page renders its labels and explanations from it; the release checker
+    answers the same route from the candidate's code while the served revision
+    predates the endpoint.
+    """
+    return {
+        "status": {status.value: item.model_dump(mode="json") for status, item in STATUS_EXPLANATIONS.items()},
+        "stage": {stage.value: item.model_dump(mode="json") for stage, item in STAGE_EXPLANATIONS.items()},
+        "reason": {reason.value: item.model_dump(mode="json") for reason, item in REASON_EXPLANATIONS.items()},
+        "use": {value: item.model_dump(mode="json") for value, item in USE_EXPLANATIONS.items()},
+        "method": {method.value: item.model_dump(mode="json") for method, item in METHOD_EXPLANATIONS.items()},
+        "format": {value: item.model_dump(mode="json") for value, item in FORMAT_EXPLANATIONS.items()},
+    }
 
 
 class ExclusionEvidence(BaseModel):

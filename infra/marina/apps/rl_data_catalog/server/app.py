@@ -10,14 +10,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, Confidence, Defect, ReferenceStatus, Verdict
-from finestore.rl.status_taxonomy import (
-    FORMAT_EXPLANATIONS,
-    METHOD_EXPLANATIONS,
-    REASON_EXPLANATIONS,
-    STAGE_EXPLANATIONS,
-    STATUS_EXPLANATIONS,
-    USE_EXPLANATIONS,
-)
+from finestore.rl.status_taxonomy import taxonomy_tables
 from marina.applets import AppletServices
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -469,14 +462,7 @@ def create_api(services: AppletServices) -> FastAPI:
         explanations from these tables; the frontend defines no label of its
         own.
         """
-        return {
-            "status": {status.value: item.model_dump(mode="json") for status, item in STATUS_EXPLANATIONS.items()},
-            "stage": {stage.value: item.model_dump(mode="json") for stage, item in STAGE_EXPLANATIONS.items()},
-            "reason": {reason.value: item.model_dump(mode="json") for reason, item in REASON_EXPLANATIONS.items()},
-            "use": {value: item.model_dump(mode="json") for value, item in USE_EXPLANATIONS.items()},
-            "method": {method.value: item.model_dump(mode="json") for method, item in METHOD_EXPLANATIONS.items()},
-            "format": {value: item.model_dump(mode="json") for value, item in FORMAT_EXPLANATIONS.items()},
-        }
+        return taxonomy_tables()
 
     @api.get("/source-statuses")
     def source_statuses() -> dict[str, Any]:

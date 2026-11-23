@@ -25,6 +25,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import requests
+from finestore.rl.status_taxonomy import taxonomy_tables
 from marina.client import MarinaRequestError, applet_query, bearer_token, marina_request, marina_token_provider
 from marina.testing import test_database_environment
 from playwright.sync_api import Route, sync_playwright
@@ -288,6 +289,12 @@ def browser_api_response(reader: CatalogReader, path: str, sources: list[dict[st
         parsed = urlsplit(path)
         source_id = dict(parse_qsl(parsed.query)).get("source_id")
         source = next((row for row in sources if row["id"] == source_id), None)
+        if error.status_code == 404 and parsed.path == "api/taxonomy":
+            # The canonical taxonomy tables ship with this release: the served
+            # revision predates the endpoint, so the checker answers the route
+            # from the candidate's own code - the same tables the released API
+            # serves.
+            return 200, taxonomy_tables()
         if (
             error.status_code == 404
             and parsed.path == "api/assessment"
