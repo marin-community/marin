@@ -1311,6 +1311,7 @@ def test_snowball_paged_routes_replay_into_learner():
         logits, _, routes = eqx.filter_jit(model.decode_with_routes)(
             prompt, cache, batch, hax.arange(position, dtype=jnp.int32)
         )
+        assert routes is not None
         replay = model.prepare_route_replay(routes.expert_ids, hax.named(routes.token_valid, position))
         features, _, _ = model._activations(prompt, False, None, route_replay=replay)
         replayed = hax.dot(features, model.get_lm_head(), axis=model.Embed)
