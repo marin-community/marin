@@ -46,6 +46,8 @@ current base images, so every update rebuilds the image, even for an unchanged
 commit. When preview skips that build, it shows the VM image as unknown.
 `pulumi up` builds and pushes the image, places the provider-produced digest in
 VM metadata, and waits for `https://loom.oa.dev/api/ready` after activation.
+The image entrypoint sets the Claude and Codex CLI and ACP adapter versions
+and selects the Codex executable for ACP sessions.
 
 ```sh
 cd /path/to/marin
