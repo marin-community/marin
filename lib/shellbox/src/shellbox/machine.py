@@ -180,6 +180,7 @@ class MachineSpec:
     storage_mb: int | None = None
     gpus: int = 0
     startup_timeout: float | None = None
+    lock_satisfied_by_image: bool = False
 
     def __post_init__(self) -> None:
         if self.cpus is not None and self.cpus <= 0:

@@ -741,7 +741,9 @@ class TaskSpecTrial(Trial):
         source = grader.environment.package_spec or HostImage()
         if self.grader_machine_image is not None:
             # The harness resolved this frozen lock-only grader environment to its composed
-            # toolchain image; deliver the grader machine from it instead of the host.
+            # toolchain image; deliver the grader machine from it instead of the host. The image
+            # bakes the environment's own lock, so prepare_machine_spec must not mount a
+            # lock runtime over it.
             source = RegistryImage(self.grader_machine_image)
         elif "verifier" in self._build_sources:
             source = self._build_sources["verifier"]
@@ -754,6 +756,7 @@ class TaskSpecTrial(Trial):
             storage_mb=self.verifier_runtime.storage_mb,
             network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
+            lock_satisfied_by_image=self.grader_machine_image is not None,
         )
         async with AsyncExitStack() as stack:
             factory = await stack.enter_async_context(

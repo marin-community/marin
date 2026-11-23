@@ -13,6 +13,7 @@ from shellbox.machine import (
     HostImage,
     MachineFactory,
     MachineSpec,
+    RegistryImage,
     UnsupportedMachineSpec,
 )
 
@@ -84,19 +85,25 @@ def prepare_machine_spec(
     variables: Mapping[str, str] = {}
     if requirements.packages_lock is not None:
         source = spec.source
-        if not isinstance(source, HostImage):
+        if spec.lock_satisfied_by_image:
+            # The machine runs the environment's own composed toolchain image, which bakes
+            # this lock's pinned packages; no lock runtime is mounted over it.
+            if not isinstance(source, RegistryImage):
+                raise UnsupportedMachineSpec("A lock-satisfied machine must run from its registry image")
+        elif not isinstance(source, HostImage):
             raise UnsupportedMachineSpec("Package locks require a HostImage source")
-        runtime = local_runtime(requirements.packages_lock)
-        runtime.ensure_built()
-        spec = replace(
-            spec,
-            source=HostImage(
-                read_only=tuple(dict.fromkeys((*source.read_only, runtime.root))),
-                bin_dirs=tuple(dict.fromkeys((runtime.bin_dir, *source.bin_dirs))),
-                mounts=(*source.mounts, *runtime.mounts),
-            ),
-        )
-        variables = runtime.env
+        else:
+            runtime = local_runtime(requirements.packages_lock)
+            runtime.ensure_built()
+            spec = replace(
+                spec,
+                source=HostImage(
+                    read_only=tuple(dict.fromkeys((*source.read_only, runtime.root))),
+                    bin_dirs=tuple(dict.fromkeys((runtime.bin_dir, *source.bin_dirs))),
+                    mounts=(*source.mounts, *runtime.mounts),
+                ),
+            )
+            variables = runtime.env
     return replace(
         spec,
         workdir=requirements.working_directory if requirements.working_directory is not None else spec.workdir,

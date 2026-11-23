@@ -583,19 +583,12 @@ def run_task(
     attempts = []
     machine_image = task_spec_grader_machine_image(task)
     if machine_image is not None:
-        # The composed toolchain image is a Daytona mechanism: its grader machine pulls the
-        # registry image. On LOCAL, a lock-declaring grader environment must use the native
-        # HostImage path - prepare_machine_spec builds the lock runtime over the host
-        # interpreter and rejects a RegistryImage source.
-        if task.backend == "local":
-            LOGGER.info(
-                "Grader machine for %s builds its declared lock on the host interpreter; no composed image",
-                task.task_id,
-            )
-            machine_image = None
-        else:
-            machine_image = pinned_registry_reference(machine_image, config.environment_options.get("registry_authfile"))
-            LOGGER.info("Grader machine for %s runs from the composed toolchain image %s", task.task_id, machine_image)
+        # The composed toolchain image is the declared environment's own artifact: it bakes
+        # the task's packages lock and, for the Lean graders, the Lean toolchain the grader
+        # probes for. The harness marks the machine lock-satisfied, so both backends run the
+        # grader from the digest-pinned image instead of mounting a lock runtime.
+        machine_image = pinned_registry_reference(machine_image, config.environment_options.get("registry_authfile"))
+        LOGGER.info("Grader machine for %s runs from the composed toolchain image %s", task.task_id, machine_image)
     pending_reason = None
     math_deadlines = prior_math_deadlines
     for number in range(config.attempts_per_task):
