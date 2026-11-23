@@ -56,7 +56,8 @@ def test_monday_digest_keeps_only_due_reviewers_and_active_internal_prs(monkeypa
     assert "<https://github.com/marin-community/marin/pull/10|#10>" in line
     assert "Fix &lt;queue&gt; &amp; wakeups" in line
     assert "Updated 3d ago" in line
-    assert line.split("Waiting on ")[1] == "early (3d 2h)"
+    assert "early (3d 2h)" in line
+    assert all(name not in line for name in pull["reviewers"] if name != "early")
 
 
 def test_digest_splits_at_pr_boundaries_only_when_needed():

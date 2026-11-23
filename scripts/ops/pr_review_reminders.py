@@ -63,8 +63,8 @@ def elapsed(start: datetime, now: datetime) -> str:
     return f"{hours}h" if hours else "under 1h"
 
 
-def due_reviewers(number: int, reviewers: list[str], cutoff: datetime, now: datetime) -> list[str]:
-    """Describe the wait since each outstanding request or subsequent reviewer activity."""
+def overdue_since(number: int, reviewers: list[str], cutoff: datetime) -> dict[str, datetime | None]:
+    """Return the latest activity for overdue reviewers, or None if the request time is unknown."""
     latest: dict[str, datetime | None] = dict.fromkeys(reviewers)
     requested = set()
 
@@ -93,20 +93,15 @@ def due_reviewers(number: int, reviewers: list[str], cutoff: datetime, now: date
         if event["event"] in {"labeled", "unlabeled", "closed", "reopened", "merged"}:
             record(event["actor"], when)
     if all(when and when >= cutoff for when in latest.values()):
-        return []
+        return {}
     for comment in records(f"pulls/{number}/comments", "{user: .user.login, updated_at}"):
         record(comment["user"], datetime.fromisoformat(comment["updated_at"]))
     for commit in records(f"pulls/{number}/commits", "{user: .author.login, date: .commit.committer.date}"):
         record(commit["user"], datetime.fromisoformat(commit["date"]))
 
-    result = []
-    for login in sorted(latest, key=str.casefold):
-        when = latest[login]
-        if when is None or when < cutoff:
-            # Some current requests lack a timestamp in the timeline.
-            age = elapsed(when, now) if when is not None and login in requested else "request time unavailable"
-            result.append(f"{login} ({age})")
-    return result
+    return {
+        login: when if login in requested else None for login, when in latest.items() if when is None or when < cutoff
+    }
 
 
 def reminder_lines(now: datetime) -> Iterable[str]:
@@ -125,8 +120,13 @@ def reminder_lines(now: datetime) -> Iterable[str]:
             continue
         if pull["author_type"] != "User" or not has_write_access(pull["author"]):
             continue
-        reviewers = due_reviewers(pull["number"], pull["reviewers"], cutoff, now)
-        if reviewers:
+        waits = overdue_since(pull["number"], pull["reviewers"], cutoff)
+        if waits:
+            reviewers = []
+            for login in sorted(waits, key=str.casefold):
+                since = waits[login]
+                age = elapsed(since, now) if since is not None else "request time unavailable"
+                reviewers.append(f"{login} ({age})")
             number = pull["number"]
             title = escape(shorten(pull["title"], width=110, placeholder="…"), quote=False)
             yield (
