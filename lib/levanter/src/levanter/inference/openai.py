@@ -83,9 +83,9 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
+_MAX_REQUEST_BYTES = 4 * 1024 * 1024
 _EVENT_STREAM = "text/event-stream"
 _CHAT_CHUNK = "chat.completion.chunk"
-_MAX_REQUEST_BYTES = 4 * 1024 * 1024
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
 
 

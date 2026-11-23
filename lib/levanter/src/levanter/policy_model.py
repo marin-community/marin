@@ -222,8 +222,15 @@ def response_logprobs(
     # A token at i is scored by the activation at i-1. Slice before the
     # vocabulary projection so prompt positions do not incur that cost.
     start = Position.size - Response.size
-    predictions = activations[Position, hax.ds(start - 1, Response.size)].rename({Position.name: Response.name})
-    targets = batch.tokens[Position, hax.ds(start, Response.size)].rename({Position.name: Response.name})
+
+    def response_slice(value: NamedArray, begin: int) -> NamedArray:
+        index = value.axis_indices(Position)
+        assert index is not None
+        axes = tuple(Response if axis == Position else axis for axis in value.axes)
+        return hax.named(jax.lax.slice_in_dim(value.array, begin, begin + Response.size, axis=index), axes)
+
+    predictions = response_slice(activations, start - 1)
+    targets = response_slice(batch.tokens, start)
     if exact_model is not None:
         return exact_model.fixed_policy_logprobs(predictions, targets).rearrange(("batch", "response"))
     loss = fused_cross_entropy_loss_and_logsumexp_penalty(

@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.sampler import LogprobMode
 from levanter.models.llama import LlamaLMHeadModel
@@ -41,6 +42,7 @@ try:
         InferenceServerConfig,
         _compute_tokens,
     )
+    from levanter.inference.snowball_publication import publish_snowball_checkpoint
     from levanter.inference.openai_protocol import ChatMessage
     from levanter.inference.policy_replay import BinaryRolloutChoice, prepare_binary_policy_batch
 
@@ -874,3 +876,86 @@ def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_token
     wrong_inputs[0] += 1
     with pytest.raises(ValueError):
         choice_expert_routes(tensors, 0, wrong_inputs)
+
+
+def test_publish_snowball_checkpoint_drives_the_live_binary_snapshot(tmp_path, local_gpt2_tokenizer):
+    cfg = SnowballConfig(
+        vocab_size=48,
+        hidden_dim=16,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=24,
+        num_layers=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=16,
+        sliding_window=4,
+        attention_implementation="reference",
+    )
+    options = InferenceServerConfig(
+        service=InferenceEngineConfig(
+            max_seq_len=16,
+            max_pages=16,
+            max_seqs=2,
+            max_rounds=2,
+            page_size=2,
+            max_seqs_in_prefill=2,
+            max_prefill_size=12,
+            max_queued_tokens=4,
+            logprob_mode=LogprobMode.POLICY,
+            compute_dtype=jnp.float32,
+        ),
+        initial_policy_id="starting",
+    )
+    with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
+        mesh = compact_grug_mesh()
+        vocab = hax.Axis("vocab", cfg.vocab_size)
+        initial = SnowballLMHeadModel.init(vocab, cfg, key=jax.random.key(18)).with_packed_experts()
+        learned = SnowballLMHeadModel.init(vocab, cfg, key=jax.random.key(21))
+        path = str(tmp_path / "native-policy")
+        save_checkpoint({"model": learned}, 3, path, metadata={"policy_version": 2, "policy_id": "learned:2"})
+        server = InferenceServer.create(options, initial, local_gpt2_tokenizer, mesh=mesh)
+        try:
+            with TestClient(server.app) as client:
+                prompt = np.array([2, 5, 7], dtype=np.int32)
+
+                def generate(policy_id):
+                    request = encode_frame(
+                        {
+                            "max_tokens": 3,
+                            "temperature": 0,
+                            "return_route_captures": True,
+                            "expected_policy_id": policy_id,
+                        },
+                        {"prompt_token_ids": prompt},
+                    )
+                    return client.post(GENERATE_PATH, content=request, headers={"content-type": MEDIA_TYPE})
+
+                before = generate("starting")
+                assert before.status_code == 200
+                with pytest.raises(ValueError):
+                    publish_snowball_checkpoint(server, path, policy_version=1, expected_serving_version=0)
+                assert publish_snowball_checkpoint(server, path, policy_version=2, expected_serving_version=0) == 1
+                assert generate("starting").status_code == 409
+                result = generate("learned:2")
+                assert result.status_code == 200
+                metadata, tensors = decode_frame(result.content)
+                assert metadata["choices"][0]["policy_id"] == "learned:2"
+                _, previous = decode_frame(before.content)
+                assert not np.array_equal(tensors["choice.0.policy_logprobs"], previous["choice.0.policy_logprobs"])
+                tokens = np.r_[prompt, tensors["choice.0.token_ids"]]
+                experts, valid = choice_expert_routes(tensors, 0, tokens)
+                inputs = hax.named(jnp.asarray(tokens[None]), ("batch", "position"))
+                replay = learned.prepare_route_replay(
+                    jnp.asarray(experts[:, None]), hax.named(valid[None], inputs.axes)
+                )
+                loss, _ = learned.next_token_loss_and_metrics(
+                    LmExample(inputs, hax.ones(inputs.axes)), route_replay=replay, reduction=None
+                )
+                np.testing.assert_allclose(
+                    tensors["choice.0.policy_logprobs"], -loss.array[0, prompt.size - 1 : -1], rtol=0, atol=1e-5
+                )
+        finally:
+            server.shutdown()
