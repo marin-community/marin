@@ -44,7 +44,6 @@ from levanter.grug._moe.common import MoeDispatchCounts, _TRANSPORT_CAPACITY_MOE
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
-    PagedAttentionImplementation,
     RotaryConfig,
     align_kv_heads,
     apply_rotary_embedding,
@@ -223,7 +222,6 @@ class SnowballConfig(HFCompatConfig):
     qk_mult: float = _DEFAULT_QK_MULT
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
-    inference_attention_implementation: PagedAttentionImplementation | None = None
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
@@ -572,7 +570,6 @@ class SnowballAttention(eqx.Module):
             batch_info.num_seqs,
             sm_scale=head_dim**-0.5,
             sliding_window=cfg.sliding_window if mode == "short" else None,
-            implementation=cfg.inference_attention_implementation,
         ).reshape(x.shape[0], 1, cfg.num_heads, head_dim)
         return self._project_output(x, out, v), cache
 

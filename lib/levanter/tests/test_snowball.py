@@ -496,7 +496,7 @@ def test_snowball_fp32_activations_cover_every_sigmoid():
 
 @pytest.mark.parametrize("model_axis_size,expert_axis_size", [(1, 1), (2, 1), (1, 2)])
 def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size):
-    cfg = _tiny_config(num_layers=2, sliding_window=3, inference_attention_implementation="reference")
+    cfg = _tiny_config(num_layers=2, sliding_window=3)
     with use_cpu_devices(model_axis_size * expert_axis_size):
         mesh = compact_grug_mesh(model_axis_size=model_axis_size, expert_axis_size=expert_axis_size)
         with jax.set_mesh(mesh):
