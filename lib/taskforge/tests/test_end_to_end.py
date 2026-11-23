@@ -776,6 +776,42 @@ def tree(destination: Path) -> dict[Path, bytes]:
     return {path: path.read_bytes() for path in destination.rglob("*") if path.is_file()}
 
 
+@pytest.mark.parametrize("command", ["one", "run"])
+@pytest.mark.parametrize(
+    "flag,value",
+    [("--glm-relay-job", ""), ("--glm-relay-job", " "), ("--glm-base-url", ""), ("--glm-base-url", "http://glm")],
+)
+async def test_a_blank_or_malformed_gateway_is_a_usage_error_before_any_claim(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    flag: str,
+    value: str,
+) -> None:
+    @asynccontextmanager
+    async def broken_runtime(
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), resources(Envs(), ())
+
+    monkeypatch.setattr(driver, "runtime", broken_runtime)
+    with pytest.raises(RuntimeError, match="exhaust"):
+        await driver.one(driver_args)  # a published held root, the one a blank flag must leave alone
+    before = tree(tmp_path)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)
+    monkeypatch.setattr(driver.subprocess, "Popen", unexpected_runtime)
+    options = {"proposals": driver_args.proposals, "output": driver_args.output, "policy": driver_args.policy}
+    argv = [command, *(item for name, path in options.items() for item in (f"--{name}", path)), flag, value]
+    argv += ["--work-dir", str(tmp_path / "relaunch"), *(["--concurrency", "1"] if command == "run" else [])]
+    monkeypatch.setattr(sys, "argv", ["driver", *argv])
+    with pytest.raises(SystemExit) as stopped:
+        driver.main()
+    assert stopped.value.code == 2 and f"argument {flag}" in capsys.readouterr().err
+    assert tree(tmp_path) == before
+
+
 @asynccontextmanager
 async def unexpected_runtime(*_: object) -> AsyncIterator[None]:
     pytest.fail("A journal that cannot be resumed must not start the runtime")

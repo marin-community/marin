@@ -8,10 +8,13 @@ from experiments.post_training.capability_driven_envs import launch
 REQUIRED = {"CW_KEY_ID": "cw-id-0123456789", "CW_KEY_SECRET": "cw-secret-0123456789", "GLM_API_KEY": "glm-0123456789"}
 
 
-def commands(*flags: str, **environ: str) -> list[list[str]]:
+def base_argv() -> list[str]:
     argv = ["--proposals", "s3://b/sample.json", "--output", "s3://b/out", "--policy", "s3://b/policy.json"]
-    argv += ["--job-prefix", "tf", "--concurrency", "4", "--cpu", "8", *flags]
-    return launch.commands(launch.parser().parse_args(argv), {**REQUIRED, **environ})
+    return [*argv, "--job-prefix", "tf", "--concurrency", "4", "--cpu", "8"]
+
+
+def commands(*flags: str, **environ: str) -> list[list[str]]:
+    return launch.commands(launch.parser().parse_args([*base_argv(), *flags]), {**REQUIRED, **environ})
 
 
 def values(command: list[str], flag: str) -> list[str]:
@@ -41,6 +44,24 @@ def test_launcher_requires_exactly_one_endpoint(endpoints: tuple[str, ...], caps
     with pytest.raises(SystemExit):
         commands("--drivers", "2", *endpoints)
     assert "--glm-relay-job" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [("--glm-relay-job", ""), ("--glm-relay-job", "  "), ("--glm-base-url", ""), ("--glm-base-url", "http://glm")],
+)
+def test_launcher_refuses_a_blank_or_malformed_gateway_before_building_a_job(
+    flag: str, value: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built: list[list[str]] = []
+    monkeypatch.setattr(launch.subprocess, "run", lambda command, **_: built.append(command))
+    monkeypatch.setattr("sys.argv", ["launch", "--drivers", "3", flag, value, *base_argv()])
+    for key, secret in REQUIRED.items():
+        monkeypatch.setenv(key, secret)
+    with pytest.raises(SystemExit) as stopped:
+        launch.main()
+    assert stopped.value.code == 2 and built == []
+    assert f"argument {flag}" in capsys.readouterr().err
 
 
 def test_launcher_forwards_a_direct_endpoint_and_resume_held_only_when_asked() -> None:
