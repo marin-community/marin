@@ -36,6 +36,7 @@ from marin.execution.lazy import lower
 from marin.execution.lazy import run as run_handles
 from marin.execution.step_runner import StepRunner
 from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.step_status import read_step_status
 
 from experiments.post_training.task_curation.release_stages import preflight as preflight_module
@@ -94,6 +95,7 @@ def mode_plan(args) -> int:
 
 def mode_preflight(args) -> int:
     """Type-check and small-slice every requested stage on real inputs."""
+    configure_coreweave_s3()
     plan = _plan_document(args)
     graph = release_graph(plan)
     selection = SliceSelection(source=args.source, max_files=args.max_files)
@@ -125,6 +127,7 @@ def mode_preflight(args) -> int:
 
 def mode_run(args, *, force_run_failed: bool) -> int:
     """The submission path: guard, per-stage preflight gate, then the lazy graph."""
+    configure_coreweave_s3()
     plan = _plan_document(args)
     assert_submission_allowed(REPO_ROOT)
     selection = SliceSelection(source=args.source, max_files=args.max_files)

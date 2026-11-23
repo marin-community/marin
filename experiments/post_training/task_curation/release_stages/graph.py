@@ -147,9 +147,10 @@ from experiments.post_training.task_curation.release_stages.sizing import (
 
 PLAN_KIND = "atlas-release-plan"
 GRAPH_RECEIPT_KIND = "atlas-release-graph-receipt"
-# The repo checkout the driver-local stages verify against (graph.py sits four
-# levels below the repo root: release_stages → task_curation → post_training → experiments).
-REPO_ROOT = Path(__file__).resolve().parents[3]
+# The repo checkout the driver-local stages verify against (graph.py sits five
+# levels below the repo root: release_stages → task_curation → post_training →
+# experiments → repo).
+REPO_ROOT = Path(__file__).resolve().parents[4]
 _CALVER = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
 _LOAD_ID_HEX = set("0123456789abcdef")
 
