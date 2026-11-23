@@ -51,9 +51,9 @@ def benchmarks() -> list[EvaluationBenchmark]:
     )
     source = evaluation_source(
         name="pdbthink",
-        # This private, immutable bundle is the audited source. Acquisition stages it regionally.
+        # Regional caches contain the same checksum-verified immutable bundle.
         source=UrlSource(
-            "gs://marin-us-west1/evaluation/datasets/" + BUNDLE_PATH,
+            "mirror://evaluation/datasets/" + BUNDLE_PATH,
             manifest()["bundle_sha256"],
             "evaluation.json.gz",
             SourceFormat.GENERATED,

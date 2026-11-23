@@ -94,9 +94,20 @@ per question, so fresh Marin baselines have a different sampling count.
 The 1.4 MB immutable bundle is stored at
 `gs://marin-us-west1/evaluation/datasets/Open-Athena/pdbthink/1bf06a464b2eab2f1e16c4dd16714314f225e196/evaluation.json.gz`
 ([Filer](https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-west1%2Fevaluation%2Fdatasets%2FOpen-Athena%2Fpdbthink%2F1bf06a464b2eab2f1e16c4dd16714314f225e196%2Fevaluation.json.gz)).
-Acquisition verifies its checksum and stages the source with the evaluation
-corpus. Workers need access to this private cache. Missing or changed bytes fail
-before inference.
+The catalog reads `mirror://evaluation/datasets/Open-Athena/pdbthink/<revision>/evaluation.json.gz`,
+which resolves beneath the worker's Marin storage prefix. GCS mirrors can copy
+this small object from the canonical cache. CoreWeave workers use their regional
+S3 copy; stage it before launching in a new CoreWeave region:
+
+```bash
+uv run fsutil cp \
+  gs://marin-us-west1/evaluation/datasets/Open-Athena/pdbthink/1bf06a464b2eab2f1e16c4dd16714314f225e196/evaluation.json.gz \
+  s3://marin-us-east-02a/marin/evaluation/datasets/Open-Athena/pdbthink/1bf06a464b2eab2f1e16c4dd16714314f225e196/evaluation.json.gz
+```
+
+Acquisition verifies the checksum and stages the source with the evaluation
+corpus. Workers need access to their regional private cache. Missing or changed
+bytes fail before inference.
 
 The frozen source dataset is archived beside the bundle as
 `source-dataset.tar.gz`
