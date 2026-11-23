@@ -18,6 +18,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 PROFILE_EXPORT_RELATIVE_PATH = Path("aiperf_artifacts/profile_export_aiperf.json")
 SERVER_METRICS_RELATIVE_PATH = Path("aiperf_artifacts/server_metrics_export.json")
+_COPY_BUFFER_BYTES = 8 * 1024 * 1024
 
 
 def read_record(uri: str) -> dict:
@@ -46,7 +47,7 @@ def copy_file(source: str, destination: str) -> None:
         Path(destination_path).parent.mkdir(parents=True, exist_ok=True)
     with atomic.atomic_rename(destination_path, filesystem=destination_fs) as temporary:
         with source_fs.open(source_path, "rb") as reader, destination_fs.open(temporary, "wb") as writer:
-            shutil.copyfileobj(reader, writer, length=8 * 1024 * 1024)
+            shutil.copyfileobj(reader, writer, length=_COPY_BUFFER_BYTES)
 
 
 def unpack(archive: Path, destination: Path) -> None:
@@ -68,7 +69,7 @@ def retain_artifacts(artifacts: Path, bundle: Path, prefix: str, *, name: str) -
 
 
 def pack_server_metrics(point: Path) -> None:
-    """Keep lossless server metrics within Iris's uncompressed task-output limit."""
+    """Compress server metrics and check the decompressed bytes before replacing the JSON."""
     source = point / SERVER_METRICS_RELATIVE_PATH
     if not source.is_file():
         return
@@ -76,7 +77,7 @@ def pack_server_metrics(point: Path) -> None:
     expected = sha256_for_path(source)
     with source.open("rb") as reader, encoded.open("wb") as writer:
         with zstandard.ZstdCompressor().stream_writer(writer) as compressed:
-            shutil.copyfileobj(reader, compressed, length=8 * 1024**2)
+            shutil.copyfileobj(reader, compressed, length=_COPY_BUFFER_BYTES)
     with encoded.open("rb") as compressed, zstandard.ZstdDecompressor().stream_reader(compressed) as decoded:
         if hashlib.file_digest(decoded, "sha256").hexdigest() != expected:
             raise ValueError("Compressed server metrics differ from the original bytes")
