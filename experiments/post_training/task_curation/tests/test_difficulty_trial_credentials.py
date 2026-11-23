@@ -3,6 +3,7 @@
 
 """Provider credential templates resolve host-side; guests get dummy values, never a real provider credential."""
 
+import asyncio
 import json
 
 import pytest
@@ -21,6 +22,7 @@ from experiments.post_training.task_curation.difficulty_trials import (
     resolve_provider_secrets,
     task_guest_environment,
     task_required_provider_secrets,
+    worker_host_capabilities,
 )
 from experiments.post_training.task_curation.images.build import (
     DEFAULT_REPOSITORY,
@@ -45,6 +47,49 @@ def judged_bundle(tmp_path):
 
 def test_bundle_credential_templates_are_detected(judged_bundle):
     assert task_required_provider_secrets((judged_bundle,)) == frozenset({"TOGETHER_API_KEY"})
+
+
+def test_trial_keeps_daytona_authority_during_another_trials_sdk_upload(tmp_path, monkeypatch):
+    sdk = pytest.importorskip("daytona._utils.environment")
+    environment = {
+        "DAYTONA_DATA_API_KEY": "fixture-data",
+        "DAYTONA_API_KEY": "fixture-other-account",
+        "DAYTONA_API_URL": "https://app.daytona.io/api",
+        "DAYTONA_TARGET": "us",
+    }
+    monkeypatch.setattr(difficulty_trials.os, "environ", environment.copy())
+    capabilities = worker_host_capabilities({}, environment)
+    packet = tmp_path / "packet"
+    packet.mkdir()
+    (packet / "instruction.md").write_text("Original task")
+    (packet / "task.toml").write_text('[environment]\ndocker_image = "alpine:3.22"\n')
+    (packet / "tests").mkdir()
+    (packet / "tests" / "test.sh").write_text("exit 0\n")
+    config = difficulty_trials.TrialConfig(
+        task=difficulty_trials.TaskConfig(path=packet),
+        trials_dir=tmp_path / "trials",
+        trial_name="candidate",
+        agent=difficulty_trials.AgentConfig(name="terminus-2", model_name="openai/fixture"),
+        environment=difficulty_trials.EnvironmentConfig(type="daytona"),
+    )
+
+    async def run_without_provider_io(trial):
+        connection = trial.host_capabilities.daytona
+        assert connection.api_key == "fixture-data"
+        assert connection.api_url == environment["DAYTONA_API_URL"]
+        assert connection.target == "us"
+        assert trial.host_capabilities.model_authentication == {"http://relay/v1": "EMPTY"}
+        return "constructed"
+
+    monkeypatch.setattr(difficulty_trials.Trial, "run", run_without_provider_io)
+    # The SDK clears the process environment while another trial builds/uploads.
+    # Keep the real Trial.create path: it validates Daytona's client factory.
+    with sdk.isolated_env({"AWS_ACCESS_KEY_ID": "fixture-storage"}):
+        trial, result = asyncio.run(
+            difficulty_trials.execute_trial(config, {"http://relay/v1": "EMPTY"}, {}, capabilities)
+        )
+    assert result == "constructed"
+    assert trial.host_capabilities.daytona is capabilities.daytona
 
 
 def test_bundle_without_credential_templates_requires_nothing(tmp_path):

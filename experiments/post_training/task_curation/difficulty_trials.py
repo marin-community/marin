@@ -548,11 +548,9 @@ def math_deadline_phase(trial: Trial) -> str | None:
     return detail.get("phase")
 
 
-def worker_host_capabilities(
-    authentication: dict[str, str], environment: Mapping[str, str] | None = None
-) -> HostCapabilities:
+def worker_host_capabilities(authentication: dict[str, str], environment: Mapping[str, str]) -> HostCapabilities:
     """Bind Difficulty's Daytona authority exclusively to the DATA credential."""
-    source = dict(os.environ if environment is None else environment)
+    source = dict(environment)
     source.pop("DAYTONA_API_KEY", None)
     if source.get("DAYTONA_DATA_API_KEY"):
         source["DAYTONA_API_KEY"] = source["DAYTONA_DATA_API_KEY"]
@@ -582,11 +580,14 @@ def worker_host_capabilities(
 
 
 async def execute_trial(
-    configuration: TrialConfig, authentication: dict[str, str], guest_environment: Mapping[str, str]
+    configuration: TrialConfig,
+    authentication: dict[str, str],
+    guest_environment: Mapping[str, str],
+    host_capabilities: HostCapabilities,
 ):
     trial = await Trial.create(
         configuration,
-        host_capabilities=worker_host_capabilities(authentication),
+        host_capabilities=dataclasses.replace(host_capabilities, model_authentication=authentication),
         guest_environment=guest_environment,
     )
     return trial, await trial.run()
@@ -600,6 +601,8 @@ def run_task(
     output: str,
     judge_url: str | None,
     prior_math_deadlines: int,
+    *,
+    host_capabilities: HostCapabilities,
     record_attempt: Callable[[StoragePath], None] | None = None,
     guest_environment: Mapping[str, str] = {},
 ) -> TaskOutcome:
@@ -700,7 +703,9 @@ def run_task(
         # Framework exceptions propagate and stop dispatch; they are never fabricated as solver zeros.
         construction_reason = None
         try:
-            trial, result = asyncio.run(execute_trial(configuration, authentication, guest_environment))
+            trial, result = asyncio.run(
+                execute_trial(configuration, authentication, guest_environment, host_capabilities)
+            )
         except MissingPreparedImageError as error:
             construction_reason = MISSING_PREPARED_IMAGE_REASON
             exception_type = type(error).__name__

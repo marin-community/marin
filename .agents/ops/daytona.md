@@ -82,6 +82,14 @@ before invoking the launcher:
 export DAYTONA_API_KEY="$DAYTONA_RL_API_KEY"
 ```
 
+For concurrent Difficulty trials, resolve the DATA key from the Iris secret
+bundle and capture the Daytona connection before starting the worker pool.
+Pass that host capability to each trial. The pinned SDK's object-storage
+constructor temporarily clears process-wide `os.environ`; resolving a connection
+inside another trial thread can therefore report missing `api_key` and `target`
+even when the job received both. Keep URL and target in ordinary job environment
+variables and the DATA key in the named secret bundle.
+
 Report presence and successful access only; never print key values. Do not copy
 private secret files into launch records or source control. The legacy
 OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify

@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import time
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,6 +17,7 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
+from harbor.host_capabilities import HostCapabilities
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
@@ -44,6 +46,7 @@ from experiments.post_training.task_curation.difficulty_trials import (
     seal_model_traffic,
     task_guest_environment,
     task_required_provider_secrets,
+    worker_host_capabilities,
     write_replaced_json_evidence,
 )
 
@@ -96,6 +99,7 @@ def execute_task(
     ledger: str,
     meter: GpuAccounting,
     provider_secrets: Mapping[str, str],
+    host_capabilities: HostCapabilities,
 ) -> None:
     source_key = hashlib.sha256(source.sample.source_id.encode()).hexdigest()
     task_key = hashlib.sha256(task.task_id.encode()).hexdigest()
@@ -112,6 +116,7 @@ def execute_task(
         str(destination),
         judge_relay,
         0,
+        host_capabilities=host_capabilities,
         record_attempt=recorder,
         guest_environment=task_guest_environment(task, provider_secrets),
     )
@@ -182,6 +187,11 @@ def main() -> None:
             Path(task.path) for source in sources for task in source.tasks if task.path is not None
         )
     )
+    # Daytona's SDK temporarily clears os.environ while uploading build contexts.
+    # Resolve authority once before any parallel trial can enter that SDK path.
+    host_capabilities = worker_host_capabilities(
+        {}, {**os.environ, "DAYTONA_DATA_API_KEY": require_secret("DAYTONA_DATA_API_KEY")}
+    )
     output = StoragePath(args.output_root)
     run_seal = RunSealState(
         config.solver.value, tuple(source.sample.source_id for source in sources), datetime.now(UTC).isoformat()
@@ -242,6 +252,7 @@ def main() -> None:
                     args.ledger,
                     meter,
                     provider_secrets,
+                    host_capabilities,
                 )
                 for task in tasks
             ]

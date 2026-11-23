@@ -344,9 +344,8 @@ def run_trial_worker(
             LOGGER.info(
                 "Provider credential %s is absent from the job bundle; tasks referencing it fail at dispatch", name
             )
-    worker_env = {**os.environ}
     if daytona_api_key is not None:
-        worker_env["DAYTONA_DATA_API_KEY"] = daytona_api_key
+        secrets["DAYTONA_DATA_API_KEY"] = daytona_api_key
     for name, value in secrets.items():
         path = secrets_dir / name
         path.write_text(value)
@@ -378,7 +377,7 @@ def run_trial_worker(
         ],
         check=True,
         env={
-            **worker_env,
+            **os.environ,
             "PYTHONPATH": str(Path.cwd()),
             SECRETS_DIR_ENV: str(secrets_dir),
             "HARBOR_VLLM_CONTEXT_SAFETY_BUFFER": str(NATIVE_CONTEXT_SAFETY_BUFFER),

@@ -107,6 +107,53 @@ print(json.dumps([context, completion_budget_from_count(
     assert forwarded.is_file() and forwarded.read_text() == "fixture-provider-key"
 
 
+def test_worker_receives_daytona_connection_through_secret_files(tmp_path, monkeypatch):
+    monkeypatch.delenv("DAYTONA_DATA_API_KEY", raising=False)
+    monkeypatch.setenv("DAYTONA_API_URL", "https://app.daytona.io/api")
+    monkeypatch.setenv("DAYTONA_TARGET", "us")
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    monkeypatch.setenv(difficulty_runtime.SECRETS_DIR_ENV, str(bundle))
+    real_run = subprocess.run
+    connections = []
+
+    def worker(command, *, check, env):
+        assert "DAYTONA_DATA_API_KEY" not in env
+        program = """
+import json, os
+from rigging.secrets import require_secret
+from harbor.host_capabilities import host_capabilities_from_environment
+capabilities = host_capabilities_from_environment({
+    **os.environ, 'DAYTONA_API_KEY': require_secret('DAYTONA_DATA_API_KEY')}, model_authentication={})
+connection = capabilities.daytona
+connection.client_factory()
+print(json.dumps([connection.api_key, connection.api_url, connection.target]))
+"""
+        result = real_run(
+            [*command[: command.index("python") + 1], "-c", program],
+            check=check,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        connections.append(json.loads(result.stdout))
+
+    monkeypatch.setattr(difficulty_runtime.subprocess, "run", worker)
+    difficulty_runtime.run_trial_worker(
+        tmp_path / "prepared.json",
+        tmp_path / "candidate.json",
+        tmp_path,
+        StoragePath(str(tmp_path / "output")),
+        "fixture-candidate",
+        None,
+        "ledger",
+        "action",
+        daytona_api_key="fixture-data",
+    )
+    assert connections == [["fixture-data", "https://app.daytona.io/api", "us"]]
+    assert (tmp_path / "framework-secrets" / "DAYTONA_DATA_API_KEY").stat().st_mode & 0o777 == 0o600
+
+
 @pytest.mark.parametrize("with_judge", [False, True])
 def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, difficulty_source, with_judge):
     task = TaskSpec.model_validate(json.loads(prebuilt_task("selected-task")["lowered_task_spec"])["task"])
