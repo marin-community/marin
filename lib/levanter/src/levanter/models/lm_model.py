@@ -272,9 +272,11 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             # For backward compatibility with models that don't yet support pos_ids
             x = self.activations(input_ids, attn_mask, key=key)
 
-        lm_logits = hax.dot(x, self.get_lm_head(), axis=self.Embed)
+        return self.project_logits(x)
 
-        return lm_logits
+    def project_logits(self, activations: NamedArray) -> NamedArray:
+        """Project the hidden state to vocabulary logits."""
+        return hax.dot(activations, self.get_lm_head(), axis=self.Embed)
 
     @abc.abstractmethod
     def activations(
