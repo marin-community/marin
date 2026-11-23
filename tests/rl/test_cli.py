@@ -146,6 +146,34 @@ def test_rl_launch_resolves_explicit_credentials_before_remote_submission(tmp_pa
     assert "pinned-judge-key" not in result.output
 
 
+@pytest.mark.parametrize("token", [None, "", "   ", "fixture-hf-token"])
+def test_required_hf_secret_refuses_empty_values_before_submission(monkeypatch, token):
+    client = MagicMock(spec=IrisClient)
+    client.submit.return_value.job_id = "/tests/hf-coordinator"
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    if token is not None:
+        monkeypatch.setenv("HF_TOKEN", token)
+
+    @click.command()
+    @rl_build_options
+    def main():
+        return _step(dataclasses.replace(_execution(), coordinator_secret_sources=(("HF_TOKEN", "env:HF_TOKEN"),)))
+
+    result = CliRunner().invoke(main, ["--version", "2026.11.23", "--run"])
+    if not token or not token.strip():
+        assert result.exit_code != 0
+        assert "HF_TOKEN" in str(result.exception)
+        client.submit.assert_not_called()
+        return
+    assert result.exit_code == 0, result.output
+    environment = client.submit.call_args.kwargs["environment"]
+    assert environment.secrets["HF_TOKEN"] == token
+    assert "HF_TOKEN" not in environment.env_vars
+    assert token not in result.output
+
+
 @pytest.mark.parametrize(
     "missing_names", [(), ("JUDGE_KEY",), ("EVAL_KEY",), ("DAYTONA_EVAL_API_KEY", "DAYTONA_TARGET")]
 )

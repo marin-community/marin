@@ -18,6 +18,8 @@ from iris.client.client import IrisClient
 from iris.resources.state import JobState
 from marin.execution.artifact import read_record
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
+from marin.rl.cli import _coordinator_request
+from marin.rl.skyrl import skyrl_execution
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SecretBehavior
 from tokenizers import Tokenizer, models
@@ -137,6 +139,40 @@ def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch,
             run_id="test",
             output_uri="s3://test/output",
         )
+
+
+def test_east02a_eval_delivers_hf_secret_to_the_actual_coordinator(tmp_path, monkeypatch, policy_reference):
+    policy = json.loads(StoragePath(policy_reference.uri).read_bytes())
+    judge_key = tmp_path / "judge-key"
+    judge_key.write_text("fixture-judge-key")
+    policy["evaluation"]["judge"]["credential"] = f"file:{judge_key}"
+    raw = json.dumps(policy).encode()
+    protocol = tmp_path / "policy.json"
+    protocol.write_bytes(raw)
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210_policy.POLICY_REFERENCE",
+        replace(policy_reference, uri=str(protocol), sha256=hashlib.sha256(raw).hexdigest(), byte_size=len(raw)),
+    )
+    monkeypatch.setenv("HF_TOKEN", "fixture-hf-token")
+    monkeypatch.setenv("WANDB_API_KEY", "fixture-wandb-key")
+    step = micro210_step(
+        Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
+        name="fixture/east02a",
+        version="2026.11.23",
+        serving_profile=ServingProfileName.SNOWBALL_H100_EAST02A,
+    )
+    execution = skyrl_execution(step)
+    required = {name: "fixture-value" for name in execution.required_env_vars}
+    cluster, request = _coordinator_request([step], "experiments.evaluation.micro210", (), tmp_path, required)
+    config = step.build_config(
+        StepContext.for_run(str(tmp_path / "eval"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
+    assert cluster == "lib/iris/config/marin.yaml"
+    assert request.resources.target_cluster == "cw-us-east-02a"
+    assert yaml.safe_load(config.skyrl.launch_config_yaml)["iris"]["target_cluster"] == "cw-us-east-02a"
+    assert request.environment.secrets["HF_TOKEN"] == "fixture-hf-token"
+    assert "HF_TOKEN" not in request.environment.env_vars
+    assert request.environment.secrets["JUDGE_API_KEY"] == "fixture-judge-key"
 
 
 @pytest.mark.parametrize("identity,revision", [("main", "a" * 40), ("sha256:" + "a" * 64, "main")])

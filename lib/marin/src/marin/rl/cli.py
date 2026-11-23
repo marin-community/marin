@@ -169,6 +169,11 @@ def _coordinator_request(
                 raise ValueError(f"RL coordinator has conflicting sources for secret {name!r}")
             secret_sources[name] = source
     secrets = {name: resolve_secret_spec(source).value for name, source in secret_sources.items()}
+    empty_secrets = sorted(name for name, value in secrets.items() if not value.strip())
+    if empty_secrets:
+        raise ValueError("Missing or empty required coordinator secrets: " + ", ".join(empty_secrets))
+    for name in secrets:
+        selected_env.pop(name, None)
     selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]

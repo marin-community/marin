@@ -263,6 +263,20 @@ source files. Read each command's `--help` before writing to production storage.
 
 ## Micro210 judge policy
 
+Micro210 requires a nonempty `HF_TOKEN` on the submitting machine for the private
+policy and prepared-task repositories. The launcher resolves it as an explicit
+Iris secret and rejects an absent or empty token before submission. A local
+Hugging Face login cache alone does not provide the remote credential.
+Coordinators and their CPU preflight and serving children inherit the secret
+files; the token is never a plain job environment override.
+
+For the reviewed Snowball H100 allocation on east02a, pass
+`--serving-profile snowball-h100-cw-us-east-02a`. The default `policy` profile
+uses the frozen policy's placement, which can name another cluster. Check the
+actual coordinator target and serving target in the launch plan; an output
+bucket does not select the compute cluster. Serving profiles leave task
+selection, sampling, judge and grading policy unchanged.
+
 For a bounded recovery, pass `--row-index 3 --row-index 9` on the standard
 `experiments.evaluation.micro210` command for each authorized zero-based row in
 the prepared table pinned by the selected policy. Duplicate indices are rejected;

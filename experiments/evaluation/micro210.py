@@ -323,7 +323,10 @@ def micro210_artifact_step(
         gpu_variant = serving_profile.gpu_variant
         config = serving_config(frozen, serving_profile)
     judge = draccus.decode(JudgeConfig, policy["judge"])
-    execution = replace(execution, coordinator_secret_sources=((JUDGE_API_KEY, judge.credential),))
+    execution = replace(
+        execution,
+        coordinator_secret_sources=((JUDGE_API_KEY, judge.credential), ("HF_TOKEN", "env:HF_TOKEN")),
+    )
     config = judge_runtime_config(config, judge)
     if isinstance(roles, SkyRLRolePlan):
         # The judged evaluation is a generation-only launch: carry the policy's
