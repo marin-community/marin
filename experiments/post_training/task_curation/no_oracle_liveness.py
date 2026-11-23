@@ -52,9 +52,10 @@ logger = logging.getLogger(__name__)
 VERIFIER_TIMEOUT = 900.0
 
 UNKNOWN_BASE = "<unknown>"
-# The Daytona account that grades sandboxed tasks.
-DAYTONA_API_KEY_ENV = "DAYTONA_API_KEY"
 """The base bucket for tasks whose rebuild manifest names no base."""
+
+DAYTONA_API_KEY_ENV = "DAYTONA_API_KEY"
+"""The variable holding the key of the Daytona account that grades sandboxed tasks."""
 
 
 class LivenessOutcome(StrEnum):
