@@ -14,6 +14,7 @@ from marin.datakit.decon_keys import (
     Reading,
     Windows,
     _located,
+    excerpt,
     hit_indices,
     item_stream,
     key_streams,
@@ -256,7 +257,19 @@ def test_an_offset_after_or_inside_a_long_stretch_without_safe_characters_is_exa
         assert reading.text_offset(position) == _full_search(text, position)
 
 
-def test_the_first_place_lookup_checks_a_bounded_number_of_places():
-    # Every window of the stream is the piece's first window, and the piece occurs nowhere.
-    reading = Reading("a" * 50_000)
-    assert reading.first("a" * 20 + "b") == -1
+def test_a_question_past_the_checked_places_of_its_first_window_is_located_by_its_key():
+    question = "a" * 20 + "question tail words about photosynthesis in plants"
+    stream = text_stream(question)
+    record = "intro " + ("a" * 20 + "b ") * 70 + question + " outro"
+    readings_of = record_readings(record)
+    # The first window of the question occurs at 71 places; the full question only at the last one.
+    assert readings_of[0].first(stream) == -1 and readings_of[0].stream.find(stream) > 0
+    right, _, at = excerpt(readings_of, len(question), stream, stream[20:40], 20)
+    assert at == readings_of[0].stream.find(stream) and question in right
+
+
+def test_a_long_plain_ascii_stretch_maps_offsets_by_counting():
+    text = "intro " + "abc" * 30_000 + " outro"
+    reading = Reading(text)
+    for position in (3, 45_000, 89_999, len(reading.stream) - 1):
+        assert reading.text_offset(position) == _full_search(text, position)

@@ -20,6 +20,7 @@ hit (``excerpt``), for the stage-2 classifier.
 """
 
 import bisect
+import functools
 import itertools
 import re
 import unicodedata
@@ -58,12 +59,14 @@ KEY_COLUMNS = (
     "key2_hash",
     "key2_count",
 )
-# A chunk of a reading (``Reading``) starts at the first safe character after this many characters. A safe
-# character starts no NFKC composition with the character before it and ends any LaTeX command.
+# A chunk of a reading (``Reading``) starts at the first safe character (``_safe_pattern``) after this many
+# characters. A chunk longer than LONG_CHUNK_CHARS of plain ASCII text maps positions by counting.
 CHUNK_CHARS = 4096
+LONG_CHUNK_CHARS = 4 * CHUNK_CHARS
 # Places of a question's first window that ``Reading.first`` checks; past them, ``_located`` uses the key.
 FIRST_PLACES = 64
-_SAFE = re.compile(r"[\s0-9!-/:-@\[\]^-`{-~\u4e00-\u9fff\uac00-\ud7a3]")
+_ALNUM = np.zeros(256, dtype=np.int32)
+_ALNUM[np.frombuffer(b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", np.uint8)] = 1
 BEFORE = 1500
 AFTER = 3000
 LOCATOR_COLUMNS = ("item", "kind", "eval", "key1_hash", "key", "offset", "question", "question_chars")
@@ -258,18 +261,54 @@ def keys_table(windows: Windows, window_counts: np.ndarray, width: int = WINDOW)
     )
 
 
+@functools.cache
+def _safe_pattern() -> re.Pattern:
+    """A pattern of the safe characters: the stream length of a text is additive before each of them.
+
+    A safe character is a starter that no character composes with, whose NFKC form starts with such a starter,
+    and whose NFKC form does not start with an ASCII letter or a backslash (which could continue or start a
+    LaTeX command across the split). Lowercasing keeps the length of each character, so it never breaks
+    additivity. Computed over the Basic Multilingual Plane, plus the CJK ideograph planes.
+    """
+    # Hangul composes by algorithm, not by the decomposition table: a leading consonant takes a vowel jamo,
+    # and a syllable takes a trailing consonant jamo.
+    seconds = {*range(0x1161, 0x1176), *range(0x11A8, 0x11C3)}
+    for code in range(0x110000):
+        parts = unicodedata.decomposition(chr(code)).split()
+        if len(parts) == 2 and not parts[0].startswith("<"):
+            seconds.add(int(parts[1], 16))
+
+    def safe(code: int) -> bool:
+        char = chr(code)
+        folded = unicodedata.normalize("NFKC", char)
+        if not folded or unicodedata.combining(char) or code in seconds:
+            return False
+        head = folded[0]
+        return not unicodedata.combining(head) and ord(head) not in seconds and not re.match(r"[A-Za-z\\]", head)
+
+    codes = [code for code in range(0x10000) if not 0xD800 <= code <= 0xDFFF and safe(code)]
+    ranges, start = [], codes[0]
+    for previous, code in itertools.pairwise([*codes, -1]):
+        if code != previous + 1:
+            ranges.append(f"\\U{start:08x}-\\U{previous:08x}" if previous > start else f"\\U{start:08x}")
+            start = code
+    return re.compile("[" + "".join(ranges) + "\\U00020000-\\U0003134f]")
+
+
 class Reading:
     """One reading of a record (``readings``): its text, stream and window hashes, with the lookups that
     ``excerpt`` needs.
 
     ``first`` finds the first place of a stream piece through a sorted index of the window hashes; it checks
     at most ``FIRST_PLACES`` places where the piece's first window occurs. ``text_offset`` maps a stream
-    position to a text offset. A stream is additive before a safe character (``_SAFE``: whitespace, ASCII
-    digits and punctuation other than the backslash, CJK ideographs, Hangul syllables): no LaTeX command or
-    NFKC composition crosses one, and lowercasing keeps the length of each character. So the reading keeps
-    the exact stream length before each chunk start (the first safe character after ``CHUNK_CHARS``
-    characters) and searches one chunk. A record costs one pass when a safe character occurs at least every
-    ``CHUNK_CHARS`` characters; a hit inside a longer stretch without one costs a search of that stretch.
+    position to a text offset. A stream's length is additive before a safe character (``_safe_pattern``:
+    whitespace, digits, punctuation other than the backslash, and the letters of most scripts other than
+    ASCII letters): no LaTeX command or NFKC composition crosses one. So the reading keeps the exact stream
+    length before each chunk start (the first safe character after ``CHUNK_CHARS`` characters) and searches
+    one chunk; a long chunk of plain ASCII text is mapped by counting its letters and digits. A record costs
+    one pass unless it holds a stretch of more than ``CHUNK_CHARS`` characters without a safe character that
+    is not plain ASCII (for example LaTeX commands or combining marks with nothing between them); a hit there
+    costs a search of that stretch.
     """
 
     def __init__(self, text: str, width: int = WINDOW) -> None:
@@ -281,6 +320,7 @@ class Reading:
         self._sorted: np.ndarray | None = None
         self._starts: list[int] = []
         self._before: list[int] = []
+        self._counts: dict[int, np.ndarray] = {}
 
     def first(self, piece: str) -> int:
         """The first position of the stream *piece* in the stream (``str.find``), among the first
@@ -300,8 +340,8 @@ class Reading:
         return -1
 
     def _index(self) -> None:
-        starts, position = [0], CHUNK_CHARS
-        while (match := _SAFE.search(self.text, position)) is not None:
+        starts, position, safe = [0], CHUNK_CHARS, _safe_pattern()
+        while (match := safe.search(self.text, position)) is not None:
             starts.append(match.start())
             position = match.start() + CHUNK_CHARS
         before = [0]
@@ -316,6 +356,16 @@ class Reading:
         chunk = bisect.bisect_right(self._before, position) - 1
         start, base = self._starts[chunk], self._before[chunk]
         low, high = start, self._starts[chunk + 1] if chunk + 1 < len(self._starts) else len(self.text)
+        if high - start > LONG_CHUNK_CHARS and chunk not in self._counts:
+            piece = self.text[start:high]
+            if piece.isascii() and "\\" not in piece:
+                # Plain ASCII without a backslash: NFKC, lowercasing and LaTeX removal leave it alone, so its
+                # stream is its letters and digits.
+                self._counts[chunk] = np.cumsum(_ALNUM[np.frombuffer(piece.encode("ascii"), np.uint8)])
+        counts = self._counts.get(chunk)
+        if counts is not None:
+            index = int(np.searchsorted(counts, position - base, side="right"))
+            return start + index + 1 if index < len(counts) else high
         while low < high:
             middle = (low + high) // 2
             if base + len(text_stream(self.text[start:middle])) > position:
