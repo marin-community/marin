@@ -2293,8 +2293,21 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   committed policies 0, 1 and 2. All 12 corresponding binary replies
   matched byte for byte, including their configuration and weight
   identities. Both actors rejected the old policy after each swap.
-  Worker traces confirmed the selected decode mode. Compare the kernels
-  at the same admitted batch size on H100 to isolate decode.
+  Worker traces confirmed the selected decode mode.
+
+  A staged single-host H100 profile isolates the kernel and batch-size
+  effects on the prior BF16 snapshot and exact short prompts. The two
+  attention modes use sequential workers on the same host. Each mode
+  warms both geometries and measures 4+4 and 8 in alternating order.
+  The profiler records synchronized prefill and decode, IPC wall time
+  and per-device lifetime allocator peaks. Eight requests reserve 40 of
+  768 KV pages under the production admission budget. The snapshot's
+  502-entry tensor manifest matched its original receipt. A CPU rehearsal
+  verified all 64 timed binary replies, detected compilation during
+  warm-up and found none in the measured waves. The worker command fits
+  the prior eight-H100 allocation shape. H100 timing and peak memory
+  still need measurement. The matched inventory run supplies rollout
+  admission, optimizer and reward measurements.
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
