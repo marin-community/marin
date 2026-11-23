@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 8:38 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 8:49 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -1980,9 +1980,9 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
 
   The second CPU coordinator preemption stopped all five H100 tasks
   during the first training admission window. That child emitted
-  trajectories and recorded zero completed updates. Iris started
-  another child on the original source after a further coordinator
-  preemption. The renderer fix needs a new artifact.
+  trajectories and recorded zero completed updates. Another child on
+  the original source lost its GPU allocation to a higher priority
+  workload, and the coordinator then failed.
 
   A one-file native renderer repair reproduced all 100 original vLLM prompt
   token arrays with the pinned tokenizer on CPU. It changed the 11 tool
@@ -1990,7 +1990,10 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   preserves already sampled token IDs. The offline artifact plan holds
   the learner, data, seed and 40-H100 role plan fixed. Require exact
   live-panel prompt parity and an audit of the source delta to reuse the
-  completed vLLM arm.
+  completed vLLM arm. Iris admitted the repaired native artifact on five
+  H100 hosts. Its two updates and both 100-task panels remain open.
+  [Reviewed renderer proof][held-native-prompt-parity-proof] ·
+  [Prompt-aligned native child][iris-held-native-prompt-aligned]
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
@@ -2015,11 +2018,12 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   head vector and score to the exact decoder output row used for the
   emitted token. It preserved all four ordinary frames and their scores.
   The first H100 attempt of that diagnostic lost its host to a higher
-  priority workload during startup. Regional capacity is checked before
-  retrying. The H100 diagnostic and a passing full-context score remain
-  required.
+  priority workload during startup. The byte-identical diagnostic retry
+  was submitted after the repaired 40-H100 pilot started. The H100
+  diagnostic and a passing full-context score remain required.
   [Verified score evidence][native-full-context-ratio-evidence] ·
-  [Diagnostic preemption evidence][native-head-preemption-evidence]
+  [Diagnostic preemption evidence][native-head-preemption-evidence] ·
+  [Emitted-row diagnostic retry][iris-native-emission-retry]
   [Original calibration][iris-native-serving-eval-first] ·
   [Revised calibration][iris-native-serving-eval-retry] ·
   [Verified calibration archive][native-serving-eval-archive] ·
@@ -2151,6 +2155,9 @@ arms. [Prior timing comparison][timing]
 [held-native-baseline-prompt-audit]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-aa86eb747b53%2Fverified-baseline-prompt-mismatch.json
 [native-full-context-ratio-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122n%2Fverified-ordinary-fused-evidence.json
 [native-head-preemption-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122o%2Fverified-preemption.json
+[held-native-prompt-parity-proof]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-079e4e4%2Fprompt-parity-proof.tar.zst
+[iris-held-native-prompt-aligned]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-9a7e3ee-in-424011b4-2026.11.22.3-coordinator-f0713ab7%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-9a7e3ee-in-424011b4-2026.11.22.3-a6705fa4611d
+[iris-native-emission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122p
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
 [iris-native-head-comparison]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused
 [iris-held-native-repaired]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-ac90c03-in-424011b4-2026.11.22.1-coordinator-f7d86071
