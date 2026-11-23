@@ -88,7 +88,8 @@ its standard response fields.
 | Native, replay off | 570.53 | 1.340 |
 | Native replay, original archive and framing | 442.62 | 2.153 |
 | Native replay, original archive and byte-oriented framing | 463.50 | 1.577 |
-| Native replay, compact archive and byte-oriented framing | 518.90 | 1.619 |
+| Native compact replay, four prefill slots | 518.90 | 1.619 |
+| Native compact replay, eight prefill slots | 522.62 | 1.687 |
 
 The initial replay lowered throughput by 22.4% against the native control and
 19.4% against compiled vLLM. Both jobs reported zero profiling errors.
@@ -115,11 +116,14 @@ The compact AgentX run's median HTTP response dropped to 14.5 MiB and the
 median interval from final text to HTTP completion fell from 420 to 179 ms.
 All 366 measured requests completed with zero errors. Compact replay was
 5.6% behind compiled vLLM on output throughput and 9.0% behind native with
-replay off. Its p90 first token was 20.9% above compiled vLLM, 13 ms above
-the 20% limit. The eight-slot prefill follow-up changes only the number of
-sequences allowed in one prefill batch.
-[Compact archive replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-compact-wire-replay-20261122)
-· [Eight-slot prefill follow-up](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-eight-prefill-replay-20261122)
+replay off. Its p90 first token was 21.0% above compiled vLLM, 13 ms above
+the 20% limit. Increasing the prefill batch limit to eight added 3.72 output
+tokens/s and 68 ms of p90 first-token latency. All 370 requests completed
+with zero errors. The two-slot run tests the smaller batch limit while
+holding the other settings fixed.
+[Four prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-compact-wire-replay-20261122)
+· [Eight prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-eight-prefill-replay-20261122)
+· [Two prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-two-prefill-replay-20261122)
 
 On CoreWeave, a four-GB200 smoke matched packed native and captured
 generation, including scores and terminal routes. Both full AgentX runs
