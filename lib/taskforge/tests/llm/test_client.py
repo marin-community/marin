@@ -318,15 +318,61 @@ def test_tool_call_frames_without_generated_text_stall(fake_glm: FakeGlm, run: R
 
 
 # Review 2026-11-21: a /health body trickling whitespace outlived a 100 ms window under a 50 ms timeout.
+class StartsAtBackoff:
+    """A clock that stands still until the client first backs off, then runs in real time.
+
+    A process's first request imports the SDK's chat resource (0.18 s measured), which a real-time window of 100 ms
+    would spend before its health read could start; here the window's whole length is left for that read.
+    """
+
+    def __init__(self) -> None:
+        self.started: float | None = None
+
+    def clock(self) -> float:
+        return 0.0 if self.started is None else time.monotonic() - self.started
+
+    async def sleep(self, delay: float) -> None:
+        if self.started is None:
+            self.started = time.monotonic()
+        self.started -= delay
+
+
+HEALTH_WINDOW = 1.0
+HEALTH_BODY = 2000
+"""Bytes of the trickled ``/health`` body: 10 s, longer than the window and shorter than ``HEALTH_TIMEOUT``."""
+CUT_SEEN = 30.0
+"""Seconds within which the fake router's next write sees that the client closed a connection."""
+HEALTH_CEILING = 1.5 * HEALTH_WINDOW
+"""Seconds from the first backoff by which the call has ended: the window plus 0.5 s of scheduling slack, and well
+short of twice the window, which a read bounded by more than the window's remainder would take."""
+
+
+# Review 2026-11-21: a /health body trickling whitespace outlived a 100 ms window under a 50 ms timeout.
 def test_a_trickling_health_read_ends_with_the_availability_window(fake_glm: FakeGlm) -> None:
-    fake_glm.health_trickle = 200
+    assert HEALTH_WINDOW < HEALTH_BODY * TRICKLE_INTERVAL < glm_provider.HEALTH_TIMEOUT
+    fake_glm.health_trickle = HEALTH_BODY
     fake_glm.status(503, "busy")
     fake_glm.stream(content="never sent")
-    started = time.monotonic()
+    clock = StartsAtBackoff()
+
+    ended: list[float] = []
+
+    async def call() -> Completion:
+        async with provider(FixedEndpoint(endpoint(fake_glm.base_url)), 600.0) as glm:
+            retry = RetryPolicy(HEALTH_WINDOW, 0.001, 0.001, 1.0)
+            client = ModelClient(glm, LIMITED, retry, role="test", clock=clock.clock, sleep=clock.sleep)
+            try:
+                return await client.complete(MESSAGES, LLMPolicy())
+            finally:
+                ended.append(clock.clock())
+
     with pytest.raises(ModelUnavailable):
-        complete(FixedEndpoint(endpoint(fake_glm.base_url)), RetryPolicy(0.1, 0.001, 0.001, 1.0))
-    assert time.monotonic() - started < 200 * TRICKLE_INTERVAL / 2
+        asyncio.run(call())
+    # One attempt, one health read and no retry after it: the window closed during the read, which was cut before its
+    # body completed. A read left to finish would end at 10 s, after the body.
     assert (len(fake_glm.requests), fake_glm.health_polls) == (1, 1)
+    assert ended[0] < HEALTH_CEILING, f"the call ended {ended[0]:.3f} s after its first backoff"
+    assert fake_glm.cut.acquire(timeout=CUT_SEEN), "the health body was read to its end"
 
 
 def test_stream_cut_before_finish_reason_is_retried(fake_glm: FakeGlm, run: Run) -> None:
