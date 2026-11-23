@@ -1,0 +1,277 @@
+/* Cluster Occupancy layout on top of the shared Marina tokens. */
+
+main {
+  max-width: 78rem;
+  margin: 0 auto;
+  padding: 1rem 1.25rem 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.head h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.freshness {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.controls {
+  display: flex;
+  gap: 1.25rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+}
+
+.picker-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.window-label {
+  font-size: 0.95rem;
+  min-height: 1.4em;
+}
+
+.window-title {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.slider-block {
+  flex: 1 1 22rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.slider {
+  width: 100%;
+  accent-color: var(--mark);
+}
+
+.status {
+  color: var(--muted);
+  font-size: 0.8rem;
+  min-height: 1.2em;
+}
+
+.status.error {
+  color: var(--warn);
+}
+
+/* One legend entry per user: swatch, name, GPU-hours in the window. */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.1rem;
+  align-items: baseline;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.legend-user {
+  font-weight: 600;
+}
+
+.legend-hours {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-total {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 2px;
+  background: var(--user);
+  border: 1px solid color-mix(in srgb, var(--user) 70%, black);
+  transform: translateY(1px);
+}
+
+.cluster h2 {
+  font-size: 1rem;
+  margin: 0 0 0.4rem;
+}
+
+.rack h3 {
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0.5rem 0 0.3rem;
+}
+
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.55rem;
+}
+
+.tile {
+  width: 5.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.node-name {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar {
+  display: flex;
+  height: 0.85rem;
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--edge);
+  background: var(--panel);
+}
+
+.segment {
+  min-width: 2px;
+  height: 100%;
+  background: var(--user);
+}
+
+.segment.idle {
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 3px,
+    color-mix(in srgb, var(--edge) 80%, transparent) 3px,
+    color-mix(in srgb, var(--edge) 80%, transparent) 5px
+  );
+}
+
+/* User colors, one pair per index; the class sets --user for swatch and segment. */
+.u0 { --user: #0f766e; }
+.u1 { --user: #1d4ed8; }
+.u2 { --user: #7c3aed; }
+.u3 { --user: #c026d3; }
+.u4 { --user: #dc2626; }
+.u5 { --user: #ea580c; }
+.u6 { --user: #b45309; }
+.u7 { --user: #4d7c0f; }
+.u8 { --user: #15803d; }
+.u9 { --user: #0e7490; }
+.u10 { --user: #db2777; }
+.u11 { --user: #475569; }
+
+@media (prefers-color-scheme: dark) {
+  .u0 { --user: #5eead4; }
+  .u1 { --user: #93c5fd; }
+  .u2 { --user: #c4b5fd; }
+  .u3 { --user: #f0abfc; }
+  .u4 { --user: #fca5a5; }
+  .u5 { --user: #fdba74; }
+  .u6 { --user: #fcd34d; }
+  .u7 { --user: #bef264; }
+  .u8 { --user: #86efac; }
+  .u9 { --user: #67e8f9; }
+  .u10 { --user: #f9a8d4; }
+  .u11 { --user: #94a3b8; }
+}
+
+/* A cluster with no mirror data says so instead of looking idle. */
+.no-data {
+  border: 1px dashed var(--edge);
+  border-radius: var(--radius);
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 9px,
+    color-mix(in srgb, var(--edge) 45%, transparent) 9px,
+    color-mix(in srgb, var(--edge) 45%, transparent) 14px
+  );
+  padding: 1.1rem 1rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+/* The hover card follows the cursor and shows both time zones. */
+.hover-card {
+  position: fixed;
+  z-index: 30;
+  width: max-content;
+  max-width: 26rem;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 18px rgb(0 0 0 / 18%);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.hc-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+.hc-job {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  word-break: break-all;
+  margin: 0.15rem 0 0.35rem;
+  max-width: 24rem;
+}
+
+.hc-row {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.08rem 0;
+  align-items: baseline;
+}
+
+.hc-label {
+  color: var(--muted);
+  flex: 0 0 5.2rem;
+}
+
+.hc-value {
+  font-weight: 500;
+}
+
+.hc-utc {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 0.4rem;
+}
