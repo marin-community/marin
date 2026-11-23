@@ -177,6 +177,7 @@ def test_math_unparsable_expected_is_an_invalid_task(tmp_path, expected):
         (r"[1, 67.\overline{3}]", MathType.LIST),
         (r"x = \frac\pi 2 = 2", MathType.EQUATION),
         (r"1$ + $2", MathType.SCALAR),
+        (r"1$ + ", MathType.SCALAR),
         (r"[1, x = \frac\pi 2 = 2]", MathType.LIST),
         (r"[1, 1$ + $2]", MathType.LIST),
     ],
@@ -213,6 +214,12 @@ def test_math_short_text_reference_stays_parseable(answer):
 @pytest.mark.parametrize("connector", ["and", "or"])
 def test_math_text_connector_does_not_invalidate_comma_separated_reference(connector):
     spec = MathSpec(expected=rf"2, 3, \text{{ {connector} }} 4")
+    assert grade_math.grade_math_candidate(spec, "2, 3, 4").reward == 1.0
+
+
+@pytest.mark.parametrize("connector", ["and", "or"])
+def test_math_list_text_connector_before_final_member(connector):
+    spec = MathSpec(expected=rf"2, 3, \text{{ {connector} }} 4", math_type=MathType.LIST)
     assert grade_math.grade_math_candidate(spec, "2, 3, 4").reward == 1.0
 
 

@@ -498,7 +498,11 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
             match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
     is_list = spec.math_type is MathType.LIST
-    references = [_parse_reference(member) for member in (_split_members(spec.expected) if is_list else [spec.expected])]
+    reference_members = _split_members(spec.expected) if is_list else [spec.expected]
+    if is_list:
+        # A connector after a list comma normalizes to another leading comma.
+        reference_members = [re.sub(r"^\\text\{\s*(?:and|or)\s*\}\s*", "", member) for member in reference_members]
+    references = [_parse_reference(member) for member in reference_members]
     expected = [parsed for parsed, _ in references]
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
