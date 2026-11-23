@@ -27,6 +27,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.encoder.tables import read_frame, write_frame
@@ -39,6 +40,8 @@ CONTAMINATED = frozenset({"COPY", "EDITED"})
 CLEAN = frozenset({"VARIANT", "GENERIC", "UNRELATED"})
 TEST_SHARE = 0.4
 SILVER_OVERLAP = 0.8
+# The two LLM judges that judge.py runs; a pair is labeled when both agree.
+JUDGE_MODELS = ("glm-5.3", "deepseek-v4.1-flash")
 _WORD = re.compile(r"\w+")
 
 
@@ -99,10 +102,11 @@ def write_batches(chosen: pd.DataFrame, directory: Path, batches: int) -> None:
                 sink.write(json.dumps(task, ensure_ascii=False) + "\n")
 
 
-def judge_labels(directory: Path, judge: str) -> pd.DataFrame:
+def judge_labels(prefix: str, judge: str) -> pd.DataFrame:
+    """The labels of *judge* under *prefix* (``judge.py --output``): ``<judge>/batch_*.jsonl``."""
     rows = [
         json.loads(line)
-        for path in sorted((directory / judge).glob("batch_*.jsonl"))
+        for path in sorted(StoragePath(prefix_join(prefix, f"{judge}/batch_*.jsonl")).glob(), key=str)
         for line in path.read_text().split("\n")
         if line.strip()
     ]
@@ -173,7 +177,8 @@ def main() -> None:
     parser.add_argument("--high", type=int, default=600, help="sample: pairs with high word overlap")
     parser.add_argument("--other", type=int, default=300, help="sample: pairs spread over scores")
     parser.add_argument("--batches", type=int, default=6, help="sample: judge batches")
-    parser.add_argument("--judges", nargs=2, default=["codex", "claude"], help="merge: judge label directories")
+    parser.add_argument("--labels", help="merge: prefix of the judge outputs (judge.py --output)")
+    parser.add_argument("--judges", nargs=2, default=list(JUDGE_MODELS), help="merge: the two judges")
     parser.add_argument("--output", help="merge, silver: training rows (parquet)")
     args = parser.parse_args()
     excluded = {item for path in args.exclude_items for item in read_frame(path)["item"]}
@@ -194,7 +199,7 @@ def main() -> None:
         )
         return
     pairs = pd.read_parquet(directory / "pairs.parquet")
-    rows = merge(pairs, *(judge_labels(directory, judge) for judge in args.judges), directory.name)
+    rows = merge(pairs, *(judge_labels(args.labels, judge) for judge in args.judges), directory.name)
     write_frame(rows, args.output)
     logger.info("wrote %d rows: %s", len(rows), rows.groupby(["split", "label_q", "label_qa"]).size().to_dict())
 

@@ -215,7 +215,7 @@ def main() -> None:
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--max-length", type=int, default=1024)
     parser.add_argument("--lr", type=float, default=3e-5)
-    parser.add_argument("--data", required=True, help="directory with judged_pairs_v2.parquet and the synthetic pairs")
+    parser.add_argument("--data", required=True, help="directory with JUDGED_PAIRS and the synthetic pairs")
     parser.add_argument("--synthetic", required=True, help="file name in --data of the generic synthetic pairs")
     parser.add_argument("--extra", action="append", default=[], help="parquet of more labeled pairs")
     parser.add_argument("--items", required=True, help="the item table directory (items/*.parquet), for item texts")

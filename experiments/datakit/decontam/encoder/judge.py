@@ -22,6 +22,7 @@ from openai import OpenAI
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.decontam.encoder.labels import JUDGE_MODELS
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tasks", required=True, help="prefix with batches/*.jsonl")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--models", nargs="+", default=["glm-5.3", "deepseek-v4.1-flash"])
+    parser.add_argument("--models", nargs="+", default=list(JUDGE_MODELS))
     parser.add_argument("--relay", required=True, help="the Iris job of the GLM relay, e.g. /muchanem/glm53-relay-h")
     parser.add_argument("--workers", type=int, default=32, help="requests in flight per model")
     args = parser.parse_args()
