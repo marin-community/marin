@@ -51,17 +51,18 @@ matched bit-for-bit. Timing includes the serialized route payloads.
 
 [TPUv4 qualification](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-qualification-20261122-v3)
 
-Packing route IDs and thresholds into contiguous device buffers reduced
-transfer overhead. The repeat on the same TPUv4 worker reached 5,134
+After packing route IDs and thresholds into contiguous device buffers,
+the repeat on the same TPUv4 worker reached 5,134
 versus 5,709 output tok/s for the homogeneous burst, a 10.1% slowdown.
 The mixed batch reached 754 versus 963 output tok/s, a 21.6% slowdown.
 All compared outputs still matched bit-for-bit.
 [Compact route buffer repeat](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-compact-20261122)
 
-A separate terminal executable added a device dispatch for short scanned
-requests. It left throughput 11.4% lower for the homogeneous burst and 27.7%
-lower for mixed requests with capture enabled. Capturing terminal rows
-inline on scanned models reached 5,189 versus 5,739 output tokens/s
+Terminal capture records the final token's routes before releasing a finished
+request's KV pages. A separate terminal executable added a device dispatch
+for short scanned requests. It left throughput 11.4% lower for the homogeneous
+burst and 27.7% lower for mixed requests with capture enabled. Capturing terminal
+rows inline on scanned models reached 5,189 versus 5,739 output tokens/s
 (−9.6%) on the homogeneous burst and 761 versus 964 (−21.1%) on mixed
 requests. Tokens, scores, and finish reasons still matched exactly.
 Unrolled models share one terminal executable across prefill and decode
@@ -72,8 +73,7 @@ and extraction took 61 s, compared with 133 s in the earlier trial.
 
 The initial full-model replay arm on v5p-8 generated 400.97 output tokens/s.
 That snapshot buffered text until completion for requests with raw policy
-scores, so its first-token latency includes generation time. The second arm
-hit the one-hour job cap during compilation.
+scores, so its first-token latency includes generation time.
 [Paired v5p-8 AgentX runs](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-replay-pair-20261122)
 
 The follow-up runs use the shared terminal kernel and incremental chat
@@ -114,7 +114,7 @@ the 67B model's route dimensions shrank from 34.63 MiB to 15.13 MiB before
 base64 encoding. The fresh-process score and gradient tests and the OpenAI
 stream and binary endpoint checks passed.
 
-The compact AgentX run's median HTTP response dropped to 14.5 MiB and the
+The four-slot compact AgentX run's median HTTP response dropped to 14.5 MiB. The
 median interval from final text to HTTP completion fell from 420 to 179 ms.
 All 366 measured requests completed with zero errors. Compact replay was
 5.6% behind compiled vLLM on output throughput and 9.0% behind native with
@@ -123,14 +123,14 @@ the 20% limit. Two and eight prefill slots each added fewer than four
 output tokens/s. Their p90 first-token latencies increased by 162 ms and
 68 ms, respectively. All compact runs completed their measured requests
 with zero errors. Use four prefill slots for this workload. It had the
-lowest measured p90 among the compact runs while staying within the 10%
-throughput target.
+lowest measured p90 among the compact runs while keeping output throughput
+within 10% of the native replay-off run.
 [Four prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-compact-wire-replay-20261122)
 · [Eight prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-eight-prefill-replay-20261122)
 · [Two prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-two-prefill-replay-20261122)
 
-On CoreWeave, a four-GB200 smoke matched packed native and captured
-generation, including scores and terminal routes. Both full AgentX runs
+On CoreWeave, a four-GB200 smoke exercised native generation,
+including scores and terminal routes. Both full AgentX runs
 used the existing regional 67B checkpoint mirror at 64K and concurrency 128,
 with route capture off. Full-run GPU counts remain unverified here.
 Native reported 571.43 output tokens/s versus 654.80 for compiled vLLM,
@@ -193,9 +193,12 @@ Q, K, V and output gradients through zero-initialized registers before writing
 shared tiles. In a same-GPU comparison, the original kernel reproduced the
 failure; all four finite-input calls with the patch returned finite gradients
 that matched the original healthy call bit-for-bit. This branch includes the
-four-load patch and a saved-input regression. Its connection to the learner
-update differences and the full-model exit failure remains unverified.
+four-load patch and a saved-input regression. At `5ae2bf475f`, that regression
+and nine attention shape cases passed on one H100. The baseline again returned
+NaN query gradients for finite inputs. These checks do not establish the cause
+of the learner update differences or the full-model exit failure.
 [Four-load comparison](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-fallback-masked-load-ab-2026-11-23-1)
+· [Permanent GPU regression](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-fa4-permanent-regression-ab-2026-11-23-2)
 
 Linux CPU controls captured stacks in a deliberately delayed C destructor,
 using the unchanged learner protocol and five-second post-ACK exit limit.
@@ -206,6 +209,14 @@ capturing the real GPU learner's native shutdown stack remains open.
 [CPU shutdown observer](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-controls-20261123-2)
 · [GPU-loaded observer controls](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-gpu-controls-20261123-1)
 
+A separate, unpublished production shutdown observer at `25012feea0` remains
+experimental. Its Linux CPU suite passed the observer-disabled case, then
+failed the healthy observer-enabled case at private-directory validation.
+The suite stopped before its remaining eleven cases. The job was cancelled
+and its private process namespace removed; its output archive was unavailable,
+so the retained live report does not establish the directory failure's cause.
+No actual GPU learner shutdown stack has been captured.
+
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and
 preserves that binding through batching and policy scoring. The distributed
@@ -213,7 +224,7 @@ driver still needs to launch native serving replicas and attach their payloads
 during trajectory assembly. Updated-policy publication, full-model restart,
 and a matched 25-update run on the maintained branch remain open. The
 quick-loop design records the separate protobuf worker-pipe proofs and the
-held H100 comparisons. Those worker responses carry the same replay payload
+planned H100 comparisons. Those worker responses carry the same replay payload
 used by the native HTTP endpoints.
 [Quick-loop migration design](https://github.com/marin-community/marin/pull/11934)
 · [Quick-loop run status](experiments/post_training/inventory/levanter-quick-loop-status.md)
