@@ -1,14 +1,15 @@
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from marinskyrl.task_sources import PreparedTaskCacheSource
 from omegaconf import OmegaConf
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
-from skyrl_train.dataset.prepared_tasks import PreparedTaskCacheSource
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.rollouts.context import TrainingContext
 from skyrl_train.task_inputs import task_messages
@@ -144,24 +145,31 @@ def prepared_selection(tmp_path):
     return cache, configs
 
 
-def test_prepared_selection_reuses_lengths_across_budgets_and_preserves_rollout_inputs(prepared_selection):
+@pytest.mark.parametrize("cache_location", ["local", "object"])
+def test_prepared_selection_reuses_lengths_across_budgets_and_preserves_rollout_inputs(
+    prepared_selection, monkeypatch, cache_location
+):
     cache, configs = prepared_selection
+    if cache_location == "object":
+        cache = replace(cache, cache_dir=f"memory://{Path(cache.path).parent.parent.name}/prepared")
     full = SourceTaskDataset(
         [cache.path], _selection_tokenizer(), 1000, environment_configs=configs, prepared_cache=cache
     )
-    (cache_file,) = tuple(Path(cache.cache_dir).glob("*.parquet"))
-    inode = cache_file.stat().st_ino
+    reference = SourceTaskDataset([cache.path], _selection_tokenizer(), 100, environment_configs=configs)
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("A prepared cache hit should not render or tokenize prompts")
+
+    monkeypatch.setattr(TokenizersBackend, "apply_chat_template", unavailable)
     warm = SourceTaskDataset(
         [cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache
     )
-    reference = SourceTaskDataset([cache.path], _selection_tokenizer(), 100, environment_configs=configs)
 
     assert [full.label(i) for i in range(len(full))] == ["fixture:4", "fixture:1", "fixture:3"]
     assert [warm.label(i) for i in range(len(warm))] == ["fixture:4", "fixture:3"]
     assert warm.prompts_dropped_too_long == 1
     assert [warm[i] for i in range(len(warm))] == [reference[i] for i in range(len(reference))]
     assert warm.collate_fn([warm[0], warm[1]]) == reference.collate_fn([reference[0], reference[1]])
-    assert cache_file.stat().st_ino == inode
 
 
 def test_prepared_selection_rebuilds_a_truncated_cache(prepared_selection):

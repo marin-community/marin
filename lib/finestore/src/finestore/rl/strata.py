@@ -20,6 +20,9 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
+SELECTION_SUMMARY_FILENAME = "summary.json"
+SELECTION_MANIFEST_FILENAME = "task_manifest.parquet"
+
 
 class TaskStrata(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -163,7 +166,7 @@ def _task_file_digests(path: str, _content_key: str) -> dict[str, str]:
 
 def read_selection_definition(root: str) -> SelectionDefinition | None:
     """Read the definition of a versioned selection, if present."""
-    summary_path = StoragePath(root) / "summary.json"
+    summary_path = StoragePath(root) / SELECTION_SUMMARY_FILENAME
     if not summary_path.exists():
         return None
     summary = json.loads(summary_path.read_text())
@@ -178,7 +181,7 @@ def read_selection_manifest(root: str) -> SelectionManifest | None:
     if definition is None:
         return None
     directory = StoragePath(root)
-    with (directory / "task_manifest.parquet").open("rb") as source:
+    with (directory / SELECTION_MANIFEST_FILENAME).open("rb") as source:
         rows = pq.read_table(source).to_pylist()
     tasks = {}
     for value in rows:

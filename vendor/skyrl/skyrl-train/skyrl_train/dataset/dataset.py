@@ -65,7 +65,7 @@ class PromptDataset:
         self._read_files_and_tokenize()
 
     def _read_files_and_tokenize(self):
-        self.dataframe = self._read_prepared_rows()
+        self.dataframe = self._read_and_prepare_rows()
 
         logger.info(f"Total dataset size: {len(self.dataframe)}")
 
@@ -86,7 +86,7 @@ class PromptDataset:
         self.prompts_dropped_too_long = input_rows - len(self.dataframe)
         logger.info(f"Filtered dataset size: {len(self.dataframe)}")
 
-    def _read_prepared_rows(self) -> datasets.Dataset:
+    def _read_and_prepare_rows(self) -> datasets.Dataset:
         return self.prepare_dataset(read_prompt_files(self.datasets, prepare_source=self._prepare_source))
 
     def prepare_dataset(self, dataset):

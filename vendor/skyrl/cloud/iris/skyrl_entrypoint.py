@@ -12,7 +12,7 @@ from typing import Callable, cast
 from omegaconf import DictConfig, OmegaConf, open_dict
 from iris.cluster.client.job_info import get_job_info
 from marinskyrl.resource_locator import is_cloud_uri
-from marinskyrl.task_sources import DirectoryDataSource, data_source
+from marinskyrl.task_sources import DirectoryDataSource, PreparedTaskCacheSource, data_source
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from finestore.rl.run_records import (
     AttemptRecord,
@@ -24,7 +24,7 @@ from cloud.iris.launch_config import RunMode, derive_launch_topology, load_launc
 from cloud.iris.rl_config_translation import registered_rl_entrypoint_module
 
 
-def _prepared_task_cache(config: DictConfig) -> dict[str, str] | None:
+def _prepared_task_cache_source(config: DictConfig) -> PreparedTaskCacheSource | None:
     sources = config.inputs.train_data
     if config.inputs.data_kind != "parquet" or len(sources) != 1:
         return None
@@ -32,11 +32,11 @@ def _prepared_task_cache(config: DictConfig) -> dict[str, str] | None:
     checkpoint_root = str(config.artifacts.checkpoint_root)
     if not isinstance(source, DirectoryDataSource) or not is_cloud_uri(source.uri) or not is_cloud_uri(checkpoint_root):
         return None
-    return {
-        "path": source.resolved_path(),
-        "identity": source.identity,
-        "cache_dir": marin_temp_bucket(14, prefix="marinskyrl/prepared-tasks", source_prefix=checkpoint_root),
-    }
+    return PreparedTaskCacheSource(
+        path=source.resolved_path(),
+        identity=source.identity,
+        cache_dir=marin_temp_bucket(14, prefix="marinskyrl/prepared-tasks", source_prefix=checkpoint_root),
+    )
 
 
 def _start_attempt_record(config: DictConfig) -> None:
@@ -81,8 +81,8 @@ def run_config(config_path: Path) -> None:
             config.skyrl.runtime.starting_checkpoint_identity = str(checkpoint.identity)
         if config.skyrl.get("trainer", {}).get("mismatch_probe", {}).get("enabled"):
             config.skyrl.runtime.checkpoint_path = str(config.skyrl.trainer.resume_path or config.inputs.model.uri)
-        if config.run.mode == RunMode.TRAIN and (prepared_cache := _prepared_task_cache(config)) is not None:
-            config.skyrl.runtime.prepared_task_cache = prepared_cache
+        if config.run.mode == RunMode.TRAIN and (prepared_cache := _prepared_task_cache_source(config)) is not None:
+            config.skyrl.runtime.prepared_task_cache = OmegaConf.structured(prepared_cache)
     if job_info is not None and config.run.mode != RunMode.CHECKPOINT_EXPORT:
         _start_attempt_record(config)
     run = cast(Callable[[DictConfig], None], getattr(importlib.import_module(module), "run"))

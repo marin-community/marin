@@ -44,6 +44,7 @@ from marinskyrl.runtime_options import (
     static_preference_pairs_requested,
 )
 from marinskyrl.resource_locator import RolloutModelLoading
+from marinskyrl.task_sources import PreparedTaskCacheSource
 
 if TYPE_CHECKING:
     from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -399,7 +400,6 @@ class BasePPOExp:
 
     def task_dataset(self, data_files):
         from skyrl_train.dataset.nemotron_ultra import NemotronTaskDataset  # noqa: PLC0415
-        from skyrl_train.dataset.prepared_tasks import PreparedTaskCacheSource  # noqa: PLC0415
         from skyrl_train.dataset.tasks import SourceTaskDataset  # noqa: PLC0415
         from skyrl_train.rollouts.harbor_tasks import (
             HarborTaskSettings,

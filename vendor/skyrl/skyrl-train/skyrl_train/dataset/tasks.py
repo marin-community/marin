@@ -14,6 +14,8 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from datasets import Dataset
 from loguru import logger
+from marinskyrl.task_sources import PreparedTaskCacheSource
+from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
@@ -38,8 +40,8 @@ from transformers import PreTrainedTokenizerBase
 from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count, dataset_num_proc
 from skyrl_train.dataset.prepared_tasks import (
     PROMPT_LENGTH_COLUMN,
-    PreparedTaskCacheSource,
     load_prepared_tasks,
+    prepared_task_cache_key,
     write_prepared_tasks,
 )
 from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
@@ -344,25 +346,43 @@ class SourceTaskDataset(TaskDataset):
         )
 
     def _read_files_and_tokenize(self):
+        cached = self._prepared_rows_with_lengths()
+        if cached is None:
+            return super()._read_files_and_tokenize()
+        prepared, lengths = cached
+        logger.info("Total dataset size: {}", len(prepared))
+        eligible = pc.indices_nonzero(pc.less_equal(lengths, self.max_prompt_length))
+        self.prompts_dropped_too_long = len(prepared) - len(eligible)
+        self.dataframe = prepared.select(eligible.to_numpy()) if self.prompts_dropped_too_long else prepared
+        logger.info("Filtered dataset size: {}", len(self.dataframe))
+
+    def _prepared_rows_with_lengths(self) -> tuple[Dataset, pa.ChunkedArray] | None:
         cache = self.prepared_cache
         task_settings = self.environment_configs.get("task_spec")
         if cache is None or self.datasets != [cache.path] or task_settings is None:
-            return super()._read_files_and_tokenize()
-        key = cache.cache_key(self.tokenizer, task_settings, self.chat_template_kwargs)
+            return None
+        key = prepared_task_cache_key(cache, self.tokenizer, task_settings, self.chat_template_kwargs)
         if key is None:
-            return super()._read_files_and_tokenize()
+            return None
         with pq.ParquetFile(cache.path) as source:
             source_columns = source.schema_arrow.names
             source_rows = source.metadata.num_rows
         if not source_rows or TASK_SPEC_COLUMN not in source_columns or TASK_ROLLOUT_COLUMN in source_columns:
-            return super()._read_files_and_tokenize()
+            return None
 
-        path = cache.cache_path(key)
-        columns = {TASK_ROLLOUT_COLUMN, TASK_EVALUATION_IDENTITY, FAMILY_COLUMN, "prompt", "env_class", "data_source"}
-        table = load_prepared_tasks(path, key, columns | {PROMPT_LENGTH_COLUMN}, source_rows)
+        path = StoragePath(cache.cache_dir) / f"{key}.parquet"
+        required_columns = {
+            TASK_ROLLOUT_COLUMN,
+            TASK_EVALUATION_IDENTITY,
+            FAMILY_COLUMN,
+            PROMPT_LENGTH_COLUMN,
+            self.prompt_key,
+            self.env_class_key,
+        }
+        table = load_prepared_tasks(path, key, required_columns, source_rows)
         if table is None:
             logger.info("Prepared task cache miss: {}", path)
-            prepared = self._read_prepared_rows()
+            prepared = self._read_and_prepare_rows()
             lengths = self._prompt_lengths(prepared)
             table = prepared.data.table.append_column(PROMPT_LENGTH_COLUMN, lengths)
             write_prepared_tasks(path, key, table)
@@ -371,11 +391,7 @@ class SourceTaskDataset(TaskDataset):
 
         lengths = table.column(PROMPT_LENGTH_COLUMN)
         prepared = Dataset(table.drop([PROMPT_LENGTH_COLUMN]), fingerprint=key).with_transform(_restore_task_prompts)
-        logger.info("Total dataset size: {}", len(prepared))
-        eligible = pc.indices_nonzero(pc.less_equal(lengths, self.max_prompt_length))
-        self.prompts_dropped_too_long = len(prepared) - len(eligible)
-        self.dataframe = prepared.select(eligible.to_numpy()) if self.prompts_dropped_too_long else prepared
-        logger.info("Filtered dataset size: {}", len(self.dataframe))
+        return prepared, lengths
 
     def _prompt_lengths(self, prepared: Dataset) -> pa.ChunkedArray:
         tokenizer = self.tokenizer

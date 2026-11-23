@@ -75,6 +75,15 @@ class DirectoryDataSource:
 
 
 @dataclass(frozen=True)
+class PreparedTaskCacheSource:
+    """An immutable selection staged locally and its shared prepared-row cache directory."""
+
+    path: str
+    identity: str
+    cache_dir: str
+
+
+@dataclass(frozen=True)
 class TaskTroveParquetSource:
     uri: str
     identity: str
