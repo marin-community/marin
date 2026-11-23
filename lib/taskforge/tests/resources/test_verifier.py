@@ -5,7 +5,7 @@ import asyncio
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import Any, cast, override
+from typing import Any, Literal, cast, override
 
 import pytest
 from lib.taskforge.tests.resources.rollout_fakes import FakeEngine
@@ -56,17 +56,12 @@ print(int(clean and Path('/app/answer.txt').read_text() == '12'))
 
 
 class CountedMachine(Machine):
-    def __init__(
-        self, machine: Machine, die: bool, failure: RuntimeError | None = None, grader_delay: float = 0
-    ) -> None:
+    def __init__(self, machine: Machine, die: bool, failure: RuntimeError | None = None) -> None:
         self.machine, self.die, self.closed = machine, die, False
-        self.failure, self.grader_delay = failure, grader_delay
+        self.failure = failure
 
     @override
     async def run(self, command: Command) -> Result:
-        if command.argv == ("python3", "/tests/grade.py"):
-            # A slow grader: the engine's verifier deadline runs on the event loop clock.
-            await asyncio.sleep(self.grader_delay)
         if self.die and command.argv == ("python3", "/tests/grade.py"):
             self.die = False
             raise self.failure or MachineTerminated("killed during grader") from RuntimeError(
@@ -102,11 +97,11 @@ class CountedMachine(Machine):
 class CountedFactory(MachineFactory):
     backend = Backend.SHELLSIM
 
-    def __init__(self, *, die: bool = False, failure: RuntimeError | None = None, grader_delay: float = 0) -> None:
+    def __init__(self, *, die: bool = False, failure: RuntimeError | None = None) -> None:
         self.factory = shellsim_factory()
         self.machines: list[CountedMachine] = []
         self.die = die
-        self.failure, self.grader_delay = failure, grader_delay
+        self.failure = failure
 
     @override
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
@@ -114,9 +109,7 @@ class CountedFactory(MachineFactory):
 
     @override
     async def create(self, spec: MachineSpec) -> Machine:
-        machine = CountedMachine(
-            await self.factory.create(spec), self.die and not self.machines, self.failure, self.grader_delay
-        )
+        machine = CountedMachine(await self.factory.create(spec), self.die and not self.machines, self.failure)
         self.machines.append(machine)
         return machine
 
@@ -263,14 +256,40 @@ async def test_parallel_grades_are_serialized_on_one_machine() -> None:
         await pool.close()
 
 
-async def test_queued_grades_wait_outside_the_verifier_deadline() -> None:
-    factory = CountedFactory(grader_delay=1.0)
+class QueueLock(asyncio.Lock):
+    """The verifier lease lock; ``queued`` is set once ``callers`` have asked for it."""
+
+    def __init__(self, callers: int) -> None:
+        super().__init__()
+        self.callers, self.queued = callers, asyncio.Event()
+
+    @override
+    async def acquire(self) -> Literal[True]:
+        self.callers -= 1
+        if self.callers == 0:
+            self.queued.set()
+        return await super().acquire()
+
+
+async def test_queued_grades_wait_outside_the_verifier_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    verifier_timeout = 30
+    factory = CountedFactory()
     pool, resource = setup(factory)
     candidate = event()
-    limits = candidate.spec.limits.model_copy(update={"verifier_timeout": 2.5})
+    limits = candidate.spec.limits.model_copy(update={"verifier_timeout": verifier_timeout})
     candidate = replace(candidate, spec=candidate.spec.model_copy(update={"limits": limits}))
+    lock = pool.lock = QueueLock(callers=5)  # This test's own hold, then four grades.
+    await lock.acquire()
     try:
-        results = await asyncio.gather(*(resource.grade(candidate) for _ in range(4)))
+        grades = [asyncio.create_task(resource.grade(candidate)) for _ in range(4)]
+        await lock.queued.wait()
+        # While every grade waits for the lease, the loop clock passes the whole verifier timeout. A deadline
+        # started before the lease would expire now; one started when the lease is held has its full budget.
+        loop = asyncio.get_running_loop()
+        clock = loop.time
+        monkeypatch.setattr(loop, "time", lambda: clock() + 2 * verifier_timeout)
+        lock.release()
+        results = await asyncio.gather(*grades)
         assert [result.reward for result in results] == [1, 1, 1, 1]
         assert sorted(result.diagnostics["verifier_lease"] for result in results) == [1, 2, 3, 4]
     finally:
