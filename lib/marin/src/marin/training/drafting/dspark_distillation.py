@@ -51,6 +51,7 @@ _TEACHER_PORT = 18000
 _EXPORT_RECEIPT = "dspark-export.json"
 _EPOCHS = 1
 _MARKOV_HEAD = "vanilla"
+_LOSS_IMPLEMENTATION = "eager"
 _D2T_FILE = "d2t.npy"
 _T2D_FILE = "t2d.npy"
 _BUILD_VOCAB_MAPPINGS = """
@@ -275,6 +276,7 @@ def _publish_checkpoint(
         "speculators_revision": SPECULATORS_REVISION,
         "vllm_source_commit": VLLM_SOURCE_COMMIT,
         "trainer_packages": packages,
+        "loss_implementation": _LOSS_IMPLEMENTATION,
         "steps": state["global_step"],
         "validation": metrics,
         "files": {
@@ -361,6 +363,8 @@ def _trainer_command(
             "on_generate": "delete",
         },
         "loss": {
+            # Dynamo cannot trace repeated calls to the pinned fused loss autotuner.
+            "loss_implementation": _LOSS_IMPLEMENTATION,
             "loss_fn": json.dumps({"ce": recipe.cross_entropy_weight, "tv": recipe.total_variation_weight}),
         },
         "optimizer": {"optimizer": recipe.optimizer, "lr": recipe.learning_rate},

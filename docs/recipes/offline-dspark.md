@@ -99,6 +99,8 @@ The recipe partitions the worker's assigned GPUs between TP1 expert-parallel
 teacher prefill and Speculators training. Teacher prefill uses FlashAttention
 and Triton MoE, matching the Snowball rollout preset. The two processes
 exchange hidden states over the worker's local filesystem.
+The trainer uses Speculators' PyTorch implementation of the weighted CE/TV
+loss to avoid a tracing error in the fused loss autotuner.
 
 Preparation verifies the data shard digests, renders assistant masks with
 Levanter's SFT chat processor, and rejects exact rendered sequences shared
