@@ -107,6 +107,20 @@ def test_changed_input_or_missing_receipt_clears_stale_inline_census(tmp_path, c
     assert bound.info.actor_census_input is None
 
 
+def test_census_receipt_newer_than_the_declaration_fails_the_declaration_loudly(tmp_path):
+    """A registered census receipt at a newer converter version than the declared source
+    version must fail the catalog declaration by name: the registry can move ahead of a
+    landing, and the skew may never silently produce a declaration without an actor
+    safety measurement (the 2026-11-23 declaration-audit blocker)."""
+    source = number_source(tmp_path / "input")
+    registered = census_receipt(source)
+    source = replace(source, config=replace(source.config, version="harbor-v2-r9"))
+    bound = bind_actor_census(source, registered)
+    assert bound.info.actor_census_input is None
+    with pytest.raises(ValueError, match=f"Source {source.info.id} requires an actor safety measurement"):
+        _ = bound.declaration
+
+
 def test_refreshed_contract_families_and_full_example_survive_arrow():
     actor = {
         "source_id": "fixture",
