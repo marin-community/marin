@@ -422,6 +422,12 @@ async def run_adversary(
             except* OutputBudgetExhausted as error:  # ends at the conversation the exhausted command left
                 limit = SearchLimit.OUTPUT_BUDGET
                 ended = next((e.session for e in error.exceptions if isinstance(e, OutputBudgetExhausted)), None)
+            except* Hold as error:
+                # A revision is extra search: its hold leaves a finding that already reproduced standing.
+                if not any(actionable(finding) for finding, _ in replays):
+                    raise
+                ctx.notify(Note(f"Adversary {name}: revision {revision} held: {'; '.join(failure_reasons(error))}"))
+                ended = None
             if (revised := report_of(ended)) is None:  # the last report stands
                 how = f"its revision {revision} ended without a report"
                 break

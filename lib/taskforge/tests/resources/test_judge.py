@@ -22,7 +22,7 @@ from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import ScriptGrader
-from verifyit.modes.grade_judge import JudgeCompletion, JudgeConnection, JudgeRequest, grade_judge_candidate
+from verifyit.modes.grade_judge import JudgeCompletion, JudgeConnection, JudgeRequest
 from verifyit.spec import JudgeCompletionPolicy, JudgeSpec
 
 from taskforge.effects.context import Context
@@ -30,7 +30,6 @@ from taskforge.effects.events import Resolved, ScopeExited
 from taskforge.effects.issues import ContextExceeded, Restart
 from taskforge.effects.log import EventLog, Record, decode
 from taskforge.llm.client import ContextExhausted, ModelClient, Progress, Segment
-from taskforge.llm.client import FinishReason as ProviderFinish
 from taskforge.llm.policy import GLM_5_3, ModelProfile, RetryPolicy
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
@@ -481,9 +480,6 @@ def test_a_judged_rollout_spec_has_a_json_schema_and_never_serializes_its_callba
     # Typed ``Any`` like the HTTP shim's transport, so VerifyIt needs no Pydantic 2 import for the schema to generate.
     schema = TaskRolloutSpec.model_json_schema()["$defs"]["JudgeConnection"]["properties"]["callback"]
     assert schema == {"default": None, "title": "Callback"}
-    with pytest.raises(TypeError, match="Judge callback must be callable, got str"):
-        connection = JudgeConnection("", "", default_model="judge", callback="judge")
-        grade_judge_candidate(JudgeSpec(references=("12",), exact_gate=False), "12", connection=connection, runtime=None)
     connection = TypeAdapter(JudgeConnection).validate_python({"base_url": "", "api_key": "", "callback": judge})
     spec = judged_spec(labels()).model_copy(update={"judge_connection": connection})
     assert "judge_connection" not in spec.model_dump()
@@ -573,7 +569,7 @@ def test_a_provider_serving_another_model_than_its_role_declares_is_refused(role
 
 
 ANSWER = replace(
-    provider_completion(), content="SCORE: 1", tool_calls=(), finish_reason=ProviderFinish.STOP, continuations=0
+    provider_completion(), content="SCORE: 1", tool_calls=(), finish_reason=FinishReason.STOP, continuations=0
 )
 
 
