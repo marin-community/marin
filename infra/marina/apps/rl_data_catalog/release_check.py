@@ -302,7 +302,29 @@ def browser_api_response(reader: CatalogReader, path: str, sources: list[dict[st
             and not (source.get("assessment") or {}).get("pipeline_key")
         ):
             return 404, {"detail": str(error)}
+        if error.status_code == 504:
+            return retry_transient_read(reader, path, error)
         raise
+
+
+def retry_transient_read(reader: CatalogReader, path: str, error: MarinaRequestError) -> tuple[int, Any]:
+    """Retry a cold-plan statement timeout with the established bounded read policy.
+
+    A cold sample-pool plan can exceed the gateway statement timeout once under
+    sweep concurrency; page fetches are idempotent reads, so the same bounded
+    read-retry policy the staged loaders run applies. A genuinely slow route
+    still fails on the last attempt.
+    """
+    last: MarinaRequestError = error
+    for _ in (2, 3):
+        time.sleep(5)
+        try:
+            return 200, reader.get(path)
+        except MarinaRequestError as retry_error:
+            if retry_error.status_code != 504:
+                raise
+            last = retry_error
+    raise last
 
 
 def inventory_timestamp_projection(inventory: dict[str, Any]) -> dict[str, Any]:

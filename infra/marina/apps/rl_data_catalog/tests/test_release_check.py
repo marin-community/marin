@@ -273,3 +273,27 @@ def test_browser_api_response_serves_the_candidate_taxonomy_when_the_served_revi
     assert status == 200
     assert tables == taxonomy_tables()
     assert set(tables) == {"status", "stage", "reason", "use", "method", "format"}
+
+
+class _Flaky504Reader:
+    """A reader whose cold plan exceeds the statement timeout before warming."""
+
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+
+    def get(self, path: str) -> dict[str, Any]:
+        if self.failures > 0:
+            self.failures -= 1
+            raise MarinaRequestError(504, "query exceeded its statement timeout")
+        return {"tasks": []}
+
+
+def test_browser_api_response_retries_transient_read_timeouts(monkeypatch):
+    monkeypatch.setattr(release_check.time, "sleep", lambda _seconds: None)
+    reader = _Flaky504Reader(failures=2)
+    status, data = release_check.browser_api_response(reader, "api/curriculum/tasks?sample_pool=true", [])
+    assert status == 200 and data == {"tasks": []}
+    exhausted = _Flaky504Reader(failures=3)
+    with pytest.raises(MarinaRequestError):
+        release_check.browser_api_response(exhausted, "api/curriculum/tasks?sample_pool=true", [])
+    assert exhausted.failures == 0
