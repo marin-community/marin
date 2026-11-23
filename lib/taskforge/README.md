@@ -137,10 +137,10 @@ rest. Format 8 is the exception: every format-8 row means the same at format 9, 
 root and its claim writes 9. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its
 decision-model grade, below), which a format-8 reader cannot decode; at 9 that reader refuses the root as another
 format, untouched, instead of reporting it corrupt. Such roots are converted once by a separate migration, or rebuilt. Format 5 covers two writers that its
-header cannot tell apart: the previous branch, whose readers cannot decode a `decision_model.read` row, and interim
-commits of this branch, which could write `decision_model.read` rows but had no `effect.invalidated` row (the marker
+header cannot tell apart: Taskforge before decision-model grading, whose readers cannot decode a `decision_model.read` row,
+and the first decision-model writers, which could write `decision_model.read` rows but had no `effect.invalidated` row (the marker
 naming the refused slot result an operator-authorised replacement supersedes); a bare request row in either cannot
-establish an operator's intent. Format 6 refuses both alike, and a previous-branch reader refuses a format-6 root
+establish an operator's intent. Format 6 refuses both alike, and a reader from before decision-model grading refuses a format-6 root
 the same way instead of misreading its new rows. Before claiming, the reader
 validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
 one envelope field; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
