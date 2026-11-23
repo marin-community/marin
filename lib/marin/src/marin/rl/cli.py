@@ -93,6 +93,13 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
     )
 
 
+def _preemption_retries(executions: tuple[IrisSkyRLExecution, ...]) -> int | None:
+    policies = {execution.max_retries_preemption for execution in executions}
+    if len(policies) != 1:
+        raise ValueError("one RL run cannot use multiple preemption retry policies")
+    return policies.pop()
+
+
 def _coordinator_request(
     handles: list[ArtifactStep],
     module_name: str,
@@ -107,6 +114,7 @@ def _coordinator_request(
         for name in execution.required_env_vars:
             selected_env[name] = env_vars[name]
     route = _submission_route(executions)
+    max_retries_preemption = _preemption_retries(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")
     request = JobRequest(
@@ -127,6 +135,7 @@ def _coordinator_request(
         environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
         priority=priority_band_value(route.priority),
         timeout=Duration.from_hours(route.timeout_hours),
+        **({"max_retries_preemption": max_retries_preemption} if max_retries_preemption is not None else {}),
     )
     return route.cluster_config, request
 
@@ -135,7 +144,11 @@ def _submit_or_run(
     module_name: str, handles: list[ArtifactStep], max_concurrent: int, coordinator_env: Mapping[str, str]
 ) -> None:
     if get_job_info() is not None:
-        run(*handles, max_concurrent=max_concurrent)
+        run(
+            *handles,
+            max_concurrent=max_concurrent,
+            max_retries_preemption=_preemption_retries(_skyrl_executions(handles)),
+        )
         return
 
     workspace = find_project_root()

@@ -471,8 +471,11 @@ class IrisSkyRLExecution:
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
     role_topology: RoleTopologyMode | None = None
+    max_retries_preemption: int | None = None
 
     def __post_init__(self) -> None:
+        if self.max_retries_preemption is not None and self.max_retries_preemption < 0:
+            raise ValueError("SkyRL max_retries_preemption cannot be negative")
         if self.coordinator_timeout_hours <= 0:
             raise ValueError("SkyRL coordinator_timeout_hours must be positive")
         if self.job_timeout_seconds < 0:
@@ -978,6 +981,11 @@ def _launch_config_yaml(
             },
             "priority": execution.priority,
             "max_retries": execution.max_retries,
+            **(
+                {"max_retries_preemption": execution.max_retries_preemption}
+                if execution.max_retries_preemption is not None
+                else {}
+            ),
             "timeout": execution.job_timeout_seconds,
             "target_cluster": execution.target_cluster,
             "parent_cluster_config": execution.parent_cluster_config,

@@ -1,6 +1,6 @@
 # Levanter quick-loop status
 
-November 22, 2026 (PST).
+November 23, 2026 (PST).
 
 For the implementation inventory and remaining transfer, protocol, router-replay
 and zero-KL work, see [inference integration status](../../../INFERENCE_HANDOFF.md).
@@ -11,15 +11,27 @@ checkpoint metadata was committed. It failed again at the five-second natural
 process-exit check. Fresh-process continuation, updated-weight publication and
 generation, and the matched 25-update comparison remain unverified.
 
-The latest eight-H100 diagnostic completed and its entire archive was audited.
-It separates two findings: identical calls to one compiled gradient program
-produce different finite gradients, and the short-sequence attention fallback
-can return NaN dQ on finite inputs after an intentional NaN-input call.
-Tiny-model checkpoint restoration is byte-exact. The strict tiny-model continued
-state/score comparison still fails; no tolerance has changed. The full-model
-validator checks exact restoration before resuming normal training. A separate
-full-model diagnostic tested finite updates, natural process exit, updated-weight
-publication and generation while retaining the failed tiny-model parity gate.
+Under `--xla_gpu_deterministic_ops=true`, the eight-H100 tiny MoE run at
+`94f1d6b171` passed all 18 strict warm-process versus fresh-process checks.
+Independent decoding found all 411 checkpoint arrays finite; continued model,
+Adam, RNG, step and all 32 policy scores matched byte-for-byte. A separate
+one-H100 genuine Ray `HostWorker` run at `f5e53f48b8` completed two finite,
+changed updates, exact step-one restoration and restored scores, and natural
+process exits. Its independent audit decoded all 137 step-one checkpoint
+arrays. These results qualify their tiny fixtures under that explicit compiler
+profile. They do not qualify full-model continuation or erase the failed
+baseline-profile comparisons. Numerical tolerances and the five-second
+post-ACK exit limit remain unchanged.
+
+The next full-model smoke opts into that profile through
+`--deterministic-gpu-ops`, which configures each native process directly.
+Original and restored runtime identities record their actual compiler flags
+and selected platforms. `--max-retries-preemption 0` bounds the coordinator,
+GPU gang and nested materialized jobs without changing the defaults for other
+runs. The experimental rank-zero shutdown observer is optional and remains
+disabled for this smoke; its latest CPU trace-cap check did not qualify.
+[Strict paired checkpoint run](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-deterministic-paired-qualification-2026-11-23-1)
+· [Genuine Ray lifecycle](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-hostworker-deterministic-20261123-2)
 
 Full-model BATCH diagnostic `2026.11.22.3` was submitted at 15:51 PST from
 `baa10702aec4cfd62e0aebb2cef8c336974172ae`, whose executable source is identical
@@ -845,7 +857,8 @@ That historical attempt established no successful accelerator update.
 Run from the repository with the required storage, evaluation, and judge
 credentials loaded. The smoke command records the submitted attempt; use a
 fresh unused version for another attempt.
-Each uses 40 H100s at BATCH priority with zero automatic failure retries. The regional route
+Each uses 40 H100s at BATCH priority. The commands below explicitly disable
+automatic failure and preemption retries. The regional route
 submits directly to the configured CoreWeave context. The smoke restarts JAX
 learners within the same allocation to validate native checkpoint continuation.
 It retains the parent actors and rollout engines.
@@ -853,9 +866,10 @@ It retains the parent actors and rollout engines.
 ```bash
 SELECTION_URI=s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.21.8 \
+  --selection-uri "$SELECTION_URI" --version 2026.11.23.1 \
   --learner levanter --steps 2 --verify-publication \
-  --validate-native-checkpoint --coordinator-route regional --run
+  --validate-native-checkpoint --deterministic-gpu-ops \
+  --max-retries-preemption 0 --coordinator-route regional --run
 ```
 
 After the smoke passes initialization/update, publication/generation, and
@@ -863,14 +877,18 @@ checkpoint continuation gates in the table, submit the matched arms:
 
 ```bash
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.21.2 \
-  --learner megatron --steps 25 --verify-publication --coordinator-route regional --run
+  --selection-uri "$SELECTION_URI" --version 2026.11.23.2 \
+  --learner megatron --steps 25 --verify-publication \
+  --max-retries-preemption 0 --coordinator-route regional --run
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version 2026.11.21.3 \
-  --learner levanter --steps 25 --verify-publication --coordinator-route regional --run
+  --selection-uri "$SELECTION_URI" --version 2026.11.23.3 \
+  --learner levanter --steps 25 --verify-publication --deterministic-gpu-ops \
+  --max-retries-preemption 0 --coordinator-route regional --run
 ```
 
-Checkpoint restart validation is disabled for both comparison arms. Record the
+The versions above are reserved examples, not submitted runs. Confirm each
+output root is unused before submitting. Checkpoint restart validation is
+disabled for both comparison arms. Record the
 executed source/bundle pins and run links after submission, then inspect the
 acceptance receipts and output archives. Native terminal HF export remains
 unimplemented. No throughput or reward comparison is available yet.

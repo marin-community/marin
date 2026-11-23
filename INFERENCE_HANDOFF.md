@@ -4,8 +4,8 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
-This report describes the integrated code at `a6aebd2844`. It includes the
-experimental shutdown observer, disabled by default. The Ray results below
+The branch includes the experimental shutdown observer, disabled by default.
+The Ray results below
 were measured at `f5e53f48b8`; the integrated observer adds a larger trace
 retention cap, which those GPU runs did not exercise.
 
@@ -309,6 +309,16 @@ explain the baseline-profile failures or qualify full-67B or multihost
 continuation, updated-policy publication, generation, observer-enabled
 integration, or 25-update acceptance.
 [Deterministic Ray lifecycle](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-hostworker-deterministic-20261123-2)
+
+The quick-loop CLI now exposes `--deterministic-gpu-ops`. Each native worker
+configures that compiler profile directly, including replacement processes;
+runtime identities record actual raw and normalized flags and selected
+platforms. Conflicting inherited compiler settings fail before process startup.
+The default retains the existing environment behavior. The separate
+`--max-retries-preemption 0` option bounds the coordinator, GPU gang and nested
+materialized jobs; leaving it unset preserves their existing retry defaults.
+Local tests cover these paths and exact native checkpoint continuation. The
+next full-model run with these controls remains unsubmitted.
 
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and

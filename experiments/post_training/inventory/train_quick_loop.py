@@ -62,10 +62,14 @@ def training_recipe(
     learner: Literal["megatron", "levanter"] = "megatron",
     verify_publication: bool = False,
     validate_native_checkpoint: bool = False,
+    deterministic_gpu_ops: bool = False,
+    diagnostic_shutdown_observer: bool = False,
 ) -> SkyRLRecipe:
     """Use the maintained Snowball geometry with synchronous RLOO-N updates."""
     if validate_native_checkpoint and learner != "levanter":
         raise ValueError("Native checkpoint validation requires the Levanter learner")
+    if (deterministic_gpu_ops or diagnostic_shutdown_observer) and learner != "levanter":
+        raise ValueError("Native compiler and shutdown diagnostics require the Levanter learner")
     preset = replace(
         DEFAULT,
         label="snowball-100k",
@@ -176,6 +180,8 @@ def training_recipe(
                             numpy_madvise_hugepage=False,
                             preallocate=False,
                             validate_checkpoint_roundtrip=validate_native_checkpoint,
+                            deterministic_gpu_ops=deterministic_gpu_ops,
+                            diagnostic_shutdown_observer=diagnostic_shutdown_observer,
                         )
                     ),
                 )
@@ -225,6 +231,9 @@ def build_run(
     learner: Literal["megatron", "levanter"] = "megatron",
     verify_publication: bool = False,
     validate_native_checkpoint: bool = False,
+    deterministic_gpu_ops: bool = False,
+    diagnostic_shutdown_observer: bool = False,
+    max_retries_preemption: int | None = None,
     coordinator_route: Literal["hub", "regional"] = "hub",
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
@@ -246,6 +255,8 @@ def build_run(
                     learner=learner,
                     verify_publication=verify_publication,
                     validate_native_checkpoint=validate_native_checkpoint,
+                    deterministic_gpu_ops=deterministic_gpu_ops,
+                    diagnostic_shutdown_observer=diagnostic_shutdown_observer,
                 ).to_skyrl(),
                 sort_keys=False,
             ),
@@ -277,6 +288,7 @@ def build_run(
             disk="2TB",
             priority="batch",
             max_retries=0,
+            max_retries_preemption=max_retries_preemption,
             target_cluster=CLUSTER if coordinator_route == "hub" else None,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG if coordinator_route == "hub" else None,
             coordinator_timeout_hours=36,
@@ -310,6 +322,22 @@ def build_run(
     help="Validate a real update and exact checkpoint restoration in fresh native learner processes.",
 )
 @click.option(
+    "--deterministic-gpu-ops",
+    is_flag=True,
+    help="Use the deterministic XLA GPU profile in every native learner process.",
+)
+@click.option(
+    "--diagnostic-shutdown-observer",
+    is_flag=True,
+    help="Observe native rank-zero shutdown with the experimental Linux debugger.",
+)
+@click.option(
+    "--max-retries-preemption",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Override preemption retries for the coordinator and its descendant jobs.",
+)
+@click.option(
     "--reproducible-serving",
     is_flag=True,
     help="Use batch-invariant serving with one sequence per rank and greedy evaluation.",
@@ -323,12 +351,17 @@ def main(
     learner: Literal["megatron", "levanter"],
     verify_publication: bool,
     validate_native_checkpoint: bool,
+    deterministic_gpu_ops: bool,
+    diagnostic_shutdown_observer: bool,
+    max_retries_preemption: int | None,
     coordinator_route: Literal["hub", "regional"],
 ) -> ArtifactStep[SkyRLRun]:
     if learner == "levanter" and export_hf:
         raise click.BadParameter("Levanter supports native checkpoints; terminal HF export is not implemented")
     if validate_native_checkpoint and learner != "levanter":
         raise click.BadParameter("--validate-native-checkpoint requires --learner levanter")
+    if (deterministic_gpu_ops or diagnostic_shutdown_observer) and learner != "levanter":
+        raise click.BadParameter("Native compiler and shutdown diagnostics require --learner levanter")
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
@@ -359,6 +392,9 @@ def main(
         learner=learner,
         verify_publication=verify_publication,
         validate_native_checkpoint=validate_native_checkpoint,
+        deterministic_gpu_ops=deterministic_gpu_ops,
+        diagnostic_shutdown_observer=diagnostic_shutdown_observer,
+        max_retries_preemption=max_retries_preemption,
         coordinator_route=coordinator_route,
     )
 

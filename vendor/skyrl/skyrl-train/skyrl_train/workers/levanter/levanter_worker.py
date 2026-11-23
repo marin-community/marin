@@ -27,20 +27,42 @@ from skyrl_train.workers.levanter_batch import forward_payload, policy_payload, 
 
 
 def _child_environment(
-    python_executable: str, memory_fraction: float, *, require_accelerator: bool, compiler_diagnostics: bool = False,
+    python_executable: str,
+    memory_fraction: float,
+    *,
+    require_accelerator: bool,
+    compiler_diagnostics: bool = False,
     preallocate: bool = False,
     allocator: str = "bfc",
     numpy_madvise_hugepage: bool | None = None,
+    deterministic_gpu_ops: bool = False,
 ) -> dict[str, str]:
     if allocator not in ("bfc", "vmm") or (allocator == "vmm" and preallocate):
         raise ValueError("Native learner requires bfc, or vmm with preallocate=false")
     environment = dict(os.environ)
+    if deterministic_gpu_ops:
+        deterministic_flag = "--xla_gpu_deterministic_ops=true"
+        inherited_flags = shlex.split(environment.get("XLA_FLAGS", ""))
+        if inherited_flags not in ([], [deterministic_flag]):
+            raise ValueError(
+                "Native deterministic GPU profile requires empty XLA_FLAGS or its exact deterministic flag"
+            )
+        environment["XLA_FLAGS"] = deterministic_flag
     if numpy_madvise_hugepage is not None:
         environment["NUMPY_MADVISE_HUGEPAGE"] = str(int(numpy_madvise_hugepage))
     for name in (
-        "CUDA_HOME", "NVRTC_HOME", "LIBRARY_PATH", "LD_LIBRARY_PATH", "LD_PRELOAD",
-        "VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH",
-        "JAX_PLATFORM_NAME", "JAX_CUDA_VISIBLE_DEVICES", "JAX_ROCM_VISIBLE_DEVICES", "JAX_LOCAL_DEVICE_IDS",
+        "CUDA_HOME",
+        "NVRTC_HOME",
+        "LIBRARY_PATH",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "VIRTUAL_ENV",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "JAX_PLATFORM_NAME",
+        "JAX_CUDA_VISIBLE_DEVICES",
+        "JAX_ROCM_VISIBLE_DEVICES",
+        "JAX_LOCAL_DEVICE_IDS",
     ):
         environment.pop(name, None)
     environment["PATH"] = f"{Path(python_executable).parent}{os.pathsep}{os.defpath}"
@@ -60,10 +82,16 @@ def _child_environment(
     return environment
 
 
-def _runtime_config(cfg, *, model_path: str, num_training_steps: int, process_id: int, coordinator_address: str) -> dict:
+def _runtime_config(
+    cfg, *, model_path: str, num_training_steps: int, process_id: int, coordinator_address: str
+) -> dict:
     validate_algorithm(cfg.trainer.algorithm)
     optimizer = cfg.trainer.policy.optimizer_config
-    if optimizer.optimizer != "AdamW" or optimizer.scheduler != "constant_with_warmup" or optimizer.num_warmup_steps != 0:
+    if (
+        optimizer.optimizer != "AdamW"
+        or optimizer.scheduler != "constant_with_warmup"
+        or optimizer.num_warmup_steps != 0
+    ):
         raise ValueError("The native quick-loop learner supports constant AdamW without warmup")
     extra = OmegaConf.to_container(optimizer.optimizer_kwargs, resolve=True)
     if set(extra) - {"eps"}:
@@ -139,8 +167,11 @@ class LevanterHostWorker:
         self._initial_finite = None
         self._finite_state_receipts = {}
         self.initialization_config = _runtime_config(
-            self.cfg, model_path=model_path, num_training_steps=num_training_steps,
-            process_id=self.process_id, coordinator_address=self.coordinator_address,
+            self.cfg,
+            model_path=model_path,
+            num_training_steps=num_training_steps,
+            process_id=self.process_id,
+            coordinator_address=self.coordinator_address,
         )
         receipt = self._start_child()
         logger.info("Native Levanter learner initialized: {}", receipt)
@@ -160,6 +191,7 @@ class LevanterHostWorker:
             preallocate=runtime.preallocate,
             allocator=runtime.allocator,
             numpy_madvise_hugepage=runtime.numpy_madvise_hugepage,
+            deterministic_gpu_ops=runtime.deterministic_gpu_ops,
         )
         if runtime.validate_checkpoint_roundtrip:
             self.initialization_config["compiler_dump_dir"] = shlex.split(environment["XLA_FLAGS"])[-3].split("=", 1)[1]
@@ -187,10 +219,14 @@ class LevanterHostWorker:
 
     def _record_finite_state(self, phase, step, version, fingerprints=None, error=None):
         receipt = {
-            "status": "passed" if error is None else "failed", "phase": phase,
-            "process_id": self.process_id, "optimizer_step": step, "policy_version": version,
+            "status": "passed" if error is None else "failed",
+            "phase": phase,
+            "process_id": self.process_id,
+            "optimizer_step": step,
+            "policy_version": version,
             "model_source": self.initialization_config["model"],
-            "state_fingerprints": fingerprints, "error_type": type(error).__name__ if error is not None else None,
+            "state_fingerprints": fingerprints,
+            "error_type": type(error).__name__ if error is not None else None,
             "validation": "Explicit all-rank native host verdict; local unique shards may repeat across processes",
             "proof_authority": "Durable native child candidate and coordinated verdict; parent mirror is supplemental",
             "parent_mirror": {"persisted": False, "paths": [], "error_types": []},
@@ -208,8 +244,11 @@ class LevanterHostWorker:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 candidate = {
                     **receipt,
-                    "parent_mirror": {"persisted": True, "paths": [str(path)],
-                                      "error_types": list(receipt["parent_mirror"]["error_types"])},
+                    "parent_mirror": {
+                        "persisted": True,
+                        "paths": [str(path)],
+                        "error_types": list(receipt["parent_mirror"]["error_types"]),
+                    },
                 }
                 path.write_text(json.dumps(candidate, sort_keys=True) + "\n")
                 receipt["parent_mirror"]["persisted"] = True
@@ -221,7 +260,9 @@ class LevanterHostWorker:
 
     def _capture_finite_state(self, phase, step, version):
         try:
-            fingerprints = self.child.request("validate_state_finite", {"phase": phase, "step": step, "version": version})
+            fingerprints = self.child.request(
+                "validate_state_finite", {"phase": phase, "step": step, "version": version}
+            )
         except Exception as error:
             self._initial_finite = None
             with suppress(Exception):
@@ -253,7 +294,9 @@ class LevanterHostWorker:
             with suppress(Exception):
                 logger.warning(
                     "NATIVE_MEMORY_SNAPSHOT {}",
-                    json.dumps({"phase": phase, "process_id": self.process_id, "observer_error_type": type(error).__name__}),
+                    json.dumps(
+                        {"phase": phase, "process_id": self.process_id, "observer_error_type": type(error).__name__}
+                    ),
                 )
 
     def _capture_memory(self, phase: str) -> None:
@@ -312,7 +355,9 @@ class LevanterHostWorker:
     def ppo_train(self, data: TrainingInputBatch) -> TrainingOutputBatch:
         mini_batch_size = self.cfg.trainer.policy_mini_batch_size * optimization_samples_per_prompt(self.cfg)
         if data.batch_size % mini_batch_size:
-            raise ValueError("The native learner requires complete optimizer minibatches; trailing rows cannot be dropped")
+            raise ValueError(
+                "The native learner requires complete optimizer minibatches; trailing rows cannot be dropped"
+            )
         updates = []
         # SkyRL's TrainingBatchIterator preserves row order and repeats that
         # order across epochs. Normalize each complete optimizer batch once.
@@ -341,7 +386,9 @@ class LevanterHostWorker:
         return output
 
     def _prepare_shutdown_observer(self):
-        if self.process_id != 0 or not self.cfg.trainer.policy.levanter_config.get("diagnostic_shutdown_observer", False):
+        if self.process_id != 0 or not self.cfg.trainer.policy.levanter_config.get(
+            "diagnostic_shutdown_observer", False
+        ):
             return
         if self._shutdown_observer is not None:
             raise RuntimeError("A shutdown observer already owns this child")
@@ -392,9 +439,14 @@ class LevanterHostWorker:
         step, version = int(train_status["optimizer_step"]), int(train_status["policy_version"])
         validation = {"phase": "step1", "step": step, "version": version}
         try:
-            saved = self.child.request("save_checkpoint", {
-                "ckpt_dir": checkpoint, "include_fingerprints": True, "finite_validation": validation,
-            })
+            saved = self.child.request(
+                "save_checkpoint",
+                {
+                    "ckpt_dir": checkpoint,
+                    "include_fingerprints": True,
+                    "finite_validation": validation,
+                },
+            )
         except Exception as error:
             with suppress(Exception):
                 self._record_finite_state("step1", step, version, error=error)
@@ -418,10 +470,14 @@ class LevanterHostWorker:
         self.child = None
         self._start_child()
         try:
-            restored = self.child.request("load_checkpoint", {
-                "ckpt_dir": checkpoint, "include_fingerprints": True,
-                "finite_validation": {"phase": "restored", "step": step, "version": version},
-            })
+            restored = self.child.request(
+                "load_checkpoint",
+                {
+                    "ckpt_dir": checkpoint,
+                    "include_fingerprints": True,
+                    "finite_validation": {"phase": "restored", "step": step, "version": version},
+                },
+            )
         except Exception as error:
             with suppress(Exception):
                 self._record_finite_state("restored", step, version, error=error)
@@ -478,12 +534,16 @@ class LevanterHostWorker:
         return self.child.request("barrier", {})
 
     def save_checkpoint(self, ckpt_dir: str, tokenizer, include_fingerprints: bool = False):
-        return self.child.request("save_checkpoint", {"ckpt_dir": ckpt_dir, "include_fingerprints": include_fingerprints})
+        return self.child.request(
+            "save_checkpoint", {"ckpt_dir": ckpt_dir, "include_fingerprints": include_fingerprints}
+        )
 
     def load_checkpoint(self, ckpt_dir: str, load_training_state: bool, include_fingerprints: bool = False):
         if not load_training_state:
             raise ValueError("Native learner checkpoints always restore complete training state")
-        return self.child.request("load_checkpoint", {"ckpt_dir": ckpt_dir, "include_fingerprints": include_fingerprints})
+        return self.child.request(
+            "load_checkpoint", {"ckpt_dir": ckpt_dir, "include_fingerprints": include_fingerprints}
+        )
 
     def state_fingerprints(self):
         return self.child.request("state_fingerprints", {})
@@ -534,7 +594,9 @@ class LevanterRayActorGroup:
             for rank in range(num_nodes)
         ]
         try:
-            address = ray.get(self._actor_handlers[0].node_address.remote(), timeout=max(0, deadline - time.monotonic()))
+            address = ray.get(
+                self._actor_handlers[0].node_address.remote(), timeout=max(0, deadline - time.monotonic())
+            )
             coordinator = f"{address}:{cfg.trainer.policy.levanter_config.coordinator_port}"
             ray.get(
                 [actor.configure.remote(coordinator) for actor in self._actor_handlers],
@@ -561,7 +623,9 @@ class LevanterRayActorGroup:
             return [
                 reference
                 for actor in self._actor_handlers
-                for reference in actor.expert_block_rpc.options(num_returns=self.local_device_count).remote(*args, **kwargs)
+                for reference in actor.expert_block_rpc.options(num_returns=self.local_device_count).remote(
+                    *args, **kwargs
+                )
             ]
         if method_name in ("forward", "ppo_train"):
             # Serialize a finalized coordinator batch once. Every host borrows

@@ -415,7 +415,12 @@ def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepS
     return spec
 
 
-def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: bool = True) -> list[T]:
+def run(
+    *handles: "ArtifactStep[T]",
+    max_concurrent: int = 8,
+    force_run_failed: bool = True,
+    max_retries_preemption: int | None = None,
+) -> list[T]:
     """Build ``handles`` and return their loaded, typed artifacts, in argument order.
 
     The entry point for one or several handles: lowers the graph, builds every step (independent
@@ -423,6 +428,8 @@ def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: 
     from the record the runner just wrote — so the caller gets the resolved values directly, no
     separate read. Provenance is captured once, so every artifact built records the same launch.
     ``force_run_failed`` reruns a previously-FAILED step instead of raising.
+    ``max_retries_preemption`` overrides retries for materialized jobs, including nested steps;
+    unset inherits the enclosing run's policy or leaves backend defaults unchanged.
     """
     provenance = Provenance.capture()
     memo: dict[int, StepSpec] = {}
@@ -430,6 +437,7 @@ def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: 
         [_lower(h, provenance, memo) for h in handles],
         force_run_failed=force_run_failed,
         max_concurrent=max_concurrent,
+        max_retries_preemption=max_retries_preemption,
     )
     return [cast(T, h.artifact_type.raw_load(h.path())) for h in handles]
 
