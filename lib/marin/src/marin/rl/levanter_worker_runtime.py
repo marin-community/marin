@@ -320,12 +320,14 @@ class NativePolicyRuntime:
 
     def checkpoint(self, method: str, payload: dict) -> dict:
         path = payload["ckpt_dir"]
+        run_id = self.settings["run_id"]
         if method == "save_checkpoint":
+            policy_id = f"{run_id}:{self.version}"
             save_checkpoint(
                 self.state,
                 int(self.state.step),
                 path,
-                metadata={"policy_version": self.version, "source": self.source_identity},
+                metadata={"policy_version": self.version, "policy_id": policy_id, "source": self.source_identity},
             )
         else:
             metadata = load_checkpoint_metadata(path)
@@ -340,7 +342,12 @@ class NativePolicyRuntime:
             self.version = metadata["policy_version"]
             if _router_bias_fingerprint(self.state.model) != self.frozen_router_bias:
                 raise ValueError("Policy checkpoint changed the initializer's frozen QB router biases")
-        receipt = {"step": int(self.state.step), "version": self.version, "checkpoint": path}
+        receipt = {
+            "step": int(self.state.step),
+            "version": self.version,
+            "policy_id": f"{run_id}:{self.version}",
+            "checkpoint": path,
+        }
         if payload.get("include_fingerprints", False):
             receipt["state_fingerprints"] = self.state_fingerprints()
         return receipt
