@@ -718,7 +718,7 @@ def _preflight(request_path: Path, *, host_environment: Mapping[str, str]) -> No
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 
-async def _image_specs(config: JobConfig, overlay: RuntimeOverlay | None) -> list[dict[str, Any]]:
+async def _image_specs(config: JobConfig, overlay: RuntimeOverlay | None) -> list[dict[str, str]]:
     """Resolve a job's effective Daytona image requests without allocating sandboxes.
 
     The config passes through the same launcher-contract validation and runtime
@@ -728,7 +728,7 @@ async def _image_specs(config: JobConfig, overlay: RuntimeOverlay | None) -> lis
     if config.environment.type is not EnvironmentType.DAYTONA:
         raise ValueError("Image specs require the daytona environment")
     config = effective_job_config(config, overlay)
-    requests: dict[str, dict[str, Any]] = {}
+    requests: dict[str, dict[str, str]] = {}
     with tempfile.TemporaryDirectory(prefix="marin-harbor-image-specs-") as jobs_dir:
         trial_paths = TrialPaths(Path(jobs_dir) / "trial")
         for task_config in await Job.resolve_task_configs(config):
