@@ -2139,8 +2139,14 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   reproduced the function names and arguments of all 10 saved vLLM calls
   through the native parser and reproduced their original scores. The
   declared sampling settings matched across engine-specific samplers.
-  Compare the generated tokens and effective stop behavior
-  before attributing the score gap to the response wrapper.
+
+  All 11 tasks enforce a single-call contract. The first complete call
+  in each saved native reply occurred at a median of 88 tokens. Grading
+  those exact prefixes passed five tasks, which would raise the original
+  100-task panel score from 0.12 to 0.17 in this offline replay. The first
+  closing delimiter matched the valid prefix in all 11 replies. Qualify
+  a structure-aware stop under the single-call contract on H100, where
+  correctness and time saved depend on stopping during decode.
 
   Kueue evicted the trainer at 12:03 UTC to admit another workload in
   the same queue. The other four tasks ended with it. The original trainer
