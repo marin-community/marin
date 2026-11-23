@@ -337,6 +337,11 @@ def micro210_artifact_step(
             inference_engine_expert_parallel_size=roles.inference_engine_expert_parallel_size,
             n_samples_per_prompt=roles.n_samples_per_prompt,
         )
+    if "entrypoint" in config:
+        if config["entrypoint"] != roles.entrypoint:
+            raise ValueError("Frozen Micro210 entrypoint disagrees with its generation plan")
+        del config["entrypoint"]
+    _materialize_role_plan_config(config, roles)
     step = skyrl_step(
         SkyRLSpec(
             name=name,

@@ -275,6 +275,35 @@ def test_canonical_evaluation_graph_lowers_with_its_final_run_binding(profile):
     assert "fixture/final-eval@2026.11.18.72" in plan.fingerprint_payload
 
 
+def test_frozen_colocated_policy_runs_as_generation_without_changing_protocol(tmp_path, monkeypatch, policy_reference):
+    policy = json.loads(StoragePath(policy_reference.uri).read_text())
+    policy["evaluation"]["config"]["trainer"]["placement"] = {"colocate_all": True}
+    policy["evaluation"]["config"]["entrypoint"] = "generate"
+    payload = json.dumps(policy).encode()
+    path = tmp_path / "policy.json"
+    path.write_bytes(payload)
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210_policy.POLICY_REFERENCE",
+        replace(policy_reference, uri=str(path), sha256=hashlib.sha256(payload).hexdigest(), byte_size=len(payload)),
+    )
+    model = Micro210Model("s3://fixture/export", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
+    step = micro210_step(model, name="fixture/generation", version="2026.11.22")
+    context = StepContext.for_run(
+        str(tmp_path / "output"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps
+    )
+    run_config = step.build_config(replace(context, is_fingerprint=True))
+    launch = yaml.safe_load(run_config.skyrl.launch_config_yaml)
+    assert launch["skyrl"]["entrypoint"] == "generate"
+    assert launch["skyrl"]["trainer"]["placement"]["colocate_all"] is False
+    assert launch["iris"]["allocation"]["num_nodes"] == 1
+    assert launch["iris"]["allocation"]["gpus_per_node"] == 1
+    assert (
+        launch["skyrl"]["generator"]["eval_sampling_params"]
+        == policy["evaluation"]["config"]["generator"]["eval_sampling_params"]
+    )
+    assert path.read_bytes() == payload
+
+
 @pytest.mark.parametrize("change", ["digest", "byte_size"])
 def test_policy_reference_verifies_hash_and_size(policy_reference, change):
     bad = replace(policy_reference, **({"sha256": "0" * 64} if change == "digest" else {"byte_size": 1}))
