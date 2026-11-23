@@ -23,6 +23,12 @@ class ErrorCategory(StrEnum):
     UNKNOWN = "unknown"  # Requires the consumer's configured fallback.
 
 
+# Maps are keyed by exception class name, not by class. Keying by class would
+# make Rigging import the heavy framework and SDK packages that raise these
+# errors, and would fix Harbor's exception types at the lowest layer of the
+# dependency stack. Persisted task records also carry only the name.
+# TODO: after the task-error cleanup, move the Harbor-specific names below into
+# the framework that owns them, leaving only names that several producers share.
 API_CONNECTION_ERROR = "APIConnectionError"
 API_TIMEOUT_ERROR = "APITimeoutError"
 AGENT_SETUP_TIMEOUT_ERROR = "AgentSetupTimeoutError"
