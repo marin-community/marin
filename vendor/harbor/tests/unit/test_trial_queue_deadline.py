@@ -13,7 +13,8 @@ from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from harbor.archive import open_archive
 from harbor.environments.base import SandboxDiskFullError
-from harbor.models.job.config import RetryConfig
+from rigging.task_errors import RetrySettings
+from harbor_config.errors import ERROR_CATEGORIES
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import (
@@ -37,7 +38,7 @@ from harbor.utils.artifact_writer import (
     ArtifactUploadTimeoutError,
     ArtifactWriter,
 )
-from harbor_config import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
 from harbor_config.errors import is_resume_retryable
 from harbor_config.models.job.config import ArchiveConfig
 from shellbox.backends.daytona.machine import DaytonaOutputUnavailable
@@ -244,7 +245,7 @@ async def test_agent_damage_to_its_sandbox_is_a_model_failure(
         )
 
     assert raised.value.__cause__ is original
-    assert error_category(type(raised.value).__name__) is ErrorCategory.AGENT
+    assert error_category(type(raised.value).__name__, categories=ERROR_CATEGORIES) is ErrorCategory.AGENT
     assert trial.result.agent_execution.finished_at is not None
 
 
@@ -459,7 +460,7 @@ async def test_finalization_waits_for_queued_trajectory_or_stays_incomplete(
             assert native.verifier_result is None
             error = native.exception_info.exception_type
             assert error == "ArtifactWriteTimeoutError"
-            assert error_category(error) is ErrorCategory.INFRASTRUCTURE
+            assert error_category(error, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
             assert is_resume_retryable(error)
         else:
             assert native.completion is not None
@@ -567,7 +568,7 @@ async def test_cancelled_agent_final_upload_failure_leaves_native_result_incompl
         )
     else:
         assert error == "ArtifactPersistenceError"
-        assert error_category(error) is ErrorCategory.INFRASTRUCTURE
+        assert error_category(error, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
     assert not trajectory_path.exists()
 
 
@@ -722,7 +723,7 @@ async def test_unconfirmed_teardown_retries_outside_include_list(
     )
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=3,
             include_exceptions={"APIConnectionError"},
             min_wait_sec=0,
@@ -761,7 +762,7 @@ async def test_daytona_output_unavailable_retries_by_name(
     )
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=1,
             include_exceptions={"DaytonaOutputUnavailable"},
             min_wait_sec=0,
@@ -775,7 +776,7 @@ async def test_daytona_output_unavailable_retries_by_name(
     )
     assert first.completion is not None
     assert first.exception_info.exception_type == "DaytonaOutputUnavailable"
-    assert error_category(first.exception_info.exception_type) is ErrorCategory.INFRASTRUCTURE
+    assert error_category(first.exception_info.exception_type, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
     assert result.trial_relpath == "daytona-command/attempts/001"
     assert result.verifier_result.rewards == {"reward": 1.0}
 
@@ -839,7 +840,7 @@ async def test_cancelling_queued_trial_does_not_start_or_retry_it(
     monkeypatch.setattr(Trial, "create", classmethod(create))
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(max_retries=2, min_wait_sec=0, max_wait_sec=0),
+        retry_config=RetrySettings(max_retries=2, min_wait_sec=0, max_wait_sec=0),
     )
 
     async with asyncio.timeout(1):
@@ -896,7 +897,7 @@ async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
         monkeypatch,
         {("hung", 0): FakeTrial(config, 0, hang), ("hung", 1): FakeTrial(config, 1, reverify)},
     )
-    retry = RetryConfig(
+    retry = RetrySettings(
         max_retries=1 if grading in {"verified", "empty"} else 0,
         include_exceptions={"APIConnectionError"},
         exclude_exceptions=None,
@@ -1057,7 +1058,7 @@ async def test_result_persistence_failure_is_primary_and_retryable(
     monkeypatch.setattr("harbor.trial.attempt.get_artifact_writer", FailingWriter)
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=1,
             include_exceptions={"ArtifactUploadTimeoutError"},
             min_wait_sec=0,
@@ -1144,7 +1145,7 @@ async def test_cancellation_resistant_attempt_quarantines_capacity_until_termina
     )
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=1,
             min_wait_sec=0,
             max_wait_sec=0,
@@ -1215,7 +1216,7 @@ async def test_late_attempt_cannot_overwrite_retry_selection_or_terminal_hook(
     )
     queue = TrialQueue(
         n_concurrent=2,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=1,
             min_wait_sec=0,
             max_wait_sec=0,
