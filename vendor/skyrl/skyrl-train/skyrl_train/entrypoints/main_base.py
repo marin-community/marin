@@ -656,6 +656,20 @@ class BasePPOExp:
             and inference_engines_required(self.cfg)
         )
 
+    def _create_trainer(self, tracker):
+        inference_engine_client = self.create_inference_engine_client()
+        trajectory_runner = self.get_trajectory_runner(self.cfg, self.tokenizer, inference_engine_client)
+        return self.get_trainer(
+            cfg=self.cfg,
+            tracker=tracker,
+            tokenizer=self.tokenizer,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            inference_engine_client=inference_engine_client,
+            trajectory_runner=trajectory_runner,
+            colocate_pg=self.colocate_pg,
+        )
+
     def _setup_trainer(self, tracker):
         """Construct the trainer and models with the experiment's active tracker."""
         logger.info(self.get_cfg_as_str(self.cfg))
@@ -669,32 +683,24 @@ class BasePPOExp:
         from skyrl_train.trainer import RayPPOTrainer  # noqa: PLC0415
 
         prepared_distillation = prepare_distillation_runtime(self.cfg, tokenizer)
-        startup = None
         trainer = None
         try:
             if self._can_overlap_learner_startup():
                 logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
-                startup = RayPPOTrainer.start_learner_models(
-                    self.cfg, PolicyWorker, RefWorker, policy_pg=self.policy_pg, prompt_count=len(self.train_dataset)
-                )
-
-            inference_engine_client = self.create_inference_engine_client()
-            trajectory_runner = self.get_trajectory_runner(self.cfg, tokenizer, inference_engine_client)
-            trainer = self.get_trainer(
-                cfg=self.cfg,
-                tracker=tracker,
-                tokenizer=tokenizer,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
-                inference_engine_client=inference_engine_client,
-                trajectory_runner=trajectory_runner,
-                colocate_pg=self.colocate_pg,
-            )
-            if startup is None:
+                with RayPPOTrainer.load_learner_models(
+                    self.cfg,
+                    PolicyWorker,
+                    RefWorker,
+                    policy_pg=self.policy_pg,
+                    prompt_count=len(self.train_dataset),
+                    pad_token_id=tokenizer.pad_token_id,
+                ) as (policy_model, ref_model):
+                    trainer = self._create_trainer(tracker)
+                trainer.policy_model, trainer.ref_model = policy_model, ref_model
+            else:
+                trainer = self._create_trainer(tracker)
                 logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
                 trainer.build_models(PolicyWorker, RefWorker, policy_pg=self.policy_pg)
-            else:
-                trainer.finish_learner_startup(startup)
             logger.info(
                 "Policy workers ready: strategy={} count={}",
                 self.cfg.trainer.strategy,
@@ -706,8 +712,6 @@ class BasePPOExp:
         except BaseException:
             if trainer is not None:
                 asyncio.run(trainer.shutdown())
-            elif startup is not None:
-                startup.stop()
             raise
         return trainer
 
