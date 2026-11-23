@@ -2135,6 +2135,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   panels and per-update checkpoints. The live operator still needs a fresh
   claim and a pin to that exact plan.
 
+  A second offline render pins the combined serving source and enables
+  blocked attention in the native recipe. It preserves the frozen inputs,
+  two 32-group updates with four choices per prompt, both 100-task panels,
+  and the exact 40-H100 scheduling request. The extracted Iris workspace
+  validated the worker config and round-tripped the v2 binary initializer.
+  The page and replay budget fits five choices at the held run's maximum
+  request length. Eight fit with prompts up to 11,776 tokens and 512-token
+  replies. Evaluation keeps its four-choice limit. These bounds describe
+  admission capacity. H100 throughput and reward require the live run.
+
   Regional telemetry recorded 32 group calls and 128 model waits in the
   first lease. Five group calls finished just after the 1,800-second model
   deadline and reported four projected tokens each. The buffer separately
