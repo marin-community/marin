@@ -2982,7 +2982,7 @@ def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes
 
 
 def relabelled_inference() -> bytes:
-    """``N4_JOURNAL`` with its first inference resolution (row 11) relabelled REEXECUTE, as the review planted it."""
+    """``N4_JOURNAL`` with its first inference resolution (row 11) relabelled REEXECUTE."""
     rows = [json.loads(line) for line in gzip.decompress(N4_JOURNAL.read_bytes()).splitlines()]
     (fingerprint,) = rows[10]["event"]["payload"]["fingerprints"]
     assert fingerprint["resource"] == "inference" and fingerprint["replay"] == ReplayPolicy.CACHE
