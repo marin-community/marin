@@ -21,7 +21,7 @@ The runtime is the released `47a8e415` wheel with the digest-pinned ShortConv
 and cache-spec Python overlay from `c83c9865`. PR140 remains open; this is a
 private experiment runtime and does not promote a reviewed production release.
 The original EAGLE calibration hash and full-precision bounds remain frozen.
-Plain checks also qualify the runtime change before candidate scoring.
+Plain checks will qualify the runtime change before candidate scoring.
 
 The EAGLE streaming and metrics harness now supports prefetched exact-token
 windows. Every scrape must contain all 16 ranks at the requested occupancy;
@@ -30,7 +30,7 @@ The focused suite passes 27 tests. The wider landing run reported 2,030 passes,
 74 failures and 18 skips. The untracked copy of this note triggered provenance
 guards in several launcher tests; this note is now included in the source.
 Remaining wider-suite failures are being isolated before landing.
-No serving or training job has been submitted at this checkpoint.
+No DSpark serving or training job has been submitted at this checkpoint.
 
 ## Decision and evidence
 
