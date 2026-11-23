@@ -191,7 +191,8 @@ class MegatronModelWrapper:
         return statistics.reshape(*hidden_states.shape[:-1], 2).transpose(0, 1).contiguous()
 
     def _unpack_statistics(self, statistics, attention_mask, packed_seq_params):
-        logprobs, entropy = statistics.unbind(-1)
+        # Splitting interleaved channels yields stride-2 views; CP collectives require contiguous tensors.
+        logprobs, entropy = (channel.contiguous() for channel in statistics.unbind(-1))
         if packed_seq_params is not None:
             logprobs = unpack_packed_token_values(logprobs, packed_seq_params, attention_mask)
             entropy = unpack_packed_token_values(entropy, packed_seq_params, attention_mask)
