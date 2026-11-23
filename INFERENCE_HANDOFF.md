@@ -264,10 +264,13 @@ cases, then exceeded the unchanged five-second exit limit in a Python finalizer
 case. A separate observer-disabled run also exceeded that limit. The observer
 is therefore unnecessary for the newly measured timeout; these runs do not
 establish the cause of the earlier GPU learner hang. The debugger also exceeded
-its 128 KiB retained-output cap. This branch raises that cap to 1 MiB; a
-CPU-only diagnostic is measuring actual retention beyond the old limit.
-It does not change the exit deadline or turn a timeout into a passing result.
-No actual GPU learner shutdown stack has been captured.
+its 128 KiB retained-output cap. This branch raises that cap to 1 MiB. The
+CPU-only follow-up hit the guardian deadline before shutdown acknowledgment
+and retained no stack, so actual retention beyond the old limit remains
+unqualified. The original five-second exit check also failed. Outputs were
+backed up before cancellation, and the pod was removed. Neither deadline was
+relaxed. No actual GPU learner shutdown stack has been captured.
+[Trace-cap diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fproduction-shutdown-cap-python35-239f1d-20261123-1)
 
 A one-H100 smoke at source `f5e53f48b8` exercised the genuine Ray
 `HostWorker` and public checkpoint roundtrip with the observer disabled. Its
