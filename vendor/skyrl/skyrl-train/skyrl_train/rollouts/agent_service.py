@@ -41,7 +41,9 @@ async def serve_agent_app(
                 port=port,
                 log_level="warning",
                 access_log=False,
-                timeout_graceful_shutdown=shutdown_timeout,
+                # The trial has ended. Stop its pending model callbacks before
+                # the outer service-cleanup deadline, preserving its verifier result.
+                timeout_graceful_shutdown=0,
             )
         )
         serving = asyncio.create_task(server.serve(sockets=[listener]))
