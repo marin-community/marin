@@ -523,9 +523,7 @@ async def test_a_profile_formatter_shapes_a_replayed_tool_call_once(proposal: Ta
 
 @pytest.fixture
 def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Namespace:
-    monkeypatch.setenv("GLM_BASE_URL", "http://fake/v1")
     monkeypatch.setenv("GLM_API_KEY", "fake")
-    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
     source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
     source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
     overlay.write_text(json.dumps({"proposals.environments": ["container"], **SETTINGS}))
@@ -539,6 +537,8 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         buckets=4096,
         bucket_range=None,
         ranks=(),
+        glm_base_url="http://fake/v1",
+        glm_relay_job=None,
     )
 
 
@@ -555,6 +555,7 @@ async def test_bucket_split_preserves_manifest_order_and_ownership(
 
     def launch(command: list[str], **_: object) -> SimpleNamespace:
         launched.append(command[command.index("--proposals") + 1])
+        assert command[command.index("--glm-base-url") + 1] == "http://fake/v1" and "--glm-relay-job" not in command
         return SimpleNamespace(wait=lambda: 0)
 
     monkeypatch.setattr(driver.subprocess, "Popen", launch)
@@ -574,7 +575,7 @@ async def test_driver_persists_programming_failure_then_reraises(
 ) -> None:
     @asynccontextmanager
     async def broken_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), resources(Envs(), ())
 
@@ -613,7 +614,7 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), next(attempts)
 
@@ -719,7 +720,7 @@ async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trial
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), next(attempts)
 
@@ -756,7 +757,7 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), resources(envs, script())
 
@@ -818,7 +819,7 @@ async def test_drivers_sharing_a_work_directory_publish_only_their_own_history(
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), next(attempts)
 
@@ -860,7 +861,7 @@ async def test_resume_decodes_published_history_before_claiming_and_leaves_it_un
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), held
 
@@ -944,7 +945,7 @@ async def test_a_collision_at_a_checkpoint_digest_exits_corrupt_and_publishes_no
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), built
 
@@ -1200,7 +1201,7 @@ def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources, workspace: Work
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         config = build_config(policy, {})
         yield (config if workspace is None else replace(config, workspace=workspace)), next(remaining)
@@ -1566,7 +1567,7 @@ async def test_a_writer_blocked_with_nothing_pending_stops_within_a_tick_of_a_ta
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), first
 
@@ -1601,7 +1602,7 @@ async def test_a_cleanup_error_after_a_takeover_stays_a_failure_and_appends_noth
 
     @asynccontextmanager
     async def failing_cleanup(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         try:
             yield build_config(policy, {}), first
@@ -1756,7 +1757,7 @@ async def test_parent_summary_separates_superseded_and_corrupt_children_from_goo
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), next(built)
 
@@ -1860,7 +1861,7 @@ async def test_root_recorded_with_previous_author_prompt_resumes_through_a_promp
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), built[-1]
 
@@ -2343,7 +2344,7 @@ async def test_a_cleanup_failure_after_acceptance_appends_to_the_returned_workpi
 ) -> None:
     @asynccontextmanager
     async def failing_exit(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), restoring_bundle(FirstRoundSolves())
         raise OSError(errno.EIO, "runtime cleanup failed")
@@ -2419,7 +2420,7 @@ async def test_a_refused_restore_publishes_the_last_workpiece_it_reached(
 
     @asynccontextmanager
     async def foreign(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield replace(build_config(policy, {}), review=restore_elsewhere), resources(Envs(), script())
 
@@ -3140,7 +3141,7 @@ async def test_broken_guest_helper_holds_with_its_cause_without_a_bug(
 ) -> None:
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), resources(HelperlessEnvs(), script())
 
@@ -3206,7 +3207,7 @@ async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), resources(envs, counted)
 
@@ -3246,7 +3247,7 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), resources(envs, responses)
 
@@ -3455,7 +3456,7 @@ def batch(
     remaining = {str(path): list(codes[name]) for name, path in paths.items()}
     launches: list[str] = []
 
-    async def child(args: Namespace) -> int:
+    async def child(args: Namespace, _controller_url: str | None) -> int:
         assert not args.resume_held, "only the operator reopens a hold"
         launches.append(Path(args.proposals).stem.removesuffix(".proposal") + "*" * getattr(args, "probe", False))
         return (remaining[args.proposals] or [0]).pop(0)

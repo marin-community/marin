@@ -17,7 +17,6 @@ BUCKETS = 4096
 """Passed to every driver as ``--buckets``; fixed across relaunches so that each proposal keeps its bucket."""
 SECRETS = ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_API_KEY", "PARALLEL_API_KEY")
 """Read by the driver with rigging.secrets.get_secret; PARALLEL_API_KEY is optional."""
-ENDPOINTS = ("GLM_RELAY_JOB", "GLM_BASE_URL")
 THREAD_PINS = ("OMP_NUM_THREADS", "RAYON_NUM_THREADS", "CARGO_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL")
 """Pinned to ``--cpu``: CPU is request-only, so a tool sizing itself from ``nproc`` sees the node's cores."""
 
@@ -34,6 +33,9 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-cluster", default="cw-rno2a")
     parser.add_argument("--ranks")
     parser.add_argument("--resume-held", action="store_true", help="Resume published held workpieces")
+    endpoint = parser.add_mutually_exclusive_group(required=True)
+    endpoint.add_argument("--glm-relay-job", help="The Iris relay job that resolves the GLM gateway")
+    endpoint.add_argument("--glm-base-url", help="A direct GLM gateway endpoint")
     return parser
 
 
@@ -42,14 +44,10 @@ def commands(args: argparse.Namespace, environ: Mapping[str, str]) -> list[list[
     start, end = args.driver_range or (0, args.drivers)
     if min(args.concurrency, args.cpu) < 1 or not 0 <= start < end <= args.drivers <= BUCKETS:
         raise ValueError(f"Positive concurrency/CPU and nonempty driver range within 1..{BUCKETS} drivers required")
-    endpoint = tuple(key for key in ENDPOINTS if environ.get(key))
-    if len(endpoint) != 1:
-        raise ValueError("Set exactly one of GLM_RELAY_JOB and GLM_BASE_URL")
     if missing := [key for key in SECRETS[:3] if not environ.get(key)]:
         raise ValueError(f"Export {', '.join(missing)}")
     # By reference only: Iris delivers them as secret files and records this argv in MARIN_PROVENANCE.
     credentials = [item for key in SECRETS if environ.get(key) for item in ("--secret", key, f"env:{key}")]
-    credentials += ["-e", endpoint[0], environ[endpoint[0]]]
     options = {
         "target-cluster": args.target_cluster,
         "cpu": str(args.cpu),
@@ -58,7 +56,8 @@ def commands(args: argparse.Namespace, environ: Mapping[str, str]) -> list[list[
         "max-retries": "3",
         "sync-package": "marin-taskforge",
     }
-    driver = {name: str(getattr(args, name)) for name in ("proposals", "output", "policy", "concurrency")}
+    names = ("proposals", "output", "policy", "concurrency", "glm_relay_job", "glm_base_url")
+    driver = {name.replace("_", "-"): str(getattr(args, name)) for name in names if getattr(args, name) is not None}
     driver["buckets"] = str(BUCKETS)
     if args.ranks:
         driver["ranks"] = args.ranks

@@ -156,13 +156,12 @@ def main(scenario: str, argv: list[str]) -> None:
     for token in tokens:
         if token.removeprefix("exit").isdigit():
             sys.exit(int(token.removeprefix("exit")))
-    os.environ.update(GLM_BASE_URL="http://fake/v1", GLM_API_KEY="fake")
-    os.environ.pop("GLM_RELAY_JOB", None)
+    os.environ.update(GLM_API_KEY="fake")
     built = bundle(tokens)
 
     @asynccontextmanager
     async def runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), built
 

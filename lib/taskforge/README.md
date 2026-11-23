@@ -52,12 +52,14 @@ Export these in the same shell as the launch (never commit or print them):
 |---|---|
 | `CW_KEY_ID`, `CW_KEY_SECRET` | your personal CoreWeave object-storage key: reading proposals, publishing outputs |
 | `GLM_API_KEY` | the interactive-tier model token: author, solver and adversary model calls through the relay |
-| `GLM_RELAY_JOB` | the Iris relay job that tunnels to the model routers: endpoint resolution; one relay serves both `glm-5.3` and `deepseek-v4.1-flash` |
 | `PARALLEL_API_KEY` | the author's web tools (optional) |
 
-`GLM_BASE_URL` may replace `GLM_RELAY_JOB` for a direct endpoint; set exactly one. The launcher
-passes the four keys as `--secret NAME env:NAME`, so their values stay off the `iris job run`
-command line; the driver reads them from Iris secret files.
+The launcher passes the four keys as `--secret NAME env:NAME`, so their values stay off the
+`iris job run` command line; the driver reads them from Iris secret files. The model gateway is a
+driver flag, not a variable: `--glm-relay-job` names the Iris relay job that tunnels to the model
+routers (one relay serves both `glm-5.3` and `deepseek-v4.1-flash`), and `--glm-base-url` names a
+direct endpoint instead; pass exactly one. Inside an Iris job the driver reaches the controller
+that Iris names in `IRIS_CONTROLLER_URL`.
 
 ### Inputs
 

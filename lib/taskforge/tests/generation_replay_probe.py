@@ -115,8 +115,7 @@ class DecisionEnvs(Envs):
 
 
 async def main(mode: str, directory: Path) -> None:
-    os.environ.update(GLM_BASE_URL="http://fake/v1", GLM_API_KEY="fake")
-    os.environ.pop("GLM_RELAY_JOB", None)
+    os.environ.update(GLM_API_KEY="fake")
     source, overlay = directory / "test.proposal.json", directory / "policy.json"
     if mode in ("record", "sibling-record"):
         source.write_bytes(TASK_PROPOSAL.dump_json(sample_proposal()))
@@ -131,6 +130,8 @@ async def main(mode: str, directory: Path) -> None:
         buckets=4096,
         bucket_range=None,
         ranks=(),
+        glm_base_url="http://fake/v1",
+        glm_relay_job=None,
     )
     recording = mode in ("record", "sibling-record")
     time = VirtualTime()
