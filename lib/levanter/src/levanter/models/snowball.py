@@ -61,7 +61,7 @@ from levanter.grug.sharding import (
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
-from levanter.layers.kv_cache import KvPageCache, ListCache
+from levanter.layers.kv_cache import KvPageCache, StackedKvPageCache
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
@@ -1112,28 +1112,27 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         new_tf = eqx.tree_at(lambda t: (t.token_embed, t.output_proj, t.config), self.transformer, (te, op, new_cfg))
         return SnowballLMHeadModel(new_tf, new_cfg)
 
-    def initial_cache(self, spec: PageTableSpec, *, dtype: jnp.dtype) -> ListCache[KvPageCache]:
+    def initial_cache(self, spec: PageTableSpec, *, dtype: jnp.dtype) -> StackedKvPageCache:
         """Allocate paged KV state on a serving mesh with context parallelism disabled."""
         if _context_axis() is not None:
             raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
         kv_heads, head_size = Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim)
-        caches = []
-        for _ in self.transformer.blocks:
-            cache = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype)
-            # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
-            pages = reshard(cache.kv_pages.array, P(None, None, "model", None))
-            caches.append(KvPageCache(hax.named(pages, cache.kv_pages.axes)))
-        return ListCache(tuple(caches))
+        layer = Axis("layer", len(self.transformer.blocks))
+        pages = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype).kv_pages
+        stacked = pages.broadcast_axis(layer).rearrange((layer, ...))
+        # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
+        stacked = hax.named(reshard(stacked.array, P(None, None, None, "model", None)), stacked.axes)
+        return StackedKvPageCache(stacked)
 
     @named_call
     def decode(
         self,
         input_ids: NamedArray,
-        kv_cache: ListCache[KvPageCache],
+        kv_cache: StackedKvPageCache,
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
-    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+    ) -> tuple[NamedArray, StackedKvPageCache]:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
         Tokens occupy a flat position axis, with a valid prefix described by batch_info.
@@ -1149,11 +1148,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def decode_for_sampling(
         self,
         input_ids: NamedArray,
-        kv_cache: ListCache[KvPageCache],
+        kv_cache: StackedKvPageCache,
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         sample_indices: NamedArray,
-    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+    ) -> tuple[NamedArray, StackedKvPageCache]:
         """Return logits in sample_indices order and update KV state for valid tokens."""
         hidden, caches = self._decode_hidden(input_ids, kv_cache, batch_info, pos_ids)
         sampled = hidden[:, 0].at[sample_indices.array].get(out_sharding=P())
@@ -1163,32 +1162,37 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def _decode_hidden(
         self,
         input_ids: NamedArray,
-        kv_cache: ListCache[KvPageCache],
+        kv_cache: StackedKvPageCache,
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
-    ) -> tuple[jax.Array, ListCache[KvPageCache]]:
+    ) -> tuple[jax.Array, StackedKvPageCache]:
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Snowball decode requires matching flat token and position arrays")
-        if len(kv_cache) != len(self.transformer.blocks):
+        num_layers = len(self.transformer.blocks)
+        if kv_cache.kv_pages.axis_size("layer") != num_layers:
             raise ValueError("Snowball decode requires one KV cache per transformer layer")
         tokens = reshard(input_ids.array[:, None], P(_BATCH_AXES, None))
         hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())
         hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
         token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
         stacked = self._stacked_inference_blocks()
-        cache_pages = jnp.stack([cache.kv_pages.array for cache in kv_cache])
-        cache_axes = kv_cache[0].kv_pages.axes
-        long_schedule = long_attention_layer_mask(len(kv_cache))
+        cache_axes = kv_cache.kv_pages.axes[1:]
+        long_schedule = long_attention_layer_mask(num_layers)
 
-        def layer_step(x, layer_data):
-            block, pages, use_long = layer_data
-            cache = KvPageCache(hax.named(pages, cache_axes))
+        def layer_step(carry, layer_data):
+            x, pages = carry
+            layer, block, use_long = layer_data
+            layer_pages = jax.lax.dynamic_index_in_dim(pages, layer, keepdims=False)
+            cache = KvPageCache(hax.named(layer_pages, cache_axes))
             x, cache = block.decode(x, cache, batch_info, pos_ids.array, use_long, token_valid)
-            return x, cache.kv_pages.array
+            pages = jax.lax.dynamic_update_index_in_dim(pages, cache.kv_pages.array, layer, axis=0)
+            return (x, pages), None
 
-        hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
+        (hidden, cache_pages), _ = jax.lax.scan(
+            layer_step, (hidden, kv_cache.kv_pages.array), (jnp.arange(num_layers), stacked, long_schedule)
+        )
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
-        caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
+        caches = StackedKvPageCache(hax.named(cache_pages, kv_cache.kv_pages.axes))
         return hidden, caches
 
     def _stacked_inference_blocks(self) -> SnowballBlock:
