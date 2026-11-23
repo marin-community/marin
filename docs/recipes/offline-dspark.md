@@ -121,6 +121,10 @@ conversations. Add `--steps 4000` to train for one packed epoch, capped at
 different completed regional mix. Size scratch for the cached tensors at
 48 KiB per input token, plus the trainer's staged weights and checkpoint.
 
+Use `--draft-size one-layer` to train a smaller Mochi draft with one Qwen3
+layer and a 4,096-wide FFN. It uses the same teacher, data, vocabulary, and
+training budget as the two-layer preset and publishes a separate artifact.
+
 Serving Mochi drafts requires ShortConv state to survive rejected proposals.
 The promoted wheel needs the upstream fix for that verification path.
 [ShortConv verifier fix](https://github.com/marin-community/vllm/pull/140)

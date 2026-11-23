@@ -97,17 +97,20 @@ class OfflineDSpark:
     max_anchors: int = 12288
     seed: int = DEFAULT_DRAFT_SEED
     mochi_sample: mochi.Sample = mochi.Sample.ALL
+    mochi_draft_size: mochi.DraftSize = mochi.DraftSize.TWO_LAYERS
 
     def training_recipe(self) -> DraftRecipe:
         shape, taps = _TARGETS[self.teacher.family]
-        mochi = self.teacher.family is TeacherFamily.MOCHI
+        layers, intermediate_size = (
+            self.mochi_draft_size.architecture if self.teacher.family is TeacherFamily.MOCHI else (3, None)
+        )
         return DraftRecipe(
             data=DraftDataConfig(
                 shape=shape,
                 mask_token_id=128004,
                 max_sequence_length=self.max_sequence_length,
-                draft_layers=2 if mochi else 3,
-                draft_intermediate_size=shape.hidden_size if mochi else None,
+                draft_layers=layers,
+                draft_intermediate_size=intermediate_size,
             ),
             feature_taps=taps,
             max_anchors=self.max_anchors,
@@ -199,10 +202,16 @@ def artifacts(
 
 
 def _resolve_recipe(
-    config: str | None, preset: str | None, data: str | None, prefix: str, *, steps: int | None = None
+    config: str | None,
+    preset: str | None,
+    data: str | None,
+    prefix: str,
+    *,
+    steps: int | None = None,
+    draft_size: mochi.DraftSize | None = None,
 ) -> tuple[OfflineDSpark, ArtifactStep]:
     if config is not None:
-        if preset is not None or data is not None or steps is not None:
+        if preset is not None or data is not None or steps is not None or draft_size is not None:
             raise click.UsageError("Use --config or --preset")
         recipe = draccus.decode(OfflineDSpark, json.loads(StoragePath(config).read_text()))
         return recipe, _adopt_input(recipe.data)
@@ -217,6 +226,7 @@ def _resolve_recipe(
             max_sequence_length=8192,
             max_anchors=1024,
             mochi_sample=mochi.Sample.SMOKE if data is None and steps is None else mochi.Sample.ALL,
+            mochi_draft_size=mochi.DraftSize.TWO_LAYERS if draft_size is None else draft_size,
         )
         return recipe, mix
     raise click.UsageError(f"Specify --config or --preset {_MOCHI_AGENTIC_PRESET}")
@@ -260,15 +270,28 @@ def _validate_training_locations(recipe: OfflineDSpark, prefix: str) -> None:
 @click.option("--preset", type=click.Choice((_MOCHI_AGENTIC_PRESET,)))
 @click.option("--data", help="Replace the named preset's smoke mix with a completed train/validation chat mix.")
 @click.option("--steps", type=click.IntRange(min=1), help="Optimizer step cap for the named preset.")
+@click.option(
+    "--draft-size",
+    type=click.Choice([size.value for size in mochi.DraftSize]),
+    help="Mochi draft architecture for the named preset.",
+)
 @click.option("--stage", type=click.Choice(("plan", "preflight", "prepare", "train")), default="plan")
-def main(config: str | None, preset: str | None, data: str | None, steps: int | None, stage: str) -> None:
+def main(
+    config: str | None,
+    preset: str | None,
+    data: str | None,
+    steps: int | None,
+    draft_size: str | None,
+    stage: str,
+) -> None:
     """Plan and preflight offline DSpark or execute it in one Iris GPU job."""
 
     if stage == "train" and "IRIS_TASK_ID" not in os.environ:
         raise click.UsageError("Submit the train stage through Iris")
     configure_coreweave_s3()
     prefix = marin_prefix()
-    recipe, mix = _resolve_recipe(config, preset, data, prefix, steps=steps)
+    size = mochi.DraftSize(draft_size) if draft_size is not None else None
+    recipe, mix = _resolve_recipe(config, preset, data, prefix, steps=steps, draft_size=size)
     if stage == "train":
         _validate_training_locations(recipe, prefix)
     teacher = _teacher_artifact(recipe.teacher)

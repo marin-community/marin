@@ -74,6 +74,17 @@ class Sample(StrEnum):
     ALL = "all"
 
 
+class DraftSize(StrEnum):
+    TWO_LAYERS = "two-layer"
+    ONE_LAYER = "one-layer"
+
+    @property
+    def architecture(self) -> tuple[int, int]:
+        if self is DraftSize.ONE_LAYER:
+            return 1, 4096
+        return 2, 6144
+
+
 @dataclass(frozen=True)
 class CachedDraft:
     """Run-time state for one distributed prefill and single-host trainer."""
