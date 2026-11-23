@@ -14,6 +14,7 @@ from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
 from experiments.datakit.decontam.encoder.pairs import _located
 from experiments.datakit.decontam.encoder.planted import holds_key, negative_forms, positive_forms
 from experiments.datakit.decontam.encoder.synthetic import context_pairs, generic_pairs
+from experiments.datakit.decontam.encoder.tables import ItemText
 from experiments.datakit.decontam.encoder.text_keys import (
     WINDOW,
     hit_indices,
@@ -230,7 +231,10 @@ def test_context_variants_skip_candidates_that_already_hold_the_item():
             {**items[1], "item": "i1", "right": "unrelated words " * 60, "question_in_record": False},
         ]
     )
-    rows = pd.DataFrame(list(context_pairs(candidates, {}, random.Random(0))))
+    texts = {
+        f"i{n}": ItemText(item["question"], list(item["choices"]), item["answer"], "") for n, item in enumerate(items)
+    }
+    rows = pd.DataFrame(list(context_pairs(candidates, texts, random.Random(0))))
     variants = rows[rows["kind"].str.startswith("ctx_variant")]
     assert set(variants["item"]) == {"i1"}
     assert set(rows.loc[rows["kind"] == "ctx_copy", "item"]) == {"i0", "i1"}
@@ -289,3 +293,22 @@ def test_a_passage_or_its_question_alone_is_not_a_copy_of_an_item_with_a_passage
     assert label["copy"] == 1 and label["question_only"] == 0 and label["passage_only"] == 0
     assert label["passage_other_question"] == 0 and label["item_without_passage"] == 0
     assert rows.loc[rows["kind"] == "copy", "right"].str.contains("Ann has three red apples").all()
+
+
+def test_a_generic_stem_shared_by_several_items_is_not_their_passage():
+    docs = [
+        {
+            "question": "Which of the following statements is correct?",
+            "choices": [f"Claim {n} a", f"Claim {n} b"],
+            "answer": 0,
+        }
+        for n in range(3)
+    ]
+    task = _Task(
+        lambda d: d["question"] + "\nA. " + d["choices"][0] + "\nB. " + d["choices"][1] + "\nAnswer:",
+        lambda d: 0,
+        lambda d: ["A", "B"],
+    )
+    item = lmh_item("mmlu_x", "mmlu_x-0", task, docs[0], shared_values(docs))
+    assert item["passage"] == ""
+    assert item["question"].startswith("Which of the following statements is correct?")

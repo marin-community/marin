@@ -87,6 +87,16 @@ def _is_passage(key: str) -> bool:
     return name in _PASSAGE_FIELDS or "passage" in name or "context" in name
 
 
+# Fields that hold the question itself. A value of one can repeat across items (a generic stem such as
+# "Which of the following is true?"), but it is never the item's passage.
+_QUESTION_FIELDS = frozenset({"prompt", "input", "problem", "instruction"})
+
+
+def _is_question_field(key: str) -> bool:
+    name = key.lower()
+    return name in _QUESTION_FIELDS or "question" in name or "query" in name
+
+
 def shared_values(docs: list[Any]) -> set[str]:
     """String values repeated across documents of a task."""
     seen: Counter[str] = Counter()
@@ -274,7 +284,11 @@ def lmh_item(leaf: str, record_id: str, task: LmTask, doc: Any, shared: set[str]
         return prompt_stream.find(text_stream(value), start) if text_stream(value) else -1
 
     candidates = [value for _, value in pairs if value not in option_set and value not in labels and not id_like(value)]
-    passage_like = {value for key, value in pairs if (_is_passage(key) or value in shared) and value in candidates}
+    passage_like = {
+        value
+        for key, value in pairs
+        if (_is_passage(key) or (value in shared and not _is_question_field(key))) and value in candidates
+    }
     others = [value for value in candidates if value not in passage_like and position(value) >= 0]
     longest_other = max((_stream_len(value) for value in others), default=0)
     # A passage is a shared or passage-named field that the prompt shows and that is at least as long
