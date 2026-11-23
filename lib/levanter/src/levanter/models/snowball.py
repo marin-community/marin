@@ -608,8 +608,6 @@ def _fixed_shared_attention_forward(
     expected_kv_shape = (4, 256, cfg.num_kv_heads, cfg.inferred_head_dim)
     if k.shape != expected_kv_shape or v.shape != expected_kv_shape:
         raise ValueError("Snowball fixed shared attention requires K/V shape [4, 256, KV, 128]")
-    if not mask.is_causal or mask.segment_ids is not None:
-        raise ValueError("Snowball fixed shared attention requires an unsegmented causal mask")
     spec = FixedScheduleSpec(
         num_q_heads=cfg.num_heads,
         num_kv_heads=cfg.num_kv_heads,
@@ -827,14 +825,6 @@ def _validate_fixed_shared_attention_config(cfg: SnowballConfig) -> None:
 def _validate_fixed_shared_attention_public_mask(mask: AttentionMask) -> None:
     if not mask.is_causal or mask.sliding_window is not None or mask.segment_ids is not None:
         raise ValueError("Snowball fixed shared attention requires an unsegmented causal mask")
-
-
-def _partition_match(aligned_v: jax.Array, attn_out: jax.Array) -> jax.Array:
-    """Match aligned_v's sharding to attn_out (backend attention can pick its own head sharding)."""
-    sharding = jax.typeof(attn_out).sharding if isinstance(attn_out, core.Tracer) else attn_out.sharding
-    if isinstance(sharding, NamedSharding):
-        return reshard(aligned_v, sharding.spec)
-    return reshard(aligned_v, _activation_spec(None, "model"))
 
 
 def _partition_match(aligned_v: jax.Array, attn_out: jax.Array) -> jax.Array:
