@@ -3,6 +3,7 @@
 
 """Actor-phase failure typing and the attempt batch's registry credential."""
 
+import base64
 import hashlib
 import json
 from types import SimpleNamespace
@@ -17,6 +18,11 @@ from experiments.post_training.task_curation.difficulty.importer import receipt_
 from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, SourceAttempts
 from experiments.post_training.task_curation.difficulty.run_action import REGISTRY_AUTH_SECRET, attempt_command
 from experiments.post_training.task_curation.difficulty.state import GapReason, Outcome
+from experiments.post_training.task_curation.difficulty_preparation import (
+    GRADER_PRIVILEGE_DROP_UID,
+    grader_requires_multi_uid,
+    grader_tier_backend,
+)
 from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
 from experiments.post_training.task_curation.difficulty_trials import (
     DEFECTIVE_ACTOR_IMAGES,
@@ -165,3 +171,37 @@ def test_registry_reference_reports_the_skopeo_failure(monkeypatch):
         raise AssertionError("expected the digest lookup to raise")
     except ValueError as error:
         assert "rc=1" in str(error) and "boom" in str(error)
+
+
+def _spec_with_verifier_resources(*contents: str) -> dict:
+    return {
+        "resources": {
+            "verifier": [
+                {
+                    "path": f"file-{index}.py",
+                    "source": {
+                        "kind": "inline_file",
+                        "content_base64": base64.b64encode(content.encode()).decode(),
+                    },
+                }
+                for index, content in enumerate(contents)
+            ]
+        }
+    }
+
+
+def test_grader_requires_multi_uid_detects_the_privilege_drop():
+    dropping = _spec_with_verifier_resources(
+        "import json\n", f"sandbox = LocalLeanSandbox({GRADER_PRIVILEGE_DROP_UID})\n"
+    )
+    assert grader_requires_multi_uid(dropping) is True
+    plain = _spec_with_verifier_resources("import json\nrun_tests()\n")
+    assert grader_requires_multi_uid(plain) is False
+    assert grader_requires_multi_uid({"resources": {}}) is False
+
+
+def test_grader_tier_backend_routes_a_privilege_dropping_grader_to_daytona():
+    assert grader_tier_backend("local", native=False, requires_multi_uid=True) == "daytona"
+    assert grader_tier_backend("local", native=False, requires_multi_uid=False) == "local"
+    assert grader_tier_backend("daytona", native=False, requires_multi_uid=True) == "daytona"
+    assert grader_tier_backend("local", native=True, requires_multi_uid=True) == "local"

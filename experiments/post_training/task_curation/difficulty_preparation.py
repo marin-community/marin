@@ -4,8 +4,9 @@
 """Materialize unchanged sampled contracts for production Harbor candidate trials."""
 
 import argparse
+import base64
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from finestore.rl.difficulty import DifficultyGap, difficulty_gap_reason, require_difficulty_gaps
@@ -45,6 +46,39 @@ def source_gap_reason(gap: DifficultyGap, detail: str | None = None) -> str:
 
 LOCAL_ACTOR_SOURCES: frozenset[str] = frozenset({"OpenResearcher:OpenResearcher-Dataset"})
 """Sources whose actor image exceeds the Daytona snapshot limit and rerun on the maintained LOCAL backend."""
+
+GRADER_PRIVILEGE_DROP_UID = "user=65534"
+"""The sandbox call a privilege-dropping grader makes before compiling untrusted content.
+
+The Nemotron Ultra Lean graders construct their compile sandbox with ``user=65534`` so the
+untrusted proof compiles as ``nobody`` rather than as the grader itself."""
+
+
+def grader_requires_multi_uid(spec: Mapping) -> bool:
+    """Whether the grader's sandbox drops privileges to a fixed uid before it compiles.
+
+    Daytona containers carry a full uid map, so the drop succeeds there. The LOCAL bubblewrap
+    tier maps a single uid inside its user namespace, so the same drop fails with EPERM
+    (measured on the Nemotron Ultra Lean graders). Detected from the grader's verifier
+    resources, so the served task bytes stay unchanged.
+    """
+    for resource in (spec.get("resources") or {}).get("verifier") or ():
+        content = base64.b64decode(resource["source"]["content_base64"]).decode("utf-8", errors="replace")
+        if GRADER_PRIVILEGE_DROP_UID in content:
+            return True
+    return False
+
+
+def grader_tier_backend(source_backend: str, *, native: bool, requires_multi_uid: bool) -> str:
+    """The backend serving a task's trials, routing up the tier ladder when the grader needs it.
+
+    A grader that drops privileges to a fixed uid cannot run on the LOCAL bubblewrap tier,
+    whose user namespace maps a single uid; it routes up to Daytona, whose containers carry
+    a full uid map. The grader bytes stay unchanged.
+    """
+    if source_backend == "local" and not native and requires_multi_uid:
+        return "daytona"
+    return source_backend
 
 
 def restore_source_locks(tasks: Sequence[TaskSpec]) -> None:
@@ -125,8 +159,13 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
                 path=str(directory) if reason is None else None,
                 workload="native" if native else "task_spec",
                 # The frozen backend auto-chooses Daytona for static-safe sources; a source whose
-                # actor image exceeds the Daytona snapshot limit reruns on the LOCAL backend.
-                backend="local" if source.sample.source_id in LOCAL_ACTOR_SOURCES else source.backend,
+                # actor image exceeds the Daytona snapshot limit reruns on the LOCAL backend, and
+                # a grader that drops privileges to a fixed uid routes up to Daytona.
+                backend=grader_tier_backend(
+                    "local" if source.sample.source_id in LOCAL_ACTOR_SOURCES else source.backend,
+                    native=native,
+                    requires_multi_uid=grader_requires_multi_uid(task.model_dump(mode="json")),
+                ),
                 reason=reason,
                 judge_model=None if judge is None else judge.model,
             )

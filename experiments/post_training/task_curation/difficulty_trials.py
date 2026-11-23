@@ -53,6 +53,7 @@ from experiments.post_training.task_curation.difficulty_config import (
     CandidateRun,
 )
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
+from experiments.post_training.task_curation.difficulty_preparation import grader_requires_multi_uid
 from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 from experiments.post_training.task_curation.environment import Environment
@@ -589,6 +590,17 @@ def run_task(
         # grader from the digest-pinned image instead of mounting a lock runtime.
         machine_image = pinned_registry_reference(machine_image, config.environment_options.get("registry_authfile"))
         LOGGER.info("Grader machine for %s runs from the composed toolchain image %s", task.task_id, machine_image)
+    if (
+        task.backend == "local"
+        and task.path is not None
+        and grader_requires_multi_uid(json.loads((Path(task.path) / "task-spec.json").read_text()))
+    ):
+        # A privilege-dropping grader cannot run on the LOCAL bubblewrap tier (single-uid user
+        # namespace); preparation routes such tasks up to Daytona, and this guard fails loudly
+        # if a routing regression ever serves one locally - it must never compile as root.
+        raise ValueError(
+            f"Task {task.task_id} grades with a privilege-dropping sandbox; preparation must route it up to Daytona"
+        )
     pending_reason = None
     math_deadlines = prior_math_deadlines
     for number in range(config.attempts_per_task):

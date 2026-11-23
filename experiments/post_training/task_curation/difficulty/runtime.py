@@ -473,8 +473,16 @@ def main() -> None:
     has_daytona = any(task.backend == "daytona" and task.reason is None for source in prepared for task in source.tasks)
     daytona_api_key = None
     if has_daytona:
-        if action["daytona_account"] != DATA_ACCOUNT:
+        if action["daytona_account"] not in (None, DATA_ACCOUNT):
             raise ValueError("Difficulty Daytona attempts require the DATA account")
+        if action["daytona_account"] is None:
+            # Preparation routed these tasks up to Daytona after the action was planned on the
+            # LOCAL tier (the grader drops privileges to a fixed uid); they consume the DATA
+            # account like any Daytona attempt.
+            LOGGER.info(
+                "Grader tier routing serves %d task(s) from Daytona on an action planned for the LOCAL tier",
+                sum(task.backend == "daytona" and task.reason is None for source in prepared for task in source.tasks),
+            )
         daytona_api_key = require_secret("DAYTONA_DATA_API_KEY")
         require_daytona_connection_environment(daytona_api_key)
     with solver_endpoint(args.solver, settings, priority_band_value(args.priority)) as (
