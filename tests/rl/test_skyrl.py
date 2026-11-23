@@ -739,6 +739,29 @@ def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
         skyrl_step(dataclasses.replace(spec, validation_data=(conflicting_source,)), _execution()).fingerprint()
 
 
+@pytest.mark.parametrize(
+    ("cluster", "explicit_hca", "expected_hca"),
+    [
+        ("cw-us-east-02a", None, "ibp"),
+        ("cw-us-east-02a", "custom_hca", "custom_hca"),
+        ("cw-us-east-08a", None, None),
+    ],
+)
+def test_skyrl_child_request_selects_east02a_ib_rails(
+    cluster: str, explicit_hca: str | None, expected_hca: str | None
+) -> None:
+    spec = _spec()
+    if explicit_hca is not None:
+        recipe = yaml.safe_load(spec.config_yaml)
+        recipe["extra_env"] = {"NCCL_IB_HCA": explicit_hca}
+        spec = dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe))
+
+    step = skyrl_step(spec, _execution(cluster))
+    launch = yaml.safe_load(materialized_config(step, prefix="s3://test").launch_config_yaml)
+
+    assert launch["runtime"]["task_env"].get("NCCL_IB_HCA") == expected_hca
+
+
 def test_starting_checkpoint_binds_identity_and_rejects_cached_output_reuse(tmp_path: Path, monkeypatch) -> None:
     spec = _spec()
     checkpoints = [

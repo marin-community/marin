@@ -45,6 +45,10 @@ class RuntimeLogCollectionError(RuntimeError):
     """Required runtime logs could not be collected before grading."""
 
 
+class EnvironmentSetupError(RuntimeError):
+    """Task-declared initialization failed before actor access."""
+
+
 class EnvironmentStopError(RuntimeError):
     """Environment teardown failed or exceeded its deadline."""
 
