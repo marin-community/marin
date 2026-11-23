@@ -7,13 +7,14 @@ from typing import Any, Dict, Set
 
 from omegaconf import DictConfig, OmegaConf
 from skyrl_train.trajectory_runners.harbor.identity_aware_reward import IDENTITY_AWARE_SHAPER
-from skyrl_train.utils.harbor_errors import (
+from skyrl_train.task_error_handling import (
     DEFAULT_ERROR_HANDLING_CONFIG,
     ErrorHandlingConfig,
     retry_excluded_exception_types,
 )
 
-from skyrl_train.rollouts.harbor_settings import EnvironmentConfig, EnvironmentType, RetryConfig, VerifierConfig
+from rigging.task_errors import RetrySettings
+from skyrl_train.rollouts.harbor_settings import EnvironmentConfig, EnvironmentType, VerifierConfig
 
 
 @dataclass
@@ -326,7 +327,7 @@ class HarborConfigBuilder:
 
         return trial_fields
 
-    def build_retry_config(self) -> RetryConfig:
+    def build_retry_config(self) -> RetrySettings:
         """Build the shared worker retry policy.
 
         Explicit and Harbor-default exclusions are combined with every exception
@@ -335,7 +336,7 @@ class HarborConfigBuilder:
         retrying would discard that result.
 
         Returns:
-            RetryConfig with exponential backoff and resolved terminal exceptions.
+            RetrySettings with exponential backoff and resolved terminal exceptions.
         """
         retry_fields = {}
 
@@ -351,7 +352,7 @@ class HarborConfigBuilder:
                         value = {s.strip() for s in value.split(",") if s.strip()}
                 retry_fields[mapping.harbor_field] = value
 
-        retry_config = RetryConfig(**retry_fields)
+        retry_config = RetrySettings(**retry_fields)
         excluded = retry_excluded_exception_types(
             retry_config.exclude_exceptions,
             self.get_error_handling_config(),

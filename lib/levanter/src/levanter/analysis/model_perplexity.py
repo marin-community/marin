@@ -201,11 +201,6 @@ def read_scored_documents(output_path: str) -> list[ScoredDocument]:
     return [_scored_document_from_row(row) for row in table.to_pylist()]
 
 
-def read_token_count_summary(output_path: str) -> dict[str, Any]:
-    token_count_summary_path = prefix_join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
-    return json.loads(StoragePath(token_count_summary_path).read_text())
-
-
 def compare_scored_outputs(
     *,
     model_a_name: str,
