@@ -2,6 +2,9 @@
 
 November 22, 2026 (PST).
 
+For the implementation inventory and remaining transfer, protocol, router-replay
+and zero-KL work, see [inference integration status](../../../INFERENCE_HANDOFF.md).
+
 Four full-model training calls returned, and step-1/version-1 checkpoint
 metadata was committed. End-to-end update confirmation, fresh-process
 continuation, updated-weight publication and generation, and the matched
