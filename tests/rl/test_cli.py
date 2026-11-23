@@ -120,9 +120,18 @@ def test_coordinator_request_requires_a_skyrl_step() -> None:
         )
 
 
-@pytest.mark.parametrize("missing_names", [(), ("JUDGE_KEY",), ("EVAL_KEY",), ("JUDGE_KEY", "EVAL_KEY")])
+@pytest.mark.parametrize(
+    "absent_or_empty",
+    [
+        {},
+        {"JUDGE_KEY": None},
+        {"EVAL_KEY": None},
+        {"DAYTONA_EVAL_API_KEY": None, "DAYTONA_TARGET": None},
+        {"DAYTONA_TARGET": ""},
+    ],
+)
 def test_rl_launch_requires_and_forwards_credentials_before_submission(
-    monkeypatch: pytest.MonkeyPatch, missing_names: tuple[str, ...]
+    monkeypatch: pytest.MonkeyPatch, absent_or_empty: dict[str, str | None]
 ) -> None:
     client = MagicMock(spec=IrisClient)
     client.submit.return_value.job_id = JobName.from_wire("/atqamar/submitted-coordinator")
@@ -132,6 +141,7 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
         "DAYTONA_RL_API_KEY": "test-rl-key",
         "DAYTONA_EVAL_API_KEY": "test-eval-key",
         "DAYTONA_API_KEY": "test-other-key",
+        "DAYTONA_TARGET": "us",
         "TOGETHER_API_KEY": "test-together-key",
         "JUDGE_KEY": "test-judge-key",
         "EVAL_KEY": "test-custom-eval-key",
@@ -140,26 +150,32 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("HF_TOKEN", "test-hf-token")
     monkeypatch.setenv("WANDB_API_KEY", "test-wandb-key")
-    for name in missing_names:
-        monkeypatch.delenv(name)
+    # None removes the name entirely; an empty string keeps it set but unusable.
+    for name, value in absent_or_empty.items():
+        if value is None:
+            monkeypatch.delenv(name)
+        else:
+            monkeypatch.setenv(name, value)
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
 
     @click.command()
     @rl_build_options
     def main() -> list[ArtifactStep[Artifact]]:
-        train = _step(dataclasses.replace(_execution(), required_env_vars=("JUDGE_KEY",)))
+        train = _step(dataclasses.replace(_execution(), required_env_vars=("JUDGE_KEY", "DAYTONA_TARGET")))
         evaluate = dataclasses.replace(
-            _step(dataclasses.replace(_execution(), required_env_vars=("EVAL_KEY",))),
+            _step(dataclasses.replace(_execution(), required_env_vars=("EVAL_KEY", "DAYTONA_EVAL_API_KEY"))),
             name="checkpoints/test-eval",
         )
         return [train, evaluate]
 
     result = CliRunner().invoke(main, ["--version", "2026.10.07", "--run"])
 
-    if missing_names:
+    if absent_or_empty:
         assert result.exit_code != 0
-        assert "missing required RL environment variables: " + ", ".join(sorted(missing_names)) in result.output
-        assert all(value not in result.output for value in expected_env.values())
+        missing = ", ".join(sorted(absent_or_empty))
+        assert f"missing required RL environment variables: {missing}" in result.output
+        # "us" is excluded because click's usage banner contains it.
+        assert all(value not in result.output for name, value in expected_env.items() if name != "DAYTONA_TARGET")
         client.submit.assert_not_called()
         return
 
