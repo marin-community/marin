@@ -26,6 +26,7 @@ from typing import Any, NamedTuple
 
 import pandas as pd
 import pyarrow.parquet as pq
+from marin.datakit.decon_keys import text_stream
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
@@ -149,6 +150,34 @@ def _row(item: dict[str, Any], right: str, kind: str, label_q: int, label_qa: in
     }
 
 
+# A sibling negative is the other item of the same eval whose question shares at least this share of words with
+# the item's question (another instance of the same template), with a different question stream.
+SIBLING_OVERLAP = 0.6
+
+
+def _siblings(items: list[dict[str, Any]]) -> dict[int, int]:
+    """For each item, the item of the same eval with the most question words in common, when that share is at
+    least ``SIBLING_OVERLAP`` and the two questions differ in their streams."""
+    by_eval: dict[str, list[int]] = {}
+    for number, item in enumerate(items):
+        by_eval.setdefault(item["eval"], []).append(number)
+    streams = [text_stream(item["question"]) for item in items]
+    found = {}
+    for numbers in by_eval.values():
+        for number in numbers:
+            best = max(
+                (
+                    (word_overlap(items[number]["question"], items[other]["question"]), other)
+                    for other in numbers
+                    if streams[other] != streams[number]
+                ),
+                default=(0.0, -1),
+            )
+            if best[0] >= SIBLING_OVERLAP:
+                found[number] = best[1]
+    return found
+
+
 def generic_pairs(items: list[dict[str, Any]], hosts: list[str], rng: random.Random) -> Iterator[dict[str, Any]]:
     by_question: dict[str, list[int]] = {}
     by_passage: dict[str, list[int]] = {}
@@ -156,6 +185,7 @@ def generic_pairs(items: list[dict[str, Any]], hosts: list[str], rng: random.Ran
         by_question.setdefault(item["question"], []).append(number)
         if item.get("passage"):
             by_passage.setdefault(item["passage"], []).append(number)
+    sibling_of = _siblings(items)
 
     def placed(inserted: str) -> str:
         host = rng.choice(hosts)
@@ -164,7 +194,10 @@ def generic_pairs(items: list[dict[str, Any]], hosts: list[str], rng: random.Ran
         after = host[start + len(before) : start + len(before) + rng.randrange(0, 600)]
         return before + "\n" + inserted + "\n" + after
 
-    for item in items:
+    for number, item in enumerate(items):
+        if number in sibling_of:
+            # Another instance of the same template (names, words or table rows changed) is not this item.
+            yield _row(item, placed(layout(items[sibling_of[number]], rng).text), "sibling", 0, 0)
         inserted = layout(item, rng)
         yield _row(item, placed(inserted.text), "copy", 1, int(inserted.shows_answer))
         passage = item.get("passage") or ""

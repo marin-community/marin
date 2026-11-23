@@ -32,35 +32,52 @@ logger = logging.getLogger(__name__)
 # Pair files scored together: one group is read and prepared while the GPU scores the group before it.
 GROUP_FILES = 16
 BATCH = 64
+# Later models score only the pairs that the first model scores at least this high; the score of the others is
+# the first model's. On 1,673,046 scored pairs, 96.7% score below it, and 6 of 14,075 pairs with a two-model mean
+# of at least 0.5 had a first score below it (both models' scores near 0 and 1).
+LATER_MODELS_FLOOR = 0.01
 
 
-def _prepared(paths: list[str], output: str, texts: dict, pool: ThreadPoolExecutor) -> tuple[list[str], pd.DataFrame]:
-    """The pair files of *paths* that have no scores yet, and their pairs with the pair text, in file order."""
+def _prepared(
+    paths: list[str], output: str, texts: dict, tokenizer, max_length: int, pool: ThreadPoolExecutor
+) -> tuple[list[str], pd.DataFrame, list]:
+    """The pair files of *paths* that have no scores yet, their pairs with the pair text in file order, and the
+    pairs' tokenized batches (row positions, encoding)."""
     targets = [prefix_join(output, f"scores/{Path(path).name}") for path in paths]
     todo = [
         path for path, done in zip(paths, pool.map(lambda t: StoragePath(t).exists(), targets), strict=True) if not done
     ]
     if not todo:
-        return [], pd.DataFrame()
+        return [], pd.DataFrame(), []
     frames = list(pool.map(read_frame, todo))
     for number, frame in enumerate(frames):
         frame["file"] = number
-    return todo, with_pair_text(pd.concat(frames, ignore_index=True), texts)
+    pairs = with_pair_text(pd.concat(frames, ignore_index=True), texts)
+    return todo, pairs, list(batches(pairs, tokenizer, BATCH, max_length, False))
 
 
 @torch.no_grad()
-def _scores(models: list, tokenizer, pairs: pd.DataFrame, max_length: int) -> np.ndarray:
-    """The question score of each model for each pair; each batch is tokenized once for all models."""
+def _scores(models: list, encoded_batches: list, rows: int) -> np.ndarray:
+    """The question score of each model for each pair (NaN where a later model is skipped, see
+    ``LATER_MODELS_FLOOR``); each batch goes to the GPU once, and the scores come back once per group."""
     for model in models:
         model.eval()
     head = OUTPUTS.index("label_q")
-    scores = np.zeros((len(pairs), len(models)))
-    for group, encoded in batches(pairs, tokenizer, BATCH, max_length, False):
-        inputs = {key: value.to("cuda") for key, value in encoded.items()}
-        for number, model in enumerate(models):
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                logits = model(**inputs).logits.float()
-            scores[group, number] = torch.sigmoid(logits[:, head]).cpu().numpy()
+    parts = []
+    for group, encoded in encoded_batches:
+        inputs = {key: value.to("cuda", non_blocking=True) for key, value in encoded.items()}
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            first = torch.sigmoid(models[0](**inputs).logits[:, head].float())
+            later = torch.full((len(group), len(models) - 1), float("nan"), device="cuda")
+            keep = (first >= LATER_MODELS_FLOOR).nonzero(as_tuple=True)[0]
+            if len(keep):
+                subset = {key: value[keep] for key, value in inputs.items()}
+                for number, model in enumerate(models[1:]):
+                    later[keep, number] = torch.sigmoid(model(**subset).logits[:, head].float())
+        parts.append((group, torch.cat([first[:, None], later], dim=1)))
+    scores = np.zeros((rows, len(models)))
+    for group, values in parts:
+        scores[group] = values.cpu().numpy()
     return scores
 
 
@@ -88,18 +105,22 @@ def main() -> None:
     started, scored = time.time(), 0
     with ThreadPoolExecutor(1) as prepare, ThreadPoolExecutor(GROUP_FILES) as io:
         writes = []
-        upcoming = prepare.submit(_prepared, groups[0], args.output, texts, io) if groups else None
+
+        def submit(group):
+            return prepare.submit(_prepared, group, args.output, texts, tokenizers[0], args.max_length, io)
+
+        upcoming = submit(groups[0]) if groups else None
         for number in range(len(groups)):
-            todo, pairs = upcoming.result()
+            todo, pairs, encoded = upcoming.result()
             if number + 1 < len(groups):
-                upcoming = prepare.submit(_prepared, groups[number + 1], args.output, texts, io)
+                upcoming = submit(groups[number + 1])
             if not todo:
                 continue
-            scores = _scores(models, tokenizers[0], pairs, args.max_length)
+            scores = _scores(models, encoded, len(pairs))
             frame = pairs[["path", "record", "item", "eval", "record_chars", "file"]].copy()
             for model_number in range(len(models)):
                 frame[f"score_{model_number}"] = scores[:, model_number]
-            frame["score"] = scores.mean(axis=1)
+            frame["score"] = np.nanmean(scores, axis=1)
             for file_number, part in frame.groupby("file"):
                 target = prefix_join(args.output, f"scores/{Path(todo[file_number]).name}")
                 writes.append(io.submit(write_frame, part.drop(columns="file"), target))
