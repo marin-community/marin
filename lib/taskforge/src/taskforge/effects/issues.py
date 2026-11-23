@@ -33,11 +33,7 @@ class Hold(EffectIssue):
 
 
 class Unreproducible(Hold):
-    """A re-executed effect failed on a fresh machine where its recording succeeded.
-
-    The machine cannot be rebuilt to the recorded history, and every later recorded result would describe state that
-    does not exist, so the workpiece holds for a person instead of continuing on it.
-    """
+    """A fresh machine cannot reproduce an owner's recorded sandbox history."""
 
 
 class LogFailure(EffectIssue):
