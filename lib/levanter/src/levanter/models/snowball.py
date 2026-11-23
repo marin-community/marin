@@ -943,8 +943,14 @@ class SnowballBlock(eqx.Module):
 
         def attend(long_context: bool):
             return self.attn.decode(
-                attn_in, cache, batch_info, pos_ids, mode="long" if long_context else "short",
-                implementation=implementation, kv_axis=kv_axis, fused_kv_tokens=fused_kv_tokens,
+                attn_in,
+                cache,
+                batch_info,
+                pos_ids,
+                mode="long" if long_context else "short",
+                implementation=implementation,
+                kv_axis=kv_axis,
+                fused_kv_tokens=fused_kv_tokens,
             )
 
         if isinstance(use_long, bool):
@@ -1278,7 +1284,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if _context_axis() is not None:
             raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
-        kv_heads, head_size = Axis("kv_head", _inference_kv_heads(cfg, self._kv_axis)), Axis("head_size", cfg.inferred_head_dim)
+        kv_heads, head_size = Axis("kv_head", _inference_kv_heads(cfg, self._kv_axis)), Axis(
+            "head_size", cfg.inferred_head_dim
+        )
         num_layers = len(self.transformer.blocks)
         if window_cache_pages is not None:
             if not self._split_decode_cache or num_long_attention_layers(num_layers) == num_layers:
@@ -1428,8 +1436,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                 use_long = _is_long_attention_layer(layer_index, num_layers)
                 layer_batch = window_batch if window_batch is not None and not use_long else batch_info
                 result, cache = self._inference_block(block).decode(
-                    hidden, cache, layer_batch, pos_ids.array, use_long, token_valid, return_routes=capture_routes,
-                    implementation=self._paged_attention, kv_axis=self._kv_axis, fused_kv_tokens=fused_kv_tokens,
+                    hidden,
+                    cache,
+                    layer_batch,
+                    pos_ids.array,
+                    use_long,
+                    token_valid,
+                    return_routes=capture_routes,
+                    implementation=self._paged_attention,
+                    kv_axis=self._kv_axis,
+                    fused_kv_tokens=fused_kv_tokens,
                 )
                 hidden = result.output
                 layers.append(cache)
@@ -1449,8 +1465,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             layer_pages = jax.lax.dynamic_index_in_dim(pages, layer, keepdims=False)
             cache = KvPageCache(hax.named(layer_pages, cache_axes))
             result, cache = block.decode(
-                x, cache, batch_info, pos_ids.array, use_long, token_valid, return_routes=capture_routes,
-                    implementation=self._paged_attention, kv_axis=self._kv_axis, fused_kv_tokens=fused_kv_tokens,
+                x,
+                cache,
+                batch_info,
+                pos_ids.array,
+                use_long,
+                token_valid,
+                return_routes=capture_routes,
+                implementation=self._paged_attention,
+                kv_axis=self._kv_axis,
+                fused_kv_tokens=fused_kv_tokens,
             )
             pages = jax.lax.dynamic_update_index_in_dim(pages, cache.kv_pages.array, layer, axis=0)
             routes = None if result.routes is None else result.routes[:, 0]
