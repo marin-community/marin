@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
-from taskforge.effects.events import StageCompleted
+from taskforge.effects.events import Note, StageCompleted
 from taskforge.effects.issues import Hold, Restart, Transient, describe_exception
 from taskforge.effects.log import EventLog
 from taskforge.harness.protocol import Stopped, Submitted
@@ -132,14 +132,12 @@ async def run_workpiece(
                 try:
                     result = await STAGES[stage](ctx, wp, config, resources)
                 except* (Restart, Transient) as error:
-                    logging.warning(
-                        "Stage %s round %d attempt %d of %d: %s",
-                        stage,
-                        wp.round,
-                        attempt,
-                        STAGE_REPLAY_ATTEMPTS,
-                        reasons(error),
+                    # Journal each attempt's cause; a hold reason names only the last one.
+                    cause = f"Stage {stage} round {wp.round} attempt {attempt} of {STAGE_REPLAY_ATTEMPTS}: " + (
+                        "; ".join(reasons(error))
                     )
+                    logging.warning("%s", cause)
+                    await ctx.emit(Note(cause))
                     if attempt >= STAGE_REPLAY_ATTEMPTS:
                         raise
                     stage_attempts[key] = attempt + 1  # replay the interrupted stage
