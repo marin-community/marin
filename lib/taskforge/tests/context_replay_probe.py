@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One process of the two-process context-refusal replay test: ``record DIR`` runs a workpiece whose provider refuses
-the author's first request for a full context window and persists the journal; ``launch DIR`` and ``resume DIR``
-reload it in a fresh process whose provider would answer and run the workpiece again under the replay rule the driver
-builds without and with ``--resume-held``. Each prints the terminal, the author's stop and how many provider calls it
-made."""
+"""Persist a context refusal in one process and replay its journal in another.
+
+``launch`` and ``resume`` currently use the same replay log. Later driver revisions
+can give those modes different replay rules.
+"""
 
 import asyncio
 import sys
@@ -28,7 +28,7 @@ from taskforge.wiring import install
 
 
 def driver_log(previous: Sequence[Record], *, resume: bool) -> EventLog:
-    """The log ``driver.one`` builds over a published stream; ``resume`` is its ``--resume-held``."""
+    """Build the replay log used by this revision's driver."""
     del resume  # this revision's driver replays the same way with or without the flag
     return EventLog(replay_from=previous, replayable=replayable_grade)
 
