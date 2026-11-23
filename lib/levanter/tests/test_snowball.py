@@ -495,12 +495,15 @@ def test_snowball_fp32_activations_cover_every_sigmoid():
 
 
 @pytest.mark.parametrize("model_axis_size,expert_axis_size", [(1, 1), (2, 1), (1, 2)])
-def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size):
+@pytest.mark.parametrize("unroll", [False, True])
+def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size, unroll):
     cfg = _tiny_config(num_layers=2, sliding_window=3)
     with use_cpu_devices(model_axis_size * expert_axis_size):
         mesh = compact_grug_mesh(model_axis_size=model_axis_size, expert_axis_size=expert_axis_size)
         with jax.set_mesh(mesh):
             model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(17))
+            if unroll:
+                model = model.with_unrolled_decode()
             engine = InferenceEngine.from_model_with_config(
                 model,
                 tokenizer=None,
