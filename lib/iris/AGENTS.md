@@ -13,6 +13,7 @@ Distributed job orchestration for Marin. Start with the shared instructions in `
 - `docs/task-states.md` — task state machine + retry semantics
 - `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
 - `docs/federation.md` — peer routing, root-job-only handoff, and cross-cluster storage
+- `docs/daytona.md` — proof-of-concept backend that runs each task attempt in a Daytona v2 sandbox
 - `docs/image-push.md` — multi-region image push/pull architecture
 
 ## Source Layout
