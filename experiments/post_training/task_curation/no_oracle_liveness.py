@@ -81,7 +81,7 @@ class LivenessResult:
     outcome: LivenessOutcome
     exit_code: int | None
     reward: float | None
-    snapshot: str
+    image: str
     detail: str = ""
     tests_executed: int = 0
 
@@ -139,7 +139,7 @@ async def run_one(
         try:
             result = await grade_empty_in_sandbox(task, placement.factory, spec_machine, timeout=VERIFIER_TIMEOUT)
         except TimeoutError as error:
-            return LivenessResult(task.id, base, LivenessOutcome.TIMEOUT, None, None, placement.snapshot, str(error))
+            return LivenessResult(task.id, base, LivenessOutcome.TIMEOUT, None, None, placement.image, str(error))
         except Exception as error:
             # One task's failure must not end the cohort run; the traceback separates
             # programming errors from sandbox failures in the run log.
@@ -150,10 +150,10 @@ async def run_one(
                 LivenessOutcome.INFRA_ERROR,
                 None,
                 None,
-                placement.snapshot,
+                placement.image,
                 f"{type(error).__name__}: {error}"[:DETAIL_LIMIT],
             )
-        return classify_result(task.id, base, placement.snapshot, result)
+        return classify_result(task.id, base, placement.image, result)
 
 
 def _verifier_runtime(spec: LoweredSpec) -> MachineRuntimeSpec:
@@ -176,7 +176,7 @@ class _GraderPlacement:
 
     factory: MachineFactory
     machine: MachineSpec
-    snapshot: str
+    image: str
 
 
 def _grader_placement(
@@ -223,7 +223,7 @@ def _grader_placement(
     )
 
 
-def classify_result(task_id: str, base: str, snapshot: str, result: GradeResult) -> LivenessResult:
+def classify_result(task_id: str, base: str, image: str, result: GradeResult) -> LivenessResult:
     """Require a completed verifier and a structured executed-test count before qualification."""
     exit_code = result.diagnostics.get("exit_code")
     detail = (result.error or json.dumps(result.diagnostics, default=str))[-1500:]
@@ -238,7 +238,7 @@ def classify_result(task_id: str, base: str, snapshot: str, result: GradeResult)
         outcome = LivenessOutcome.UNVERIFIED_EXECUTION
     else:
         outcome = LivenessOutcome.NEGATIVE_VERDICT if result.reward < 1.0 else LivenessOutcome.POSITIVE_REWARD
-    return LivenessResult(task_id, base, outcome, exit_code, result.reward, snapshot, detail, tests_executed)
+    return LivenessResult(task_id, base, outcome, exit_code, result.reward, image, detail, tests_executed)
 
 
 async def run(

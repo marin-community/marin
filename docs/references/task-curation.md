@@ -774,7 +774,7 @@ Pass the resulting JSONL to the offline command with `--liveness /path/to/livene
 to combine the receipts. That command rejects duplicate and unknown task IDs.
 
 This phase needs a Daytona credential for image-graded tasks. It records each
-sample's outcome and the Daytona image it ran in (the record's `snapshot` field)
+sample's outcome and the Daytona image it ran in
 in the JSONL file. Nothing here deletes images; see `.agents/ops/daytona.md`.
 
 ## Conversion modes

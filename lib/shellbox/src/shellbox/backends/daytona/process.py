@@ -10,8 +10,8 @@ from collections.abc import Awaitable, Callable
 
 from daytona import DaytonaConnectionError, DaytonaNotFoundError
 from daytona.v2 import AsyncProcessHandle, AsyncProcessService, WaitResult
-from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.transient import retry_backoff
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT
 from shellbox.machine import MachineTerminated
 from shellbox.process_session import BoundedByteBuffer, StreamProcessSession, own_cleanup
@@ -82,7 +82,7 @@ class DaytonaProcessSession(StreamProcessSession):
         assert self._handle is not None
         cursor: str | None = None
         resumes = 0
-        backoff = ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
+        backoff = retry_backoff()
         try:
             while True:
                 try:
