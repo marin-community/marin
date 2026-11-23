@@ -56,8 +56,7 @@ from taskforge.effects.issues import (
     UnsupportedFormat,
 )
 from taskforge.effects.log import EventLog, Status, fold
-from taskforge.gateway import add_gateway_flags
-from taskforge.llm.glm_provider import EndpointSource
+from taskforge.llm.glm_provider import API_ROOT, EndpointSource
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import Terminal, Workpiece
@@ -334,6 +333,19 @@ def exit_code(error: Exception) -> int | None:
     return None
 
 
+def relay_job(value: str) -> str:
+    """A non-blank relay job, so that a quoted unset variable is a usage error before anything is claimed."""
+    if not value.strip():
+        raise argparse.ArgumentTypeError(f"must name an Iris relay job, got {value!r}")
+    return value
+
+
+def base_url(value: str) -> str:
+    if not value.endswith(API_ROOT):
+        raise argparse.ArgumentTypeError(f"must be a URL ending in {API_ROOT}, got {value!r}")
+    return value
+
+
 def cli() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -346,7 +358,9 @@ def cli() -> argparse.ArgumentParser:
         command.add_argument("--output", required=True)
         command.add_argument("--policy", required=True)
         command.add_argument("--work-dir", default="forge-work")
-        add_gateway_flags(command)
+        gateway = command.add_mutually_exclusive_group(required=True)
+        gateway.add_argument("--glm-relay-job", type=relay_job, help="The Iris relay job that resolves the GLM gateway")
+        gateway.add_argument("--glm-base-url", type=base_url, help=f"A direct GLM gateway endpoint ending in {API_ROOT}")
         command.add_argument(
             "--resume-held",
             action="store_true",

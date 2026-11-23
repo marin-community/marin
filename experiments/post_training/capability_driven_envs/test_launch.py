@@ -50,7 +50,7 @@ def test_launcher_requires_exactly_one_endpoint(endpoints: tuple[str, ...], caps
     "flag,value",
     [("--glm-relay-job", ""), ("--glm-relay-job", "  "), ("--glm-base-url", ""), ("--glm-base-url", "http://glm")],
 )
-def test_launcher_refuses_a_blank_or_malformed_gateway_before_building_a_job(
+def test_launcher_refuses_a_blank_relay_or_a_url_without_v1_before_building_a_job(
     flag: str, value: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     built: list[list[str]] = []
