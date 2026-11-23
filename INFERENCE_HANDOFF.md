@@ -4,9 +4,10 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
-This report describes the integrated code at `94f1d6b171`. The experimental
-shutdown observer and Ray smoke below use a separate local worktree at
-`f5e53f48b8`; those observer changes are outside this published branch.
+This report describes the integrated code at `a6aebd2844`. It includes the
+experimental shutdown observer, disabled by default. The Ray results below
+were measured at `f5e53f48b8`; the integrated observer adds a larger trace
+retention cap, which those GPU runs did not exercise.
 
 | Gate | Integrated path |
 | --- | --- |
@@ -226,8 +227,9 @@ scores. Model averaging was disabled. Both native processes exited naturally
 with code zero under the unchanged five-second post-ACK deadline. The complete
 archive and both task and uploader exits were verified. This qualifies the
 instrumented two-layer MoE fixture under that explicit compiler profile;
-the baseline-profile failures, production Ray path and full-model continuation
-remain separate.
+the baseline-profile failures and full-model continuation remain unqualified.
+The genuine Ray lifecycle results below have their own compiler-profile and
+fixture boundaries.
 [Strict paired checkpoint qualification](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-deterministic-paired-qualification-2026-11-23-1)
 
 A single-H100 test of the FA4/CuTe attention backward fallback, with head
@@ -253,7 +255,7 @@ capturing the real GPU learner's native shutdown stack remains open.
 [CPU shutdown observer](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-controls-20261123-2)
 · [GPU-loaded observer controls](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-gpu-controls-20261123-1)
 
-A separate, unpublished production shutdown observer remains experimental.
+The opt-in production shutdown observer remains experimental.
 An actual worker filesystem probe found that inherited group permissions made
 a fresh private directory mode `02700`. Setting only that new directory to
 `0700` allowed all strict directory checks to pass. The follow-up CPU suite at
@@ -262,10 +264,12 @@ cases, then exceeded the unchanged five-second exit limit in a Python finalizer
 case. A separate observer-disabled run also exceeded that limit. The observer
 is therefore unnecessary for the newly measured timeout; these runs do not
 establish the cause of the earlier GPU learner hang. The debugger also exceeded
-its 128 KiB retained-output cap. No actual GPU learner shutdown stack has been
-captured.
+its 128 KiB retained-output cap. This branch raises that cap to 1 MiB; a
+CPU-only diagnostic is measuring actual retention beyond the old limit.
+It does not change the exit deadline or turn a timeout into a passing result.
+No actual GPU learner shutdown stack has been captured.
 
-A one-H100 smoke at the same unpublished source exercised the genuine Ray
+A one-H100 smoke at source `f5e53f48b8` exercised the genuine Ray
 `HostWorker` and public checkpoint roundtrip with the observer disabled. Its
 receipts record one finite update, a natural exit from the original native
 process, a new native process, and identical saved/restored model, Adam, RNG,
@@ -281,6 +285,27 @@ cancelled and their pods removed. Neither run reached update two or final close;
 the baseline-profile Ray lifecycle remains unqualified.
 [Ray checkpoint smoke](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-hostworker-default-off-20261123-1)
 · [Ray score operands](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-hostworker-default-off-20261123-2)
+
+A follow-up on one H100 at the same source, `f5e53f48b8`, passed
+the bounded genuine Ray `HostWorker` lifecycle with the observer disabled and
+`--xla_gpu_deterministic_ops=true`. Both updates were finite and changed the
+model and Adam fingerprints. An independent audit decoded all 137 arrays in
+the saved step-one checkpoint, found them finite, and verified matching
+saved/restored state fingerprints. All four restored FP32 scores matched
+byte-for-byte: maximum absolute error and ULP difference were both zero.
+The original and restored native processes exited naturally with
+code zero. Public final close took 3.187 s under the unchanged five-second
+post-ACK exit deadline. The complete archive, task and uploader exits, and
+Iris `SUCCEEDED` state were independently verified.
+
+Step-two full state and raw final scores were not serialized; its finite
+state and changed model/Adam claims rely on producer fingerprints, native
+child receipts and the pinned control flow. This one-host lifecycle pass is
+separate from the eight-H100 paired optimizer comparison above. It does not
+explain the baseline-profile failures or qualify full-67B or multihost
+continuation, updated-policy publication, generation, observer-enabled
+integration, or 25-update acceptance.
+[Deterministic Ray lifecycle](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-hostworker-deterministic-20261123-2)
 
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and
