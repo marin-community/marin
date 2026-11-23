@@ -322,11 +322,12 @@ QUEUED_BACKOFF = 1.1
 async def test_control_grade_on_iris_survives_a_first_copy_queued_past_its_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A sleep never ends early, so the first copy's third refusal comes after its timeout, even under a retry budget
-    # clipped to it, while each copy has the whole timeout once it runs. (At 0.1 s, a loaded runner's copy itself
-    # timed out.)
+    # Without jitter and since a sleep never ends early, the first copy's third refusal comes after its timeout, even
+    # under a retry budget clipped to it, while each copy has the whole timeout once it runs. The timeout was 0.1 s;
+    # this test failed under load on a laptop, never on CI, with no failure text kept, and the suspected cause, a copy
+    # outliving 0.1 s itself, was never reproduced.
     assert 2 * QUEUED_BACKOFF > QUEUED_COMMAND_TIMEOUT
-    backoff = ExponentialBackoff(initial=QUEUED_BACKOFF, maximum=QUEUED_BACKOFF)
+    backoff = ExponentialBackoff(initial=QUEUED_BACKOFF, maximum=QUEUED_BACKOFF, jitter=0.0)
     monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", backoff)
     monkeypatch.setitem(SITES, "first-copy", lambda script: "forge-candidates/0 " in script and "4> /tmp/" in script)
     factory = LocalIrisFactory(tmp_path, [("first-copy", Fault.ADMISSION_REFUSED, False)] * 3)
