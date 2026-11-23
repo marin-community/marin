@@ -60,6 +60,12 @@ from experiments.post_training.task_curation.difficulty_config import CandidateR
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
+from experiments.post_training.task_curation.difficulty_trials import (
+    ModelTraffic,
+    RunSealState,
+    iris_root_job_id,
+    worker_host_capabilities,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -634,16 +640,13 @@ def test_recovered_transport_retry_preserves_the_valid_grade(tmp_path, monkeypat
 
 
 def test_worker_host_capabilities_binds_data_without_an_eval_fallback():
-    from experiments.post_training.task_curation.difficulty_trials import worker_host_capabilities
-
     capabilities = worker_host_capabilities(
         {},
         environment={"DAYTONA_DATA_API_KEY": "data-key", "DAYTONA_API_KEY": "eval-key",
                      "DAYTONA_API_URL": "https://fixture.invalid", "DAYTONA_TARGET": "us"},
     )
     assert capabilities.daytona is not None
-    factory = capabilities.daytona.client_factory()  # an incomplete connection raises here
-    assert callable(factory)
+    capabilities.daytona.client_factory()  # an incomplete connection raises here
     assert capabilities.daytona.api_key == "data-key"
 
     with pytest.raises(UnsupportedMachineSpec, match="missing api_key, target"):
@@ -654,7 +657,6 @@ def test_worker_host_capabilities_binds_data_without_an_eval_fallback():
 
 def test_run_seal_checkpoint_keeps_own_windows_and_deltas(tmp_path):
     """The checkpointed run seal survives a killed worker with exact own accounting."""
-    from experiments.post_training.task_curation.difficulty_trials import ModelTraffic, RunSealState
 
     seal = RunSealState(solver="large", selection_source_ids=("Src:a", "Src:b"), started_at="2026-11-18T00:00:00+00:00")
     traffic = ModelTraffic(receipt=None, input_tokens=120, output_tokens=45)
@@ -682,7 +684,6 @@ def test_run_seal_checkpoint_keeps_own_windows_and_deltas(tmp_path):
 
 
 def test_iris_root_job_id_derives_the_job_from_the_task_wire(monkeypatch):
-    from experiments.post_training.task_curation.difficulty_trials import iris_root_job_id
 
     monkeypatch.setenv("IRIS_TASK_ID", "/benfeuer/atlas-difficulty-hosted-20261118-v13c/0:0")
     assert iris_root_job_id() == "/benfeuer/atlas-difficulty-hosted-20261118-v13c"
