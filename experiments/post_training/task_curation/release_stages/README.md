@@ -11,12 +11,14 @@ retired-scripts directory by `inventory.py`) for the retirement mapping.
 ## The release plan document
 
 Everything release-specific lives in one typed JSON document — the release plan.
-It is the only place a release id, load ID or snapshot name enters the system;
-stage sources carry none of them (`guard.py` refuses any that appear as literals).
-Resolve the plan with the release owner, write it to a file, and pass it to every
-invocation. The document is sealed write-once under the release prefix the first
-time the pipeline runs, so a changed plan means a new release prefix and a bumped
-`artifact_version`.
+Release plans are reviewed configuration: they live in this package at
+`plans/<release>.json`, landed via atlas-push like any other config, and the
+pipeline seals a write-once copy under the release prefix the first time it runs
+(a changed plan means a new release prefix and a bumped `artifact_version`).
+Nothing under `~/Documents/experiments` is ever an input. It is the only place a
+release id, load ID or snapshot name enters the system; stage sources carry none
+of them (`guard.py` refuses any that appear as literals). Pass the plan path to
+every invocation — e.g. `plans/m3-dryrun.json` for the current dry-run cut.
 
 Schema (see `ReleasePlan` in `graph.py` for the authoritative field list):
 
