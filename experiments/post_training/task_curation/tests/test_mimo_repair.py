@@ -1,4 +1,4 @@
-# Copyright The Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """The MiMo backend repair: pinned images, the source's own grader, and typed refusal."""

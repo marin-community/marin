@@ -1,4 +1,4 @@
-# Copyright The Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Build and pin the MiMo population's per-task agent images in-region.
@@ -192,8 +192,11 @@ def run_in_rootfs(rootfs: Path, command: str, environment: dict[str, str], workd
     saved = resolv.read_bytes() if resolv.is_file() or resolv.is_symlink() else None
     resolv.parent.mkdir(parents=True, exist_ok=True)
     resolv.write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    chroot = shutil.which("chroot")
+    if chroot is None:
+        raise BuildRejected("the build host has no chroot; the lane cannot execute RUN steps")
     try:
-        run(["chroot", str(rootfs), "/bin/sh", "-c", command], env=dict(environment), timeout=1800)
+        run([chroot, str(rootfs), "/bin/sh", "-c", command], env=dict(environment), timeout=1800)
     finally:
         if saved is None:
             resolv.unlink(missing_ok=True)

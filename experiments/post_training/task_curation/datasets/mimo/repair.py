@@ -1,4 +1,4 @@
-# Copyright The Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Repair the pinned MiMo population: pin agent images and declare the source's own grader.
