@@ -69,6 +69,13 @@ trials:
   commit: 72e4fce9c4
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.6075
+  delta:
+  - -0.0046
+  steps: 30389
+  baseline: s7n-d768 2.6121 (same commit, seed 0)
+  step_time_change: 0%
 - id: t004
   variant: document n-gram count cache mixed into output
   rung: competitive-d1024
