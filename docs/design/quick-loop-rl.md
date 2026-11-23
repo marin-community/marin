@@ -673,10 +673,9 @@ from the Hub.
 SkyRL's Megatron loader already coalesces direct reads for rank-owned HF
 tensors and first-axis expert slices. Its Snowball comparison reduced
 policy-worker startup from 209.9 s to 75.3 s versus per-tensor requests.
-Prototype that range planning for the Levanter mesh. Start with HF tensors
-whose addressable slices map to contiguous ranges, and retain coalesced
-whole-tensor reads where the mesh would otherwise generate many tiny
-requests. On the smoke mesh, the four-way data split gives each host a
+The same approach applies to Levanter weights with contiguous addressable
+slices. Keep coalesced whole-tensor reads where the mesh would generate many
+small requests. On the smoke mesh, the four-way data split gives each host a
 contiguous span per routed down-projection expert. Reading those spans
 alone would reduce logical weight bytes from about 125 to 94.5 GiB per
 host. Each learner would read 256 contiguous ranges per layer, one per
@@ -696,8 +695,21 @@ A synthetic safetensors fixture read 131,072 BF16 down-projection bytes in
 matched the frozen whole-tensor loader bit for bit across all 65,536 BF16
 bit patterns. Split whole-tensor coalescing at selectively read tensors
 so it cannot fetch those bytes again. The proof uses local files.
-Regional object-store throughput and cold-start latency remain open.
 [Reproducible range-read proof][down-rank-read-proof]
+
+The prototype now runs through the frozen learner's model-layout HF
+initializer. It plans selective reads from the explicit addressable
+shardings, deduplicates local replicas and retains whole-tensor reads for
+layouts with a split trailing axis. Runs with two and four JAX CPU
+processes used two devices per process and the same four-file Snowball
+export. Each process read 1 MiB with two processes and 0.5 MiB with four,
+down from 2 MiB in the original loader. The processes read disjoint
+ranges that exactly covered the routed down projections. The other 44
+tensors kept the same reads, and all 46 initialized model leaves per
+process matched the original loader byte for byte. The program recorded
+actual local filesystem requests. Measure cold-start time and range
+request overhead against the regional object store on H100.
+[Initializer prototype and distributed CPU receipts][down-rank-initializer-proof]
 
 A regional native checkpoint is also an option for repeated cold starts.
 Convert the pinned export, including its finalized router biases, to a
@@ -2483,6 +2495,7 @@ arms. [Prior timing comparison][timing]
 [runai-distributed-streaming]: https://github.com/dsx-ai-factory/model-streamer/blob/master/docs/src/usage.md#distributed-streaming
 [vllm-runai-loader]: https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/model_loader/runai_streamer_loader.py
 [down-rank-read-proof]: https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-central2%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fhandoff%2F2026.11.21.1%2Fproofs%2Fsnowball-down-rank-reads-586d56160770.tar.gz
+[down-rank-initializer-proof]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fhf-rank-local-initializer-cpu-proof.tar.zst
 [native-shard-reader]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/lib/levanter/src/levanter/tensorstore_serialization.py#L988-L1024
 [hf-to-native-converter]: https://github.com/marin-community/marin/blob/6936528c55df0212ec8ccd1fa619361863b4c420/lib/marin/src/marin/experiment/checkpoints.py#L125
 [model-only-restore]: https://github.com/marin-community/marin/pull/9475
