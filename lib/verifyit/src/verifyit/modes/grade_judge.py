@@ -421,9 +421,7 @@ def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: open
     weight = 0.0
     for candidate_position, answer_a, answer_b in (("B", baseline, candidate), ("A", candidate, baseline)):
         messages = _judge_messages(spec, {"question": spec.question, "answer_a": answer_a, "answer_b": answer_b})
-        answer, detail = _judged_answer(
-            spec, client, model, messages, attempt_detail={}, temperature=spec.temperature
-        )
+        answer, detail = _judged_answer(spec, client, model, messages, attempt_detail={}, temperature=spec.temperature)
         verdict = _pairwise_verdict(answer, spec.verdict_patterns)
         if verdict is None or verdict not in labels:
             raise GradingInfraError("judge returned no recognized pairwise verdict", verdict=verdict, **detail)

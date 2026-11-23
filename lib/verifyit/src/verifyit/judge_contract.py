@@ -4,6 +4,7 @@
 """Validate static judge contracts without loading provider transports."""
 
 import math
+import re
 import string
 from dataclasses import dataclass
 
@@ -14,6 +15,7 @@ from verifyit.spec import (
     RUBRIC_ANSWERS,
     RUBRIC_CHECKLIST,
     RUBRIC_LABELS,
+    RUBRIC_PAIRWISE,
     RUBRIC_REFERENCE,
     RUBRICS,
     Constraint,
@@ -22,6 +24,8 @@ from verifyit.spec import (
 )
 
 ANSWERS_FIELDS = frozenset({"question", "references", "candidate"})
+LABEL_FIELDS = frozenset({"question", "reference", "candidate", "context"})
+PAIRWISE_FIELDS = frozenset({"question", "answer_a", "answer_b"})
 
 
 @dataclass(frozen=True)
@@ -70,13 +74,13 @@ def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
         raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
     if not isinstance(spec.strip_candidate_reasoning_blocks, bool):
         raise InvalidTask("strip_candidate_reasoning_blocks must be boolean")
-    if spec.rubric in (RUBRIC_LABELS, RUBRIC_ANSWERS) and (
+    if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE, RUBRIC_ANSWERS) and (
         not isinstance(spec.system_prompt, str)
         or not isinstance(spec.prompt_template, str)
         or not isinstance(spec.question, str)
         or not all(isinstance(reference, str) for reference in spec.references)
     ):
-        raise InvalidTask("label rubric templates, question and references must be strings")
+        raise InvalidTask("judge templates, question and references must be strings")
     references = tuple(reference for reference in spec.references if reference.strip())
     criteria = tuple(criterion for criterion in spec.criteria if criterion.strip())
     if spec.rubric == RUBRIC_REFERENCE and not references:
@@ -87,6 +91,10 @@ def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
         _validate_label_spec(spec, references)
     if spec.rubric == RUBRIC_ANSWERS:
         _validate_answers_spec(spec, references)
+    if spec.rubric == RUBRIC_PAIRWISE:
+        _validate_pairwise_spec(spec)
+    elif spec.label_weights or spec.verdict_patterns:
+        raise InvalidTask("label weights and verdict patterns apply only to pairwise judges")
     for budget in (spec.max_completion_tokens, spec.incomplete_retry_tokens):
         if type(budget) is not int or budget < 0:
             raise InvalidTask("judge token budgets must be nonnegative integers")
@@ -128,6 +136,51 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
         raise InvalidTask("label_scan must be literal, lines or whole")
     if type(spec.strip_reasoning_blocks) is not bool:
         raise InvalidTask("strip_reasoning_blocks must be boolean")
+    _validate_verdict_labels(spec)
+    if spec.label_metrics and set(spec.label_metrics) != set(spec.label_scores):
+        raise InvalidTask("label metrics must cover every declared verdict")
+    for metrics in spec.label_metrics.values():
+        if (
+            not isinstance(metrics, dict)
+            or not metrics
+            or any(
+                not isinstance(name, str) or not isinstance(value, (int, float)) or not math.isfinite(value)
+                for name, value in metrics.items()
+            )
+        ):
+            raise InvalidTask("label metrics require named finite observations")
+    if not {"reference", "candidate"} <= _template_fields(spec, LABEL_FIELDS):
+        raise InvalidTask("judge template must include reference and candidate")
+
+
+def _validate_pairwise_spec(spec: JudgeSpec) -> None:
+    # The baseline may legitimately be blank: Arena-Hard judges an empty baseline answer too.
+    if len(spec.references) != 1 or not spec.prompt_template.strip():
+        raise InvalidTask("pairwise rubric requires one baseline answer and a prompt template")
+    if spec.label_metrics or spec.exact_gate_answers or spec.exact_gate_label:
+        raise InvalidTask("pairwise rubric reports its own metric and has no exact gate")
+    if not spec.verdict_patterns:
+        raise InvalidTask("pairwise rubric requires verdict patterns")
+    for pattern in spec.verdict_patterns:
+        try:
+            groups = re.compile(pattern).groups
+        except re.error as error:
+            raise InvalidTask(f"malformed verdict pattern {pattern!r}") from error
+        if groups != 1:
+            raise InvalidTask("each verdict pattern must capture exactly one group")
+    _validate_verdict_labels(spec)
+    if not spec.label_scores:
+        raise InvalidTask("pairwise rubric requires verdict labels")
+    if not isinstance(spec.label_weights, dict) or not set(spec.label_weights) <= set(spec.label_scores):
+        raise InvalidTask("label weights must name declared verdicts")
+    for weight in spec.label_weights.values():
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not 0 < weight < math.inf:
+            raise InvalidTask("label weights must be finite and positive")
+    if not {"answer_a", "answer_b"} <= _template_fields(spec, PAIRWISE_FIELDS):
+        raise InvalidTask("pairwise template must include answer_a and answer_b")
+
+
+def _validate_verdict_labels(spec: JudgeSpec) -> None:
     if not isinstance(spec.label_scores, dict):
         raise InvalidTask("verdict labels must be a label/reward table")
     for label, score in spec.label_scores.items():
@@ -141,33 +194,9 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
         ):
             raise InvalidTask("verdict label rewards must be finite unit scalars")
     normalized_labels = [label.upper() if spec.label_case == "upper" else label for label in spec.label_scores]
-    if len(set(normalized_labels)) != len(normalized_labels):
+    if len(set(normalized_labels)) != len(spec.label_scores):
         raise InvalidTask("verdict labels collide after case normalization")
-    if spec.label_metrics and set(spec.label_metrics) != set(spec.label_scores):
-        raise InvalidTask("label metrics must cover every declared verdict")
-    for metrics in spec.label_metrics.values():
-        if (
-            not isinstance(metrics, dict)
-            or not metrics
-            or any(
-                not isinstance(name, str) or not isinstance(value, (int, float)) or not math.isfinite(value)
-                for name, value in metrics.items()
-            )
-        ):
-            raise InvalidTask("label metrics require named finite observations")
-    used = set()
-    for template in (spec.system_prompt, spec.prompt_template):
-        try:
-            for _, name, format_spec, conversion in string.Formatter().parse(template):
-                if name is None:
-                    continue
-                if name not in {"question", "reference", "candidate", "context"} or format_spec or conversion:
-                    raise InvalidTask("judge template has an unsupported field")
-                used.add(name)
-        except ValueError as error:
-            raise InvalidTask("malformed judge template") from error
-    if not {"reference", "candidate"} <= used:
-        raise InvalidTask("judge template must include reference and candidate")
+
 
 def _template_fields(spec: JudgeSpec, allowed: frozenset[str]) -> set[str]:
     """The fields the judge templates use, each of which must be in ``allowed``."""

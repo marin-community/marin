@@ -544,6 +544,29 @@ def test_configured_judge_labels_on_real_http_boundary(tmp_path, fake_judge, rep
     ]
 
 
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+def test_label_parse_retry_preserves_context_and_attempt_diagnostics(fake_judge, finish_reason):
+    fake_judge.replies = ["unclear", "[[A=B]]"]
+    fake_judge.finish_reasons = ["stop", finish_reason]
+    spec = _label_spec(parse_attempts=2, system_prompt="Context: {context}")
+    if finish_reason == "length":
+        with pytest.raises(GradingInfraError) as raised:
+            grade_judge.grade_judge_candidate(spec, "candidate", context="trusted context")
+        detail = raised.value.detail
+    else:
+        result = grade_judge.grade_judge_candidate(spec, "candidate", context="trusted context")
+        assert result.reward == 1
+        detail = result.detail
+    assert detail["parse_attempt"] == 2
+    assert detail["previous_parse_attempts"] == [{"attempt": 1, "completion": "unclear"}]
+    assert [request["messages"] for request in fake_judge.requests] == [
+        [
+            {"role": "system", "content": "Context: trusted context"},
+            {"role": "user", "content": "A: reference answer\nB: candidate"},
+        ]
+    ] * 2
+
+
 @pytest.mark.parametrize(
     ("candidate", "final_answer"),
     [
