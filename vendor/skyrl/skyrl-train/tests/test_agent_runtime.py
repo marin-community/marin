@@ -46,6 +46,11 @@ from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from tests.cpu.task_specs import lowered_task
 
 
+GUEST_WORKSPACE = "/workspace"
+HOST_JUDGE_KEY = "host-private-key"
+POLICY_JUDGE_MODEL = "policy-judge"
+
+
 class ProviderUnavailable(RuntimeError):
     pass
 
@@ -82,22 +87,30 @@ class ProcessTransport:
 class RelayProcessMachine:
     def __init__(self, root):
         self.root = root
-        self.path("/workspace").mkdir(parents=True)
+        self.path(GUEST_WORKSPACE).mkdir(parents=True)
         self.sessions = []
 
     def path(self, value):
         return self.root / value.lstrip("/")
 
     def argument(self, value):
-        for prefix in ("/workspace", "/tests", "/logs"):
+        for prefix in (GUEST_WORKSPACE, "/tests", "/logs"):
             value = value.replace(prefix, str(self.path(prefix)))
         return value
 
+    def process_command(self, command):
+        return (
+            tuple(self.argument(value) for value in command.argv),
+            self.path(command.cwd or GUEST_WORKSPACE),
+            {"PATH": os.environ["PATH"], **command.env},
+        )
+
     async def open_process(self, command):
+        argv, cwd, env = self.process_command(command)
         process = await asyncio.create_subprocess_exec(
-            *(self.argument(value) for value in command.argv),
-            cwd=self.path(command.cwd or "/workspace"),
-            env={"PATH": os.environ["PATH"], **command.env},
+            *argv,
+            cwd=cwd,
+            env=env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -113,10 +126,11 @@ class RelayProcessMachine:
         return session
 
     async def run(self, command):
+        argv, cwd, env = self.process_command(command)
         process = await asyncio.create_subprocess_exec(
-            *(self.argument(value) for value in command.argv),
-            cwd=self.path(command.cwd or "/workspace"),
-            env={"PATH": os.environ["PATH"], **command.env},
+            *argv,
+            cwd=cwd,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -167,7 +181,7 @@ async def test_bixbench_verifier_grades_through_host_judge_relay(harbor_package,
         "python3 - <<'PY'\n"
         "import json, os, urllib.request\n"
         "assert os.environ['OPENAI_API_KEY'] == 'EMPTY'\n"
-        "assert 'host-private-key' not in os.environ.values()\n"
+        f"assert {HOST_JUDGE_KEY!r} not in os.environ.values()\n"
         "request = urllib.request.Request(\n"
         "    os.environ['OPENAI_BASE_URL'] + '/chat/completions',\n"
         "    data=json.dumps({'model': os.environ['MODEL_NAME'], 'messages': [{'role': 'user', 'content': 'Grade'}]}).encode(),\n"
@@ -198,7 +212,7 @@ async def test_bixbench_verifier_grades_through_host_judge_relay(harbor_package,
         cleanup_timeout=5,
         service_startup_timeout=5,
         service_shutdown_timeout=5,
-        judge_model="policy-judge",
+        judge_model=POLICY_JUDGE_MODEL,
     )
     connection = DaytonaConnection(api_key="daytona-secret")
     runtime = InstalledAgentRuntime(
@@ -207,7 +221,7 @@ async def test_bixbench_verifier_grades_through_host_judge_relay(harbor_package,
         128,
         daytona_connection=connection,
         eval_daytona_connection=connection,
-        judge=JudgeConnection("https://provider.invalid/v1", "host-private-key"),
+        judge=JudgeConnection("https://provider.invalid/v1", HOST_JUDGE_KEY),
     )
     binding = runtime.original_trial_binding(
         lowered_task(task_spec, "harbor_trial", attempt_timeout=15),
@@ -245,9 +259,9 @@ async def test_bixbench_verifier_grades_through_host_judge_relay(harbor_package,
         await machine.close()
     assert result.rewards == {"reward": 1.0}
     assert len(observed) == 1
-    assert observed[0][0] == "Bearer host-private-key"
+    assert observed[0][0] == f"Bearer {HOST_JUDGE_KEY}"
     assert observed[0][1] == "/v1/chat/completions"
-    assert json.loads(observed[0][2])["model"] == "policy-judge"
+    assert json.loads(observed[0][2])["model"] == POLICY_JUDGE_MODEL
 
 
 @pytest.mark.asyncio
