@@ -121,6 +121,19 @@ class BoundedByteBuffer:
                 offset += size
                 self._condition.notify_all()
 
+    async def append(self, data: bytes) -> None:
+        """Buffer ``data`` without waiting for readers, failing once unread bytes would exceed capacity.
+
+        For a transport whose stream must keep flowing even while the reader pauses.
+        """
+        async with self._condition:
+            if self._finished:
+                return
+            if len(self._data) + len(data) > self._capacity:
+                raise BufferError(f"Unread process output exceeds {self._capacity} bytes")
+            self._data.extend(data)
+            self._condition.notify_all()
+
     async def read(self, max_bytes: int) -> bytes:
         async with self._condition:
             await self._condition.wait_for(lambda: bool(self._data) or self._finished)

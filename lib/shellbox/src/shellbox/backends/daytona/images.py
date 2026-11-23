@@ -111,8 +111,8 @@ async def ensure_image(client: AsyncDaytonaV2Client, request: ImageRequest) -> s
     The name is derived from the source, so a name another rollout already
     submitted is the same image and is awaited instead. A submission that
     failed in transit or collided is read back by name before it is repeated.
-    A failed registry import is submitted once more, which the provider
-    imports again; a failed build raises.
+    A failed image is submitted once more, which the provider builds or imports
+    again: concurrent identical builds can report a transient failure.
     """
     name = request.name
     resubmitted = False
@@ -135,7 +135,7 @@ async def ensure_image(client: AsyncDaytonaV2Client, request: ImageRequest) -> s
             image = await retry_transient(partial(client.images.get, image.id, wait="ready"))
         if image.status == READY_IMAGE_STATUS:
             return name
-        if resubmitted or not isinstance(request.source, RegistryImage):
+        if resubmitted:
             raise RuntimeError(f"Daytona image {name} is {image.status}: {image.error}")
         resubmitted = True
         await _submit(client, request)

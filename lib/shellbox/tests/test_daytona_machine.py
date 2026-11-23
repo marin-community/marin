@@ -1565,28 +1565,26 @@ def test_daytona_failed_image_closes_client_without_starting_sandbox() -> None:
     client.images = FailingImages(failures=2)
     with pytest.raises(RuntimeError, match="manifest unknown"):
         asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
-    # A failed registry import is submitted once more before the failure stands.
+    # A failed image is submitted once more before the failure stands.
     assert len(client.images.submitted) == 2
     assert client.params is None
     assert client.closed
 
 
-def test_ensure_image_imports_a_failed_registry_image_again() -> None:
-    request = ImageRequest(RegistryImage("fixture:tag"))
+@pytest.mark.parametrize("source_kind", ["registry", "dockerfile"])
+def test_ensure_image_submits_a_failed_image_once_more(tmp_path, source_kind) -> None:
+    # Concurrent identical builds can report a transient failure, which a second submission clears.
+    (tmp_path / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+    source = (
+        RegistryImage("fixture:tag")
+        if source_kind == "registry"
+        else DockerfileSource(tmp_path, tmp_path / "Dockerfile")
+    )
+    request = ImageRequest(source)
     images = FailingImages(failures=1)
 
     assert asyncio.run(ensure_image(SimpleNamespace(images=images), request)) == request.name
     assert images.submitted == [request.name, request.name]
-
-
-def test_ensure_image_raises_a_failed_build_without_rebuilding(tmp_path) -> None:
-    (tmp_path / "Dockerfile").write_text("FROM ubuntu:24.04\nRUN false\n")
-    request = ImageRequest(DockerfileSource(tmp_path, tmp_path / "Dockerfile"))
-    images = FailingImages(failures=1)
-
-    with pytest.raises(RuntimeError, match="manifest unknown"):
-        asyncio.run(ensure_image(SimpleNamespace(images=images), request))
-    assert images.submitted == [request.name]
 
 
 def test_ensure_image_awaits_an_image_another_rollout_submitted() -> None:

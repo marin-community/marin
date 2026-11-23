@@ -16,8 +16,10 @@ from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT
 from shellbox.machine import MachineTerminated
 from shellbox.process_session import BoundedByteBuffer, StreamProcessSession, own_cleanup
 
-# The stdout buffer holds this much unread output before the log stream waits for the reader.
-OUTPUT_BUFFER_BYTES = 128 * 1024
+# The log stream keeps flowing while the reader pauses: over HTTP/2 the SDK multiplexes it
+# with stdin writes and the sandbox's other requests, so a waiting consumer stalls them all.
+# Unread stdout is buffered instead, and the session fails once this much is unread.
+OUTPUT_BUFFER_BYTES = 64 * 1024 * 1024
 STDIN_CHUNK_BYTES = 64 * 1024
 # A followed log can end before its eof; it resumes from the last cursor this many times in a row.
 STREAM_RESUMES = 5
@@ -88,7 +90,7 @@ class DaytonaProcessSession(StreamProcessSession):
                         if event.type == "log":
                             data = decode_frame_data(event.frame.data)
                             if event.frame.channel == "stdout":
-                                await self._output.feed(data)
+                                await self._output.append(data)
                             else:
                                 self.capture_stderr(data)
                         elif event.type == "warning":
