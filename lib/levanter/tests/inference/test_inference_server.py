@@ -817,16 +817,35 @@ def test_snowball_route_evidence_is_consistent_across_serving_adapters():
                 content=encode_frame(options, {"prompt_token_ids": prompt}),
                 headers={"Content-Type": MEDIA_TYPE},
             )
-        assert response.status_code == binary.status_code == 200, (response.text, binary.status_code)
+            stream = client.post(
+                "/v1/chat/completions",
+                json={
+                    **options,
+                    "model": "snowball",
+                    "messages": [{"role": "user", "content": "A"}],
+                    "_skyrl_exact_prompt_token_ids": prompt.tolist(),
+                    "stream": True,
+                },
+            )
+        assert response.status_code == binary.status_code == stream.status_code == 200
+        stream_choices = [
+            json.loads(line[6:])["choices"][0] for line in stream.text.splitlines() if line.startswith("data: {")
+        ]
+        final = stream_choices[-1]
+        assert final["finish_reason"] == response.json()["choices"][0]["finish_reason"]
         choice = response.json()["choices"][0]
         _, arrays = decode_frame(binary.content)
         from_openai = SnowballReplayPayload.from_bytes(base64.b64decode(choice["route_capture"]))
         from_binary = SnowballReplayPayload.from_bytes(arrays["choice.0.route_capture"].tobytes())
+        from_stream = SnowballReplayPayload.from_bytes(base64.b64decode(final["route_capture"]))
         np.testing.assert_array_equal(from_openai.tokens, from_binary.tokens)
+        np.testing.assert_array_equal(from_openai.tokens, from_stream.tokens)
         np.testing.assert_array_equal(from_openai.tokens, [*prompt, *choice["token_ids"]])
         np.testing.assert_array_equal(from_openai.layers[0].selected_experts, from_binary.layers[0].selected_experts)
         np.testing.assert_array_equal(arrays["choice.0.policy_logprobs"], choice["policy_logprobs"])
-        assert from_binary.policy_id == from_openai.policy_id == "fixture:41"
+        np.testing.assert_array_equal(final["policy_logprobs"], choice["policy_logprobs"])
+        np.testing.assert_array_equal(from_openai.layers[0].qb_alpha, from_stream.layers[0].qb_alpha)
+        assert from_binary.policy_id == from_openai.policy_id == from_stream.policy_id == "fixture:41"
     finally:
         server.shutdown()
 

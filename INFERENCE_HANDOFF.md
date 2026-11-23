@@ -60,15 +60,19 @@ All compared outputs still matched bit-for-bit.
 
 A separate terminal executable added a device dispatch for short scanned
 requests. It left throughput 11.4% lower for the homogeneous burst and 27.7%
-lower for mixed requests with capture enabled. Scanned models now capture
-terminal rows inline. Unrolled models share one terminal executable across
-prefill and decode buckets.
+lower for mixed requests with capture enabled. Capturing terminal rows
+inline on scanned models reached 5,189 versus 5,739 output tokens/s
+(−9.6%) on the homogeneous burst and 761 versus 964 (−21.1%) on mixed
+requests. Tokens, scores, and finish reasons still matched exactly.
+Unrolled models share one terminal executable across prefill and decode
+buckets. The first cold v5p-8 prefill and extraction fell from 133 s to 61 s
+after this change.
 [Separate terminal capture](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-terminal-20261122)
 · [Inline terminal capture](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-scan-inline-20261122)
 
-The full-model v5p-8 job runs both replay arms with raw policy scores enabled.
-Both use the same worker and pinned 64K AgentX traffic. The measured native
-and compiled vLLM gap is a separate acceptance gate.
+The initial full-model replay arm on v5p-8 generated 400.97 output tokens/s.
+That snapshot buffered text until completion for requests with raw policy
+scores, so its first-token latency includes generation time.
 [Paired v5p-8 AgentX runs](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-replay-pair-20261122)
 
 The follow-up runs use the shared terminal kernel and incremental chat
@@ -76,6 +80,13 @@ streaming. They retain the same context, offered concurrency, checkpoint,
 and frozen prompts. Both arms request raw policy scores.
 [Optimized replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-optimized-replay-20261122)
 · [Replay-off control](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-optimized-control-20261122)
+
+The streaming adapter now writes a route event as JSON bytes and sends the
+SSE framing separately. A synthetic 46 MiB route event took 56 ms to format,
+compared with 118 ms for the old formatter, and produced identical bytes.
+The normal OpenAI stream and tensor endpoint still agree on route identity
+and policy scores.
+[Byte-oriented replay run](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-byte-stream-replay-20261122)
 
 On CoreWeave, a four-GB200 smoke matched packed native and captured
 generation, including scores and terminal routes. Both full AgentX runs

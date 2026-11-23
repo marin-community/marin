@@ -33,6 +33,7 @@ from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoic
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
+from pydantic import TypeAdapter
 from tokenizers.decoders import DecodeStream
 from tokenizers.models import BPE
 from transformers import PreTrainedTokenizerFast
@@ -68,6 +69,7 @@ logger = logging.getLogger(__name__)
 
 
 TOKEN_ID_PREFIX = "token_id:"
+_CHAT_CHUNK_ENCODER = TypeAdapter(ChatCompletionChunk)
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset(
     {"add_generation_prompt", "continue_final_message", "chat_template", "return_dict", "tokenize"}
 )
@@ -100,7 +102,7 @@ def _chat_completion_events(
     *,
     include_usage: bool,
     emitted_text: dict[int, list[str]] | None = None,
-) -> collections.abc.Iterator[str]:
+) -> collections.abc.Iterator[str | bytes]:
     """Emit any remaining text, the finish reasons, and optional usage."""
     for choice in completion.choices:
         prefix = "" if emitted_text is None else "".join(emitted_text.get(choice.index, ()))
@@ -141,7 +143,14 @@ def _chat_completion_events(
                         if key in completion.model_extra
                     }
                 )
-            yield _sse_event(chunk.model_dump_json())
+            if chunk_choice is finish and "route_capture" in finish_fields:
+                # A full-context route capture can take tens of MiB. Keep the JSON in bytes
+                # and send the SSE framing separately to avoid copying the entire event.
+                yield b"data: "
+                yield _CHAT_CHUNK_ENCODER.dump_json(chunk)
+                yield b"\n\n"
+            else:
+                yield _sse_event(chunk.model_dump_json())
     if include_usage:
         chunk = ChatCompletionChunk(
             id=completion.id,
@@ -684,7 +693,7 @@ async def _stream_chat_completion(
         logger.exception("Error before chat streaming started")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    async def events() -> collections.abc.AsyncIterator[str]:
+    async def events() -> collections.abc.AsyncIterator[str | bytes]:
         decoders: dict[int, DecodeStream] = {}
         emitted: dict[int, list[str]] = {}
         update = first
