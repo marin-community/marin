@@ -26,11 +26,9 @@ from taskcompendium.importers.evalchemy.facts_parametric import (
     facts_parametric_item,
     read_facts_parametric,
 )
-from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.pipeline.inputs import SourceFormat
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
-from experiments.evaluation.benchmarks.environments import JUDGE_GRADER
 from experiments.evaluation.prompt_compilation import evaluation_source
 from experiments.post_training.task_curation.pipeline import UrlSource
 
@@ -40,7 +38,7 @@ FACTS_PARAMETRIC_URL = (
 )
 FACTS_PARAMETRIC_SHA256 = "23fdc39d681656c87c6790b158f3d3a54f335903691a3285599c67a1578439f8"
 FACTS_PARAMETRIC_POPULATION = 1052
-VERSION = "2026.11.20"
+VERSION = "2026.11.23"
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
@@ -75,9 +73,9 @@ def benchmarks() -> list[EvaluationBenchmark]:
             read=read_facts_parametric,
         ),
         convert=convert_facts_parametric,
-        version=VERSION + "-" + scorer_revision("facts_parametric"),
+        version=VERSION,
         protocol=protocol,
         item_builder=facts_parametric_item,
-        grader=JUDGE_GRADER,
+        grader=None,
     )
     return fixed_benchmarks([source], "chat")

@@ -1418,10 +1418,32 @@ def test_pairwise_rejects_invalid_contracts_before_calling_the_judge(unconfigure
         grade_judge.grade_judge_candidate(replace(_pairwise_spec(), **change), "candidate")
 
 
-@pytest.mark.parametrize("change", [{"label_weights": {"PASS": 3.0}}, {"verdict_patterns": (r"\[\[(\w+)\]\]",)}])
-def test_pairwise_only_fields_are_rejected_on_label_judges(unconfigured_judge, change):
+@pytest.mark.parametrize(
+    "change", [{"label_weights": {"PASS": 3.0}}, {"verdict_patterns": (r"\[\[A=B\]\]",)}, {"verdict_patterns": ("(",)}]
+)
+def test_label_judges_reject_weights_and_malformed_verdict_patterns(unconfigured_judge, change):
     with pytest.raises(InvalidTask):
         grade_judge.grade_judge_candidate(_label_spec(**change), "candidate")
+
+
+@pytest.mark.parametrize(
+    "reply,reward,status",
+    [
+        ("[[A!=B]] at first, but on reflection VERDICT: [[A=B]]", 1.0, Status.SCORED),
+        ("VERDICT: [[A=B]]\nVERDICT: [[A!=B]]", 0.0, Status.SCORED),
+        ("[[A=B]] with no verdict line", 0.0, Status.INFRA_ERROR),
+        ("VERDICT: [[A?B]]", 0.0, Status.INFRA_ERROR),
+    ],
+)
+def test_label_verdict_patterns_read_the_last_match(fake_judge, reply, reward, status):
+    fake_judge.replies = [reply]
+    spec = _label_spec(verdict_patterns=(r"VERDICT: (\[\[[^\]]*\]\])",))
+    if status is Status.INFRA_ERROR:
+        with pytest.raises(GradingInfraError):
+            grade_judge.grade_judge_candidate(spec, "candidate")
+        return
+    verdict = grade_judge.grade_judge_candidate(spec, "candidate")
+    assert (verdict.status, verdict.reward) == (status, reward)
 
 
 def test_judge_reply_sends_the_conversation_and_retries_transient_failures(fake_judge, monkeypatch):

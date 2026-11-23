@@ -41,5 +41,5 @@ def test_publication_sends_question_and_binds_gold_answer(tmp_path, monkeypatch)
     for case, row in zip(cases, ROWS, strict=True):
         [event] = case.task.context.events
         assert (event.role, event.content) == ("user", row["query"])
-        judge = case.task.grader.judge
-        assert (judge.question, judge.references) == (row["query"], (row["answer"],))
+        parameters = case.task.grader.parameters
+        assert (parameters["question"], parameters["references"]) == (row["query"], [row["answer"]])
