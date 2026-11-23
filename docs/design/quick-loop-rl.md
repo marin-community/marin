@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 8:40 a.m. PST.
+Draft for review.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -19,9 +19,9 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Levanter learner with vLLM | The frozen 25-update arm scored 0.2310 to 0.3201 on 40 H100s. Its median warm update took 3.0 times the Megatron control’s wall time. The maintained two-update H100 arm also passed exact restore and all 24 receiver checks. | Profile maintained publication and run a longer comparison before changing the learner default. |
 | Learner port based on `main` | The port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Four deployed learner hosts applied two updates, including exact continuation after restart, with vLLM serving. | Finish the matched native arm with the same learner. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | — |
-| Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
+| Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. On eight H100s, one pinned 67B diagnostic passed weight swap, a real tool turn, and all 32,768 full-context fused scorer targets. [Passing diagnostic][native-passing-diagnostic-evidence] | Repeat the 67B diagnostic before promoting native serving. Earlier diagnostics crossed the scorer's ratio bounds. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 67B live swap, real tool-turn replay and full-context fused scoring passed together on one eight-H100 host. The repaired five-host arm completed one exact learner update and restore before GPU preemption. Its 40-H100 replacement matched all 100 baseline prompts before Kueue preempted it during first-batch admission. The next candidate passed the local launch and evidence checks. | Complete two updates and both 100-task panels on one fresh matched attempt. Qualify H100 recovery after scheduler eviction and improve sustained admission before promoting native serving. |
+| Native inventory backend | The 40-H100 vLLM control completed both updates and both panels at 0.331 lease seconds per admitted group. The repaired native arm completed one update and exact restore before preemption. The sealed native `2026.11.23.90` attempt passed launch and evidence checks and awaits submission. [Accepted control][iris-held-vllm-validation-replacement] | Complete two native updates and both 100-task panels. Compare lease seconds per admitted group, update time and fixed-panel reward with the accepted control. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Verify the full native handoff at 67B. The frozen H100 comparison uses its original worker transport. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -2238,9 +2238,11 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   request across leafgroups of four, two, and two. At 18:53 UTC, the
   existing GPU reservations were already bound to pods and accounted
   for in the capacity scan. This was a physical fit at the time of
-  inspection. Admission requires a live Kueue assignment, and the
-  BATCH request remains subject to preemption. Record the realized
-  topology alongside the rollout and learner timing.
+  inspection. By 19:04 UTC no idle host met the full request, while
+  Kueue still had 173 H100s of unreserved quota. Check current node
+  capacity and quota before submission. The BATCH request remains
+  subject to preemption. Record the realized topology alongside the
+  rollout and learner timing.
   [Kueue v0.18.3 topology scheduling][kueue-preferred-topology]
 
   The accepted vLLM control's archived pod placement joins to four
