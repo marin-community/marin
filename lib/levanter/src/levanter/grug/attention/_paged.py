@@ -30,8 +30,12 @@ _RPA_V3_VMEM_LIMIT_BYTES = MappingProxyType(
 )
 _RPA_V3_WIDE_DECODE_TILES = (4096, 2048)
 FUSED_KV_APPEND_MAX_TOKENS = 32
-_FUSED_KV_PREFILL_MAX_TOKENS = 8192
-_V5P_FUSED_KV_PREFILL_MAX_TOKENS = 65_536
+_FUSED_KV_PREFILL_LIMITS = MappingProxyType(
+    {
+        pltpu.ChipVersion.TPU_V5P: 65_536,
+        pltpu.ChipVersion.TPU_V6E: 8_192,
+    }
+)
 RPA_V3_ALIGNMENT = 128
 
 
@@ -154,10 +158,10 @@ def _tpu_v3_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *
 
 
 def fused_kv_prefill_token_limit() -> int:
-    """Return the largest prefill width supported by fused KV append."""
-    if jax.default_backend() == "tpu" and pltpu.get_tpu_info().chip_version == pltpu.ChipVersion.TPU_V5P:
-        return _V5P_FUSED_KV_PREFILL_MAX_TOKENS
-    return _FUSED_KV_PREFILL_MAX_TOKENS
+    """Return the fused prefill width limit, with zero for unsupported devices."""
+    if jax.default_backend() != "tpu":
+        return 0
+    return _FUSED_KV_PREFILL_LIMITS.get(pltpu.get_tpu_info().chip_version, 0)
 
 
 def ragged_paged_attention_append(
