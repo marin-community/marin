@@ -585,7 +585,11 @@ def _normalize_draft_mirror(config: dict, expected_launch: dict) -> None:
     """Normalize a draft mirror when its receipt matches the planned Hub source and revision."""
     path = "skyrl.generator.speculative_decoding.model"
     draft, expected = get_path(config, path), get_path(expected_launch, path)
-    if not isinstance(draft, dict) or not isinstance(expected, dict) or not expected["source_uri"].startswith("hf://"):
+    if not isinstance(draft, dict) or not isinstance(expected, dict):
+        return
+    expected_uri = expected["source_uri"]
+    model_id = expected_uri.removeprefix("hf://")
+    if model_id == expected_uri:
         return
     mirrors = config["inputs"].get("hugging_face_models", [])
     matches = [
@@ -593,11 +597,11 @@ def _normalize_draft_mirror(config: dict, expected_launch: dict) -> None:
         for index, mirror in enumerate(HuggingFaceModelCache(**row) for row in mirrors)
         if mirror.uri == draft["source_uri"]
         and mirror.identity == draft["source_identity"]
-        and mirror.model_id == expected["source_uri"].removeprefix("hf://")
+        and mirror.model_id == model_id
         and mirror.revision == mirror.resolved_revision == expected["source_identity"]
     ]
     if len(matches) == 1:
-        draft.update(source_uri=expected["source_uri"], source_identity=expected["source_identity"])
+        draft.update(source_uri=expected_uri, source_identity=expected["source_identity"])
         del mirrors[matches[0]]
 
 

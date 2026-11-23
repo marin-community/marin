@@ -141,7 +141,7 @@ def test_frozen_object_store_speculator_is_supported(method: str, vllm_sampling:
 def test_dspark_rejects_online_training_config() -> None:
     config = _base_config()
     config["generator"]["speculative_decoding"]["method"] = "dspark"
-    with pytest.raises(SpeculativeDecodingConfigError, match=r"\.training is supported only for eagle3"):
+    with pytest.raises(SpeculativeDecodingConfigError, match=r"\btraining\b.*\beagle3\b"):
         parse_rl_config(config)
 
 

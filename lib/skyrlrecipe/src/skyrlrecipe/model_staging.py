@@ -22,7 +22,7 @@ class HuggingFaceModelCache:
 
 
 def immutable_model_cache_key(source: str, identity: str) -> str:
-    """Preserve the digest used in existing worker and bucket cache paths."""
+    """Return the stable cache digest for a model source and immutable identity."""
     return hashlib.sha256(f"{source}@{identity}".encode()).hexdigest()
 
 
