@@ -113,7 +113,16 @@ class InferenceEngineConfig:
     max_tokens_per_round: int | None = None
     """Pack size for each decode loop iteration. If None, set to max_seqs """
 
+    prefill_bucket_sizes: tuple[int, ...] = ()
+    """Additional compiled prompt token capacities below max_prefill_size."""
+
+    decode_bucket_sizes: tuple[int, ...] = ()
+    """Additional compiled token capacities below max_tokens_per_round."""
+
     def __post_init__(self):
+        prefill_limit = self.max_prefill_size or self.max_pages_per_seq * self.page_size
+        _validate_bucket_sizes(self.prefill_bucket_sizes, prefill_limit, "prefill")
+        _validate_bucket_sizes(self.decode_bucket_sizes, self.imputed_max_tokens_per_round, "decode")
         if self.max_rounds < 1:
             raise ValueError("max_rounds must be positive")
 
@@ -135,6 +144,15 @@ class InferenceEngineConfig:
     @property
     def max_pages_per_seq(self) -> int:
         return (self.max_seq_len + self.page_size - 1) // self.page_size
+
+
+def _validate_bucket_sizes(sizes: tuple[int, ...], limit: int, phase: str) -> None:
+    if sizes != tuple(sorted(set(sizes))) or any(not 0 < size < limit for size in sizes):
+        raise ValueError(f"{phase} bucket sizes must be positive, strictly increasing, and below {limit}")
+
+
+def _token_bucket(needed: int, sizes: tuple[int, ...], limit: int) -> int:
+    return next((size for size in sizes if size >= needed), limit)
 
 
 def _tree_byte_size(tree, axis_resources: ResourceMapping | None = None) -> int:
@@ -1206,10 +1224,11 @@ class InferenceEngine:
         if offset == 0:
             return None
 
+        capacity = _token_bucket(offset, self.config.prefill_bucket_sizes, max_prefill_size)
         prefill_queue = TokenQueue(
-            queued_tokens=hax.named(jnp.asarray(queue_tokens, dtype=jnp.int32), axis="position"),
-            queued_slot_ids=hax.named(jnp.asarray(queue_slot_ids, dtype=jnp.int32), axis="position"),
-            queued_pos_ids=hax.named(jnp.asarray(queue_pos_ids, dtype=jnp.int32), axis="position"),
+            queued_tokens=hax.named(jnp.asarray(queue_tokens[:capacity], dtype=jnp.int32), axis="position"),
+            queued_slot_ids=hax.named(jnp.asarray(queue_slot_ids[:capacity], dtype=jnp.int32), axis="position"),
+            queued_pos_ids=hax.named(jnp.asarray(queue_pos_ids[:capacity], dtype=jnp.int32), axis="position"),
             num_queued_tokens=jnp.array(offset, dtype=jnp.int32),
         )
 
@@ -1377,12 +1396,15 @@ class InferenceEngine:
 
             if step_callback is not None:
                 step_callback(decode_iteration)
+            token_capacity = _token_bucket(
+                len(self.local_map), self.config.decode_bucket_sizes, self.config.imputed_max_tokens_per_round
+            )
             started = time.monotonic()
             self.gen_state, outputs = _run_generation_loop(
                 self.gen_state,
                 self.model,
                 self.sampler,
-                self.config.imputed_max_tokens_per_round,
+                token_capacity,
                 self.config.max_rounds,
                 capture_routes,
             )
