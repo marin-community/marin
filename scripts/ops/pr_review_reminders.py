@@ -17,7 +17,7 @@ SLACK_LIMIT = 4000
 
 
 def records(endpoint: str, fields: str) -> list[dict]:
-    """Project each page before loading GitHub data into memory."""
+    """Return the jq projection of every record from a repository-relative REST endpoint."""
     separator = "&" if "?" in endpoint else "?"
     result = subprocess.run(
         [
@@ -53,10 +53,9 @@ def previous_weekday(now: datetime) -> datetime:
     return cutoff
 
 
-def due_reviewers(pull: dict, cutoff: datetime) -> list[str]:
-    """Start from current individual requests and remove recently active reviewers."""
-    waiting = set(pull["reviewers"])
-    number = pull["number"]
+def due_reviewers(number: int, reviewers: list[str], cutoff: datetime) -> list[str]:
+    """Return reviewers with neither a new request nor PR activity at or after cutoff."""
+    waiting = set(reviewers)
     timeline = records(
         f"issues/{number}/timeline",
         "{event, actor: .actor.login, user: .user.login, requested: .requested_reviewer.login,"
@@ -68,10 +67,11 @@ def due_reviewers(pull: dict, cutoff: datetime) -> list[str]:
             continue
         if event["event"] == "review_requested":
             waiting.discard(event["requested"])
+            waiting.discard(event["actor"])
         if event["event"] in {"commented", "reviewed"}:
             waiting.discard(event["user"])
         # A mention or assignment can be recorded in the recipient's name.
-        if event["event"] in {"labeled", "unlabeled", "closed", "reopened", "review_requested", "merged"}:
+        if event["event"] in {"labeled", "unlabeled", "closed", "reopened", "merged"}:
             waiting.discard(event["actor"])
     if waiting:
         since = cutoff.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -99,7 +99,7 @@ def reminder_lines(now: datetime) -> Iterable[str]:
             continue
         if pull["author_type"] != "User" or not has_write_access(pull["author"]):
             continue
-        reviewers = due_reviewers(pull, cutoff)
+        reviewers = due_reviewers(pull["number"], pull["reviewers"], cutoff)
         if reviewers:
             number = pull["number"]
             yield f"<https://github.com/{REPO}/pull/{number}|#{number}>  " + ", ".join(reviewers)

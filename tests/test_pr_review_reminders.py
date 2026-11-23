@@ -50,9 +50,10 @@ def test_monday_digest_keeps_only_due_reviewers_and_active_internal_prs(monkeypa
 
     monkeypatch.setattr(reminders, "records", read)
     monkeypatch.setattr(reminders, "has_write_access", lambda login: login == "member")
-    assert reminders.messages(reminders.reminder_lines(monday)) == [
-        "*Marin PRs waiting for review*\n<https://github.com/marin-community/marin/pull/10|#10>  early"
-    ]
+    (line,) = reminders.reminder_lines(monday)
+    link, *logins = line.split()
+    assert link == "<https://github.com/marin-community/marin/pull/10|#10>"
+    assert logins == ["early"]
 
 
 def test_digest_splits_at_pr_boundaries_only_when_needed():
