@@ -474,6 +474,7 @@ BASE_RECIPE_VERSION = "3"
 REPAIRED_RECIPE_VERSION = "4"
 TOOLCALL_SCHEMA_RECIPE_VERSION = "6"
 EXECUTABLE_GRADER_RECIPE_VERSION = "6"
+REASONING_GYM_RECIPE_VERSION = "7"
 REASONING_MARKUP_RECIPE_VERSION = "7"
 UNGRADABLE_STATEMENT_RECIPE_VERSION = "8"
 RECIPE_VERSIONS = {
@@ -485,7 +486,7 @@ RECIPE_VERSIONS = {
     "ultra_sft_step3200_calendar_v2": REASONING_MARKUP_RECIPE_VERSION,
     "ultra_sft_step3200_comp_coding": UNGRADABLE_STATEMENT_RECIPE_VERSION,
     "ultra_sft_step3200_lean": EXECUTABLE_GRADER_RECIPE_VERSION,
-    "ultra_sft_step3200_reasoning_gym": EXECUTABLE_GRADER_RECIPE_VERSION,
+    "ultra_sft_step3200_reasoning_gym": REASONING_GYM_RECIPE_VERSION,
 }
 """Calibrated or deterministic grader revisions; new judge families stay on version 3 until calibrated."""
 
