@@ -27,13 +27,13 @@ during inference.
 import functools
 import math
 from enum import Enum
-from typing import Any
 
 import jax
 import jax.numpy as jnp
 from jax import lax
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
+from jax.typing import DTypeLike
 
 from levanter.kernels.pallas._ragged_paged_attention_v3_layout import (
     align_to,
@@ -789,7 +789,7 @@ def _ragged_paged_attention_kernel_loop(
 
         @pl.loop(0, num_bq, unroll=False)
         def compute_with_bq(bq_idx):
-            # Re-initialize l, m, acc to 0 before bkv loop.
+            # Reset the online softmax state for each query tile.
             l_ref[...] = jnp.full_like(l_ref, 0.0)
             m_ref[...] = jnp.full_like(m_ref, -jnp.inf)
             acc_ref[...] = jnp.full_like(acc_ref, 0.0)
@@ -818,7 +818,6 @@ def _ragged_paged_attention_kernel_loop(
             def compute_with_bkv(bkv_idx):
                 assert bkv_sz % kv_packing == 0
 
-                # Get next bkv ids.
                 bkv_sem_idx = sem_ids_ref[1]
                 next_seq_idx, _, next_bkv_idx, next_bkv_sem_idx = get_next_bkv_ids(
                     seq_idx, bq_idx, bkv_idx, bkv_sem_idx, num_bkv=end_bkv_idx
@@ -836,7 +835,6 @@ def _ragged_paged_attention_kernel_loop(
                 def wait_cur_bq():
                     wait_fetch_bq(seq_idx, bq_idx, bq_sem_idx)
 
-                # Wait for cur bkv
                 offset, update_sz = wait_fetch_bkv(seq_idx, bkv_idx, bkv_sem_idx)
 
                 if update_kv_cache:
@@ -948,7 +946,6 @@ def _ragged_paged_attention_kernel_loop(
             out = pltpu.bitcast(out.astype(q_dtype), out_ref.dtype).reshape(out_ref.shape)
             strided_store(out_ref, 0, out_ref.shape[0], 1, out)
 
-            # Send cur bo
             start_send_bo(seq_idx, bq_idx, bo_sem_idx)
 
     ### ------- Kernel start ------- ###
@@ -1093,7 +1090,7 @@ def dynamic_validate_inputs(
     sm_scale: float = 1.0,
     sliding_window: int | None = None,
     soft_cap: float | None = None,
-    out_dtype: Any = None,
+    out_dtype: DTypeLike | None = None,
     mask_value: float | None = None,
     q_scale: float | None = None,
     k_scale: float | None = None,
@@ -1184,7 +1181,7 @@ def static_validate_inputs(
     sm_scale: float = 1.0,
     sliding_window: int | None = None,
     soft_cap: float | None = None,
-    out_dtype: Any = None,
+    out_dtype: DTypeLike | None = None,
     mask_value: float | None = None,
     q_scale: float | None = None,
     k_scale: float | None = None,
@@ -1441,7 +1438,7 @@ def ragged_paged_attention(
     sm_scale: float = 1.0,
     sliding_window: int | None = None,
     soft_cap: float | None = None,
-    out_dtype: Any = None,
+    out_dtype: DTypeLike | None = None,
     mask_value: float | None = None,
     q_scale: float | None = None,
     k_scale: float | None = None,
@@ -1484,9 +1481,7 @@ def ragged_paged_attention(
       sm_scale: the softmax scale which will be applied to the Q@K^T.
       sliding_window: the sliding window size for the attention.
       soft_cap: the logit soft cap for the attention.
-      out_dtype: the dtype of the output and the accumulator for matmul. Set
-        lower for better performance, set higher for better accuracy. If None, it
-        uses q.dtype.
+      out_dtype: accumulator dtype. The attention output uses the query dtype.
       mask_value: mask value for causal mask.
       q_scale: the scale for the query.
       k_scale: the scale for the key.
@@ -1504,7 +1499,7 @@ def ragged_paged_attention(
       disable_semaphore_checks: if true, disable semaphore checks.
 
     Returns:
-      The output of the attention.
+      Attention output and the resulting KV cache.
     """
     q, k, v = queries, keys, values
     tpu_version = get_tpu_version()

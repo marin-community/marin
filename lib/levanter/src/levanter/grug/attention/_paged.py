@@ -4,6 +4,7 @@
 """Array-first attention over Levanter's interleaved paged KV cache."""
 
 from functools import partial
+from types import MappingProxyType
 from typing import Literal, NamedTuple
 
 import jax
@@ -21,10 +22,13 @@ from levanter.kernels.pallas.ragged_paged_attention_v3 import ragged_paged_atten
 PagedAttentionImplementation = Literal["reference", "tpu", "tpu_v3"]
 _TPU_QUERIES_PER_BLOCK = 128
 _TPU_KV_PAGES_PER_BLOCK = 8
-_RPA_V3_VMEM_LIMIT_BYTES = {
-    pltpu.ChipVersion.TPU_V5P: 50_000 * 1024,
-    pltpu.ChipVersion.TPU_V6E: 98_304 * 1024,
-}
+_RPA_V3_VMEM_LIMIT_BYTES = MappingProxyType(
+    {
+        pltpu.ChipVersion.TPU_V5P: 50_000 * 1024,
+        pltpu.ChipVersion.TPU_V6E: 98_304 * 1024,
+    }
+)
+_RPA_V3_WIDE_DECODE_TILES = (4096, 2048)
 FUSED_KV_APPEND_MAX_TOKENS = 32
 FUSED_KV_PREFILL_MAX_TOKENS = 8192
 _RPA_V3_ALIGNMENT = 128
@@ -57,6 +61,8 @@ def ragged_paged_attention(
         soft_cap: Optional tanh logit cap, applied before masking.
         implementation: Select the reference, the upstream FP32 TPU kernel,
             or BF16 paged attention v3 on v5p and v6e.
+            The v3 selection uses the FP32 TPU kernel for small sliding-window
+            batches or inputs outside the BF16 kernel's layout.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
     Padding queries produce zero. By default, FP32 inputs on supported TPUs use Pallas
@@ -217,10 +223,10 @@ def _tpu_v3(
     decode_cores = 1
     if append and sliding_window is None and q.shape[0] <= FUSED_KV_APPEND_MAX_TOKENS and q.shape[2] == 4:
         if chip == pltpu.ChipVersion.TPU_V6E and q.shape[1] == 1:
-            decode_block, decode_compute_block = 4096, 2048
+            decode_block, decode_compute_block = _RPA_V3_WIDE_DECODE_TILES
         elif chip == pltpu.ChipVersion.TPU_V5P and q.shape[1] == 2:
             decode_cores = 2
-            decode_block, decode_compute_block = 4096, 2048
+            decode_block, decode_compute_block = _RPA_V3_WIDE_DECODE_TILES
     output, updated = tpu_ragged_paged_attention_v3(
         q.reshape(q.shape[0], -1, q.shape[-1]),
         dummy_kv if k is None else k,
