@@ -2094,7 +2094,7 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   for checkpoint and panel verification.
   [Regional request fixture][held-native-recovery-root] ·
   [Exact first-attempt launcher][held-native-direct-operator] ·
-  [Original native matched arm][iris-held-native-matched-current] ·
+  [Original native matched arm][iris-held-native-matched-preempted] ·
   [Verified 40-rank startup][held-native-matched-current-startup]
 
   The conventional vLLM launch receipt records the configuration before
@@ -2151,7 +2151,7 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   recorded five fully masked groups totaling 20 projected tokens. The two
   series have no shared group identifier. The model deadline starts before
   the Ray request is queued, and the logs show it expired before eviction.
-  [Original native attempt][iris-held-native-matched-current]
+  [Original native attempt][iris-held-native-matched-preempted]
 
   A local cancellation fix forwards the expired training request's
   cancellation to Ray. In the frozen CPU reproduction, the expired request
@@ -2577,7 +2577,7 @@ arms. [Prior timing comparison][timing]
 [held-native-recovery-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fordinary-checkpoint-cpu-proof.tar.zst
 [held-native-recovery-root]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fparentless-regional-launch-proof.tar.zst
 [held-native-direct-operator]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-first-attempt-7de5313.tar.gz
-[iris-held-native-matched-current]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-7de5313-in-424011b4-2026.11.23.2-a7416ff4d7c8
+[iris-held-native-matched-preempted]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-7de5313-in-424011b4-2026.11.23.2-a7416ff4d7c8
 [held-native-matched-current-startup]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-startup-proof.tar.zst
 [held-native-matched-current-config]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-effective-workload.tar.zst
 [held-native-matched-current-shards]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-shard-load-proof.tar.zst
