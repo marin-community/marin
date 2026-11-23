@@ -136,7 +136,8 @@ def glm_source(policy: Policy) -> EndpointSource:
 
 
 async def one(args: argparse.Namespace) -> int:
-    """Run one proposal to a published head; ``DEFERRED`` when it waits for the decision model, else 0."""
+    """Run one proposal to a published head; ``DEFERRED`` when it waits for the decision model, ``ANSWERED`` when a
+    ``--probe`` run got a fresh decision-model answer, else 0."""
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
         proposal = TASK_PROPOSAL.validate_json(source.read())
