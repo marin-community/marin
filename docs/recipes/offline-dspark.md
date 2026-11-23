@@ -101,12 +101,16 @@ down before Speculators uses one of the leader's GPUs. The RunAI loader
 caps each process's CPU buffer at 8 GiB. The trainer stages only the
 teacher's embedding and final gated head shards.
 
+Export `CW_KEY_ID` and `CW_KEY_SECRET` before submission so Iris can pass
+them to the job as secrets.
+
 ```bash
 uv run iris --cluster=marin job run --no-wait \
   --job-name mochi-dspark --target-cluster cw-us-east-08a --region us-east-08a \
   --enable-extra-resources --replicas 2 --gpu GB200x4 \
   --cpu 48 --memory 768GB --disk 600GB --timeout 7200 \
-  --sync-package marin-core --extra cpu -e TMPDIR /cache \
+  --sync-package marin-core --extra cpu -e TMPDIR /cache -e MARIN_PREFIX "$MARIN_PREFIX" \
+  --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
   -- python -m experiments.post_training.dspark_sft --preset mochi-agentic --stage train
 ```
 
