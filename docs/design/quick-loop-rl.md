@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 5:08 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 5:13 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -1829,7 +1829,15 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   attempt ended with zero accepted updates. Scope the next deadline
   change to the supplemental validation save and retain the exact
   fresh-process state comparison.
+  Both `2026.11.22.3` plans preserve the retry's launch settings and set
+  a 45-minute inner commit deadline for the validation save within the
+  existing 60-minute learner command window. Ordinary checkpoint saves
+  retain the 30-minute inner deadline. The two-process CPU check passed
+  exact fresh restore and a separate test propagated a real commit
+  failure before emitting any fingerprints. The vLLM coordinator has
+  accepted the new run.
   [Fresh held vLLM child][iris-held-vllm-retry]
+  [Validation-deadline vLLM coordinator][iris-held-vllm-validation-timeout]
 
   The native coordinator lost its first slot before the GPU group was
   admitted and its second during regional initializer streaming. Its
@@ -1907,9 +1915,17 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   with 53,055 prompt tokens and 49,078 generated tokens. The same worker
   returned an assistant-prefix training frame with all 79 prompt tokens,
   contiguous positions and exactly ten raw logprobs for the ten sampled
-  tokens. The warm unary-versus-batched comparison is in progress.
+  tokens. The warm comparison completed the same 16 prompts in 264.9
+  seconds batched and 858.0 seconds unary. Four responses had identical
+  token IDs, three also had bit-identical sampling logprobs and 15 had
+  identical finish reasons. The maximum absolute sampling-logprob
+  difference among the identical responses was 0.475. The instrument
+  timed requests with the same policy and per-request sampling seed.
+  The observed batch-shape sensitivity leaves the separate raw PPO score
+  gate open.
   [Original calibration][iris-native-serving-eval-first] ·
-  [Revised calibration][iris-native-serving-eval-retry]
+  [Revised calibration][iris-native-serving-eval-retry] ·
+  [Verified calibration archive][native-serving-eval-archive]
 
   Both plans use a 24,576-token serving limit and a 16,896-token request
   limit. Native uses the cache geometry from the 67B live-swap run. Use the same learner, selection and fixed panel to
@@ -2017,8 +2033,10 @@ arms. [Prior timing comparison][timing]
 [native-head-first-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused%2F0%2F709a5c5cf7fb819e%2Foutputs.tar.zst
 [iris-held-vllm-direct-corrected]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-38f335b-in-424011b4-2026.11.22.1-acd9904b74c0
 [iris-held-vllm-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-52324ce-in-424011b4-2026.11.22.2-coordinator-3c9d26e6%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-52324ce-in-424011b4-2026.11.22.2-a08d6abd1b30
+[iris-held-vllm-validation-timeout]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-aabb141-in-424011b4-2026.11.22.3-coordinator-c303053f
 [iris-native-serving-eval-first]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-serving-67b-eval-20261123a
 [iris-native-serving-eval-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-serving-67b-eval-20261123b
+[native-serving-eval-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-serving-67b-eval-20261123b%2F0%2F15f62cbc6c076387%2Foutputs.tar.zst
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
 [iris-native-head-comparison]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused
 [iris-held-native-repaired]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-ac90c03-in-424011b4-2026.11.22.1-coordinator-f7d86071
