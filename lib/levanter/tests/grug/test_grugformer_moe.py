@@ -58,6 +58,7 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.devices import use_cpu_devices, use_test_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -2604,3 +2605,29 @@ def test_combine_in_fp32_matches_an_fp32_combine_reference_on_eight_devices():
                 mesh=mesh,
                 combine_in_fp32=True,
             )
+
+
+def test_small_ep_decode_matches_ring_with_a_padded_token():
+    with use_cpu_devices(2), jax.set_mesh(compact_grug_mesh(expert_axis_size=2)):
+        mesh = jax.sharding.get_abstract_mesh()
+        mlp = MoEExpertMlp.init(
+            num_experts=4,
+            hidden_dim=8,
+            intermediate_dim=16,
+            initializer_std=0.1,
+            key=jax.random.key(23),
+            implementation="ring",
+            capacity_factor=2.0,
+        )
+        token_spec = P("expert", None)
+        tokens = jax.sharding.reshard(jax.random.normal(jax.random.key(17), (2, 8)), token_spec)
+        indices = jax.sharding.reshard(jnp.array([[0, 3], [2, 1]], dtype=jnp.int32), token_spec)
+        combine = jax.sharding.reshard(jnp.array([[0.25, 0.75], [0.4, 0.6]], dtype=jnp.float32), token_spec)
+        valid = jax.sharding.reshard(jnp.array([True, False]), P("expert"))
+        args = (tokens, indices, combine)
+        reference = mlp(*args, token_valid=valid, mesh=mesh)
+        selected = mlp.decode_small_ep(*args, token_valid=valid, mesh=mesh)
+
+    np.testing.assert_allclose(selected, reference, atol=1e-6, rtol=1e-5)
+    assert np.any(np.asarray(selected)[0] != 0)
+    np.testing.assert_array_equal(np.asarray(selected)[1], 0)
