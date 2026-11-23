@@ -67,6 +67,8 @@ def _score_coin_flip(answer: str, entry: dict) -> float:
         candidate = Fraction(answer.replace(",", ""))
     except (ValueError, ZeroDivisionError):
         return 0.0
+    if not 0 <= candidate <= 1:
+        return 0.0
     return float(abs(candidate - expected) <= abs(expected) / COIN_FLIP_RELATIVE_DENOMINATOR)
 
 

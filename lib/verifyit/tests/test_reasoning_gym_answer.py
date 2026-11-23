@@ -87,6 +87,13 @@ def test_coin_flip_scores_a_probability_within_a_tenth_of_a_percent(reply, rewar
     assert grade_reasoning_gym.score_reasoning_gym_answer("coin_flip", entry, reply) == reward
 
 
+@pytest.mark.parametrize(("reply", "reward"), [("0.999", 1.0), ("1.001", 0.0)], ids=["below_one", "above_one"])
+def test_coin_flip_scores_no_probability_above_one(reply, reward):
+    entry = reasoning_gym.create_dataset("coin_flip", size=5, seed=42)[4]
+    assert entry["answer"] == "1"
+    assert grade_reasoning_gym.score_reasoning_gym_answer("coin_flip", entry, reply) == reward
+
+
 def test_coin_flip_malformed_reference_is_an_invalid_task():
     entry = {**reasoning_gym.create_dataset("coin_flip", size=1, seed=42)[0], "answer": "not a probability"}
     with pytest.raises(InvalidTask, match="coin_flip reference probability"):
