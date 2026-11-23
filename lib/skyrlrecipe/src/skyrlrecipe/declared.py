@@ -32,6 +32,13 @@ class TeacherModel(Section):
     revision: str
 
 
+class FullBatchFill(Section):
+    """Opt-in admission deadlines; the runtime validates their ordering."""
+
+    straggler_timeout: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    timeout: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+
+
 class TeacherEndpoint(Section):
     url: str
     auth: str | None = unset_field()

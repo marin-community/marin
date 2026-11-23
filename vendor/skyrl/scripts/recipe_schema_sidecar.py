@@ -216,6 +216,7 @@ UNDECLARED = MappingProxyType(
         "trainer.checkpoint_retention": ('Literal["latest", "best"] | None', None),
         "trainer.checkpoint_keep_every": ("PositiveInt | None", None),
         "trainer.rollout_buffer.groups_per_family": ("CountMap", Ellipsis),
+        "trainer.rollout_buffer.full_batch_fill": ("FullBatchFill | None", Ellipsis),
         "trainer.hf_hub_repo_id": ("str | None", None),
         "trainer.hf_hub_private": ("bool", False),
         "trainer.hf_hub_revision": ("str", "main"),

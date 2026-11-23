@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, NonNegativeInt, PositiveInt
 
-from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting
+from .declared import Callback, CorrectionRule, FullBatchFill, LoggingBackend, Teacher, TeacherRouting
 from .model import CountMap, NumberMap, OpenMap, Section, SectionMap, field, unset_field
 from .sampling import EvalSamplingParams
 
@@ -487,6 +487,7 @@ class RolloutBuffer(Section):
     URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps payloads
     only in Ray's object store."""
     groups_per_family: CountMap = unset_field()
+    full_batch_fill: FullBatchFill | None = unset_field()
 
 
 class TeacherScoring(Section):

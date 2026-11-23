@@ -300,7 +300,7 @@ class TrainingContext:
         self._submission_allowed.clear()
 
     async def prepare_evaluation(self) -> None:
-        """Stop admissions and, when requested, revoke unfinished groups before cancelling them."""
+        """Leave priority rollouts active; otherwise pause admissions and optionally abort unfinished groups."""
         if self.eval_drain is EvalDrainStrategy.PRIORITY:
             return
         self.pause()
