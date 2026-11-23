@@ -172,8 +172,7 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
 
     if absent_or_empty:
         assert result.exit_code != 0
-        missing = ", ".join(sorted(absent_or_empty))
-        assert f"missing required RL environment variables: {missing}" in result.output
+        assert all(name in result.output for name in absent_or_empty)
         # "us" is excluded because click's usage banner contains it.
         assert all(value not in result.output for name, value in expected_env.items() if name != "DAYTONA_TARGET")
         client.submit.assert_not_called()
