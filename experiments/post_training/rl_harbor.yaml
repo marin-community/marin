@@ -16,17 +16,15 @@ job:
   environment:
     delete: true
     type: daytona
-    kwargs:
-      image_build: declarative
   n_attempts: 1
   n_concurrent_trials: 30
   retry:
     include_exceptions:
     - PhaseCancellationError
     - TimeoutError
-    - DaytonaConflictError
-    - DaytonaConnectionError
-    - DaytonaTimeoutError
+    - ConflictError
+    - ConnectionError
+    - ClientTimeoutError
     - TmuxExecTimeoutError
     - DaytonaOutputUnavailable
     - MachineTerminated

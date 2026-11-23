@@ -74,7 +74,7 @@ Set `environment.type` in the Harbor policy:
 | Type | Requirements and limits |
 | --- | --- |
 | `local` | Needs prepared Linux images pinned by digest and delegated cgroups. Denies external networking. Supports prepared Compose groups. Shares the worker's kernel. |
-| `daytona` | Needs backend credentials and an explicit target. Uses a task registry image or Daytona's Dockerfile build service. Rejects Compose tasks. Guest images need Python 3 and `setsid`. |
+| `daytona` | Needs backend credentials. Uses a task registry image or Daytona's Dockerfile build service. Rejects Compose tasks. Guest images need `setsid`. |
 | `qemu` | Shellbox QEMU image. No shared host filesystem. |
 | `shellsim` | Shellbox simulated filesystem and command execution. |
 
@@ -82,38 +82,17 @@ Removed provider names and custom environment import paths fail validation.
 Agent import paths load trusted harness code. Harbor cannot select Shellbox's Docker backend.
 
 Daytona accepts `network_policy` (`mode` and optional `value`), `ttl_minutes`,
-`create_timeout` and `image_build`. In snapshot mode, Shellbox derives the snapshot
-from the task image or Dockerfile and the task's resource request. Snapshot names,
-automatic snapshots, forced rebuilds and policy-level target overrides are not
-policy settings. Inventory, preflight and reclamation use `shellbox-daytona-snapshots`; see the
-[Daytona operations runbook](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#snapshot-preflight-and-reclamation).
+`create_timeout` and `output_collection_timeout`. Shellbox derives each task's Daytona
+image from the task image or Dockerfile, registers it once as a named project image and
+starts sandboxes from it; the task's resource request sizes each sandbox and does not
+change the image. Image names, forced rebuilds and region overrides are not policy
+settings. Inventory and preflight use `shellbox-daytona-images`; see the
+[Daytona operations runbook](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#image-preflight).
 
-`image_build` selects how each sandbox gets its image. The default, `snapshot`, builds each
-distinct task environment once into a named Daytona snapshot and starts sandboxes from it.
-Snapshots persist after the run and count against the account's snapshot quota, so a dataset
-with more distinct environments than the free quota fails with `Snapshot quota exceeded`.
-`declarative` builds the image for every sandbox instead and creates no snapshot; every
-trial repeats the build, including the base-image pull, and `snapshot-specs` rejects the
-policy. Use it for standalone or inline validation in the Daytona eval account. SkyRL training
-rollouts use snapshot mode in the RL account. Select it in the eval policy:
-
-```yaml
-environment:
-  type: daytona
-  kwargs:
-    image_build: declarative
-```
-
-Set the target before launching:
-
-```bash
-export DAYTONA_TARGET=us
-```
-
-The host entry point reads `DAYTONA_API_KEY`, `DAYTONA_API_URL` and `DAYTONA_TARGET`
-once. The API URL defaults to `https://app.daytona.io/api`. Missing credentials or target
-fail before allocation. SDK `.env` files, JWT credentials and other connection overrides
-are not read.
+The host entry point reads `DAYTONA_API_KEY` once and uses the Daytona v2 API. Sandboxes
+and images use the project's default region; `DAYTONA_V2_API_URL` overrides the endpoint.
+A missing credential fails before allocation. SDK `.env` files, JWT
+credentials and other connection overrides are not read.
 
 The launcher does not change a policy's provider. Remove unsupported settings from the
 policy and prepare any missing task images before launching. Harbor rejects `--no-delete` and

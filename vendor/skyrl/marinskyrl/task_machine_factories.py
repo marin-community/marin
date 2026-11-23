@@ -2,10 +2,9 @@
 
 import os
 import shutil
-from functools import partial
 
-from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
@@ -21,7 +20,7 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
     daytona = task_sessions.get("daytona")
     if daytona is not None:
         factories[Backend.DAYTONA] = DaytonaMachineFactory(
-            client_factory=partial(AsyncDaytona, DaytonaConfig(api_key=os.environ[daytona.api_key_env])),
+            client_factory=DaytonaConnection(api_key=os.environ[daytona.api_key_env]).client_factory(),
             ttl_minutes=int(daytona.ttl_minutes),
         )
     if shutil.which("docker") is not None:

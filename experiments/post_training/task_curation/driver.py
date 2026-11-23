@@ -121,10 +121,11 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
         raise ValueError(f"Unsupported image backend: {backend}")
     # Daytona is an optional Shellbox dependency; local and Iris campaigns do not import its SDK.
     try:
+        from shellbox.backends.daytona.connection import DaytonaConnection  # noqa: PLC0415
         from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
     except ImportError as error:
         raise click.UsageError("--image-backend daytona requires the Shellbox daytona extra") from error
-    return DaytonaMachineFactory()
+    return DaytonaMachineFactory(DaytonaConnection(api_key=os.environ.get("DAYTONA_API_KEY")).client_factory())
 
 
 def _publish_campaign(report_path: str, selected: dict[str, RlDataSource], catalog_root: str) -> None:

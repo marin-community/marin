@@ -47,7 +47,6 @@ from experiments.evaluation.models import models
 def submitted_batches(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "local-test-key")
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     batches: list[EvaluationBatch] = []
 
     class Client:
@@ -264,7 +263,6 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
 def test_daytona_launch_uses_the_eval_org_key_not_an_exported_daytona_key(tmp_path, monkeypatch, harbor_task_workspace):
     monkeypatch.setenv("DAYTONA_API_KEY", "rl-org-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "eval-org-key")
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
     submitted_env = []
 

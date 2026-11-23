@@ -1,7 +1,9 @@
 # Daytona operations for agentic RL
 
-Use this runbook when Harbor trials fail during sandbox setup, snapshot quota
-prevents a launch, or completed trials leave provider capacity occupied. Iris
+Use this runbook when Harbor trials fail during sandbox setup, a project limit
+prevents a launch, or completed trials leave provider capacity occupied. Shellbox
+uses the Daytona v2 API (SDK `daytona` 2.x, `daytona.v2`); the existing RL, eval
+and data keys authenticate there. Iris
 job operations remain in [Iris OPS](../../lib/iris/OPS.md).
 
 ## Credentials and account selection
@@ -11,16 +13,12 @@ authenticate successfully against the wrong account. Do not substitute it for
 the RL key. Resolve the credential through the launcher's supported secret
 indirection and verify that the coordinator and trial workers receive it.
 
-Validation that needs declarative image builds uses the Daytona **eval** account,
-not the RL account. Keep the two credentials separately named and select the
-eval credential only in the validation subprocess. For inline Harbor validation,
-set the callback's `daytona_api_key_env: DAYTONA_EVAL_API_KEY` and
-forward it through both the coordinator and task launcher. Do not globally
-replace the RL credential: training containers remain in the RL account.
-`DaytonaValidationError: declarative builds are not allowed` is an account/build
-permission failure, not a model failure or a zero reward. Inline validation accepts
-`image_build: snapshot` and `image_build: declarative`. Select declarative mode for
-per-sandbox image builds in the eval account.
+Validation uses the Daytona **eval** account, not the RL account. Keep the two
+credentials separately named and select the eval credential only in the validation
+subprocess. For inline Harbor validation, set the callback's
+`daytona_api_key_env: DAYTONA_EVAL_API_KEY` and forward it through both the
+coordinator and task launcher. Do not globally replace the RL credential: training
+containers remain in the RL account.
 
 The keys live in Google Secret Manager in project `hai-gcp-models`:
 `DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.
@@ -88,199 +86,87 @@ preserves other settings, including compaction. Omit the kwarg to keep the
 image's setting; the pinned Pi 0.87.0 defaults to five minutes. This override
 does not extend Harbor or provider execution deadlines.
 
-## Snapshot preflight and reclamation
+## Image preflight
 
-Shellbox identifies snapshots for all launchers. One snapshot
-covers one image source (a registry image, or a Docker build context with its
-Dockerfile contents) and one CPU, memory, disk and GPU request. Memory and disk
-round up to whole GiB. The name is `shellbox-` plus the first 40 hex characters
-of `sha256(image_source_key(source) + json(resources))`, so a changed image
-reference, build context or resource request selects a different snapshot. A
-moved registry tag keeps its snapshot name. Harbor passes its task
-image and resource values to Shellbox and does not name, round or build
-snapshots itself.
+Shellbox identifies images for all launchers. One image covers one image source:
+a registry image, or a Docker build context with its Dockerfile contents. The
+name is `shellbox-` plus the first 40 hex characters of
+`sha256(image_source_key(source))`, so a changed image reference or build context
+selects a different image. A moved registry tag keeps its image name. CPU, memory
+and disk are set on each sandbox and are not part of the identity. Harbor passes
+its task image to Shellbox and does not name or build images itself.
 
-Use `shellbox-daytona-snapshots` from a checkout instead of ad-hoc SDK scripts.
-It reads credentials from an explicit environment variable and never falls back
-to the SDK's ambient account selection:
+Use `shellbox-daytona-images` from a checkout instead of ad-hoc SDK scripts. It
+reads credentials from an explicit environment variable and never falls back to
+the SDK's ambient account selection:
 
 ```bash
-# RL account used by training.
 : "${DAYTONA_RL_API_KEY:?Load the dedicated RL key through the configured secret provider}"
-export DAYTONA_TARGET="<the configured target>"
-
-uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-images \
   --api-key-env DAYTONA_RL_API_KEY inventory
 ```
 
-Pass `--api-key-env DAYTONA_EVAL_API_KEY` to inventory or purge the eval account
-used for validation builds. `--target` overrides `DAYTONA_TARGET`. `--api-url`
-overrides `DAYTONA_API_URL`.
-
-Read the account's current quota and inventory before submission. Snapshot quota
-and live sandbox capacity are separate limits. A successful GPU allocation proves
-neither is available.
-
-`shellbox-daytona-usage` reads the account's live quota, current usage and
-remaining capacity. It lists the account's sandboxes (paginated) and reports
-the usage overview with sandbox counts by state. The `/organizations` endpoint
-rejects API-key credentials with 401, so the command resolves the organization
-ID from the inventory; when the org has no sandboxes, it reads snapshots and
-then volumes instead:
-
-```bash
-uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
-  --api-key-env DAYTONA_RL_API_KEY --cpu 2 --memory-gib 8 --disk-gib 8
-```
-
-`--all` reads the three known accounts in one sweep (eval =
-`DAYTONA_EVAL_API_KEY`; rl = `DAYTONA_RL_API_KEY`;
-data = `DAYTONA_DATA_API_KEY`). `DAYTONA_API_KEY` is never an account
-selector here: the SDK treats it as an ambient variable, and some launchers
-load the RL key into it. `--json` emits the
-machine-readable report, including per-region rows with the provider's
-per-sandbox maxima.
-
-Size concurrency from the remaining capacity. The `max concurrency` line sizes
-against the quota row for the launch's target region and sandbox class
-(`--target`, `--sandbox-class`, default class `container`), because the
-provider enforces each row's quota separately; the summed totals above it are
-informational. The line applies the headroom (default 20%, `--headroom`) to
-that row's remaining CPU, memory and disk capacity, divides by the per-sandbox
-request from `--cpu`, `--memory-gib` and `--disk-gib`, and reports the
-minimum. The sandbox state counts show what is live. The reading moves as
-lanes start and stop, so re-read before large submissions. A
-per-sandbox request above the row's `max_cpu_per_sandbox`,
-`max_memory_gib_per_sandbox` or `max_disk_gib_per_sandbox` fails at creation;
-the command prints a warning when the profile exceeds one.
-
-1. Inventory snapshots in the intended account, including every result page:
-
-   ```bash
-   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
-     --api-key-env DAYTONA_RL_API_KEY inventory --json
-   ```
-
-   The command paginates through the inventory and reports state, organization
-   ownership, resources, last use and whether each snapshot is stale, fresh,
-   unclassified or provider-owned (`general`). `general=true` snapshots are
-   outside account cleanup scope. Never substitute another account's key to
-   overcome a quota limit.
-2. Determine the snapshots required by the dataset and pinned backend. Count
-   distinct environment contents, including fixtures, rather than assuming one
-   snapshot per task or counting Dockerfiles alone. Emit the effective inputs
-   from the job config that launches the trials:
+1. Emit the effective image inputs from the job config that launches the trials:
 
    ```bash
    PYTHONPATH=lib/marin/src uv run --isolated --project vendor/harbor --frozen \
      --extra runtime python lib/marin/src/marin/evaluation/harbor/trial_driver.py \
-     snapshot-specs experiments/evaluation/configs/harbor/ot-tblite.yaml \
-     > /tmp/required-snapshots.json
+     image-specs experiments/evaluation/configs/harbor/ot-tblite.yaml \
+     > /tmp/required-images.json
    ```
 
-   `snapshot-specs` applies the job's `environment.override_*` values and resource
-   enforcement policy as a trial does, resolves each dataset task, and emits the
-   Shellbox spec JSON. Do not hand-write task-level CPU or memory values: the
-   snapshot name follows the effective request. For example, `ot-tblite` launches
-   at 2 CPU, 8192 MB memory and 8192 MB storage regardless of task-level values.
-   A SkyRL launcher sets the same values under `terminal_bench.harbor` as
-   `override_cpus`, `override_memory_mb` and `override_storage_mb`; use those,
-   not the task's `task.toml`. Use `--specs -` on the next commands to read stdin.
-   When the launch overrides the dataset through a runtime overlay file, pass it
-   as a second argument (`snapshot-specs <policy> <overlay>`); otherwise the
-   stable policy's own task set is emitted.
-
-   `plan` reports each required name as `missing` or its current state:
+   `image-specs` applies the job's runtime overlay when one is passed as a second
+   argument (`image-specs <policy> <overlay>`), resolves each dataset task, and
+   emits the Shellbox spec JSON. Use `--specs -` on the next commands to read stdin.
+2. `plan` reports each required name as `missing` or its current status:
 
    ```bash
-   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
-     --api-key-env DAYTONA_RL_API_KEY plan \
-     --specs /tmp/required-snapshots.json
+   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-images \
+     --api-key-env DAYTONA_RL_API_KEY plan --specs /tmp/required-images.json
    ```
 
-   Creating missing snapshots is the preflight itself. Run `ensure` in the account
-   that launches the trials:
+3. `ensure` imports or builds the missing images and waits until each is ready.
+   Run it in the account that launches the trials:
 
    ```bash
-   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
-     --api-key-env DAYTONA_RL_API_KEY ensure \
-     --specs /tmp/required-snapshots.json
+   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-images \
+     --api-key-env DAYTONA_RL_API_KEY ensure --specs /tmp/required-images.json
    ```
 
-   `ensure` waits for every snapshot to become active. The RL account rejects
-   declarative image builds, so a Dockerfile-only task must be prepared as a
-   digest-pinned registry image before preflight. The worked example above does
-   not clear this bar as-is: `ot-tblite` resolves only Dockerfile-based tasks
-   (every emitted spec names a `dockerfile`, not an image), so running `ensure`
-   with that output in the RL account fails with the declarative-build
-   rejection. Prebuild those environments, publish them as registry images, and
-   repin the task configs to the digest-pinned references before relying on
-   `ensure` in the RL account; a dataset whose tasks already use registry
-   images needs no extra step. Do not create trial snapshots in the eval
-   account. If validation creates declarative snapshots there, purge that
-   account with the same commands and `--api-key-env DAYTONA_EVAL_API_KEY`.
-3. On every snapshot check, classify a snapshot as stale when its last use was
-   more than one hour ago (`now_utc - last_used_utc > 3600 seconds`). Use actual
-   last-use evidence, not creation time, snapshot state, or an unfamiliar name.
-   Exactly one hour does not exceed the threshold. If last-use evidence is
-   missing or ambiguous, report that snapshot as unclassified; do not invent a
-   timestamp or silently treat it as fresh. The command uses the provider's
-   timezone-aware `last_used_at` value and compares it in UTC.
-4. Purge **all stale snapshots** in the authorized account on every check,
-   whether or not quota is exhausted. Do not stop after freeing the slots needed
-   for the next launch:
+   Sandbox creation also ensures its image, so preflight only moves the import
+   or build ahead of the first trial. A failed registry import is submitted once
+   more; a failed Dockerfile build raises with the provider's error.
 
-   ```bash
-   # Preview exact targets first.
-   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
-     --api-key-env DAYTONA_RL_API_KEY purge
-   # Delete them. Every target is revalidated immediately before deletion.
-   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
-     --api-key-env DAYTONA_RL_API_KEY purge --apply
-   ```
+Shellbox has no automatic image purge: an unreferenced image can be one prepared
+for trials that have not started. The 2026-10-07 one-hour purge authorization
+covered v0 snapshots and does not extend to v2 images. Delete images only on an
+explicit operator request.
 
-   `purge` enumerates the account's sandboxes before deleting anything, keeps every
-   stale snapshot that a sandbox still references (`kept <name> (referenced by a
-   sandbox)`), and aborts without deleting when sandbox references cannot be
-   enumerated. It re-reads each remaining target's last use so a snapshot used
-   since the inventory is also kept. Provider deletion is asynchronous: `removal
-   pending <name>` means the delete was accepted but a follow-up inventory still
-   observes it. Do not repeat the deletion merely because removal is asynchronous.
-5. Re-inventory after cleanup. Report remaining stale targets and deletion
-   failures rather than claiming cleanup succeeded. Recheck quota, create any
-   required snapshots that are now missing with `ensure`, and verify their active
-   state before launching trials. A reference in a future launch configuration
-   alone does not exempt an unused snapshot from the one-hour purge rule.
+`shellbox-daytona-usage` reads the project's limits and live use: the
+organization's concurrent-sandbox, image, volume and snapshot limits, the
+per-sandbox CPU and memory maxima, and sandbox counts by state. v2 has no
+per-region CPU, memory or disk quota; the concurrent-sandbox limit bounds a
+launch. The `max concurrency` line keeps the headroom (default 20%, `--headroom`)
+of the remaining concurrent-sandbox limit. `--cpu` (vCPUs) and `--memory-gib`
+check a per-sandbox request against the maxima; a request above them fails at
+creation:
 
-`--min-idle-seconds` changes the idle threshold for a deliberate one-off check;
-the default is 3600 and matches the policy. The same operations are available as
-Python entrypoints from `shellbox.backends.daytona.snapshot` (`list_snapshots`,
-`classify_snapshot`, `purge_stale_snapshots`, `snapshot_name`) when a launcher
-must embed them.
+```bash
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-usage \
+  --api-key-env DAYTONA_RL_API_KEY --cpu 2 --memory-gib 8
+```
 
-Existing authorization to remove stale snapshots need not be requested again.
-The default one-hour rule and full stale-set purge were explicitly supplied by
-the operator on 2026-10-07. They apply within the authorized account; they do not
-grant access to other accounts or authorize deleting unclassified snapshots.
-Report what was removed and whether rebuilding is possible; deletion is not a
-recoverable local-cache operation.
+`--all` reads the three known accounts in one sweep (eval =
+`DAYTONA_EVAL_API_KEY`; rl = `DAYTONA_RL_API_KEY`; data = `DAYTONA_DATA_API_KEY`).
+`DAYTONA_API_KEY` is never an account selector here. `--json` emits the
+machine-readable report. The reading moves as lanes start and stop, so re-read
+before large submissions.
 
-Do not assume launcher cleanup enforces this rule. MarinSkyRL campaign revision
-`f8d6cf25235c20cb8365069c7561026100231ca7`, in
-[`cloud/iris/iris_backend.py`](https://github.com/marin-community/MarinSkyRL/blob/f8d6cf25235c20cb8365069c7561026100231ca7/cloud/iris/iris_backend.py),
-uses a two-hour cutoff, selects only names starting with `harbor__`, falls back
-to creation time for never-used snapshots, and skips cleanup when the optional
-Daytona SDK is unavailable. That implementation does not satisfy the newer
-one-hour, all-stale-account-snapshots policy. Run the account-wide check above
-with an installed SDK until the selected launcher implements the current rule.
-
-Use the pinned provider SDK through these Shellbox entrypoints for remote
-snapshot operations. Harbor's `cache clean` command cleans local Docker images
-and the local Harbor cache; it is not a Daytona snapshot-quota remedy.
-
-Quota exhaustion can fail every trial before scoring. Inspect an actual trial
-exception and preserve it separately from model errors. After any backend or
-snapshot change, run the campaign's end-to-end smoke before scaling collection.
+Limit exhaustion can fail every trial before scoring. A full concurrent-sandbox
+limit raises `LimitExceededError`; Shellbox retries throttled creation until the
+create deadline. Inspect an actual trial exception and preserve it separately
+from model errors. After any backend or image change, run the campaign's
+end-to-end smoke before scaling collection.
 
 ## Sandbox lifecycle and idle cleanup
 
@@ -376,10 +262,11 @@ re-measurement; none changes a task's own instruction, files or grader.
    does. Pin every base by digest; a floating tag fails spec validation. A step
    the lowering cannot express (a multi-stage build, a user creation, an
    unsupported interpreter) defers the task instead of approximating it.
-2. **Normalize the machine shape.** Identity includes the machine resources, so
-   declare one shape (for example 2 CPU / 4096 MB / 10240 MB) for task and
-   verifier machines. Differing shapes multiply snapshot names without changing
-   the environment.
+2. **Normalize the machine shape.** Daytona v2 image identity excludes machine
+   resources, so differing shapes no longer multiply identities. Counts recorded
+   for v0 snapshots included resources and are not comparable with v2 image
+   counts. The ten-environment threshold came from the v0 snapshot quota; v2
+   projects hold up to 1,000 images.
 3. **Keep the archive's environment in the converted task.** A converted task
    runs in the environment its archive specifies:
    `environment_fidelity.environment_unused` rejects a spec that replaces the
@@ -395,12 +282,11 @@ Re-measure with the production path, not a reimplementation:
 `experiments/post_training/task_curation/daytona_identity.py` materializes each
 task's environment, builds the `MachineSpec` through Harbor's mapping
 (`harbor.environments.daytona.machine_spec`), names it with
-`shellbox.backends.daytona.machine.snapshot_identity`, and runs
-`daytona_execution_failure` per task. Record the resulting count, the ten-snapshot
-threshold and the basis on the source; the verdict
+`shellbox.backends.daytona.images.image_request_for_spec`, and runs
+`daytona_execution_failure` per task. Record the resulting count, the
+ten-environment threshold and the basis on the source; the verdict
 (`finestore.rl.curation.daytona_verdict`) is derived from them. Nothing in this
-procedure creates or deletes a snapshot; cleanup stays with the operator
-procedure above.
+procedure creates or deletes an image.
 
 Publish the converted cohort to the `open-athena` Hugging Face org as a **private**
 repository (`experiments/post_training/task_curation/calibforge_publish.py`), with a
@@ -420,8 +306,7 @@ Transferred from MarinSkyRL revision
 - [RL diagnostics](https://github.com/marin-community/MarinSkyRL/blob/544d5d6f14116a06bde0209352585903133bd618/.agents/ops/rl-diagnostics.md):
   agentic failure interpretation, progress, concurrency, and timing semantics.
 
-The snapshot-reclamation checklist incorporates the operator's 2026-10-07
-instruction to purge every snapshot unused for more than one hour on every
-check. This threshold was supplied separately from the source runbooks. The
+The operator's 2026-10-07 instruction to purge every v0 snapshot unused for more
+than one hour applied to the v0 snapshot quota and does not cover v2 images. The
 cancellation incident is additional operational evidence, not cross-account
 cleanup authority.

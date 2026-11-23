@@ -407,10 +407,9 @@ The dashboards are available through the [RL Grafana dashboard](https://grafana.
 
 A Harbor cohort is a pinned sample of tasks from one benchmark. `train-long-harbor`
 evaluates cohorts of 30 tasks each from BFCL, SWE-bench Verified and OpenThoughts-TBLite.
-Set `DAYTONA_EVAL_API_KEY` and
-`DAYTONA_TARGET` for the evaluation account before submitting. Each cohort can run 30
-Daytona sandboxes at once, up to 90 across all three cohorts. Each sandbox builds the pinned
-task environment in declarative mode. The runner enables the HTTP endpoint that Harbor uses
+Set `DAYTONA_EVAL_API_KEY` for the evaluation account before submitting. Each cohort can
+run 30 Daytona sandboxes at once, up to 90 across all three cohorts. Each pinned task
+environment is built once as a Daytona image and shared by its sandboxes. The runner enables the HTTP endpoint that Harbor uses
 to evaluate the current training weights.
 
 A checkpoint is eligible when it scores at least 99% of the EvalLite active set and 90% of each Harbor cohort.

@@ -1,12 +1,11 @@
 """Apply Harbor launch settings to tasks executed by the common rollout engine."""
 
 from dataclasses import dataclass, replace
-from functools import partial
 import os
 
-from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
 from rigging.task_errors import RetrySettings
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
@@ -102,12 +101,11 @@ class HarborTaskSettings:
             case EnvironmentType.DAYTONA:
                 policy = self.environment.kwargs.get("network_policy")
                 key_env = self.environment.kwargs.get("eval_api_key_env" if phase == "eval" else "api_key_env")
-                client_factory = AsyncDaytona
-                if key_env is not None:
-                    api_key = os.environ.get(key_env)
-                    if not api_key:
-                        raise ValueError(f"Missing Daytona credential environment variable: {key_env}")
-                    client_factory = partial(AsyncDaytona, DaytonaConfig(api_key=api_key))
+                api_key = os.environ.get(key_env or "DAYTONA_API_KEY")
+                if key_env is not None and not api_key:
+                    raise ValueError(f"Missing Daytona credential environment variable: {key_env}")
+                # Without a key the factory stays constructible and fails when a sandbox is requested.
+                client_factory = DaytonaConnection(api_key=api_key).client_factory() if api_key else None
                 return DaytonaMachineFactory(
                     client_factory=client_factory,
                     ttl_minutes=self.environment.kwargs.get("ttl_minutes", 360),

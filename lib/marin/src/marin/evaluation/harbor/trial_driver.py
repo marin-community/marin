@@ -604,8 +604,6 @@ def _preflight_one(
     assert isinstance(dataset, DatasetConfig)
     agent_name = _agent_class(agent).name()
     environment_name = _validate_environment(config)
-    if config.environment.type == EnvironmentType.DAYTONA and not host_environment.get("DAYTONA_TARGET"):
-        raise ValueError("Harbor Daytona policies require DAYTONA_TARGET before model allocation")
     dataset_metadata = _dataset_metadata(dataset, _raw_dataset_path(document))
 
     stable_config = _stable_config(config)
@@ -720,18 +718,18 @@ def _preflight(request_path: Path, *, host_environment: Mapping[str, str]) -> No
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 
-async def _snapshot_specs(config: JobConfig, overlay: RuntimeOverlay | None) -> list[dict[str, Any]]:
-    """Resolve a job's effective Daytona snapshot requests without allocating sandboxes.
+async def _image_specs(config: JobConfig, overlay: RuntimeOverlay | None) -> list[dict[str, Any]]:
+    """Resolve a job's effective Daytona image requests without allocating sandboxes.
 
     The config passes through the same launcher-contract validation and runtime
     overlay that ``run`` applies, so the preflight resolves the task set the run
     actually launches.
     """
     if config.environment.type is not EnvironmentType.DAYTONA:
-        raise ValueError("Snapshot specs require the daytona environment")
+        raise ValueError("Image specs require the daytona environment")
     config = effective_job_config(config, overlay)
     requests: dict[str, dict[str, Any]] = {}
-    with tempfile.TemporaryDirectory(prefix="marin-harbor-snapshot-specs-") as jobs_dir:
+    with tempfile.TemporaryDirectory(prefix="marin-harbor-image-specs-") as jobs_dir:
         trial_paths = TrialPaths(Path(jobs_dir) / "trial")
         for task_config in await Job.resolve_task_configs(config):
             task = await load_task(
@@ -742,7 +740,7 @@ async def _snapshot_specs(config: JobConfig, overlay: RuntimeOverlay | None) -> 
                 config=config.environment,
                 environment_dir=task.paths.environment_dir,
                 environment_name=task.short_name,
-                session_id="snapshot-specs",
+                session_id="image-specs",
                 trial_paths=trial_paths,
                 task_env_config=task.config.environment,
                 # Preflight never allocates a sandbox, so it needs no provider
@@ -751,7 +749,7 @@ async def _snapshot_specs(config: JobConfig, overlay: RuntimeOverlay | None) -> 
                 guest_environment={},
             )
             assert isinstance(environment, DaytonaEnvironment)
-            request = environment.snapshot_request()
+            request = environment.image_request()
             requests[request.name] = request.as_dict()
     return list(requests.values())
 
@@ -787,12 +785,12 @@ def main() -> None:
         if command == "preflight":
             _preflight(Path(sys.argv[2]), host_environment=host_environment)
             return
-        if command not in {"run", "snapshot-specs"}:
+        if command not in {"run", "image-specs"}:
             raise ValueError(f"unknown command {command!r}")
-        if command == "snapshot-specs":
+        if command == "image-specs":
             config = JobConfig.model_validate(_document(Path(sys.argv[2])), extra="forbid")
             overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[3]).read_text()) if len(sys.argv) > 3 else None
-            specs = asyncio.run(_snapshot_specs(config, overlay))
+            specs = asyncio.run(_image_specs(config, overlay))
             sys.stdout.write(json.dumps(specs, ensure_ascii=False, separators=(",", ":")))
             return
         policy = JobConfig.model_validate_json(Path(sys.argv[2]).read_text(), extra="forbid")

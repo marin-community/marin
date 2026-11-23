@@ -13,9 +13,9 @@ import pytest
 pytest.importorskip("harbor", reason="Requires the isolated vendor/harbor runtime")
 
 from harbor.environments.daytona import machine_spec
-from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
+from shellbox.backends.daytona.images import image_request_for_spec
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import MachineSpec, UnsupportedMachineSpec
+from shellbox.machine import MachineSpec
 
 from experiments.post_training.task_curation.daytona_identity import (
     count_lowered_spec_identities,
@@ -55,19 +55,11 @@ def _native_tar(dockerfile: str, files: dict[str, bytes]) -> bytes:
     return pack_tar(members)
 
 
-def test_snapshot_identity_names_are_stable_and_formatted():
-    first = snapshot_request_for_spec(MachineSpec(source=RegistryImage("ubuntu:24.04"))).name
-    second = snapshot_request_for_spec(MachineSpec(source=RegistryImage("ubuntu:24.04"))).name
+def test_image_identity_names_are_stable_and_formatted():
+    first = image_request_for_spec(MachineSpec(source=RegistryImage("ubuntu:24.04"))).name
+    second = image_request_for_spec(MachineSpec(source=RegistryImage("ubuntu:24.04"))).name
     assert first == second
     assert first.startswith("shellbox-") and len(first) == len("shellbox-") + 40
-
-
-def test_snapshot_identity_rejects_add_dockerfiles(tmp_path):
-    context = tmp_path / "context"
-    context.mkdir()
-    (context / "Dockerfile").write_text("FROM ubuntu:24.04\nADD archive.tar /app\n")
-    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
-        snapshot_request_for_spec(MachineSpec(source=DockerfileSource(context, context / "Dockerfile")))
 
 
 def test_machine_spec_maps_a_registry_source():
@@ -95,7 +87,7 @@ def test_machine_spec_maps_a_dockerfile_source(tmp_path):
     assert spec.source.context == context
 
 
-def test_identical_native_tars_share_one_snapshot_and_add_tars_fail():
+def test_identical_native_tars_share_one_image_and_add_tars_count():
     shared = _native_tar("FROM ubuntu:24.04\nCOPY files/data.csv /app/data.csv\n", {"files/data.csv": b"a,b\n1,2\n"})
     count = count_task_identities([("task-a", shared), ("task-b", shared)])
     assert count.distinct == 1 and not count.failures
@@ -103,8 +95,7 @@ def test_identical_native_tars_share_one_snapshot_and_add_tars_fail():
 
     add_tar = _native_tar("FROM ubuntu:24.04\nADD files/data.csv /app/data.csv\n", {"files/data.csv": b"a,b\n1,2\n"})
     count = count_task_identities([("task-add", add_tar), ("task-a", shared)])
-    assert count.distinct == 1
-    assert count.failures == [("task-add", "Daytona Dockerfiles with ADD require a prebuilt registry image")]
+    assert count.distinct == 2 and not count.failures
 
 
 def test_data_baked_into_contexts_splits_identities():
@@ -165,7 +156,7 @@ def test_counter_names_match_the_production_name_for_the_staged_tree(tmp_path):
         _write.parent.mkdir(parents=True, exist_ok=True)
         _write.write_bytes(content)
         _write.chmod(mode)
-    expected = snapshot_request_for_spec(MachineSpec(source=DockerfileSource(staged, staged / "Dockerfile"))).name
+    expected = image_request_for_spec(MachineSpec(source=DockerfileSource(staged, staged / "Dockerfile"))).name
 
     count = count_task_identities([("task", payload)])
     assert list(count.sizes) == [expected]
@@ -206,8 +197,8 @@ def test_grader_environment_is_counted_independently_and_lock_refusals_are_retai
     )
     separate = count_lowered_spec_identities([("separate", spec)])
     assert set(separate.sizes) == {
-        snapshot_request_for_spec(MachineSpec(source=RegistryImage(actor))).name,
-        snapshot_request_for_spec(MachineSpec(source=RegistryImage(grader))).name,
+        image_request_for_spec(MachineSpec(source=RegistryImage(actor))).name,
+        image_request_for_spec(MachineSpec(source=RegistryImage(grader))).name,
     }
     locked = lowered(
         {

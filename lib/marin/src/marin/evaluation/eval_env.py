@@ -6,8 +6,8 @@
 import os
 
 DAYTONA_EVAL_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
-DAYTONA_TARGET_ENV = "DAYTONA_TARGET"
-DAYTONA_RUNTIME_ENV_KEYS = ("DAYTONA_API_URL", DAYTONA_TARGET_ENV)
+# The Daytona v2 SDK reads only this endpoint override from the environment.
+DAYTONA_RUNTIME_ENV_KEYS = ("DAYTONA_V2_API_URL",)
 
 # Credentials and W&B metadata propagated from an eval orchestrator into its serve and mechanism children.
 EVAL_RUNTIME_ENV_KEYS: tuple[str, ...] = (

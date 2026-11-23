@@ -52,7 +52,9 @@ DAYTONA_API_KEY = "DAYTONA_API_KEY"
 """The worker secret holding the Daytona eval-org key; launchers resolve it from ``DAYTONA_EVAL_API_KEY``."""
 DAYTONA_API_URL = "DAYTONA_API_URL"
 DAYTONA_TARGET = "DAYTONA_TARGET"
-DAYTONA_EGRESS = ("app.daytona.io", "*.app.daytona.io")
+# Daytona v2: the API and its event websocket, the regional sandbox proxies
+# (proxy.<zone>.<region>.daytona.app), and the bucket Dockerfile build contexts upload to.
+DAYTONA_EGRESS = ("api.daytona.com", "*.*.*.daytona.app", "prod-rlp-contexts.s3.us-east-1.amazonaws.com")
 MACHINE_BACKENDS = frozenset({Backend.LOCAL, Backend.DOCKER, Backend.DAYTONA})
 MODEL_REQUEST_RETRIES = 8
 """Retries of a model request that fails with a rate limit, server error or lost connection.
