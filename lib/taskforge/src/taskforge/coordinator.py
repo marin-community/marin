@@ -238,7 +238,7 @@ async def run_workpiece(
             while True:
                 reached(wp)
                 visit = digest((stage, wp, compat)) if compat and stage in (Stage.VALIDATE, Stage.CONFIRM) else None
-                hit, entered = commits.get(visit or ""), len(wp.evidence)
+                hit = commits.get(visit or "")
                 try:
                     # A committed visit returns its evidence and runs nothing: no call, scope, observer or read.
                     result = Validated(hit.result) if hit else await STAGES[stage](ctx, wp, config, resources)
@@ -260,7 +260,7 @@ async def run_workpiece(
                     if wp.round != previous_round:
                         await resources.close_round()
                     if isinstance(result, Validated):
-                        pending = Committed(visit, entered, result.result) if visit and not hit else None
+                        pending = Committed(visit, result.result) if visit and not hit else None
                     commit = pending if stage is Stage.REVIEW and following is not None else None
                     marker = StageCompleted(stage, config_digest, type(result).__name__, wp.round, wp.terminal, commit)
                     await ctx.emit(marker)

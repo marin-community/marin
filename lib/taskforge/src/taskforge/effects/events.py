@@ -181,11 +181,10 @@ class ScopeExited(Event[None]):
 
 @dataclass(frozen=True, slots=True)
 class Committed:
-    """The visit (``digest((stage, entry workpiece, compatibility))``) a continuing review decided on, its evidence index
-    and evidence; a later launch entering it returns that evidence."""
+    """The visit (``digest((stage, entry workpiece, compatibility))``) a continuing review decided on and its evidence;
+    a later launch entering it returns that evidence."""
 
     visit: str
-    attempt: int
     result: ValidationResult
 
 

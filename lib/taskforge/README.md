@@ -225,8 +225,9 @@ sessions (sampling included), the rollout, grading and decision-model replay ide
 lowering may pick; a custom review rule or a role run by any harness but the exact stock loop has no stable identity,
 and such a run reuses no visit (logged once). Reuse identifies a role by its harness type, tool classes, settings and
 resource fingerprints, so a caller who assembles a harness by hand (its argument-repair callback, say) must keep that
-behaviour and the resource replay identity in step. A policy edit is a new plan: every visit of the root recomputes from the first one,
-even when only an operational setting such as the solver heartbeat changed. Its decisions then follow the edited
+behaviour and the resource replay identity in step. A visit is reused only under the plan that committed it. An edit to the policy, even
+of an operational setting such as the solver heartbeat, is a different plan whose visits run afresh from the first
+one, and returning to an earlier plan returns to that plan's committed visits. A new plan's decisions follow its
 settings, so lowering `budget.max_missing_trials` below a round's missing slots turns that round into a hold.
 The author reads each round's evidence as `.validation/<n>.json` in ordinary JSON with sorted keys and without
 receipts (a nonfinite reward is `null`), so a cold launch hydrates the bytes the first one wrote.

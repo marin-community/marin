@@ -291,7 +291,7 @@ async def test_a_cold_launch_keeps_the_retry_a_control_outage_bought(launches: D
     new = launches.rows()[held:]
     assert scopes(new, "validate") == 0 and scopes(new, "confirm") == 1  # no duration sample for a committed visit
     commits = [r.event.committed for r in launches.rows() if isinstance(r.event, StageCompleted) and r.event.committed]
-    assert [c.attempt for c in commits] == [0, 1]  # the two validation visits, each committed once
+    assert len({c.visit for c in commits}) == len(commits) == 2  # the two validation visits, each committed once
 
 
 async def test_a_trial_without_a_transcript_stays_absent_beside_a_newer_resolution_of_its_slot(
@@ -563,3 +563,30 @@ async def test_a_relaunch_under_another_plan_leaves_the_shipped_round_its_own(
     assert sorted(final.solver.runs) == sorted(control.solver.runs)
     assert (final.grader.calls, final.round_reviews) == (control.grader.calls, control.round_reviews)
     assert [slot for slot in final.solver.runs if slot[1] == 0] == []  # round 0 is bought by no later launch
+
+
+async def test_explicit_resume_retries_only_refusals_in_the_open_confirmation(launches: Driver) -> None:
+    """``--resume-held`` replaces the refusals of the visit it resumes and nothing committed: validation's tolerated
+    refusal (2, 0) stays at its receipt, an unflagged launch adds no row, and the flagged one buys only the
+    confirmation's refused slots, with no validation scope, control grade or round review."""
+    settings = {"solver.k": 3, "budget.max_missing_trials": 1}
+    first = launch(Paid(refused={(2, 0), (3, 1), (4, 1)}))
+    assert await launches.run(first, settings) == 0
+    held = published_workpiece(launches.root)
+    assert held.terminal is Terminal.HELD and kinds(held) == ["accept", "incomplete"]
+    baseline = held.evidence[0].solver[2]
+    assert baseline.trial == 2 and baseline.receipt is not None
+
+    rows = len(launches.rows())
+    skipped = launch(Paid())
+    assert await launches.run(skipped, settings) == 0
+    assert len(launches.rows()) == rows and skipped.solver.runs == []
+
+    launches.args.resume_held = True
+    resumed = launch(Paid())
+    assert await launches.run(resumed, settings) == 0
+    wp = published_workpiece(launches.root)
+    assert wp.terminal is Terminal.ACCEPTED and kinds(wp) == ["accept", "accept"]
+    assert wp.evidence[0].solver[2] == baseline
+    assert sorted(resumed.solver.runs) == [(3, 1), (4, 1)]
+    assert (scopes(launches.rows()[rows:], "validate"), resumed.grader.calls, resumed.round_reviews) == (0, 0, 0)

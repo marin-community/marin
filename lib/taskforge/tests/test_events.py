@@ -86,7 +86,7 @@ RECORDED = b"""\
 """Journal lines written by this format, frozen."""
 
 
-COMMITTED = Committed("visit", 0, ValidationResult("task", (), (), ()))
+COMMITTED = Committed("visit", ValidationResult("task", (), (), ()))
 
 
 # Regression: an unconditional ``committed`` field moved every marker's digest, so a format-12 root's repeated
@@ -123,7 +123,7 @@ def test_recorded_kinds_decoders_and_replay_digests_are_pinned() -> None:
         "resolved": event_digest(resolved),
     } == {
         "stage": "230238f1053d6ebfb3a54954281e736c301dcb21323bbc456f77d5e39500585d",
-        "committed": "c842ad0afcf5ed55d891744241acf20a7cedc53ddfdbb8cd98836574471f6e60",
+        "committed": "c43a00a68030212385966fb9d52d9f1f0ff5bb7d511ae6f122ac132195195878",
         "command": "227b4531c6a0a3a00d43fa741cd010bd246b32d81c1237126231830b797279ba",
         "inference": "2709c75295b758602f82a1e114cfbf401cdba869c2d6620caaa851973f9887aa",
         "resolved": "052985a3615a19c16965da77e0bcd07d7741bf5b9f6f1a65ca4d8bd946ffc5e0",
