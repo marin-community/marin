@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 7:26 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 7:43 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2146,14 +2146,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   admission capacity. H100 throughput and reward require the live run.
 
   Iris identifies the workspace by the SHA-256 of the uploaded archive.
-  The local controller rehearsal computed that digest from the sealed
-  candidate archive. Repacking a fresh checkout of the same commit and
-  tree produced a different digest. In both historical jobs, the regional
-  controller returned the original bundle ID and clean source provenance
-  while masking the separate Git environment stamp and embedded worker
-  config. The acceptance check binds the candidate archive digest to
-  the registered job and verifies the worker-written resolved config
-  against the plan.
+  In an offline launch rehearsal, the stock SDK emitted the exact sealed
+  archive and an otherwise identical 40-H100 request. A fresh checkout
+  first produced a different digest. After the rehearsal verified all
+  4,688 bundled files and restored their archived modification times in
+  a disposable checkout, the stock SDK emitted the same request byte for
+  byte. In both historical jobs, the regional controller returned the
+  original bundle ID and clean source provenance while masking the
+  separate Git environment stamp and embedded worker config. The
+  acceptance check binds the candidate archive digest to the registered
+  job and verifies the worker-written resolved config against the plan.
   [Interrupted native attempt][iris-held-native-matched-preempted] ·
   [Accepted vLLM attempt][iris-held-vllm-validation-replacement]
 
@@ -2208,7 +2210,12 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   two prompts and installed the same step-2 policy after the update. All
   16 paired binary replays matched after normalizing request IDs. The new
   attempt appended its checkpoint to the original step-1 lineage. This
-  rehearsal stopped after a completed checkpoint commit.
+  rehearsal stopped after a completed checkpoint commit. A separate
+  offline rehearsal replayed the archived CPU checkpoints through stock
+  retention. It reproduced the archived step-2 index bytes and joined the
+  retained index to the same generation and four object metadata records.
+  Capture the original step-1 index, the two-entry index after step 2,
+  and the terminal retention index in order during the H100 run.
 
   A fresh-start diagnostic can skip the initial evaluation callback and
   keep the final panel. The callback ran for 26m55s in the interrupted
