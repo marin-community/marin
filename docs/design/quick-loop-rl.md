@@ -2144,6 +2144,17 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   removes work after a caller expires. The effect on H100 admission time
   remains unmeasured.
 
+  With rollout spans enabled, a local timing candidate joins native training
+  requests to the trainer's admission and disposition records by lease ID.
+  It measures time waiting for a serving slot, time queued inside the actor,
+  and wall time for the shared binary worker exchange. The caller's RPC
+  duration minus the actor's duration gives the combined time outside the
+  actor, including Ray scheduling and reply delivery. Each process records
+  local elapsed time. The comparison needs neither synchronized host clocks
+  nor replay frame changes. A loopback run through the real Ray processes and
+  a committed CPU snapshot joined all four choices to one admitted group and
+  traced one queued cancellation. H100 timing still needs a matched run.
+
   A fresh-start diagnostic can skip the initial evaluation callback and
   keep the final panel. The callback ran for 26m55s in the interrupted
   attempt. The production worker composer reproduced the archived
