@@ -3,6 +3,7 @@
 
 """An Iris machine whose controller runs each exec as a local subprocess, with scripted faults."""
 
+import re
 import shutil
 import subprocess
 from collections.abc import Callable, Sequence
@@ -18,7 +19,7 @@ from iris.cluster.types import JobName
 from iris.resources.state import TaskState
 from shellbox.backends.iris.machine import EXEC_ADMISSION_REFUSED, EXEC_SETUP_FAILURE, IrisMachine
 from shellbox.image import RegistryImage
-from shellbox.machine import MachineSpec
+from shellbox.machine import Backend, ExecutionRequirements, MachineSpec
 
 # Guest images' /bin/sh is a POSIX shell such as dash; macOS's sh is bash, which tolerates more.
 GUEST_SH = shutil.which("dash") or "sh"
@@ -51,6 +52,8 @@ class Fault(StrEnum):
     """The exec stream drops and the loss arrives as a ConnectRPC error."""
     OOM_KILLED = "oom-killed"
     """The sandbox task is OOM-killed: its exec stream drops and the status lookup reports OOMKilled."""
+    TIMER_KILLED = "timer-killed"
+    """The guest timer exits 137 without the command's record, as when its KILL escalation ends the command."""
 
 
 NEVER_AFTER_RUN = {
@@ -71,9 +74,10 @@ Injection = tuple[str, Fault, bool]
 """An RPC site, its fault, and whether the controller runs the exec before the fault."""
 
 
-# Every RPC an ``IrisMachine.run`` without stdin can make. Status is the sandbox task lookup; the rest are exec scripts.
+# Every RPC an ``IrisMachine.run`` without stdin can make once its machine has probed the guest ``timeout``.
+# Status is the sandbox task lookup; the rest are exec scripts.
 RPC_SITES: dict[str, Callable[[str], bool]] = {
-    "command": lambda script: "2> /tmp/.shellbox-" in script,
+    "command": lambda script: re.search(r"[24]> /tmp/\.shellbox-", script) is not None,  # Untimed, or timed.
     "status": lambda script: script == "status",
     "stdout-size": lambda script: script.startswith("wc -c") and script.endswith("-out"),
     "stdout-chunk": lambda script: script.startswith("tail -c") and "-out |" in script,
@@ -94,6 +98,8 @@ def injections(site: str, fault: Fault) -> tuple[Injection, ...]:
     """Each physically possible way ``fault`` can hit ``site``: before the exec ran and, where it can, after."""
     if fault is Fault.SETUP_FAILED_LATE:
         return () if site == "status" else ((site, fault, True),)
+    if fault is Fault.TIMER_KILLED:
+        return ((site, fault, True),) if site == "command" else ()
     unsent = (site, fault, False)
     return (unsent,) if fault in NEVER_AFTER_RUN or site == "status" else (unsent, (site, fault, True))
 
@@ -163,18 +169,59 @@ class LocalController:
             self._execute(shell, script)
         assert not (ran and fault in NEVER_AFTER_RUN), NEVER_AFTER_RUN.get(fault)
         self.oom_killed = self.oom_killed or fault is Fault.OOM_KILLED
+        if fault is Fault.TIMER_KILLED:
+            return SimpleNamespace(exit_code=0, stdout="timer 137\n", stderr="", error="")
         if fault in REPLIES:
             return SimpleNamespace(exit_code=0, stdout="", stderr="", error=REPLIES[fault])
         _raise(fault)
 
 
-def local_iris_machine(workdir: Path, controller: LocalController) -> IrisMachine:
+def local_iris_machine(
+    workdir: Path, controller: LocalController, cancel: Callable[[], None] = lambda: None
+) -> IrisMachine:
     task = SimpleNamespace(task_id=JobName.from_wire("/fixture/sandbox/0"), status=controller.status)
     return IrisMachine(
         SimpleNamespace(close=lambda: None),  # type: ignore[arg-type]
         SimpleNamespace(shutdown=lambda: None),  # type: ignore[arg-type]
         controller,  # type: ignore[arg-type]
-        SimpleNamespace(cancel=lambda: None),  # type: ignore[arg-type]
+        SimpleNamespace(cancel=cancel),  # type: ignore[arg-type]
         task,  # type: ignore[arg-type]
         MachineSpec(source=RegistryImage("fixture"), workdir=str(workdir)),
     )
+
+
+# Guest roots a rooted controller maps into its directory: the task workdir and staged candidate files.
+GUEST_ROOTS = re.compile(r"(?<![\w.-])/(workspace|\.forge-candidates)(?=/|[\s'\"]|$)")
+
+
+class RootedController(LocalController):
+    """A local controller whose guest task roots live under ``root``."""
+
+    def __init__(self, root: Path, faults: Sequence[Injection] = ()) -> None:
+        super().__init__(faults)
+        self.root = root
+
+    def exec_in_container(self, request: object, timeout_ms: int) -> SimpleNamespace:
+        command = [GUEST_ROOTS.sub(lambda match: str(self.root / match[1]), part) for part in request.command]  # type: ignore[attr-defined]
+        return super().exec_in_container(SimpleNamespace(command=command), timeout_ms)
+
+
+class LocalIrisFactory:
+    """Creates each machine as a local Iris sandbox in a fresh directory, with the same scripted faults."""
+
+    backend = Backend.GVISOR
+
+    def __init__(self, root: Path, faults: Sequence[Injection] = ()) -> None:
+        self.root, self.faults = root, faults
+        self.created: list[Path] = []
+        self.controllers: list[RootedController] = []
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        pass
+
+    async def create(self, spec: MachineSpec) -> IrisMachine:
+        root = self.root / f"machine-{len(self.created)}"
+        (root / "workspace").mkdir(parents=True)
+        self.created.append(root)
+        self.controllers.append(controller := RootedController(root, self.faults))
+        return local_iris_machine(root / "workspace", controller)
