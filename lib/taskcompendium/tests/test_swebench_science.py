@@ -29,7 +29,7 @@ def test_native_verifier_entrypoint_and_hidden_tests_remain_image_owned():
     task = lowered.task
     config = tomllib.loads((FIXTURE / "task.toml").read_text())
     assert task.context.events[0].content == (FIXTURE / "instruction.md").read_text()
-    assert task.environment_requirements.docker_image == config["environment"]["docker_image"]
+    assert task.environment_requirements.docker_image == config["environment"]["docker_image"].replace(":v0.1.0@", "@")
     assert "network" not in task.environment_requirements.capabilities
     assert not task.resources.worker
     assert not task.resources.oracle
@@ -41,7 +41,9 @@ def test_native_verifier_entrypoint_and_hidden_tests_remain_image_owned():
     assert isinstance(grader, ScriptGrader)
     assert grader.argv == ("bash", "/tests/test.sh")
     assert isinstance(grader.placement, GraderMachine)
-    assert grader.placement.environment.docker_image == config["verifier"]["environment"]["docker_image"]
+    assert grader.placement.environment.docker_image == config["verifier"]["environment"]["docker_image"].replace(
+        ":v0.1.0@", "@"
+    )
     assert "network" not in grader.placement.environment.capabilities
     assert len(grader.placement.artifacts) == 1
     assert grader.placement.artifacts[0].missing == MissingArtifactPolicy.ERROR

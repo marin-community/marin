@@ -11,7 +11,7 @@ from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from taskcompendium.evaluation.spec import AgentEpisode, EpisodeLimits, MiniSweAgent
+from taskcompendium.evaluation.spec import AgentEpisode, EpisodeLimits, EvaluationItem, MiniSweAgent
 from taskcompendium.importers.harbor.science import lower_science_package
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -26,7 +26,7 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 DATASET = "OpenMOSS-Team/SWE-bench-Science"
 REVISION = "997408298e8e4d09978b1120b95c4540d1a71bcb"
-VERSION = "2026.11.20.1"
+VERSION = "2026.11.23.1"
 BENCHMARK = "swebench-science"
 # Exact selections/default-96.json in the pinned release. The other 23 tasks
 # require upstream's explicit restricted-license opt-in and are not selected.
@@ -49,6 +49,14 @@ def convert(row: RawRow, _context: ConversionContext) -> TaskSpec:
     return lowered.task.model_copy(
         update={"labels": {**lowered.task.labels, EPISODE_LABEL: lowered.episode.model_dump_json()}, "tags": ("eval",)}
     )
+
+
+def science_item(task: TaskSpec, *, agent: AgentEpisode) -> EvaluationItem:
+    """Use the 10 GiB solver disk validated for the unrestricted cohort on Daytona."""
+    item = harbor_item(task, agent=agent)
+    assert item.episode is not None
+    episode = item.episode.model_copy(update={"storage_mb": 10 * 1024})
+    return item.model_copy(update={"episode": episode})
 
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
@@ -86,7 +94,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 task_format=TaskFormat.HARBOR,
             ),
             config=EvaluationCorpusRecipe(
-                recipe, protocol, partial(harbor_item, agent=agent), protocol_name="mini-swe-agent", agent=agent
+                recipe, protocol, partial(science_item, agent=agent), protocol_name="mini-swe-agent", agent=agent
             ),
             pipeline=prepare_evaluation,
         )

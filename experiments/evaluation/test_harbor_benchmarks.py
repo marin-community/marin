@@ -23,6 +23,7 @@ from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, R
 
 import experiments.evaluation.benchmarks.harbor as harbor_module
 import experiments.post_training.task_curation.harbor_packages as packages_module
+from experiments.evaluation.benchmarks import swebench_science
 from experiments.evaluation.benchmarks.agentic import BIXBENCH, FINANCEAGENT
 from experiments.evaluation.benchmarks.harbor import (
     NODE_VERSION,
@@ -129,6 +130,23 @@ def test_a_repository_archive_with_another_digest_stages_nothing(tmp_path):
         stage_archive_packages(stream, "0" * 64, "", StoragePath(str(output)), None)
 
     assert not output.exists()
+
+
+def test_science_corpus_uses_the_validated_daytona_solver_resources():
+    fixture = Path(__file__).resolve().parents[2] / "lib/taskcompendium/tests/fixtures/swebench_science/task_002"
+    row = RawRow(
+        "tasks/task_002.tar.gz:0",
+        Source(
+            dataset=swebench_science.DATASET, revision=swebench_science.REVISION, row="task_002", importer_revision="1"
+        ),
+        {"name": fixture.name, "archive": package_archive(fixture)},
+    )
+    [source] = swebench_science.sources()
+    task = source.config.recipe.convert(row, ConversionContext({}, None))
+    assert isinstance(task, TaskSpec)
+    episode = source.config.item_builder(task).episode
+    assert episode is not None
+    assert (episode.cpus, episode.memory_mb, episode.storage_mb) == (2, 8192, 10240)
 
 
 def test_nested_huggingface_selection_stages_only_requested_tasks(tmp_path, monkeypatch):

@@ -3,12 +3,14 @@
 
 """Lower SWE-bench Science's Pier release while keeping its image-owned verifier."""
 
-import json
+import re
 import shlex
 import shutil
 import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+import tomlkit
 
 from taskcompendium.importers.harbor.package import HarborTask, JobSettings, PackageTests, lower_package
 from taskcompendium.models import (
@@ -31,14 +33,15 @@ def lower_science_package(directory: Path, *, task_id: str, source: Source) -> H
     The release's public test.sh is a loader stub. Only grader.py overlays the fresh verifier
     image; its own /tests/test.sh applies the patch and rebuilds before invoking that grader.
     """
-    original = (directory / "task.toml").read_text()
-    config = tomllib.loads(original)
+    config = tomllib.loads((directory / "task.toml").read_text())
     verifier = config["verifier"]
     if config["schema_version"] != "1.3" or verifier["environment_mode"] != "separate":
         raise ValueError("Expected SWE-bench Science's schema 1.3 separate-verifier release")
     for environment in (config["environment"], verifier["environment"]):
         if environment["allow_internet"] or "@sha256:" not in environment["docker_image"]:
             raise ValueError("SWE-bench Science requires offline digest-pinned images")
+        # Skopeo's docker transport accepts repository@digest, including registries with ports.
+        environment["docker_image"] = re.sub(r":[^/:@]+(?=@)", "", environment["docker_image"])
     if config["agent"]["network_mode"] != "no-network" or verifier["network_mode"] != "no-network":
         raise ValueError("SWE-bench Science requires the native no-network protocol")
     hook = (directory / "pre_artifacts.sh").read_text()
@@ -51,9 +54,9 @@ def lower_science_package(directory: Path, *, task_id: str, source: Source) -> H
         shutil.copyfile(directory / "tests/grader.py", prepared / "tests/grader.py")
         # This release's 1.3 fields have 1.2 equivalents: offline environment
         # declarations plus an explicit collection command replace Pier's hook.
-        normalized = original.replace('schema_version = "1.3"', 'schema_version = "1.2"', 1)
-        normalized += f"\n[[verifier.collect]]\ncommand = {json.dumps(command)}\ntimeout_sec = 300.0\n"
-        (prepared / "task.toml").write_text(normalized)
+        config["schema_version"] = "1.2"
+        verifier["collect"] = [{"command": command, "timeout_sec": 300.0}]
+        (prepared / "task.toml").write_text(tomlkit.dumps(config))
         lowered = lower_package(
             prepared, task_id=task_id, source=source, rule=PackageTests(), image_digests={}, job=JobSettings()
         )

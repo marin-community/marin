@@ -285,7 +285,7 @@ from the original JSON report without interpreting nested diagnostics as
 metrics.
 
 The released tasks request two CPUs, 8 GiB RAM and 20 GiB storage per machine.
-The agent receives those resources. The curated runner currently uses a fresh
+Marin requests 10 GiB disk for the solver to fit the Daytona sandbox quota. The curated runner currently uses a fresh
 local Shellbox verifier on its remote evaluator worker (eight CPUs, 12 GiB RAM,
 64 GiB disk), without per-verifier resource limits. The Qwen3.6-35B-A3B
 and Nemotron 3.5 Super VL 120B-A12B validation runs used Daytona for both
