@@ -251,6 +251,8 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
             f"excluded: {details}"
         )
     for index, old in sorted(old_rows.items()):
+        if index in KNOWN_GENERATED_EXCLUSIONS:
+            continue
         new = json.loads(regenerated[index])
         old_task = json.loads(old["task_spec"])
         if new["context"]["events"][0]["content"] != _old_question(old_task):
