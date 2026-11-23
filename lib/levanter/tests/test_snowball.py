@@ -494,13 +494,18 @@ def test_snowball_fp32_activations_cover_every_sigmoid():
     assert router and all("scan" in path and "cond" not in path and "shard_map" not in path for path, _ in router)
 
 
-@pytest.mark.parametrize("model_axis_size,expert_axis_size", [(1, 1), (2, 1), (1, 2)])
-def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size):
+@pytest.mark.parametrize(
+    "model_axis_size,expert_axis_size,selected_decode",
+    [(1, 1, False), (2, 1, False), (1, 2, False), (1, 2, True)],
+)
+def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size, selected_decode):
     cfg = _tiny_config(num_layers=2, sliding_window=3)
     with use_cpu_devices(model_axis_size * expert_axis_size):
         mesh = compact_grug_mesh(model_axis_size=model_axis_size, expert_axis_size=expert_axis_size)
         with jax.set_mesh(mesh):
             model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(17))
+            if selected_decode:
+                model = model.with_selected_ep_decode()
             engine = InferenceEngine.from_model_with_config(
                 model,
                 tokenizer=None,
@@ -508,6 +513,7 @@ def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_
                     max_seq_len=16,
                     max_pages=16,
                     max_rounds=2,
+                    max_tokens_per_round=expert_axis_size if selected_decode else None,
                     page_size=2,
                     compute_dtype=jnp.float32,
                     max_seqs=4,

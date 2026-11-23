@@ -662,6 +662,7 @@ class SnowballMoEMLP(eqx.Module):
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
     cfg: SnowballConfig = eqx.field(static=True)
+    selected_decode: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballMoEMLP":
@@ -729,20 +730,30 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights = combine_weights_f if self.cfg.router_combine_fp32 else combine_weights_f.astype(x.dtype)
 
         valid_flat = None if token_valid is None else reshard(token_valid.reshape(b * s), P(_token_spec()[0]))
-        report_capacity_overflow = token_valid is not None or collect_counts
-        result = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            token_valid=valid_flat,
-            report_capacity_overflow=report_capacity_overflow,
-        )
         counts = None
-        if report_capacity_overflow:
-            routed_flat, counts = cast(tuple[Array, MoeDispatchCounts], result)
+        if self.selected_decode:
+            assert valid_flat is not None
+            routed_flat = self.expert_mlp.decode_small_ep(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                token_valid=valid_flat,
+                mesh=get_abstract_mesh(),
+            )
         else:
-            routed_flat = cast(Array, result)
+            report_capacity_overflow = token_valid is not None or collect_counts
+            result = self.expert_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                token_valid=valid_flat,
+                report_capacity_overflow=report_capacity_overflow,
+            )
+            if report_capacity_overflow:
+                routed_flat, counts = cast(tuple[Array, MoeDispatchCounts], result)
+            else:
+                routed_flat = cast(Array, result)
         out = jax.lax.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
         if not return_routes:
             return MoeForwardOutput(out, None, counts)
@@ -979,6 +990,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
     transformer: SnowballTransformer
     _config: SnowballConfig = eqx.field(static=True)
+    _selected_ep_decode: bool = eqx.field(static=True, default=False)
+
+    def with_selected_ep_decode(self) -> "SnowballLMHeadModel":
+        """Read selected matrix slices for eligible small expert-parallel decode batches."""
+        return dataclasses.replace(self, _selected_ep_decode=True)
 
     @property
     def config(self) -> SnowballConfig:
@@ -1147,7 +1163,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())
         hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
         token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
-        stacked = self._stacked_inference_blocks()
+        stacked = self._stacked_inference_blocks(tokens.shape[0])
         cache_pages = jnp.stack([cache.kv_pages.array for cache in kv_cache])
         cache_axes = kv_cache[0].kv_pages.axes
         long_schedule = long_attention_layer_mask(len(kv_cache))
@@ -1166,7 +1182,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
         return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches
 
-    def _stacked_inference_blocks(self) -> SnowballBlock:
+    def _stacked_inference_blocks(self, token_rows: int) -> SnowballBlock:
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)
         expert_size = _mesh_axis_size(_current_mesh(), "expert")
         if expert_size <= 1:
@@ -1176,7 +1192,17 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         experts = dataclasses.replace(
             stacked.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
         )
-        return eqx.tree_at(lambda block: block.mlp.expert_mlp, stacked, experts)
+        selected = (
+            self._selected_ep_decode
+            and token_rows == expert_size
+            and not self.config.router_combine_fp32
+            and _mesh_axis_size(_current_mesh(), "data") == 1
+            and _mesh_axis_size(_current_mesh(), "replica_dcn") == 1
+            and _mesh_axis_size(_current_mesh(), "replica") == 1
+            and _mesh_axis_size(_current_mesh(), "model") == 1
+        )
+        mlp = dataclasses.replace(stacked.mlp, expert_mlp=experts, selected_decode=selected)
+        return eqx.tree_at(lambda block: block.mlp, stacked, mlp)
 
     # --- state dict (bidirectional HF serialization) ---
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
