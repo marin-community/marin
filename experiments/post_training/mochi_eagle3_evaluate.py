@@ -12,6 +12,7 @@ from pathlib import Path
 from statistics import mean, median, variance
 
 import httpx
+import numpy as np
 from iris.cluster.client.job_info import get_job_info
 from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.inference.config import ServingGeometry
@@ -37,6 +38,9 @@ PROBE_POSITIONS = (0, 1, 3, 7, 15, 31, 63)
 DECODE_POSITIONS = (*PROBE_POSITIONS, 127, 255)
 AUTOREGRESSIVE_ARTIFACT = "autoregressive.json"
 SAMPLING_STANDARD_ERRORS = 3
+ROUTED_LAYERS = 48
+ROUTED_EXPERTS_PER_TOKEN = 8
+MAX_ROUTE_SLOT_NOISE = 0.05
 
 
 async def probe_inventory(base_url: str, requests: list[LoadRequest]) -> list[dict]:
@@ -114,6 +118,12 @@ def score_difference(reference: dict[str, dict], candidate: dict[str, dict]) -> 
         raise ValueError("Correctness score inventories differ or are empty")
     errors = [abs(row["logprob"] - candidate[key]["logprob"]) for key, row in reference.items()]
     top_errors = [abs(row["top1_logprob"] - candidate[key]["top1_logprob"]) for key, row in reference.items()]
+    reference_routes = np.asarray([row["routes"] for row in reference.values()])
+    candidate_routes = np.asarray([candidate[key]["routes"] for key in reference])
+    expected_shape = (len(errors), ROUTED_LAYERS, ROUTED_EXPERTS_PER_TOKEN)
+    if reference_routes.shape != expected_shape or candidate_routes.shape != expected_shape:
+        raise ValueError("Mochi correctness scores must retain all 48 layers and eight expert slots")
+    route_mismatch = reference_routes != candidate_routes
     return {
         "prefixes": len(errors),
         "max_absolute_logprob_error": max(errors),
@@ -125,6 +135,8 @@ def score_difference(reference: dict[str, dict], candidate: dict[str, dict]) -> 
         "route_mismatch_fraction": (
             sum(row["routes"] != candidate[key]["routes"] for key, row in reference.items()) / len(errors)
         ),
+        "route_slot_mismatch_fraction": float(route_mismatch.mean()),
+        "route_slot_mismatch_by_layer": route_mismatch.mean(axis=(0, 2)).tolist(),
     }
 
 
@@ -217,19 +229,15 @@ def sampling_by_prompt(trajectories: list[dict]) -> dict[str, list[dict]]:
     return grouped
 
 
-def sampling_calibration(grouped: dict[str, list[dict]], numerical_bounds: dict) -> dict:
+def sampling_calibration(grouped: dict[str, list[dict]]) -> dict:
     """Predeclare three-standard-error bounds from paired target-only seed repeats."""
-    metrics = {"mean_logprob": "max_absolute_logprob_error", "mean_top1_probability": "max_top1_logprob_error"}
     calibrated = {}
-    for metric, numerical_metric in metrics.items():
+    for metric in ("mean_logprob", "mean_top1_probability"):
         values = [[row[metric] for row in rows] for rows in grouped.values()]
         standard_error = math.sqrt(sum(2 * variance(group) / len(group) for group in values)) / len(values)
-        numerical_bound = numerical_bounds[numerical_metric]
-        if metric == "mean_top1_probability":
-            numerical_bound = math.expm1(numerical_bound)
         calibrated[metric] = {
             "reference": mean(mean(group) for group in values),
-            "maximum_mean_shift": max(numerical_bound, SAMPLING_STANDARD_ERRORS * standard_error),
+            "maximum_mean_shift": SAMPLING_STANDARD_ERRORS * standard_error,
             "standard_error": standard_error,
         }
     return {"by_prompt": grouped, "metrics": calibrated, "standard_errors": SAMPLING_STANDARD_ERRORS}
@@ -346,19 +354,30 @@ async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> No
             "noise": noise,
             "max_logprob_error": max(1e-4, 2 * noise["max_absolute_logprob_error"]),
             "max_top1_mismatch_fraction": noise["top1_mismatch_fraction"] + 1 / len(probes),
-            "max_route_mismatch_fraction": noise["route_mismatch_fraction"] + 1 / len(probes),
+            "max_route_slot_mismatch_fraction": (
+                2 * noise["route_slot_mismatch_fraction"] + 1 / (len(probes) * ROUTED_LAYERS * ROUTED_EXPERTS_PER_TOKEN)
+            ),
             "decode_noise": decode_noise,
             "decode_bounds": {
                 "max_absolute_logprob_error": max(1e-4, 2 * decode_noise["max_absolute_logprob_error"]),
                 "max_top1_logprob_error": max(1e-4, 2 * decode_noise["max_top1_logprob_error"]),
                 "top1_mismatch_fraction": decode_noise["top1_mismatch_fraction"] + 1 / len(teacher),
-                "route_mismatch_fraction": decode_noise["route_mismatch_fraction"] + 1 / len(teacher),
+                "route_slot_mismatch_fraction": (
+                    2 * decode_noise["route_slot_mismatch_fraction"]
+                    + 1 / (len(teacher) * ROUTED_LAYERS * ROUTED_EXPERTS_PER_TOKEN)
+                ),
             },
         }
-        calibration["sampling"] = sampling_calibration(
-            sampling_by_prompt(autoregressive["trajectories"]), calibration["decode_bounds"]
-        )
+        calibration["sampling"] = sampling_calibration(sampling_by_prompt(autoregressive["trajectories"]))
         write_json(spec["output"], "correctness-calibration.json", calibration)
+        if (
+            max(
+                calibration["max_route_slot_mismatch_fraction"],
+                calibration["decode_bounds"]["route_slot_mismatch_fraction"],
+            )
+            > MAX_ROUTE_SLOT_NOISE
+        ):
+            raise ValueError("Target-only expert-slot noise exceeds the five-percent sensitivity budget")
         return
     calibration = json.loads((root / "correctness-calibration.json").read_text())
     scores = await prefix_scores(environment.server_url, calibration["probes"], 16)
@@ -366,7 +385,7 @@ async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> No
     passed = (
         difference["max_absolute_logprob_error"] <= calibration["max_logprob_error"]
         and difference["top1_mismatch_fraction"] <= calibration["max_top1_mismatch_fraction"]
-        and difference["route_mismatch_fraction"] <= calibration["max_route_mismatch_fraction"]
+        and difference["route_slot_mismatch_fraction"] <= calibration["max_route_slot_mismatch_fraction"]
     )
     write_json(
         spec["output"], f"{arm['name']}/correctness.json", {"passed": passed, "difference": difference, "scores": scores}
