@@ -838,7 +838,9 @@ def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
 
 
 def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, budget: int) -> ChatCompletion:
-    return _chat_result(spec, client, model, [{"role": "user", "content": prompt}], budget).response
+    return _chat_result(
+        spec, client, model, [{"role": "user", "content": prompt}], budget, temperature=spec.temperature
+    ).response
 
 
 def _chat_result(
