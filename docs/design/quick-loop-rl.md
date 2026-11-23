@@ -2284,13 +2284,17 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   independent learner scores stayed within 0.00048 of serving scores
   with zero PPO clip crossings.
 
-  The inventory launcher derives the serving model configuration from the
-  verified snapshot. That configuration is part of the replay binding.
-  To compare decode kernels on the same snapshot, carry the choice as a
-  serving-engine option in the typed initialization message and apply it
-  after restoring the verified weights. Apply the option on every install
-  and keep the original model binding in each frame. Compare both kernels
-  at the same admitted batch size so the result isolates decode.
+  An isolated port exposes `inference_attention_implementation` in
+  `generator.native_snowball.engine_config`. The normal artifact launcher
+  carries the choice over the existing typed initialization message.
+  The initial and replacement engines apply the serving-only option
+  after verifying the snapshot and preserve the original model binding.
+  On local Ray, omission and `reference_blocked` both loaded the same
+  committed policies 0, 1 and 2. All 12 corresponding binary replies
+  matched byte for byte, including their configuration and weight
+  identities. Both actors rejected the old policy after each swap.
+  Worker traces confirmed the selected decode mode. Compare the kernels
+  at the same admitted batch size on H100 to isolate decode.
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
