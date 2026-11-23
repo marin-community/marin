@@ -1727,7 +1727,8 @@ class InferenceEngine:
         admit(requests)
         decode_iteration = 0
         while outstanding:
-            if poll_requests is not None and (not pending or self.config.max_retained_prompts):
+            refill_pending = self.config.max_retained_prompts > 0 and decode_iteration > 0
+            if poll_requests is not None and (not pending or refill_pending):
                 # Pending choices already claim slots even though their prompts have not run.
                 available = len(self.free_slots) - sum(request.n_generations for request in pending)
                 incoming = poll_requests(available) if available > 0 else ()
