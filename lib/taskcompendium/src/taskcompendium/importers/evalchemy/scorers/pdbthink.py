@@ -5,7 +5,7 @@
 
 import json
 
-from pdbthink.evaluation.response_protocol import answer_content, response_tool_events
+from pdbthink.evaluation.response_protocol import MARIN_THINKING, answer_content, response_tool_events
 from pdbthink.scoring import score_response
 from verifyit.grade import Reward, scored
 
@@ -14,9 +14,9 @@ def grade_pdbthink(config: dict, response: str) -> Reward:
     envelope = json.loads(response)
     message = envelope["message"]
     finish_reason = envelope["finish_reason"]
-    text = answer_content(message, "marin-thinking-v1")
+    text = answer_content(message, MARIN_THINKING)
     tool_call = finish_reason in ("tool_calls", "function_call") or bool(
-        response_tool_events({"choices": [{"message": message}]}, "marin-thinking-v1")
+        response_tool_events({"choices": [{"message": message}]}, MARIN_THINKING)
     )
     outcome = score_response(
         text,
