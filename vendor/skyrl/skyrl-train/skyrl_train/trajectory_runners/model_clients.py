@@ -1,6 +1,7 @@
 """Model transports used by trajectory runners."""
 
 import asyncio
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable, Sequence
@@ -54,6 +55,13 @@ _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_SAMPLING_OUTPUT_LIMIT_KEYS, "logprobs",
 
 REASONING_VIOLATIONS_KEY = "reasoning_violations"
 REASONING_VIOLATION_TOKENS_KEY = "reasoning_violation_tokens"
+
+# vLLM's Hermes parser serializes tool-call arguments with ensure_ascii=False, so a JSON \u escape for half of
+# a surrogate pair becomes a lone surrogate, which the tokenizer cannot encode when it renders the next turn.
+# vLLM decodes the arguments before the chat template writes them, so an escape in the arguments string does
+# not help: the decoded value must be valid Unicode.
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+_REPLACEMENT_CHARACTER = "\ufffd"
 
 
 class ModelClientOutput(InferenceEngineOutput):
@@ -188,6 +196,23 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
     if all(result.policy_steps is not None for result in results):
         output["response_policy_steps"] = [result.policy_steps for result in results]
     return output
+
+
+def _replace_lone_surrogates(message: dict[str, Any]) -> dict[str, Any]:
+    """Replace each lone surrogate in the message's tool-call arguments with U+FFFD."""
+    if not message.get("tool_calls"):
+        return message
+    tool_calls = [
+        {
+            **call,
+            "function": {
+                **call["function"],
+                "arguments": _LONE_SURROGATE.sub(_REPLACEMENT_CHARACTER, call["function"]["arguments"]),
+            },
+        }
+        for call in message["tool_calls"]
+    ]
+    return {**message, "tool_calls": tool_calls}
 
 
 async def _render_chat_prompt(
@@ -413,7 +438,7 @@ class DirectModelClient:
             response_ids = choice.get("token_ids")
             if not isinstance(response_ids, list) or not all(isinstance(token, int) for token in response_ids):
                 raise RuntimeError("vLLM chat completion did not return exact token IDs")
-            message = choice["message"]
+            message = _replace_lone_surrogates(choice["message"])
             text = message.get("content") or ""
             # Some serving configurations omit reasoning parsers and remove
             # special delimiters from content. Exact tokens retain the boundary.

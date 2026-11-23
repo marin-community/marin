@@ -369,10 +369,27 @@ def die_with_parent(lifeline: int) -> None:
     threading.Thread(target=lambda: os.read(lifeline, 1) or os._exit(143), daemon=True).start()
 
 
+def exit_on_sigterm() -> None:
+    """Exit 143 at SIGTERM: a crash, so the journal's last committed head survives. A Python handler runs only once the
+    main thread returns to the interpreter, which a write to a full pipe nobody reads never does when the signal landed
+    just before it; the C handler also writes the signal's number to the wakeup pipe, and a watching thread exits."""
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(143))
+    wakeup, woken = os.pipe()
+    os.set_blocking(woken, False)
+    signal.set_wakeup_fd(woken)
+
+    def watch() -> None:
+        while number := os.read(wakeup, 1):
+            if number[0] == signal.SIGTERM:
+                os._exit(143)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def main() -> None:
     args = cli().parse_args()
     if threading.current_thread() is threading.main_thread():  # an in-process test child runs on another thread
-        signal.signal(signal.SIGTERM, lambda *_: os._exit(143))  # a crash: the journal's last committed head survives
+        exit_on_sigterm()
         if getattr(args, "die_with_parent", None) is not None:
             die_with_parent(args.die_with_parent)
     configure_logging()

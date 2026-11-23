@@ -1287,7 +1287,6 @@ async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
     assert payers(root, replayed=False) == PAID  # the cold rerun paid for nothing
     replayed = payers(root, replayed=True)  # eighteen resolutions, none naming a payer
     assert sum(replayed.values()) == 18 and {payer for _, payer in replayed} == {None}
-    assert {payer for _, payer in payers(root, replayed=True)} == {None}
 
 
 async def test_a_format_9_root_charges_its_tokens_as_unattributed_and_replays_with_zero_calls(
