@@ -74,7 +74,7 @@ from levanter.grug.sharding import (
     replicate_keeping_reduced,
 )
 from levanter.kernels.pallas.radix_select import radix_select
-from levanter.kernels.pallas.autotune_utils import named_sharding_of
+from levanter.kernels.pallas.autotune_utils import contains_tracer, named_sharding_of
 from levanter.utils.activation import ActivationFunctionEnum
 
 MOE_DROPPED_ASSIGNMENTS_METRIC = "moe/dropped_assignments"
@@ -187,7 +187,7 @@ def validate_moe_route_capture(
     num_experts: int,
     num_experts_per_token: int,
 ) -> None:
-    """Validate a captured route before putting it inside a jitted forward."""
+    """Validate a capture's values before serialization or replay preparation."""
     if isinstance(capture, PreparedMoERouteCapture):
         validate_prepared_moe_route_capture(
             capture,
@@ -396,6 +396,11 @@ class QBRoutedMoE(eqx.Module):
     # model hyperparameter: selected sigmoid weights are normalized to this sum.
     routing_renorm_sum: float = eqx.field(static=True, default=2.5)
 
+    def _select_experts(self, router_logits, router_bias):
+        biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
+        topk_logits, expert_ids = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
+        return expert_ids[:, :-1], topk_logits[:, -1:]
+
     def capture_routes(
         self,
         x: Float[Array, "T D"],
@@ -414,12 +419,11 @@ class QBRoutedMoE(eqx.Module):
         if x.ndim != 2 or token_valid.shape != (x.shape[0],):
             raise ValueError("x and token_valid must have shapes [T, D] and [T]")
         router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
-        topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
+        selected_experts, qb_alpha = self._select_experts(router_logits, router_bias)
         capture = MoERouteCapture(
-            selected_experts=jax.lax.stop_gradient(selected_experts[:, :-1].astype(jnp.int32)),
+            selected_experts=jax.lax.stop_gradient(selected_experts.astype(jnp.int32)),
             token_valid=jax.lax.stop_gradient(token_valid),
-            qb_alpha=jax.lax.stop_gradient(topk_logits[:, -1:]),
+            qb_alpha=jax.lax.stop_gradient(qb_alpha),
         )
         return prepare_moe_route_capture(
             capture,
@@ -456,10 +460,7 @@ class QBRoutedMoE(eqx.Module):
 
         if route_capture is not None and not isinstance(route_capture, PreparedMoERouteCapture):
             raise TypeError("route_capture must be prepared with prepare_moe_route_capture")
-        capture_is_traced = route_capture is not None and any(
-            isinstance(leaf, jax.core.Tracer) for leaf in jax.tree_util.tree_leaves((route_capture, token_valid))
-        )
-        if route_capture is not None and not capture_is_traced:
+        if route_capture is not None and not contains_tracer(*route_capture, token_valid):
             validate_prepared_moe_route_capture(
                 route_capture,
                 token_valid,
@@ -471,10 +472,7 @@ class QBRoutedMoE(eqx.Module):
             router_logits = jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
             if route_capture is None:
-                biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
-                topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
-                qb_alpha = topk_logits[:, -1:]
-                selected_experts = selected_experts[:, :-1]
+                selected_experts, qb_alpha = self._select_experts(router_logits, router_bias)
             else:
                 if route_capture.selected_experts.shape != (x.shape[0], self.num_experts_per_token):
                     raise ValueError("route_capture selected_experts must align with x and router K")

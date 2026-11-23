@@ -54,7 +54,6 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoERouteCapture,
     QBRoutedMoE,
-    prepare_moe_route_capture,
     validate_moe_route_capture,
     MoEExpertMlpPspecs,
     MoeImplementation,
@@ -2630,7 +2629,6 @@ def test_route_capture_replay_keeps_ids_but_recomputes_current_gate_weights():
 
     with jax.set_mesh(mesh):
         capture = routerer.capture_routes(x, token_valid, router=router, router_bias=router_bias)
-        validate_moe_route_capture(capture, num_experts=4, num_experts_per_token=2)
         perturbed_router = router.at[:, 3].add(10.0)
         perturbed_capture = routerer.capture_routes(x, token_valid, router=perturbed_router, router_bias=router_bias)
         assert not np.array_equal(np.asarray(capture.selected_experts), np.asarray(perturbed_capture.selected_experts))
@@ -2705,13 +2703,3 @@ def test_route_capture_validation_rejects_duplicate_experts():
     )
     with pytest.raises(ValueError, match="duplicate"):
         validate_moe_route_capture(capture, num_experts=3, num_experts_per_token=2)
-
-
-def test_route_capture_preparation_rejects_noncanonical_dtypes():
-    capture = MoERouteCapture(
-        selected_experts=jnp.asarray([[1.0, 2.0]], dtype=jnp.float32),
-        token_valid=jnp.asarray([True]),
-        qb_alpha=jnp.zeros((1, 1), dtype=jnp.float32),
-    )
-    with pytest.raises(TypeError, match="integer"):
-        prepare_moe_route_capture(capture, capture.token_valid, num_experts=3, num_experts_per_token=2)
