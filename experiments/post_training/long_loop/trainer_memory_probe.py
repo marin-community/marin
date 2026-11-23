@@ -22,6 +22,7 @@ import torch
 from cloud.iris.launch_config import load_launch_config
 from omegaconf import open_dict
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 from skyrl_train.projected_softmax import projected_token_statistics
 from skyrl_train.stable_softmax import token_entropy, token_logprobs
 from skyrl_train.utils.utils import initialize_ray
@@ -159,7 +160,7 @@ def compiled_config(args):
         cfg.trainer.run_name = args.output_prefix.rstrip("/").split("/")[-1]
         cfg.trainer.logger = "console"
         cfg.trainer.export_path = args.output_prefix
-        cfg.trainer.native_telemetry_root = args.output_prefix + "/telemetry"
+        cfg.trainer.native_telemetry_root = prefix_join(args.output_prefix, "telemetry")
         cfg.trainer.policy.model.path = "/tmp/trainer-profile-model-metadata"
         cfg.trainer.policy.model.tokenizer_path = launch.inputs.model.tokenizer_uri
         cfg.trainer.policy.model.tokenizer_revision = launch.inputs.model.tokenizer_revision
@@ -203,7 +204,7 @@ def driver(args):
         batch.metadata = {**batch.metadata, "global_step": 0}
         numerical = ray.get(actors.async_run_ray_method("mesh", "qualify_real_batch", batch))
         write_receipt(
-            args.output_prefix + "/real-batch-numerics.json",
+            prefix_join(args.output_prefix, "real-batch-numerics.json"),
             {"batch_uri": args.batch_uri, "batch_sha256": batch_sha256, "ranks": numerical},
         )
         timings = []
@@ -215,7 +216,7 @@ def driver(args):
                 {"warm_optimizer": index > 0, "seconds": time.monotonic() - started, "rank_outputs": len(outputs)}
             )
             write_receipt(
-                args.output_prefix + "/matched-batch-timing.json",
+                prefix_join(args.output_prefix, "matched-batch-timing.json"),
                 {"variant": args.variant, "batch_sha256": batch_sha256, "timings": timings},
             )
         memory = (
@@ -233,7 +234,7 @@ def driver(args):
             "timings": timings,
             "memory": memory,
         }
-        write_receipt(args.output_prefix + "/receipt.json", result)
+        write_receipt(prefix_join(args.output_prefix, "receipt.json"), result)
         print(json.dumps({"qualification_passed": True, "policy_ranks": len(identities)}), flush=True)
     finally:
         ray.shutdown()

@@ -1149,6 +1149,9 @@ at actual concurrency. Do not infer serving capacity from consumed training toke
 
 For a qualified Megatron PPO recipe, set
 `trainer.policy.megatron_config.memory_profile.enabled: true` before launch.
+Declare `max_sequence_length`, `valid_token_counts` (which may be empty), and
+`minimum_headroom_fraction` explicitly in the same mapping; use `0.1` for a 10%
+device-memory reserve. Omitting an enabled check's capacity or reserve fails preflight.
 The check runs on every policy rank before initial weight publication and rollout
 admission. It initializes Adam, then runs forward, backward and optimizer steps
 at each `memory_profile.valid_token_counts` value and at the explicit

@@ -53,6 +53,9 @@ def validate_megatron_config(cfg: DictConfig):
                 if path[-1] in ("sequence_parallel", "defer_embedding_wgrad_compute", "delay_wgrad_compute") and value:
                     raise ValueError(f"output_projection_chunk_size requires {name}.{'.'.join(path)}=false")
     if profile.get("enabled", False):
+        for name in ("max_sequence_length", "valid_token_counts", "minimum_headroom_fraction"):
+            if name not in profile:
+                raise ValueError(f"Trainer sizing requires an explicit memory_profile.{name}")
         if str(policy.optimizer_config.optimizer).lower() not in ("adam", "adamw"):
             raise ValueError("Synthetic trainer sizing currently requires Adam")
         if cfg.trainer.algorithm.get("policy_loss_type", "regular") != "regular":
