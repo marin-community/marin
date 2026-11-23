@@ -21,8 +21,6 @@ class MetadataExclusion:
     """A source excluded by policy without any catalog population."""
 
     id: str
-    name: str
-    display_name: str
     origin: str
     upstream_dataset: str
     upstream_url: str
@@ -52,8 +50,6 @@ MIROVERSE_PIN = "11fbf325f6eda37b34f519d1ba7268f40f469ac6"
 METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
     MetadataExclusion(
         id="GPUMODE:kernelbot-data",
-        name="kernelbot-data",
-        display_name="GPUMODE · kernelbot-data",
         origin="GPUMODE",
         upstream_dataset="GPUMODE/kernelbot-data",
         upstream_url="https://huggingface.co/datasets/GPUMODE/kernelbot-data",
@@ -75,8 +71,6 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
     ),
     MetadataExclusion(
         id="CyBench:andyzorigin-cybench",
-        name="andyzorigin-cybench",
-        display_name="CyBench · andyzorigin/cybench",
         origin="CyBench",
         upstream_dataset="andyzorigin/cybench",
         upstream_url="https://github.com/andyzorigin/cybench",
@@ -100,8 +94,6 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
     ),
     MetadataExclusion(
         id="HAL:princeton-pli-hal-harness",
-        name="princeton-pli-hal-harness",
-        display_name="HAL harness · princeton-pli/hal-harness",
         origin="HAL",
         upstream_dataset="princeton-pli/hal-harness",
         upstream_url="https://github.com/princeton-pli/hal-harness",
@@ -124,8 +116,6 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
     ),
     MetadataExclusion(
         id="MiroVerse:miromind-ai-MiroVerse-v0.1",
-        name="miromind-ai-MiroVerse-v0.1",
-        display_name="MiroVerse · miromind-ai/MiroVerse-v0.1",
         origin="MiroVerse",
         upstream_dataset="miromind-ai/MiroVerse-v0.1",
         upstream_url="https://huggingface.co/datasets/miromind-ai/MiroVerse-v0.1",
@@ -146,8 +136,6 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
     ),
     MetadataExclusion(
         id="MAI-Gym:tasks",
-        name="MAI-Gym-tasks",
-        display_name="MAI-Gym · tasks",
         origin="MAI-Gym",
         upstream_dataset="Tongyi-MAI/MAI-Gym",
         upstream_url="https://github.com/Tongyi-MAI/MAI-Gym",
@@ -169,8 +157,6 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
     ),
     MetadataExclusion(
         id="OpenGCUA:trajectories",
-        name="OpenGCUA-trajectories",
-        display_name="OpenGCUA · trajectories",
         origin="OpenGCUA",
         upstream_dataset="https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
         upstream_url="https://tongyi-mai.github.io/OpenGCUA/trajectories.html",

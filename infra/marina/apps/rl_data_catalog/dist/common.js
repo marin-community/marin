@@ -187,8 +187,25 @@ function overlapEvidence(source, labels) {
   return content.children.length ? content : null;
 }
 
-const backendNames = {local: 'LOCAL', daytona: 'Daytona', docker: 'Docker', 'docker-gvisor': 'Docker + runsc (local dev)', qemu: 'QEMU', shellsim: 'ShellSim', iris: 'Iris (gVisor, production)'};
-const backendDeploymentClass = {iris: 'production', daytona: 'production', local: 'production', docker: 'dev_only', 'docker-gvisor': 'dev_only', qemu: 'dev_only', shellsim: 'dev_only'};
+// Canonical taxonomy tables served by /api/taxonomy; every page loads them
+// before rendering and no page defines a label of its own. The backend table
+// is the supported-production-backends enum; backendReason covers the
+// auto-derived blockers for unsupported production backends.
+const AtlasTaxonomy = {
+  status: {}, stage: {}, reason: {}, use: {}, method: {}, format: {}, backend: {}, backendReason: {},
+};
+async function loadTaxonomy() {
+  const tables = await json('api/taxonomy');
+  AtlasTaxonomy.status = tables.status || {};
+  AtlasTaxonomy.stage = tables.stage || {};
+  AtlasTaxonomy.reason = tables.reason || {};
+  AtlasTaxonomy.use = tables.use || {};
+  AtlasTaxonomy.method = tables.method || {};
+  AtlasTaxonomy.format = tables.format || {};
+  AtlasTaxonomy.backend = tables.backend || {};
+  AtlasTaxonomy.backendReason = tables['backend-reason'] || {};
+  return tables;
+}
 const supportClasses = {supported: 'good', partial: 'some_issues', unsupported: 'bad', role_absent: 'unassessed'};
 const backendStatusLabels = {partial: 'Partial', role_absent: 'N/A (no role)', verify: 'Verify (live probe pending)'};
 function readableRecord(value) {
@@ -222,19 +239,36 @@ function displayBackendFit(fit, taskCount) {
   const failed = ['partial', 'unsupported', 'not_applicable'].includes(fit.support) || Object.values(affected).some(count => count > 0) || Object.keys(blockers).length || Object.keys(fit.validation_errors).length;
   return {...fit, roles, blockers, affected_roles: affected, support: absent ? 'role_absent' : fit.support === 'partial' ? 'partial' : failed ? 'unsupported' : pending ? 'verify' : 'supported'};
 }
+// The auto-derived reasons one backend's fit fails: typed demands render as
+// their own value; the non-demand blockers map onto the canonical enum. A
+// blocker key outside both fails loudly — no free-text reason renders.
+function blockerReasons(fit) {
+  const reasons = new Set();
+  for (const key of Object.keys(fit.blockers || {})) {
+    const capability = key.split(':').slice(1).join(':');
+    if (capability === 'required_backend') reasons.add('required-backend');
+    else if (AtlasTaxonomy.backendReason[capability]) reasons.add(capability);
+    else throw new Error(`Backend blocker "${key}" maps to no typed reason; the survey drifted from the taxonomy.`);
+  }
+  if (Object.keys(fit.validation_errors || {}).length) reasons.add('validation-error');
+  return [...reasons].sort();
+}
 function backendLabels(source) {
   const capabilities = source.backend_capabilities;
   if (!capabilities || capabilities.basis === 'unassessed') return [];
-  return Object.entries(capabilities.backends).map(([key, recorded]) => {
-    const fit = displayBackendFit(recorded, capabilities.task_count);
-    const reasons = [...new Set(Object.keys(fit.blockers).map(reason => reason.split(':').slice(1).join(':') || reason))];
-    if (!reasons.length && Object.keys(fit.validation_errors).length) reasons.push('validation');
-    const name = backendNames[key] || key;
-    const status = backendStatusLabels[fit.support] || fit.support.toUpperCase();
-    const devOnly = backendDeploymentClass[key] === 'dev_only';
-    const display = devOnly ? `${name} — dev only` : name;
-    return {key, fit, dev_only: devOnly, label: fit.support === 'supported' ? display : `${display}: ${status}${reasons.length ? ': ' + reasons.join(', ') : ''}`};
-  });
+  // The fit table is the supported-production-backends enum plus the reasons
+  // for the unsupported ones; dev-only backends the survey also measured never
+  // render, and a backend outside the served taxonomy is drift.
+  return Object.entries(capabilities.backends)
+    .filter(([key]) => AtlasTaxonomy.backend[key])
+    .map(([key, recorded]) => {
+      const fit = displayBackendFit(recorded, capabilities.task_count);
+      const reasons = blockerReasons(fit);
+      const name = AtlasTaxonomy.backend[key].label;
+      const status = backendStatusLabels[fit.support] || fit.support.toUpperCase();
+      const reasonText = reasons.map(reason => AtlasTaxonomy.backendReason[reason]?.label || reason).join(', ');
+      return {key, fit, reasons, label: fit.support === 'supported' ? name : `${name}: ${status}${reasons.length ? ': ' + reasonText : ''}`};
+    });
 }
 function daytonaEvidenceRows(source, cap) {
   const declaration = source.declaration || source, safety = source.daytona;
@@ -290,11 +324,21 @@ function gradingChips(source) {
 function backendDetails(source) {
   const wrap = node('div', undefined, 'table-wrap'); wrap.tabIndex = 0; wrap.setAttribute('aria-label', 'Backend fit by execution role');
   const table = node('table', undefined, 'backend-table'), head = node('thead'), headings = node('tr');
-  for (const title of ['Backend', 'Overall', 'Agent', 'Grader', 'Affected tasks by role', 'Blockers', 'Validation errors']) headings.append(node('th', title));
+  for (const title of ['Backend', 'Overall', 'Agent', 'Grader', 'Reasons', 'Affected tasks by role', 'Blockers', 'Validation errors']) headings.append(node('th', title));
   head.append(headings); table.append(head); const body = node('tbody');
-  for (const {key, fit} of backendLabels(source)) {
-    const row = node('tr'); row.append(node('td', backendNames[key] || key));
+  for (const {key, fit, reasons} of backendLabels(source)) {
+    const row = node('tr'); row.append(node('td', AtlasTaxonomy.backend[key].label));
     const status = node('td'); status.append(node('span', backendStatusLabels[fit.support] || fit.support.toUpperCase(), `chip quality-${supportClasses[fit.support]}`)); row.append(status);
+    const reasonCell = node('td', undefined, 'backends-cell');
+    if (fit.support === 'supported') reasonCell.append(node('span', '—'));
+    else if (reasons.length) {
+      for (const reason of reasons) {
+        const chip = node('span', AtlasTaxonomy.backendReason[reason]?.label || reason, 'chip');
+        chip.title = AtlasTaxonomy.backendReason[reason]?.meaning || '';
+        reasonCell.append(chip);
+      }
+    } else reasonCell.append(node('span', 'Not measured', 'muted'));
+    row.append(reasonCell);
     for (const role of ['agent', 'grader']) {
       const cell = node('td');
       const counts = Object.fromEntries(Object.entries(fit.roles[role] || {}).filter(([, count]) => count > 0).map(([state, count]) => [backendStatusLabels[state] || state, count]));

@@ -215,8 +215,17 @@ def source_identifier(origin: SourceOrigin, dataset: str, subset: str | None, va
     return f"{origin}:{dataset}" + (f"/{subset}" if subset else "") + (f"@{variant}" if variant else "")
 
 
-def source_title(name: str, subset: str | None, variant: str | None) -> str:
-    return " · ".join(part for part in (name, subset, variant) if part)
+def source_display_name(source_id: str) -> str:
+    """The display name derived from a source ID: ``<origin> · <dataset path>``.
+
+    The ID is the only identity a display name may restate; there is no
+    free-text name field. The dataset path keeps the subset and variant
+    segments so every source's display name stays unique.
+    """
+    origin, separator, dataset = source_id.partition(":")
+    if not separator or not origin or not dataset:
+        raise ValueError(f"Source ID does not carry '<origin>:<dataset>': {source_id}")
+    return f"{origin} · {dataset}"
 
 
 class ContentEvidenceReference(CatalogRecord):
@@ -1045,7 +1054,6 @@ class TaskFormat(StrEnum):
 
 class SourceDeclaration(CatalogRecord):
     id: str
-    name: str
     display_name: str
     origin: str
     build_path: str = "unmeasured"
@@ -1099,7 +1107,6 @@ class QualifiedSourceDeclaration(SourceDeclaration):
     reader accepting the strict contract without touching main's legacy model."""
 
     id: str
-    name: str
     display_name: str
     origin: SourceOrigin
     build_path: str
@@ -1206,6 +1213,12 @@ class QualifiedSourceDeclaration(SourceDeclaration):
     exclusion_claims: list[ExclusionClaim] = Field(default_factory=list)
     """Typed exclusion reasons with evidence; an Excluded source carries at least one."""
 
+    replacement_source_id: str | None = None
+    """The typed link to the replacement source of a superseded population.
+
+    Only a Deprecated source carries one, and the linked source must exist in
+    the Atlas in any status (ruling 2026-11-23)."""
+
     @model_validator(mode="after")
     def _typed_status_fields(self) -> "QualifiedSourceDeclaration":
         require_typed_status_fields(self)
@@ -1246,8 +1259,8 @@ class QualifiedSourceDeclaration(SourceDeclaration):
             != (self.dataset_id, self.dataset_revision, self.pipeline.version)
         ):
             raise ValueError("Actor census input or converter version differs from the declaration")
-        if self.display_name != source_title(self.upstream_name, self.subset, self.variant):
-            raise ValueError("Source title differs from generated title")
+        if self.display_name != source_display_name(self.id):
+            raise ValueError("Source display name differs from the identity-derived display name")
         if self.daytona_safety is not None:
             measurement = DaytonaMeasurement.model_validate(
                 {
@@ -1428,6 +1441,17 @@ def require_typed_status_fields(declaration: QualifiedSourceDeclaration) -> None
         raise ValueError(f"Only a Pending source carries a PendingStage: {declaration.id}")
     if declaration.status is SourceStatus.EXCLUDED and not declaration.exclusion_claims:
         raise ValueError(f"Excluded source carries no ExclusionReason: {declaration.id}")
+    if declaration.replacement_source_id is not None:
+        if declaration.status is not SourceStatus.DEPRECATED:
+            raise ValueError(f"Only a Deprecated source carries a replacement link: {declaration.id}")
+        replacement = declaration.replacement_source_id
+        if replacement == declaration.id:
+            raise ValueError(f"A source cannot supersede itself: {declaration.id}")
+        origin, separator, dataset = replacement.partition(":")
+        if not separator or not origin or not dataset:
+            raise ValueError(f"Replacement source ID does not carry '<origin>:<dataset>': {replacement}")
+    if declaration.exclusion_claims and declaration.status is SourceStatus.DEPRECATED:
+        raise ValueError(f"A Deprecated source carries no ExclusionReason: {declaration.id}")
 
 
 class CatalogSnapshot(CatalogRecord):

@@ -47,14 +47,14 @@ def test_generated_identity_and_title_survive_catalog_serialization(tmp_path):
     source = replace(source, info=info)
     declaration = QualifiedSourceDeclaration.model_validate_json(source.declaration.model_dump_json())
     assert declaration.id == "Marin:math/test@repaired"
-    assert declaration.display_name == "Math · test · repaired"
+    assert declaration.display_name == "Marin · math/test@repaired"
     assert declaration.build_path == "Campaign Release"
     assert declaration.current_release.repo == source.dataset.name
     with pytest.raises(ValueError, match="Source ID"):
         replace(info, id="Marin:another")
     with pytest.raises(ValueError, match="Source title"):
         replace(info, title="Math dataset converted from elsewhere")
-    with pytest.raises(ValueError, match="Source title"):
+    with pytest.raises(ValueError, match="identity-derived display name"):
         QualifiedSourceDeclaration.model_validate({**declaration.model_dump(), "display_name": "hand-set title"})
 
 

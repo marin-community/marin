@@ -14,7 +14,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.curation import CurationCatalog, OversightEvidence, OversightLevel, TaskFormat
+from finestore.rl.curation import (
+    CurationCatalog,
+    OversightEvidence,
+    OversightLevel,
+    TaskFormat,
+    source_display_name,
+)
 from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
@@ -179,7 +185,13 @@ def test_historical_corpus_inventory_keeps_the_current_embedding_plan(tmp_path, 
                 {
                     "population": "converted",
                     "sources": [],
-                    "inventory": [{**source.declaration.model_dump(mode="json"), "id": identifier}],
+                    "inventory": [
+                        {
+                            **source.declaration.model_dump(mode="json"),
+                            "id": identifier,
+                            "display_name": source_display_name(identifier),
+                        }
+                    ],
                 }
             )
         )
@@ -717,7 +729,9 @@ def test_full_campaign_requires_qa_transport_availability(tmp_path, monkeypatch,
     assert campaign["status"] == "failed" and outcome["status"] == "incomplete"
     catalog = CurationCatalog(str(cache / "campaigns/catalog"))
     catalog_source = next(
-        row for row in catalog.sources(catalog.current().snapshot_id) if row.declaration.name == "math500"
+        row
+        for row in catalog.sources(catalog.current().snapshot_id)
+        if row.declaration.display_name == "HuggingFaceH4 · math500"
     )
     assert catalog_source.curation.status == "incomplete"
     assert [(item.cohort, item.status) for item in catalog.items(catalog_source.assessment_key)] == [

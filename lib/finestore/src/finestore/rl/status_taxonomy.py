@@ -11,6 +11,7 @@ docs render the same explanation metadata from here. Nothing else may define
 status, stage, reason or column-value labels.
 """
 
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -97,6 +98,10 @@ class PendingStage(StrEnum):
     """The source waits for a remediation agent to produce the clean or
     remediated private-release receipt its training use requires."""
 
+    SNAPSHOT_REPAIR_QUEUED = "Snapshot repair queued"
+    """The actor census measured the cohort's snapshot provisioning over the
+    shared budget; a snapshot-safe rebuild re-admits the source."""
+
     BACKEND_VERIFICATION_PENDING = "Backend verification pending"
     """A new admission awaits the live backend qualification: no production
     backend admits it and VERIFY is its only positive production outcome."""
@@ -153,12 +158,9 @@ class ExclusionReason(StrEnum):
     AGENTIC_TASK_FORMAT_MISSING = "agentic-task-format-missing"
     SNAPSHOT_IDENTITY_MISSING = "snapshot-identity-missing"
     EXECUTION_REQUIREMENT_MISSING = "execution-requirement-missing"
-    EVAL_ONLY_BENCHMARK = "eval-only-benchmark"
-    SUPERSEDED_BY_REPLACEMENT = "superseded-by-replacement"
     GRADER_DEFECT = "grader-defect"
     CONTAMINATION_RISK = "contamination-risk"
     DUPLICATE_OF_SOURCE = "duplicate-of-source"
-    SNAPSHOT_BUDGET_EXCEEDED = "snapshot-budget-exceeded"
     UNSPECIFIED_LEGACY = "unspecified-legacy"
     ENVIRONMENT_ARTIFACT_MISSING = "environment-artifact-missing"
     NO_SUPPORTED_BACKEND = "no-supported-backend"
@@ -263,16 +265,6 @@ REASON_EXPLANATIONS: dict[ExclusionReason, ReasonExplanation] = {
         meaning="No execution-requirement measurement exists for the population.",
         clears="The execution-requirement measurement receipt.",
     ),
-    ExclusionReason.EVAL_ONLY_BENCHMARK: ReasonExplanation(
-        label="Eval only",
-        meaning="The source is admitted for evaluation only; its training use is excluded by a recorded benchmark rule.",
-        clears="A user ruling that admits training use, recorded with the benchmark evidence.",
-    ),
-    ExclusionReason.SUPERSEDED_BY_REPLACEMENT: ReasonExplanation(
-        label="Superseded",
-        meaning="A repaired or re-pinned cohort replaces this source's population.",
-        clears="Retiring the replacement claim, or restoring this pin as the current cohort.",
-    ),
     ExclusionReason.GRADER_DEFECT: ReasonExplanation(
         label="Grader defect",
         meaning="A recorded grader or oracle defect makes the population's reward untrustworthy.",
@@ -287,11 +279,6 @@ REASON_EXPLANATIONS: dict[ExclusionReason, ReasonExplanation] = {
         label="Duplicate",
         meaning="The population duplicates another admitted source's population.",
         clears="A distinct-population ruling recorded against the other source.",
-    ),
-    ExclusionReason.SNAPSHOT_BUDGET_EXCEEDED: ReasonExplanation(
-        label="Snapshot budget exceeded",
-        meaning="Provisioning the cohort needs more machine-snapshot variants than the budget allows.",
-        clears="A rebuilt payload whose provisioning fits the budget, with a snapshot-capacity-check receipt.",
     ),
     ExclusionReason.UNSPECIFIED_LEGACY: ReasonExplanation(
         label="Needs ruling",
@@ -375,6 +362,13 @@ STAGE_EXPLANATIONS: dict[PendingStage, ReasonExplanation] = {
         meaning="Training use waits on a remediation agent's clean or remediated private-release receipt.",
         clears="The remediated private-release decontamination receipt bound to the current pin.",
     ),
+    PendingStage.SNAPSHOT_REPAIR_QUEUED: ReasonExplanation(
+        label="Snapshot repair queued",
+        meaning="The cohort's measured snapshot provisioning exceeds the shared machine-snapshot budget; "
+        "the constraint is capacity, not a property of the data.",
+        clears="A snapshot-safe rebuild whose provisioning fits the budget — declarative or registry-image "
+        "builds, shared images, LOCAL-tier routing, or snapshot cleanup — re-admitting the source.",
+    ),
     PendingStage.BACKEND_VERIFICATION_PENDING: ReasonExplanation(
         label="Backend verification pending",
         meaning="No production backend admits the new source and VERIFY is its only positive production outcome.",
@@ -417,6 +411,85 @@ USE_EXPLANATIONS: dict[str, ValueExplanation] = {
     ),
 }
 
+
+class ProductionBackend(StrEnum):
+    """The production deployment backends an Atlas source's fit is measured against.
+
+    Dev-only backends (local Docker, Docker+runsc) and the test simulators are
+    not members: admission counts production backends only, and the Backend
+    Evidence page renders this enum. The member set must stay identical to the
+    survey layer's production ``BACKEND_DEPLOYMENT`` entries; the catalog tests
+    pin the two together.
+    """
+
+    DAYTONA = "daytona"
+    IRIS = "iris"
+    LOCAL = "local"
+
+
+class BackendBlockerReason(StrEnum):
+    """Why a production backend cannot host a role, beyond its typed demands.
+
+    A typed demand the backend's survey cells refuse renders as the demand's
+    own value; these members cover the blockers that are not demands. The
+    reasons are auto-derived from the measured survey fit, never hand-entered.
+    """
+
+    REQUIRED_BACKEND = "required-backend"
+    """The task pins a different backend than this one."""
+
+    UNCLASSIFIED_CAPABILITY = "unclassified-capability"
+    """A declared capability the survey vocabulary does not classify yet."""
+
+    VALIDATION_ERROR = "validation-error"
+    """The backend's checker refused the task's declared environment."""
+
+
+BACKEND_EXPLANATIONS: dict[ProductionBackend, ValueExplanation] = {
+    ProductionBackend.DAYTONA: ValueExplanation(
+        label="Daytona",
+        meaning="The production Daytona RL sandbox backend; admission counts its measured fit.",
+    ),
+    ProductionBackend.IRIS: ValueExplanation(
+        label="Iris (gVisor)",
+        meaning="The production Iris backend running gVisor-sandboxed workers.",
+    ),
+    ProductionBackend.LOCAL: ValueExplanation(
+        label="LOCAL",
+        meaning="The production LOCAL backend on cluster workers with the verified disk pool.",
+    ),
+}
+
+BACKEND_BLOCKER_EXPLANATIONS: dict[BackendBlockerReason, ValueExplanation] = {
+    BackendBlockerReason.REQUIRED_BACKEND: ValueExplanation(
+        label="Required backend",
+        meaning="The task pins a different production backend, so this one cannot host the role.",
+    ),
+    BackendBlockerReason.UNCLASSIFIED_CAPABILITY: ValueExplanation(
+        label="Unclassified capability",
+        meaning="A declared capability the survey vocabulary does not classify yet; the cells stay "
+        "VERIFY until the vocabulary classifies it or a live probe resolves the role.",
+    ),
+    BackendBlockerReason.VALIDATION_ERROR: ValueExplanation(
+        label="Validation error",
+        meaning="The backend's checker refused the task's declared environment outright.",
+    ),
+}
+
+
+def requirement_blocker_explanation(requirement: str) -> ValueExplanation:
+    """The canonical explanation of one typed-demand blocker reason.
+
+    A demand reason renders as the measured requirement's own value with this
+    meaning; the requirement vocabulary itself is validated by the serving app
+    against the survey layer's enum.
+    """
+    return ValueExplanation(
+        label=requirement,
+        meaning=f"The population's measured '{requirement}' demand is not available on this backend at the current pin.",
+    )
+
+
 METHOD_EXPLANATIONS: dict[SourceMethod, ValueExplanation] = {
     SourceMethod.RL: ValueExplanation(
         label="RL",
@@ -444,13 +517,17 @@ FORMAT_EXPLANATIONS: dict[str, ValueExplanation] = {
 }
 
 
-def taxonomy_tables() -> dict[str, Any]:
+def taxonomy_tables(requirement_values: Sequence[str]) -> dict[str, Any]:
     """The canonical status, stage, reason and Use/Method/Format explanation tables.
 
     The Atlas ``/api/taxonomy`` endpoint serves exactly this document and every
     page renders its labels and explanations from it; the release checker
     answers the same route from the candidate's code while the served revision
-    predates the endpoint.
+    predates the endpoint. ``requirement_values`` is the survey layer's typed
+    demand vocabulary (shellbox ``Requirement``), which lives outside this
+    module: the serving app and the checker pass the same enumeration so both
+    render one document, and the backend-blocker table covers every typed
+    demand beside the canonical non-demand reasons.
     """
     return {
         "status": {status.value: item.model_dump(mode="json") for status, item in STATUS_EXPLANATIONS.items()},
@@ -459,6 +536,11 @@ def taxonomy_tables() -> dict[str, Any]:
         "use": {value: item.model_dump(mode="json") for value, item in USE_EXPLANATIONS.items()},
         "method": {method.value: item.model_dump(mode="json") for method, item in METHOD_EXPLANATIONS.items()},
         "format": {value: item.model_dump(mode="json") for value, item in FORMAT_EXPLANATIONS.items()},
+        "backend": {backend.value: item.model_dump(mode="json") for backend, item in BACKEND_EXPLANATIONS.items()},
+        "backend-reason": {
+            **{reason.value: item.model_dump(mode="json") for reason, item in BACKEND_BLOCKER_EXPLANATIONS.items()},
+            **{value: requirement_blocker_explanation(value).model_dump(mode="json") for value in requirement_values},
+        },
     }
 
 

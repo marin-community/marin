@@ -31,7 +31,10 @@ function entry(kind, value) {
 
 function label(kind, value) {
   if (value === undefined || value === null) return '—';
-  return entry(kind, value)?.label ?? value;
+  const item = entry(kind, value);
+  // Typed values always come from the taxonomy; a miss is drift, not a label.
+  if (!item) throw new Error(`Untyped ${kind} value "${value}"`);
+  return item.label;
 }
 
 function chipRow(value, kind) {
@@ -45,6 +48,24 @@ function chipRow(value, kind) {
   if (item.clears) body.append(node('p', `Advanced by: ${item.clears}`));
   details.append(summary, body);
   holder.append(details);
+  return holder;
+}
+
+// A Deprecated row's typed replacement link, with the replacement's own status
+// beside it: the replacement must exist in the Atlas in any status, and a miss
+// is served-catalog drift, never a silent link.
+function replacementLink(item) {
+  const replacement = state.rows.find(row => row.id === item.replacement_source_id);
+  const holder = node('div', undefined, 'status-chips');
+  const anchor = node('a', `${item.replacement_source_id} ›`, 'chip');
+  anchor.href = `source.html#${new URLSearchParams({source_id: item.replacement_source_id})}`;
+  anchor.title = 'Open the replacement source';
+  holder.append(anchor);
+  const status = node('span', replacement ? label('status', replacement.status) : 'Unknown status', 'chip');
+  status.title = replacement
+    ? `The replacement's catalog status: ${entry('status', replacement.status)?.meaning || ''}`
+    : `The linked replacement ${item.replacement_source_id} is not in this catalog; the audit refuses this drift.`;
+  holder.append(status);
   return holder;
 }
 
@@ -108,6 +129,28 @@ function columnCell(value, kind) {
   return cell;
 }
 
+// Every typed value a row renders must be an enum member served by /api/taxonomy.
+// An out-of-enum value is served-catalog drift: fail loudly instead of rendering
+// the raw string as a label.
+function requireTypedRows(rows) {
+  const fail = (row, field, value) => {
+    throw new Error(`Untyped ${field} value "${value}" on ${row.id}; the served catalog drifted from the taxonomy.`);
+  };
+  for (const row of rows) {
+    if (!entry('status', row.status)) fail(row, 'status', row.status);
+    if (row.stage && !entry('stage', row.stage)) fail(row, 'stage', row.stage);
+    if (row.replacement_source_id && !rows.some(other => other.id === row.replacement_source_id)) {
+      fail(row, 'replacement_source_id', row.replacement_source_id);
+    }
+    if (row.use !== undefined && row.use !== null && !entry('use', row.use)) fail(row, 'use', row.use);
+    if (row.task_format !== undefined && row.task_format !== null && !entry('format', row.task_format)) {
+      fail(row, 'format', row.task_format);
+    }
+    for (const tag of row.method_tags || []) if (!entry('method', tag)) fail(row, 'method', tag);
+    for (const claim of row.reasons || []) if (!entry('reason', claim.reason)) fail(row, 'reason', claim.reason);
+  }
+}
+
 function lastChange(row) {
   if (row.receipt) return row.receipt;
   return row.generated_at || '—';
@@ -117,8 +160,8 @@ function row(item) {
   const tr = node('tr');
   tr.dataset.sourceId = item.id;
   const source = node('td');
-  source.append(node('strong', item.display_name || item.name || item.id));
-  if (item.id !== (item.display_name || item.name)) {
+  source.append(node('strong', item.display_name || item.id));
+  if (item.id !== item.display_name) {
     source.append(node('div', item.id, 'sr-only'));
   }
   tr.append(source);
@@ -132,6 +175,7 @@ function row(item) {
     status.append(flag);
   }
   if (item.stage) status.append(chipRow(item.stage, 'stage'));
+  if (item.replacement_source_id) status.append(replacementLink(item));
   tr.append(status, columnCell(item.use, 'use'), columnCell(item.method_tags, 'method'), columnCell(item.task_format, 'format'));
   const claims = item.reasons || [];
   const reasons = node('td');
@@ -154,7 +198,7 @@ function matches(item) {
     if (!values.includes(state[key])) return false;
   }
   if (state.search) {
-    const haystack = `${item.id} ${item.display_name || ''} ${item.name || ''}`.toLowerCase();
+    const haystack = `${item.id} ${item.display_name || ''}`.toLowerCase();
     if (!haystack.includes(state.search)) return false;
   }
   return true;
@@ -233,7 +277,7 @@ async function load() {
   const [catalog, extras, taxonomy] = await Promise.all([
     json('api/source-statuses'),
     json('measurements/source-status-extras.json'),
-    json('api/taxonomy'),
+    loadTaxonomy(),
   ]);
   state.taxonomy = taxonomy;
   const reasonFilter = $('reason-filter');
@@ -250,7 +294,6 @@ async function load() {
   const main = (catalog.sources || []).map(declaration => ({
     id: declaration.id,
     display_name: declaration.display_name,
-    name: declaration.name,
     status: declaration.status,
     stage: stages[declaration.id] || declaration.stage || null,
     use: declaration.intended_use,
@@ -275,6 +318,7 @@ async function load() {
     byId.set(item.id, item);
   }
   state.rows = [...byId.values()];
+  requireTypedRows(state.rows);
   const generated = Math.max(
     0,
     ...state.rows.map(item => (item.generated_at ? Date.parse(item.generated_at) : 0))

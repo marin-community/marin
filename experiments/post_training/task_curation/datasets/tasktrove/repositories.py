@@ -37,6 +37,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.repository_pytes
 from experiments.post_training.task_curation.datasets.tasktrove.swe_rebench import convert_swe_rebench_task
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from experiments.post_training.task_curation.source_policy import SUPERSEDED_REPLACEMENTS
 
 REPOSITORY_CRITERIA = """
 The public repository and checkout identify necessary context; unavailable local checkout is a runtime
@@ -191,6 +192,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 family="swe-repo",
                 tags=("agentic", "single-turn", "language:python", "deprecated"),
                 count=12927,
+                replacement_source_id=SUPERSEDED_REPLACEMENTS["TaskTrove:laion__swesmith-oracle-filtered-v2"],
                 notes=(
                     "Deprecated: this upstream SWE-smith conversion predates the hardened "
                     "bug-zero/reference-one admission and retains unresolved Docker contexts. "

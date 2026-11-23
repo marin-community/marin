@@ -557,7 +557,14 @@ def test_alias_metadata_refresh_keeps_archived_rows_and_packet_bytes(tmp_path):
     root = str(tmp_path / "production")
     fixture = number_source(tmp_path / "input")
     source = replace(
-        fixture, info=replace(fixture.info, id=current, origin=SourceOrigin.HUGGINGFACEH4, upstream_dataset="aime24")
+        fixture,
+        info=replace(
+            fixture.info,
+            id=current,
+            origin=SourceOrigin.HUGGINGFACEH4,
+            upstream_dataset="aime24",
+            title=None,
+        ),
     )
     record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "opaque-assessment-key")
     publish_catalog(root, "first", [source])

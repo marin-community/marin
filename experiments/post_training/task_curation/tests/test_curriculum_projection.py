@@ -46,8 +46,7 @@ from lib.taskcompendium.tests.deduplication_fixtures import deduplication_eviden
 def declaration(identifier, revision="1"):
     return QualifiedSourceDeclaration(
         id=source_identifier(SourceOrigin.MARIN, identifier, None, None),
-        name=identifier,
-        display_name=identifier,
+        display_name=f"Marin · {identifier}",
         origin="Marin",
         build_path="fixture",
         upstream_dataset=identifier,

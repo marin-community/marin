@@ -13,6 +13,7 @@ import pytest
 import requests
 from finestore.rl.status_taxonomy import taxonomy_tables
 from marina.client import MarinaRequestError
+from shellbox.requirements import Requirement
 
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
 from infra.marina.apps.rl_data_catalog import release_check
@@ -54,7 +55,10 @@ def test_browser_preserves_empty_assessment_response_but_requires_expected_data(
 
 
 def test_release_counts_include_eval_pending_and_unique_static_and_final_exclusions() -> None:
-    declarations = {source.name: with_declaration_admission_census(source) for _, source in contamination_declarations()}
+    declarations = {
+        source.id.rpartition(":")[2]: with_declaration_admission_census(source)
+        for _, source in contamination_declarations()
+    }
     counts = SourceCounts(
         sources=(
             count_evidence(declarations["clean"], oracle_tasks=0, blocked=1),
@@ -271,8 +275,8 @@ class _NotFoundReader:
 def test_browser_api_response_serves_the_candidate_taxonomy_when_the_served_revision_lacks_it():
     status, tables = release_check.browser_api_response(_NotFoundReader(), "api/taxonomy", [])
     assert status == 200
-    assert tables == taxonomy_tables()
-    assert set(tables) == {"status", "stage", "reason", "use", "method", "format"}
+    assert tables == taxonomy_tables(requirement_values=[requirement.value for requirement in Requirement])
+    assert set(tables) == {"status", "stage", "reason", "use", "method", "format", "backend", "backend-reason"}
 
 
 class _Flaky504Reader:

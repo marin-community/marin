@@ -3,7 +3,6 @@
 
 """Executed QUICK releases recovered from the retired source ledger."""
 
-
 from finestore.rl.curation import (
     ConvertedExamples,
     DatasetRelease,
@@ -21,7 +20,12 @@ from experiments.post_training.task_curation.native_release import import_native
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
-from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_REASON, CROSSCODE_EVAL_SOURCE_IDS
+from experiments.post_training.task_curation.source_policy import (
+    CROSSCODE_EVAL_REASON,
+    CROSSCODE_EVAL_SOURCE_IDS,
+    SUPERSEDED_REPLACEMENTS,
+)
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 RETIRED_ORIGINS = {
     "Harbor Hub": SourceOrigin.HARBOR_HUB,
@@ -71,6 +75,7 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                     upstream_name=entry["display_name"],
                     upstream_url=entry["url"],
                     build_path="Native Harbor QUICK conversion",
+                    replacement_source_id=SUPERSEDED_REPLACEMENTS.get(canonical_source_id(entry["id"])),
                     current_release=DatasetRelease(
                         repo=release["repo"],
                         revision=release["revision"],

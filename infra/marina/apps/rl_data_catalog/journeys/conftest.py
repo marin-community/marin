@@ -214,17 +214,19 @@ def marina_kernel(marina_database: DatabaseSpec, tmp_path_factory: pytest.TempPa
     )
     observations = []
     for _, declaration in contamination_declarations():
-        if declaration.name not in {"clean", "eval", "stale-clean", "required"}:
+        if declaration.id.rpartition(":")[2] not in {"clean", "eval", "stale-clean", "required"}:
             continue
         declaration = with_declaration_admission_census(declaration)
-        if declaration.name == "clean":
+        if declaration.id.rpartition(":")[2] == "clean":
             declaration = QualifiedSourceDeclaration.model_validate(
                 {**declaration.model_dump(mode="json"), "actor_census_input": ACTOR_INPUT}
             )
         observation = count_evidence(
-            declaration, 1 if declaration.name == "required" else 0, None if declaration.name == "required" else 1
+            declaration,
+            1 if declaration.id.rpartition(":")[2] == "required" else 0,
+            None if declaration.id.rpartition(":")[2] == "required" else 1,
         )
-        if declaration.name == "stale-clean":
+        if declaration.id.rpartition(":")[2] == "stale-clean":
             observation = observation.model_copy(update={"input": ActorCensusInput.model_validate(ACTOR_INPUT)})
         observations.append(observation.model_dump(mode="json"))
     payload = json.dumps({"version": 1, "sources": observations})
@@ -250,7 +252,7 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
             ]:
                 if declaration.id == "Marin:unmeasured":
                     declaration = declaration.model_copy(update={"pipeline": None})
-                if declaration.name in {"clean", "eval", "required"}:
+                if declaration.id.rpartition(":")[2] in {"clean", "eval", "required"}:
                     declaration = with_declaration_admission_census(declaration)
                 if declaration.id == "Marin:clean":
                     declaration = QualifiedSourceDeclaration.model_validate(
@@ -356,7 +358,7 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
             ).scalars():
                 declaration = QualifiedSourceDeclaration.model_validate(payload)
                 for solver in Solver:
-                    solved = 3 if (declaration.name == "clean") == (solver == Solver.SMALL) else 1
+                    solved = 3 if (declaration.id.rpartition(":")[2] == "clean") == (solver == Solver.SMALL) else 1
                     measurement = difficulty_measurement(declaration, solver, solved)
                     connection.execute(
                         text(

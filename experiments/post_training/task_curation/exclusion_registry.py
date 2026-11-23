@@ -15,10 +15,6 @@ record on the declaration; the claim keeps the deciding sentence.
 
 from finestore.rl.status_taxonomy import ExclusionClaim, ExclusionEvidence, ExclusionEvidenceKind, ExclusionReason
 
-from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_REASON
-
-_EVAL_ONLY_EVIDENCE = ExclusionEvidence(kind=ExclusionEvidenceKind.NOTE, message=CROSSCODE_EVAL_REASON)
-
 
 def _note(message: str) -> ExclusionEvidence:
     return ExclusionEvidence(kind=ExclusionEvidenceKind.NOTE, message=message)
@@ -525,43 +521,27 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
-    "TaskTrove:laion__swesmith-oracle-filtered-v2": (
-        ExclusionClaim(
-            reason=ExclusionReason.SUPERSEDED_BY_REPLACEMENT,
-            evidence=_note(
-                "Deprecated: this upstream SWE-smith conversion predates the hardened "
-                "bug-zero/reference-one admission and retains unresolved Docker contexts. "
-                "The long-loop repair campaign found scratch, generated-metadata and verifier "
-                "infrastructure defects in the derived Smartie cohort. Use its pinned repaired "
-                "release with exact per-task control receipts."
-            ),
-        ),
-    ),
     "TaskTrove:laion__exp_rpt_codenet-python-v4": (
         ExclusionClaim(
             reason=ExclusionReason.GRADER_DEFECT,
             evidence=_note(
-                "Only 3 hidden cases and whitespace-collapsing compare. Oracle present; "
-                "regenerate 20+ cases per task."
+                "Only 3 hidden cases and whitespace-collapsing compare. Oracle present; regenerate 20+ cases per task."
             ),
         ),
     ),
     "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4": (
-        ExclusionClaim(reason=ExclusionReason.EVAL_ONLY_BENCHMARK, evidence=_EVAL_ONLY_EVIDENCE),
         ExclusionClaim(
             reason=ExclusionReason.GRADER_DEFECT,
             evidence=_note("0.25 reward for any identifier-shaped output; instruction coaches the hack."),
         ),
     ),
     "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3": (
-        ExclusionClaim(reason=ExclusionReason.EVAL_ONLY_BENCHMARK, evidence=_EVAL_ONLY_EVIDENCE),
         ExclusionClaim(
             reason=ExclusionReason.GRADER_DEFECT,
             evidence=_note("Exact string match on a single line completion. Not agentic, no execution."),
         ),
     ),
     "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2": (
-        ExclusionClaim(reason=ExclusionReason.EVAL_ONLY_BENCHMARK, evidence=_EVAL_ONLY_EVIDENCE),
         ExclusionClaim(
             reason=ExclusionReason.GRADER_DEFECT,
             evidence=_note("Re-skin of the Python variant with the same free 0.25 tier; metadata still says python."),
@@ -633,29 +613,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             evidence=_note(
                 "Only test is the example shown in the prompt. Oracle solutions exist, so "
                 "generate hidden cases by fuzzing inputs through the oracle."
-            ),
-        ),
-    ),
-    "TaskTrove:smartie-swesmith-admitted": (
-        ExclusionClaim(
-            reason=ExclusionReason.SUPERSEDED_BY_REPLACEMENT,
-            evidence=_note(
-                "Deprecated: the original 8,045-task admission did not enforce the hardened "
-                "bug-zero/reference-one controls. Re-control excluded 2,417 tasks, including "
-                "scratch permissions, generated metadata, verifier infrastructure failures, "
-                "timeouts, degenerate references and passing bug commits. Use the separately "
-                "pinned repaired cohort; its v4-admitted task packages retain their tested bytes."
-            ),
-        ),
-    ),
-    "TaskTrove:smartie-calibforge-shared-v2": (
-        ExclusionClaim(
-            reason=ExclusionReason.SNAPSHOT_BUDGET_EXCEEDED,
-            evidence=_note(
-                "Deprecated pending the snapshot-safe CalibForge rebuild: the campaign's "
-                "provisioning records (snapshot-capacity-check) report the cohort needing 23 "
-                "image/resource snapshot variants (19 on the retained training slice), over the "
-                "ten-snapshot budget."
             ),
         ),
     ),

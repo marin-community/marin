@@ -86,8 +86,7 @@ def contamination_declarations() -> list[tuple[str, SourceDeclaration]]:
                 SourceDeclaration(
                     license_receipt=fixture_license(f"Marin:{name}", "fixture", revision),
                     id=f"Marin:{name}",
-                    name=name,
-                    display_name=name,
+                    display_name=f"Marin · {name}",
                     origin="Marin",
                     build_path="fixture",
                     upstream_dataset=name,

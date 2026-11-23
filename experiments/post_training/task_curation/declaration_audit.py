@@ -438,6 +438,28 @@ def audit_typed_status() -> list[str]:
     return findings
 
 
+def audit_replacement_links() -> list[str]:
+    """Ruling 2026-11-23: a superseded source's replacement must exist in the Atlas.
+
+    A Deprecated superseded source carries a typed ``replacement_source_id``;
+    the linked source must be declared in the Atlas in any status, and the
+    status page renders the replacement's own status beside the link.
+    """
+    from experiments.post_training.task_curation.sources import all_sources  # noqa: PLC0415
+
+    declared = all_sources()
+    findings: list[str] = []
+    for source_id, source in sorted(declared.items()):
+        replacement = source.info.replacement_source_id
+        if replacement is None:
+            continue
+        if replacement == source_id:
+            findings.append(f"replacement link: {source_id} supersedes itself")
+        elif replacement not in declared:
+            findings.append(f"replacement link: {source_id} links {replacement}, which the Atlas does not declare")
+    return findings
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -469,6 +491,11 @@ def main() -> None:
     # structurally; the extras rows are plain JSON and can drift silently, so
     # the audit measures both.
     findings.extend(audit_typed_status())
+
+    # A superseded Deprecated source's replacement link must resolve inside the
+    # Atlas (ruling 2026-11-23); the status page renders the replacement's
+    # status beside the link.
+    findings.extend(audit_replacement_links())
 
     # The serving projections (the Atlas grader and curriculum-area columns) must also bind
     # every current pin: a derived-contract census receipt and a curriculum alignment at the

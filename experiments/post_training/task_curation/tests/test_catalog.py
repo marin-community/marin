@@ -97,7 +97,9 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
     root = str(cache / "campaigns/catalog")
     catalog = CurationCatalog(root)
     snapshot = catalog.current()
-    source = next(row for row in catalog.sources(snapshot.snapshot_id) if row.declaration.name == "math500")
+    source = next(
+        row for row in catalog.sources(snapshot.snapshot_id) if row.declaration.display_name == "HuggingFaceH4 · math500"
+    )
     key = source.assessment_key
     assert key is not None
     items = list(catalog.items(key))

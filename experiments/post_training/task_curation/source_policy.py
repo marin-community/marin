@@ -18,3 +18,11 @@ CROSSCODE_EVAL_REASON = (
     "335184f930fd957094b86f8f5402465766c40674de9044e2feb6faf21d904789. "
     "Within-source dedup applies; lexical contamination is measured only."
 )
+
+# Ruling 2026-11-23: a source superseded by a replacement version is Deprecated
+# with a typed link to its replacement, never Excluded. The replacements are
+# declared sources in the Atlas; the audit refuses a link that does not resolve.
+SUPERSEDED_REPLACEMENTS: dict[str, str] = {
+    "TaskTrove:laion__swesmith-oracle-filtered-v2": "TaskTrove:swesmith-verifier-repaired-v5",
+    "TaskTrove:smartie-swesmith-admitted": "TaskTrove:swesmith-verifier-repaired-v5",
+}

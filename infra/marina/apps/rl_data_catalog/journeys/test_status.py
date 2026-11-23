@@ -100,8 +100,7 @@ def seeded_extras(journey: Journey):
     payload["pending"] = [
         {
             "id": "Fixture:queued-source",
-            "name": "queued-source",
-            "display_name": "Fixture queued source",
+            "display_name": "Fixture · queued-source",
             "status": "Pending",
             "stage": "Intake queued",
             "origin": "Marin",
@@ -117,8 +116,7 @@ def seeded_extras(journey: Journey):
     payload["metadata_exclusions"] = [
         {
             "id": "Fixture:metadata-excluded",
-            "name": "metadata-excluded",
-            "display_name": "Fixture metadata exclusion",
+            "display_name": "Fixture · metadata-excluded",
             "status": "Excluded",
             "stage": None,
             "origin": "Marin",
@@ -143,8 +141,7 @@ def seeded_extras(journey: Journey):
         },
         {
             "id": "Fixture:needs-ruling",
-            "name": "needs-ruling",
-            "display_name": "Fixture needs ruling",
+            "display_name": "Fixture · needs-ruling",
             "status": "Excluded",
             "stage": None,
             "origin": "Marin",
@@ -165,6 +162,20 @@ def seeded_extras(journey: Journey):
                     },
                 }
             ],
+        },
+        {
+            "id": "Fixture:superseded",
+            "display_name": "Fixture · superseded",
+            "status": "Deprecated",
+            "stage": None,
+            "origin": "Marin",
+            "upstream_dataset": "fixture/superseded",
+            "upstream_url": "https://example.org/superseded",
+            "dataset_id": "fixture/superseded",
+            "dataset_revision": "a" * 40,
+            "notes": "Superseded by its repaired release.",
+            "replacement_source_id": "Fixture:metadata-excluded",
+            "reasons": [],
         },
     ]
     page = journey.page
@@ -280,7 +291,7 @@ def test_status_page_lists_every_status_with_clickable_reasons(journey: Journey,
 
     ruling = page.locator("#needs-ruling")
     expect(ruling).to_be_visible()
-    expect(ruling.locator("li").first).to_contain_text("Fixture needs ruling")
+    expect(ruling.locator("li").first).to_contain_text("Fixture · needs-ruling")
 
     excluded.screenshot(path=str(journey.shots / "status-reason-expanded.png"))
     page.screenshot(path=str(journey.shots / "status-page.png"), full_page=True)
@@ -334,3 +345,46 @@ def test_status_page_renders_typed_columns_and_chip_filters(journey: Journey, se
     page.locator("#clear-filters").click()
     expect(page.locator('tr[data-source-id="Fixture:metadata-excluded"]')).to_have_count(1)
     page.screenshot(path=str(journey.shots / "status-typed-columns.png"), full_page=True)
+
+
+def test_untyped_status_fails_loudly_instead_of_rendering_free_text(journey: Journey, seeded_extras: dict) -> None:
+    """An out-of-enum status value is served-catalog drift: the page refuses it.
+
+    The status page renders Status only from the canonical taxonomy. A row whose
+    status leaves the enum gets the loud error banner naming the value and the
+    source, and the table never renders the raw string as a label.
+    """
+    page = journey.page
+    page.goto(f"{journey.origin}/{APP_ROOT}/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    base = page.url.rstrip("/") + "/"
+    payload = deepcopy(seeded_extras)
+    payload["pending"][0]["status"] = "Not selectable"
+    page.route("**/measurements/source-status-extras.json", lambda route: route.fulfill(json=payload))
+    page.goto(base + "status.html")
+    banner = page.locator("#message")
+    expect(banner).to_contain_text("Untyped status value")
+    expect(banner).to_contain_text("Not selectable")
+    expect(page.locator("#rows tr")).to_have_count(0)
+
+
+def test_superseded_row_links_its_replacement_with_the_replacement_status(journey: Journey, seeded_extras: dict) -> None:
+    """A Deprecated superseded row carries its typed replacement link.
+
+    The replacement's own status renders beside the link, and the link opens
+    the replacement's source page.
+    """
+    page = journey.page
+    page.goto(f"{journey.origin}/{APP_ROOT}/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    base = page.url.rstrip("/") + "/"
+    page.goto(base + "status.html")
+    row = page.locator('tr[data-source-id="Fixture:superseded"]')
+    expect(row).to_have_count(1)
+    link = row.locator("a.chip", has_text="Fixture:metadata-excluded")
+    expect(link).to_have_count(1)
+    href = link.get_attribute("href")
+    assert href is not None and "source.html" in href and "Fixture%3Ametadata-excluded" in href
+    status = row.locator("span.chip", has_text="Excluded")
+    expect(status).to_have_count(1)
+    page.screenshot(path=str(journey.shots / "status-replacement-link.png"))

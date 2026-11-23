@@ -116,8 +116,7 @@ def _write_population(tmp_path: Path, tasks: list[TaskSpec]) -> tuple[SourceText
 def _declaration(tmp_path: Path, scan_sha: str, measured_tasks: int = 2) -> QualifiedSourceDeclaration:
     return QualifiedSourceDeclaration(
         id=source_identifier(SourceOrigin.MARIN, "fixture", None, None),
-        name="fixture",
-        display_name="fixture",
+        display_name="Marin · fixture",
         origin="Marin",
         build_path="fixture",
         upstream_dataset="fixture",

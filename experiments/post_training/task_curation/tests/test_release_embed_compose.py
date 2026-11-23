@@ -57,8 +57,7 @@ EMBEDDING_SPEC = {
 def _declaration(identifier: str, revision: str = "1") -> QualifiedSourceDeclaration:
     return QualifiedSourceDeclaration(
         id=source_identifier(SourceOrigin.MARIN, identifier, None, None),
-        name=identifier,
-        display_name=identifier,
+        display_name=f"Marin · {identifier}",
         origin="Marin",
         build_path="fixture",
         upstream_dataset=identifier,

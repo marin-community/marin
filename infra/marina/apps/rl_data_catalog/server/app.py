@@ -12,6 +12,7 @@ from fastapi.responses import Response
 from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, Confidence, Defect, ReferenceStatus, Verdict
 from finestore.rl.status_taxonomy import taxonomy_tables
 from marina.applets import AppletServices
+from shellbox.requirements import Requirement
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from taskcompendium.source_fingerprints import DuplicateReview
@@ -65,6 +66,7 @@ from .schema import SCHEMA_SQL
 from .source_areas import materialize_source_areas
 from .source_counts import SourceCounts
 from .source_identity import canonical_source_id, original_source_id
+from .typed_status import require_typed_served_declaration
 
 MAX_PAGE_ITEMS = 500
 DEFAULT_PAGE_ITEMS = 100
@@ -84,11 +86,11 @@ class SourceProjection(StrEnum):
 TABLE_SOURCE_FIELDS = frozenset(
     {
         "id",
-        "name",
         "display_name",
         "origin",
         "build_path",
         "status",
+        "replacement_source_id",
         "notes",
         "family",
         "tags",
@@ -460,9 +462,10 @@ def create_api(services: AppletServices) -> FastAPI:
 
         Every page renders its status, stage, reason and column labels and
         explanations from these tables; the frontend defines no label of its
-        own.
+        own. The production backend and backend-blocker tables render the
+        Backend Evidence page from the same canonical source.
         """
-        return taxonomy_tables()
+        return taxonomy_tables(requirement_values=[requirement.value for requirement in Requirement])
 
     @api.get("/source-statuses")
     def source_statuses() -> dict[str, Any]:
@@ -473,9 +476,10 @@ def create_api(services: AppletServices) -> FastAPI:
                 text(
                     """
                     SELECT id,method_variants,jsonb_build_object(
-                        'id',id,'display_name',declaration->'display_name','name',declaration->'name',
+                        'id',id,'display_name',declaration->'display_name',
                         'status',declaration->'status','stage',declaration->'stage',
                         'exclusion_claims',declaration->'exclusion_claims','notes',declaration->'notes',
+                        'replacement_source_id',declaration->'replacement_source_id',
                         'dataset_id',declaration->'dataset_id','license_receipt',declaration->'license_receipt',
                         'within_source_dedup',declaration->'within_source_dedup',
                         'actor_census_input',declaration->'actor_census_input',
@@ -502,26 +506,28 @@ def create_api(services: AppletServices) -> FastAPI:
                     declaration = restriction_projection(declaration)
                 method_tags = variant_projection(declaration, record.get("method_variants"))["method_tags"]
                 sources.append(
-                    {
-                        key: declaration.get(key)
-                        for key in (
-                            "id",
-                            "display_name",
-                            "name",
-                            "status",
-                            "stage",
-                            "exclusion_claims",
-                            "notes",
-                            "consumer_findings",
-                            "intended_use",
-                            "task_format",
-                        )
-                    }
-                    | {
-                        "data_restriction": declaration.get("data_restriction"),
-                        "method_tags": method_tags,
-                        "updated_at": metadata["loaded_at"],
-                    }
+                    require_typed_served_declaration(
+                        {
+                            key: declaration.get(key)
+                            for key in (
+                                "id",
+                                "display_name",
+                                "status",
+                                "stage",
+                                "replacement_source_id",
+                                "exclusion_claims",
+                                "notes",
+                                "consumer_findings",
+                                "intended_use",
+                                "task_format",
+                            )
+                        }
+                        | {
+                            "data_restriction": declaration.get("data_restriction"),
+                            "method_tags": method_tags,
+                            "updated_at": metadata["loaded_at"],
+                        }
+                    )
                 )
         return {"sources": sources, "snapshot_id": metadata["snapshot_id"], "synced_at": metadata["loaded_at"]}
 
@@ -586,6 +592,9 @@ def create_api(services: AppletServices) -> FastAPI:
                 )
                 served_declaration = (
                     withheld_declaration_projection(row["declaration"]) if withheld else row["declaration"]
+                )
+                served_declaration = require_typed_served_declaration(
+                    {**served_declaration, "method_tags": row["method_tags"]}
                 )
                 display = quality_display(row["declaration"], row["curation"], row["assessment_key"])
                 inventory.append(

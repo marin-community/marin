@@ -944,14 +944,20 @@ counts, token usage and GPU-hours.
 Every source carries exactly one `SourceStatus`: `Pending`, `Available`,
 `Excluded` or `Deprecated`. The status and every exclusion reason live in
 `finestore.rl.status_taxonomy`, the single source the catalog, the Atlas status
-page, this reference and the guide all render from.
+page, this reference and the guide all render from. Every served row's Status,
+PendingStage, ExclusionReason, Use, Format and Method value is validated against
+its enum at serve time: a value outside its enum is served-catalog drift, the
+projection refuses it, and no Atlas page renders a status as free text.
 
 - **Pending** covers every source queued in `sources.PENDING_MEASUREMENT_SOURCES`
-  that is not configured for the catalog yet, and every configured source
-  whose only exclusion claim is a missing lexical remediation receipt. Each
+  that is not configured for the catalog yet, every configured source
+  whose only exclusion claim is a missing lexical remediation receipt, and
+  every configured source whose only measured defect is the Daytona snapshot
+  budget (a capacity constraint queues repair, never exclusion). Each
   Pending row records its current intake stage: `Intake queued`,
-  `Measurements pending`, `Admission pending` or
-  `Lexical remediation queued`. A remediation agent produces the missing
+  `Measurements pending`, `Admission pending`,
+  `Lexical remediation queued`, `Snapshot repair queued`, or one of the
+  load-time backend stages. A remediation agent produces the missing
   receipt; the row is not Excluded and its claims stay visible on the status
   page.
 - **Available** sources pass every admission check at their current pin.
@@ -960,12 +966,18 @@ page, this reference and the guide all render from.
   `ExclusionReason` with typed `ExclusionEvidence`; exclusion without a claim is
   a construction error, never a display state. A source with a lexical
   remediation claim and any other exclusion reason stays Excluded — only rows
-  whose exclusion is remediation work alone queue as Pending.
+  whose exclusion is remediation work alone queue as Pending. There is no
+  eval-only exclusion: an eval benchmark is a valid source with Use=eval that
+  goes through the normal gates, and a snapshot budget is never an exclusion
+  reason.
 - **Deprecated** means trainable but no longer supported or recommended.
   Selection may use a Deprecated source when explicitly asked, never by
   default. A Deprecated row must carry no exclusion reason; a deprecated-tagged
-  source with any exclusion reason is Excluded instead, and its replacement
-  source is shown when one exists.
+  source with any exclusion reason is Excluded instead. A source superseded by
+  a replacement version is Deprecated with a typed `replacement_source_id`
+  link (ruling 2026-11-23): the replacement must exist in the Atlas in any
+  status — the audit refuses an unresolvable link — and the status page shows
+  the replacement's own status beside the link.
 
 ### Exclusion reasons and evidence
 
@@ -990,12 +1002,12 @@ evidence does not keep an unrunnable source selectable.
 Policy exclusions that the admission checks
 cannot derive are recorded per source in
 `experiments/post_training/task_curation/exclusion_registry.py`: license
-reasons (`LICENSE_BAN`, `LICENSE_MISSING`), benchmark-use rulings
-(`EVAL_ONLY_BENCHMARK`, `CONTAMINATION_RISK`), replaced populations
-(`SUPERSEDED_BY_REPLACEMENT`), recorded defects (`GRADER_DEFECT`),
-duplicates (`DUPLICATE_OF_SOURCE`), provisioning limits
-(`SNAPSHOT_BUDGET_EXCEEDED`), non-task-data upstreams (`NOT_RL_TASK_DATA`) and
-`ORACLE_FILTRATION_RETAINED_ZERO`.
+reasons (`LICENSE_BAN`, `LICENSE_MISSING`), recorded defects (`GRADER_DEFECT`),
+duplicates (`DUPLICATE_OF_SOURCE`), non-task-data upstreams
+(`NOT_RL_TASK_DATA`) and `ORACLE_FILTRATION_RETAINED_ZERO`. There is no
+eval-only, snapshot-budget or superseded exclusion: an eval benchmark is a
+valid source with Use=eval, a snapshot budget queues Pending repair, and a
+superseded source is Deprecated with its replacement link.
 
 Each claim carries a typed `ExclusionEvidence` object — a receipt URI (with its
 SHA-256 where pinned), the failing check's output, an issue link for bans, or
@@ -1043,12 +1055,9 @@ A lexical-remediation-only row queues as Pending under `Lexical remediation queu
 | `AGENTIC_TASK_FORMAT_MISSING` | Agentic source declares no payload shape. | Declare the exact shape of every row (`HARBOR`, `TASKSPEC` or `MARINSKYRL`); the detector must confirm it. | b: declared shape the detector confirms; conversion and later qualification. |
 | `SNAPSHOT_IDENTITY_MISSING` | Production snapshot identities unmeasured. | Measure the task-declared profiles through the production naming path. | c: current-pin identity receipt; static identity is not a live quota test. |
 | `EXECUTION_REQUIREMENT_MISSING` | Execution requirements unmeasured. | Inventory declared limits; calibrate missing agentic limits. | c then f: bound requirement and calibration evidence. |
-| `EVAL_ONLY_BENCHMARK` | A ruling excludes training use. | Retain EVAL use unless a user ruling explicitly admits TRAIN. | a: scoped Use ruling and e evidence for that Use; EVAL admission alone does not clear TRAIN exclusion. |
-| `SUPERSEDED_BY_REPLACEMENT` | A replacement claim supersedes this population. | Obtain a ruling retiring the claim or restoring this pin. | a: current declaration and replacement provenance; keep any still-valid later receipts. |
 | `GRADER_DEFECT` | Grader/oracle defect changes reward trust. | Apply a versioned defect fix with a regression check; preserve the original protocol unless a ruling changes it. | c: grading census; g oracle/NoP; h QC and recorded defect check. |
 | `CONTAMINATION_RISK` | Recorded exposure or canary contamination. | Remove the recorded exposure under the ruling. | e: decontamination receipt proving removal; affected content reruns from b. |
 | `DUPLICATE_OF_SOURCE` | Population duplicates another admitted source. | Resolve the group; obtain a distinct-population ruling to clear this claim. | d2: pinned comparison and distinct-population ruling. |
-| `SNAPSHOT_BUDGET_EXCEEDED` | Provisioning exceeds its identity budget. | Repair the payload only with fidelity evidence, or use an approved supported provisioning route. | c: identity and snapshot-capacity receipts within the budget; f/g execution. |
 | `UNSPECIFIED_LEGACY` | The legacy exclusion has no typed cause. | Obtain a user ruling; replace this reason with the evidenced typed claim. | a: typed ruling; follow the resulting reason, never clear directly to Available. |
 | `ENVIRONMENT_ARTIFACT_MISSING` | Declared artifact exists in no region. | Rebuild faithfully in-region and bind its receipt; exclude only if unrebuildable. | c: artifact existence, fidelity and backend survey; f/g execution. |
 | `NO_SUPPORTED_BACKEND` | No surveyed production backend runs the contracts. | Qualify a supported backend or make a faithful, versioned contract repair. | c: runnable current-pin survey; f/g at the declared profile. |
@@ -1768,7 +1777,8 @@ MarinSkyRL builds them.
 |---|---|
 | `upstream_dataset`, `subset`, `variant` | Stable upstream population keys; subset and variant are optional. |
 | `id` | Generated as `<origin>:<upstream_dataset>[/<subset>][@<variant>]`; mismatches fail validation. Approved historical IDs resolve through the permanent alias table. |
-| `upstream_name`, `title` | Title is generated as `<upstream_name> · <subset> · <variant>`, omitting absent parts. Do not add prose or format labels. |
+| `upstream_name` | The upstream's own name, kept for provenance and publication URLs; it never renders as the Atlas display name. |
+| `title`/`display_name` | Derived from the source ID as `<origin> · <dataset path>` (the ID's subset and variant segments stay in the path). There is no free-text name field; a hand-set title fails validation. |
 | `build_path` | Internal campaign or pipeline, independently of upstream origin. |
 | `url` | Upstream provenance URL, including for repaired releases. |
 | `current_release` | Required exact `{repo, revision, url}` consumed for training. QUICK uses its pinned input; QA/repair uses its private open-athena release; decontamination uses the configured remediated pin after the pipeline is rebound. Release URLs must match their repository and revision. |

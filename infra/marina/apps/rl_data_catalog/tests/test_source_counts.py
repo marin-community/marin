@@ -22,7 +22,7 @@ from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_decla
 def test_no_oracle_counts_subtract_unique_blockers_and_separate_eval(
     name: str, blocked: int, remaining: int, admitted: int, state: str
 ) -> None:
-    source = next(source for _, source in contamination_declarations() if source.name == name)
+    source = next(source for _, source in contamination_declarations() if source.id.rpartition(":")[2] == name)
     source = with_declaration_admission_census(source)
     observation = count_evidence(source, oracle_tasks=0, blocked=blocked)
     result = filtration(source.model_dump(mode="json"), observation)
@@ -64,10 +64,10 @@ def test_sample_tolerance_display_preserves_counts_and_full_finality(provisional
     assert completeness["reviewed"] == declaration.quality_result.reviewed
     assert completeness["required"] == declaration.quality_result.sample_count
     assert completeness["coverage_complete"] is (declaration.quality_result.unavailable_count == 0)
-    if declaration.name.startswith("sample-missing-"):
+    if declaration.id.rpartition(":")[2].startswith("sample-missing-"):
         assert quality_display(declaration.model_dump(mode="json"), None, None).quality.value == "SAMPLE"
         assert not completeness["coverage_complete"]
-    if declaration.name == "full-waiver-over-cap":
+    if declaration.id.rpartition(":")[2] == "full-waiver-over-cap":
         # Above the 1% unreviewed bound the waiver is not whole-source finality.
         displayed = quality_display(declaration.model_dump(mode="json"), None, None)
         assert displayed.quality.value != "FULL"

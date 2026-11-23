@@ -10,17 +10,31 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from finestore.rl.curation import OversightEvidence, OversightLevel, SourceUse, TaskFormat, require_typed_status_fields
+from finestore.rl.curation import (
+    OversightEvidence,
+    OversightLevel,
+    QualifiedSourceDeclaration,
+    SourceUse,
+    TaskFormat,
+    require_typed_status_fields,
+)
 from finestore.rl.difficulty import DIFFICULTY_GAPS
 from finestore.rl.status_taxonomy import (
+    BACKEND_BLOCKER_EXPLANATIONS,
+    BACKEND_EXPLANATIONS,
     FORMAT_EXPLANATIONS,
     METHOD_EXPLANATIONS,
     REASON_EXPLANATIONS,
     STAGE_EXPLANATIONS,
     STATUS_EXPLANATIONS,
     USE_EXPLANATIONS,
+    BackendBlockerReason,
+    ExclusionClaim,
+    ExclusionEvidence,
+    ExclusionEvidenceKind,
     ExclusionReason,
     PendingStage,
+    ProductionBackend,
     SourceMethod,
     SourceStatus,
 )
@@ -37,6 +51,7 @@ from experiments.post_training.task_curation.source import (
     lexical_blocker_reason,
     population_blocker_reason,
 )
+from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
 from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources, configured_sources
 from infra.marina.apps.rl_data_catalog.server.licensing import source_license_ban
 
@@ -207,8 +222,11 @@ def test_remediation_rows_are_configured_pending_sources():
     assert set(remediation) <= configured - intake
     for row in remediation.values():
         assert row["status"] == SourceStatus.PENDING
-        assert row["stage"] == source_status.PendingStage.LEXICAL_REMEDIATION_QUEUED.value
         assert row["reasons"], f"Remediation row without its claim: {row['id']}"
+        # The stage is the source's own computed one: the lexical queue shows the
+        # remediation stage, and a source whose binding constraint is the snapshot
+        # budget shows its repair stage here too.
+        assert row["stage"] in {stage.value for stage in source_status.PendingStage}, row["id"]
 
 
 REBUILT_LEXICAL_ONLY_SOURCES = (
@@ -450,15 +468,211 @@ def test_excluded_declaration_without_claim_fails_the_build(tmp_path):
 
 def test_pending_extras_row_without_stage_fails_the_build():
     with pytest.raises(ValueError, match="carries no PendingStage"):
-        source_status.require_typed_rows([{"id": "Fixture:x", "status": "Pending", "stage": None, "reasons": []}])
+        source_status.require_typed_rows(
+            [{"id": "Fixture:x", "display_name": "Fixture · x", "status": "Pending", "stage": None, "reasons": []}]
+        )
     with pytest.raises(ValueError, match="carries no ExclusionReason"):
-        source_status.require_typed_rows([{"id": "Fixture:y", "status": "Excluded", "stage": None, "reasons": []}])
+        source_status.require_typed_rows(
+            [{"id": "Fixture:y", "display_name": "Fixture · y", "status": "Excluded", "stage": None, "reasons": []}]
+        )
     source_status.require_typed_rows(
         [
-            {"id": "Fixture:ok", "status": "Pending", "stage": "Intake queued", "reasons": []},
-            {"id": "Fixture:excluded", "status": "Excluded", "stage": None, "reasons": [{"reason": "license-ban"}]},
+            {
+                "id": "Fixture:ok",
+                "display_name": "Fixture · ok",
+                "status": "Pending",
+                "stage": "Intake queued",
+                "reasons": [],
+            },
+            {
+                "id": "Fixture:excluded",
+                "display_name": "Fixture · excluded",
+                "status": "Excluded",
+                "stage": None,
+                "reasons": [{"reason": "license-ban"}],
+            },
         ]
     )
+
+
+def test_extras_row_outside_an_enum_fails_the_build():
+    rows = [
+        {
+            "id": "Fixture:status",
+            "display_name": "Fixture · status",
+            "status": "Not selectable",
+            "stage": None,
+            "reasons": [],
+        },
+        {
+            "id": "Fixture:stage",
+            "display_name": "Fixture · stage",
+            "status": "Pending",
+            "stage": "Sometime soon",
+            "reasons": [],
+        },
+        {
+            "id": "Fixture:reason",
+            "display_name": "Fixture · reason",
+            "status": "Excluded",
+            "stage": None,
+            "reasons": [{"reason": "needs-a-ruling"}],
+        },
+        {
+            "id": "Fixture:use",
+            "display_name": "Fixture · use",
+            "status": "Available",
+            "stage": None,
+            "reasons": [],
+            "use": "distillation",
+        },
+        {
+            "id": "Fixture:format",
+            "display_name": "Fixture · format",
+            "status": "Available",
+            "stage": None,
+            "reasons": [],
+            "task_format": "spreadsheets",
+        },
+        {
+            "id": "Fixture:method",
+            "display_name": "Fixture · method",
+            "status": "Available",
+            "stage": None,
+            "reasons": [],
+            "method_tags": ["legacy"],
+        },
+        {"id": "Fixture:name", "display_name": "hand-set prose", "status": "Available", "stage": None, "reasons": []},
+    ]
+    for row in rows:
+        with pytest.raises(ValueError, match=f"Fixture:{row['id'].split(':', 1)[1]}"):
+            source_status.require_typed_rows([row])
+
+
+def test_removed_exclusion_reasons_stay_removed():
+    """Ruling 2026-11-23: the three retired reasons are gone from the taxonomy.
+
+    Eval-only benchmarks are admitted as Use=eval sources; a snapshot budget is
+    a capacity constraint that queues Pending repair; a superseded source is
+    Deprecated with a replacement link. The scripted checks reject all three
+    values because the enum no longer carries them.
+    """
+    for removed in ("eval-only-benchmark", "snapshot-budget-exceeded", "superseded-by-replacement"):
+        with pytest.raises(ValueError):
+            ExclusionReason(removed)
+        assert removed not in REASON_EXPLANATIONS
+    assert PendingStage.SNAPSHOT_REPAIR_QUEUED in STAGE_EXPLANATIONS
+
+
+def test_production_backend_enum_matches_the_survey_deployment_classes():
+    """The Atlas production-backend enum and the survey layer agree, member for member.
+
+    The Backend Evidence page renders the enum from the taxonomy; a backend the
+    survey layer promotes to production without a taxonomy member (or the
+    reverse) fails here instead of silently vanishing from the page.
+    """
+    from shellbox.machine import BACKEND_DEPLOYMENT, DeploymentClass  # noqa: PLC0415
+
+    survey_production = {
+        backend.value for backend, cls in BACKEND_DEPLOYMENT.items() if cls is DeploymentClass.PRODUCTION
+    }
+    assert {backend.value for backend in ProductionBackend} == survey_production
+    assert {backend.value for backend in BACKEND_EXPLANATIONS} == survey_production
+    assert {reason.value for reason in BackendBlockerReason} <= set(BACKEND_BLOCKER_EXPLANATIONS)
+
+
+def test_replacement_link_requires_a_deprecated_source(tmp_path):
+    source = _admitted_source(tmp_path)
+    base = source.declaration.model_dump()
+    with pytest.raises(ValueError, match="Only a Deprecated source carries a replacement link"):
+        require_typed_status_fields(
+            QualifiedSourceDeclaration.model_validate({**base, "replacement_source_id": "Marin:replacement"})
+        )
+    deprecated = QualifiedSourceDeclaration.model_validate(
+        {**base, "status": SourceStatus.DEPRECATED, "replacement_source_id": "Marin:replacement"}
+    )
+    assert deprecated.replacement_source_id == "Marin:replacement"
+    with pytest.raises(ValueError, match="cannot supersede itself"):
+        QualifiedSourceDeclaration.model_validate(
+            {**base, "status": SourceStatus.DEPRECATED, "replacement_source_id": base["id"]}
+        )
+    with pytest.raises(ValueError, match="does not carry '<origin>:<dataset>'"):
+        QualifiedSourceDeclaration.model_validate(
+            {**base, "status": SourceStatus.DEPRECATED, "replacement_source_id": "no-origin"}
+        )
+    with pytest.raises(ValueError, match="Deprecated source carries no ExclusionReason"):
+        claim = ExclusionClaim(
+            reason=ExclusionReason.LICENSE_BAN,
+            evidence=ExclusionEvidence(kind=ExclusionEvidenceKind.NOTE, message="ruled"),
+        )
+        QualifiedSourceDeclaration.model_validate(
+            {**base, "status": SourceStatus.DEPRECATED, "exclusion_claims": [claim.model_dump(mode="json")]}
+        )
+
+
+@pytest.mark.data_integration
+def test_eval_only_benchmarks_carry_only_their_defect_claims():
+    """The eval-only reason is retired: its benchmark rows keep their real claims.
+
+    CrossCodeEval-derived sources are valid eval-benchmark sources (Use=eval);
+    the grader defect, not the eval-only rule, keeps them out of selection.
+    """
+    for source_id in CROSSCODE_EVAL_SOURCE_IDS:
+        source = all_sources()[source_id]
+        reasons = {claim.reason for claim in source.declaration.exclusion_claims}
+        assert source.declaration.intended_use is SourceUse.EVAL, source_id
+        assert reasons <= {ExclusionReason.GRADER_DEFECT, ExclusionReason.CONTAMINATION_RISK}, source_id
+
+
+@pytest.mark.data_integration
+def test_superseded_sources_are_deprecated_with_resolvable_replacements():
+    """Ruling 2026-11-23: superseded sources are Deprecated, never Excluded."""
+    replacements = {"TaskTrove:laion__swesmith-oracle-filtered-v2", "TaskTrove:smartie-swesmith-admitted"}
+    declared = all_sources()
+    for source_id in replacements:
+        source = declared[source_id]
+        assert source.status is SourceStatus.DEPRECATED, source_id
+        assert source.declaration.exclusion_claims == (), source_id
+        replacement = source.declaration.replacement_source_id
+        assert replacement == "TaskTrove:swesmith-verifier-repaired-v5", source_id
+        assert replacement in declared, source_id
+
+
+@pytest.mark.data_integration
+def test_snapshot_budget_source_waits_pending_with_the_repair_stage():
+    """Ruling 2026-11-23: a snapshot budget queues Pending repair, never Excluded.
+
+    The CalibForge shared cohort also owes a lexical receipt; that claim stays
+    visible while the budget is the stage the row queues under.
+    """
+    source = all_sources()["TaskTrove:smartie-calibforge-shared-v2"]
+    assert source.status is SourceStatus.PENDING
+    assert source.stage is PendingStage.SNAPSHOT_REPAIR_QUEUED
+    assert {claim.reason for claim in source.declaration.exclusion_claims} == {
+        ExclusionReason.LEXICAL_REMEDIATION_REQUIRED
+    }
+
+
+@pytest.mark.data_integration
+def test_invalid_display_name_declarations_are_fixed():
+    """The four prose/free-text display-name declarations now derive from their IDs.
+
+    The r38 served rows carried hand-set titles ('OpenResearcher TRAIN' prose,
+    pipeline-suffix names); the identity rule regenerates every display name as
+    '<origin> · <dataset path>' and the declaration model carries no free-text
+    name field at all.
+    """
+    from finestore.rl.curation import source_display_name  # noqa: PLC0415
+
+    for source_id in (
+        "TaskTrove:tasktrove-e2egit-large-rebuilt-v1",
+        "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
+        "OpenResearcher:OpenResearcher-Dataset",
+        "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3",
+    ):
+        declaration = all_sources()[source_id].declaration
+        assert declaration.display_name == source_display_name(declaration.id), source_id
+    assert "name" not in QualifiedSourceDeclaration.model_fields
 
 
 @pytest.mark.data_integration

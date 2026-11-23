@@ -17,9 +17,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from finestore.rl.curation import SourceUse, TaskFormat
+from finestore.rl.curation import SourceUse, TaskFormat, source_display_name
 from finestore.rl.status_taxonomy import (
     REASON_EXPLANATIONS,
+    ExclusionReason,
     PendingStage,
     SourceMethod,
     SourceStatus,
@@ -47,7 +48,6 @@ class StatusRow:
     """One status-page row shared by pending and metadata-only sources."""
 
     id: str
-    name: str
     display_name: str
     status: str
     origin: str
@@ -123,8 +123,7 @@ def pending_rows() -> list[dict[str, Any]]:
     return [
         StatusRow(
             id=source.info.id,
-            name=source.name,
-            display_name=source.info.upstream_name,
+            display_name=source_display_name(source.info.id),
             status=SourceStatus.PENDING.value,
             origin=source.info.origin.value,
             upstream_dataset=source.info.upstream_dataset,
@@ -158,19 +157,20 @@ def remediation_rows() -> list[dict[str, Any]]:
 
     These rows keep every claim visible on the status page while their status
     is Pending: the remediation agent produces the clean or remediated
-    private-release receipt, and the source returns to Available.
+    private-release receipt, and the source returns to Available. Each row
+    carries the source's computed stage, so a source whose binding constraint
+    is the snapshot budget shows its repair stage here too.
     """
     return [
         StatusRow(
             id=source.info.id,
-            name=source.name,
             display_name=source.declaration.display_name,
             status=SourceStatus.PENDING.value,
             origin=source.info.origin.value,
             upstream_dataset=source.info.upstream_dataset,
             upstream_url=source.info.upstream_url,
             notes=source.info.notes,
-            stage=PendingStage.LEXICAL_REMEDIATION_QUEUED.value,
+            stage=source.stage.value if source.stage else None,
             **intake_columns(source),
             reasons=[claim.model_dump(mode="json") for claim in source.declaration.exclusion_claims],
         ).payload()
@@ -184,8 +184,7 @@ def metadata_rows() -> list[dict[str, Any]]:
     return [
         StatusRow(
             id=row.id,
-            name=row.name,
-            display_name=row.display_name,
+            display_name=source_display_name(row.id),
             status=SourceStatus.EXCLUDED.value,
             origin=row.origin,
             upstream_dataset=row.upstream_dataset,
@@ -207,15 +206,38 @@ def reason_explanations() -> dict[str, dict[str, str]]:
 def require_typed_rows(rows: list[dict[str, Any]]) -> None:
     """Fail the build when an extras row breaks the typed status contract.
 
-    Every Pending row carries its computed PendingStage and every Excluded row
-    carries at least one typed ExclusionReason; a violation here fails the
-    release build's status-extras generation, not a later page render.
+    Every row's Status, PendingStage, ExclusionReason, Use, Format and Method
+    value must be a member of its enum, every Pending row carries its computed
+    PendingStage and every Excluded row carries at least one typed
+    ExclusionReason; a violation here fails the release build's status-extras
+    generation, not a later page render.
     """
+
+    def member(enum: type, value: Any, source_id: str, field: str) -> str:
+        try:
+            return enum(value).value
+        except ValueError:
+            raise ValueError(f"Untyped {field} value {value!r} on {source_id} is outside {enum.__name__}") from None
+
     for row in rows:
+        source_id = row["id"]
+        member(SourceStatus, row["status"], source_id, "status")
         if row["status"] == SourceStatus.PENDING.value and not row["stage"]:
-            raise ValueError(f"Pending source carries no PendingStage: {row['id']}")
+            raise ValueError(f"Pending source carries no PendingStage: {source_id}")
+        if row["display_name"] != source_display_name(source_id):
+            raise ValueError(f"Row display name differs from the identity-derived display name: {source_id}")
+        if row["stage"]:
+            member(PendingStage, row["stage"], source_id, "stage")
+        for claim in row["reasons"]:
+            member(ExclusionReason, claim["reason"], source_id, "reason")
         if row["status"] == SourceStatus.EXCLUDED.value and not row["reasons"]:
-            raise ValueError(f"Excluded source carries no ExclusionReason: {row['id']}")
+            raise ValueError(f"Excluded source carries no ExclusionReason: {source_id}")
+        if row.get("use") is not None:
+            member(SourceUse, row["use"], source_id, "use")
+        if row.get("task_format") is not None:
+            member(TaskFormat, row["task_format"], source_id, "format")
+        for tag in row.get("method_tags") or ():
+            member(SourceMethod, tag, source_id, "method")
 
 
 def status_extras() -> dict[str, Any]:

@@ -153,7 +153,6 @@ def require_public_declaration(declaration: dict[str, Any], destination: str = "
 PRIVATE_DECLARATION_FIELDS = frozenset(
     {
         "id",
-        "name",
         "display_name",
         "origin",
         "build_path",

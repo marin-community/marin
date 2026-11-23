@@ -1,7 +1,14 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 async function render(sourceId) {
   const params = new URLSearchParams({source_id: sourceId});
-  const [source, survey] = await Promise.all([json(`api/source?${params}`), json('api/backends')]);
+  const [source, survey] = await Promise.all([loadTaxonomy().then(() => json(`api/source?${params}`)), json('api/backends')]);
+  // The fit table renders the supported-production-backends enum; a survey
+  // that reports a production backend outside it has drifted from the taxonomy.
+  for (const [key, deploymentClass] of Object.entries(survey.deployment_classes || {})) {
+    if (deploymentClass === 'production' && !AtlasTaxonomy.backend[key]) {
+      throw new Error(`Production backend "${key}" is outside the served taxonomy.`);
+    }
+  }
   if (source.catalog.root !== survey.catalog_root || source.catalog.snapshot_id !== survey.snapshot_id) {
     throw new Error('The source and backend survey belong to different catalog snapshots. Reload this page.');
   }

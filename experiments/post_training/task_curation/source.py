@@ -40,8 +40,8 @@ from finestore.rl.curation import (
     WithinSourceDedupEvidence,
     consumer_blockers,
     consumer_decision_status,
+    source_display_name,
     source_identifier,
-    source_title,
 )
 from finestore.rl.curation import (
     QualifiedSourceDeclaration as SourceDeclaration,
@@ -186,6 +186,13 @@ class SourceInfo:
     upstream_dataset: str
     upstream_name: str
     build_path: str
+    replacement_source_id: str | None = None
+    """The typed link to the replacement source of a superseded population.
+
+    Ruling 2026-11-23: a source superseded by a replacement version is
+    ``Deprecated`` with this link, never Excluded. The replacement must exist
+    in the Atlas in any status; the audit and the status page both resolve it.
+    """
     data_restriction: DataRestriction = DataRestriction.OPEN
     """The source's typed restriction tier, set explicitly on every configured source.
 
@@ -296,9 +303,15 @@ class SourceInfo:
         if self.id and canonical_source_id(self.id) != expected_id:
             raise ValueError("Source ID differs from generated identity")
         object.__setattr__(self, "id", expected_id)
-        title = source_title(self.upstream_name, self.subset, self.variant)
+        title = source_display_name(expected_id)
         if self.title is not None and self.title != title:
-            raise ValueError("Source title differs from generated title")
+            # Archived receipt copies written before the identity-derived title
+            # carry the legacy <upstream_name> · <subset> · <variant> form; they
+            # validate as archived aliases and normalize on read. A hand-set
+            # title that matches neither rule still fails.
+            legacy = " · ".join(part for part in (self.upstream_name, self.subset, self.variant) if part)
+            if self.title != legacy:
+                raise ValueError("Source title differs from generated title")
         object.__setattr__(self, "title", title)
 
 
@@ -596,24 +609,48 @@ class RlDataSource[ConfigT: CatalogConfig]:
 
     @property
     def exclusion_claims(self) -> tuple[ExclusionClaim, ...]:
-        """All typed exclusion claims: admission-derived claims plus recorded manual rulings."""
+        """All typed exclusion claims: admission-derived claims plus recorded manual rulings.
+
+        A superseded source carries its replacement link instead of exclusion
+        claims: it is Deprecated, and a Deprecated row carries no exclusion
+        reason (ruling 2026-11-23).
+        """
+        if self.info.replacement_source_id:
+            return ()
         return self.admission_claims + manual_exclusion_claims(self.info.id)
+
+    @property
+    def snapshot_repair_queued(self) -> bool:
+        """The measured provisioning exceeds the snapshot budget.
+
+        The Daytona snapshot budget is a capacity constraint, not a property of
+        the data: while it binds, the source waits Pending for the snapshot-safe
+        rebuild instead of being Excluded (ruling 2026-11-23). Other recorded
+        claims stay visible beside the repair stage.
+        """
+        return self.info.daytona_unsafe_reasons == (DaytonaUnsafeReason.TOO_MANY_SNAPSHOTS,)
 
     @property
     def status(self) -> SourceStatus:
         """The catalog status for the Atlas taxonomy.
 
-        Not selectable folds into Excluded. A deprecated tag yields Deprecated
-        only when no exclusion reason applies; a Deprecated source must be
-        trainable. An ``excluded`` tag without any claim is a registry bug and
-        fails loudly. A source whose only exclusion claim is the missing
-        lexical remediation receipt queues as Pending with the remediation
-        stage when a remediation agent can produce it: no user-ruling claim
-        applies and the population is nonempty. A legacy ``excluded`` tag
-        without a recorded ruling does not override that queue (user ruling
-        2026-11-17: lexical-remediation sources are Pending, not Excluded);
-        ruled exclusions and zero-task sources stay Excluded.
+        A superseded source is Deprecated with its typed replacement link. The
+        snapshot budget is a capacity constraint: a source whose measured
+        provisioning exceeds it waits Pending for the snapshot-safe repair,
+        whatever other claims stay visible beside the repair stage. Not
+        selectable folds into Excluded. A deprecated
+        tag yields Deprecated only when no exclusion reason applies; a
+        Deprecated source must be trainable. An ``excluded`` tag without any
+        claim is a registry bug and fails loudly. A source whose only exclusion
+        claim is the missing lexical remediation receipt queues as Pending with
+        the remediation stage when a remediation agent can produce it: no
+        user-ruling claim applies and the population is nonempty. A legacy
+        ``excluded`` tag without a recorded ruling does not override that queue
+        (user ruling 2026-11-17: lexical-remediation sources are Pending, not
+        Excluded); ruled exclusions and zero-task sources stay Excluded.
         """
+        if self.info.replacement_source_id:
+            return SourceStatus.DEPRECATED
         claims = self.exclusion_claims
         if "excluded" in self.info.tags and not claims:
             raise ValueError(
@@ -629,6 +666,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             ):
                 return SourceStatus.PENDING
             return SourceStatus.EXCLUDED
+        if self.snapshot_repair_queued:
+            return SourceStatus.PENDING
         if "deprecated" in self.info.tags:
             return SourceStatus.DEPRECATED
         if approved := self.approved_consumer_status:
@@ -639,15 +678,19 @@ class RlDataSource[ConfigT: CatalogConfig]:
     def stage(self) -> PendingStage | None:
         """The evidence-computed intake stage of a Pending declaration.
 
-        A Pending source with claims queues for lexical remediation; a Pending
-        source without claims waits on its consumer admission decision. Any
-        other status carries no stage. Load-time backend downgrades assign the
-        backend stages on top of this value.
+        A Pending source whose measured provisioning exceeds the snapshot
+        budget queues for the snapshot-safe repair; a Pending source with
+        claims queues for lexical remediation; a Pending source without claims
+        waits on its consumer admission decision. Any other status carries no
+        stage. Load-time backend downgrades assign the backend stages on top of
+        this value.
         """
         if self.status is not SourceStatus.PENDING:
             return None
         if self.exclusion_claims:
             return PendingStage.LEXICAL_REMEDIATION_QUEUED
+        if self.snapshot_repair_queued:
+            return PendingStage.SNAPSHOT_REPAIR_QUEUED
         return PendingStage.CONSUMER_CHECK_PENDING
 
     @property
@@ -723,8 +766,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             safety = measurement.safety
         return SourceDeclaration(
             id=info.id,
-            name=self.name,
-            display_name=source_title(info.upstream_name, info.subset, info.variant),
+            display_name=source_display_name(info.id),
             origin=info.origin,
             build_path=info.build_path,
             upstream_dataset=info.upstream_dataset,
@@ -768,6 +810,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             data_restriction=info.data_restriction,
             kind="Generator" if "generator" in tags else "Dataset",
             status=self.status,
+            replacement_source_id=info.replacement_source_id,
             stage=self.stage,
             exclusion_claims=list(self.exclusion_claims),
             pipeline=invocation,

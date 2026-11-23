@@ -4,8 +4,9 @@ const resultLabels = {GOOD: 'Good', SOME_ISSUES: 'Some issues', BAD: 'Bad', UNKN
 const resultClasses = {GOOD: 'good', SOME_ISSUES: 'some_issues', BAD: 'bad', UNKNOWN: 'unknown', none: 'unassessed'};
 let useLabels = {};
 let formatLabels = {};
-// Both maps fill from the served canonical taxonomy (/api/taxonomy) before the
-// first render; the frontend defines no Use or Format label of its own.
+let statusLabels = {};
+// All three maps fill from the served canonical taxonomy (/api/taxonomy) before
+// the first render; the frontend defines no Use, Format or Status label of its own.
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [
   ['display_name', 'Source'], ['examples', 'Examples'], ['filtration', 'Filtration'], ['use', 'Use'], ['method', 'Method'], ['format', 'Format'], ['quality', 'Quality'], ['result', 'Result'],
@@ -26,22 +27,31 @@ function value(row, key) {
   if (key === 'result') return resultKey(row);
   if (key === 'contamination') return row.contamination_status;
   if (key === 'overlap') return row.contamination_status === 'NOT MEASURED' ? null : row.lexical_contamination?.contaminated_tasks;
-  if (key === 'backends') return backendLabels(row).map(item => item.dev_only ? `${item.label} (dev only)` : item.label).join('; ');
+  if (key === 'backends') return backendLabels(row).map(item => item.label).join('; ');
   if (key === 'grading') return Object.keys(row.grading_environment?.required_counts || {}).join('; ');
   if (key === 'area') return row.coverage?.top_area?.name;
   if (key === 'updated') return row.updated_at;
   if (key === 'difficulty') return AtlasDifficulty.selected(row.difficulty, $('difficulty-model').value)?.solve_rate;
   return row[key];
 }
-function excludedStatus(row) { return row.status === 'Excluded' || row.status === 'Not selectable'; }
-function statusOf(row) { return excludedStatus(row) ? 'Excluded' : row.status || 'Available'; }
+function statusOf(row) { return row.status; }
+function statusText(row) {
+  // Status renders only from the served taxonomy; the source projection refuses
+  // out-of-enum values, so a miss here is a client/server contract break.
+  return statusLabels[row.status]?.label ?? `Unknown status "${row.status}"`;
+}
+function statusChip(row) {
+  const chip = node('span', statusText(row), 'chip');
+  chip.title = statusLabels[row.status]?.meaning || '';
+  return chip;
+}
 function shownByDefault(row) {
-  return row.quality !== 'QUICK' && row.result !== 'BAD' && !excludedStatus(row) && statusOf(row) !== 'Pending';
+  return row.quality !== 'QUICK' && row.result !== 'BAD' && row.status !== 'Excluded' && row.status !== 'Pending';
 }
 function eligible(row) {
   // Excluded and Pending rows stay out of the default view; one Status-filter click brings each back.
-  if ($('status').value === 'Excluded') return excludedStatus(row);
-  if ($('status').value === 'Pending') return statusOf(row) === 'Pending';
+  if ($('status').value === 'Excluded') return row.status === 'Excluded';
+  if ($('status').value === 'Pending') return row.status === 'Pending';
   return $('show-all').checked || shownByDefault(row);
 }
 function matchesFilters(row) {
@@ -54,7 +64,7 @@ function matchesFilters(row) {
   if ($('grader').value !== 'all' && (row.grader_type || 'pending') !== $('grader').value) return false;
   if ($('quality').value !== 'all' && row.quality !== $('quality').value) return false;
   if ($('result').value !== 'all' && resultKey(row) !== $('result').value) return false;
-  const text = [row.display_name, row.name, row.dataset_id, row.family, ...(row.tags || [])].join(' ').toLowerCase();
+  const text = [row.display_name, row.dataset_id, row.family, ...(row.tags || [])].join(' ').toLowerCase();
   return !search || text.includes(search);
 }
 function filtered() {
@@ -151,9 +161,9 @@ function render() {
   $('empty').hidden = displayed.length > 0;
   AtlasColumns.attach(document.querySelector('.source-table'), columns);
   const hidden = state.sources.filter(row => !eligible(row));
-  const hiddenExcluded = hidden.filter(row => excludedStatus(row));
-  const hiddenPending = hidden.filter(row => !excludedStatus(row) && statusOf(row) === 'Pending');
-  const hiddenQuality = hidden.filter(row => !excludedStatus(row) && statusOf(row) !== 'Pending');
+  const hiddenExcluded = hidden.filter(row => row.status === 'Excluded');
+  const hiddenPending = hidden.filter(row => row.status === 'Pending');
+  const hiddenQuality = hidden.filter(row => row.status !== 'Excluded' && row.status !== 'Pending');
   const folded = rows.length - displayed.length;
   $('visible-count').textContent = `${number.format(displayed.length)} displayed sources` +
     (folded ? ` · ${number.format(folded)} duplicate/subset members folded` : '') +
@@ -224,7 +234,7 @@ function details(row) {
   $('detail-difficulty-bars').replaceChildren(AtlasDifficulty.comparison(row.difficulty));
   const controls = row.curation?.verification;
   const fields = [
-    ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
+    ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', statusChip(row)], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
     ['Content review', row.quality_review_status],
     ['Consumer advisory', row.consumer_findings?.join(', ')],
     ['Consumer user ruling', row.consumer_decision?.user_ruling],
@@ -295,9 +305,9 @@ function metrics(displayed, rows) {
   $('metric-quality-shown').textContent = `Shown ${qualityCounts(displayed)}`;
   $('metric-date').textContent = day(state.syncedAt);
   const hidden = state.sources.filter(row => !eligible(row));
-  const hiddenExcluded = hidden.filter(row => excludedStatus(row));
-  const hiddenPending = hidden.filter(row => !excludedStatus(row) && statusOf(row) === 'Pending');
-  const hiddenQuality = hidden.filter(row => !excludedStatus(row) && statusOf(row) !== 'Pending');
+  const hiddenExcluded = hidden.filter(row => row.status === 'Excluded');
+  const hiddenPending = hidden.filter(row => row.status === 'Pending');
+  const hiddenQuality = hidden.filter(row => row.status !== 'Excluded' && row.status !== 'Pending');
   const filtered = state.sources.filter(row => !hidden.includes(row) && !matchesFilters(row));
   const folded = rows.filter(row => !displayed.includes(row));
   const reasons = [
@@ -316,10 +326,16 @@ async function load() {
   const [data, inventory, taxonomy] = await Promise.all([
     json('api/sources?projection=table'),
     json('measurements/oracle-inventory.json'),
-    json('api/taxonomy'),
+    loadTaxonomy(),
   ]);
   useLabels = Object.fromEntries(Object.entries(taxonomy.use).map(([value, entry]) => [value, entry.label]));
   formatLabels = Object.fromEntries(Object.entries(taxonomy.format).map(([value, entry]) => [value, entry.label]));
+  statusLabels = Object.fromEntries(Object.entries(taxonomy.status).map(([value, entry]) => [value, entry]));
+  const statusFilter = $('status');
+  const selected = statusFilter.value;
+  statusFilter.replaceChildren(new Option('All statuses', 'all'));
+  for (const [value, entry] of Object.entries(taxonomy.status)) statusFilter.append(new Option(entry.label, value));
+  if (![...statusFilter.options].some(option => option.value === selected)) statusFilter.value = 'all';
   state.sources = data.sources.map(source => ({...source, oracle_inventory: boundOracleInventory(source, inventory)}));
   state.syncedAt = data.synced_at;
   state.daytonaLimit = data.daytona_snapshot_limit;
