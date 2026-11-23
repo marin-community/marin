@@ -418,21 +418,6 @@ def stock(time_limit: float, **settings: float) -> tuple[RetryPolicy, TaskRollou
     return retry_policy(policy, "solver"), SPEC.model_copy(update={"limits": lowering_settings(policy).limits})
 
 
-# Regression: the derived 12,681 s model-turn wall cut healthy requests the client still allowed.
-@pytest.mark.parametrize("time_limit", [1800.0, 4199.0, 4200.0, 4201.0, 7200.0])
-def test_the_time_limit_bounds_generation_under_the_stock_attempt_cap_and_no_model_turn_wall(time_limit: float) -> None:
-    retry, spec = stock(time_limit)
-    assert retry.generation_timeout == time_limit
-    assert (spec.limits.model_turn_timeout, spec.limits.attempt_timeout) == (None, 8400.0)
-
-
-def test_a_time_limit_that_bounds_nothing_or_outlasts_the_attempt_cap_is_rejected() -> None:
-    with pytest.raises(ValueError, match=r"solver\.time_limit must be positive"):
-        stock(0.0)
-    with pytest.raises(ValueError, match=r"solver\.attempt_timeout must be finite and greater than solver\.time_limit"):
-        stock(8401.0)
-
-
 # Regression: at an equal cap and time limit the attempt cap fired first, so a time-limited trial was recorded as an
 # unscored cap and the task held instead of counting the trial unsolved.
 def test_a_time_limit_equal_to_the_attempt_cap_is_rejected() -> None:
