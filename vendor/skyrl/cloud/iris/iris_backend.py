@@ -908,8 +908,11 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
     # virtual ifaces, so NCCL AND Ray's raylet/GCS mis-detect the bootstrap interface and the
     # multi-node gang SILENTLY never forms (keep-6 2026-07-19: 6 arms idle-heartbeated 3.4h at
     # zero progress before this was diagnosed). Pin the bootstrap socket to the host ethernet PF
-    # via the exclude pattern (value = cw-rno2a.yaml:128). No-op on cw-us-east-02a (auto-detect
-    # already lands on the PF). Add a cluster row here rather than editing every RL config.
+    # via the exclude pattern (value = cw-rno2a.yaml:128). On cw-us-east-02a, bootstrap
+    # already selects the PF, but NCCL also selects mlx5_* Ethernet HCAs alongside the
+    # ibp* InfiniBand HCAs. Restrict the RDMA path to ibp*: mixed auto-selection causes
+    # completion-queue retries on the Ethernet ports in multi-node jobs.
+    # Add a cluster row here rather than editing every RL config.
     # Do NOT add GLOO_SOCKET_IFNAME here with this value. Gloo does not accept
     # NCCL's `^exclude` syntax — it wants a literal interface name and fails with
     # `Unable to find address for: ^ibs` at engine init. Gloo picking loopback on
@@ -917,6 +920,7 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
     # name, which differs per node, so the exclusion trick does not transfer.
     _CLUSTER_ENV_DEFAULTS: dict[str, dict[str, str]] = {
         "cw-rno2a": {"NCCL_SOCKET_IFNAME": "^ibs,ibp,lo,docker,veth,cilium,lxc"},
+        "cw-us-east-02a": {"NCCL_IB_HCA": "ibp"},
     }
     for _k, _v in _CLUSTER_ENV_DEFAULTS.get(args.cluster, {}).items():
         if _k not in env_vars:

@@ -20,14 +20,16 @@ from skyrl_train.hf_export_schema import HFExportRequest
 
 
 @pytest.mark.parametrize(
-    "target_cluster,parent_cluster_config,interface,logger,entrypoint,preemption_retries,groups",
+    "target_cluster,parent_cluster_config,interface,hca,logger,entrypoint,preemption_retries,groups",
     [
-        ("cw-rno2a", "marin.yaml", None, "records", "skyrl_train.entrypoints.main_base", 0, ()),
-        (None, "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, ()),
-        (None, None, None, "console", "skyrl_train.entrypoints.main_base", 1000, ()),
-        ("cw-rno2a", "marin.yaml", "eth0", "records", "skyrl_train.entrypoints.main_base", 0, ()),
-        (None, "marin.yaml", None, "records", CHECKPOINT_EXPORT_ENTRYPOINT, 1000, ()),
-        ("cw-us-east-08a", "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, (16, 8)),
+        ("cw-rno2a", "marin.yaml", None, None, "records", "skyrl_train.entrypoints.main_base", 0, ()),
+        (None, "marin.yaml", None, None, "console", "skyrl_train.entrypoints.main_base", 1000, ()),
+        (None, None, None, None, "console", "skyrl_train.entrypoints.main_base", 1000, ()),
+        ("cw-rno2a", "marin.yaml", "eth0", None, "records", "skyrl_train.entrypoints.main_base", 0, ()),
+        (None, "marin.yaml", None, None, "records", CHECKPOINT_EXPORT_ENTRYPOINT, 1000, ()),
+        ("cw-us-east-08a", "marin.yaml", None, None, "console", "skyrl_train.entrypoints.main_base", 1000, (16, 8)),
+        ("cw-us-east-02a", "marin.yaml", None, None, "console", "skyrl_train.entrypoints.main_base", 1000, ()),
+        ("cw-us-east-02a", "marin.yaml", None, "=ibp0:1", "console", "skyrl_train.entrypoints.main_base", 1000, ()),
     ],
 )
 def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
@@ -37,6 +39,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     target_cluster,
     parent_cluster_config,
     interface,
+    hca,
     logger,
     entrypoint,
     preemption_retries,
@@ -64,6 +67,8 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     document = raw_launch_config()
     document["run"].update(submission="detach", export_hf=False)
     document["runtime"]["task_env"] = {} if interface is None else {"NCCL_SOCKET_IFNAME": interface}
+    if hca is not None:
+        document["runtime"]["task_env"]["NCCL_IB_HCA"] = hca
     document["iris"].update(
         cluster=target_cluster or "cw-rno2a",
         cluster_config="unused-peer-config.yaml",
@@ -152,6 +157,8 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         "^ibs,ibp,lo,docker,veth,cilium,lxc" if config.iris.cluster == "cw-rno2a" else None
     )
     assert request.environment.env_vars.get("NCCL_SOCKET_IFNAME") == expected_interface
+    expected_hca = hca or ("ibp" if config.iris.cluster == "cw-us-east-02a" else None)
+    assert request.environment.env_vars.get("NCCL_IB_HCA") == expected_hca
 
     shell = request.entrypoint.run_command.argv[-1]
     assert "nccl_transport_probe.py --mode gate --gate-coverage all-gpus" in shell

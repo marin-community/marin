@@ -538,6 +538,13 @@ For the current curation, training and evaluation recipe, see the
 [Snowball RL experiments](../recipes/rl-experiments.md) and the
 [selection handoff](task-curation.md#train-on-a-snowball-selection).
 
+### Cluster network selection
+
+On `cw-us-east-02a`, the SkyRL launcher defaults `NCCL_IB_HCA` to `ibp` so RDMA
+uses the InfiniBand ports instead of the hosts' additional `mlx5_*` Ethernet
+ports. An explicit runtime setting takes precedence. The interconnect gate uses
+the same environment as the launched workers and must pass before they start.
+
 ### NCCL SIMPLE buffers
 
 Policy and reference roles resolve `nccl_buffer_size_bytes` to 4,194,304 bytes
