@@ -11,13 +11,13 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from openai_harmony import Message, Role
 from rigging.filesystem.storage_path import prefix_join
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 from transformers.utils.chat_template_utils import render_jinja_template
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
 from marin.datakit.chat_normalize import ChatChannel, message_text
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.normalize import DEFAULT_MAX_WORKERS
 from marin.execution.step_spec import StepSpec
 
