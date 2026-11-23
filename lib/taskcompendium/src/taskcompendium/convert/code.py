@@ -52,14 +52,24 @@ _NUMERIC_TOLERANCE = re.compile(
 of decimal places, or an epsilon."""
 _REPLY_SUBJECT = re.compile(r"\b(answers?|outputs?|solutions?|submission)\b[^.\n]{0,25}$", re.IGNORECASE)
 """A reply as the subject that ends just before "considered correct if", as in "Your answer will be"."""
+_SENTENCE_END = re.compile(r"\.(\s|$)")
+_ACCEPTED_VARIATION = re.compile(
+    r"\b(any|possibly|at (most|least)|no (more|less|fewer) than|(not|n't) exceed|between|satisf(y|ies)|consistent"
+    r"|suitable|valid)\b",
+    re.IGNORECASE,
+)
+"""Freedom that a condition leaves the reply: a choice ("any suitable m"), an order ("possibly reordered"), a bound
+("at most 1.3·b + 100 mistakes") or a property to satisfy ("consistent with s")."""
 _INTERACTIVE = re.compile(r"(?P<negation>(\bnot|n't)\s+(an?\s+)?|\bnon-?\s*)?\binteractive problem\b", re.IGNORECASE)
 """An interactive-problem notice, or its negation ("This is NOT an interactive problem", "the usual, non-interactive
 problem")."""
 _FUNCTION_TEMPLATE = re.compile(
     r"you (don'?t|do not) (need|have) to (read|take) (any )?input|no need to read input"
-    r"|complete the (given )?(function|method|class)",
+    r"|complete the (given )?(function|method|class)(?![^.\n]{0,100}\bread(s|ing)?\b)",
     re.IGNORECASE,
 )
+"""A prompt for a function body rather than a program, unless that sentence has the function read the input
+("Complete the function solve() to read an integer and print its square")."""
 _INPUT_FORMAT = re.compile(r"input format|-+\s*input\s*-+", re.IGNORECASE)
 
 
@@ -118,18 +128,30 @@ class _Correctness(StrEnum):
     CONDITION = "condition"
 
 
+def _condition(statement: str, clause: re.Match[str]) -> str:
+    """The condition of a "considered correct if" clause: the rest of its sentence, or the list after a colon."""
+    window = statement[clause.end() : clause.end() + _CORRECT_IF_WINDOW]
+    if window.lstrip().startswith(":"):
+        return window
+    end = _SENTENCE_END.search(window)
+    return window if end is None else window[: end.start()]
+
+
 def _correctness(statement: str) -> _Correctness | None:
     """What the statement's "considered correct if" clauses make the grader check, a tolerance first, or None.
 
-    A condition with a numeric tolerance accepts nearby numbers. A condition on the reply without one is tested by a
-    checker ("Your answer will be considered correct if you output any suitable m"). A clause that defines a term
-    ("A bracket sequence is considered correct if") says nothing about grading.
+    A condition with a numeric tolerance accepts nearby numbers. A condition that leaves the reply some freedom is
+    tested by a checker ("Your answer will be considered correct if you output any suitable m"). A condition that
+    fixes the reply ("Your answer will be considered correct if it equals n*n") or a clause that defines a term
+    ("A bracket sequence is considered correct if") says nothing that one stored output cannot check.
     """
     result = None
     for clause in _CORRECT_IF.finditer(statement):
         if _NUMERIC_TOLERANCE.search(statement, clause.end(), clause.end() + _CORRECT_IF_WINDOW):
             return _Correctness.TOLERANCE
-        if _REPLY_SUBJECT.search(statement, 0, clause.start()):
+        if _REPLY_SUBJECT.search(statement, 0, clause.start()) and _ACCEPTED_VARIATION.search(
+            _condition(statement, clause)
+        ):
             result = _Correctness.CONDITION
     return result
 

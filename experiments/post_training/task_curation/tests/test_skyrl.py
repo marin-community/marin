@@ -329,12 +329,20 @@ def eurus2_stdin_row(statement: str) -> dict:
             "Your answer will be considered correct if you output any suitable m such that 1 <= m <= 1000.",
             "any_valid_output",
         ),
+        (
+            "The answer will be considered correct if:\n\n* each line is a command;\n* there are at most 50 commands.",
+            "any_valid_output",
+        ),
         ("This is an interactive problem. Query the judge.", "interactive_problem"),
         (
             "This is an interactive problem. Unlike a non-interactive problem, flush after each query.",
             "interactive_problem",
         ),
         ("You don't need to read input. Complete the function sum2().", "function_template_with_example_tests"),
+        (
+            "Example 1:\nInput:\nN = 5\nOutput:\n25\nYour Task:\nComplete the function square() which returns N * N.",
+            "function_template_with_example_tests",
+        ),
     ],
 )
 def test_eurus2_row_that_one_stored_output_cannot_check_is_rejected(statement, reason):
@@ -352,6 +360,8 @@ def test_eurus2_row_that_one_stored_output_cannot_check_is_rejected(statement, r
         "This is NOT an interactive problem. Read both integers and print their sum.",
         "Solve it as you would solve the usual, non-interactive problem: read the whole input, then print the sum.",
         "A bracket sequence is considered correct if inserting '1' and '+' makes it an expression. Print YES or NO.",
+        "Read n and print n*n. Your answer will be considered correct if it equals n*n.",
+        "Complete the function solve() to read an integer and print its square.\n\n### Input\n\nOne integer n.",
     ],
 )
 def test_eurus2_row_with_one_right_output_stays(statement):
