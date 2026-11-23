@@ -12,7 +12,7 @@ import jax.numpy as jnp
 
 from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.page_table import PageBatchInfo
-from levanter.inference.utils import INVALID
+from levanter.inference.utils import INVALID, purge_raw
 
 
 class WindowPageMap(eqx.Module):
@@ -21,7 +21,6 @@ class WindowPageMap(eqx.Module):
     logical_to_window: jax.Array
     window_to_logical: jax.Array
     next_slot: jax.Array
-    terminal_pins: jax.Array
     window: int = eqx.field(static=True)
 
     @staticmethod
@@ -30,7 +29,6 @@ class WindowPageMap(eqx.Module):
             jnp.full(logical_pages, INVALID, jnp.int32),
             jnp.full(window_pages, INVALID, jnp.int32),
             jnp.asarray(0, jnp.int32),
-            jnp.zeros(logical_pages, jnp.bool_),
             window,
         )
 
@@ -76,7 +74,7 @@ class WindowPageMap(eqx.Module):
         batch_keep = (jnp.arange(batch_lens.shape[0])[:, None] < batch.num_seqs) & (columns >= batch_start)
         batch_pages = jnp.where(batch_keep, batch.page_indices.array, INVALID)
 
-        pinned = self.terminal_pins
+        pinned = jnp.zeros(global_pages, jnp.bool_)
         pinned = pinned.at[live_pages].set(True, mode="drop")
         pinned = pinned.at[batch_pages].set(True, mode="drop")
 
@@ -87,9 +85,8 @@ class WindowPageMap(eqx.Module):
         available = ~pinned.at[owners].get(mode="fill", fill_value=False)
         count = jnp.sum(missing, dtype=jnp.int32)
         count = eqx.error_if(count, count > jnp.sum(available), "Out of sliding-window KV pages")
-        new_owners = jnp.nonzero(missing, size=compact_pages, fill_value=INVALID)[0]
-        free_ranks = jnp.nonzero(available, size=compact_pages, fill_value=0)[0]
-        selected = jnp.where(rank < count, ordered_slots[free_ranks], INVALID)
+        new_owners = purge_raw(jnp.arange(global_pages, dtype=jnp.int32), ~missing, max_nnz=compact_pages)
+        selected = jnp.where(rank < count, purge_raw(ordered_slots, ~available, max_nnz=compact_pages), INVALID)
 
         evicted = self.window_to_logical.at[selected].get(mode="fill", fill_value=INVALID)
         placements = self.logical_to_window.at[evicted].set(INVALID, mode="drop")

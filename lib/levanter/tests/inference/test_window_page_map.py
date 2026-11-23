@@ -14,7 +14,7 @@ from levanter.inference.utils import INVALID
 from levanter.inference.window_page_map import WindowPageMap
 
 
-def test_window_pool_reuses_expired_page_and_preserves_live_prefix():
+def test_window_pool_reuses_expired_page_and_preserves_live_suffix():
     page_size = 4
     state = SequenceTable.init(max_seqs=1, pages_per_seq=3, page_size=page_size)
     state = replace(state, used_mask=hax.named(jnp.array([True]), "seq"))
@@ -37,6 +37,7 @@ def test_window_pool_reuses_expired_page_and_preserves_live_prefix():
         compact, result = remap(compact, live, work)
         translated.append((result.page_indices.array, result.new_token_dests.array))
 
-    np.testing.assert_array_equal(translated[1][0], [[0, 1, INVALID]])
-    np.testing.assert_array_equal(translated[2][0], [[INVALID, 1, 0]])
-    np.testing.assert_array_equal(translated[2][1], [0, 1, 2, 3])
+    first_slot, second_slot, _ = np.asarray(translated[1][0])[0]
+    assert first_slot != second_slot
+    np.testing.assert_array_equal(translated[2][0], [[INVALID, second_slot, first_slot]])
+    np.testing.assert_array_equal(translated[2][1], first_slot * page_size + np.arange(page_size))
