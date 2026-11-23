@@ -24,7 +24,6 @@ import math
 import os
 import random
 import re
-import statistics
 import string
 import time
 import unicodedata
@@ -40,11 +39,9 @@ from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 
 from verifyit.file_ops.read import read_text
 from verifyit.grade import (
-    Aggregation,
     GradingInfraError,
     InvalidTask,
     Reward,
-    aggregate_rewards,
     empty_output_policy,
     read_output,
     scored,
@@ -1015,117 +1012,3 @@ def _score(reply: str, allowed_scores: tuple[float, ...]) -> float | None:
 def _reasoning(reply: str) -> str:
     text = SCORE_PATTERN.sub("", reply)
     return re.sub(r"\s+", " ", text).strip()[:REASONING_LIMIT]
-
-
-def grade_paired_ordinal(
-    cohort_size: int,
-    expected_edges: list[tuple[int, int]],
-    ratings: object,
-    *,
-    rating_bounds: tuple[float, float] = (1.0, 5.0),
-    ranking_bounds: tuple[float, float] = (1.0, 6.0),
-    tie_policy: str = "ranking_midpoint",
-) -> list[Reward]:
-    """Grade a complete decoded pairwise judge cohort, without partial credit.
-
-    Requires the schema extra in addition to judge. Transport and reward
-    shaping belong to the caller; malformed provider cohorts raise RuntimeError.
-    """
-
-    from verifyit.modes.grade_json_schema import grade_json_schema_candidate  # noqa: PLC0415
-
-    if type(cohort_size) is not int or cohort_size < 2 or tie_policy != "ranking_midpoint":
-        raise InvalidTask("paired judge needs at least two responses and ranking_midpoint policy")
-    if not isinstance(expected_edges, list) or not expected_edges:
-        raise InvalidTask("paired judge needs expected directed edges")
-    edges = set()
-    covered = set()
-    for edge in expected_edges:
-        if (
-            not isinstance(edge, tuple)
-            or len(edge) != 2
-            or any(type(index) is not int or not 0 <= index < cohort_size for index in edge)
-            or edge[0] == edge[1]
-            or edge in edges
-        ):
-            raise InvalidTask("paired judge expected edges contain invalid or duplicate indices")
-        edges.add(edge)
-        covered.update(edge)
-    if len(covered) != cohort_size:
-        raise InvalidTask("paired judge expected edges must cover every response")
-
-    def finite_scalar(value: object) -> bool:
-        try:
-            return type(value) in (int, float) and math.isfinite(cast(int | float, value))
-        except OverflowError:
-            return False
-
-    for bounds in (rating_bounds, ranking_bounds):
-        if (
-            not isinstance(bounds, tuple)
-            or len(bounds) != 2
-            or any(not finite_scalar(value) for value in bounds)
-            or bounds[0] >= bounds[1]
-        ):
-            raise InvalidTask("paired judge bounds must be finite increasing pairs")
-    ranking_width = ranking_bounds[1] - ranking_bounds[0]
-    midpoint = ranking_bounds[0] + ranking_width / 2
-    low = rating_bounds[0] - ranking_width / 2
-    high = rating_bounds[1] + ranking_width / 2
-    width = high - low
-    if not all(math.isfinite(value) for value in (ranking_width, midpoint, low, high, width)) or width <= 0:
-        raise InvalidTask("paired judge derived bounds must be finite")
-    items = []
-    for left, right in expected_edges:
-        items.append(
-            {
-                "type": "object",
-                "required": ["left", "right", "score_left", "score_right", "ranking"],
-                "additionalProperties": False,
-                "properties": {
-                    "left": {"type": "integer", "const": left},
-                    "right": {"type": "integer", "const": right},
-                    "score_left": {"type": "number", "minimum": rating_bounds[0], "maximum": rating_bounds[1]},
-                    "score_right": {"type": "number", "minimum": rating_bounds[0], "maximum": rating_bounds[1]},
-                    "ranking": {"type": "number", "minimum": ranking_bounds[0], "maximum": ranking_bounds[1]},
-                },
-            }
-        )
-    schema = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "array",
-        "prefixItems": items,
-        "minItems": len(items),
-        "maxItems": len(items),
-    }
-    protocol = grade_json_schema_candidate(schema, ratings)
-    if protocol.reward != 1.0:
-        raise RuntimeError(f"paired judge cohort protocol failed: {protocol.detail}")
-    assert isinstance(ratings, list)
-    components: dict[int, list[Reward]] = {index: [] for index in covered}
-    for record in ratings:
-        left_score, right_score = record["score_left"], record["score_right"]
-        if left_score == right_score:
-            adjustment = midpoint - record["ranking"]
-            left_score += adjustment
-            right_score -= adjustment
-        for index, raw in ((record["left"], left_score), (record["right"], right_score)):
-            components[index].append(scored((raw - low) / width))
-    individual_scores = [record[key] for record in ratings for key in ("score_left", "score_right")]
-    metrics = {
-        "mean_individual_score": statistics.mean(individual_scores),
-        "std_individual_score": statistics.pstdev(individual_scores),
-        "tiebreak_usage_rate": sum(record["score_left"] == record["score_right"] for record in ratings) / len(ratings),
-    }
-    rewards = []
-    for index in range(cohort_size):
-        verdict = aggregate_rewards(components[index], expected_total=len(components[index]), policy=Aggregation.MEAN)
-        rewards.append(
-            scored(
-                verdict.reward,
-                raw_score=low + width * verdict.reward,
-                raw_bounds=[low, high],
-                comparison_metrics=metrics,
-            )
-        )
-    return rewards
