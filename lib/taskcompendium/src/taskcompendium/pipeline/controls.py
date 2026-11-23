@@ -18,6 +18,7 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     ConversationTrace,
+    DecisionModelGrader,
     EnvironmentRequirements,
     GradingAttempt,
     NoGrader,
@@ -148,7 +149,7 @@ async def _control_checks(
 ) -> VerificationReport:
     require_resolved_environment(task.environment_requirements)
     grader = task.grader
-    if isinstance(grader, NoGrader):
+    if isinstance(grader, NoGrader | DecisionModelGrader):
         return VerificationReport(
             [
                 CheckResult(
