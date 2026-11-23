@@ -24,7 +24,14 @@ from shellbox.machine import (
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient, describe_exception
+from taskforge.effects.issues import (
+    Hold,
+    OutputBudgetExhausted,
+    RequestRejected,
+    Restart,
+    Transient,
+    describe_exception,
+)
 from taskforge.llm.client import ModelRequestRejected
 from taskforge.resources.execution import Notify, retry_effect
 
@@ -35,10 +42,6 @@ class SolverRollout(Event[GradedRollout]):
     spec: TaskRolloutSpec
     trial: int
     attempt: int
-
-
-class RequestRejected(Hold):
-    """The model server refused this slot's request; a retry would be refused again."""
 
 
 SLOT_LOCAL: tuple[type[Hold], ...] = (RequestRejected,)

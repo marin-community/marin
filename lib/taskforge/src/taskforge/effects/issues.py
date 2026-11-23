@@ -44,6 +44,14 @@ class Unreproducible(Hold):
     """
 
 
+class RequestRejected(Hold):
+    """The model server refused a solver slot's request; a retry would be refused again.
+
+    A refusal says nothing about the task or the model's ability, so the slot holds as missing evidence instead of
+    counting as a failed trial; the batch records it as that slot's result (``SLOT_LOCAL`` in ``resources.rollouts``).
+    """
+
+
 class LogFailure(EffectIssue):
     """Event log encoding, decoding, or persistence failed."""
 
