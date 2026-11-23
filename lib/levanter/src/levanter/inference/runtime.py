@@ -112,7 +112,11 @@ class InferenceResponse:
     route_capture: SnowballReplayPayload | None = None
 
 
-class PolicyVersionMismatch(ValueError):
+class GenerationRequestError(ValueError):
+    """The generation request is outside the configured serving contract."""
+
+
+class PolicyVersionMismatch(GenerationRequestError):
     """The caller requested a policy version that is no longer available."""
 
 
@@ -282,15 +286,17 @@ class InferenceContext:
             or len(prompt_tokens) >= service.max_seq_len
             or len(prompt_tokens) > service.max_prefill_size
         ):
-            raise ValueError("Prompt must be nonempty, fit prefill and leave room within the context limit")
+            raise GenerationRequestError(
+                "Prompt must be nonempty, fit prefill and leave room within the context limit"
+            )
         if min(prompt_tokens) < 0 or max(prompt_tokens) >= self.model.Vocab.size:
-            raise ValueError("Prompt contains a token ID outside the model vocabulary")
+            raise GenerationRequestError("Prompt contains a token ID outside the model vocabulary")
         if max_tokens < 1 or not 1 <= n_generations <= service.max_seqs:
-            raise ValueError("Generation length and choice count must be positive and fit serving limits")
+            raise GenerationRequestError("Generation length and choice count must be positive and fit serving limits")
         if not np.isfinite(temperature) or temperature < 0 or (top_p is not None and not 0 < top_p <= 1):
-            raise ValueError("Sampling requires finite temperature >= 0 and top_p in (0, 1]")
+            raise GenerationRequestError("Sampling requires finite temperature >= 0 and top_p in (0, 1]")
         if seed is not None and not 0 <= seed < 2**32:
-            raise ValueError("Seed must be a uint32")
+            raise GenerationRequestError("Seed must be a uint32")
         if stop_tokens and (
             len(stop_tokens) > service.max_stop_seqs
             or any(
@@ -298,11 +304,11 @@ class InferenceContext:
                 for stop in stop_tokens
             )
         ):
-            raise ValueError("Stop sequences must contain vocabulary IDs and fit the configured limits")
+            raise GenerationRequestError("Stop sequences must contain vocabulary IDs and fit the configured limits")
         if return_route_captures and not self.config.capture_routes:
-            raise ValueError("This server does not have route capture enabled")
+            raise GenerationRequestError("This server does not have route capture enabled")
         if self.config.capture_routes and n_generations != 1:
-            raise ValueError("Route capture requires one generation per prompt")
+            raise GenerationRequestError("Route capture requires one generation per prompt")
 
         with self.admission_lock:
             if expected_model_version is not None and expected_model_version != self.model_version:
@@ -375,7 +381,7 @@ class InferenceContext:
                 if len(r.prompt_tokens) >= max_tokens_per_seq:
                     r.future.get_loop().call_soon_threadsafe(
                         r.future.set_exception,
-                        ValueError("Prompt must leave room for generation within the context limit"),
+                        GenerationRequestError("Prompt must leave room for generation within the context limit"),
                     )
                     continue
 
@@ -386,14 +392,14 @@ class InferenceContext:
                         f"the maximum allowed {self.engine.config.max_seqs}"
                     )
                     logger.error(error_msg)
-                    r.future.get_loop().call_soon_threadsafe(r.future.set_exception, ValueError(error_msg))
+                    r.future.get_loop().call_soon_threadsafe(r.future.set_exception, GenerationRequestError(error_msg))
                     continue
 
                 max_tokens = min(len(r.prompt_tokens) + r.max_tokens, max_tokens_per_seq)
                 request_pages = kv_pages_for_request(len(r.prompt_tokens), max_tokens, r.n_generations, page_size)
                 if request_pages > max_pages:
                     r.future.get_loop().call_soon_threadsafe(
-                        r.future.set_exception, ValueError("Request exceeds the serving KV page budget")
+                        r.future.set_exception, GenerationRequestError("Request exceeds the serving KV page budget")
                     )
                     continue
 
@@ -481,9 +487,10 @@ class InferenceContext:
                 callback(choice, tokens, in_flight[request_index].model_version)
 
         def on_complete(request_index: int, result: GenerationResult) -> None:
-            req = in_flight.pop(request_index)
+            req = in_flight[request_index]
             capture = None if replay is None else replay.complete(request_index, result)
             self._complete_request(req, result, capture)
+            del in_flight[request_index]
 
         def should_abort() -> bool:
             return self.shutdown_event.is_set() or self.pause_event.is_set()

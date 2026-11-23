@@ -52,6 +52,19 @@ Both use the same worker and pinned 64K AgentX traffic. The measured native
 and compiled vLLM gap is a separate acceptance gate.
 [Paired v5p-8 AgentX runs](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-replay-pair-20261122)
 
+The follow-up runs use the shared terminal kernel and incremental chat
+streaming. They retain the same context, offered concurrency, checkpoint,
+and frozen prompts. Both arms request raw policy scores.
+[Optimized replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-optimized-replay-20261122)
+· [Replay-off control](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-optimized-control-20261122)
+
+On CoreWeave, a four-GB200 smoke matched packed native and captured
+generation, including scores and terminal routes. The native and compiled
+vLLM AgentX jobs use the existing regional 67B checkpoint mirror.
+[GB200 smoke](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-cw-gb200-smoke-20261122-v3)
+· [Native AgentX](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-cw-gb200-c128-agentx-20261122)
+· [Compiled vLLM AgentX](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-vllm-cw-gb200-c128-agentx-20261122)
+
 ## Distributed rollout and publication
 
 The SkyRL quick-loop recipe uses its vLLM engine group and expert-block
@@ -75,5 +88,9 @@ bridge accepts a version-bound native route payload per trajectory and
 preserves that binding through batching and policy scoring. The distributed
 driver still needs to launch native serving replicas and attach their payloads
 during trajectory assembly. Updated-policy publication, full-model restart,
-and a matched 25-update run remain open.
-[Quick-loop run status](experiments/post_training/inventory/levanter-quick-loop-status.md)
+and a matched 25-update run on the maintained branch remain open. The
+quick-loop design records the separate protobuf worker-pipe proofs and the
+held H100 comparisons. Those worker responses carry the same replay payload
+used by the native HTTP endpoints.
+[Quick-loop migration design](https://github.com/marin-community/marin/pull/11934)
+· [Quick-loop run status](experiments/post_training/inventory/levanter-quick-loop-status.md)

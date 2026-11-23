@@ -42,6 +42,7 @@ from levanter.inference.jit_scheduler import FinishReason
 from levanter.inference.runtime import (
     ChatTokenCallback,
     DEFAULT_MODEL_NAME as DEFAULT_MODEL_NAME,
+    GenerationRequestError,
     InferenceBatch as InferenceBatch,
     InferenceContext as InferenceContext,
     InferenceResponse as InferenceResponse,
@@ -427,7 +428,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
         raise
     except PolicyVersionMismatch as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    except ValueError as e:
+    except GenerationRequestError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error("Error in completion.", exc_info=True)
@@ -530,7 +531,7 @@ def _submit_chat_completion(
         )
     except PolicyVersionMismatch as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
+    except GenerationRequestError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return prompt_tokens, future
 
@@ -622,6 +623,8 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         )
     except HTTPException:
         raise
+    except GenerationRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Error in chat completion")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -673,6 +676,9 @@ async def _stream_chat_completion(
     except asyncio.CancelledError:
         closed.set()
         raise
+    except GenerationRequestError as exc:
+        closed.set()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         closed.set()
         logger.exception("Error before chat streaming started")

@@ -106,7 +106,7 @@ def main() -> None:
     parser.add_argument("--max-seqs-in-prefill", type=int, default=16)
     parser.add_argument("--max-rounds", type=int, default=32)
     parser.add_argument("--max-tokens-per-round", type=int, help="Cap decode tokens independently of client concurrency")
-    parser.add_argument("--accelerator", choices=("tpu", "h100x4", "h100x8"), default="tpu")
+    parser.add_argument("--accelerator", choices=("tpu", "h100x4", "h100x8", "gb200x4"), default="tpu")
     parser.add_argument("--chips", type=int, choices=(4, 8))
     parser.add_argument("--layerwise-load", action="store_true", help="Bound checkpoint conversion HBM by one layer")
     parser.add_argument("--pack-expert-weights", action="store_true", help="Pack gate and up weights for inference")
@@ -151,12 +151,13 @@ def main() -> None:
     series = load_series(SERIES)
     assert (series["max_context"], series["duration"]) == (65536, 180)
     devices = jax.devices()
-    if args.accelerator.startswith("h100x"):
-        expert_shards, platform, device_kind = int(args.accelerator[-1]), "gpu", "H100"
+    if args.accelerator == "tpu":
+        expert_shards, platform, device_kind = args.chips or 4, "tpu", "TPU"
+    else:
+        gpu, chips = args.accelerator.split("x")
+        expert_shards, platform, device_kind = int(chips), "gpu", gpu.upper()
         if args.chips not in (None, expert_shards):
             parser.error("--chips must match --accelerator")
-    else:
-        expert_shards, platform, device_kind = args.chips or 4, "tpu", "TPU"
     if len(devices) != expert_shards or any(
         device.platform != platform or device_kind not in device.device_kind for device in devices
     ):

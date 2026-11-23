@@ -13,7 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from safetensors import SafetensorError
 from safetensors.numpy import load, save
 
-from levanter.inference.runtime import InferenceContext, InferenceResponse, PolicyVersionMismatch
+from levanter.inference.runtime import (
+    GenerationRequestError,
+    InferenceContext,
+    InferenceResponse,
+    PolicyVersionMismatch,
+)
 
 MEDIA_TYPE = "application/vnd.levanter.generate.v1"
 GENERATE_PATH = "/v1/levanter/generate"
@@ -123,10 +128,13 @@ def register_binary_routes(app: FastAPI, runtime: InferenceContext) -> None:
                 expected_policy_id=options.expected_policy_id,
                 return_route_captures=options.return_route_captures,
             )
-            outputs = await future
         except PolicyVersionMismatch as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            outputs = await future
+        except GenerationRequestError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if options.return_route_captures:
             body = await asyncio.to_thread(

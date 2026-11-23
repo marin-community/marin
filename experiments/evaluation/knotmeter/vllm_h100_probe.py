@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the pinned Snowball AgentX comparison against compiled vLLM on H100."""
+"""Run the pinned Snowball AgentX comparison against compiled vLLM on NVIDIA GPUs."""
 
 import argparse
 import json
@@ -20,13 +20,12 @@ from experiments.evaluation.knotmeter.processes import run_logged
 from experiments.evaluation.knotmeter.recipe import SERIES_PATH, benchmark_command, load_series, workload_environment
 from experiments.evaluation.knotmeter.workload import check_native_cache, restore_workload
 
-H100_COUNT = 8
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", required=True)
     parser.add_argument("--workload", required=True)
+    parser.add_argument("--accelerator", choices=("h100x8", "gb200x4"), default="h100x8")
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--max-seqs", type=int, default=8, help="Maximum sequences per data-parallel rank")
     args = parser.parse_args()
@@ -35,8 +34,10 @@ def main() -> None:
     devices = subprocess.check_output(
         ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"], text=True
     ).splitlines()
-    if len(devices) != H100_COUNT or any("H100" not in device for device in devices):
-        raise RuntimeError(f"Expected eight H100 devices, got {devices}")
+    device_kind, count = args.accelerator.split("x")
+    num_chips = int(count)
+    if len(devices) != num_chips or any(device_kind.upper() not in device for device in devices):
+        raise RuntimeError(f"Expected {num_chips} {device_kind.upper()} devices, got {devices}")
     series = load_series(SERIES_PATH)
     workload = read_record(args.workload)
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
@@ -59,7 +60,7 @@ def main() -> None:
             "--gpu-memory-utilization",
             "0.9",
             "--data-parallel-size",
-            str(H100_COUNT),
+            str(num_chips),
             "--enable-expert-parallel",
             "--all2all-backend",
             "allgather_reducescatter",
@@ -68,11 +69,11 @@ def main() -> None:
         ),
     )
 
-    with tempfile.TemporaryDirectory(prefix="agentx-vllm-h100-") as workdir:
+    with tempfile.TemporaryDirectory(prefix="agentx-vllm-gpu-") as workdir:
         bundle = Path(workdir) / "bundle"
         restore_workload(workload, bundle)
         check_native_cache(bundle, SERIES_PATH, output / "workload-check.log")
-        with local_inference(model, engine, num_chips=H100_COUNT) as session:
+        with local_inference(model, engine, num_chips=num_chips) as session:
             endpoint = session.model.endpoint
             url = endpoint.base_url.removesuffix("/v1")
             command = benchmark_command(series, args.concurrency, url, output / "aiperf_artifacts")
