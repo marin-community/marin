@@ -4,7 +4,7 @@
 r"""Grade mathematical answers, either symbolically or as a number with tolerance.
 
 The default anchored profile takes the last ``\boxed{}`` expression, or the last non-empty line when the output has
-none. References require an anchored LaTeX parse of the whole expression. Candidates first use
+none. References use anchored LaTeX extraction without the bare-number fallback. Candidates first use
 anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``) if that yields
 nothing. Other profiles retain raw source extraction or require a boxed expression; their parser
 options remain task-controlled.
@@ -87,7 +87,7 @@ def _parse(text: str) -> list:
 
 
 def _parse_reference(text: str) -> list:
-    """Parse one whole reference without falling through to a number inside it."""
+    """Parse an anchored reference without bare-number extraction."""
     from math_verify.parser import LatexExtractionConfig  # noqa: PLC0415
 
     value = strip_math_delimiters(text)
