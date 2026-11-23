@@ -634,15 +634,30 @@ def run_calibration_source(
     pack = pack_calibration(source_id, release_parquet, panel_local, work, sample_size=sample_size)
 
     calibration_dir = work / "calibration"
-    calibrate_cohort(
-        Path(pack["cohort"]),
-        Path(pack["task_map"]),
-        calibration_dir,
-        environment,
-        environment_kwargs,
-        concurrency,
-        calibration_solutions=Path(pack["calibration_solutions"]),
-    )
+    try:
+        calibrate_cohort(
+            Path(pack["cohort"]),
+            Path(pack["task_map"]),
+            calibration_dir,
+            environment,
+            environment_kwargs,
+            concurrency,
+            calibration_solutions=Path(pack["calibration_solutions"]),
+        )
+    except Exception as error:
+        # Preserve the failing attempt's evidence before the scratch disappears: the
+        # harbor log, the recorded result and a fresh inspection of the package.
+        logger.exception("Calibration failed for %s; uploading attempt evidence", source_id)
+        evidence = output = StoragePath(output_root) / "failure-evidence"
+        evidence.mkdir(parents=True, exist_ok=True)
+        for attempt_dir in sorted((calibration_dir).glob("*/attempt-*")):
+            name = f"{attempt_dir.parent.name}-{attempt_dir.name}"
+            for member in ("harbor.log", "trial.json", "sandbox-lifecycle.jsonl"):
+                if (attempt_dir / member).exists():
+                    (evidence / f"{name}-{member}").write_bytes((attempt_dir / member).read_bytes())
+            for result in sorted(attempt_dir.glob("jobs/**/result.json")):
+                (evidence / f"{name}-result.json").write_bytes(result.read_bytes())
+        raise
     calibrated_map = json.loads((calibration_dir / "task-map.json").read_text())
     measured_storage_mb, per_task = measured_calibration_storage(calibrated_map)
     calibration_summary = {
