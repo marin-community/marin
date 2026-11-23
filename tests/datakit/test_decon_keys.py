@@ -188,34 +188,64 @@ def test_a_scan_rejects_most_window_hashes_with_the_prefilter_and_finds_the_same
     assert sorted(table.unique[table.found(probes)].tolist()) == sorted(keys[:7].tolist())
 
 
-@pytest.mark.parametrize("seed", range(5))
+PIECES = [
+    "word ",
+    "word",
+    "\u00dcn\u00efc\u00f6d\u00e9",
+    "e\u0301",
+    "\u1100\u1161\u11a8",
+    "\u0b47\u0b3e",
+    "\\\\frac{1}{2}",
+    "\\frac{1}{2}",
+    "\\alpha",
+    "x\\ny",
+    "\\\\alpha",
+    "\uff3c\uff46\uff52\uff41\uff43",
+    "\ufb01x",
+    "\u0391\u03a3",
+    "\u0130",
+    "x\\\\ny",
+    "\t",
+    "\u6570\u5b66\u9898",
+    "\uac00\ub098",
+    "\uff21\uff22\uff23",
+    "12",
+    ", ",
+]
+
+
+def _full_search(text: str, position: int) -> int:
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high) // 2
+        if len(text_stream(text[:middle])) > position:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+@pytest.mark.parametrize("seed", range(8))
 def test_a_reading_maps_stream_positions_to_text_offsets_as_a_full_search_does(seed):
     rng = np.random.default_rng(seed)
-    pieces = [
-        "word ",
-        "Ünïcödé ",
-        "\\frac{1}{2} ",
-        "ﬁx ",
-        "ΑΣ ",
-        "x\\ny ",
-        "  ",
-        "\t",
-        "数学题 ",
-        "$\\alpha$, ",
-        "\uff21\uff22\uff23 ",
-    ]
-    text = "".join(rng.choice(pieces, size=6000))
+    text = "".join(rng.choice(PIECES, size=9000))
     reading = Reading(text)
-
-    def full_search(position):
-        low, high = 0, len(text)
-        while low < high:
-            middle = (low + high) // 2
-            if len(text_stream(text[:middle])) > position:
-                high = middle
-            else:
-                low = middle + 1
-        return low
-
     for position in rng.integers(0, len(reading.stream) + 5, size=40).tolist():
-        assert reading.text_offset(position) == full_search(position)
+        assert reading.text_offset(position) == _full_search(text, position)
+
+
+def test_a_reading_finds_the_first_place_of_a_piece_as_str_find_does():
+    rng = np.random.default_rng(0)
+    reading = Reading("".join(rng.choice(["alpha beta ", "gamma ", "alpha beta gamma ", "delta "], size=3000)))
+    for start in rng.integers(0, len(reading.stream) - 40, size=50).tolist():
+        piece = reading.stream[start : start + 30]
+        assert reading.first(piece) == reading.stream.find(piece)
+    assert reading.first("zzzzzzzzzzzzzzzzzzzzzzzz") == -1
+
+
+def test_an_offset_in_a_stretch_without_safe_characters_is_estimated_within_the_stretch():
+    text = "intro " + "a" * 300_000 + " outro"
+    reading = Reading(text)
+    for position in (10, 150_000, 299_990):
+        offset = reading.text_offset(position)
+        assert abs(offset - _full_search(text, position)) <= 1 + 300_000 // 4

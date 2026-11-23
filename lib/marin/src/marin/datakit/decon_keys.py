@@ -58,9 +58,12 @@ KEY_COLUMNS = (
     "key2_hash",
     "key2_count",
 )
-# A chunk of a reading (``Reading``) starts at the first whitespace character after this many characters.
+# A chunk of a reading (``Reading``) starts at the first safe character after this many characters, and a
+# stretch without one is split after MAX_CHUNK_CHARS. A safe character starts no NFKC composition with the
+# character before it and ends any LaTeX command (see ``Reading``).
 CHUNK_CHARS = 4096
-_SPACE = re.compile(r"\s")
+MAX_CHUNK_CHARS = 65536
+_SAFE = re.compile(r"[\s0-9!-/:-@\[\]^-`{-~\u4e00-\u9fff\uac00-\ud7a3]")
 BEFORE = 1500
 AFTER = 3000
 LOCATOR_COLUMNS = ("item", "kind", "eval", "key1_hash", "key", "offset", "question", "question_chars")
@@ -256,37 +259,72 @@ def keys_table(windows: Windows, window_counts: np.ndarray, width: int = WINDOW)
 
 
 class Reading:
-    """One reading of a record (``readings``): its text and stream, and text offsets of stream positions.
+    """One reading of a record (``readings``): its text, stream and window hashes, with two lookups that cost
+    one pass over the record in all, whatever the number of hits.
 
-    A stream is additive at whitespace: no LaTeX command, NFKC composition or case rule crosses a whitespace
-    character. ``text_offset`` therefore keeps the stream length before each chunk start (a whitespace
-    character about every ``CHUNK_CHARS`` characters) and searches one chunk, so the offsets of many hits
-    in one record cost one pass over the record.
+    ``first`` finds the first place of a stream piece through a sorted index of the window hashes.
+    ``text_offset`` maps a stream position to a text offset. A stream is additive at a safe character
+    (``_SAFE``: whitespace, ASCII digits and punctuation other than the backslash, CJK ideographs, Hangul
+    syllables): no LaTeX command, NFKC composition or case rule crosses one. So the reading keeps the stream
+    length before each chunk start (a safe character about every ``CHUNK_CHARS`` characters) and searches
+    one chunk. A stretch of more than ``MAX_CHUNK_CHARS`` characters without a safe character is split
+    anyway, and an offset inside it is estimated in proportion.
     """
 
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, width: int = WINDOW) -> None:
         self.text = text
         self.stream = text_stream(text)
+        self.width = width
+        self.hashes = window_hashes(self.stream, width)
+        self._order: np.ndarray | None = None
+        self._sorted: np.ndarray | None = None
         self._starts: list[int] = []
         self._before: list[int] = []
+        self._exact: list[bool] = []
+
+    def first(self, piece: str) -> int:
+        """The first position of the stream *piece* in the stream, as ``str.find`` gives it."""
+        if len(piece) < self.width:
+            return self.stream.find(piece)
+        if self._order is None or self._sorted is None:
+            self._order = np.argsort(self.hashes, kind="stable")
+            self._sorted = self.hashes[self._order]
+        head = window_hashes(piece[: self.width], self.width)[0]
+        low, high = np.searchsorted(self._sorted, head, side="left"), np.searchsorted(self._sorted, head, side="right")
+        for position in np.sort(self._order[low:high]).tolist():
+            if self.stream.startswith(piece, position):
+                return position
+        return -1
 
     def _index(self) -> None:
-        starts, position = [0], CHUNK_CHARS
-        while (match := _SPACE.search(self.text, position)) is not None:
-            starts.append(match.start())
-            position = match.start() + CHUNK_CHARS
+        starts, exact, position = [0], [True], CHUNK_CHARS
+        while position < len(self.text):
+            match = _SAFE.search(self.text, position, position + MAX_CHUNK_CHARS)
+            boundary = match.start() if match else position + MAX_CHUNK_CHARS
+            if boundary >= len(self.text):
+                break
+            # The chunk that ends at a forced split is not additive at its end; offsets inside it are estimates.
+            exact[-1] = exact[-1] and match is not None
+            starts.append(boundary)
+            exact.append(True)
+            position = boundary + CHUNK_CHARS
         before = [0]
         for start, end in itertools.pairwise(starts):
             before.append(before[-1] + len(text_stream(self.text[start:end])))
-        self._starts, self._before = starts, before
+        self._starts, self._before, self._exact = starts, before, exact
 
     def text_offset(self, position: int) -> int:
-        """The smallest prefix length of the text whose stream is longer than *position*."""
+        """The smallest prefix length of the text whose stream is longer than *position* (an estimate inside a
+        stretch without safe characters; see the class)."""
         if not self._starts:
             self._index()
         chunk = bisect.bisect_right(self._before, position) - 1
         start, base = self._starts[chunk], self._before[chunk]
-        low, high = start, self._starts[chunk + 1] if chunk + 1 < len(self._starts) else len(self.text)
+        end = self._starts[chunk + 1] if chunk + 1 < len(self._starts) else len(self.text)
+        if not self._exact[chunk]:
+            length = self._before[chunk + 1] - base
+            return min(end, start + (position - base + 1) * (end - start) // max(length, 1))
+        low, high = start, end
         while low < high:
             middle = (low + high) // 2
             if base + len(text_stream(self.text[start:middle])) > position:
@@ -296,19 +334,19 @@ class Reading:
         return low
 
 
-def record_readings(text: str) -> list[Reading]:
-    """The readings of the record *text* (``readings``) with their streams."""
-    return [Reading(reading) for reading in readings(text)]
+def record_readings(text: str, width: int = WINDOW) -> list[Reading]:
+    """The readings of the record *text* (``readings``) with their streams and window hashes."""
+    return [Reading(reading, width) for reading in readings(text)]
 
 
 def _located(readings_of: list[Reading], question: str, key: str, offset: int) -> tuple[Reading, int]:
     """The first reading with the question or key, and the estimated item position in its stream (-1 if absent)."""
     for reading in readings_of:
         # A question shorter than a window is no place marker: it can occur anywhere. Its key holds the choices.
-        at = reading.stream.find(question) if len(question) >= WINDOW else -1
+        at = reading.first(question) if len(question) >= WINDOW else -1
         if at < 0 and key:
             # The record holds the key (stage 1 found it); the item starts that far before it.
-            hit = reading.stream.find(key)
+            hit = reading.first(key)
             at = max(0, hit - offset) if hit >= 0 else -1
         if at >= 0:
             return reading, at
@@ -333,8 +371,8 @@ def excerpt(
 def record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table, width: int = WINDOW) -> list[dict]:
     """One pair per item whose key-1 window a reading of *text* holds; an item keyed by several streams
     takes the first locator row found."""
-    streams = record_readings(text)
-    found = table.found(np.concatenate([window_hashes(reading.stream, width) for reading in streams]))
+    streams = record_readings(text, width)
+    found = table.found(np.concatenate([reading.hashes for reading in streams]))
     pairs: dict[str, dict] = {}
     for row in table.items_of(found):
         located = {name: locators.column(name)[int(row)].as_py() for name in LOCATOR_COLUMNS if name != "key1_hash"}
