@@ -31,6 +31,7 @@ class GenerateOptions(BaseModel):
     seed: StrictInt | None = Field(default=None, ge=0, lt=2**32)
     stop_tokens: list[list[StrictInt]] | None = None
     n: StrictInt = Field(default=1, ge=1)
+    return_route_captures: bool = False
 
 
 def encode_frame(metadata: dict, tensors: dict[str, np.ndarray]) -> bytes:
@@ -82,3 +83,30 @@ async def read_generate_request(request: Request) -> tuple[np.ndarray, GenerateO
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return prompt, options
+
+
+def choice_expert_routes(
+    tensors: dict[str, np.ndarray], choice: int, input_ids: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return captured IDs and validity when the frame tokens match the learner input."""
+    prefix = f"choice.{choice}."
+    try:
+        prompt = tensors[PROMPT_TOKEN_IDS]
+        generated = tensors[prefix + "token_ids"]
+        expert_ids = tensors[prefix + "expert_ids"]
+        valid = tensors[prefix + "expert_valid"]
+    except KeyError as exc:
+        raise ValueError("Response has no captured expert routes for this choice") from exc
+    if prompt.ndim != 1 or generated.ndim != 1 or prompt.dtype != np.int32 or generated.dtype != np.int32:
+        raise ValueError("Replay requires flat int32 prompt and generated tokens")
+    if not np.array_equal(np.concatenate((prompt, generated)), input_ids):
+        raise ValueError("Captured token IDs differ from the learner input")
+    if (
+        expert_ids.ndim != 3
+        or expert_ids.shape[1] != input_ids.size
+        or expert_ids.dtype not in (np.uint8, np.int32)
+        or valid.shape != input_ids.shape
+        or valid.dtype != bool
+    ):
+        raise ValueError("Invalid expert routes or token validity in generation frame")
+    return expert_ids, valid

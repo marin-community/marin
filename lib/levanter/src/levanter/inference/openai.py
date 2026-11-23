@@ -22,6 +22,7 @@ from typing import List, Optional, Union
 
 import haliax as hax
 import jax.numpy as jnp
+from jax.sharding import Mesh
 import jax.random as jrandom
 import numpy as np
 import uvicorn
@@ -46,6 +47,7 @@ from levanter.inference.binary import (
     read_generate_request,
 )
 from levanter.inference.engine import (
+    GeneratedExpertRoutes,
     InferenceEngine,
     InferenceEngineConfig,
     Request,
@@ -62,6 +64,7 @@ from levanter.inference.openai_protocol import (
 )
 from levanter.inference.utils import INVALID
 from levanter.models.lm_model import LmHeadModel
+from levanter.models.snowball import SnowballLMHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
 
@@ -109,6 +112,7 @@ class InferenceRequest:
     future: asyncio.Future
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
+    return_route_captures: bool = False
 
 
 @dataclass
@@ -123,6 +127,7 @@ class InferenceResponse:
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
+    expert_routes: GeneratedExpertRoutes | None = None
 
 
 class InferenceBatch(list):
@@ -162,11 +167,20 @@ def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinToken
 class InferenceContext:
     """Background thread that manages the InferenceEngine and processes requests"""
 
-    def __init__(self, model: LmHeadModel, tokenizer, engine: InferenceEngine, config: InferenceServerConfig):
+    def __init__(
+        self,
+        model: LmHeadModel,
+        tokenizer,
+        engine: InferenceEngine,
+        config: InferenceServerConfig,
+        *,
+        mesh: Mesh | None = None,
+    ):
         self.model = model
         self.tokenizer = tokenizer
         self.engine = engine
         self.config = config
+        self.mesh = config.trainer.device_mesh if mesh is None else mesh
         self.request_queue: queue.Queue[InferenceRequest] = queue.Queue()
         self.batch_queue: queue.Queue[InferenceBatch] = queue.Queue()
         self.shutdown_event = threading.Event()
@@ -211,7 +225,7 @@ class InferenceContext:
 
             start = time.time()
             with (
-                hax.partitioning.set_mesh(self.config.trainer.device_mesh),
+                hax.partitioning.set_mesh(self.mesh),
                 hax.axis_mapping(self.config.trainer.compute_axis_mapping),
             ):
                 self.model = weight_callback(self.model)
@@ -235,6 +249,8 @@ class InferenceContext:
         future: asyncio.Future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        *,
+        return_route_captures: bool = False,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -252,6 +268,7 @@ class InferenceContext:
             future=future,
             n_generations=n_generations,
             echo_logprobs_top_k=echo_logprobs_top_k,
+            return_route_captures=return_route_captures,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -317,7 +334,7 @@ class InferenceContext:
                 batch = self.batch_queue.get(timeout=1)
                 with (
                     self.model_lock,
-                    hax.partitioning.set_mesh(self.config.trainer.device_mesh),
+                    hax.partitioning.set_mesh(self.mesh),
                     hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                 ):
                     self._execute_batch(batch)
@@ -371,7 +388,8 @@ class InferenceContext:
 
         # Generate responses
         start_time = time.time()
-        result = self.engine.generate(service_requests)
+        capture_routes = any(request.return_route_captures for request in requests)
+        result = self.engine.generate(service_requests, capture_routes=capture_routes)
         duration = time.time() - start_time
         logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
 
@@ -405,6 +423,11 @@ class InferenceContext:
                                 request_id=req.request_id,
                                 echo_token_ids=echo_token_ids,
                                 echo_logprobs=echo_logprobs,
+                                expert_routes=(
+                                    result.expert_routes[output_idx]
+                                    if req.return_route_captures and result.expert_routes is not None
+                                    else None
+                                ),
                             )
                         )
                         output_idx += 1
@@ -808,6 +831,8 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
 
 
 def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
+    if options.return_route_captures and not isinstance(ctx.model, SnowballLMHeadModel):
+        raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
     config = ctx.engine.config
     max_prefill_size = config.max_prefill_size or config.max_seq_len
     if prompt.size + options.max_tokens > config.max_seq_len or prompt.size > max_prefill_size:
@@ -839,12 +864,21 @@ async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Respo
         options.seed,
         future,
         n_generations=options.n,
+        return_route_captures=options.return_route_captures,
     )
     try:
         outputs = await future
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if options.return_route_captures:
+        content = await asyncio.to_thread(_encode_binary_outputs, prompt, outputs)
+    else:
+        content = _encode_binary_outputs(prompt, outputs)
+    return Response(content=content, media_type=MEDIA_TYPE)
+
+
+def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse]) -> bytes:
     tensors = {PROMPT_TOKEN_IDS: prompt}
     choices = []
     for choice, output in enumerate(outputs):
@@ -853,10 +887,10 @@ async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Respo
         tensors[prefix + "token_ids"] = np.asarray(output.tokens, dtype=np.int32)
         if output.logprobs is not None:
             tensors[prefix + "behavior_logprobs"] = np.asarray(output.logprobs, dtype=np.float32)
-    return Response(
-        content=encode_frame({"choices": choices}, tensors),
-        media_type=MEDIA_TYPE,
-    )
+        if output.expert_routes is not None:
+            tensors[prefix + "expert_ids"] = np.ascontiguousarray(output.expert_routes.expert_ids)
+            tensors[prefix + "expert_valid"] = output.expert_routes.valid
+    return encode_frame({"choices": choices}, tensors)
 
 
 class InferenceServer:
@@ -881,21 +915,29 @@ class InferenceServer:
         self._server = None
 
     @staticmethod
-    def create(config: InferenceServerConfig, model: LmHeadModel, tokenizer: MarinTokenizer) -> "InferenceServer":
+    def create(
+        config: InferenceServerConfig,
+        model: LmHeadModel,
+        tokenizer: MarinTokenizer,
+        *,
+        mesh: Mesh | None = None,
+    ) -> "InferenceServer":
         """Create and initialize a new InferenceServer.
 
         This factory method loads the model, tokenizer, and creates all necessary
         components for the inference server.
         """
-        service = InferenceEngine.from_model_with_config(
-            model=model,
-            tokenizer=tokenizer,
-            config=config.service,
-            axis_resources=config.trainer.compute_axis_mapping,
-        )
+        mesh = config.trainer.device_mesh if mesh is None else mesh
+        with hax.partitioning.set_mesh(mesh):
+            service = InferenceEngine.from_model_with_config(
+                model=model,
+                tokenizer=tokenizer,
+                config=config.service,
+                axis_resources=config.trainer.compute_axis_mapping,
+            )
 
         # Create and start inference thread
-        inference_context = InferenceContext(model, tokenizer, service, config)
+        inference_context = InferenceContext(model, tokenizer, service, config, mesh=mesh)
         inference_context.start()
 
         # Create FastAPI app with initialized context

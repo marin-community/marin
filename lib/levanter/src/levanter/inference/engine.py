@@ -1181,7 +1181,9 @@ class InferenceEngine:
                 the prompt followed by its generated tokens, excluding the unscheduled terminal row.
         """
         if not requests:
-            return GenerationResult(tokens=[], logprobs=[], total_generated=0, expert_routes=[] if capture_routes else None)
+            return GenerationResult(
+                tokens=[], logprobs=[], total_generated=0, expert_routes=[] if capture_routes else None
+            )
         if capture_routes and not isinstance(self.model, SnowballLMHeadModel):
             raise ValueError("Expert route capture requires a Snowball model")
         self._validate_generation_requests(requests)

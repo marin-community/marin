@@ -12,7 +12,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.llama import LlamaLMHeadModel
+from levanter.models.lm_model import LmExample
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.testing.devices import use_cpu_devices
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
@@ -22,7 +26,7 @@ try:
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
-    from levanter.inference.binary import GENERATE_PATH, MEDIA_TYPE, decode_frame, encode_frame
+    from levanter.inference.binary import GENERATE_PATH, MEDIA_TYPE, choice_expert_routes, decode_frame, encode_frame
     from levanter.inference.engine import (
         InferenceEngineConfig,
         score_token_sequence_logprobs,
@@ -634,3 +638,67 @@ def test_binary_generation_returns_exact_token_ids_and_scores(test_client):
     wrong_dtype = encode_frame({"max_tokens": 2}, {"prompt_token_ids": prompt.astype(np.float32)})
     response = client.post(GENERATE_PATH, content=wrong_dtype, headers={"content-type": MEDIA_TYPE})
     assert response.status_code == 400
+
+
+def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
+    cfg = SnowballConfig(
+        vocab_size=48,
+        hidden_dim=16,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=24,
+        num_layers=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=16,
+        sliding_window=4,
+        attention_implementation="reference",
+    )
+    server_config = InferenceServerConfig(
+        service=InferenceEngineConfig(
+            max_seq_len=16,
+            max_pages=16,
+            max_seqs=4,
+            max_seqs_in_prefill=4,
+            max_prefill_size=12,
+            max_queued_tokens=8,
+            max_rounds=2,
+            page_size=2,
+            compute_dtype=jnp.float32,
+        ),
+    )
+    prompt = np.array([2, 7, 4, 9, 6], dtype=np.int32)
+    with use_cpu_devices(1):
+        mesh = compact_grug_mesh()
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(hax.Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(19))
+            server = InferenceServer.create(server_config, model, local_gpt2_tokenizer, mesh=mesh)
+            try:
+                with TestClient(server.app) as client:
+                    body = encode_frame(
+                        {"max_tokens": 4, "temperature": 0, "return_route_captures": True},
+                        {"prompt_token_ids": prompt},
+                    )
+                    response = client.post(GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
+                    assert response.status_code == 200, response.text
+                    _, tensors = decode_frame(response.content)
+            finally:
+                server.inference_context.shutdown()
+
+            inputs = np.concatenate((prompt, tensors["choice.0.token_ids"]))
+            experts, valid = choice_expert_routes(tensors, 0, inputs)
+            tokens = hax.named(jnp.asarray(inputs[None]), ("batch", "position"))
+            replay = model.prepare_route_replay(jnp.asarray(experts[:, None]), hax.named(valid[None], tokens.axes))
+            learner_loss, _ = model.next_token_loss_and_metrics(
+                LmExample(tokens, hax.ones(tokens.axes)), route_replay=replay, reduction=None
+            )
+
+    np.testing.assert_allclose(
+        tensors["choice.0.behavior_logprobs"], -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
+    )
+    wrong_inputs = inputs.copy()
+    wrong_inputs[0] += 1
+    with pytest.raises(ValueError):
+        choice_expert_routes(tensors, 0, wrong_inputs)
