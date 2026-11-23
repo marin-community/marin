@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Provider credentials reach the verifier env from the wave's resolved bundle, never free text."""
+"""Provider credential templates resolve host-side; guests get dummy values, never a real provider credential."""
 
 import json
 
@@ -76,7 +76,7 @@ def test_unresolved_credentials_fail_the_task_before_any_attempt(judged_bundle):
         task_guest_environment(task, {})
 
 
-def test_resolved_credentials_grant_the_guest_environment(judged_bundle, monkeypatch):
+def test_resolved_credentials_grant_harbor_dummy_credentials(judged_bundle, monkeypatch):
     monkeypatch.setattr(difficulty_trials, "require_secret", lambda name: "resolved-" + name.lower())
     resolved = resolve_provider_secrets(("TOGETHER_API_KEY",))
     task = PreparedTask(
@@ -88,7 +88,8 @@ def test_resolved_credentials_grant_the_guest_environment(judged_bundle, monkeyp
         reason=None,
         judge_model=None,
     )
-    assert task_guest_environment(task, resolved) == {"TOGETHER_API_KEY": "resolved-together_api_key"}
+    granted = task_guest_environment(task, resolved)
+    assert granted == {"TOGETHER_API_KEY": "EMPTY"}
 
 
 def _fake_storage_path(payloads: dict[str, str]):

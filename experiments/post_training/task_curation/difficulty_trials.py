@@ -30,7 +30,12 @@ from finestore.rl.difficulty import (
     difficulty_gap_reason,
 )
 from harbor.environments.docker_translate import MissingPreparedImageError
-from harbor.host_capabilities import MODEL_CREDENTIALS, HostCapabilities, host_capabilities_from_environment
+from harbor.host_capabilities import (
+    MODEL_CREDENTIALS,
+    HostCapabilities,
+    host_capabilities_from_environment,
+    model_guest_credentials,
+)
 from harbor.models.task.task import Task
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
 from harbor.trial.trial import Trial
@@ -100,10 +105,14 @@ def resolve_provider_secrets(required: Iterable[str]) -> dict[str, str]:
 
 
 def task_guest_environment(task: PreparedTask, provider_secrets: Mapping[str, str]) -> dict[str, str]:
-    """The granted guest environment for one task's provider credential templates.
+    """The guest environment for one task's provider credential templates.
 
-    Raises before the task's first attempt when a bundle-referenced credential
-    was not resolved for the wave, so a task never fails mid-verifier.
+    Harbor refuses real provider credentials at the sandbox boundary (the guest
+    model relay is the sanctioned channel), so the guest receives Harbor's dummy
+    projection for each declared template; the resolved values stay host-side and
+    never enter the sandbox. Raises before the task's first attempt when a
+    bundle-referenced credential was not resolved for the wave, so a task never
+    fails mid-verifier.
     """
     if task.path is None:
         return {}
@@ -113,7 +122,7 @@ def task_guest_environment(task: PreparedTask, provider_secrets: Mapping[str, st
         raise ValueError(
             f"Task {task.task_id} requires provider credentials the wave did not resolve: {sorted(missing)}"
         )
-    return {name: provider_secrets[name] for name in sorted(required)}
+    return model_guest_credentials({name: provider_secrets[name] for name in sorted(required)})
 
 
 def task_spec_actor_image(task: PreparedTask) -> str | None:
