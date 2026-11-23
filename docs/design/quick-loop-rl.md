@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 6:24 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 6:55 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -1943,14 +1943,26 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   The matched `2026.11.22.3` native arm started after vLLM published
   policy 1. It uses the same learner commit, scoped checkpoint deadline,
   initializer and task selections. The new native child passed NCCL on
-  all 40 H100s.
+  all 40 H100s. Three learner hosts finished their initializer reads
+  within four minutes. The fourth finished after about 26 minutes.
+  The acknowledged policy-0 manifest matched all 502 tensors and shard
+  digests from the previous initializer. Snapshot publication took
+  149.4 seconds and serving install took 244.5 seconds. Kueue preempted
+  the CPU coordinator as baseline evaluation began. This child recorded
+  no scored baseline tasks or optimizer updates. Iris admitted the
+  replacement on the same 40-H100 layout.
   A separate eight-H100 diagnostic is running with the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
-  scores to the same typed frames from one original attempt.
+  scores to the same typed frames from one original attempt. The first
+  diagnostic installed both policies and started the full-context
+  group. Its CPU coordinator was preempted at the same time as the
+  held native coordinator. The replacement is running with a distinct
+  task identity.
   [Original calibration][iris-native-serving-eval-first] ·
   [Revised calibration][iris-native-serving-eval-retry] ·
   [Verified calibration archive][native-serving-eval-archive] ·
-  [Matched native child][iris-held-native-validation-retry] ·
+  [First matched native child][iris-held-native-validation-retry] ·
+  [Matched native replacement][iris-held-native-validation-replacement] ·
   [Same-attempt score diagnostic][iris-native-same-attempt-score]
 
   Both plans use a 24,576-token serving limit and a 16,896-token request
@@ -2067,6 +2079,7 @@ arms. [Prior timing comparison][timing]
 [held-vllm-rendezvous-proof]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-vllm-a08d6abd1b30%2Ftensorstore-rendezvous-terminal-proof.json
 [held-vllm-accepted-audit]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-vllm-ab5ce0f492e1%2Faccepted-vllm-arm.json
 [iris-held-native-validation-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-coordinator-1f166fa9%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-a9875414cfa5
+[iris-held-native-validation-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-coordinator-1f166fa9%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-aa86eb747b53
 [iris-native-same-attempt-score]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122m%2Fnative-native-fused-20261122m-tool-fused
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
 [iris-native-head-comparison]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused
