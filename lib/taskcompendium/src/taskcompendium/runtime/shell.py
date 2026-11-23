@@ -9,10 +9,10 @@ import json
 import os
 import uuid
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import (
@@ -21,7 +21,6 @@ from shellbox.machine import (
     Machine,
     MachineFactory,
     MachineSpec,
-    QemuBundle,
 )
 
 from taskcompendium.models import (
@@ -149,14 +148,6 @@ async def run_shell_call(
             "stderr_truncated": result.stderr_truncated,
         }
     )
-
-
-def machine_spec_identity(machine_spec: MachineSpec) -> dict[str, Any]:
-    """Serialize machine parameters with a JSON-compatible local bundle path."""
-    identity = asdict(machine_spec)
-    if isinstance(machine_spec.source, QemuBundle):
-        identity["source"] = {"path": str(machine_spec.source.path)}
-    return identity
 
 
 async def upload_resources(

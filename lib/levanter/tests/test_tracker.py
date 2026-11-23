@@ -24,7 +24,6 @@ from levanter.tracker.wandb import (
     WandbConfig,
     WandbTracker,
     _truncate_wandb_artifact_name,
-    truncate_wandb_run_name,
 )
 
 
@@ -346,22 +345,3 @@ def test_wandb_tracker_materializes_before_dynamic_stale_step_check(monkeypatch)
     tracker.log({"metric": 2.0}, step=10)
 
     assert converted == [2.0]
-
-
-def test_truncate_wandb_run_name_preserves_scientific_notation_lr_suffix():
-    name = "dpo/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-7_seed2"
-
-    truncated = truncate_wandb_run_name(name)
-
-    assert len(truncated) <= 64
-    assert truncated.endswith("lr7.5e-7_seed2")
-    assert "_-7_seed2" not in truncated
-
-
-def test_truncate_wandb_run_name_logs_warning(caplog):
-    name = "dpo/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-7_seed2"
-
-    with caplog.at_level(logging.WARNING):
-        truncate_wandb_run_name(name)
-
-    assert any(record.levelno >= logging.WARNING for record in caplog.records)

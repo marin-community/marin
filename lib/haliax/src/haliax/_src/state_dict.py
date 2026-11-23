@@ -13,7 +13,6 @@ import jax.numpy as jnp
 import numpy as np
 from jax import ShapeDtypeStruct
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
-from jax.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, SequenceKey
 from jaxtyping import PyTree
 
 import safetensors.numpy as safetensors_numpy
@@ -319,27 +318,6 @@ def default_eqx_module_to_state_dict(mod: eqx.Module, prefix: str | None = None)
         # TODO: should we check for conflicts?
         state_dict.update(child)
     return state_dict
-
-
-# Torch compatible KeyPath formatting. Torch just always uses .
-def _format_key_path_element(path_elem) -> str:
-    match path_elem:
-        case SequenceKey(idx):  # type: ignore
-            return f".{idx}"
-        case DictKey(key):  # type: ignore
-            return f".{key}"
-        case GetAttrKey():  # type: ignore
-            return str(path_elem)
-        case FlattenedIndexKey(idx):  # type: ignore
-            return f".{idx}"
-        case _:
-            # The convention in JAX is to append the separator in the element itself
-            # so we expect it to have
-            path_elem = str(path_elem)
-            if path_elem.startswith("."):
-                return path_elem
-            else:
-                return f".{path_elem}"
 
 
 def to_numpy_state_dict(model, prefix: str | None = None) -> StateDict:
