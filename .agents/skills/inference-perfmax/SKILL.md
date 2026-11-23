@@ -78,8 +78,9 @@ Coordinate shared GPU capacity through your team's process and read
 concurrent ceilings across trials and retries. Let the runner's CPU coordinator
 prepare uncached data before GPU allocation. Release idle resources and count setup, compilation, warmup, drain
 and failed allocations. Prioritize GPU efficiency over elapsed time.
-Keep `run` attached to track allocation cost. Detached runs may lose required
-timestamps after Pod cleanup; incomplete cost blocks recommendations.
+Keep `run` attached to track allocation cost. Detached runs may lose timestamps
+after Pod cleanup. Retain known usage and label estimates and unknowns;
+incomplete cost alone does not block a recommendation.
 
 ## Measure and return the result
 
@@ -98,7 +99,7 @@ For a memory claim, report stored parameter bytes or usable KV capacity with
 topology and throughput for both configurations. Label any load-time memory
 measurement separately.
 The runner checks before AgentX and resets caches before native warmup. Retain
-failed observations; missing evidence and failed checks block recommendations.
+failed observations; missing required correctness evidence and failed checks block recommendations.
 They stop traffic unless `--measure-failed-checks` explicitly permits diagnostics.
 Use the agreed policy, including its provisional status. Change bounds only with
 recorded evidence and delegated authority. These checks do not qualify RL learning

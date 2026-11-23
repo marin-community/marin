@@ -121,6 +121,21 @@ keep distinct attempt IDs, host records, exports and logs. Prepared AgentX workl
 data uses a checksum-addressed archive; `plan.json` and `result.json` retain recovery inputs.
 Keep large disposable intermediates in existing TTL scratch storage.
 
+The leader uploads a snapshot after AgentX exits successfully and before stopping
+followers or its server. A final snapshot records shutdown and capture failures.
+Each receipt points to a checksum-addressed archive. A failed final upload leaves
+the earlier receipt readable. The GPU job's failure still blocks a recommendation.
+An abrupt kill before the first upload can leave no durable exports.
+
+Plans, results and attempt records use `schema_version: 1`; older results and
+attempts may have no version field. `measured_unix` records AgentX's zero exit.
+Shutdown timestamps and `capture_phase` distinguish later work. Timestamps are
+Unix seconds, `gpu_seconds` counts physical GPU-seconds, and latency is seconds.
+`measurement.validity` holds native admission, local protocol checks, command
+completion and final request counts by phase. Numerical reports remain separate.
+`cost_complete` describes coverage; allocation entries label measured, estimated
+or unknown usage. Dashboard code can read these records without parsing Markdown.
+
 The terminal prints the CPU coordinator's Iris job ID, trial URI and recovery
 commands. Its GPU child job is that ID followed by `/serve`. `run` waits
 by default. It also captures pod allocation times, including setup before
@@ -133,7 +148,8 @@ Capture records contain only timing and identity fields. If a pod expires, a ret
 time plus Iris's terminal observation gives a conservative end time. Missing
 timestamps remain unknown. Keep `run` attached for complete allocation tracking.
 `--no-wait` returns after submission; detached runs may lose required timestamps
-after Pod cleanup. Incomplete cost blocks recommendations. `status` reports current
+after Pod cleanup. Retain known usage and label estimates and unknowns. Incomplete
+cost alone does not block recommendations. `status` reports current
 state and does not continue allocation tracking. Interrupting the local wait leaves Iris running.
 Cost is allocated GPU-hours: physical GPUs times allocated seconds, divided by
 3,600, summed across hosts and attempts. It includes failed attempts.
@@ -148,7 +164,9 @@ uv run python -m experiments.evaluation.knotmeter.cli report --campaign-uri CAMP
 Recover from the original source revision recorded in `plan.json`. Recovery
 collects terminal work and never submits GPUs. After coordinator loss, inspect
 its `/serve` child and cancel or wait for it before recovery. Check provider
-cleanup before retrying.
+cleanup before retrying. Artifact uploads can finish after Iris first reports a
+failed gang. If outputs are unavailable, rerun `recover` after capture finishes;
+it rechecks durable receipts and does not allocate GPUs.
 CPU coordinator preemption can stop the GPU child. Recovery retains that failed
 trial's evidence and cost; it does not resume its measurement window.
 The report prints the same Markdown saved as `summary.md`, including all attempts'
@@ -158,7 +176,7 @@ One invocation measures one window; repeatability has not been measured. Use
 separate fresh-server trials when noise could change a decision. Native multi-run
 reuses the server and skips additional warmup after the first by default.
 `report --recommend TRIAL_ID` requires a valid Confirm protocol, unchanged gang,
-passed checks and complete cost. Every physical host must retain the same Iris
+and passed required checks. Cost completeness is reported separately. Every physical host must retain the same Iris
 attempt ID throughout profiling. The command writes `recommended.yaml` with a
 frozen runtime. Add `--baseline TRIAL_ID` to show changes within a comparison
 group; diagnostics with different controls remain separate rows.

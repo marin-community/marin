@@ -112,19 +112,23 @@ def validate_window(point: Path, manifest: PointManifest, record: dict) -> dict:
         complete = all(
             coverage[0][key] >= coverage[0]["required_ratio"] for key in ("ttft_ratio", "inter_token_latency_ratio")
         )
-    successes, errors = 0, 0
+    phase_counts = {}
     with (point / "aiperf_artifacts/profile_export.jsonl").open() as stream:
         for line in stream:
             request = json.loads(line)
-            if request["metadata"]["benchmark_phase"] == "profiling":
-                if request.get("error"):
-                    errors += 1
-                else:
-                    successes += 1
+            phase = request["metadata"]["benchmark_phase"]
+            counts = phase_counts.setdefault(phase, {"successes": 0, "errors": 0})
+            counts["errors" if request.get("error") else "successes"] += 1
+    profiling = phase_counts.get("profiling", {"successes": 0, "errors": 0})
+    successes, errors = profiling["successes"], profiling["errors"]
     ratio = errors / (successes + errors) if successes + errors else None
     native = export["metadata"].get("submission_valid") is True and not export.get("was_cancelled")
+    # The native command's zero exit is recorded before teardown. Export files
+    # alone can also survive an interrupted or failed benchmark process.
+    completed = isinstance(record.get("measured_unix"), (int, float))
     valid = (
         native
+        and completed
         and successful_metrics
         and complete
         and successes > 0
@@ -132,11 +136,13 @@ def validate_window(point: Path, manifest: PointManifest, record: dict) -> dict:
     )
     return {
         "submission_valid": native,
+        "measurement_completed": completed,
         "worker_metrics": successful_metrics,
         "coverage_complete": complete,
         "profiling_successes": successes,
         "profiling_errors": errors,
         "profiling_error_ratio": ratio,
+        "request_counts_by_phase": phase_counts,
         "protocol_valid": bool(valid and not manifest["series"]["unsafe_override"]),
         "diagnostic": manifest["diagnostic"],
     }
@@ -263,6 +269,7 @@ def collect_trial(client: IrisClient, plan: TrialPlan, work: Path) -> dict:
             and len(uuids) == profile.gpus.count
         )
     result = {
+        "schema_version": 1,
         "trial_id": plan["trial_id"],
         "trial_uri": plan["trial_uri"],
         "manifest": manifest,

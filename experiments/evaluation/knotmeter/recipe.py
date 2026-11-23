@@ -56,6 +56,7 @@ class TrialPlan(TypedDict):
 def unmeasured_result(plan: TrialPlan, state: str, *, cost_complete: bool = False) -> dict:
     """Keep plans without collected measurements visible in campaign reports."""
     return {
+        "schema_version": 1,
         "trial_id": plan["trial_id"],
         "trial_uri": plan["trial_uri"],
         "manifest": (

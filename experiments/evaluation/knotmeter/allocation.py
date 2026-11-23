@@ -136,7 +136,7 @@ def allocation_cost(
     if finish < start:
         raise ValueError("Allocation finish precedes pod scheduling")
     return (finish - start) * gpus, record | {
-        "status": "measured",
+        "status": "measured" if record["finished_unix"] else "estimated",
         "end_basis": "pod-container-finish" if record["finished_unix"] else "iris-observed-terminal",
         "end_unix": finish,
     }

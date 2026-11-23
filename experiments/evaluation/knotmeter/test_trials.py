@@ -412,6 +412,32 @@ def test_report_keeps_diagnostics_separate_and_pins_selected_runtime_and_load(tm
         report_campaign(str(tmp_path), recommendation="diagnostic", baseline="baseline")
 
 
+@pytest.mark.parametrize("recorded_gpu_seconds", [0.0, 1800.0])
+@pytest.mark.parametrize("check_status", ["passed", "failed"])
+def test_incomplete_cost_preserves_usage_and_correctness_gate(tmp_path, recorded_gpu_seconds, check_status):
+    result = trial(tmp_path, "candidate", 120)
+    result["gpu_seconds"] = recorded_gpu_seconds
+    result["cost_complete"] = False
+    if recorded_gpu_seconds:
+        result["attempts"] = [{"allocation": {"end_basis": "iris-observed-terminal"}}]
+    result["measurement"]["checks"][0]["status"] = check_status
+    write_record(f"{result['trial_uri']}/result.json", result)
+
+    if check_status == "passed":
+        report = report_campaign(str(tmp_path), recommendation="candidate")
+        assert ("0.500 + unknown (estimated)" if recorded_gpu_seconds else "unknown") in report
+        assert (tmp_path / "recommended.yaml").is_file()
+        assert read_record(str(tmp_path / "decision.json"))["recommended_trial"] == "candidate"
+    else:
+        with pytest.raises(ValueError, match="passed required checks"):
+            report_campaign(str(tmp_path), recommendation="candidate")
+        assert not (tmp_path / "recommended.yaml").exists()
+
+    saved = read_record(f"{result['trial_uri']}/result.json")
+    assert saved["gpu_seconds"] == recorded_gpu_seconds and not saved["cost_complete"]
+    assert saved["measurement"]["checks"][0]["status"] == check_status
+
+
 def test_failed_check_measurement_preserves_native_protocol_and_blocks_recommendation(tmp_path):
     profile = load_profile(Path("snowball-h100"), [])
     normal = resolved_series(profile, Stage.CONFIRM)
@@ -570,7 +596,7 @@ def test_existing_check_pass_transfers_only_to_its_checkpoint_and_runtime(tmp_pa
         assert read_record(f"{result['trial_uri']}/result.json")["measurement"]["checks"] == checks
 
 
-@pytest.mark.parametrize("missing", ["required-check", "submission-validity", "qualification"])
+@pytest.mark.parametrize("missing", ["required-check", "submission-validity", "qualification", "job-success"])
 def test_numerical_pass_does_not_replace_other_acceptance_requirements(tmp_path, missing):
     result = trial(tmp_path, "candidate", 120)
     if missing == "required-check":
@@ -579,6 +605,8 @@ def test_numerical_pass_does_not_replace_other_acceptance_requirements(tmp_path,
         )
     elif missing == "submission-validity":
         result["measurement"]["validity"]["submission_valid"] = False
+    elif missing == "job-success":
+        result |= {"job_succeeded": False, "job_state": "failed"}
     else:
         result["manifest"]["diagnostic"] = True
     write_record(f"{result['trial_uri']}/result.json", result)
@@ -616,7 +644,8 @@ def test_plan_without_result_remains_visible_in_report(tmp_path):
 
 
 @pytest.mark.parametrize("partial_exports", [False, True])
-def test_recovery_counts_setup_and_failed_native_attempts_without_resubmitting(tmp_path, partial_exports):
+@pytest.mark.parametrize("pod_finish", [True, False])
+def test_recovery_counts_setup_and_failed_native_attempts_without_resubmitting(tmp_path, partial_exports, pod_finish):
     result = trial(tmp_path, "failed", 0)
     plan = {
         "trial_id": "failed",
@@ -646,7 +675,7 @@ def test_recovery_counts_setup_and_failed_native_attempts_without_resubmitting(t
             {
                 "pod_uid": f"pod-{uid}",
                 "scheduled_unix": scheduled,
-                "finished_unix": stopped,
+                "finished_unix": stopped if pod_finish else None,
             },
         )
         if partial_exports:
@@ -689,8 +718,11 @@ def test_recovery_counts_setup_and_failed_native_attempts_without_resubmitting(t
             raise AssertionError("Recovery must not submit compute")
 
     recovered = collect_trial(Client(), plan, tmp_path / "recovery")
-    assert recovered["gpu_seconds"] == 480
+    assert recovered["gpu_seconds"] == (480 if pod_finish else 560)
     assert recovered["cost_complete"] is True
+    assert all(
+        row["allocation"]["status"] == ("measured" if pod_finish else "estimated") for row in recovered["attempts"]
+    )
     assert [row["attempt_uid"] for row in recovered["attempts"]] == ["one", "two"]
     if partial_exports:
         assert recovered["measurement"] is None

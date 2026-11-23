@@ -6,6 +6,7 @@
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import platform
 import shutil
@@ -53,6 +54,25 @@ from experiments.evaluation.knotmeter.recipe import (
 )
 from experiments.evaluation.knotmeter.runtime import materialize_release
 from experiments.evaluation.knotmeter.workload import check_native_cache, restore_workload
+
+logger = logging.getLogger(__name__)
+
+
+def capture_attempt(plan: TrialPlan, output: Path, record: dict, task_index: int, *, phase: str) -> None:
+    """Publish a checksum-addressed snapshot before changing the receipt."""
+    snapshot = record | {"capture_phase": phase}
+    write_record(str(output / "attempt.json"), snapshot)
+    prefix = prefix_join(plan["trial_uri"], f"attempts/{record['iris_attempt_uid']}/hosts/{task_index}")
+    # Keep this intermediate archive outside IRIS_OUTPUT_DIR; Iris also captures
+    # that directory and must not include a second copy of the same output.
+    with tempfile.TemporaryDirectory(prefix="knotmeter-capture-") as directory:
+        uri, digest = retain_artifacts(output, Path(directory) / "host.tar.zst", prefix, name="native")
+    receipt_uri = prefix_join(prefix, ATTEMPT_RECEIPT_NAME)
+    write_record(
+        receipt_uri,
+        snapshot | {"archive_uri": uri, "archive_sha256": digest, "captured_unix": time.time()},
+    )
+    print(f"KNOTMETER_ATTEMPT {receipt_uri}", flush=True)
 
 
 def interrupt(signum: int, _frame: object) -> None:
@@ -257,6 +277,7 @@ def run_point(plan: TrialPlan, output: Path, bundle: Path, launch: IrisVllmLaunc
     leader = launch is None or launch.is_leader
     output.mkdir(parents=True, exist_ok=False)
     record = {
+        "schema_version": 1,
         "manifest": manifest,
         "status": "preparing",
         "started_unix": time.time(),
@@ -270,6 +291,7 @@ def run_point(plan: TrialPlan, output: Path, bundle: Path, launch: IrisVllmLaunc
     }
     native_logs = None
     router_logs = None
+    failure = None
     try:
         record["gpu_uuids"] = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader"], text=True
@@ -301,7 +323,7 @@ def run_point(plan: TrialPlan, output: Path, bundle: Path, launch: IrisVllmLaunc
             if not leader:
                 assert launch is not None
                 wait_for_iris_vllm_shutdown(launch, server.check_alive)
-                record["status"] = "succeeded"
+                record |= {"status": "succeeded", "shutdown_started_unix": time.time()}
                 return
             server.wait_until_ready()
             router_logs = server.router.log_dir if server.router else None
@@ -363,18 +385,35 @@ def run_point(plan: TrialPlan, output: Path, bundle: Path, launch: IrisVllmLaunc
                 if gang_attempts(profile.gpus.count // profile.gpus.per_host) != record["gang_attempts"]:
                     raise RuntimeError("The serving gang changed native attempts during profiling")
                 server.check_alive()
-                record["status"] = "succeeded"
+                record["status"] = "measured"
+                pack_server_metrics(output)
+                capture_attempt(plan, output, record, info.task_index, phase="before-shutdown")
+                record |= {"status": "stopping", "shutdown_started_unix": time.time()}
+            if launch and launch.num_tasks > 1:
+                record["followers_stopped_unix"] = time.time()
+        record["status"] = "succeeded"
     except BaseException as error:
+        failure = error
         record |= {"status": "failed", "error": f"{type(error).__name__}: {error}"}
         raise
     finally:
         record["finished_unix"] = time.time()
-        if native_logs:
-            shutil.copytree(native_logs, output / "server-logs")
-        if router_logs:
-            shutil.copytree(router_logs, output / "router-logs")
+        if failure is None:
+            record["shutdown_completed_unix"] = record["finished_unix"]
+        capture_error = None
+        for source, name in ((native_logs, "server-logs"), (router_logs, "router-logs")):
+            if source:
+                try:
+                    shutil.copytree(source, output / name)
+                except OSError as error:
+                    capture_error = capture_error or error
+                    record.setdefault("capture_errors", []).append(f"{name}: {type(error).__name__}: {error}")
         if leader:
-            pack_server_metrics(output)
+            try:
+                pack_server_metrics(output)
+            except Exception as error:
+                capture_error = capture_error or error
+                record.setdefault("capture_errors", []).append(f"metrics: {type(error).__name__}: {error}")
         try:
             memory_limit = Path("/sys/fs/cgroup/memory.max").read_text().strip()
             record["host_memory"] = {
@@ -384,12 +423,16 @@ def run_point(plan: TrialPlan, output: Path, bundle: Path, launch: IrisVllmLaunc
             }
         except (OSError, ValueError) as error:
             record["host_memory"] = {"error": str(error)}
-        write_record(str(output / "attempt.json"), record)
-        prefix = prefix_join(plan["trial_uri"], f"attempts/{record['iris_attempt_uid']}/hosts/{info.task_index}")
-        uri, digest = retain_artifacts(output, output.parent / "host.tar.zst", prefix, name="native")
-        receipt_uri = prefix_join(prefix, ATTEMPT_RECEIPT_NAME)
-        write_record(receipt_uri, record | {"archive_uri": uri, "archive_sha256": digest})
-        print(f"KNOTMETER_ATTEMPT {receipt_uri}", flush=True)
+        if capture_error and failure is None:
+            record |= {"status": "failed", "error": f"{type(capture_error).__name__}: {capture_error}"}
+        try:
+            capture_attempt(plan, output, record, info.task_index, phase="final")
+        except BaseException:
+            if failure is None:
+                raise
+            logger.exception("Artifact capture failed; preserving the original task failure")
+        if capture_error and failure is None:
+            raise capture_error
         if launch and not leader and record["status"] == "succeeded":
             notify_iris_vllm_stopped(launch)
 

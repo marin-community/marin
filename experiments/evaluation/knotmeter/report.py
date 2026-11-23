@@ -90,9 +90,9 @@ def comparison_controls(result: dict) -> dict:
 
 
 def accepted(result: dict) -> bool:
-    """Return whether measurement, allocation and scoped checks qualify this trial."""
+    """Return whether measurement and scoped checks qualify this trial."""
     measurement = result["measurement"]
-    if not measurement or not result["job_succeeded"] or not result["cost_complete"]:
+    if not measurement or not result["job_succeeded"]:
         return False
     checks = recorded_checks(result)
     numerical = [check for check in checks if check.get("kind") == "numerical"]
@@ -136,7 +136,7 @@ def render_report(
         "repeatability has not been measured.",
         "",
         "| Trial | Stage | Runtime | Weights | GPU job | Sessions | GPUs | Output tokens/s/GPU | Change | p90 TTFT | "
-        "p90 completion | AgentX | Errors | Checks | GPU-hours |",
+        "p90 completion | AgentX | Errors by phase | Checks | GPU-hours |",
         "| --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | --- | --- | --- | ---: |",
     ]
     for result in results:
@@ -171,7 +171,10 @@ def render_report(
             validity = measurement["validity"]
             agentx = "native " + ("valid" if validity["submission_valid"] else "invalid")
             agentx += "; protocol " + ("valid" if validity["protocol_valid"] else "invalid")
-            errors = str(validity.get("profiling_errors", "unknown"))
+            counts = validity.get("request_counts_by_phase", {})
+            errors = "; ".join(f"{phase}: {counts[phase]['errors']}" for phase in sorted(counts))
+            if not errors:
+                errors = "profiling: " + str(validity.get("profiling_errors", "unknown"))
         if result["manifest"]["diagnostic"]:
             agentx += "; diagnostic"
         elif result["manifest"]["series"].get("measure_failed_checks") and any(
@@ -181,6 +184,10 @@ def render_report(
         cost = format_value(result["gpu_seconds"] / 3600) + (" + unknown" if not result["cost_complete"] else "")
         if not result["cost_complete"] and not result["gpu_seconds"]:
             cost = "unknown"
+        if any(
+            attempt.get("allocation", {}).get("end_basis") == "iris-observed-terminal" for attempt in result["attempts"]
+        ):
+            cost += " (estimated)"
         record_file = "plan.json" if result["job_state"] == "unrecorded" else "result.json"
         weights = profile.get("weight_precision") or profile.get("quantization") or profile["serving"]["dtype"]
         lines.append(
@@ -196,7 +203,7 @@ def render_report(
         "",
         f"Total recorded GPU-hours: {sum(row['gpu_seconds'] for row in results) / 3600:.3f}.",
         "Cost includes every retained Iris attempt, including setup, warmup, drain and failed attempts. "
-        "Missing allocation timestamps remain unknown; queueing is excluded.",
+        "Iris-observed end times are estimates. Missing allocation timestamps remain unknown; queueing is excluded.",
         "",
     ]
     if any(not row["cost_complete"] for row in results):
@@ -215,7 +222,7 @@ def render_report(
             raise ValueError(f"No recommendation trial {recommendation!r} in this campaign")
         if not accepted(chosen):
             raise ValueError(
-                "Recommendation requires a successful GPU job, complete allocation cost, "
+                "Recommendation requires a successful GPU job, "
                 "a valid Confirm window, unchanged gang and passed required checks"
             )
         lines += [
@@ -284,6 +291,7 @@ def report_campaign(campaign_uri: str, recommendation: str | None = None, baseli
         write_record(
             prefix_join(campaign_uri, "decision.json"),
             {
+                "schema_version": 1,
                 "recommended_trial": recommendation,
                 "baseline_trial": baseline,
                 "throughput_change": throughput_change(selected, reference),
