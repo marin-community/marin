@@ -16,6 +16,7 @@ from taskcompendium.models import ScriptGrader
 from experiments.post_training.task_curation.datasets.mimo.repair import (
     ImageBinding,
     RepairRejected,
+    exclusions_from_document,
     load_bindings,
     parse_recipe,
     repair_population,
@@ -246,6 +247,46 @@ def test_population_repair_covers_every_task_and_writes_the_ledger(tmp_path):
     assert len(ledger["tasks"]) == 3
     with pytest.raises(RepairRejected, match="omit task"):
         repair_population(input_parquet, {rows[0]["id"]: bindings[rows[0]["id"]]}, tmp_path / "out2")
+
+
+def test_population_repair_excludes_typed_tasks(tmp_path):
+    rows = [retained_row("fweindel-validated-tasks-mimo-v1-" + f"{index:064x}") for index in range(3)]
+    input_parquet = tmp_path / "input.parquet"
+    table = pa.Table.from_pylist(rows)
+    with input_parquet.open("wb") as stream:
+        with pq.ParquetWriter(stream, table.schema) as writer:
+            writer.write_table(table)
+    bindings = {row["id"]: binding_for(row) for row in rows}
+    exclusions = exclusions_from_document(
+        {
+            "tasks": [
+                {
+                    "task_id": rows[0]["id"],
+                    "reason": "backend_contract_unsupported",
+                    "evidence": "the declared memory exceeds every production rollout backend",
+                }
+            ]
+        }
+    )
+    summary = repair_population(input_parquet, bindings, tmp_path / "out", exclusions)
+    assert summary["tasks"] == 2 and summary["excluded_tasks"] == 1
+    ledger = json.loads((tmp_path / "out" / "repair-ledger.json").read_text())
+    assert ledger["excluded_tasks"] == [
+        {
+            "task_id": rows[0]["id"],
+            "reason": "backend_contract_unsupported",
+            "evidence": "the declared memory exceeds every production rollout backend",
+        }
+    ]
+    output_rows = pq.ParquetFile(tmp_path / "out" / "tasks.parquet").metadata.num_rows
+    assert output_rows == 2
+    with pytest.raises(RepairRejected, match="outside the population"):
+        repair_population(
+            input_parquet,
+            bindings,
+            tmp_path / "out2",
+            exclusions_from_document({"tasks": [{"task_id": "missing", "reason": "r", "evidence": "e"}]}),
+        )
 
 
 def subprocess_completed(script: str) -> int:

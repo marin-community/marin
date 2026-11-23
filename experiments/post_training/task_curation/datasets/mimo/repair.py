@@ -34,6 +34,7 @@ import json
 import re
 import shutil
 import tomllib
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -206,6 +207,32 @@ def verifier_timeout(config: dict) -> float:
     return float(timeout)
 
 
+@dataclass(frozen=True)
+class TaskExclusion:
+    """One task the repaired variant omits, with its typed reason and evidence."""
+
+    task_id: str
+    reason: str
+    evidence: str
+
+
+def exclusions_from_document(document: dict) -> dict[str, TaskExclusion]:
+    """Validate the repair lane's typed per-task exclusion document."""
+    exclusions = {}
+    for entry in document["tasks"]:
+        exclusion = TaskExclusion(
+            task_id=entry["task_id"],
+            reason=entry["reason"],
+            evidence=entry["evidence"],
+        )
+        if exclusion.task_id in exclusions:
+            raise RepairRejected(f"the exclusion document repeats task {exclusion.task_id}")
+        if not exclusion.reason or not exclusion.evidence:
+            raise RepairRejected(f"the exclusion for {exclusion.task_id} lacks its typed reason or evidence")
+        exclusions[exclusion.task_id] = exclusion
+    return exclusions
+
+
 def private_verifier_files(resources: tuple) -> tuple:
     """The private tests/* resources, renamed relative to their /tests restore root."""
     private = []
@@ -346,10 +373,17 @@ def bindings_from_document(document: dict) -> dict[str, ImageBinding]:
     return bindings
 
 
-def repair_population(input_parquet: Path, bindings: dict[str, ImageBinding], output_dir: Path) -> dict:
+def repair_population(
+    input_parquet: Path,
+    bindings: dict[str, ImageBinding],
+    output_dir: Path,
+    exclusions: dict[str, TaskExclusion] | None = None,
+) -> dict:
     """Rewrite the whole retained population and write the repaired release artifacts."""
     schema = pq.ParquetFile(input_parquet).schema_arrow
+    exclusions = exclusions or {}
     ledger = []
+    excluded = []
     seen = set()
     rows = []
     for batch in pq.ParquetFile(input_parquet).iter_batches(batch_size=16):
@@ -358,6 +392,9 @@ def repair_population(input_parquet: Path, bindings: dict[str, ImageBinding], ou
             if task_id in seen:
                 raise RepairRejected(f"the retained release repeats task {task_id}")
             seen.add(task_id)
+            if task_id in exclusions:
+                excluded.append({"task_id": task_id, **exclusions[task_id].__dict__})
+                continue
             binding = bindings.get(task_id)
             if binding is None:
                 raise RepairRejected(f"the image bindings omit task {task_id}")
@@ -373,14 +410,19 @@ def repair_population(input_parquet: Path, bindings: dict[str, ImageBinding], ou
                     "runtime": row["runtime"],
                 }
             )
-    missing = sorted(set(bindings) - seen)
-    if missing:
-        raise RepairRejected(f"the image bindings name tasks outside the population: {missing[:5]}")
+    unknown = sorted(set(bindings) - seen - set(exclusions))
+    if unknown:
+        raise RepairRejected(f"the image bindings name tasks outside the population: {unknown[:5]}")
+    missing_exclusions = sorted(set(exclusions) - seen)
+    if missing_exclusions:
+        raise RepairRejected(f"the exclusions name tasks outside the population: {missing_exclusions[:5]}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output = output_dir / "tasks.parquet"
     ledger_path = output_dir / "repair-ledger.json"
-    ledger_path.write_text(json.dumps({"version": REPAIR_VERSION, "tasks": ledger}, indent=1) + "\n")
+    ledger_path.write_text(
+        json.dumps({"version": REPAIR_VERSION, "tasks": ledger, "excluded_tasks": excluded}, indent=1) + "\n"
+    )
     with output.open("wb") as stream:
         with pq.ParquetWriter(stream, schema) as writer:
             for start in range(0, len(rows), 64):
@@ -389,6 +431,8 @@ def repair_population(input_parquet: Path, bindings: dict[str, ImageBinding], ou
         "version": REPAIR_VERSION,
         "input_parquet_sha256": hashlib.file_digest(input_parquet.open("rb"), "sha256").hexdigest(),
         "tasks": len(rows),
+        "excluded_tasks": len(excluded),
+        "exclusion_reasons": dict(Counter(entry["reason"] for entry in excluded)),
         "ledger_sha256": hashlib.sha256(ledger_path.read_bytes()).hexdigest(),
         "output_sha256": hashlib.file_digest(output.open("rb"), "sha256").hexdigest(),
     }
@@ -402,6 +446,7 @@ def main() -> None:
     parser.add_argument("--repo", default=None, help="the pinned release repo, downloaded when --input is absent")
     parser.add_argument("--revision", default=None, help="the pinned release revision")
     parser.add_argument("--bindings", required=True, help="the image lane's binding document URI")
+    parser.add_argument("--exclude", default=None, help="the typed per-task exclusion document URI")
     parser.add_argument("--output", required=True, help="directory for the repaired release, local or object-store")
     arguments = parser.parse_args()
     if (arguments.input is None) == (arguments.repo is None):
@@ -412,14 +457,17 @@ def main() -> None:
             hf_hub_download(arguments.repo, "tasks.parquet", repo_type="dataset", revision=arguments.revision)
         )
     bindings = bindings_from_document(json.loads(StoragePath(arguments.bindings).read_text()))
+    exclusions = (
+        exclusions_from_document(json.loads(StoragePath(arguments.exclude).read_text())) if arguments.exclude else {}
+    )
     output = StoragePath(arguments.output)
     if output.is_local:
-        summary = repair_population(input_parquet, bindings, Path(arguments.output))
+        summary = repair_population(input_parquet, bindings, Path(arguments.output), exclusions)
         print(json.dumps(summary, indent=1))
         return
     with TemporaryDirectory(prefix="mimo-repair-") as temporary:
         staging = Path(temporary)
-        summary = repair_population(input_parquet, bindings, staging)
+        summary = repair_population(input_parquet, bindings, staging, exclusions)
         for name in ("tasks.parquet", "repair-ledger.json", "repair-summary.json"):
             destination = output / name
             if destination.exists():
