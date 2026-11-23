@@ -37,10 +37,11 @@ logger = logging.getLogger(__name__)
 PROBE_POSITIONS = (0, 1, 3, 7, 15, 31, 63)
 DECODE_POSITIONS = (*PROBE_POSITIONS, 127, 255)
 AUTOREGRESSIVE_ARTIFACT = "autoregressive.json"
-SAMPLING_STANDARD_ERRORS = 3
+CALIBRATION_STANDARD_ERRORS = 3
 ROUTED_LAYERS = 48
 ROUTED_EXPERTS_PER_TOKEN = 8
-MAX_ROUTE_SLOT_NOISE = 0.05
+ROUTED_EXPERT_COUNT = 384
+MAX_ROUTE_CHOICE_NOISE = 0.05
 
 
 async def probe_inventory(base_url: str, requests: list[LoadRequest]) -> list[dict]:
@@ -117,7 +118,7 @@ async def prefix_scores(base_url: str, probes: list[dict], concurrency: int) -> 
 
 
 def score_difference(reference: dict[str, dict], candidate: dict[str, dict]) -> dict:
-    """Measure fixed-token logprob drift and top-one mismatch on identical prefixes."""
+    """Compare identical-prefix probabilities, expert choices, and ordered route diagnostics."""
     if reference.keys() != candidate.keys() or not reference:
         raise ValueError("Correctness score inventories differ or are empty")
     errors = [abs(row["logprob"] - candidate[key]["logprob"]) for key, row in reference.items()]
@@ -127,7 +128,22 @@ def score_difference(reference: dict[str, dict], candidate: dict[str, dict]) -> 
     expected_shape = (len(errors), ROUTED_LAYERS, ROUTED_EXPERTS_PER_TOKEN)
     if reference_routes.shape != expected_shape or candidate_routes.shape != expected_shape:
         raise ValueError("Mochi correctness scores must retain all 48 layers and eight expert slots")
+    for routes in (reference_routes, candidate_routes):
+        if (
+            not np.issubdtype(routes.dtype, np.integer)
+            or routes.min() < 0
+            or routes.max() >= ROUTED_EXPERT_COUNT
+            or np.any(np.diff(np.sort(routes, axis=-1), axis=-1) == 0)
+        ):
+            raise ValueError("Mochi routes must contain eight distinct valid expert IDs per layer")
     route_mismatch = reference_routes != candidate_routes
+    # Replay gathers weights by expert ID, so slot permutations preserve the chosen set.
+    missing_choices = ~(reference_routes[..., :, None] == candidate_routes[..., None, :]).any(axis=-1)
+    choices_by_prompt: dict[str, list[float]] = {}
+    for key, rate in zip(reference, missing_choices.mean(axis=(1, 2)), strict=True):
+        # Both @position and @0/seed/temperature/decode suffixes follow the request identity.
+        choices_by_prompt.setdefault(key.split("@", 1)[0], []).append(float(rate))
+    choice_means = {key: mean(values) for key, values in choices_by_prompt.items()}
     return {
         "prefixes": len(errors),
         "max_absolute_logprob_error": max(errors),
@@ -141,7 +157,20 @@ def score_difference(reference: dict[str, dict], candidate: dict[str, dict]) -> 
         ),
         "route_slot_mismatch_fraction": float(route_mismatch.mean()),
         "route_slot_mismatch_by_layer": route_mismatch.mean(axis=(0, 2)).tolist(),
+        "route_choice_mismatch_fraction": float(missing_choices.mean()),
+        "route_choice_mismatch_by_prompt": choice_means,
+        "mean_prompt_route_choice_mismatch_fraction": mean(choice_means.values()),
     }
+
+
+def route_choice_bound(difference: dict) -> float:
+    """Calibrate expert-choice variation using independent prompts as the sampling unit."""
+    values = list(difference["route_choice_mismatch_by_prompt"].values())
+    if len(values) < 2:
+        raise ValueError("Route-choice calibration requires at least two independent prompt groups")
+    standard_error = math.sqrt(variance(values) / len(values))
+    one_slot = 1 / (difference["prefixes"] * ROUTED_LAYERS * ROUTED_EXPERTS_PER_TOKEN)
+    return mean(values) + CALIBRATION_STANDARD_ERRORS * standard_error + one_slot
 
 
 async def decode_probes(base_url: str, probes: list[dict], seeds: list[int]) -> dict:
@@ -241,10 +270,10 @@ def sampling_calibration(grouped: dict[str, list[dict]]) -> dict:
         standard_error = math.sqrt(sum(2 * variance(group) / len(group) for group in values)) / len(values)
         calibrated[metric] = {
             "reference": mean(mean(group) for group in values),
-            "maximum_mean_shift": SAMPLING_STANDARD_ERRORS * standard_error,
+            "maximum_mean_shift": CALIBRATION_STANDARD_ERRORS * standard_error,
             "standard_error": standard_error,
         }
-    return {"by_prompt": grouped, "metrics": calibrated, "standard_errors": SAMPLING_STANDARD_ERRORS}
+    return {"by_prompt": grouped, "metrics": calibrated, "standard_errors": CALIBRATION_STANDARD_ERRORS}
 
 
 def sampling_difference(grouped: dict[str, list[dict]], calibration: dict) -> dict:
@@ -347,51 +376,63 @@ async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> No
         reference = await prefix_scores(environment.server_url, probes, 1)
         repeat = await prefix_scores(environment.server_url, probes, 16)
         noise = score_difference(reference, repeat)
+        control = await prefix_scores(environment.server_url, probes, 16)
+        control_noise = score_difference(reference, control)
         autoregressive = await decode_probes(environment.server_url, probes, spec["correctness_seeds"])
         write_json(spec["output"], f"{arm['name']}/{AUTOREGRESSIVE_ARTIFACT}", autoregressive)
         teacher = await prefix_scores(environment.server_url, list(autoregressive["scores"].values()), 16)
         decode_noise = score_difference(autoregressive["scores"], teacher)
+        teacher_control = await prefix_scores(environment.server_url, list(autoregressive["scores"].values()), 16)
+        decode_control_noise = score_difference(autoregressive["scores"], teacher_control)
         # Accepted design: predeclare the numerical bound from baseline repeats,
         # before observing any candidate scores.
         calibration = {
             "probes": probes,
             "reference": reference,
+            "repeat": repeat,
+            "control": control,
             "noise": noise,
-            "max_logprob_error": max(1e-4, 2 * noise["max_absolute_logprob_error"]),
-            "max_top1_mismatch_fraction": noise["top1_mismatch_fraction"] + 1 / len(probes),
-            "max_route_slot_mismatch_fraction": (
-                2 * noise["route_slot_mismatch_fraction"] + 1 / (len(probes) * ROUTED_LAYERS * ROUTED_EXPERTS_PER_TOKEN)
-            ),
+            "control_noise": control_noise,
+            "fixed_bounds": {
+                "max_absolute_logprob_error": max(1e-4, 2 * noise["max_absolute_logprob_error"]),
+                "top1_mismatch_fraction": noise["top1_mismatch_fraction"] + 1 / len(probes),
+                "mean_prompt_route_choice_mismatch_fraction": route_choice_bound(noise),
+            },
+            "decode_teacher": teacher,
+            "decode_teacher_control": teacher_control,
             "decode_noise": decode_noise,
+            "decode_control_noise": decode_control_noise,
             "decode_bounds": {
                 "max_absolute_logprob_error": max(1e-4, 2 * decode_noise["max_absolute_logprob_error"]),
                 "max_top1_logprob_error": max(1e-4, 2 * decode_noise["max_top1_logprob_error"]),
                 "top1_mismatch_fraction": decode_noise["top1_mismatch_fraction"] + 1 / len(teacher),
-                "route_slot_mismatch_fraction": (
-                    2 * decode_noise["route_slot_mismatch_fraction"]
-                    + 1 / (len(teacher) * ROUTED_LAYERS * ROUTED_EXPERTS_PER_TOKEN)
-                ),
+                "mean_prompt_route_choice_mismatch_fraction": route_choice_bound(decode_noise),
             },
         }
         calibration["sampling"] = sampling_calibration(sampling_by_prompt(autoregressive["trajectories"]))
-        write_json(spec["output"], "correctness-calibration.json", calibration)
-        if (
+        calibration["sensitivity_passed"] = (
             max(
-                calibration["max_route_slot_mismatch_fraction"],
-                calibration["decode_bounds"]["route_slot_mismatch_fraction"],
+                calibration["fixed_bounds"]["mean_prompt_route_choice_mismatch_fraction"],
+                calibration["decode_bounds"]["mean_prompt_route_choice_mismatch_fraction"],
             )
-            > MAX_ROUTE_SLOT_NOISE
-        ):
-            raise ValueError("Target-only expert-slot noise exceeds the five-percent sensitivity budget")
+            <= MAX_ROUTE_CHOICE_NOISE
+        )
+        calibration["negative_controls_passed"] = all(
+            difference[name] <= bound
+            for difference, bounds in (
+                (control_noise, calibration["fixed_bounds"]),
+                (decode_control_noise, calibration["decode_bounds"]),
+            )
+            for name, bound in bounds.items()
+        )
+        write_json(spec["output"], "correctness-calibration.json", calibration)
+        if not calibration["sensitivity_passed"] or not calibration["negative_controls_passed"]:
+            raise ValueError("Target-only expert-choice sensitivity or independent negative control failed")
         return
     calibration = json.loads((root / "correctness-calibration.json").read_text())
     scores = await prefix_scores(environment.server_url, calibration["probes"], 16)
     difference = score_difference(calibration["reference"], scores)
-    passed = (
-        difference["max_absolute_logprob_error"] <= calibration["max_logprob_error"]
-        and difference["top1_mismatch_fraction"] <= calibration["max_top1_mismatch_fraction"]
-        and difference["route_slot_mismatch_fraction"] <= calibration["max_route_slot_mismatch_fraction"]
-    )
+    passed = all(difference[name] <= bound for name, bound in calibration["fixed_bounds"].items())
     write_json(
         spec["output"], f"{arm['name']}/correctness.json", {"passed": passed, "difference": difference, "scores": scores}
     )
