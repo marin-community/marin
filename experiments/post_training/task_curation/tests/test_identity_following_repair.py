@@ -6,16 +6,19 @@
 import hashlib
 import io
 import json
+import logging
 import tarfile
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from marin.inference.iris import RemoteInferenceStartupError
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow, Source
 from taskcompendium.runtime.resources import resource_bytes
 
+import experiments.post_training.task_curation.identity_following_qa as identity_qa
 from experiments.post_training.task_curation.datasets.tasktrove.identity_following import (
     convert_repaired_identity,
     identity_criteria,
@@ -29,6 +32,7 @@ from experiments.post_training.task_curation.identity_following_qa import (
     judge_spec,
     language_pin,
     load_repaired_tasks,
+    redrive_serving,
     stratified_panel,
 )
 from experiments.post_training.task_curation.identity_following_repair import (
@@ -352,6 +356,50 @@ def test_language_pin_judge_spec_and_controls(tmp_path: Path) -> None:
     assert "Stanford" in submissions["positive"] and "Open Athena" in submissions["positive"]
     assert "NVIDIA" not in submissions["positive"]
     assert "NVIDIA" in submissions["nvidia"] and "Stanford" not in submissions["nvidia"]
+
+
+def test_redrive_serving_retries_startup_failures(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.CRITICAL)  # keep the retry log line out of the test output
+
+    class FakeConnection:
+        def __init__(self, fail_enter: int):
+            self.fail_enter = fail_enter
+            self.entered = 0
+            self.exited = 0
+
+        def __enter__(self):
+            self.entered += 1
+            if self.entered <= self.fail_enter:
+                raise RemoteInferenceStartupError("broker died", jobs=())
+            return "connection"
+
+        def __exit__(self, *exc):
+            self.exited += 1
+            return False
+
+    original_wait = identity_qa.SERVING_STARTUP_RETRY_WAIT_SECONDS
+    identity_qa.SERVING_STARTUP_RETRY_WAIT_SECONDS = 0.0
+    try:
+        connection = FakeConnection(fail_enter=2)
+        with redrive_serving(connection.connect if False else (lambda: connection), attempts=4) as value:
+            assert value == "connection"
+        assert connection.entered == 3
+        assert connection.exited == 1
+
+        exhausted = FakeConnection(fail_enter=99)
+        with pytest.raises(RemoteInferenceStartupError):
+            with redrive_serving(lambda: exhausted, attempts=4):
+                pass
+        assert exhausted.entered == 4
+
+        # A body exception propagates and still exits the connection exactly once.
+        body = FakeConnection(fail_enter=0)
+        with pytest.raises(RuntimeError, match="body"):
+            with redrive_serving(lambda: body, attempts=4):
+                raise RuntimeError("body")
+        assert body.entered == 1 and body.exited == 1
+    finally:
+        identity_qa.SERVING_STARTUP_RETRY_WAIT_SECONDS = original_wait
 
 
 def test_stratified_panel_is_seed_stable(tmp_path: Path) -> None:

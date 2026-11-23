@@ -14,6 +14,9 @@ import argparse
 import json
 import logging
 import random
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -22,6 +25,7 @@ import pyarrow.parquet as pq
 from fray.types import ANY_REGION
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.inference.iris import RemoteInferenceStartupError
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec
@@ -90,10 +94,46 @@ IDENTITY_LANGUAGES = {
 SAMPLE_SEED = 0
 CONTROLS_PER_LANGUAGE = 3
 SAMPLE_PANEL_PER_LANGUAGE = 12
+SERVING_STARTUP_ATTEMPTS = 4
+SERVING_STARTUP_RETRY_WAIT_SECONDS = 180.0
 MEDIUM_MODEL_CONFIG = Path(
     "experiments/post_training/task_curation/judge_model_configs/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml"
 )
 MEDIUM_CONTEXT_WINDOW_TOKENS = 262_144
+
+
+@contextmanager
+def redrive_serving(connect: Any, *, attempts: int = SERVING_STARTUP_ATTEMPTS) -> Iterator[Any]:
+    """Enter a serving connection, re-driving broker startup failures.
+
+    The controls3 run lost its broker actor between readiness registration and the parent's
+    readiness poll (abrupt process death on the shared peer, no traceback), so the job failed on a
+    serving-infrastructure flake. Infrastructure failures are re-driven and never count as task
+    failures; this bounds the re-drive so a dead peer cannot spin forever.
+    """
+    for attempt in range(1, attempts + 1):
+        connection_cm = connect()
+        try:
+            connection = connection_cm.__enter__()
+        except RemoteInferenceStartupError as error:
+            if attempt == attempts:
+                raise
+            logger.warning(
+                "Serving startup attempt %d/%d failed (%s); re-driving in %.0fs",
+                attempt,
+                attempts,
+                error,
+                SERVING_STARTUP_RETRY_WAIT_SECONDS,
+            )
+            time.sleep(SERVING_STARTUP_RETRY_WAIT_SECONDS)
+            continue
+        try:
+            yield connection
+            connection_cm.__exit__(None, None, None)
+            return
+        except BaseException as error:
+            connection_cm.__exit__(type(error), error, error.__traceback__)
+            raise
 
 
 def load_repaired_tasks(parquet_uri: str) -> list[tuple[TaskSpec, dict]]:
@@ -160,7 +200,7 @@ def run_controls(parquet_uri: str, output: str) -> dict[str, Any]:
         env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-02a"},
     )
     results: list[dict[str, Any]] = []
-    with endpoint.connect() as connection:
+    with redrive_serving(endpoint.connect) as connection:
         for task, _runtime in panel:
             language = language_pin(task)
             spec = judge_spec(task)
@@ -207,7 +247,7 @@ def run_sample(parquet_uri: str, output: str, review_cache: str) -> dict[str, An
     batches = [panel[index : index + REVIEW_BATCH_SIZE] for index in range(0, len(panel), REVIEW_BATCH_SIZE)]
     reviews: list[ReviewRecord] = []
     receipts: list[str] = []
-    with spec.endpoint.serve() as session:
+    with redrive_serving(spec.endpoint.serve) as session:
         reviewer = ReadyChatReviewer(
             session,
             spec,
@@ -272,6 +312,26 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     configure_coreweave_s3()
+    if not args.run:
+        tasks = load_repaired_tasks(args.parquet)
+        languages = sorted({language_pin(task) for task, _runtime in tasks})
+        print(
+            json.dumps(
+                {
+                    "mode": args.mode,
+                    "run": False,
+                    "population_tasks": len(tasks),
+                    "languages": languages,
+                    "controls_panel": len(languages) * CONTROLS_PER_LANGUAGE,
+                    "sample_panel": len(languages) * SAMPLE_PANEL_PER_LANGUAGE,
+                    "controls_grader": "MiniMaxAI/MiniMax-M3-MXFP8 (pinned MEDIUM labels contract)",
+                    "sample_reviewer": "pinned V4 GLM-5.3 full-qc reviewer",
+                },
+                indent=1,
+                sort_keys=True,
+            )
+        )
+        return
     if args.mode in ("controls", "both"):
         receipt = run_controls(args.parquet, f"{args.output_root}/controls.json")
         logger.info("Controls summary: %s", json.dumps(receipt["summary"], sort_keys=True))
