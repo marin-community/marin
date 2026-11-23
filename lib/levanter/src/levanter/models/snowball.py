@@ -1044,6 +1044,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     ) -> NamedArray:
         return self._activations(input_ids, return_routes=False, attn_mask=attn_mask)[0]
 
+    def activations_with_replay(
+        self, input_ids: NamedArray, attn_mask: LmHeadAttentionMask, route_replay: SnowballRouteReplay
+    ) -> NamedArray:
+        """Compute hidden states with prepared expert IDs and live combine weights."""
+        return self._activations(input_ids, False, attn_mask, route_replay=route_replay)[0]
+
     def activations_with_routes(
         self, input_ids: NamedArray, attn_mask: LmHeadAttentionMask | NamedArray | None = None
     ) -> tuple[NamedArray, Array]:

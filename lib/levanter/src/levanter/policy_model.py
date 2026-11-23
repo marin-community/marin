@@ -16,7 +16,15 @@ from levanter.layers.attention import AttentionMask
 from levanter.metrics import Metric
 from levanter.models.lm_model import LmHeadModel, split_activations
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
+from levanter.models.snowball import SnowballLMHeadModel, SnowballRouteReplay
 from levanter.utils.tree_utils import inference_mode
+
+
+class PolicyRouteReplay(eqx.Module):
+    """Prepared expert IDs and their validity along the batch’s token axes."""
+
+    expert_ids: NamedArray
+    token_valid: NamedArray
 
 
 class PolicyBatch(eqx.Module):
@@ -41,6 +49,19 @@ class PolicyBatch(eqx.Module):
     old_logprobs: NamedArray
     reference_logprobs: NamedArray | None
     segment_ids: NamedArray | None = None
+    route_replay: PolicyRouteReplay | None = None
+
+
+def prepare_policy_route_replay(
+    model: SnowballLMHeadModel, tokens: NamedArray, expert_ids: NamedArray, token_valid: NamedArray
+) -> PolicyRouteReplay:
+    """Validate aligned Snowball routes before packing or learner JIT execution."""
+    Batch, Position = tokens.resolve_axis(("batch", "position"))
+    Layer, TopK = expert_ids.resolve_axis(("layer", "top_k"))
+    valid = token_valid.rearrange((Batch, Position))
+    ids = expert_ids.rearrange((Layer, Batch, Position, TopK))
+    prepared = model.prepare_route_replay(ids.array, valid)
+    return PolicyRouteReplay(hax.named(prepared.expert_ids, ids.axes), prepared.token_valid)
 
 
 def pack_policy_batch(
@@ -80,6 +101,15 @@ def pack_policy_batch(
     tokens = np.full((rows, sequence_length), pad_token_id, dtype=np.int32)
     segments = np.full((rows, sequence_length), -1, dtype=np.int32)
     positions = np.zeros((rows, sequence_length), dtype=np.int32)
+    source_replay = example.route_replay
+    if source_replay is not None:
+        source_experts = np.asarray(source_replay.expert_ids.rearrange(("batch", "position", "layer", "top_k")).array)
+        source_route_valid = np.asarray(source_replay.token_valid.rearrange(("batch", "position")).array)
+        if np.any(source_route_valid & ~valid):
+            raise ValueError("Expert routes must be within attended token positions")
+        packed_experts = np.empty((rows, sequence_length, *source_experts.shape[2:]), dtype=np.int32)
+        packed_experts[...] = np.arange(source_experts.shape[-1], dtype=np.int32)
+        packed_route_valid = np.zeros((rows, sequence_length), dtype=np.bool_)
     objective = {
         name: np.zeros((rows, sequence_length - 1), dtype=value.dtype) for name, value in source_objective.items()
     }
@@ -87,6 +117,8 @@ def pack_policy_batch(
     if response_start < 1:
         raise ValueError("Each response needs a preceding prompt token")
     response_mask = source_objective["response_mask"]
+    if source_replay is not None and np.any(response_mask > source_route_valid[:, response_start - 1 : -1]):
+        raise ValueError("Every response predictor must have a captured expert route")
     if np.any(response_mask > valid[:, response_start:]) or np.any(response_mask > valid[:, response_start - 1 : -1]):
         raise ValueError("Each response target and its predecessor must be attended")
     if np.any(
@@ -101,6 +133,9 @@ def pack_policy_batch(
             tokens[row, offset : offset + count] = source["tokens"][document, indices]
             segments[row, offset : offset + count] = document
             positions[row, offset : offset + count] = source["position_ids"][document, indices]
+            if source_replay is not None:
+                packed_experts[row, offset : offset + count] = source_experts[document, indices]
+                packed_route_valid[row, offset : offset + count] = source_route_valid[document, indices]
             for compact_target, target in enumerate(indices):
                 if target < response_start or compact_target == 0 or not valid[document, target - 1]:
                     continue
@@ -118,6 +153,12 @@ def pack_policy_batch(
     def response(name: str) -> NamedArray:
         return hax.named(jnp.asarray(objective[name]), (Batch, Response))
 
+    packed_replay = None
+    if source_replay is not None:
+        packed_replay = PolicyRouteReplay(
+            hax.named(jnp.asarray(packed_experts), (Batch, Position, "layer", "top_k")),
+            hax.named(jnp.asarray(packed_route_valid), (Batch, Position)),
+        )
     return PolicyBatch(
         tokens=hax.named(jnp.asarray(tokens), (Batch, Position)),
         attention_mask=hax.named(jnp.asarray((segments >= 0).astype(np.int32)), (Batch, Position)),
@@ -129,6 +170,7 @@ def pack_policy_batch(
         old_logprobs=response("old_logprobs"),
         reference_logprobs=response("reference_logprobs") if example.reference_logprobs is not None else None,
         segment_ids=hax.named(jnp.asarray(segments), (Batch, Position)),
+        route_replay=packed_replay,
     )
 
 
@@ -151,12 +193,21 @@ def response_logprobs(
         raise ValueError("Every response needs at least one preceding prompt token")
     if block_size < 1:
         raise ValueError("block_size must be positive")
-    # TODO: Before training MoE policies from rollouts, replay their router decisions
-    # during scoring and training.
     model = inference_mode(model, True)
     segments = batch.segment_ids if batch.segment_ids is not None else batch.attention_mask.astype(jnp.int32)
     mask = AttentionMask.causal().with_segment_ids(segments)
-    activations, _ = split_activations(model.activations(batch.tokens, mask, pos_ids=batch.position_ids, key=key))
+    replay = batch.route_replay
+    if replay is None:
+        activations, _ = split_activations(model.activations(batch.tokens, mask, pos_ids=batch.position_ids, key=key))
+    else:
+        if not isinstance(model, SnowballLMHeadModel):
+            raise ValueError("Prepared expert route replay requires a Snowball learner")
+        axes = tuple(axis.name for axis in batch.tokens.axes)
+        routes = SnowballRouteReplay(
+            replay.expert_ids.rearrange(("layer", *axes, "top_k")).array,
+            replay.token_valid.rearrange(axes),
+        )
+        activations = model.activations_with_replay(batch.tokens, mask, routes)
     # A token at i is scored by the activation at i-1. Slice before the
     # vocabulary projection so prompt positions do not incur that cost.
     start = Position.size - Response.size

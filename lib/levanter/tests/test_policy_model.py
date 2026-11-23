@@ -11,10 +11,19 @@ import numpy as np
 import pytest
 
 from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
-from levanter.policy_model import PolicyBatch, policy_model_loss, pack_policy_batch, response_logprobs
+from levanter.policy_model import (
+    PolicyBatch,
+    pack_policy_batch,
+    policy_model_loss,
+    prepare_policy_route_replay,
+    response_logprobs,
+)
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionBackend
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import QwenConfig
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.testing.devices import use_cpu_devices
 from levanter.testing.policy_reference import full_softmax_response_logprobs
 
 
@@ -192,3 +201,53 @@ def test_packed_policy_value_and_gradients_match_unpacked_full_softmax(model_bat
     for observed, reference in zip(jax.tree.leaves(gradient), jax.tree.leaves(expected_gradient), strict=True):
         np.testing.assert_allclose(observed, reference, atol=1e-6, rtol=1e-5)
     assert max(float(jnp.max(jnp.abs(g))) for g in jax.tree.leaves(gradient)) > 1e-3
+
+
+def test_packed_snowball_scores_use_the_same_captured_expert_ids():
+    cfg = SnowballConfig(
+        vocab_size=32,
+        hidden_dim=16,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        head_dim=8,
+        max_seq_len=16,
+        initializer_std=0.12,
+        sliding_window=4,
+        attention_implementation="reference",
+    )
+    B, S, R = hax.Axis("batch", 2), hax.Axis("position", 8), hax.Axis("response", 2)
+    tokens = hax.named(jnp.asarray([[0, 1, 2, 3, 4, 5, 6, 7], [0, 0, 0, 2, 1, 7, 9, 12]]), (B, S))
+    attended = hax.named(jnp.asarray([[0, 1, 1, 1, 1, 1, 1, 1], [0, 0, 0, 1, 1, 1, 1, 1]]), (B, S))
+    route_valid = attended.astype(bool).at[S, -1].set(False)
+    # Supply recorded routes that don't follow the live router. The final targets have no predictor forward.
+    forced = hax.full((B, S, hax.Axis("layer", 2), hax.Axis("top_k", 1)), 3, dtype=jnp.int32)
+    active = hax.ones((B, R), dtype=jnp.float32)
+    with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
+        model = SnowballLMHeadModel.init(hax.Axis("vocab", 32), cfg, key=jax.random.key(15))
+        routes = prepare_policy_route_replay(model, tokens, forced, route_valid)
+        batch = PolicyBatch(
+            tokens=tokens,
+            attention_mask=attended,
+            position_ids=hax.maximum(hax.cumsum(attended, S) - 1, 0),
+            response_mask=active,
+            advantages=active,
+            policy_weights=active / 4,
+            kl_weights=active / 4,
+            old_logprobs=hax.zeros((B, R)),
+            reference_logprobs=None,
+            route_replay=routes,
+        )
+        packed = pack_policy_batch(batch, sequence_length=13, pad_token_id=0)
+        score = eqx.filter_jit(response_logprobs)
+        original = np.asarray(score(model, batch, block_size=8).array)
+        natural = np.asarray(score(model, dataclasses.replace(batch, route_replay=None), block_size=8).array)
+        packed_scores = np.asarray(score(model, packed, block_size=8).array)
+        assert not np.allclose(natural, original, atol=1e-5, rtol=0)
+        np.testing.assert_allclose(
+            packed_scores[np.asarray(packed.response_mask.array, dtype=bool)], original.ravel(), atol=1e-5, rtol=0
+        )
