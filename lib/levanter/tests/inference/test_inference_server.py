@@ -243,7 +243,14 @@ def test_chat_stream_matches_complete_text_for_each_choice(test_client):
     complete = client.post("/v1/chat/completions", json=payload)
     assert complete.status_code == 200, complete.text
     streamed = client.post(
-        "/v1/chat/completions", json={**payload, "stream": True, "stream_options": {"include_usage": True}}
+        "/v1/chat/completions",
+        json={
+            **payload,
+            "max_tokens": 2,
+            "max_completion_tokens": payload["max_tokens"],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        },
     )
     assert streamed.status_code == 200, streamed.text
     events = [line.removeprefix("data: ") for line in streamed.text.splitlines() if line.startswith("data: ")]
@@ -251,6 +258,7 @@ def test_chat_stream_matches_complete_text_for_each_choice(test_client):
     chunks = [json.loads(event) for event in events[:-1]]
     assert chunks[-1]["choices"] == []
     assert chunks[-1]["usage"] == complete.json()["usage"]
+    assert chunks[-1]["usage"]["completion_tokens"] == 10
     for expected in complete.json()["choices"]:
         deltas = [row for chunk in chunks for row in chunk["choices"] if row["index"] == expected["index"]]
         assert "".join(row["delta"].get("content") or "" for row in deltas) == expected["message"]["content"]

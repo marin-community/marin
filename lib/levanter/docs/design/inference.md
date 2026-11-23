@@ -56,7 +56,7 @@ The inference server is built around a `GenerationService` that encapsulates:
 
 ### API Design
 - **OpenAI Compatibility**: Follows OpenAI API v1 specification for `/v1/completions` and `/v1/chat/completions`
-- **Request Schema**: Supports `prompt`, `max_tokens`, `temperature`, `stop`, `seed` parameters
+- **Request Schema**: Supports `prompt`, `max_tokens`, `temperature`, `stop`, and `seed`. In chat requests, `max_completion_tokens` takes precedence over `max_tokens`.
 - **Response Schema**: Returns structured responses with `choices`, `usage`, and metadata
 - **Error Handling**: Proper HTTP status codes and error messages
 
