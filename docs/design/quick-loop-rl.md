@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 5:42 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 6:12 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -1839,11 +1839,17 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   replacement started a fresh five-host child. All 40 ranks passed NCCL,
   and the child verified policy 0 in 113.1 seconds with eight exact
   receipts. It scored all 100 baseline tasks at a mean of 0.21 and
-  admitted 32 groups of four rollouts at zero staleness. The first update
-  still needs the validation save and exact restore.
+  admitted 32 groups of four rollouts at zero staleness. All four
+  learner hosts committed the 749.66 GiB validation checkpoint in
+  403 seconds. Fresh processes restored the model and optimizer state
+  exactly before publishing policy 1. The same processes applied update
+  2, published policy 2, and scored all 100 final tasks at a mean of
+  0.20. All 24 receiver receipts had zero byte mismatches. The regular
+  step-2 checkpoint is in progress.
   [Fresh held vLLM child][iris-held-vllm-retry]
   [Validation-deadline vLLM coordinator][iris-held-vllm-validation-timeout]
-  · [Automatic GPU replacement][iris-held-vllm-validation-replacement]
+  · [Automatic GPU replacement][iris-held-vllm-validation-replacement] ·
+  [Prior rendezvous evidence in Filer][held-vllm-rendezvous-proof]
 
   The native coordinator lost its first slot before the GPU group was
   admitted and its second during regional initializer streaming. Its
@@ -1929,9 +1935,14 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   timed requests with the same policy and per-request sampling seed.
   The observed batch-shape sensitivity leaves the separate raw PPO score
   gate open.
+  The matched `2026.11.22.3` native arm started after vLLM published
+  policy 1. It uses the same learner commit, scoped checkpoint deadline,
+  initializer and task selections. The new native child passed NCCL on
+  all 40 H100s.
   [Original calibration][iris-native-serving-eval-first] ·
   [Revised calibration][iris-native-serving-eval-retry] ·
-  [Verified calibration archive][native-serving-eval-archive]
+  [Verified calibration archive][native-serving-eval-archive] ·
+  [Matched native child][iris-held-native-validation-retry]
 
   Both plans use a 24,576-token serving limit and a 16,896-token request
   limit. Native uses the cache geometry from the 67B live-swap run. Use the same learner, selection and fixed panel to
@@ -2043,7 +2054,9 @@ arms. [Prior timing comparison][timing]
 [iris-held-vllm-validation-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-aabb141-in-424011b4-2026.11.22.3-coordinator-c303053f%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-aabb141-in-424011b4-2026.11.22.3-ab5ce0f492e1
 [iris-native-serving-eval-first]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-serving-67b-eval-20261123a
 [iris-native-serving-eval-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-serving-67b-eval-20261123b
-[native-serving-eval-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-serving-67b-eval-20261123b%2F0%2F15f62cbc6c076387%2Foutputs.tar.zst
+[native-serving-eval-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-serving-67b-eval-20261123b%2Foriginal-task-outputs.tar.zst
+[held-vllm-rendezvous-proof]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-vllm-a08d6abd1b30%2Ftensorstore-rendezvous-terminal-proof.json
+[iris-held-native-validation-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-coordinator-1f166fa9%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-a9875414cfa5
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
 [iris-native-head-comparison]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused
 [iris-held-native-repaired]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-ac90c03-in-424011b4-2026.11.22.1-coordinator-f7d86071
