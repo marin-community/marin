@@ -3,7 +3,8 @@ import json
 import pytest
 
 from harbor.models.trial.config import AgentConfig, TrialConfig
-from harbor.models.job.config import JobConfig, RetryConfig
+from harbor.models.job.config import JobConfig
+from rigging.task_errors import RetrySettings
 from harbor.models.job.lock import JobLock, TaskLock, TrialLock
 from harbor.models.trial.config import EnvironmentConfig, VerifierConfig
 
@@ -98,7 +99,7 @@ class TestAgentConfigEnvSerialization:
         config_json = JobConfig(agents=[agent]).model_dump_json()
         lock_json = JobLock(
             n_concurrent_trials=1,
-            retry=RetryConfig(),
+            retry=RetrySettings(),
             trials=[
                 TrialLock(
                     task=TaskLock(
