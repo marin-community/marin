@@ -226,7 +226,9 @@ class SnowballConfig(HFCompatConfig):
     qk_mult: float = _DEFAULT_QK_MULT
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
-    projection_implementation: Literal["native", "fixed_schedule"] = "native"
+    projection_implementation: Literal["native", "fixed_schedule"] = dataclasses.field(
+        default="native", metadata={"fingerprint_omit_default": True}
+    )
     """Use fixed per-row dense projections in both learner and serving paths on TPUv4."""
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
