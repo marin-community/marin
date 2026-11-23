@@ -2243,6 +2243,18 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   topology alongside the rollout and learner timing.
   [Kueue v0.18.3 topology scheduling][kueue-preferred-topology]
 
+  The accepted vLLM control's archived pod placement joins to four
+  learner hosts on one leafgroup and its serving host on another leafgroup
+  in the same superpod. All five current Node objects and their recorded
+  provider topology label updates predate the run. This is a retrospective
+  join of the original pod placement to current labels. The earlier
+  native attempt's live capture places all five of its hosts on one
+  leafgroup in the same superpod. Record the learner and serving domains
+  separately on the sealed run when interpreting update and publication
+  timings.
+  [Accepted vLLM attempt][iris-held-vllm-validation-replacement] ·
+  [Original native attempt][iris-held-native-matched-preempted]
+
   Regional telemetry recorded 32 group calls and 128 model waits in the
   first lease. Five group calls finished just after the 1,800-second model
   deadline and reported four projected tokens each. The buffer separately
