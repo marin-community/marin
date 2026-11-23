@@ -98,6 +98,21 @@ HANG = "hang"
 """A healthy stream that never finishes."""
 
 
+class Time:
+    """A clock that moves only when the client sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.waits: list[float] = []
+
+    def clock(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        self.waits.append(delay)
+        self.now += delay
+
+
 class LoopTime:
     """A fake clock that is also the running event loop's: ``sleep`` jumps both forward.
 
