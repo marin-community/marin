@@ -4,10 +4,12 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
-The branch includes the experimental shutdown observer, disabled by default.
-The Ray results below
-were measured at `f5e53f48b8`; the integrated observer adds a larger trace
-retention cap, which those GPU runs did not exercise.
+The full-model quick loop at `ab3e704c55` completed one finite update on all
+four native learner ranks, then failed the unchanged five-second process-exit
+check before checkpoint restore. Updated-policy publication, generation from
+that policy, and the matched 25-update comparison remain open. The integrated
+inference endpoints and benchmarks below have their own source and workload
+boundaries. The experimental shutdown observer is disabled by default.
 
 | Gate | Integrated path |
 | --- | --- |
@@ -272,6 +274,13 @@ backed up before cancellation, and the pod was removed. Neither deadline was
 relaxed. No actual GPU learner shutdown stack has been captured.
 [Trace-cap diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fproduction-shutdown-cap-python35-239f1d-20261123-1)
 
+The guardian now waits separately for debugger readiness and shutdown
+acknowledgment. A late readiness marker can no longer revive an expired phase.
+The 15-second outer debugger cap, ACK-relative sampling and cleanup deadlines,
+and native five-second exit requirement are unchanged. Sixteen portable tests
+pass, including arrivals and reads crossing a deadline. Actual Linux/LLDB
+capture with this repair remains unqualified.
+
 A one-H100 smoke at source `f5e53f48b8` exercised the genuine Ray
 `HostWorker` and public checkpoint roundtrip with the observer disabled. Its
 receipts record one finite update, a natural exit from the original native
@@ -317,8 +326,35 @@ platforms. Conflicting inherited compiler settings fail before process startup.
 The default retains the existing environment behavior. The separate
 `--max-retries-preemption 0` option bounds the coordinator, GPU gang and nested
 materialized jobs; leaving it unset preserves their existing retry defaults.
-Local tests cover these paths and exact native checkpoint continuation. The
-next full-model run with these controls remains unsubmitted.
+Local tests cover these paths and exact native checkpoint continuation.
+
+Full-model run `2026.11.23.1` tested source `ab3e704c55` on 40 H100s: 32 for
+the native learner and eight for the existing vLLM rollout group. It used the
+deterministic compiler profile with the observer disabled. Actual accepted
+requests were BATCH with zero failure and preemption retries. The coordinator
+and GPU bundles matched all 4,639 frozen source entries. The resolved recipe
+had no unexpected differences across all 693 leaves of the resolved launch configuration; selection,
+initializer, RLOO-N, graders, rollout engines and evaluation were preserved.
+
+Durable initial and step-one proofs cover every native rank. Model and Adam
+fingerprints changed, all state components were finite, and their schemas and
+layouts were retained. The checkpoint writer reported 749.66 GiB; the fetched
+321-byte metadata object records temporary step 1 / policy version 1. Its array
+payloads were not downloaded or independently decoded. The original exception
+shows shutdown acknowledgment followed by the unchanged five-second natural
+exit timeout. The four original worker logs record all seven cleanup phases
+returning, acknowledgment and entry into Python finalization. Restore never
+started. The deterministic profile therefore did
+not fix the full-model shutdown failure.
+
+The job is terminal with one failure and no preemptions. All five GPU pods were
+verified absent; the failed coordinator CPU pod remains retained. Canonical
+output archives were unavailable: root and inference-head attempts advertised
+`EMPTY`, and the four coscheduling-failed native hosts advertised no archive.
+The evidence above comes from bounded, revision-checked durable debug objects
+and the original exceptions. No real learner C++ shutdown stack was captured.
+A further full-model run needs that diagnostic evidence before another attempt.
+[Full-model deterministic run](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.23.1-coordinator-e253e06c)
 
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and

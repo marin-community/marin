@@ -5,7 +5,8 @@ November 23, 2026 (PST).
 For the implementation inventory and remaining transfer, protocol, router-replay
 and zero-KL work, see [inference integration status](../../../INFERENCE_HANDOFF.md).
 
-The latest completed full-model run passed initial and step-one finite-state
+Full-model run `2026.11.23.1` from `ab3e704c55`, with the deterministic
+compiler profile and observer disabled, passed initial and step-one finite-state
 checks on all four native learners; model and Adam fingerprints changed and step-1/version-1
 checkpoint metadata was committed. It failed again at the five-second natural
 process-exit check. Fresh-process continuation, updated-weight publication and
@@ -23,14 +24,32 @@ profile. They do not qualify full-model continuation or erase the failed
 baseline-profile comparisons. Numerical tolerances and the five-second
 post-ACK exit limit remain unchanged.
 
-The next full-model smoke opts into that profile through
-`--deterministic-gpu-ops`, which configures each native process directly.
-Original and restored runtime identities record their actual compiler flags
-and selected platforms. `--max-retries-preemption 0` bounds the coordinator,
-GPU gang and nested materialized jobs without changing the defaults for other
-runs. The experimental rank-zero shutdown observer is optional and remains
-disabled for this smoke; its latest CPU trace-cap check did not qualify.
-[Strict paired checkpoint run](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-deterministic-paired-qualification-2026-11-23-1)
+The full-model run opted into that profile through `--deterministic-gpu-ops`,
+which configures each native process directly. Runtime identities report
+compiler flags and selected platforms. Actual BATCH requests had zero failure
+and preemption retries, using `--max-retries-preemption 0`. Both accepted
+bundles matched all 4,639 frozen source entries; all 693 leaves of the resolved launch
+configuration were compared with zero unexpected differences. The checkpoint writer reported
+749.66 GiB and the fetched small metadata object records temporary step 1 /
+policy version 1. Array payloads were not independently decoded. The original
+exception confirms acknowledged shutdown followed by the unchanged five-second
+exit timeout, before restore began. All four original worker logs confirm the
+actual deterministic flags, all seven cleanup phases returning, acknowledgment
+and entry into Python finalization. The deterministic profile did not fix the
+full-model shutdown failure.
+
+All five GPU pods were verified absent. The failed coordinator CPU pod remains
+retained. Root/head attempts advertised empty output archives, while the four
+coscheduling-failed native hosts advertised none. Bounded durable debug objects
+preserve all four ranks' finite-state proofs and the original exceptions.
+No actual learner C++ shutdown stack was captured; that diagnosis precedes a
+further full-model retry. The experimental rank-zero shutdown observer remains
+optional; its latest CPU trace-cap check did not qualify. The guardian now
+separates startup readiness from ACK waiting and rejects late markers before
+they can reset an expired phase. Sixteen portable regressions and required
+lint/type checks pass; actual Linux/LLDB capture with the repair remains open.
+[Full-model deterministic run](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.23.1-coordinator-e253e06c)
+· [Strict paired checkpoint run](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-deterministic-paired-qualification-2026-11-23-1)
 · [Genuine Ray lifecycle](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-hostworker-deterministic-20261123-2)
 
 Full-model BATCH diagnostic `2026.11.22.3` was submitted at 15:51 PST from
@@ -477,7 +496,7 @@ numerical tolerances. See [policy learning](../../../docs/references/policy-lear
 | --- | --- | --- |
 | Source and CPU | JAX/JAXLIB `0.11.0` data4/EP1 proof: exact state continuation, 78 publication payloads / 232,384 bytes; four initial and four restarted JAX children exited zero. Four-device Snowball regression: 35 passed, two skipped. | CPU checks do not qualify CUDA, H100, EP8, or the full online loop. |
 | Actual H100 | Full-model smoke `2026.11.22.1` reports four native process identities, H100 80GB devices, 67,078,882,816 installed parameters, data4/expert8, effective NumPy advisory disabled on Linux, and VMM at 0.90 with preallocation off. Standard JAX memory counters are unavailable for VMM; this is an observed policy, not a measured allocator cap. | Qualify memory management through publication and two finite parameter updates with the pinned CUDA kernels. |
-| Publication and resume | Full-model smoke `2026.11.22.1` passed initial model-version-zero byte comparisons on all eight receivers: 19,687,358,464 bytes each, zero mismatches, and nonempty generation stamped 1. Full-model restart failed at natural process exit. Tiny CPU and GPU transactions restored exact model, Adam, RNG, step, and averaging state; strict GPU post-update continuation failed. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh full-model learner processes restoring exact state, and a further finite update. |
+| Publication and resume | Full-model smoke `2026.11.22.1` passed initial model-version-zero byte comparisons on all eight receivers: 19,687,358,464 bytes each, zero mismatches, and nonempty generation stamped 1. Full-model restart failed at natural process exit. Tiny CPU and GPU transactions restored exact state. Baseline-profile GPU continuation failed; the deterministic eight-H100 fixture passed strict continued state and scores. Full-model continuation remains unqualified. | Publication of actual updated weights with zero byte mismatches, nonempty generation stamped 2 after model version 1, terminal checkpoint, fresh full-model learner processes restoring exact state, and a further finite update. |
 | Matched 25-update comparison | Both arms are configured; neither comparison has run. | Same inputs, optimizer, rollout/grading and evaluation exposure; measure training reward and fixed-panel evaluation separately, plus groups/sequences/tokens, wall time, and environment/tool failures, with terminal receipts and archives. |
 
 The earlier November 4 single-host, four-H100 toy-pipeline acceptance does not
@@ -886,8 +905,9 @@ uv run python -m experiments.post_training.inventory.train_quick_loop \
   --max-retries-preemption 0 --coordinator-route regional --run
 ```
 
-The versions above are reserved examples, not submitted runs. Confirm each
-output root is unused before submitting. Checkpoint restart validation is
+Comparison versions `2026.11.23.2` and `2026.11.23.3` are reserved examples
+and remain unsubmitted. Smoke version `2026.11.23.1` is terminal and must not be
+reused. Confirm each new output root is unused before submitting. Checkpoint restart validation is
 disabled for both comparison arms. Record the
 executed source/bundle pins and run links after submission, then inspect the
 acceptance receipts and output archives. Native terminal HF export remains
