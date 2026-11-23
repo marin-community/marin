@@ -37,6 +37,7 @@ from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
+from levanter.models.snowball import SnowballLMHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
@@ -431,8 +432,11 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-    logits_at_samples = _gather_logits(logits, sample_indices)
+    if isinstance(model, SnowballLMHeadModel):
+        logits_at_samples, cache = model.decode_for_sampling(tokens, gen_state.cache, binfo, pos_ids, sample_indices)
+    else:
+        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+        logits_at_samples = _gather_logits(logits, sample_indices)
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
     # jax.debug.print(
