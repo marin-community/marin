@@ -442,12 +442,7 @@ def test_daytona_failed_setup_cancels_activity_renewal(lifecycle_client, monkeyp
 
 
 @pytest.mark.parametrize("failure", ["error", "cancelled", "not_started"])
-def test_daytona_failed_creation_deletes_an_accepted_sandbox(monkeypatch, failure):
-    async def no_wait(delay):
-        pass
-
-    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
-
+def test_daytona_failed_creation_deletes_an_accepted_sandbox(no_retry_wait, failure):
     class AcceptedThenFailed(LocalDaytona):
         searches = 0
 
@@ -1034,6 +1029,7 @@ def no_retry_wait(monkeypatch):
 
     monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
     monkeypatch.setattr("shellbox.backends.daytona.transient.sleep", wait)
+    monkeypatch.setattr("shellbox.backends.daytona.images.sleep", wait)
 
 
 @pytest.mark.parametrize("error", [CONNECTION_RESET, BAD_GATEWAY], ids=["reset", "502"])
@@ -1657,7 +1653,7 @@ def test_ensure_image_awaits_an_image_another_rollout_submitted() -> None:
     [ConflictError("image name is taken", status_code=409), ProviderConnectionError("Connection reset by peer")],
     ids=["conflict", "lost"],
 )
-def test_ensure_image_reads_back_a_submission_that_did_not_answer(monkeypatch, failure) -> None:
+def test_ensure_image_reads_back_a_submission_that_did_not_answer(no_retry_wait, failure) -> None:
     class UnansweredImages(LocalImages):
         async def pull(self, reference, *, name, wait):
             # The name is registered (by another rollout, or by this request before its answer was lost).
@@ -1665,10 +1661,6 @@ def test_ensure_image_reads_back_a_submission_that_did_not_answer(monkeypatch, f
             self.add(name, reference, status="pending", pending_polls=1)
             raise failure
 
-    async def no_wait(delay):
-        pass
-
-    monkeypatch.setattr("shellbox.backends.daytona.images.sleep", no_wait)
     request = ImageRequest(RegistryImage("fixture:tag"))
     images = UnansweredImages()
 
@@ -1684,7 +1676,7 @@ def test_ensure_image_reads_back_a_submission_that_did_not_answer(monkeypatch, f
     [ProviderConnectionError("Connection reset by peer"), ClientTimeoutError("operation timed out")],
     ids=["reset", "timeout"],
 )
-def test_ensure_image_reads_back_a_resubmission_that_did_not_answer(monkeypatch, lost) -> None:
+def test_ensure_image_reads_back_a_resubmission_that_did_not_answer(no_retry_wait, lost) -> None:
     class LostResubmission(LocalImages):
         async def pull(self, reference, *, name, wait):
             self.submitted.append(name)
@@ -1695,10 +1687,6 @@ def test_ensure_image_reads_back_a_resubmission_that_did_not_answer(monkeypatch,
             self.add(name, reference, status="pending", pending_polls=1)
             raise lost
 
-    async def no_wait(delay):
-        pass
-
-    monkeypatch.setattr("shellbox.backends.daytona.images.sleep", no_wait)
     request = ImageRequest(RegistryImage("fixture:tag"))
     images = LostResubmission()
 
@@ -1827,11 +1815,7 @@ class DeletionClient:
         ConflictError("Sandbox state change in progress", status_code=409),
     ],
 )
-def test_sandbox_deletion_retries_a_transient_error(monkeypatch, transient) -> None:
-    async def no_wait(delay):
-        pass
-
-    monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
+def test_sandbox_deletion_retries_a_transient_error(no_retry_wait, transient) -> None:
     client = DeletionClient(transient)
 
     asyncio.run(_delete_sandbox(client, _SandboxClaim("fixture")))

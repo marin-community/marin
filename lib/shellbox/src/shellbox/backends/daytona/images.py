@@ -105,9 +105,7 @@ async def _submit(client: AsyncDaytonaV2Client, request: ImageRequest) -> None:
         await client.images.build_from_context(source.context, dockerfile=source.dockerfile.name, name=request.name)
 
 
-async def _submit_and_read_back(
-    client: AsyncDaytonaV2Client, request: ImageRequest, backoff: ExponentialBackoff
-) -> None:
+async def _submit_once(client: AsyncDaytonaV2Client, request: ImageRequest, backoff: ExponentialBackoff) -> None:
     """Submit the image; a collision or a submission whose answer was lost is left for the next read by name."""
     try:
         await _submit(client, request)
@@ -135,7 +133,7 @@ async def ensure_image(client: AsyncDaytonaV2Client, request: ImageRequest) -> s
         try:
             image = await retry_transient(lambda: client.images.get(name))
         except DaytonaNotFoundError:
-            await _submit_and_read_back(client, request, backoff)
+            await _submit_once(client, request, backoff)
             continue
         while image.status not in FAILED_IMAGE_STATUSES | {READY_IMAGE_STATUS}:
             # One server long poll per request; callers bound the whole wait with their own deadline.
@@ -145,7 +143,7 @@ async def ensure_image(client: AsyncDaytonaV2Client, request: ImageRequest) -> s
         if resubmitted:
             raise RuntimeError(f"Daytona image {name} is {image.status}: {image.error}")
         resubmitted = True
-        await _submit_and_read_back(client, request, backoff)
+        await _submit_once(client, request, backoff)
 
 
 async def list_images(client: AsyncDaytonaV2Client) -> list[Image]:
