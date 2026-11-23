@@ -250,7 +250,9 @@ def build_one(task: dict, config: BuildConfig, workroot: Path, authfile: Path | 
                 errors.append(f"{source}: {str(error)[-200:]}")
                 logger.warning("base copy from %s failed for %s: %s", source, task_id, str(error)[-200:])
         if source_used is None:
-            raise BuildRejected(f"every base source failed for {task_id}: {'; '.join(errors)}")
+            raise BuildRejected(
+                f"every base source failed for {task_id}: {' | '.join(error[-300:] for error in errors)}"
+            )
         base_raw = run([SKOPEO, "inspect", "--raw", f"oci:{layout}:base"])
         base_manifest_sha256 = "sha256:" + hashlib.sha256(base_raw.encode()).hexdigest()
         if base_manifest_sha256 != recipe.base_digest:

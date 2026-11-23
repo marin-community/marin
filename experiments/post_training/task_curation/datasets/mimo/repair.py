@@ -45,7 +45,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 REPAIR_VERSION = "2026.11.23.pinned-images.1"
 
-BASE_IMAGE_PATTERN = re.compile(r"^FROM docker\.io/xiaomimimo/mimo-v2\.6-rl-oss@sha256:([0-9a-f]{64})$", re.MULTILINE)
+BASE_IMAGE_PATTERN = re.compile(r"^FROM docker\.io/xiaomimimo/mimo-v2\.6-rl-oss@(sha256:[0-9a-f]{64})$", re.MULTILINE)
 WORKDIR_PATTERN = re.compile(r"^WORKDIR (/[A-Za-z0-9._/-]+)$", re.MULTILINE)
 RUN_PATTERN = re.compile(r"^RUN (.+)$", re.MULTILINE)
 

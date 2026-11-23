@@ -122,7 +122,7 @@ def binding_for(row: dict, digest: str = "b" * 64) -> ImageBinding:
 
 def test_parse_recipe_accepts_the_audited_shape_and_refuses_other_directives():
     recipe = parse_recipe(DOCKERFILE)
-    assert recipe.base_digest == "a" * 64
+    assert recipe.base_digest == "sha256:" + "a" * 64
     assert recipe.workdir == "/testbed"
     assert recipe.run_commands == ("install-tmux", "repair-repository")
     with pytest.raises(RepairRejected, match="does not pin the expected upstream base"):
