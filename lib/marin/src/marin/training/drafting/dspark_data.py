@@ -74,12 +74,16 @@ class PreparedSplits:
     train_ratio: float
 
 
+def _weight_map(index: Path) -> dict[str, str]:
+    return json.loads(index.read_text())["weight_map"]
+
+
 def tensor_files(root: Path) -> dict[str, str]:
     """Map tensor names to relative safetensors filenames."""
 
     index = root / SAFE_TENSORS_INDEX_NAME
     if index.is_file():
-        return json.loads(index.read_text())["weight_map"]
+        return _weight_map(index)
     with safe_open(root / _SAFETENSORS_FILE, framework="np") as weights:
         return dict.fromkeys(weights.keys(), _SAFETENSORS_FILE)
 
@@ -96,7 +100,7 @@ def _tensor_header(path: StoragePath) -> dict:
 def _check_teacher_tensors(root: StoragePath, metadata: Path, shape: GrugShape) -> None:
     index = metadata / SAFE_TENSORS_INDEX_NAME
     if index.is_file():
-        weights = json.loads(index.read_text())["weight_map"]
+        weights = _weight_map(index)
         headers = {}
     else:
         name = _SAFETENSORS_FILE
@@ -128,7 +132,7 @@ def _check_teacher_tensors(root: StoragePath, metadata: Path, shape: GrugShape) 
             raise ValueError(f"Unexpected shape for teacher tensor {name}, expected {expected}")
 
 
-def _teacher_decoder(target: dict, config: DraftDataConfig) -> dict[str, str | int | float | bool | None]:
+def _draft_decoder(target: dict, config: DraftDataConfig) -> dict[str, str | int | float | bool | None]:
     if (
         target["model_type"] != GRUG_MOE_MODEL_TYPE
         or target["architectures"] != [GRUG_MOE_ARCHITECTURE]
@@ -181,8 +185,8 @@ def _teacher_inputs(
                 source.download_to(str(metadata / source.name))
         templates = root / "chat_templates"
         if templates.isdir():
-            templates.download_to(str(metadata / "chat_templates"), recursive=True)
-        decoder = _teacher_decoder(json.loads((metadata / CONFIG_NAME).read_text()), config)
+            templates.download_to(str(metadata / templates.name), recursive=True)
+        decoder = _draft_decoder(json.loads((metadata / CONFIG_NAME).read_text()), config)
         _check_teacher_tensors(root, metadata, config.shape)
         tokenizer = load_tokenizer(str(metadata))
         if not tokenizer.chat_template or tokenizer.vocab_size > config.shape.vocab_size:
@@ -221,7 +225,7 @@ def _chat_rows(files: list[StoragePath]) -> Iterator[dict]:
 def _tokenized_rows(
     files: list[StoragePath], processor: ChatProcessor, config: DraftDataConfig
 ) -> Iterator[tuple[bytes, dict]]:
-    """Yield each row with its clipped token IDs for overlap checks."""
+    """Yield a serialized token sequence and its training row."""
 
     for batch in batched(_chat_rows(files), 64):
         for row in processor(batch):

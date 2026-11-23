@@ -49,6 +49,8 @@ _MARKOV_HEAD = "vanilla"
 _LOSS_IMPLEMENTATION = "eager"
 _D2T_FILE = "d2t.npy"
 _T2D_FILE = "t2d.npy"
+_D2T_TENSOR = "d2t"
+_SPECULATOR_TYPE = "dspark"
 _PREPARE_TRAINER_INPUTS = """
 import json
 import sys
@@ -219,7 +221,7 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
 
     config = json.loads((checkpoint / CONFIG_NAME).read_text())
     required = {
-        "speculators_model_type": "dspark",
+        "speculators_model_type": _SPECULATOR_TYPE,
         "layer_type": DRAFT_LAYER_TYPE,
         "block_size": recipe.block_size,
         "sample_from_anchor": True,
@@ -256,8 +258,8 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
         with safe_open(checkpoint / files[name], framework="np") as weights:
             if tuple(weights.get_slice(name).get_shape()) != shape:
                 raise ValueError(f"DSpark checkpoint has invalid shape for {name}")
-    with safe_open(checkpoint / files["d2t"], framework="np") as weights:
-        mapping = weights.get_tensor("d2t")
+    with safe_open(checkpoint / files[_D2T_TENSOR], framework="np") as weights:
+        mapping = weights.get_tensor(_D2T_TENSOR)
     target_ids = mapping + np.arange(recipe.draft_vocab_size)
     if (
         mapping.dtype != np.int64
@@ -357,7 +359,7 @@ def _write_config_and_build_command(
     endpoint: str,
 ) -> list[str]:
     train_config = {
-        "speculator_type": "dspark",
+        "speculator_type": _SPECULATOR_TYPE,
         "seed": recipe.seed,
         "verifier": {"verifier_name_or_path": str(teacher)},
         "draft": {
@@ -398,7 +400,7 @@ def _write_config_and_build_command(
             "gradient_checkpointing": True,
         },
         "dflash": {"block_size": recipe.block_size, "sample_from_anchor": True},
-        "dspark": {
+        _SPECULATOR_TYPE: {
             "draft_layer_type": DRAFT_LAYER_TYPE,
             "markov_rank": recipe.markov_rank,
             "markov_head_type": _MARKOV_HEAD,
@@ -419,6 +421,7 @@ def _write_config_and_build_command(
 def _prepare_trainer_inputs(
     python: str, data: Path, scratch: Path, recipe: DraftRecipe, train_rows: int, env: dict[str, str]
 ) -> tuple[int, dict[str, str]]:
+    """Write vocabulary maps and return the capped step count and installed package versions."""
     result = json.loads(
         subprocess.check_output(
             [

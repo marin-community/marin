@@ -43,9 +43,11 @@ class TeacherFamily(StrEnum):
     MOCHI = "mochi"
 
 
+_GRUG_HEAD_DIM = 128
+_GRUG_VOCAB_SIZE = 128256
 _SHAPES = {
-    TeacherFamily.SNOWBALL: GrugShape(2560, 26, 20, 5, 128, 128256),
-    TeacherFamily.MOCHI: GrugShape(6144, 48, 48, 12, 128, 128256, sconv=True),
+    TeacherFamily.SNOWBALL: GrugShape(2560, 26, 20, 5, _GRUG_HEAD_DIM, _GRUG_VOCAB_SIZE),
+    TeacherFamily.MOCHI: GrugShape(6144, 48, 48, 12, _GRUG_HEAD_DIM, _GRUG_VOCAB_SIZE, sconv=True),
 }
 _FEATURE_TAPS = {
     TeacherFamily.SNOWBALL: (2, 12, 22),
