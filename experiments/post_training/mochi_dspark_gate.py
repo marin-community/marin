@@ -1,0 +1,238 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Qualify Mochi DSpark before measuring matched long-thinking decode windows."""
+
+import argparse
+import asyncio
+import hashlib
+import json
+import logging
+import tempfile
+from pathlib import Path
+
+from iris.cluster.client.job_info import get_job_info
+from marin.inference.backend import ModelSpec
+from marin.inference.config import ServingGeometry, VllmCompilationCacheMode, VllmEngineConfig
+from marin.inference.iris_vllm import (
+    iris_vllm_followers,
+    iris_vllm_launch,
+    notify_iris_vllm_stopped,
+    wait_for_iris_vllm_shutdown,
+)
+from marin.inference.vllm_backend import VllmBackend
+from marin.inference.vllm_server import VllmEnvironment
+from rigging.filesystem.storage_path import StoragePath
+from skyrl_train.io import io
+
+from experiments.post_training.long_loop.throughput import graph_capture_observed, workload_requests, write_json
+from experiments.post_training.mochi_correctness import (
+    MAX_ROUTE_CHOICE_NOISE,
+    decode_probes,
+    prefix_scores,
+    sampling_by_prompt,
+    sampling_difference,
+    score_difference,
+)
+from experiments.post_training.mochi_decode_window import DecodeWindowConfig, steady_decode_window
+
+logger = logging.getLogger(__name__)
+
+
+def checked_json(uri: str, sha256: str) -> dict:
+    payload = StoragePath(uri).read_bytes()
+    if hashlib.sha256(payload).hexdigest() != sha256:
+        raise ValueError(f"Pinned JSON changed: {uri}")
+    return json.loads(payload)
+
+
+def engine_config(spec: dict, draft: Path | None) -> VllmEngineConfig:
+    arguments = (
+        "--enable-expert-parallel",
+        "--attention-backend",
+        "FLASH_ATTN",
+        "--moe-backend",
+        "triton",
+        "--enable-return-routed-experts",
+        "--load-format",
+        "runai_streamer",
+        "--model-loader-extra-config",
+        json.dumps({"distributed": False, "concurrency": 4, "memory_limit": 8589934592}),
+        "--gpu-memory-utilization",
+        str(spec["gpu_memory_utilization"]),
+        "--enable-prefix-caching",
+        "--mamba-cache-mode",
+        "none",
+        "--no-async-scheduling",
+        "--compilation-config",
+        json.dumps(spec["compilation_config"]),
+    )
+    if draft is not None:
+        arguments += (
+            "--speculative-config",
+            json.dumps(
+                {
+                    "method": "dspark",
+                    "model": str(draft),
+                    "num_speculative_tokens": 4,
+                    "draft_sample_method": "probabilistic",
+                    "rejection_sample_method": "standard",
+                    "max_model_len": spec["model"]["max_model_len"],
+                }
+            ),
+        )
+    return VllmEngineConfig(
+        compilation_cache=VllmCompilationCacheMode.CALLER_MANAGED,
+        startup_timeout_seconds=7200,
+        max_num_seqs=64,
+        max_num_batched_tokens=8192,
+        extra_args=arguments,
+        extra_metric_families=frozenset(
+            {
+                "vllm:spec_decode_num_drafts",
+                "vllm:spec_decode_num_draft_tokens",
+                "vllm:spec_decode_num_accepted_tokens",
+            }
+        ),
+    )
+
+
+def require_difference(spec: dict, name: str, reference: dict, scores: dict, bounds: dict) -> None:
+    difference = score_difference(reference, scores)
+    passed = all(difference[key] <= bound for key, bound in bounds.items())
+    write_json(
+        spec["output"], f"{name}.json", {"passed": passed, "difference": difference, "bounds": bounds, "scores": scores}
+    )
+    if not passed:
+        raise ValueError(f"Strict correctness failed: {name}; no performance measurements permitted")
+
+
+async def qualify(environment: VllmEnvironment, spec: dict, stage: str, calibration: dict) -> None:
+    base = environment.server_url
+    if stage == "plain-rescore":
+        for arm in ("plain-check", "dspark-check"):
+            recorded = json.loads((StoragePath(spec["output"]) / f"{arm}/autoregressive.json").read_text())
+            teacher = await prefix_scores(base, list(recorded["scores"].values()), 16)
+            require_difference(
+                spec, f"{arm}/autoregressive-correctness", recorded["scores"], teacher, calibration["decode_bounds"]
+            )
+        write_json(
+            spec["output"], "correctness-passed.json", {"passed": True, "calibration_sha256": spec["calibration_sha256"]}
+        )
+        return
+    scores = await prefix_scores(base, calibration["probes"], 16)
+    require_difference(spec, f"{stage}/fixed-correctness", calibration["reference"], scores, calibration["fixed_bounds"])
+    if stage == "plain-check":
+        # Re-qualify the runtime change against the old teacher before observing DSpark.
+        recorded = checked_json(spec["reference_autoregressive"], spec["reference_autoregressive_sha256"])
+        for repeat in range(2):
+            teacher = await prefix_scores(base, list(recorded["scores"].values()), 16)
+            require_difference(
+                spec, f"{stage}/old-teacher-{repeat}", recorded["scores"], teacher, calibration["decode_bounds"]
+            )
+        repeat = await prefix_scores(base, calibration["probes"], 16)
+        require_difference(
+            spec, f"{stage}/independent-control", calibration["reference"], repeat, calibration["fixed_bounds"]
+        )
+    decoded = await decode_probes(base, calibration["probes"], spec["correctness_seeds"])
+    write_json(spec["output"], f"{stage}/autoregressive.json", decoded)
+    sampling = sampling_difference(sampling_by_prompt(decoded["trajectories"]), calibration["sampling"])
+    write_json(spec["output"], f"{stage}/sampling-correctness.json", sampling)
+    if not sampling["passed"]:
+        raise ValueError(f"Strict sampled-distribution check failed: {stage}")
+    if stage == "plain-check":
+        teacher = await prefix_scores(base, list(decoded["scores"].values()), 16)
+        require_difference(
+            spec, f"{stage}/fresh-teacher-control", decoded["scores"], teacher, calibration["decode_bounds"]
+        )
+
+
+async def benchmark(environment: VllmEnvironment, spec: dict, stage: str) -> None:
+    if not json.loads((StoragePath(spec["output"]) / "correctness-passed.json").read_text())["passed"]:
+        raise ValueError("All correctness stages must pass before measuring load")
+    for running in (16, 32, 48):
+        config = DecodeWindowConfig(**spec["decode_window"], running_per_engine=running)
+        result = await steady_decode_window(
+            environment,
+            workload_requests(spec["performance_workload"], config.seed),
+            config,
+            speculative=stage == "dspark-performance",
+        )
+        write_json(spec["output"], f"{stage}/running{running}.json", result)
+        if not result["valid"]:
+            raise ValueError(f"Unqualified occupancy/counters/KV preemptions: {stage} running{running}")
+        logger.info("Measured %s running%s: %s", stage, running, result["summary"])
+
+
+def run(spec: dict) -> None:
+    info = get_job_info()
+    if info is None or info.worker_region.casefold() != "us-east-08a":
+        raise ValueError("Run this gate only in the registered 08a Iris gang")
+    calibration = checked_json(spec["calibration"], spec["calibration_sha256"])
+    if not calibration["sensitivity_passed"] or any(
+        calibration[name]["mean_prompt_route_choice_mismatch_fraction"] > MAX_ROUTE_CHOICE_NOISE
+        for name in ("fixed_bounds", "decode_bounds")
+    ):
+        raise ValueError("The frozen route check lacks required sensitivity")
+    geometry = ServingGeometry(**spec["geometry"])
+    if geometry.tensor_parallel_size != 1 or geometry.data_parallel_size != 16 or geometry.total_gpus != 16:
+        raise ValueError("This approval covers one TP1/EP16, 16-GB200 gang")
+    stages = ("plain-check", "dspark-check", "plain-rescore", "plain-performance", "dspark-performance")
+    with tempfile.TemporaryDirectory(prefix="mochi-dspark-gate-") as scratch:
+        draft = Path(scratch) / "draft"
+        io.download_directory(spec["draft"], str(draft))
+        manifest = checked_json(spec["draft_manifest"], spec["draft_manifest_sha256"])
+        for entry in manifest["files"]:
+            if not entry["path"].startswith("hf/"):
+                continue
+            local = draft / entry["path"].removeprefix("hf/")
+            if (
+                local.stat().st_size != entry["size"]
+                or hashlib.sha256(local.read_bytes()).hexdigest() != entry["sha256"]
+            ):
+                raise ValueError("Staged draft differs from the verified-copy SHA manifest")
+        for stage in stages:
+            speculative = stage.startswith("dspark")
+            with iris_vllm_launch(geometry, instance_name=f"vllm-{stage}") as launch:
+                with VllmBackend(engine_config(spec, draft if speculative else None)).start(
+                    ModelSpec(**spec["model"]),
+                    extra_args=launch.extra_cli_args,
+                    subprocess_env={**launch.subprocess_env, "VLLM_USE_V2_MODEL_RUNNER": "1"},
+                ) as environment:
+                    try:
+                        if launch.is_leader:
+                            with iris_vllm_followers(launch):
+                                environment.wait_until_ready()
+                                if stage.endswith("performance"):
+                                    asyncio.run(benchmark(environment, spec, stage))
+                                else:
+                                    asyncio.run(qualify(environment, spec, stage, calibration))
+                        else:
+                            wait_for_iris_vllm_shutdown(launch, environment.check_alive)
+                    finally:
+                        logs = environment.logs()
+                        (StoragePath(spec["output"]) / stage / f"task-{info.task_index}-vllm.log").write_text(logs)
+                    if not graph_capture_observed(logs):
+                        raise ValueError(f"CUDA graph capture unconfirmed for {stage} task {info.task_index}")
+                if not launch.is_leader:
+                    notify_iris_vllm_stopped(launch)
+        write_json(
+            spec["output"],
+            f"task-{info.task_index}-complete.json",
+            {"task": str(info.task_id), "source_revision": spec["source_revision"]},
+        )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--spec", required=True)
+    parser.add_argument("--source-revision", required=True)
+    args = parser.parse_args()
+    spec = json.loads(StoragePath(args.spec).read_text())
+    spec["source_revision"] = args.source_revision
+    run(spec)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    main()

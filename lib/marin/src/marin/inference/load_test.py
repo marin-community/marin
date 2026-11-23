@@ -53,6 +53,7 @@ class RequestMeasurement:
     output_tokens: int | None
     finish_reason: str | None
     error: str | None
+    requested_data_parallel_rank: int | None = None
 
     @property
     def ttft(self) -> float | None:
@@ -67,6 +68,8 @@ class RequestMeasurement:
 
 @dataclass(frozen=True)
 class LoadConfig:
+    """Control the load window, optionally pinning clients across vLLM DP ranks."""
+
     concurrency: int
     warmup_seconds: float
     measurement_seconds: float
@@ -74,6 +77,7 @@ class LoadConfig:
     gpu_count: int
     seed: int
     metrics_interval_seconds: float = 2.0
+    data_parallel_size: int | None = None
 
 
 def request_digest(body: dict) -> str:
@@ -96,6 +100,7 @@ async def measure_request(
     seed: int,
     clock: Callable[[], float] = time.perf_counter,
     on_event: Callable[[dict], None] | None = None,
+    data_parallel_rank: int | None = None,
 ) -> RequestMeasurement:
     """Measure one streaming request without treating SSE chunks as single tokens."""
     body = {
@@ -112,7 +117,10 @@ async def measure_request(
     finish_reason = error = None
     done = False
     try:
-        async with client.stream("POST", f"{base_url.rstrip('/')}/{request.path.lstrip('/')}", json=body) as response:
+        headers = None if data_parallel_rank is None else {"X-data-parallel-rank": str(data_parallel_rank)}
+        async with client.stream(
+            "POST", f"{base_url.rstrip('/')}/{request.path.lstrip('/')}", json=body, headers=headers
+        ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
@@ -152,6 +160,7 @@ async def measure_request(
         output_tokens,
         finish_reason,
         error,
+        requested_data_parallel_rank=data_parallel_rank,
     )
 
 
@@ -250,8 +259,14 @@ async def run_load(
         or config.concurrency < 1
         or min(config.measurement_seconds, config.gpu_count, config.metrics_interval_seconds) <= 0
         or config.warmup_seconds < 0
+        or (
+            config.data_parallel_size is not None
+            and (config.data_parallel_size < 1 or config.concurrency % config.data_parallel_size)
+        )
     ):
-        raise ValueError("A load run requires requests, positive load/window/GPU counts and nonnegative warmup")
+        raise ValueError(
+            "A load run requires requests, positive load/window/GPU counts, nonnegative warmup and balanced DP clients"
+        )
     order = list(requests)
     random.Random(config.seed).shuffle(order)
     rows: list[RequestMeasurement] = []
@@ -290,13 +305,23 @@ async def run_load(
 
         async def drive(rank: int) -> None:
             index = rank
+            data_parallel_rank = None if config.data_parallel_size is None else rank % config.data_parallel_size
+            request_index = rank if config.data_parallel_size is None else rank // config.data_parallel_size
+            request_stride = (
+                config.concurrency
+                if config.data_parallel_size is None
+                else config.concurrency // config.data_parallel_size
+            )
             while time.perf_counter() < deadline and not failed.is_set():
-                request = order[index % len(order)]
-                row = await measure_request(client, base_url, model, request, seed=config.seed + index)
+                request = order[request_index % len(order)]
+                row = await measure_request(
+                    client, base_url, model, request, seed=config.seed + index, data_parallel_rank=data_parallel_rank
+                )
                 rows.append(row)
                 if row.error is not None:
                     failed.set()
                 index += config.concurrency
+                request_index += request_stride
 
         await asyncio.gather(observe(), *(drive(rank) for rank in range(config.concurrency)))
     server = summarize_metrics(samples, config.gpu_count)

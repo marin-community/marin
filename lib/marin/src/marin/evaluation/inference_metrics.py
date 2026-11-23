@@ -5,18 +5,24 @@
 
 import time
 from dataclasses import dataclass
+from typing import Protocol
 
 from evalrecords.records import InferenceMetrics, SpeculativeDecodingMetrics
 from prometheus_client.core import Metric as PrometheusMetric
 from rigging.telemetry.prometheus import PrometheusScraper
-
-from marin.inference.iris import RemoteInferenceSession
 
 _PROMPT_TOKENS = "vllm:prompt_tokens_total"
 _GENERATION_TOKENS = "vllm:generation_tokens_total"
 _SPECULATIVE_DRAFTS = "vllm:spec_decode_num_drafts_total"
 _SPECULATIVE_DRAFT_TOKENS = "vllm:spec_decode_num_draft_tokens_total"
 _SPECULATIVE_ACCEPTED_TOKENS = "vllm:spec_decode_num_accepted_tokens_total"
+
+
+class InferenceMetricsEndpoint(Protocol):
+    """Cumulative metrics exposed by native and remote serving sessions."""
+
+    @property
+    def metrics_url(self) -> str | None: ...
 
 
 @dataclass(frozen=True)
@@ -38,13 +44,13 @@ def _counter(families: tuple[PrometheusMetric, ...], name: str) -> int:
     return int(value)
 
 
-def _metrics_url(session: RemoteInferenceSession) -> str:
+def _metrics_url(session: InferenceMetricsEndpoint) -> str:
     if session.metrics_url is None:
         raise ValueError("inference session does not expose cumulative metrics")
     return session.metrics_url
 
 
-def _scrape(session: RemoteInferenceSession, *, speculative: bool) -> _CumulativeCounters:
+def _scrape(session: InferenceMetricsEndpoint, *, speculative: bool) -> _CumulativeCounters:
     families = PrometheusScraper(_metrics_url(session)).scrape()
     return _CumulativeCounters(
         prompt_tokens=_counter(families, _PROMPT_TOKENS),
@@ -66,13 +72,13 @@ def _delta(after: int, before: int, name: str) -> int:
 class InferenceMetricWindow:
     """A before/after counter window over one evaluator sharing a vLLM server."""
 
-    session: RemoteInferenceSession
+    session: InferenceMetricsEndpoint
     baseline: _CumulativeCounters
     started_at: float
     speculative: bool
 
     @classmethod
-    def start(cls, session: RemoteInferenceSession, *, speculative: bool) -> "InferenceMetricWindow":
+    def start(cls, session: InferenceMetricsEndpoint, *, speculative: bool) -> "InferenceMetricWindow":
         baseline = _scrape(session, speculative=speculative)
         return cls(
             session=session,

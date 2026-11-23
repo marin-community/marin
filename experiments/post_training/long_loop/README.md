@@ -1429,3 +1429,20 @@ metric chunks for saturated-window comparisons. Hard periodic-tail detection is
 shared with training; it does not detect all circular reasoning. Normal source
 answer extraction can accept raw text, so explicit final markers are also
 reported. Neither signal is a correctness grade.
+
+## Mochi DSpark serving gate
+
+`experiments.post_training.mochi_dspark_gate` runs one TP1/BF16 EP16 gang.
+It applies the EAGLE3 harness's frozen probability, routed-expert and sampled
+distribution bounds to independent plain controls, then DSpark, then a plain
+teacher rescore. Any failure stops the gate before performance measurement.
+The spec pins the checkpoint's verified-copy manifest and the private runtime
+overlay; the runtime never changes the production vLLM release.
+
+After correctness passes, `mochi_decode_window` measures exact token arrivals
+after every rank-pinned stream has prefetched. Each plain/DSpark cell requires
+16, 32 or 48 running streams on every engine, no KV preemptions and a full common
+measurement window. Natural EOS is preserved; early completion invalidates the
+cell. Report tokens per verification round, per-request decode speed ratios and
+TPOT p50/p95 from valid matched cells. These windows exclude initial prefill and
+measure serving in isolation. A training-pair comparison needs separate approval.

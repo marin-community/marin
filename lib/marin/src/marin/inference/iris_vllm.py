@@ -106,7 +106,7 @@ class IrisVllmLaunch:
 
 
 @contextlib.contextmanager
-def iris_vllm_launch(geometry: ServingGeometry) -> Iterator[IrisVllmLaunch]:
+def iris_vllm_launch(geometry: ServingGeometry, *, instance_name: str = "vllm") -> Iterator[IrisVllmLaunch]:
     """Bootstrap native vLLM pipeline stages or a distributed data-parallel group."""
     job_info = get_job_info()
     if job_info is None:
@@ -115,7 +115,7 @@ def iris_vllm_launch(geometry: ServingGeometry) -> Iterator[IrisVllmLaunch]:
         raise ValueError(f"vLLM geometry requires {geometry.task_count} Iris tasks, got {job_info.num_tasks}")
 
     endpoint_namespace = str(job_info.job_id).strip("/").replace("/", "-")
-    coordinator_name = f"{endpoint_namespace}-vllm-coordinator"
+    coordinator_name = f"{endpoint_namespace}-{instance_name}-coordinator"
     identity = IrisGangCoordinator(coordinator_name, job_info.task_index, job_info.num_tasks)
     with iris_gang_coordinator(identity, job_info.advertise_host, job_info.advertise_host) as master_addr:
         yield _build_task_launch(
