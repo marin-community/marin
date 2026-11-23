@@ -396,9 +396,6 @@ async def test_budget_final_revisions_sets_how_many_revisions_the_final_review_b
     assert final.notes == (finding(3 + revisions, what=f"revision {revisions}"),)
 
 
-# Review 2026-11-23: a second final revision with the same placement and the same failed-fix request rendered the first
-# one's author request, so it replayed the first revision's answers instead of buying an author attempt.
-# Review 2026-11-23, again: an ``author.revision`` overlay without ``{kind}`` dropped the ordinal and replayed again.
 @pytest.mark.parametrize(
     "prompt", [{}, {"author.revision": "Address these findings:\n\n{detail}"}], ids=["stock", "custom"]
 )
@@ -412,7 +409,7 @@ async def test_each_final_revision_is_a_fresh_author_attempt_that_a_restart_repl
     wp = await run_workpiece(proposal, config, live, log, install=install)
     assert kinds(wp) == ["accept", "revise", "accept", "revise", "accept", "accept"]
     assert isinstance(live.inference, FakeInference)
-    assert len(live.inference.requests) == len(script()) + 2 * len(RESUBMIT)  # every revision paid its author turns
+    assert len(live.inference.requests) == len(script()) + 2 * len(RESUBMIT)
     openings = [r.conversation[1].content for r in live.inference.requests if len(r.conversation) == 2]
     assert [o.rsplit("\n\n", 1)[1] for o in openings[1:]] == [f"This is final revision {n} of 2." for n in (1, 2)]
     cold = bundle(Trials(), Reviewer(), ())
@@ -558,7 +555,6 @@ def test_the_final_revision_s_round_decides_as_live_forge(
 
 
 EASY = tuple(TrialResult(i, GradeResult(Outcome.GRADED, 1.0)) for i in range(2))
-"""Two of two solved: too easy."""
 REFUSED = ("round", "last round", "revision with a fallback", "author stop", "final revision's round", "confirmation")
 
 
@@ -599,7 +595,7 @@ def test_with_too_easy_refused_no_path_accepts_a_too_easy_task(
     wp = refusing(proposal, path, config)
     shipped = wp.decisions[-1]
     if not accept_too_easy and isinstance(shipped, Accept) and shipped.band is BandOutcome.TOO_EASY:
-        assert path == "final revision's round" and wp.terminal is None  # pending: its confirmation places it
+        assert path == "final revision's round" and wp.terminal is None
     expected = {
         "round": "modify",
         "last round": "accept" if accept_too_easy else "abandon",
@@ -613,16 +609,6 @@ def test_with_too_easy_refused_no_path_accepts_a_too_easy_task(
         assert (wp.accepted_with is BandOutcome.TOO_EASY) is accept_too_easy
 
 
-def test_a_confirmation_placed_too_easy_after_its_final_revision_is_abandoned_naming_the_setting(
-    proposal: TaskProposal,
-) -> None:
-    config = setup(**{"band.accept_too_easy": False})
-    decision = default_review(confirmed(proposal, False, False, True, False), config.band, config.budget)
-    assert isinstance(decision, Abandon) and "band.accept_too_easy is false" in decision.reasons[0]
-
-
-# Review 2026-11-23: a band-only abandonment listed every earlier final-review finding as unresolved, though the
-# revision had repaired it and the final review reported nothing.
 @pytest.mark.parametrize("repeated", [False, True], ids=["repaired, then refused", "reported again"])
 async def test_a_refused_confirmation_names_its_placement_setting_and_budget_and_only_open_findings(
     proposal: TaskProposal, repeated: bool
@@ -643,8 +629,6 @@ async def test_a_refused_confirmation_names_its_placement_setting_and_budget_and
     assert isinstance(abandoned, Abandon) and abandoned.reasons == (why, *unresolved)
 
 
-# Review 2026-11-23, again: a finding declined, then revised twice with a clean last review, was named unresolved
-# because every historical decline counted; a decline that is the author's latest answer still is.
 @pytest.mark.parametrize("last", [Response.REVISED, Response.DECLINED], ids=["revised last", "declined last"])
 def test_a_refused_confirmation_reads_the_latest_answer_to_a_final_revision_finding(
     proposal: TaskProposal, last: Response
@@ -1448,7 +1432,7 @@ async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
     clients = [live.inference, *live.role_inference.values()]
     assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
     assert payers(root, replayed=False) == PAID  # the cold rerun paid for nothing
-    replayed = payers(root, replayed=True)  # nineteen resolutions, none naming a payer
+    replayed = payers(root, replayed=True)
     assert sum(replayed.values()) == 19 and {payer for _, payer in replayed} == {None}
 
 
@@ -1490,8 +1474,6 @@ def always_too_easy(workpiece: Workpiece, band: BandRules, budget: Budget) -> De
     return Accept(BandOutcome.TOO_EASY)
 
 
-# Coordinator's ruling 2026-11-23: a strict band is a shipping invariant. A custom review rule that publishes a terminal
-# acceptance at a refused band is a programming error; a pending one still goes to its confirmation.
 @pytest.mark.parametrize("confirmation_k", [0, 5])
 async def test_no_review_rule_publishes_a_terminal_acceptance_at_a_refused_band(
     proposal: TaskProposal, confirmation_k: int
