@@ -104,6 +104,7 @@ def read_release(source_id: str, cache_dir: Path) -> Path:
     """Download the source's retained release parquet once and return its local path."""
     repo, revision = RELEASES[source_id]
     path = hf_hub_download(repo_id=repo, repo_type="dataset", revision=revision, filename="tasks.parquet")
+    cache_dir.mkdir(parents=True, exist_ok=True)
     local = cache_dir / f"{canonical_sha256(source_id)[:8]}-tasks.parquet"
     if not local.exists():
         shutil.copy(path, local)
