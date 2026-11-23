@@ -123,7 +123,17 @@ def main() -> None:
     )
     parser.add_argument("--skip-stage", action="store_true", help="Assume the weights prefix is already staged.")
     parser.add_argument("--no-watchdog", action="store_true", help="Do not start the watchdog job.")
-    parser.add_argument("--wait/--no-wait", default=True, help="Wait for the endpoint and print capability URL.")
+    parser.add_argument(
+        "--wait",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Wait for the endpoint and print capability URL.",
+    )
+    parser.add_argument(
+        "--attach-only",
+        action="store_true",
+        help="Submit nothing; wait for an already-running pool's endpoint and print the URL.",
+    )
     parser.add_argument("--tag", default=None, help="Job name tag (default: short hex).")
     args = parser.parse_args()
 
@@ -141,6 +151,11 @@ def main() -> None:
 
     with connect_controller(cluster_name=pool.CLUSTER) as endpoint_info:
         with IrisClient.remote(endpoint_info.url, workspace=workspace, credentials=endpoint_info.credentials) as client:
+            if args.attach_only:
+                base_url = wait_for_endpoint(client)
+                click.echo(f"READY — endpoint: {base_url}")
+                return
+
             if not args.skip_stage:
                 stage_job = submit_stage_job(client, suffix)
                 logger.info("staging job %s", stage_job.job_id)
