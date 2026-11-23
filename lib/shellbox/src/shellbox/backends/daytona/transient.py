@@ -7,7 +7,7 @@ import logging
 from asyncio import sleep
 from collections.abc import Awaitable, Callable
 
-from daytona import DaytonaConnectionError, DaytonaError
+from daytona import DaytonaConnectionError, DaytonaError, DaytonaTimeoutError
 from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,14 @@ def is_transient_daytona_error(error: DaytonaError) -> bool:
     The provider may have run the request, so repeat only a request that is safe to run twice.
     """
     return isinstance(error, DaytonaConnectionError) or error.status_code in TRANSIENT_DAYTONA_STATUS
+
+
+def is_ambiguous_daytona_error(error: DaytonaError) -> bool:
+    """Whether the provider may have run a request whose answer never arrived: a transit failure or a timeout.
+
+    Repeat such a request only when it is idempotent, or read its effect back first.
+    """
+    return is_transient_daytona_error(error) or isinstance(error, DaytonaTimeoutError)
 
 
 async def retry_transient[T](request: Callable[[], Awaitable[T]]) -> T:

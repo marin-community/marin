@@ -89,6 +89,9 @@ _ERROR_CATEGORIES: dict[str, ErrorCategory] = {
     "SandboxCreateRequestTimeoutError": ErrorCategory.INFRASTRUCTURE,
     "SandboxTerminalStateError": ErrorCategory.INFRASTRUCTURE,
     "LimitExceededError": ErrorCategory.INFRASTRUCTURE,
+    # Also the name of the OpenAI SDK's 429 error; both are provider throttling.
+    "RateLimitError": ErrorCategory.INFRASTRUCTURE,
+    "OverloadedError": ErrorCategory.INFRASTRUCTURE,
     "ClientTimeoutError": ErrorCategory.INFRASTRUCTURE,
     "RequestTimeoutError": ErrorCategory.INFRASTRUCTURE,
     "ServiceUnavailableError": ErrorCategory.INFRASTRUCTURE,

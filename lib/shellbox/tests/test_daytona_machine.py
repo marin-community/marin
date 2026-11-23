@@ -26,6 +26,7 @@ pytest.importorskip("daytona")
 
 from daytona.v2 import (
     DISABLED,
+    ClientTimeoutError,
     ConflictError,
     DaytonaError,
     LimitExceededError,
@@ -1658,7 +1659,12 @@ def test_ensure_image_reads_back_a_submission_that_did_not_answer(monkeypatch, f
     assert images.submitted == [name]
 
 
-def test_ensure_image_reads_back_a_resubmission_that_did_not_answer(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "lost",
+    [ProviderConnectionError("Connection reset by peer"), ClientTimeoutError("operation timed out")],
+    ids=["reset", "timeout"],
+)
+def test_ensure_image_reads_back_a_resubmission_that_did_not_answer(monkeypatch, lost) -> None:
     class LostResubmission(LocalImages):
         async def pull(self, reference, *, name, wait):
             self.submitted.append(name)
@@ -1667,7 +1673,7 @@ def test_ensure_image_reads_back_a_resubmission_that_did_not_answer(monkeypatch)
                 return
             # The provider accepted the second submission, but its answer was lost.
             self.add(name, reference, status="pending", pending_polls=1)
-            raise ProviderConnectionError("Connection reset by peer")
+            raise lost
 
     async def no_wait(delay):
         pass
@@ -1811,6 +1817,18 @@ def test_sandbox_deletion_retries_a_transient_error(monkeypatch, transient) -> N
     asyncio.run(_delete_sandbox(client, "fixture", []))
 
     assert client.deleted == ["fixture"]
+
+
+def test_sandbox_deletion_reports_a_recovered_sandbox_whose_deletion_hangs(monkeypatch) -> None:
+    class HangingDeletion(DeletionClient):
+        async def delete(self, sandbox, *, timeout):
+            await asyncio.Future()
+
+    monkeypatch.setattr("shellbox.backends.daytona.machine.INTERRUPT_TIMEOUT", 0.1)
+
+    # The sandbox was found by name, so a deletion that never finishes is a failure, not "nothing appeared".
+    with pytest.raises(TimeoutError):
+        asyncio.run(_delete_sandbox(HangingDeletion(), "fixture", []))
 
 
 def test_sandbox_deletion_reports_a_conflict_that_outlasts_the_deadline(monkeypatch) -> None:
