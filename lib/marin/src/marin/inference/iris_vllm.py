@@ -171,8 +171,7 @@ def wait_for_iris_vllm_shutdown(
             try:
                 check_alive()
             except RuntimeError:
-                # Another follower may have stopped the shared engine after
-                # the first read. Keep failures from before shutdown visible.
+                # Shutdown can arrive between the first read and the health check.
                 stopped = client.shutdown_requested()
                 if not stopped:
                     raise
