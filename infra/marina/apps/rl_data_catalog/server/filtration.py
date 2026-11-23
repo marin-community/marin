@@ -5,7 +5,12 @@
 
 from typing import Any
 
-from finestore.rl.curation import OracleFiltrationEvidence, OracleValidation
+from finestore.rl.curation import (
+    DatasetRelease,
+    OracleFiltrationEvidence,
+    OraclePendingExclusionReason,
+    OracleValidation,
+)
 from finestore.rl.curation import QualifiedSourceDeclaration as SourceDeclaration
 
 from .admission import (
@@ -62,28 +67,46 @@ def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None =
     raw = declaration.get("oracle_filtration")
     if raw is None:
         return counted_population(declaration, counts, pending)
-    evidence = OracleFiltrationEvidence.model_validate(raw)
-    release = evidence.filtered_release
+    # The served row projects the per-task pending-exclusion list past the SQL row
+    # budget (the r34-precedent served-row projection). A genuine receipt with
+    # infrastructure exclusions always carries the list - the typed model enforces the
+    # pair - so a missing list beside a positive infrastructure count identifies the
+    # projection. The aggregates and pinned references are authoritative on the served
+    # row; the full evidence remains in the catalog snapshot and census receipts.
+    infrastructure = raw.get("exclusion_counts", {}).get(OraclePendingExclusionReason.INFRASTRUCTURE.value, 0)
+    projected_list = "pending_exclusions" not in raw and infrastructure > 0
+    if projected_list:
+        filtered_release = DatasetRelease.model_validate(raw["filtered_release"])
+        filter_version = raw["oracle_filter_version"]
+        admitted = raw["admitted_count"]
+        original = raw["original_count"]
+    else:
+        evidence = OracleFiltrationEvidence.model_validate(raw)
+        filtered_release = evidence.filtered_release
+        filter_version = evidence.oracle_filter_version
+        admitted = evidence.admitted_count
+        original = evidence.original_count
     if (
-        evidence.oracle_filter_version not in {3, 4}
-        or release.model_dump(mode="json") != declaration["current_release"]
-        or (release.repo, release.revision) != (declaration["dataset_id"], declaration["dataset_revision"])
-        or evidence.admitted_count != declaration["within_source_dedup"]["unique_count"]
-        or evidence.admitted_count != declaration["task_count"]
+        filter_version not in {3, 4}
+        or filtered_release.model_dump(mode="json") != declaration["current_release"]
+        or (filtered_release.repo, filtered_release.revision)
+        != (declaration["dataset_id"], declaration["dataset_revision"])
+        or admitted != declaration["within_source_dedup"]["unique_count"]
+        or admitted != declaration["task_count"]
     ):
         return counted_population(declaration, counts, pending)
-    if evidence.admitted_count == 0 and declaration["status"] == "Excluded":
+    if admitted == 0 and declaration["status"] == "Excluded":
         return {
             "example_count": 0,
             "state": "excluded",
             "admitted_count": 0,
-            "population_count": evidence.original_count,
-            "excluded_count": evidence.original_count,
+            "population_count": original,
+            "excluded_count": original,
             "source_status": declaration["status"],
             "reason": "Complete filtration retained no tasks; the source is excluded, with no admission claimed.",
         }
     if (
-        evidence.oracle_filter_version != 4
+        filter_version != 4
         or declaration["status"] != "Available"
         or declaration.get("oracle_validation") != OracleValidation.EXECUTED
     ):
@@ -98,16 +121,16 @@ def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None =
         if qualified.intended_use is None:
             return pending
         require_lexical_qualification(
-            qualified.lexical_contamination, release.repo, release.revision, qualified.intended_use
+            qualified.lexical_contamination, filtered_release.repo, filtered_release.revision, qualified.intended_use
         )
     except ValueError:
         return pending
     # Header totals describe the current retained population; original exclusions stay in the receipt.
     return {
-        "example_count": evidence.admitted_count,
+        "example_count": admitted,
         "state": "complete",
-        "admitted_count": evidence.admitted_count,
-        "population_count": evidence.admitted_count,
+        "admitted_count": admitted,
+        "population_count": admitted,
         "excluded_count": 0,
         "source_status": declaration["status"],
         "reason": "The current private release is qualified after full-population oracle filtration.",
