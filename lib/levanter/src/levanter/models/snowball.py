@@ -70,7 +70,6 @@ from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.kernels.logsumexp import batch_invariant_logsumexp
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 
-from levanter.kernels.logsumexp import batch_invariant_logsumexp
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.rms_norm import Implementation as RmsNormImplementation
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm
@@ -267,6 +266,14 @@ class SnowballConfig(HFCompatConfig):
     tokenizer: Optional[str] = None
 
     def __post_init__(self) -> None:
+        if self.replay_precision == "zero_kl":
+            _validate_fixed_shared_attention_config(self)
+            if (
+                self.projection_implementation != "fixed_schedule"
+                or self.shared_attention_implementation != "fixed_schedule"
+                or self.moe_implementation != "ring"
+            ):
+                raise ValueError("Use SnowballConfig.with_zero_kl_replay() to select the complete replay profile")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.num_experts_per_token > self.num_experts:
@@ -442,9 +449,7 @@ def _replay_norm(cfg: SnowballConfig) -> RmsNormImplementation | None:
     return "pallas_tpu" if cfg.replay_precision == "zero_kl" else None
 
 
-def _bounded_rms_norm(
-    x: jax.Array, weight: jax.Array, eps: float, implementation: RmsNormImplementation
-) -> jax.Array:
+def _bounded_rms_norm(x: jax.Array, weight: jax.Array, eps: float, implementation: RmsNormImplementation) -> jax.Array:
     rows = x.size // x.shape[-1]
     if rows <= MAX_FLATTENED_ROWS:
         return batch_invariant_rms_norm(x, weight, eps, implementation)
@@ -1644,6 +1649,10 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if _context_axis() is not None:
             raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
+        if cfg.replay_precision == "zero_kl" and (
+            dtype != jnp.bfloat16 or self.transformer.token_embed.dtype != jnp.float32
+        ):
+            raise ValueError("The zero-KL replay profile requires FP32 compute and BF16 serving KV")
         kv_heads, head_size = Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim)
         caches = []
         for _ in self.transformer.blocks:
