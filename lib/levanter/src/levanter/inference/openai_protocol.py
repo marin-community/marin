@@ -5,7 +5,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class ChatMessage(BaseModel):
@@ -28,7 +28,11 @@ class ChatCompletionRequest(BaseModel):
     logit_bias: dict[str, int] | None = None
     logprobs: bool = Field(default=False, description="Whether to include logprobs in the response")
     top_logprobs: int | None = None
-    max_tokens: int = Field(default=1024, description="Maximum number of tokens to generate")
+    max_tokens: int = Field(
+        default=1024,
+        validation_alias=AliasChoices("max_completion_tokens", "max_tokens"),
+        description="Maximum number of tokens to generate",
+    )
     n: int | None = None
     presence_penalty: float | None = None
     response_format: dict[str, object] | None = None

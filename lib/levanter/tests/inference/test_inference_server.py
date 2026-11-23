@@ -258,6 +258,26 @@ def test_chat_stream_matches_complete_text_for_each_choice(test_client):
         assert deltas[-1]["finish_reason"] == expected["finish_reason"]
 
 
+def test_chat_stream_honors_max_completion_tokens(test_client):
+    client, _ = test_client
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": TEST_MODEL_NAME,
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_completion_tokens": 2,
+            "max_tokens": 5,
+            "seed": 483,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        },
+    )
+    assert response.status_code == 200, response.text
+    events = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
+    assert events[-1] == "[DONE]"
+    assert json.loads(events[-2])["usage"]["completion_tokens"] == 2
+
+
 def test_chat_completion_without_a_chat_template_is_rejected(test_client, monkeypatch, local_gpt2_tokenizer):
     """A model with no chat template cannot represent a conversation, so chat requests are refused.
 
