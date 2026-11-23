@@ -2179,6 +2179,15 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   ordinary native checkpoint index through step 2. This covers the
   trainer and checkpoint callbacks on the combined source.
 
+  The same stock trainer also recovered a committed step-1 checkpoint in
+  a fresh CPU learner and serving process with blocked attention enabled.
+  The restored model, optimizer, training key, step, and model averaging
+  matched the uninterrupted control. The second lease continued at the next
+  two prompts and installed the same step-2 policy after the update. All
+  16 paired binary replays matched after normalizing request IDs. The new
+  attempt appended its checkpoint to the original step-1 lineage. This
+  rehearsal stopped after a completed checkpoint commit.
+
   A fresh-start diagnostic can skip the initial evaluation callback and
   keep the final panel. The callback ran for 26m55s in the interrupted
   attempt. The production worker composer reproduced the archived
