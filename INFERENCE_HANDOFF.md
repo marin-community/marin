@@ -4,6 +4,9 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
+This report describes the integrated code at `e7ffcd3ac1`. The experimental
+shutdown observer and Ray smoke below use a separate local worktree at
+`f5e53f48b8`; those observer changes are outside this published branch.
 
 | Gate | Integrated path |
 | --- | --- |
@@ -12,6 +15,12 @@ sampling, and policy installation. See [native inference](lib/levanter/docs/desi
 | OpenAI and binary serving | Both endpoints accept exact prompt IDs and expose generated IDs, finish reasons, policy version, and separate policy and behavior scores. Each can return the Snowball route payload. |
 | Router replay | Capture uses the optimized forward and keeps route rows alongside retained prefixes. The learner can validate the emitted positions, align routes against padded rows, move them during packing, and consume them in differentiable policy scoring. |
 | Fixed-input qualification | The benchmark compares learner scoring, prefill and cached decode with fixed weights and input tokens. Report numerical KL separately from the reference-KL penalty used in the RL objective. |
+
+Policy scores are selected-token log probabilities from the model's raw logits.
+Behavior scores, also called sampled logprobs here, use the temperature and
+top-p transformed distribution. The public serving runtime returns zero
+behavior log probability for greedy sampling and retains the raw policy score
+separately.
 
 The binary serving endpoint is `/v1/levanter/generate`: a versioned frame
 containing JSON metadata and safetensors tensors. It is separate from the
@@ -33,6 +42,12 @@ at `15bc5e751c` measured 575.55 versus 549.46 output tokens/s on v5p-8,
 are the pre-integration native and compiled vLLM baselines. The integrated
 replay-on/off overhead and vLLM gap have their own measurements.
 [AgentX results and launch settings](docs/reports/snowball-inference-status-2026-11-20.md)
+
+The TPUv4 results below qualify diagnostic fixtures separately from the 67B
+AgentX workload. The [current fixture source](lib/levanter/benchmarks/snowball_zero_kl.py)
+uses hidden width 128 and a 256-token context; the historical job's exact
+configuration was not re-audited for this handoff. Full-67B training/serving
+equality remains unqualified.
 
 The four-chip TPUv4 arm with shared `fixed_schedule` attention matched all
 evaluated FP32 logits between the learner, prefill, and cached decode. Max
@@ -125,6 +140,8 @@ output tokens/s. Their p90 first-token latencies increased by 162 ms and
 with zero errors. Use four prefill slots for this workload. It had the
 lowest measured p90 among the compact runs while keeping output throughput
 within 10% of the native replay-off run.
+The four-slot recommendation is the best measured configuration; it still
+misses the p90 target of at most 20% above compiled vLLM.
 [Four prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-compact-wire-replay-20261122)
 · [Eight prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-eight-prefill-replay-20261122)
 · [Two prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-two-prefill-replay-20261122)
@@ -186,6 +203,20 @@ gradient leaves differed, and all were finite. This fixture does not qualify
 full-model restart.
 [Current-source repeatability](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-lifecycle-repeatability-2026-11-23-1)
 
+A follow-up at `e7ffcd3ac1` compared two calls to one compiled gradient
+object in each of two fresh processes on eight H100s. Both processes used
+the original saved state, batch and PRNG key. The baseline differed in 134
+embedding elements and one value-projection element, with maximum absolute
+differences of `0.001953125` and `5.96e-8`. With
+`--xla_gpu_deterministic_ops=true`, all 46 gradient leaves matched byte-for-byte
+between the two calls. All four saved gradient sets were finite and independently
+decoded. The deterministic compiler profile changed scatter lowering; both
+executables retained the same opaque CuTe call configuration. This bounded
+result does not establish determinism inside the native attention kernel or
+qualify optimizer updates and resumed continuation. The earlier strict paired
+failure remains unresolved.
+[Compiler-profile diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-raw-repeat-determinism-2026-11-23-1)
+
 A single-H100 test of the FA4/CuTe attention backward fallback, with head
 dimension 64 and multi-head attention, reproduced NaN query gradients on finite
 inputs after a deliberately NaN output-gradient call. Clearing K padding alone failed. A broader patch loads
@@ -209,13 +240,29 @@ capturing the real GPU learner's native shutdown stack remains open.
 [CPU shutdown observer](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-controls-20261123-2)
 · [GPU-loaded observer controls](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-gpu-controls-20261123-1)
 
-A separate, unpublished production shutdown observer at `25012feea0` remains
-experimental. Its Linux CPU suite passed the observer-disabled case, then
-failed the healthy observer-enabled case at private-directory validation.
-The suite stopped before its remaining eleven cases. The job was cancelled
-and its private process namespace removed; its output archive was unavailable,
-so the retained live report does not establish the directory failure's cause.
-No actual GPU learner shutdown stack has been captured.
+A separate, unpublished production shutdown observer remains experimental.
+An actual worker filesystem probe found that inherited group permissions made
+a fresh private directory mode `02700`. Setting only that new directory to
+`0700` allowed all strict directory checks to pass. The follow-up CPU suite at
+`f5e53f48b8` passed its observer-disabled, healthy and delayed-C-destructor
+cases, then exceeded the unchanged five-second exit limit in a Python finalizer
+case. A separate observer-disabled run also exceeded that limit. The observer
+is therefore unnecessary for the newly measured timeout; these runs do not
+establish the cause of the earlier GPU learner hang. The debugger also exceeded
+its 128 KiB retained-output cap. No actual GPU learner shutdown stack has been
+captured.
+
+A one-H100 smoke at the same unpublished source exercised the genuine Ray
+`HostWorker` and public checkpoint roundtrip with the observer disabled. Its
+receipts record one finite update, a natural exit from the original native
+process, a new native process, and identical saved/restored model, Adam, RNG,
+step and model-averaging fingerprints. It then failed the strict restored-score
+check before update two. The driver did not persist the restored scores, so
+the available evidence cannot separate score dtype, score bytes and scoring
+state at that check. A bounded forensic backup retained the receipts but omitted
+three large model/checkpoint files. The failed job was cancelled and its pod
+removed. This smoke does not qualify resumed training or full-model restart.
+[Ray checkpoint smoke](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-hostworker-default-off-20261123-1)
 
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and
