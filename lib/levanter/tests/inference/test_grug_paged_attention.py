@@ -70,7 +70,12 @@ def test_grug_paged_attention_mixed_prefixes_match_reference(window, cap, dtype)
     actual = fn(*args, sm_scale=jnp.array(_SCALE))
     expected = _dense_reference(args, window, cap, _SCALE)
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-5, rtol=1e-5)
-    empty = fn(*args._replace(num_seqs=jnp.array(0, jnp.int32)), sm_scale=jnp.array(_SCALE))
+
+
+def test_grug_paged_attention_empty_batch_returns_zeros():
+    args = _mixed_case(jnp.float32)._replace(num_seqs=jnp.array(0, jnp.int32))
+    fn = jax.jit(partial(ragged_paged_attention, implementation="reference", sm_scale=_SCALE))
+    empty = fn(*args)
     np.testing.assert_array_equal(empty, jnp.zeros_like(args.q))
 
 

@@ -162,9 +162,6 @@ def test_ragged_paged_attention_single_seq():
     tol = _rpa_tol()
     for i in range(len(ragged.array)):
         assert_trees_all_close(ragged.array[i], ref.array[i], atol=tol, rtol=tol, custom_message=f" at index {i}")
-    # assert_trees_all_close(ragged.array[:-1], ref.array[:-1], atol=_rpa_tol(), rtol=_rpa_tol())
-    # assert_trees_all_close(ragged.array[-1], ref.array[-1], atol=_rpa_tol(), rtol=_rpa_tol())
-    # assert_trees_all_close(ragged.array, ref.array, atol=_rpa_tol(), rtol=_rpa_tol())
 
 
 jit_rpa = jax.jit(ragged_paged_attention)
