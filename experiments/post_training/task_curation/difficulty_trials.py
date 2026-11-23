@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import (
@@ -593,6 +594,33 @@ async def execute_trial(
     return trial, await trial.run()
 
 
+def trial_environment_options(
+    task: PreparedTask,
+    environment_options: Mapping[str, Any],
+    daytona_provisioning: str,
+    machine_image: str | None,
+) -> dict[str, Any]:
+    """The environment kwargs for one attempt's TrialConfig.
+
+    Daytona tasks ignore the worker-local options; their environment takes the
+    provisioning mode and the attempt timeout. The composed grader machine image
+    is not worker-local: a tier-routed task's grader must still run from its
+    digest-pinned composed image (the Daytona grader machine refuses to start
+    from a bare host image, so dropping the binding fails every attempt).
+    """
+    if task.backend == "daytona":
+        options: dict[str, Any] = {
+            "provisioning": daytona_provisioning,
+            "trial_attempt_timeout_sec": ATTEMPT_TIMEOUT,
+            "create_admission_command": list(DATA_ADMISSION_COMMAND),
+        }
+    else:
+        options = dict(environment_options)
+    if machine_image is not None:
+        options["grader_machine_image"] = machine_image
+    return options
+
+
 def run_task(
     task: PreparedTask,
     config: CandidateRun,
@@ -664,19 +692,8 @@ def run_task(
             }
             agent_name = "terminus-2"
 
-        options = dict(config.environment_options)
+        options = trial_environment_options(task, config.environment_options, config.daytona_provisioning, machine_image)
         authentication = {endpoint: "EMPTY"}
-        if machine_image is not None:
-            options["grader_machine_image"] = machine_image
-        if task.backend == "daytona":
-            # Daytona tasks ignore the worker-local options; their environment
-            # takes the provisioning mode and the attempt timeout. The judge
-            # and candidate relay endpoints are added below when judged.
-            options = {
-                "provisioning": config.daytona_provisioning,
-                "trial_attempt_timeout_sec": ATTEMPT_TIMEOUT,
-                "create_admission_command": list(DATA_ADMISSION_COMMAND),
-            }
         if task.judge_model is not None:
             if judge_url is None or config.judge is None:
                 raise ValueError("A task judge requires the protocol's host-side relay")

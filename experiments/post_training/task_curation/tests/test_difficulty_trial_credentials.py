@@ -22,6 +22,7 @@ from experiments.post_training.task_curation.difficulty_trials import (
     resolve_provider_secrets,
     task_guest_environment,
     task_required_provider_secrets,
+    trial_environment_options,
     worker_host_capabilities,
 )
 from experiments.post_training.task_curation.images.build import (
@@ -135,6 +136,38 @@ def test_resolved_credentials_grant_harbor_dummy_credentials(judged_bundle, monk
     )
     granted = task_guest_environment(task, resolved)
     assert granted == {"TOGETHER_API_KEY": "EMPTY"}
+
+
+def test_daytona_options_keep_the_composed_grader_machine_image():
+    """A tier-routed task's grader must still run from its digest-pinned composed image.
+
+    48a1d5796a routes privilege-dropping graders up to Daytona after planning;
+    the Daytona options swap must not discard the grader machine image binding
+    (machine.py:652 refuses a bare host image), and worker-local options must
+    not leak into the Daytona environment.
+    """
+    routed = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=None,
+        workload="task_spec",
+        backend="daytona",
+        reason=None,
+        judge_model=None,
+    )
+    pinned = "ghcr.io/marin-community/rollout-images@sha256:" + "f" * 64
+    options = trial_environment_options(routed, {"registry_authfile": "auth.json"}, "snapshot", pinned)
+    assert options == {
+        "provisioning": "snapshot",
+        "trial_attempt_timeout_sec": difficulty_trials.ATTEMPT_TIMEOUT,
+        "create_admission_command": list(difficulty_trials.DATA_ADMISSION_COMMAND),
+        "grader_machine_image": pinned,
+    }
+    local = routed.model_copy(update={"backend": "local"})
+    assert trial_environment_options(local, {"registry_authfile": "auth.json"}, "snapshot", pinned) == {
+        "registry_authfile": "auth.json",
+        "grader_machine_image": pinned,
+    }
 
 
 def _fake_storage_path(payloads: dict[str, str]):
