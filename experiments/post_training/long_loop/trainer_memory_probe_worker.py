@@ -3,8 +3,13 @@
 
 """GPU workers for the trainer-only memory qualification."""
 
+import math
+import time
+
 import megatron.core.parallel_state as mpu
 import torch
+from megatron.core.optimizer import ChainedOptimizer
+from skyrl_train.distributed.megatron.megatron_utils import dp_weight_checksum_mismatch
 from skyrl_train.workers.megatron.megatron_model_wrapper import MegatronModelWrapper
 from skyrl_train.workers.megatron.megatron_worker import MegatronPolicyWorkerBase
 
@@ -50,6 +55,27 @@ class QualifyingWorker(MegatronPolicyWorkerBase):
             output_projection_chunk_size=self.cfg.trainer.policy.megatron_config.output_projection_chunk_size,
         )
         self.model.router_replay = replay
+        self.clip_observations = []
+        children = (
+            self.optimizer.chained_optimizers if isinstance(self.optimizer, ChainedOptimizer) else [self.optimizer]
+        )
+        thresholds = [child.config.clip_grad for child in children if child.get_parameters()]
+        if not thresholds or any(value != 0.5 for value in thresholds):
+            raise ValueError(f"Qualification requires native clipping at 0.5, got {thresholds}")
+        native_step = self.optimizer.step_with_ready_grads
+
+        def observed_step():
+            # Every policy rank executes this extra norm collective, after native
+            # clipping and before the optimizer consumes the gradients.
+            started = time.monotonic()
+            norm = float(self.optimizer.get_grad_norm())
+            observation = {"post_clip_norm": norm, "norm_check_seconds": time.monotonic() - started}
+            self.clip_observations.append(observation)
+            if not math.isfinite(norm) or norm > 0.5 * 1.001:
+                raise ValueError(f"Native clipping did not bound the consumed gradient: {observation}")
+            return native_step()
+
+        self.optimizer.step_with_ready_grads = observed_step
         groups = [
             {
                 "route": group.get("optimizer"),
@@ -64,6 +90,8 @@ class QualifyingWorker(MegatronPolicyWorkerBase):
             "rank": self._rank,
             "gpu_uuid": str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid),
             "optimizer_groups": groups,
+            "optimizer_types": [type(child.optimizer).__name__ for child in children],
+            "clip_thresholds": thresholds,
         }
 
     def qualify_real_batch(self, batch):
@@ -80,3 +108,21 @@ class QualifyingWorker(MegatronPolicyWorkerBase):
         ):
             raise RuntimeError("Last pipeline stage did not qualify the real-batch output projection")
         return report
+
+    def ppo_train(self, batch):
+        self.clip_observations = []
+        started = time.monotonic()
+        output = super().ppo_train(batch)
+        learner_seconds = time.monotonic() - started
+        started = time.monotonic()
+        mismatch = dp_weight_checksum_mismatch(self.actor_module)
+        output.metadata["qualification"] = {
+            "rank": self._rank,
+            "learner_seconds": learner_seconds,
+            "checksum_seconds": time.monotonic() - started,
+            "dp_weight_checksum_mismatch": mismatch,
+            "clipping": self.clip_observations,
+        }
+        if mismatch != 0 or not self.clip_observations:
+            raise ValueError(f"Native update qualification failed: {output.metadata['qualification']}")
+        return output

@@ -16,6 +16,8 @@ from skyrl_train.distributed.megatron.grug_muonh import (
     megatron_grug_route,
 )
 
+from skyrl_train.trainer_memory_profile import preserve_training_state, warm_state_profile
+
 FIXTURE = Path(__file__).with_name("fixtures") / "grug_muonh_hero_ep" / "golden.npz"
 
 
@@ -147,6 +149,28 @@ def oracle_update_error(offload_momentum, normalization, *, expert_parallel_grou
                 muon.initialize_state()
                 muon.load_state_dict(restored["muon"])
                 adam.load_state_dict(restored["adam"])
+
+                def sizing_step(tokens):
+                    for name, parameter in parameters.items():
+                        parameter.grad = torch.tensor(fixture[f"gradient_2__{name}"]) * tokens
+                    muon.step()
+                    adam.step()
+
+                def measure(tokens, run, warm):
+                    run()
+                    return {"tokens": tokens, "warm": warm}
+
+                # Sizing must restore moments and FP32 masters so the next real
+                # update still matches the independent JAX step-2 oracle.
+                with preserve_training_state(
+                    [muon, adam], optimizer_parameters=list(parameters.values()), cuda_devices=[]
+                ):
+                    reports = warm_state_profile([5, 7], step=sizing_step, measure=measure)
+                assert reports == [
+                    {"tokens": 5, "warm": False},
+                    {"tokens": 5, "warm": True},
+                    {"tokens": 7, "warm": True},
+                ]
 
         return max(errors)
 

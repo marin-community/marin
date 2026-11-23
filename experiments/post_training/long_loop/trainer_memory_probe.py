@@ -95,7 +95,7 @@ def applied_update_metrics(outputs):
         }
         if not all(math.isfinite(value) for value in values.values()):
             raise ValueError(f"Non-finite native update on output {rank}: {values}")
-        if values["policy_update_steps"] <= 0 or values["skipped_steps"] != 0:
+        if values["policy_update_steps"] <= 0 or values["skipped_steps"] != 0 or values["raw_grad_norm"] <= 0:
             raise ValueError(f"Native optimizer did not apply every update on output {rank}: {values}")
         metrics.append(values)
     if not metrics:
@@ -144,6 +144,7 @@ def driver(args, worker_type):
                     "seconds": time.monotonic() - started,
                     "rank_outputs": len(outputs),
                     "updates": applied_update_metrics(outputs),
+                    "rank_measurements": [output.metadata["qualification"] for output in outputs],
                 }
             )
             io.write_bytes_atomic(

@@ -10,8 +10,8 @@ import pytest
 import yaml
 
 
-@pytest.mark.parametrize("variant", ["chunked", "offload"])
-def test_probe_derives_native_loss_context_before_worker_start(tmp_path, variant):
+@pytest.mark.parametrize("variant, optimizer", [("chunked", "AdamW"), ("offload", "AdamW"), ("chunked", "MuonH")])
+def test_probe_derives_native_loss_context_before_worker_start(tmp_path, variant, optimizer):
     pytest.importorskip("hydra", reason="Probe admission requires the native SkyRL CPU environment")
     from cloud.iris.launch_config import load_launch_config  # noqa: PLC0415 - optional SkyRL runtime
     from cloud.iris.tests.launch_config_fixtures import raw_launch_config  # noqa: PLC0415 - optional SkyRL runtime
@@ -23,7 +23,11 @@ def test_probe_derives_native_loss_context_before_worker_start(tmp_path, variant
     )
 
     source = tmp_path / "launch.yaml"
-    source.write_text(yaml.safe_dump(raw_launch_config()))
+    document = raw_launch_config()
+    document["skyrl"]["trainer"]["policy"] = {
+        "optimizer_config": {"optimizer": optimizer, "weight_decay": 0.0, "max_grad_norm": 0.5}
+    }
+    source.write_text(yaml.safe_dump(document))
     reference = load_launch_config(source).skyrl
     assert OmegaConf.select(reference, "trainer.algorithm.max_seq_len") is None
     validate_cfg(reference, check_runtime_resources=False)
@@ -106,7 +110,13 @@ def test_cpu_driver_publishes_complete_receipts_after_training_and_warm_profile(
                                 "skipped_steps": 0,
                                 "policy_loss": 0.25,
                                 "raw_grad_norm": 0.5,
-                            }
+                            },
+                            "qualification": {
+                                "rank": 0,
+                                "learner_seconds": 0.01,
+                                "dp_weight_checksum_mismatch": 0,
+                                "clipping": [{"post_clip_norm": 0.5, "norm_check_seconds": 0.001}],
+                            },
                         }
                     )
                 ]
