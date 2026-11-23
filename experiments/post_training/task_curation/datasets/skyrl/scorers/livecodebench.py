@@ -368,6 +368,13 @@ class _ProgramError(Exception):
         return self.args[0]
 
 
+class _OversizedResult(Exception):
+    """A result message longer than its bound, which the parent discarded without decoding it."""
+
+    def __init__(self, size: int, bound: int):
+        super().__init__(f"the program's result is {size} bytes, over the {bound}-byte bound for this test")
+
+
 class _VerifierChildLost(BaseException):
     """The verifier child exited or missed its deadline before reporting a test.
 
@@ -461,6 +468,20 @@ _FRAME_LENGTH = struct.Struct("!Q")
 """The length prefix of each message a verifier child writes to its parent's pipe."""
 _PIPE_READ_BYTES = 1 << 20
 """The most one read takes from the pipe: a length prefix the program wrote can be arbitrarily large."""
+_MESSAGE_FLOOR_BYTES = 1 << 20
+"""The longest message the parent reads whatever the expected output: setup messages and small results."""
+_MESSAGE_BYTES_PER_EXPECTED_BYTE = 16
+"""How much longer than its expected output a result message may be. The value form of a list of one-digit numpy
+integers is up to 12 times the compact JSON of the same list."""
+
+
+def _result_bound(expected_output: str) -> int:
+    """The longest result message the parent reads for a test whose expected output is ``expected_output``.
+
+    The parent decodes and compares each result outside the child's memory cap, so the bound keeps what it
+    allocates proportional to the expected outputs it already holds.
+    """
+    return _MESSAGE_FLOOR_BYTES + _MESSAGE_BYTES_PER_EXPECTED_BYTE * len(expected_output.encode())
 
 
 def _message(*fields) -> bytes:
@@ -480,7 +501,7 @@ class _ChildProgram:
         self._connection = connection
         self._deadline = deadline
 
-    def _read(self, size: int) -> bytes:
+    def _read(self, size: int) -> bytearray:
         # The program can reach the pipe and write part of a message, so every read waits only until the deadline.
         data = bytearray()
         while len(data) < size:
@@ -490,15 +511,21 @@ class _ChildProgram:
             if not chunk:
                 raise _VerifierChildLost
             data += chunk
-        return bytes(data)
+        return data
 
-    def _receive(self) -> Any:
+    def _receive(self, bound: int) -> Any:
+        """The next message, decoded; a message longer than ``bound`` bytes is read off the pipe and dropped."""
         (size,) = _FRAME_LENGTH.unpack(self._read(_FRAME_LENGTH.size))
+        if size > bound:
+            remaining = size
+            while remaining:
+                remaining -= len(self._read(min(remaining, _PIPE_READ_BYTES)))
+            raise _OversizedResult(size, bound)
         return json.loads(self._read(size))
 
     def wait_until_ready(self) -> None:
         """Wait until the program has compiled and defines the tested function; raise why it cannot run otherwise."""
-        match self._receive():
+        match self._receive(_MESSAGE_FLOOR_BYTES):
             case [_ChildMessage.READY]:
                 return
             case [_ChildMessage.SETUP_ERROR, str(text)]:
@@ -506,9 +533,12 @@ class _ChildProgram:
             case message:
                 raise ValueError(f"unexpected verifier child message: {truncatefn(message)}")
 
-    def next_result(self) -> tuple[Any, float]:
-        """What the program returned or printed for the next test, and how long it ran."""
-        match self._receive():
+    def next_result(self, bound: int) -> tuple[Any, float]:
+        """What the program returned or printed for the next test, and how long it ran.
+
+        Raises ``_OversizedResult`` if the result's message is longer than ``bound`` bytes.
+        """
+        match self._receive(bound):
             case [_ChildMessage.VALUE, form, int() | float() as execution_time]:
                 return _value_from_form(form), execution_time
             case [_ChildMessage.UNSUPPORTED, str(text), int() | float() as execution_time]:
@@ -520,12 +550,16 @@ class _ChildProgram:
 
 
 def _execution_failure(error: Exception, test_input, expected_output) -> tuple[int, dict[str, Any]]:
-    timed_out = "timeoutexception" in repr(error).lower()
-    error_code = -3 if timed_out else -4
+    if isinstance(error, _OversizedResult):
+        error_code, error_message = -2, "Wrong Answer: result over the size bound"
+    elif "timeoutexception" in repr(error).lower():
+        error_code, error_message = -3, "Time Limit Exceeded"
+    else:
+        error_code, error_message = -4, "Runtime Error"
     return error_code, {
         "error": repr(error),
         "error_code": error_code,
-        "error_message": "Time Limit Exceeded" if timed_out else "Runtime Error",
+        "error_message": error_message,
         "inputs": truncatefn(test_input),
         "expected": truncatefn(expected_output),
     }
@@ -545,14 +579,15 @@ def grade_call_based(
 
     all_inputs = _call_arguments(all_inputs)
 
+    bounds = [_result_bound(output) for output in all_outputs]
     all_outputs = [json.loads(output) for output in all_outputs]
 
     total_execution = 0
     all_results = []
     failure_metadata = None
-    for idx, (gt_inp, gt_out) in enumerate(zip(all_inputs, all_outputs)):
+    for idx, (gt_inp, gt_out, bound) in enumerate(zip(all_inputs, all_outputs, bounds)):
         try:
-            prediction, execution_time = program.next_result()
+            prediction, execution_time = program.next_result(bound)
             total_execution += execution_time
 
             # don't penalize model if it produces tuples instead of lists
@@ -600,7 +635,7 @@ def grade_stdio(
     failure_metadata = None
     for idx, (gt_inp, gt_out) in enumerate(zip(all_inputs, all_outputs)):
         try:
-            prediction, execution_time = program.next_result()
+            prediction, execution_time = program.next_result(_result_bound(gt_out))
             total_execution_time += execution_time
         except Exception as e:
             error_code, metadata = _execution_failure(e, gt_inp, gt_out)

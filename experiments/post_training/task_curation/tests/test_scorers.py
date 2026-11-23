@@ -428,22 +428,40 @@ ULTRA_CODE = ScorerClosure(
 """What the Ultra code grade script ships: ``code_gen`` imports the one vendored LiveCodeBench evaluator."""
 
 ULTRA_CODE_CHECK = """
-import json, sys
+import json, sys, tracemalloc
 sys.path.insert(0, sys.argv[1])
 from skyrl_gym.envs.nemotron_ultra.code_gen import grade_code
+tracemalloc.start()
 reward, detail = grade_code(sys.stdin.read(), {"verifier_metadata": {"unit_tests": json.loads(sys.argv[2])}})
-print(json.dumps([reward, detail["result"], detail["test_results"]]))
+print(json.dumps([reward, detail["result"], detail["test_results"], tracemalloc.get_traced_memory()[1]]))
 """
+"""Grades the reply on stdin with Ultra's ``grade_code`` and prints the result with the peak memory it allocated."""
+
+PRINTS_64_MIB = 'print("x" * (64 << 20))'
+"""A stdin program whose output is 64 MiB, for tests that expect a few bytes."""
 
 
-def test_ultra_code_grade_scores_a_program_without_the_tested_function_zero(tmp_path: Path):
+def ultra_code_grade(tmp_path: Path, cases: list[dict], program: str) -> tuple[float, str, list, int]:
     ULTRA_CODE.skip_if_unavailable()
     tests = ULTRA_CODE.stage(tmp_path)
     result = subprocess.run(
-        (sys.executable, "-I", "-c", ULTRA_CODE_CHECK, str(tests), json.dumps(FUNCTIONAL_ADD)),
-        input="```python\nclass Solution:\n    def solve(self, a, b):\n        return a + b\n```",
+        (sys.executable, "-I", "-c", ULTRA_CODE_CHECK, str(tests), json.dumps(cases)),
+        input=f"```python\n{program}\n```",
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout.splitlines()[-1]) == [0.0, "failed_tests", [-4]]
+    reward, outcome, test_results, peak_bytes = json.loads(result.stdout.splitlines()[-1])
+    return reward, outcome, test_results, peak_bytes
+
+
+def test_ultra_code_grade_scores_a_program_without_the_tested_function_zero(tmp_path: Path):
+    program = "class Solution:\n    def solve(self, a, b):\n        return a + b"
+    assert ultra_code_grade(tmp_path, FUNCTIONAL_ADD, program)[:3] == (0.0, "failed_tests", [-4])
+
+
+def test_ultra_code_grade_fails_an_oversized_output_without_reading_it(tmp_path: Path):
+    reward, outcome, test_results, peak_bytes = ultra_code_grade(tmp_path, STDIN_ADD, PRINTS_64_MIB)
+    assert (reward, outcome, test_results) == (0.0, "failed_tests", [-2])
+    # The grading process reads the 64 MiB result in 1 MiB pieces and drops it.
+    assert peak_bytes < 16 << 20
