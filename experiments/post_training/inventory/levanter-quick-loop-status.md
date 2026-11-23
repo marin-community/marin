@@ -11,12 +11,23 @@ The latest eight-H100 diagnostic completed and its entire archive was audited.
 It separates two findings: identical calls to one compiled gradient program
 produce different finite gradients, and the short-sequence attention fallback
 can return NaN dQ on finite inputs after an intentional NaN-input call.
-Checkpoint restoration itself is byte-exact. The strict tiny-model continued
+Tiny-model checkpoint restoration is byte-exact. The strict tiny-model continued
 state/score comparison still fails; no tolerance has changed. The full-model
 validator checks exact restoration before resuming normal training. A separate
-full-model diagnostic is being prepared to test finite updates, natural process
-exit, updated-weight publication and generation while retaining the failed
-tiny-model parity gate.
+full-model diagnostic is running to test finite updates, natural process exit,
+updated-weight publication and generation while retaining the failed tiny-model
+parity gate.
+
+Full-model BATCH diagnostic `2026.11.22.3` was submitted at 15:51 PST from
+`baa10702aec4cfd62e0aebb2cef8c336974172ae`, whose executable source is identical
+to `761116cb37ae27c9fb1468582d22c3e71e3a1d07`. Its coordinator is
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.22.3-coordinator-55ff407d`;
+the GPU child suffix is `2026.11.22.3-aa7035a8034a`. All five GPU tasks were
+running at 15:55 PST with zero failures or preemptions. Both accepted source
+bundles match all 4,588 frozen entries and 48 required runtime files. Automatic
+failure retries are zero; the unchanged coordinator/GPU preemption-retry budgets
+are 100/1,000, independently matching the previous full-model run. Startup and
+source verification do not establish finite updates, restoration or publication.
 
 BATCH smoke `2026.11.22.1`, from
 `8dde046e6980e120e13f577f0035be16c62d77f7`, failed at 00:56 PST during
@@ -211,7 +222,8 @@ archive members and 4,588 frozen source entries. The
 ([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-lifecycle-repeatability-2026-11-22-2%2F0%2Fdba881a4baa5c048%2Foutputs.tar.zst))
 is 810,804,989 bytes, SHA256
 `19dccc5b331eedebbfb6d59bf50f7115be952da64889e42ce0c8b015596c306a`.
-Collection succeeded; learner qualification remains failed. No job is active.
+Collection succeeded; learner qualification remains failed. This tiny-model
+diagnostic is no longer active.
 
 The repeated shared-checkpoint test again passed 16 of 18 checks. Exact
 restoration, frozen input and scores before the update, finite model/Adam state,
@@ -244,6 +256,14 @@ key/value head counts; this shape selects the adapted segmented backward on
 H100. The full model uses 128 values per head and four query heads per key/value
 head (D128/GQA4), which selects a different native SM90 backward.
 
+The opt-in `fallback_stage_probe.py` records scratch values after the original
+preprocess and backward stages, with an unchanged control in a separate process.
+A separate finite-input case prefills the entire dQ accumulator with NaNs before
+the original preprocess to check actual clearing. CPU contract and error-reporting
+checks pass; GPU compilation and stage behavior remain untested. Snapshot copies
+can alter ordering and suppress the original failure, so healthy observed stages
+would not establish a production remedy.
+
 The native SM90 adapter selects `deterministic=False`. The pinned upstream
 implementation has shared FP32 GQA gradient reductions, so its source contract
 does not promise bitwise repeatability. That source observation alone does not
@@ -261,8 +281,8 @@ copies are supplemental. Extra host-transfer cost remains
 unmeasured on the full model.
 
 Full-model sequence/window geometry and cross-host behavior remain separate
-gates. No new 40-H100 full-model smoke or matched 25-update comparison has been
-launched.
+gates. The new 40-H100 operational diagnostic is running; neither matched
+25-update comparison has been launched.
 
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
