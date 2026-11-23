@@ -11,7 +11,7 @@ from itertools import count
 from pathlib import Path
 
 import pytest
-from shellbox.image import PreparedImage, RegistryImage
+from shellbox.image import ImageArchitecture, PreparedImage, RegistryImage, host_architecture
 
 HOST_REQUIREMENTS = {
     "requires_host_setsid": "The local Linux guest fake needs the host setsid executable",
@@ -40,10 +40,14 @@ def pytest_addoption(parser):
 
 
 @pytest.fixture
-def oci_image(tmp_path: Path) -> Callable[[tuple[bytes, ...], dict[str, object]], PreparedImage]:
+def oci_image(tmp_path: Path) -> Callable[..., PreparedImage]:
     sequence = count()
 
-    def build(layers: tuple[bytes, ...], process: dict[str, object]) -> PreparedImage:
+    def build(
+        layers: tuple[bytes, ...],
+        process: dict[str, object],
+        architecture: ImageArchitecture | None = None,
+    ) -> PreparedImage:
         layout = tmp_path / f"oci-{next(sequence)}"
         blobs = layout / "blobs/sha256"
         blobs.mkdir(parents=True)
@@ -56,7 +60,7 @@ def oci_image(tmp_path: Path) -> Callable[[tuple[bytes, ...], dict[str, object]]
         descriptors = tuple(blob(layer, "application/vnd.oci.image.layer.v1.tar") for layer in layers)
         config = {
             "os": "linux",
-            "architecture": "amd64",
+            "architecture": str(architecture or host_architecture()),
             "config": process,
             "rootfs": {"type": "layers", "diff_ids": [layer["digest"] for layer in descriptors]},
         }

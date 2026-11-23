@@ -12,7 +12,7 @@ import tarfile
 from pathlib import Path
 
 import pytest
-from shellbox.image import PreparedImage, RegistryImage
+from shellbox.image import PreparedImage, RegistryImage, host_architecture
 
 
 @pytest.fixture
@@ -50,7 +50,7 @@ def prepared_busybox_image(tmp_path: Path) -> PreparedImage:
         json.dumps(
             {
                 "os": "linux",
-                "architecture": "amd64",
+                "architecture": str(host_architecture()),
                 "rootfs": {"type": "layers", "diff_ids": [layer_descriptor["digest"]]},
                 "config": {
                     "Env": ["PATH=/bin", "IMAGE_VALUE=from-image"],

@@ -10,8 +10,23 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE, IMAGE_REFERENCE_KEY, guest_code_id, stage_bundle
-from shellbox.image import OCI_TAG, DockerfileSource, PreparedImage, RegistryImage, prepared_image_workdir
+from shellbox.backends.qemu.bundle import (
+    IMAGE_METADATA_FILE,
+    IMAGE_REFERENCE_KEY,
+    QEMU_GUEST_ARCHITECTURE,
+    guest_code_id,
+    stage_bundle,
+)
+from shellbox.image import (
+    OCI_TAG,
+    DockerfileSource,
+    PreparedImage,
+    RegistryImage,
+    check_image_architecture,
+    prepared_image_config,
+    prepared_image_workdir,
+    source_description,
+)
 from shellbox.machine import QemuBundle
 
 
@@ -30,7 +45,8 @@ class QemuAssets:
 
 
 def stage_qemu_image(image: PreparedImage, assets: QemuAssets, cache: Path) -> Path:
-    """Stage a prepared image as a reusable QEMU bundle."""
+    """Stage a prepared linux/amd64 image as a reusable QEMU bundle."""
+    check_image_architecture(prepared_image_config(image), QEMU_GUEST_ARCHITECTURE, source_description(image.source))
     working_directory = prepared_image_workdir(image)
     source_id = (
         image.source.reference
