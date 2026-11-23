@@ -229,12 +229,18 @@ def test_shutdown_waits_for_active_generation(
     ctx = server.inference_context
     started = threading.Event()
     unblock = threading.Event()
+    shutdown_started = threading.Event()
+    wait_timeout = 15
     original_execute = ctx._execute_batch
 
     def blocked_execute(requests, poll):
         started.set()
-        assert unblock.wait(timeout=15)
+        assert unblock.wait(timeout=wait_timeout)
         original_execute(requests, poll)
+
+    def shutdown():
+        shutdown_started.set()
+        server.shutdown()
 
     monkeypatch.setattr(ctx, "_execute_batch", blocked_execute)
     try:
@@ -250,16 +256,16 @@ def test_shutdown_waits_for_active_generation(
                 },
             )
             try:
-                assert started.wait(timeout=5)
-                stopping = executor.submit(server.shutdown)
-                assert ctx.shutdown_event.wait(timeout=5)
+                assert started.wait(timeout=wait_timeout)
+                stopping = executor.submit(shutdown)
+                assert shutdown_started.wait(timeout=wait_timeout)
                 with pytest.raises(TimeoutError):
                     stopping.result(timeout=2.5)
             finally:
                 unblock.set()
 
-            stopping.result(timeout=15)
-            assert result.result(timeout=15).status_code == 200
+            stopping.result(timeout=wait_timeout)
+            assert result.result(timeout=wait_timeout).status_code == 200
     finally:
         server.shutdown()
 

@@ -225,7 +225,7 @@ class InferenceContext:
         self.batch_thread.start()
 
     def shutdown(self):
-        """Stop admission and wait for active generation before returning."""
+        """Signal shutdown and wait for the serving workers to exit."""
         logger.info("Shutting down inference context.")
         self.shutdown_event.set()
         self.inference_thread.join()
