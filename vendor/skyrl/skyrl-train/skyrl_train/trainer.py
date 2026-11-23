@@ -1525,6 +1525,8 @@ class RayPPOTrainer:
 
     @asynccontextmanager
     async def _admission_window(self, step_wall: StepWallTime):
+        # Evaluation must finish its deferred buffer publish before the next batch is admitted.
+        await self._join_priority_evaluation()
         step_wall.start("group_admission")
         logger.info(
             "Rollout batch started: step={} required_groups={}", self.global_step, self.context.config.batch_size

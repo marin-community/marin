@@ -15,8 +15,19 @@ from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
 from skyrl_train.utils.trainer_utils import ResumeMode
 from skyrl_train.callbacks.builtin import create_callbacks_from_config
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.dynamic_sampling import GroupSelectionResult
+from skyrl_train.rollouts.buffer import (
+    BatchPolicy,
+    GroupRewards,
+    PayloadReference,
+    RolloutBuffer,
+    RolloutBufferConfig,
+    RolloutVerdict,
+)
 from skyrl_train.rollouts.context import TrainingContextState
 from skyrl_train.rollouts.loader import PromptLoaderState
+from skyrl_train.telemetry import GeneratedWork
+from skyrl_train.timing_observability import StepWallTime
 from skyrl_train.trainer import RayPPOTrainer
 
 
@@ -426,7 +437,7 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail", [False, True])
-async def test_next_sync_and_publish_wait_for_frozen_evaluation_and_select_its_checkpoint(
+async def test_next_admission_and_sync_wait_for_evaluation_publish_and_select_its_checkpoint(
     checkpoint_trainer,
     tmp_path,
     fail,
@@ -435,12 +446,29 @@ async def test_next_sync_and_publish_wait_for_frozen_evaluation_and_select_its_c
     trainer.cfg.trainer.rollout_buffer.eval_drain = "priority"
     trainer._training_metrics_enabled = False
     trainer._policy_version_step = trainer._inference_policy_step = 2
+    trainer._speculator_capture_active = False
+    trainer._sealed_speculator_capture_uri = None
     trainer.eval_dataset = object()
     trainer.eval_trajectory_sink = None
     trainer.tracker = SimpleNamespace(log=lambda *args, **kwargs: None)
     started = asyncio.Event()
     release = asyncio.Event()
     events = []
+    buffer = RolloutBuffer(RolloutBufferConfig(1, 2, 1, BatchPolicy.FULL_BATCH, None, None))
+    await buffer.publish(2)
+    leases = [await buffer.acquire_lease() for _ in range(2)]
+    for lease in leases:
+        await buffer.commit(
+            lease.lease_id,
+            {},
+            RolloutVerdict(
+                lease.lease_id, (), GroupSelectionResult.KEEP,
+                GroupRewards((0.0, 1.0), (0.0, 1.0), True), GeneratedWork(2, 2, 20),
+            ),
+            PayloadReference(lease.lease_id),
+        )
+    consumed = await buffer.admit(1)
+    assert buffer.payload_refs(2, [group.index for group in consumed.admitted]) == [leases[0].lease_id]
 
     async def noop(*args, **kwargs):
         pass
@@ -457,6 +485,7 @@ async def test_next_sync_and_publish_wait_for_frozen_evaluation_and_select_its_c
         return {"eval/all/num_attempted": 40, "eval/all/num_scored": 40, "eval/all/avg_verifier_score": 0.5}
 
     async def publish(step):
+        await buffer.publish(step)
         events.append(("publish", step))
 
     async def pause():
@@ -470,6 +499,7 @@ async def test_next_sync_and_publish_wait_for_frozen_evaluation_and_select_its_c
 
     trainer.context.pause_and_drain = noop
     trainer.context.publish = publish
+    trainer.context.config = buffer.config
     trainer._begin_speculator_capture = noop
     trainer.eval_trajectory_runner = SimpleNamespace(
         set_trajectory_sink=lambda sink: None,
@@ -501,21 +531,35 @@ async def test_next_sync_and_publish_wait_for_frozen_evaluation_and_select_its_c
     )
     await trainer._run_step_end_callbacks(TrainerState(2, 0, 20, 20))
     await started.wait()
-    # The next optimizer may finish while the serving policy remains frozen at 2.
+    # The real buffer has consumed step 2; admission must wait for eval's deferred publish.
     trainer.global_step = trainer._policy_version_step = 3
     await trainer._publish(3)
+
+    async def admit_next_batch():
+        async with trainer._admission_window(StepWallTime(trainer.cfg.trainer.step_phase_budgets)):
+            admission = await buffer.admit(1)
+            events.append(("admit", 3))
+            return buffer.payload_refs(3, [group.index for group in admission.admitted])
+
+    admitting = asyncio.create_task(admit_next_batch())
     syncing = asyncio.create_task(trainer._sync_policy_for_rollouts(reason="training_step"))
-    await asyncio.sleep(0)  # Reach the evaluation fence, without a wall-clock delay.
-    assert events == []
-    assert not syncing.done()
-    release.set()
+    try:
+        await asyncio.sleep(0)  # Let both tasks reach the evaluation fence without a wall-clock delay.
+        assert events == []
+        assert not admitting.done()
+        assert not syncing.done()
+    finally:
+        release.set()
+        results = await asyncio.gather(admitting, syncing, return_exceptions=True)
     if fail:
-        with pytest.raises(ExceptionGroup, match="TaskGroup"):
-            await syncing
+        assert all(isinstance(result, ExceptionGroup) for result in results)
         assert events == ["session-stopped"]
         return
-    await syncing
-    assert events == ["session-stopped", ("publish", 3), "pause-generation", "sync-weights", ("resume-generation", 4)]
+    assert results == [[leases[1].lease_id], None]
+    assert events.index(("publish", 3)) < events.index(("admit", 3))
+    assert [event for event in events if event != ("admit", 3)] == [
+        "session-stopped", ("publish", 3), "pause-generation", "sync-weights", ("resume-generation", 4),
+    ]
     selected = json.loads((tmp_path / "best_checkpoint.json").read_text())
     assert selected["step"] == trainer._last_evaluated_step == 2
     assert not (tmp_path / "global_step_3").exists()

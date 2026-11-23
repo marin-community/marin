@@ -1267,7 +1267,7 @@ strategy and aborted/re-queued group count. Ordinary trajectory timeouts still
 run the verifier and retain its score.
 Pausing before batch acquisition could prevent rejected groups from being replaced.
 
-`priority` leaves training admission and in-flight groups active. Evaluation shares
+`priority` leaves training rollout dispatch and in-flight groups active. Evaluation shares
 the same rollout workers and vLLM engines, using request priority `-1` versus
 training's `0` (lower values run first). Recipe composition derives
 `generator.engine_init_kwargs.scheduling_policy: priority` from this mode; a
@@ -1276,12 +1276,14 @@ ordering, not the available KV memory or Harbor slots; running training requests
 can still compete for engine resources.
 
 After step-N weight sync, priority evaluation runs asynchronously with captured
-step-N identities. The next optimizer can proceed, but its weight sync and buffer
-policy publication wait for evaluation to complete. Best selection reuses the
+step-N identities. Admission of the next learner batch waits for evaluation and
+the deferred buffer policy publication to complete, so the consumed step-N batch
+cannot be taken again. Weight sync also retains its evaluation fence. Best selection reuses the
 saved step-N checkpoint rather than saving newer optimizer weights under an old
 step. Keep checkpoint and evaluation cadence aligned when using best selection.
-Evaluation failures propagate through the next sync fence. Native timings retain
-`eval` at the evaluated step and `eval_sync_wait` at the blocked sync step.
+Evaluation failures propagate through the admission or sync fence before further
+batch consumption or weight updates. Native timings retain `eval` at the evaluated
+step and `eval_sync_wait` at the next learner step's fence.
 The prepared `.124` round changes only `.123`'s version and `eval_drain` to
 `priority`; its baseline evaluation remains synchronous.
 
