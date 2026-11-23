@@ -578,6 +578,16 @@ config:
       repo: marin-community/marin
       promptFile: watches/belay.md
       slackChannels: []
+    pr-review-reminders:
+      enabled: true
+      cron: "0 10 * * 1-5"
+      timezone: America/Los_Angeles
+      runTimeoutSeconds: 1800
+      profile: ops-report
+      repo: marin-community/marin
+      promptFile: watches/pr-review-reminders.md
+      slackChannels:
+        - C0BN20081CH
     # Lists long-running Iris root jobs in a Google Sheet and cancels the ones their owners marked Kill.
     old-iris-jobs:
       enabled: true
