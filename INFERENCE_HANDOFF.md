@@ -34,11 +34,11 @@ are the pre-integration native and compiled vLLM baselines. The integrated
 replay-on/off overhead and vLLM gap have their own measurements.
 [AgentX results and launch settings](docs/reports/snowball-inference-status-2026-11-20.md)
 
-The four-chip TPUv4 fixed-schedule fixture matched all evaluated FP32 logits
-between the learner, prefill, and cached decode. Max logprob error and
-full-vocabulary forward KL were both zero. The native Splash control had
-maximum absolute logit error 0.0004404 and maximum mean forward KL
-`7.55e-9` nats across the reported comparisons.
+The four-chip TPUv4 arm with shared `fixed_schedule` attention matched all
+evaluated FP32 logits between the learner, prefill, and cached decode. Max
+logprob error and full-vocabulary forward KL were both zero. Within the native
+Splash arm, the learner, prefill and cached-decode comparisons had maximum
+absolute logit error 0.0004404 and maximum mean forward KL `7.55e-9` nats.
 
 The production-engine replay A/B used the same requests and seeds at 32
 decode rounds. Generated tokens, sampled logprobs, and finish reasons
@@ -65,8 +65,8 @@ inline on scanned models reached 5,189 versus 5,739 output tokens/s
 (−9.6%) on the homogeneous burst and 761 versus 964 (−21.1%) on mixed
 requests. Tokens, scores, and finish reasons still matched exactly.
 Unrolled models share one terminal executable across prefill and decode
-buckets. The first cold v5p-8 prefill and extraction fell from 133 s to 61 s
-after this change.
+buckets. With the shared executable, the reported first cold v5p-8 prefill
+and extraction took 61 s, compared with 133 s in the earlier trial.
 [Separate terminal capture](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-terminal-20261122)
 · [Inline terminal capture](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-v4-replay-scan-inline-20261122)
 
@@ -92,8 +92,9 @@ its standard response fields.
 | Native compact replay, four prefill slots | 518.90 | 1.619 |
 | Native compact replay, eight prefill slots | 522.62 | 1.687 |
 
-The initial replay lowered throughput by 22.4% against the native control and
-19.4% against compiled vLLM. Both jobs reported zero profiling errors.
+Replay with the original archive and framing lowered throughput by 22.4%
+against the native control and 19.4% against compiled vLLM. Both jobs reported
+zero profiling errors.
 The replay arm cancelled one outstanding request at the drain deadline.
 Its median HTTP response was 33.4 MiB, compared with 15.3 KiB for the control.
 [Optimized replay](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-optimized-replay-20261122)
@@ -131,8 +132,9 @@ throughput target.
 On CoreWeave, a four-GB200 smoke matched packed native and captured
 generation, including scores and terminal routes. Both full AgentX runs
 used the existing regional 67B checkpoint mirror at 64K and concurrency 128,
-with route capture off. Native generated 571.43 output tokens/s versus
-654.80 for compiled vLLM, a 12.7% throughput gap. Native p90 first-token
+with route capture off. Full-run GPU counts remain unverified here.
+Native reported 571.43 output tokens/s versus 654.80 for compiled vLLM,
+a 12.7% throughput gap. Native p90 first-token
 latency was 0.665 s versus 1.047 s for compiled vLLM.
 [GB200 smoke](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-cw-gb200-smoke-20261122-v3)
 · [Native AgentX](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-cw-gb200-c128-agentx-20261122)
@@ -184,19 +186,25 @@ gradient leaves differed, and all were finite. This fixture does not qualify
 full-model restart.
 [Current-source repeatability](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-lifecycle-repeatability-2026-11-23-1)
 
-A single-H100 backward test with head dimension 64 and multi-head attention
-reproduced NaN query gradients on finite inputs after a deliberately NaN
-output-gradient call. Clearing K padding did not prevent the NaNs in a
-same-GPU comparison; that experimental patch remains outside this branch.
-The connection between this reproducer, the update differences and the
-full-model exit failure is unverified.
-[K-padding comparison](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-fallback-k-tail-ab-2026-11-23-2)
+A single-H100 test of the FA4/CuTe attention backward fallback, with head
+dimension 64 and multi-head attention, reproduced NaN query gradients on finite
+inputs after a deliberately NaN output-gradient call. Clearing K padding alone failed. A broader patch loads
+Q, K, V and output gradients through zero-initialized registers before writing
+shared tiles. In a same-GPU comparison, the original kernel reproduced the
+failure; all four finite-input calls with the patch returned finite gradients
+that matched the original healthy call bit-for-bit. This branch includes the
+four-load patch and a saved-input regression. Its connection to the learner
+update differences and the full-model exit failure remains unverified.
+[Four-load comparison](https://iris.oa.dev/#/job/%2Fdlwh%2Fnative-fallback-masked-load-ab-2026-11-23-1)
 
 Linux CPU controls captured stacks in a deliberately delayed C destructor,
-including with JAX libraries loaded, using the unchanged learner protocol
-and five-second post-ACK exit limit. A hung-debugger test cleaned up safely.
-Capturing the real GPU learner's native shutdown stack remains open.
+using the unchanged learner protocol and five-second post-ACK exit limit.
+One-H100 controls then executed a tiny CUDA kernel before shutdown and captured
+C-destructor, CUDA-driver and XLA CUDA-plugin frames. Healthy shutdown and
+hung-debugger cleanup controls passed. These are isolated process fixtures;
+capturing the real GPU learner's native shutdown stack remains open.
 [CPU shutdown observer](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-controls-20261123-2)
+· [GPU-loaded observer controls](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-gpu-controls-20261123-1)
 
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and

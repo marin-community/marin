@@ -1506,13 +1506,16 @@ class SegmentedFlashAttentionBackwardSm80:
                         predicate[i, k] = (
                             tKpK[i, n, k] if cutlass.const_expr(self.check_hdim_oob) else True
                         ) and predicate_n
+                # False predicates retain RF zeros; every shared destination is written.
+                rK = cute.make_rmem_tensor(tKsK[None, n, None].shape, self.dtype)
+                rK.fill(0.0)
                 cute.copy(
                     gmem_thr_copy,
                     tKgK[None, n, None],
-                    tKsK[None, n, None],
+                    rK,
                     pred=predicate,
                 )
-            # We need to clear the sK smem tiles since we'll use sKt for mma_dq
+                cute.autovec_copy(rK, tKsK[None, n, None])
 
     @cute.jit
     def load_V(
@@ -1540,12 +1543,15 @@ class SegmentedFlashAttentionBackwardSm80:
                         predicate[i, k] = (
                             tVpV[i, n, k] if cutlass.const_expr(self.check_hdim_oob) else True
                         ) and predicate_n
+                rV = cute.make_rmem_tensor(tVsV[None, n, None].shape, self.dtype)
+                rV.fill(0.0)
                 cute.copy(
                     gmem_thr_copy,
                     tVgV[None, n, None],
-                    tVsV[None, n, None],
+                    rV,
                     pred=predicate,
                 )
+                cute.autovec_copy(rV, tVsV[None, n, None])
 
     @cute.jit
     def load_Q_LSE(
@@ -1576,13 +1582,20 @@ class SegmentedFlashAttentionBackwardSm80:
                         predicate[i, k] = (
                             tQpQ[i, m, k] if cutlass.const_expr(self.check_hdim_oob) else True
                         ) and predicate_m
+                rQ = cute.make_rmem_tensor(
+                    tQsQ[None, m, None, smem_pipe_write_q if cutlass.const_expr(self.num_stages_Q) > 1 else 0].shape,
+                    self.dtype,
+                )
+                rQ.fill(0.0)
                 cute.copy(
                     gmem_tiled_copy_Q,
                     tQgQ[None, m, None, block],
-                    tQsQ[None, m, None, smem_pipe_write_q if cutlass.const_expr(self.num_stages_Q) > 1 else 0],
+                    rQ,
                     pred=predicate,
                 )
-            # We need to clear the sQ smem tiles since we'll use sQt for mma_dK
+                cute.autovec_copy(
+                    rQ, tQsQ[None, m, None, smem_pipe_write_q if cutlass.const_expr(self.num_stages_Q) > 1 else 0]
+                )
         # We made sure LSE length is padded so we read `kBlockM` elements so that all
         # elements in sLSE are filled. Without this we might have uninitialized sLSE values.
         for m in cutlass.range_constexpr(cute.size(tLSEsLSE.shape[1])):
@@ -1622,13 +1635,22 @@ class SegmentedFlashAttentionBackwardSm80:
                         predicate[i, k] = (
                             tdOpdO[i, m, k] if cutlass.const_expr(self.check_hdim_oob) else True
                         ) and predicate_m
+                rdO = cute.make_rmem_tensor(
+                    tdOsdO[
+                        None, m, None, smem_pipe_write_q if cutlass.const_expr(self.num_stages_dO > 1) else 0
+                    ].shape,
+                    self.dtype,
+                )
+                rdO.fill(0.0)
                 cute.copy(
                     gmem_tiled_copy_dO,
                     tdOgdO[None, m, None, block],
-                    tdOsdO[None, m, None, smem_pipe_write_q if cutlass.const_expr(self.num_stages_dO > 1) else 0],
+                    rdO,
                     pred=predicate,
                 )
-            # We need to clear the sQ smem tiles since we'll use sQt for mma_dK
+                cute.autovec_copy(
+                    rdO, tdOsdO[None, m, None, smem_pipe_write_q if cutlass.const_expr(self.num_stages_dO > 1) else 0]
+                )
         # We made sure LSE length is padded so we read `kBlockM` elements so that all
         # elements in sLSE are filled. Without this we might have uninitialized sLSE values.
         for m in cutlass.range_constexpr(cute.size(tdPsumgdPsum.shape[1])):
