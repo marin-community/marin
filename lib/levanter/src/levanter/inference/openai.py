@@ -43,15 +43,17 @@ from levanter.inference.binary import (
     EXPERT_IDS,
     EXPERT_VALID,
     GENERATE_PATH,
+    LOGPROB_MODE,
     MEDIA_TYPE,
     MAX_POLICY_ID_LENGTH,
+    POLICY_ID,
     POLICY_LOGPROBS,
     PROMPT_TOKEN_IDS,
     TOKEN_IDS,
     GenerateOptions,
     choice_tensor_key,
+    decode_frame,
     encode_frame,
-    read_generate_request,
 )
 from levanter.inference.engine import (
     GeneratedExpertRoutes,
@@ -79,6 +81,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
+_MAX_REQUEST_BYTES = 4 * 1024 * 1024
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
 
 
@@ -867,6 +870,29 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _read_generate_request(request: HttpRequest) -> tuple[np.ndarray, GenerateOptions]:
+    """Read a bounded generation frame with exactly one int32 token vector."""
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != MEDIA_TYPE:
+        raise HTTPException(status_code=415, detail=f"Expected {MEDIA_TYPE}")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > _MAX_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="Generation frame exceeds the request size limit")
+        body.extend(chunk)
+
+    try:
+        metadata, tensors = decode_frame(bytes(body))
+        options = GenerateOptions.model_validate(metadata)
+        if tensors.keys() != {PROMPT_TOKEN_IDS}:
+            raise ValueError("Generation requires exactly one prompt_token_ids tensor")
+        prompt = tensors[PROMPT_TOKEN_IDS]
+        if prompt.ndim != 1 or prompt.dtype != np.int32 or prompt.size == 0:
+            raise ValueError("prompt_token_ids must be a nonempty one-dimensional int32 tensor")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return prompt, options
+
+
 def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
     if options.return_route_captures and not ctx.engine.supports_route_capture:
         raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
@@ -891,7 +917,7 @@ def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options:
 
 
 async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
-    prompt, options = await read_generate_request(request)
+    prompt, options = await _read_generate_request(request)
     _validate_binary_options(ctx, prompt, options)
     future = asyncio.get_running_loop().create_future()
     ctx.submit_request(
@@ -931,7 +957,7 @@ def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse],
             "model_version": output.model_version,
         }
         if output.policy_id is not None:
-            metadata["policy_id"] = output.policy_id
+            metadata[POLICY_ID] = output.policy_id
         choices.append(metadata)
         tensors[choice_tensor_key(choice, TOKEN_IDS)] = np.asarray(output.tokens, dtype=np.int32)
         if output.logprobs is not None:
@@ -939,7 +965,7 @@ def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse],
         if output.expert_routes is not None:
             tensors[choice_tensor_key(choice, EXPERT_IDS)] = np.ascontiguousarray(output.expert_routes.expert_ids)
             tensors[choice_tensor_key(choice, EXPERT_VALID)] = output.expert_routes.valid
-    return encode_frame({"choices": choices, "logprob_mode": score_mode}, tensors)
+    return encode_frame({"choices": choices, LOGPROB_MODE: score_mode}, tensors)
 
 
 class InferenceServer:

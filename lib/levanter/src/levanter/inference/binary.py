@@ -7,7 +7,6 @@ import json
 import struct
 
 import numpy as np
-from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from safetensors import SafetensorError
 from safetensors.numpy import load, save
@@ -20,13 +19,14 @@ PROMPT_TOKEN_IDS = "prompt_token_ids"
 TOKEN_IDS = "token_ids"
 BEHAVIOR_LOGPROBS = "behavior_logprobs"
 POLICY_LOGPROBS = "policy_logprobs"
+POLICY_ID = "policy_id"
+LOGPROB_MODE = "logprob_mode"
 EXPERT_IDS = "expert_ids"
 EXPERT_VALID = "expert_valid"
 MAX_POLICY_ID_LENGTH = 256
 _MAGIC = b"LEVANTER-GENERATE\x01"
 _HEADER_LENGTH = struct.Struct(">I")
 _MAX_METADATA_BYTES = 64 * 1024
-_MAX_REQUEST_BYTES = 4 * 1024 * 1024
 
 
 class GenerateOptions(BaseModel):
@@ -70,29 +70,6 @@ def decode_frame(frame: bytes) -> tuple[dict, dict[str, np.ndarray]]:
     if not isinstance(metadata, dict):
         raise ValueError("Generation frame metadata must be an object")
     return metadata, tensors
-
-
-async def read_generate_request(request: Request) -> tuple[np.ndarray, GenerateOptions]:
-    """Read a bounded generation frame with exactly one int32 token vector."""
-    if request.headers.get("content-type", "").split(";")[0].strip().lower() != MEDIA_TYPE:
-        raise HTTPException(status_code=415, detail=f"Expected {MEDIA_TYPE}")
-    body = bytearray()
-    async for chunk in request.stream():
-        if len(body) + len(chunk) > _MAX_REQUEST_BYTES:
-            raise HTTPException(status_code=413, detail="Generation frame exceeds the request size limit")
-        body.extend(chunk)
-
-    try:
-        metadata, tensors = decode_frame(bytes(body))
-        options = GenerateOptions.model_validate(metadata)
-        if tensors.keys() != {PROMPT_TOKEN_IDS}:
-            raise ValueError("Generation requires exactly one prompt_token_ids tensor")
-        prompt = tensors[PROMPT_TOKEN_IDS]
-        if prompt.ndim != 1 or prompt.dtype != np.int32 or prompt.size == 0:
-            raise ValueError("prompt_token_ids must be a nonempty one-dimensional int32 tensor")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return prompt, options
 
 
 def choice_tensor_key(choice: int, field: str) -> str:
