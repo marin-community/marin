@@ -5,8 +5,7 @@
 
 The public contract is deliberately narrow: four complete sequence slots are
 sharded over a data mesh axis, each local kernel sees one 256-row sequence,
-and all eight physical cache pages are replicated. This checkpoint does not
-change normal Grug or Snowball dispatch.
+and all eight physical cache pages are replicated. This entry point is opt-in.
 """
 
 from dataclasses import dataclass
@@ -216,8 +215,7 @@ def fixed_schedule_attention(
     Shapes are q=[4,256,2,128], kv_pages=[8,128,2,128],
     kv_lens=[4], page_indices=[4,2], and query metadata [4] or [4,256].
     The function requires an explicit mesh with a data axis of size four.
-    Each shard receives one whole sequence; KV pages and metadata outside that
-    sequence are replicated. query_lengths=L and valid rows beginning at
+    Each shard receives one sequence's metadata and the replicated KV pages. query_lengths=L and valid rows beginning at
     position 256-L make decode at position p use L=256-p without repacking
     neighboring sequences.
     """
@@ -256,8 +254,11 @@ def fixed_schedule_attention(
         or getattr(mesh, "empty", False)
         or int(mesh.shape.get("data", 0)) != spec.max_num_seqs
         or int(mesh.size) != spec.max_num_seqs
+        or mesh.axis_types[mesh.axis_names.index("data")] != jax.sharding.AxisType.Explicit
     ):
-        raise ValueError("fixed_schedule_attention requires a four-device mesh with data=4 and singleton extra axes")
+        raise ValueError(
+            "fixed_schedule_attention requires a four-device explicit data mesh with singleton extra axes"
+        )
 
     in_specs = (
         P("data", None, None, None),

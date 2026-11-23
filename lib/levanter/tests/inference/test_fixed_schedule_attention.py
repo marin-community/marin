@@ -66,7 +66,7 @@ def test_fixed_schedule_public_forward_matches_oracle_and_decode(position: int, 
     full_valid = jnp.ones((4, 256), dtype=jnp.bool_)
     decode_positions = jnp.full((4, 256), -1, dtype=jnp.int32).at[:, 0].set(position)
     decode_valid = jnp.zeros((4, 256), dtype=jnp.bool_).at[:, 0].set(True)
-    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",))):
+    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",), axis_types=(AxisType.Explicit,))):
         full = fixed_schedule_attention(
             q,
             pages,
@@ -103,7 +103,7 @@ def test_fixed_schedule_public_forward_matches_oracle_and_decode(position: int, 
 
     permuted_indices = jnp.asarray([[1, 0], [3, 2], [5, 4], [7, 6]], dtype=jnp.int32)
     permuted_pages = materialize_contiguous_kv(keys, values, permuted_indices, spec=spec)
-    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",))):
+    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",), axis_types=(AxisType.Explicit,))):
         permuted = fixed_schedule_attention(
             q,
             permuted_pages,
@@ -126,7 +126,7 @@ def test_fixed_schedule_public_forward_isolates_data_sharded_neighbor_changes() 
     q = jnp.broadcast_to(query[:, None, :, :], (4, 256, 2, 128))
     positions = jnp.broadcast_to(jnp.arange(256, dtype=jnp.int32), (4, 256))
     valid = jnp.ones((4, 256), dtype=jnp.bool_)
-    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",))):
+    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",), axis_types=(AxisType.Explicit,))):
         before = fixed_schedule_attention(
             q,
             pages,
@@ -221,7 +221,7 @@ def test_fixed_schedule_public_forward_empty_neighbor_preserves_target() -> None
     valid = jnp.ones((4, 256), dtype=jnp.bool_)
     empty_positions = positions.at[1].set(-1)
     empty_valid = valid.at[1].set(False)
-    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",))):
+    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",), axis_types=(AxisType.Explicit,))):
         baseline = fixed_schedule_attention(
             q,
             pages,
@@ -350,7 +350,7 @@ def test_fixed_schedule_public_forward_poison_invalid_metadata() -> None:
     positions = jnp.broadcast_to(jnp.arange(256, dtype=jnp.int32), (4, 256))
     valid = jnp.ones((4, 256), dtype=jnp.bool_)
     bad_lengths = jnp.asarray([257, 256, 256, 256], dtype=jnp.int32)
-    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",))):
+    with jax.set_mesh(Mesh(jax.devices()[:4], ("data",), axis_types=(AxisType.Explicit,))):
         output = fixed_schedule_attention(
             q,
             pages,
