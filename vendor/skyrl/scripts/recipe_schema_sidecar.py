@@ -63,7 +63,7 @@ TYPES = MappingProxyType(
         "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
         "trainer.ref.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
         "trainer.rollout_buffer.max_staleness_steps": "NonNegativeInt",
-        "trainer.rollout_buffer.eval_drain": 'Literal["wait", "abort"]',
+        "trainer.rollout_buffer.eval_drain": 'Literal["wait", "abort", "priority"]',
         "trainer.wandb_entity": "str | None",
         "trainer.native_telemetry_root": "str | None",
         "trainer.rollout_buffer.batch_policy": _literal(BatchPolicy),
