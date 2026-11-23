@@ -301,6 +301,8 @@ def validate_generator_cfg(cfg: DictConfig, *, check_runtime_resources: bool = T
         )
 
     if not cfg.generator.run_engines_locally:
+        if cfg.generator.get("vllm_compile_cache_root") is not None:
+            raise ValueError("generator.vllm_compile_cache_root requires local rollout engines")
         assert cfg.generator.num_inference_engines == len(cfg.generator.remote_inference_engine_urls), (
             "num_inference_engines should be equal to the number of remote_inference_engine_urls"
         )

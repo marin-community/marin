@@ -140,6 +140,7 @@ TYPES = MappingProxyType(
         "trainer.mismatch_probe.reuse_probe": "str | None",
         "trainer.mismatch_probe.filtered_replay.keep_fraction": "Annotated[int | float, Field(ge=0, le=1)] | None",
         "generator.vllm_attention_backend": "str | None",
+        "generator.vllm_compile_cache_root": "str | None",
         "generator.chat_template.name_or_path": "str | None",
         "generator.sampling_params.logprobs": "NonNegativeInt | None",
         "generator.eval_sampling_params.seed": "NonNegativeInt | None",

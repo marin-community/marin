@@ -49,6 +49,7 @@ from skyrl_train.config.rollout_validation import EntrypointOperation, validate_
 from skyrl_train.inference_engines import placement as inference_placement
 from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
     _build_inference_engine_runtime_env,
+    _vllm_compile_cache_environment,
     should_verify_inference_workers,
 )
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
@@ -1277,3 +1278,15 @@ def test_resolved_nccl_buffers_override_inherited_small_buffer(
         nccl_buffer_size_bytes=resolved.trainer.policy.nccl_buffer_size_bytes
     )
     assert runtime_env["env_vars"]["NCCL_BUFFSIZE"] == "8388608"
+
+
+def test_rollout_compile_cache_isolates_rank_paths_and_preserves_model_assets(tmp_path):
+    assets = str(tmp_path / "assets")
+    first = _vllm_compile_cache_environment(tmp_path / "cache", 0, assets)
+    second = _vllm_compile_cache_environment(tmp_path / "cache", 1, assets)
+
+    assert first["VLLM_ASSETS_CACHE"] == second["VLLM_ASSETS_CACHE"] == assets
+    for name in ("VLLM_CACHE_ROOT", "TORCHINDUCTOR_CACHE_DIR", "TRITON_CACHE_DIR", "CUDA_CACHE_PATH"):
+        assert Path(first[name]).name == "rank-0" and Path(second[name]).name == "rank-1"
+    assert first["VLLM_DISABLE_COMPILE_CACHE"] == "0"
+    assert first["VLLM_USE_AOT_COMPILE"] == first["VLLM_USE_MEGA_AOT_ARTIFACT"] == "0"

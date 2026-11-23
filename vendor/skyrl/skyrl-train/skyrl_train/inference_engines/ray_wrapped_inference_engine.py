@@ -3,6 +3,7 @@ from collections.abc import Callable, Collection
 from dataclasses import asdict
 from enum import StrEnum
 import os
+from pathlib import Path
 import time
 from typing import Any, Dict, List
 
@@ -274,6 +275,22 @@ def _build_inference_engine_runtime_env(
         return None
     logger.info(f"Forwarding managed environment to vLLM engine actors via runtime_env: {sorted(env_vars)}")
     return {"env_vars": env_vars}
+
+
+def _vllm_compile_cache_environment(root: Path, data_parallel_rank: int, assets_cache: str) -> dict[str, str]:
+    rank = f"rank-{data_parallel_rank}"
+    return {
+        "VLLM_DISABLE_COMPILE_CACHE": "0",
+        # The vLLM default otherwise changes the compiler path along with disk persistence.
+        "VLLM_USE_AOT_COMPILE": "0",
+        "VLLM_USE_MEGA_AOT_ARTIFACT": "0",
+        "VLLM_COMPILE_CACHE_SAVE_FORMAT": "binary",
+        "VLLM_CACHE_ROOT": str(root / "vllm" / rank),
+        "VLLM_ASSETS_CACHE": assets_cache,
+        "TORCHINDUCTOR_CACHE_DIR": str(root / "inductor" / rank),
+        "TRITON_CACHE_DIR": str(root / "triton" / rank),
+        "CUDA_CACHE_PATH": str(root / "cuda" / rank),
+    }
 
 
 async def _await_actor_task(actor_task: Any) -> Any:
@@ -550,6 +567,7 @@ def create_ray_wrapped_inference_engines(
     weight_sync_pause_policy: WeightSyncPausePolicy = DEFAULT_WEIGHT_SYNC_PAUSE_POLICY,
     nccl_buffer_size_bytes: int | None = None,
     node_label_selectors: list[dict[str, str]] | None = None,
+    vllm_compile_cache_root: str | None = None,
 ) -> List[InferenceEngineInterface]:
     """
     Create a list of RayWrappedInferenceEngine instances wrapping Ray actor handles to InferenceEngineInterface instances.
@@ -571,6 +589,20 @@ def create_ray_wrapped_inference_engines(
     model_metadata_path = engine_init_kwargs.pop(MODEL_METADATA_PATH_KEY, pretrain)
     if backend != "vllm":
         raise ValueError(f"Unsupported backend: {backend}")
+    cache_root = Path(vllm_compile_cache_root) if vllm_compile_cache_root is not None else None
+    if cache_root is not None:
+        if not cache_root.is_absolute():
+            raise ValueError("generator.vllm_compile_cache_root must be an absolute local path")
+        if (
+            num_inference_engines != 1
+            or tensor_parallel_size != 1
+            or pipeline_parallel_size != 1
+            or data_parallel_size != expert_parallel_size
+            or shared_pg is not None
+        ):
+            raise ValueError("vLLM compile caching requires one dedicated rollout replica with TP=PP=1 and DP=EP")
+        if enforce_eager or engine_init_kwargs.get("compilation_config") is not None:
+            raise ValueError("vLLM compile caching requires the default compilation configuration")
     import vllm
     from skyrl_train.inference_engines.vllm.vllm_engine import AsyncVLLMRayActor
 
@@ -727,7 +759,7 @@ def create_ray_wrapped_inference_engines(
                 bundles = [{"GPU": 1, "CPU": 1} for _ in range(per_engine_gpu_count)]
                 pg = placement_group(
                     bundles,
-                    strategy="PACK" if cross_node_ep else "STRICT_PACK",
+                    strategy="PACK" if cross_node_ep and cache_root is None else "STRICT_PACK",
                     bundle_label_selector=(
                         [node_label_selectors[engine_index]] * len(bundles) if node_label_selectors else None
                     ),
@@ -908,7 +940,11 @@ def create_ray_wrapped_inference_engines(
                 num_gpus=num_gpus_per_actor,
                 scheduling_strategy=dp_rank_sched,
             )
-            if inference_engine_runtime_env is not None:
+            if cache_root is not None:
+                cache_env = _vllm_compile_cache_environment(cache_root, dp_rank, vllm.envs.VLLM_ASSETS_CACHE)
+                inherited = {} if inference_engine_runtime_env is None else inference_engine_runtime_env["env_vars"]
+                engine_options["runtime_env"] = {"env_vars": {**inherited, **cache_env}}
+            elif inference_engine_runtime_env is not None:
                 engine_options["runtime_env"] = inference_engine_runtime_env
             engine = AsyncVLLMRayActor.options(**engine_options).remote(
                 model=pretrain,
