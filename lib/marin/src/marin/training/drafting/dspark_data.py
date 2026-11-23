@@ -94,6 +94,16 @@ class PreparedSplits:
     validation: int
     train_ratio: float
 
+    @classmethod
+    def from_counts(cls, train: int, validation: int) -> "PreparedSplits":
+        # Speculators floors dataset size times the ratio. Use the midpoint
+        # between split boundaries so rounding cannot move a row into validation.
+        return cls(train, validation, (train + 0.5) / (train + validation))
+
+
+def supervised_token_ids(input_ids: list[int], loss_mask: list[bool]) -> Iterator[int]:
+    return (token for token, supervised in zip(input_ids, loss_mask, strict=True) if supervised)
+
 
 def _weight_map(index: Path | StoragePath) -> dict[str, str]:
     return json.loads(index.read_text())["weight_map"]
@@ -284,9 +294,7 @@ def _write_masked_dataset(
         for key, row in _tokenized_rows(train_files, processor, config):
             if key in validation_keys:
                 raise ValueError("A rendered training sequence also appears in validation")
-            frequencies.update(
-                token for token, supervised in zip(row["input_ids"], row["loss_mask"], strict=True) if supervised
-            )
+            frequencies.update(supervised_token_ids(row["input_ids"], row["loss_mask"]))
             yield row
 
     features = datasets.Features(
@@ -300,15 +308,12 @@ def _write_masked_dataset(
     train = datasets.Dataset.from_generator(generate_train, features=features, cache_dir=str(prepared.parent))
     if not len(train) or not len(val):
         raise ValueError("Each split needs at least one usable row")
-    # Speculators floors len(dataset) * train_data_ratio. Use the midpoint
-    # between split boundaries so rounding cannot move a row into validation.
-    train_ratio = (len(train) + 0.5) / (len(train) + len(val))
     # Speculators compares the reloaded input IDs directly with teacher tensors.
     dataset = datasets.concatenate_datasets([train, val]).with_format("torch")
     dataset.save_to_disk(str(prepared / ARROW_DATASET_DIR))
 
     (prepared / TOKEN_FREQUENCIES_FILE).write_text(json.dumps(frequencies, sort_keys=True) + "\n")
-    return PreparedSplits(len(train), len(val), train_ratio)
+    return PreparedSplits.from_counts(len(train), len(val))
 
 
 def prepare_data(

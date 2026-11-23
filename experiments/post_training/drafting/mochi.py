@@ -7,7 +7,6 @@ import fcntl
 import json
 import logging
 import shutil
-import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -22,6 +21,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, l
 from marin.execution.step_runner import StepRunner
 from marin.inference.config import InferenceModelConfig, ServingGeometry
 from marin.inference.iris_vllm import (
+    IrisVllmLaunch,
     iris_vllm_followers,
     iris_vllm_launch,
     notify_iris_vllm_stopped,
@@ -35,6 +35,7 @@ from marin.training.drafting.dspark_data import (
     SPLITS_FILE,
     TOKEN_FREQUENCIES_FILE,
     PreparedSplits,
+    supervised_token_ids,
 )
 from marin.training.drafting.dspark_distillation import (
     DraftRecipe,
@@ -43,6 +44,7 @@ from marin.training.drafting.dspark_distillation import (
     train_cached_and_export,
 )
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration, ExponentialBackoff
 from safetensors.torch import load_file
 
 logger = logging.getLogger(__name__)
@@ -50,17 +52,21 @@ _GPUS_PER_NODE = 4
 _SMOKE_TRAIN_ROWS = 12
 _SMOKE_VALIDATION_ROWS = 4
 _SMOKE_MAX_TOKENS = 2048
-_SHORT_CONV_COMPILATION = {
-    "mode": 3,
-    "cudagraph_mode": "PIECEWISE",
-    "splitting_ops": [
-        "vllm::unified_attention_with_output",
-        "vllm::unified_kv_cache_update",
-        "vllm::grug_moe_short_conv",
-    ],
-    "inductor_compile_config": {"enable_auto_functionalized_v2": False},
-}
-_STREAMER = {"distributed": True, "concurrency": 4, "memory_limit": 8 * 1024**3}
+_SMOKE_ROW_LENGTH = range(720, 1537)
+_MODEL_ALIAS = "mochi"
+_SHORT_CONV_COMPILATION = json.dumps(
+    {
+        "mode": 3,
+        "cudagraph_mode": "PIECEWISE",
+        "splitting_ops": [
+            "vllm::unified_attention_with_output",
+            "vllm::unified_kv_cache_update",
+            "vllm::grug_moe_short_conv",
+        ],
+        "inductor_compile_config": {"enable_auto_functionalized_v2": False},
+    }
+)
+_STREAMER = json.dumps({"distributed": True, "concurrency": 4, "memory_limit": 8 * 1024**3})
 
 
 class Sample(StrEnum):
@@ -142,22 +148,21 @@ def _select_smoke_data(
 ) -> tuple[Dataset, PreparedSplits]:
     train, validation = [], []
     for index, length in enumerate(data["seq_len"]):
-        if 720 <= length <= 1536:
+        if length in _SMOKE_ROW_LENGTH:
             (train if index < split.train else validation).append(index)
     train, validation = train[:_SMOKE_TRAIN_ROWS], validation[:_SMOKE_VALIDATION_ROWS]
     if len(train) < _SMOKE_TRAIN_ROWS or not validation:
-        raise ValueError("The prepared mix lacks enough rows between 720 and 1,536 tokens for the Mochi smoke")
+        raise ValueError(f"The Mochi smoke needs more rows with token lengths in {_SMOKE_ROW_LENGTH}")
     subset = data.select(train + validation)
     subset.with_format("torch").save_to_disk(str(destination / ARROW_DATASET_DIR))
     frequencies = Counter(
         token
         for row in subset.select(range(len(train)))
-        for token, keep in zip(row["input_ids"], row["loss_mask"], strict=True)
-        if keep
+        for token in supervised_token_ids(row["input_ids"], row["loss_mask"])
     )
     (destination / TOKEN_FREQUENCIES_FILE).write_text(json.dumps(frequencies))
     shutil.copyfile(source / DRAFT_CONFIG_FILE, destination / DRAFT_CONFIG_FILE)
-    return subset, PreparedSplits(len(train), len(validation), (len(train) + 0.5) / len(subset))
+    return subset, PreparedSplits.from_counts(len(train), len(validation))
 
 
 def _stage_data(prepared: str, scratch: Path, recipe: DraftRecipe, sample: Sample) -> tuple[Dataset, PreparedSplits]:
@@ -183,17 +188,17 @@ def _cache_rows(url: str, dataset: Dataset, hidden_states: Path, recipe: DraftRe
         response = requests.post(
             f"{url}/completions",
             headers={"X-data-parallel-rank": "0"},
-            json={"model": "mochi", "prompt": ids, "max_tokens": 1, "temperature": 0, "detokenize": False},
+            json={"model": _MODEL_ALIAS, "prompt": ids, "max_tokens": 1, "temperature": 0, "detokenize": False},
             timeout=180,
         )
         response.raise_for_status()
         path = Path(response.json()["kv_transfer_params"]["hidden_states_path"])
         lock_path = Path(f"{path}.lock")
-        deadline = time.monotonic() + 120
-        while not lock_path.is_file():
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Mochi did not start writing hidden states for row {row_index}")
-            time.sleep(0.25)
+        ExponentialBackoff(initial=0.25, maximum=2).wait_until_or_raise(
+            lock_path.is_file,
+            timeout=Duration.from_seconds(120),
+            error_message=f"Mochi did not start writing hidden states for row {row_index}",
+        )
         with lock_path.open() as lock:
             fcntl.flock(lock, fcntl.LOCK_SH)
             tensors = load_file(path)
@@ -212,6 +217,41 @@ def _cache_rows(url: str, dataset: Dataset, hidden_states: Path, recipe: DraftRe
                 logger.info("Cached %d/%d Mochi rows for taps %s", count, len(dataset), recipe.extraction_taps)
 
 
+def _teacher_environment(teacher: str, recipe: DraftRecipe, launch: IrisVllmLaunch, hidden: Path) -> VllmEnvironment:
+    speculative, transfer = extraction_config(recipe, hidden)
+    length = recipe.data.max_sequence_length + 1
+    launcher = VllmLauncherWithEnvironment(
+        IsolatedCudaVllm(source=VllmType.MARIN_FORK),
+        {**launch.subprocess_env, "MAX_JOBS": "2", "PYTHONPATH": ""},
+    )
+    return VllmEnvironment(
+        InferenceModelConfig(
+            _MODEL_ALIAS,
+            teacher,
+            {"dtype": "bfloat16", "max_model_len": length, "gpu_memory_utilization": 0.94},
+        ),
+        launcher=launcher,
+        timeout_seconds=2400,
+        wait_for_ready=launch.is_leader,
+        extra_args=[
+            *launch.extra_cli_args,
+            *(["--api-server-count=1"] if launch.is_leader else []),
+            f"--served-model-name={_MODEL_ALIAS}",
+            "--skip-tokenizer-init",
+            "--enable-expert-parallel",
+            "--attention-backend=FLASHINFER",
+            "--moe-backend=triton",
+            "--no-enable-prefix-caching",
+            "--max-num-seqs=8",
+            f"--max-num-batched-tokens={length}",
+            f"--model-loader-extra-config={_STREAMER}",
+            f"--compilation-config={_SHORT_CONV_COMPILATION}",
+            f"--speculative-config={json.dumps(speculative)}",
+            f"--kv-transfer-config={json.dumps(transfer)}",
+        ],
+    )
+
+
 def train_mochi(
     *,
     teacher: str,
@@ -221,7 +261,7 @@ def train_mochi(
     prefix: str,
     sample: Sample,
 ) -> bool:
-    """Use the GB200 gang for teacher prefill, then train on the leader's local cache."""
+    """Prefill on the gang and return whether this task published the trained draft."""
 
     geometry = ServingGeometry(
         tensor_parallel_size=1,
@@ -238,35 +278,7 @@ def train_mochi(
             dataset, split = _stage_data(prepared.path(prefix), scratch, recipe, sample)
         hidden = scratch / "hidden_states"
         hidden.mkdir()
-        speculative, transfer = extraction_config(recipe, hidden)
-        length = recipe.data.max_sequence_length + 1
-        launcher = VllmLauncherWithEnvironment(
-            IsolatedCudaVllm(source=VllmType.MARIN_FORK),
-            {**launch.subprocess_env, "MAX_JOBS": "2", "PYTHONPATH": ""},
-        )
-        with VllmEnvironment(
-            InferenceModelConfig("mochi", teacher, {"dtype": "bfloat16", "max_model_len": length}),
-            launcher=launcher,
-            timeout_seconds=2400,
-            wait_for_ready=launch.is_leader,
-            extra_args=[
-                *launch.extra_cli_args,
-                *(["--api-server-count=1"] if launch.is_leader else []),
-                "--served-model-name=mochi",
-                "--skip-tokenizer-init",
-                "--enable-expert-parallel",
-                "--attention-backend=FLASHINFER",
-                "--moe-backend=triton",
-                "--no-enable-prefix-caching",
-                "--gpu-memory-utilization=0.92",
-                "--max-num-seqs=8",
-                f"--max-num-batched-tokens={length}",
-                f"--model-loader-extra-config={json.dumps(_STREAMER)}",
-                f"--compilation-config={json.dumps(_SHORT_CONV_COMPILATION)}",
-                f"--speculative-config={json.dumps(speculative)}",
-                f"--kv-transfer-config={json.dumps(transfer)}",
-            ],
-        ) as server:
+        with _teacher_environment(teacher, recipe, launch, hidden) as server:
             if launch.is_leader:
                 with iris_vllm_followers(launch):
                     _cache_rows(server.server_url, dataset, hidden, recipe)

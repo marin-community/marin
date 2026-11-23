@@ -244,6 +244,17 @@ def _preflight(recipe: OfflineDSpark, teacher: ArtifactStep, prefix: str) -> dic
     }
 
 
+def _validate_training_locations(recipe: OfflineDSpark, prefix: str) -> None:
+    locations = [recipe.data, prefix]
+    if not recipe.teacher.source.startswith("hf://"):
+        locations.append(recipe.teacher.source)
+    for location in locations:
+        if StoragePath(location).scheme not in ("gs", "s3"):
+            raise click.UsageError(f"Iris training requires a shared gs:// or s3:// location, got {location}")
+        if is_cross_region_url(location):
+            raise click.UsageError(f"Iris training requires regional inputs and output, got {location}")
+
+
 @click.command()
 @click.option("--config", help="Path or object storage URI of the DSpark JSON recipe.")
 @click.option("--preset", type=click.Choice((_MOCHI_AGENTIC_PRESET,)))
@@ -258,16 +269,8 @@ def main(config: str | None, preset: str | None, data: str | None, steps: int | 
     configure_coreweave_s3()
     prefix = marin_prefix()
     recipe, mix = _resolve_recipe(config, preset, data, prefix, steps=steps)
-    mix_root = StoragePath(recipe.data)
     if stage == "train":
-        locations = [mix_root, StoragePath(prefix)]
-        if not recipe.teacher.source.startswith("hf://"):
-            locations.append(StoragePath(recipe.teacher.source))
-        for location in locations:
-            if location.scheme not in ("gs", "s3"):
-                raise click.UsageError(f"Iris training requires a shared gs:// or s3:// location, got {location}")
-            if is_cross_region_url(str(location)):
-                raise click.UsageError(f"Iris training requires regional inputs and output, got {location}")
+        _validate_training_locations(recipe, prefix)
     teacher = _teacher_artifact(recipe.teacher)
     prepared, draft = artifacts(recipe, teacher=teacher, mix=mix)
     if stage == "preflight":

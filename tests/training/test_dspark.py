@@ -172,7 +172,9 @@ def test_teacher_preflight_rejects_an_incomplete_sharded_export(teacher: Path, r
         inspect_teacher(StoragePath(str(teacher)), recipe.data)
 
 
-def test_draft_export_uses_feature_taps_and_offset_mapping(tmp_path: Path, teacher: Path, recipe: DraftRecipe) -> None:
+def test_draft_config_preserves_feature_taps_and_vocab_mapping(
+    tmp_path: Path, teacher: Path, recipe: DraftRecipe
+) -> None:
     decoder = inspect_teacher(StoragePath(str(teacher)), recipe.data)
     speculative, _ = extraction_config(recipe, tmp_path / "hidden_states")
     assert speculative["draft_model_config"]["hf_config"]["eagle_aux_hidden_state_layer_ids"] == [1, 3, 4]

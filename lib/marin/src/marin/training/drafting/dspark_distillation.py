@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import subprocess
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -202,7 +203,7 @@ def require_supported_vllm_release() -> None:
         raise ValueError("Requalify DSpark against the newly promoted vLLM wheel before changing the pin")
 
 
-def require_qualified_teacher(recipe: DraftRecipe) -> None:
+def _require_single_worker_teacher(recipe: DraftRecipe) -> None:
     """Keep ShortConv teachers out of the single-worker training path."""
     if recipe.data.shape.sconv:
         raise ValueError("ShortConv DSpark training requires the distributed teacher and cached states")
@@ -461,49 +462,37 @@ def _speculators_environment(devices: str) -> dict[str, str]:
     return env
 
 
-def train_cached_and_export(
+def _fit_and_publish(
     *,
     output: str,
-    teacher: str,
+    teacher_path: Path,
     teacher_identity: str,
     recipe: DraftRecipe,
     scratch: Path,
     split: PreparedSplits,
+    devices: str,
+    server_context: AbstractContextManager[VllmEnvironment | None],
 ) -> DSparkExport:
-    """Train on prepared Arrow data and indexed hidden states on the same worker."""
-
-    require_supported_vllm_release()
-    if min(split.train, split.validation) < recipe.trainer_ranks:
-        raise ValueError("Each prepared split needs at least one usable row per trainer rank")
-    source = StoragePath(teacher)
-    teacher_path = scratch / "teacher"
-    teacher_path.mkdir()
-    index = json.loads((source / SAFE_TENSORS_INDEX_NAME).read_text())
-    tensors = (EMBEDDING, LM_HEAD, FINAL_NORM, GATE_DOWN, GATE_UP)
-    weights = {name: index["weight_map"][name] for name in tensors}
-    for file in (CONFIG_NAME, *sorted(set(weights.values()))):
-        (source / file).download_to(str(teacher_path / file))
-    (teacher_path / SAFE_TENSORS_INDEX_NAME).write_text(json.dumps({"weight_map": weights}))
-
-    devices = _worker_gpu_devices().split(",")[: recipe.trainer_ranks]
-    env = _speculators_environment(",".join(devices))
+    env = _speculators_environment(devices)
     data = scratch / "data"
     training = scratch / "checkpoints"
     python = _install_speculators(scratch, env)
     steps, packages = _prepare_trainer_inputs(python, data, scratch, recipe, split.train, env)
-    train = _write_config_and_build_command(
-        teacher_path,
-        recipe,
-        python,
-        data,
-        scratch,
-        training,
-        scratch / "hidden_states",
-        train_ratio=split.train_ratio,
-        steps=steps,
-        endpoint=None,
-    )
-    subprocess.run(train, env=env, check=True)
+    logger.info("Training DSpark for %s at %s for %d optimizer steps", teacher_identity, output, steps)
+    with server_context as server:
+        train = _write_config_and_build_command(
+            teacher_path,
+            recipe,
+            python,
+            data,
+            scratch,
+            training,
+            scratch / "hidden_states",
+            train_ratio=split.train_ratio,
+            steps=steps,
+            endpoint=server.server_url if server is not None else None,
+        )
+        subprocess.run(train, env=env, check=True)
     return _publish_checkpoint(
         output=StoragePath(output) / HF_DRAFT_SUBDIRECTORY,
         training=training,
@@ -512,6 +501,39 @@ def train_cached_and_export(
         expected_steps=steps,
         mapping=np.load(scratch / _D2T_FILE, allow_pickle=False),
         packages=packages,
+    )
+
+
+def _stage_frozen_weights(source: StoragePath, teacher_path: Path) -> None:
+    teacher_path.mkdir()
+    index = json.loads((source / SAFE_TENSORS_INDEX_NAME).read_text())
+    tensors = (EMBEDDING, LM_HEAD, FINAL_NORM, GATE_DOWN, GATE_UP)
+    weights = {name: index["weight_map"][name] for name in tensors}
+    for file in (CONFIG_NAME, *sorted(set(weights.values()))):
+        (source / file).download_to(str(teacher_path / file))
+    (teacher_path / SAFE_TENSORS_INDEX_NAME).write_text(json.dumps({"weight_map": weights}))
+
+
+def train_cached_and_export(
+    *, output: str, teacher: str, teacher_identity: str, recipe: DraftRecipe, scratch: Path, split: PreparedSplits
+) -> DSparkExport:
+    """Train on prepared Arrow data and indexed hidden states on the same worker."""
+
+    require_supported_vllm_release()
+    if min(split.train, split.validation) < recipe.trainer_ranks:
+        raise ValueError("Each prepared split needs at least one usable row per trainer rank")
+    teacher_path = scratch / "teacher"
+    _stage_frozen_weights(StoragePath(teacher), teacher_path)
+    devices = ",".join(_worker_gpu_devices().split(",")[: recipe.trainer_ranks])
+    return _fit_and_publish(
+        output=output,
+        teacher_path=teacher_path,
+        teacher_identity=teacher_identity,
+        recipe=recipe,
+        scratch=scratch,
+        split=split,
+        devices=devices,
+        server_context=nullcontext(),
     )
 
 
@@ -528,26 +550,19 @@ def train_and_export(
     """Stage the pinned inputs, train on an Iris worker, and publish the HF draft."""
 
     require_supported_vllm_release()
-    require_qualified_teacher(recipe)
-    export = StoragePath(output) / HF_DRAFT_SUBDIRECTORY
+    _require_single_worker_teacher(recipe)
     source = StoragePath(teacher) / teacher_subdirectory
     prepared_source = StoragePath(prepared) / PREPARED_DIR
     split = PreparedSplits(**json.loads((prepared_source / SPLITS_FILE).read_text()))
     if min(split.train, split.validation) < recipe.trainer_ranks:
         raise ValueError("Each prepared split needs at least one usable row per trainer rank")
     teacher_devices, trainer_devices = _gpu_device_split(_worker_gpu_devices(), recipe)
-    trainer_env = _speculators_environment(trainer_devices)
     with TemporaryDirectory(prefix="marin-dspark-") as directory:
         scratch = Path(directory)
-        training = scratch / "checkpoints"
         hidden_states = scratch / "hidden_states"
         hidden_states.mkdir()
         teacher_path = scratch / "teacher"
-        data = scratch / "data"
-        prepared_source.download_to(str(data), recursive=True, batch_size=8)
-        python = _install_speculators(scratch, trainer_env)
-        steps, packages = _prepare_trainer_inputs(python, data, scratch, recipe, split.train, trainer_env)
-
+        prepared_source.download_to(str(scratch / "data"), recursive=True, batch_size=8)
         logger.info("Staging DSpark teacher %s", teacher_identity)
         source.download_to(str(teacher_path), recursive=True, batch_size=8)
         if tokenizer_source is not None:
@@ -555,27 +570,13 @@ def train_and_export(
             for pattern in ("tokenizer*", "chat_template*", "special_tokens_map.json", "added_tokens.json"):
                 for file in (tokenizer_path / pattern).glob():
                     file.download_to(str(teacher_path / file.name))
-        logger.info("Training DSpark for %s at %s for %d optimizer steps", teacher_identity, output, steps)
-        with _teacher_environment(teacher_path, recipe, hidden_states, teacher_devices) as server:
-            train = _write_config_and_build_command(
-                teacher_path,
-                recipe,
-                python,
-                data,
-                scratch,
-                training,
-                hidden_states,
-                train_ratio=split.train_ratio,
-                steps=steps,
-                endpoint=server.server_url,
-            )
-            subprocess.run(train, env=trainer_env, check=True)
-        return _publish_checkpoint(
-            output=export,
-            training=training,
+        return _fit_and_publish(
+            output=output,
+            teacher_path=teacher_path,
             teacher_identity=teacher_identity,
             recipe=recipe,
-            expected_steps=steps,
-            mapping=np.load(scratch / _D2T_FILE, allow_pickle=False),
-            packages=packages,
+            scratch=scratch,
+            split=split,
+            devices=trainer_devices,
+            server_context=_teacher_environment(teacher_path, recipe, hidden_states, teacher_devices),
         )

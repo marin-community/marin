@@ -69,8 +69,8 @@ uv run --extra cpu python -m experiments.post_training.dspark_sft --config "$REC
 
 The default command prints the artifact graph. CPU preflight checks the
 teacher config, tensor headers, tokenizer, template, and the train and
-validation shard locations. It reports the requested GPU count and whether
-the teacher family is supported for training. Run `--stage prepare` on CPU
+validation shard locations. It reports the requested GPU count and trainer
+ranks. Run `--stage prepare` on CPU
 to stage an uncached Hub teacher. Planning and preflight check the promoted
 vLLM wheel against the recipe's source pin.
 
