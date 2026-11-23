@@ -1125,13 +1125,27 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         new_tf = eqx.tree_at(lambda t: (t.token_embed, t.output_proj, t.config), self.transformer, (te, op, new_cfg))
         return dataclasses.replace(self, transformer=new_tf, _config=new_cfg)
 
-    def initial_cache(self, spec: PageTableSpec, *, dtype: jnp.dtype) -> StackedKvPageCache | ListCache[KvPageCache]:
+    def initial_cache(
+        self, spec: PageTableSpec, *, dtype: jnp.dtype, window_cache_pages: int | None = None
+    ) -> StackedKvPageCache | ListCache[KvPageCache]:
         """Allocate paged KV state on a serving mesh with context parallelism disabled."""
         if _context_axis() is not None:
             raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
         kv_heads, head_size = Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim)
-        layer = Axis(_CACHE_LAYER_AXIS, len(self.transformer.blocks))
+        num_layers = len(self.transformer.blocks)
+        if window_cache_pages is not None:
+            if not self._split_decode_cache or num_long_attention_layers(num_layers) == num_layers:
+                raise ValueError("A compact window cache requires split decode and sliding-window layers")
+            window_spec = dataclasses.replace(spec, num_pages=window_cache_pages)
+            layer_sharding = P(*_STACKED_CACHE_SHARDING[1:])
+            layers = []
+            for index in range(num_layers):
+                layer_spec = spec if _is_long_attention_layer(index, num_layers) else window_spec
+                pages = KvPageCache.init(layer_spec, kv_heads, head_size, dtype=dtype).kv_pages
+                layers.append(KvPageCache(hax.named(reshard(pages.array, layer_sharding), pages.axes)))
+            return ListCache(tuple(layers))
+        layer = Axis(_CACHE_LAYER_AXIS, num_layers)
         pages = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype).kv_pages
         stacked = pages.broadcast_axis(layer).rearrange((layer, ...))
         # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
@@ -1146,13 +1160,17 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         kv_cache: StackedKvPageCache | ListCache[KvPageCache],
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
+        *,
+        window_batch: PageBatchInfo | None = None,
     ) -> tuple[NamedArray, StackedKvPageCache | ListCache[KvPageCache]]:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
         Tokens occupy a flat position axis, with a valid prefix described by batch_info.
         Expert assignments are independent of other requests and padding.
         """
-        hidden, caches = self._decode_hidden(input_ids, kv_cache, batch_info, pos_ids, unroll=self._unroll_decode)
+        hidden, caches = self._decode_hidden(
+            input_ids, kv_cache, batch_info, pos_ids, unroll=self._unroll_decode, window_batch=window_batch
+        )
         logits = jnp.einsum(
             "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
         )
@@ -1166,9 +1184,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         sample_indices: NamedArray,
+        *,
+        window_batch: PageBatchInfo | None = None,
     ) -> tuple[NamedArray, StackedKvPageCache | ListCache[KvPageCache]]:
         """Return logits in sample_indices order and update KV state for valid tokens."""
-        hidden, caches = self._decode_hidden(input_ids, kv_cache, batch_info, pos_ids)
+        hidden, caches = self._decode_hidden(
+            input_ids, kv_cache, batch_info, pos_ids, unroll=window_batch is not None, window_batch=window_batch
+        )
         sampled = hidden[:, 0].at[sample_indices.array].get(out_sharding=P())
         logits = jnp.einsum("pd,dv->pv", sampled, self.transformer.output_proj, out_sharding=P())
         return hax.named(logits, (*sample_indices.axes, self.Vocab)), caches
@@ -1181,6 +1203,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         pos_ids: NamedArray,
         *,
         unroll: bool = False,
+        window_batch: PageBatchInfo | None = None,
     ) -> tuple[jax.Array, StackedKvPageCache | ListCache[KvPageCache]]:
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Snowball decode requires matching flat token and position arrays")
@@ -1198,8 +1221,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             layers = []
             for layer_index, (block, cache) in enumerate(zip(self.transformer.blocks, kv_cache, strict=True)):
                 use_long = _is_long_attention_layer(layer_index, num_layers)
+                layer_batch = window_batch if window_batch is not None and not use_long else batch_info
                 hidden, cache = self._inference_block(block).decode(
-                    hidden, cache, batch_info, pos_ids.array, use_long, token_valid
+                    hidden, cache, layer_batch, pos_ids.array, use_long, token_valid
                 )
                 layers.append(cache)
             return self.transformer.final_gated_norm(self.transformer.final_norm(hidden)), ListCache(tuple(layers))
