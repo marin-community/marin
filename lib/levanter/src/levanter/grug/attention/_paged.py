@@ -31,7 +31,7 @@ _RPA_V3_VMEM_LIMIT_BYTES = MappingProxyType(
 _RPA_V3_WIDE_DECODE_TILES = (4096, 2048)
 FUSED_KV_APPEND_MAX_TOKENS = 32
 FUSED_KV_PREFILL_MAX_TOKENS = 8192
-_RPA_V3_ALIGNMENT = 128
+RPA_V3_ALIGNMENT = 128
 
 
 def ragged_paged_attention(
@@ -89,7 +89,7 @@ def ragged_paged_attention(
         supports_v3 = (
             (sliding_window is None or q.shape[0] > _TPU_QUERIES_PER_BLOCK)
             and q.dtype == kv_pages.dtype == jnp.bfloat16
-            and q.shape[-1] == kv_pages.shape[1] == _RPA_V3_ALIGNMENT
+            and q.shape[-1] == kv_pages.shape[1] == RPA_V3_ALIGNMENT
             and isinstance(sm_scale, (float, int))
         )
         backend = _tpu_v3_attention if supports_v3 else _tpu_attention
@@ -176,7 +176,7 @@ def ragged_paged_attention_append(
         raise ValueError(f"Fused paged KV append supports batches of up to {FUSED_KV_PREFILL_MAX_TOKENS} tokens")
     if q.dtype != k.dtype or q.dtype != v.dtype or q.dtype != kv_pages.dtype or q.dtype != jnp.bfloat16:
         raise ValueError("Fused paged KV append requires BF16 queries, keys, values, and cache pages")
-    if q.shape[-1] != _RPA_V3_ALIGNMENT or kv_pages.shape[1] != _RPA_V3_ALIGNMENT:
+    if q.shape[-1] != RPA_V3_ALIGNMENT or kv_pages.shape[1] != RPA_V3_ALIGNMENT:
         raise ValueError("Fused paged KV append requires 128-wide heads and 128-token pages")
 
     def attend(q, k, v, pages, lengths, indices, offsets, num_seqs):

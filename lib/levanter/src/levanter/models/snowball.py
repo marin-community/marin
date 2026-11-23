@@ -52,6 +52,7 @@ from levanter.grug.attention import (
 )
 from levanter.grug.attention._paged import (
     FUSED_KV_APPEND_MAX_TOKENS,
+    RPA_V3_ALIGNMENT,
     PagedAttentionImplementation,
     ragged_paged_attention_append,
 )
@@ -578,7 +579,7 @@ class SnowballAttention(eqx.Module):
             implementation == "tpu_v3"
             and q.shape[0] <= FUSED_KV_APPEND_MAX_TOKENS
             and q.dtype == cache.kv_pages.dtype == jnp.bfloat16
-            and head_dim == batch_info.page_size == 128
+            and head_dim == batch_info.page_size == RPA_V3_ALIGNMENT
         ):
             out, pages = ragged_paged_attention_append(
                 q,
