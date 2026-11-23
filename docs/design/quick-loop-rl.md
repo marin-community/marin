@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 5:13 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 5:42 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -1834,10 +1834,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   existing 60-minute learner command window. Ordinary checkpoint saves
   retain the 30-minute inner deadline. The two-process CPU check passed
   exact fresh restore and a separate test propagated a real commit
-  failure before emitting any fingerprints. The vLLM coordinator has
-  accepted the new run.
+  failure before emitting any fingerprints. Kueue preempted the first
+  vLLM coordinator task during serving warmup. The coordinator's
+  replacement started a fresh five-host child. All 40 ranks passed NCCL,
+  and the child verified policy 0 in 113.1 seconds with eight exact
+  receipts. It scored all 100 baseline tasks at a mean of 0.21 and
+  admitted 32 groups of four rollouts at zero staleness. The first update
+  still needs the validation save and exact restore.
   [Fresh held vLLM child][iris-held-vllm-retry]
   [Validation-deadline vLLM coordinator][iris-held-vllm-validation-timeout]
+  · [Automatic GPU replacement][iris-held-vllm-validation-replacement]
 
   The native coordinator lost its first slot before the GPU group was
   admitted and its second during regional initializer streaming. Its
@@ -2034,6 +2040,7 @@ arms. [Prior timing comparison][timing]
 [iris-held-vllm-direct-corrected]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-38f335b-in-424011b4-2026.11.22.1-acd9904b74c0
 [iris-held-vllm-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-52324ce-in-424011b4-2026.11.22.2-coordinator-3c9d26e6%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-52324ce-in-424011b4-2026.11.22.2-a08d6abd1b30
 [iris-held-vllm-validation-timeout]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-aabb141-in-424011b4-2026.11.22.3-coordinator-c303053f
+[iris-held-vllm-validation-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-aabb141-in-424011b4-2026.11.22.3-coordinator-c303053f%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-aabb141-in-424011b4-2026.11.22.3-ab5ce0f492e1
 [iris-native-serving-eval-first]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-serving-67b-eval-20261123a
 [iris-native-serving-eval-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-serving-67b-eval-20261123b
 [native-serving-eval-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-serving-67b-eval-20261123b%2F0%2F15f62cbc6c076387%2Foutputs.tar.zst
