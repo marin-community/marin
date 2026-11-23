@@ -68,7 +68,6 @@ def _with_subprocess_env(
 
 RUNAI_STREAMER_LOADER_FLAG = "--model-loader-extra-config"
 DISTRIBUTED_STREAMER_BOUNDS = {"concurrency": 4, "memory_limit": 16 * (1 << 30)}
-BOUNDED_DISTRIBUTED_STREAMER_CONFIG = json.dumps({"distributed": True, **DISTRIBUTED_STREAMER_BOUNDS})
 
 
 def _fill_streamer_bounds(value: str) -> str:
@@ -209,7 +208,7 @@ class VllmBackend:
             and _is_object_store_path(spec.weights)
             and not any(arg.partition("=")[0] in {"--load-format", RUNAI_STREAMER_LOADER_FLAG} for arg in loader_args)
         ):
-            loader_args = (RUNAI_STREAMER_LOADER_FLAG, BOUNDED_DISTRIBUTED_STREAMER_CONFIG, *loader_args)
+            loader_args = (RUNAI_STREAMER_LOADER_FLAG, '{"distributed":true}', *loader_args)
         loader_args = bound_distributed_streamer_buffers(loader_args)
         return [
             *(
