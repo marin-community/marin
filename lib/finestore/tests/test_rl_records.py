@@ -163,7 +163,6 @@ def test_catalog_reads_legacy_and_typed_review_rows(archive_root):
 def legacy_source():
     return {
         "id": "math",
-        "name": "math",
         "display_name": "Math",
         "origin": "native",
         "family": "math",
@@ -206,6 +205,7 @@ def qualified_source():
     return {
         **legacy_source(),
         "id": "Marin:math",
+        "display_name": "Marin · math",
         "origin": "Marin",
         "build_path": "Pipeline",
         "upstream_dataset": "math",
@@ -320,7 +320,6 @@ def test_source_declaration_carries_policy_reward_measurements():
     )
     declaration = SourceDeclaration(
         id="OpenAthena:structure-closure",
-        name="snowball-v01-structure-closure-train",
         display_name="Snowball structural closure",
         origin="OpenAthena",
         family="structural",
