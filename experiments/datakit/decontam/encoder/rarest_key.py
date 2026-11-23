@@ -23,11 +23,21 @@ import logging
 import random
 import time
 from collections.abc import Iterator
-from typing import NamedTuple
 
 import numpy as np
 import pyarrow as pa
 from fray.types import ResourceConfig
+from marin.datakit.decon_keys import (
+    MAX_DOC_CHARS,
+    WINDOW,
+    KeyTable,
+    Windows,
+    candidate_windows,
+    key_streams,
+    keys_table,
+    record_hit_indices,
+    record_window_hashes,
+)
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
@@ -36,25 +46,15 @@ from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
 from experiments.datakit.decontam.encoder.tables import parquet_files, read_table, shard_name, write_table
-from experiments.datakit.decontam.encoder.text_keys import (
-    WINDOW,
-    KeyStream,
-    key_streams,
-    record_hit_indices,
-    record_window_hashes,
-    window_hashes,
-)
 
 logger = logging.getLogger(__name__)
-WINDOWS_PER_ITEM = 16
-MAX_DOC_CHARS = 5_000_000
 SAMPLE_ROWS_PER_SHARD = 400
 MEASURE_SEED = 7
 REFERENCE_SEED = 11
 
 
 def item_streams(root: str, width: int) -> tuple[list[str], list[str], list[str]]:
-    """One entry per item and key stream (``text_keys.key_streams``): item ids, stream kinds, streams."""
+    """One entry per item and key stream (``decon_keys.key_streams``): item ids, stream kinds, streams."""
     ids, kinds, streams = [], [], []
     for path in parquet_files(root):
         for row in read_table(path, ["id", "question", "choices", "passage"]).to_pylist():
@@ -63,21 +63,6 @@ def item_streams(root: str, width: int) -> tuple[list[str], list[str], list[str]
                 kinds.append(str(kind))
                 streams.append(stream)
     return ids, kinds, streams
-
-
-def candidate_windows(streams: list[str], width: int = WINDOW) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Hashes of the candidate windows, the item of each, and its offset in the item stream."""
-    hashes, owners, offsets = [], [], []
-    for number, stream in enumerate(streams):
-        if len(stream) < width:
-            continue
-        last = len(stream) - width
-        starts = sorted({round(k * last / (WINDOWS_PER_ITEM - 1)) for k in range(WINDOWS_PER_ITEM)}) if last else [0]
-        window = window_hashes(stream, width)
-        hashes.append(window[starts])
-        owners.append(np.full(len(starts), number, dtype=np.int32))
-        offsets.append(np.array(starts, dtype=np.int32))
-    return np.concatenate(hashes), np.concatenate(owners), np.concatenate(offsets)
 
 
 def prepare(items: str, output: str, width: int) -> None:
@@ -102,49 +87,9 @@ def prepare(items: str, output: str, width: int) -> None:
     )
 
 
-class Windows(NamedTuple):
-    """The candidate windows of all key streams: hash, stream number, and offset in the stream; and the item id
-    and stream kind of each stream."""
-
-    hashes: np.ndarray
-    owners: np.ndarray
-    offsets: np.ndarray
-    ids: np.ndarray
-    kinds: np.ndarray
-
-
 def load_windows(output: str) -> Windows:
     data = np.load(io.BytesIO(StoragePath(prefix_join(output, "windows.npz")).read_bytes()), allow_pickle=True)
     return Windows(data["hashes"], data["owners"], data["offsets"], data["ids"], data["kinds"])
-
-
-# A key table rejects most window hashes with one lookup in a table of 2**FILTER_BITS flags (64 MB),
-# indexed by the top bits of the hash, before the binary search; this cuts the lookup time about 14x.
-FILTER_BITS = 26
-_FILTER_SHIFT = np.uint64(64 - FILTER_BITS)
-
-
-class KeyTable:
-    """Keys of one kind: the sorted unique hashes, and the items behind each hash."""
-
-    def __init__(self, hashes: np.ndarray, items: np.ndarray) -> None:
-        self.unique, inverse = np.unique(hashes, return_inverse=True)
-        order = np.argsort(inverse, kind="stable")
-        self.items = items[order]
-        self.starts = np.searchsorted(inverse[order], np.arange(len(self.unique) + 1))
-        self.present = np.zeros(1 << FILTER_BITS, dtype=bool)
-        self.present[self.unique >> _FILTER_SHIFT] = True
-
-    def found(self, hashes: np.ndarray) -> np.ndarray:
-        """Indices into ``unique`` of the keys among *hashes* (window hashes of a record's readings)."""
-        hashes = hashes[self.present[hashes >> _FILTER_SHIFT]]
-        if not len(hashes):
-            return np.empty(0, dtype=np.int64)
-        slot = np.minimum(np.searchsorted(self.unique, hashes), len(self.unique) - 1)
-        return np.unique(slot[self.unique[slot] == hashes])
-
-    def items_of(self, found: np.ndarray) -> list:
-        return [item for index in found.tolist() for item in self.items[self.starts[index] : self.starts[index + 1]]]
 
 
 def make_count(output: str, width: int):
@@ -167,70 +112,6 @@ def make_count(output: str, width: int):
         yield {"records": records, "nonzero": len(nonzero), "seconds": time.monotonic() - started}
 
     return count
-
-
-KEY_COLUMNS = (
-    "id",
-    "kind",
-    "first_hash",
-    "first_count",
-    "key1_hash",
-    "key1_count",
-    "key1_offset",
-    "key2_hash",
-    "key2_count",
-)
-
-
-def keys_table(windows: Windows, window_counts: np.ndarray, width: int = WINDOW) -> pa.Table:
-    """One row per key stream: its first window, its rarest window (key 1), and the rarest window that does
-    not overlap key 1 (key 2). Hash columns are uint64; 0 means "no such key", and its count is -1.
-
-    A stream other than the question keeps its key only when its rarest window occurs in no reference
-    record: an extra key that common text holds (a generic stem taken for a passage) would only add load.
-    """
-    hashes, owners, offsets, ids, kinds = windows
-    columns: dict[str, list] = {name: [] for name in KEY_COLUMNS}
-    order = np.lexsort((offsets, window_counts, owners))
-    keyed: set[int] = set()
-    start = 0
-    while start < len(order):
-        owner = int(owners[order[start]])
-        end = start
-        while end < len(order) and owners[order[end]] == owner:
-            end += 1
-        group = order[start:end]
-        first = group[0]
-        if str(kinds[owner]) != KeyStream.QUESTION and window_counts[first] > 0:
-            start = end
-            continue
-        second = next((k for k in group[1:] if abs(int(offsets[k]) - int(offsets[first])) >= width), None)
-        lowest = group[int(np.argmin(offsets[group]))]
-        keyed.add(owner)
-        values = (
-            str(ids[owner]),
-            str(kinds[owner]),
-            int(hashes[lowest]),
-            int(window_counts[lowest]),
-            int(hashes[first]),
-            int(window_counts[first]),
-            int(offsets[first]),
-            int(hashes[second]) if second is not None else 0,
-            int(window_counts[second]) if second is not None else -1,
-        )
-        for name, value in zip(columns, values, strict=True):
-            columns[name].append(value)
-        start = end
-    for owner in range(len(ids)):
-        if owner not in keyed:
-            for name, value in zip(columns, (str(ids[owner]), str(kinds[owner]), 0, -1, 0, -1, -1, 0, -1), strict=True):
-                columns[name].append(value)
-    return pa.table(
-        {
-            name: pa.array(np.array(values, dtype=np.uint64)) if name.endswith("_hash") else pa.array(values)
-            for name, values in columns.items()
-        }
-    )
 
 
 def choose(output: str, width: int = WINDOW) -> None:

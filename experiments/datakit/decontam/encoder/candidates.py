@@ -16,18 +16,15 @@ from collections.abc import Iterator
 
 import numpy as np
 import pyarrow as pa
+from marin.datakit.decon_keys import MAX_DOC_CHARS, KeyTable, record_pairs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.dataset import ShardInfo
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
-from experiments.datakit.decontam.encoder.pairs import excerpt
-from experiments.datakit.decontam.encoder.rarest_key import MAX_DOC_CHARS, KeyTable
 from experiments.datakit.decontam.encoder.tables import read_table, shard_name, write_table
-from experiments.datakit.decontam.encoder.text_keys import WINDOW, readings, text_stream, window_hashes
 
 LOCATORS = "locators.parquet"
-LOCATOR_COLUMNS = ("item", "kind", "eval", "key1_hash", "key", "offset", "question", "question_chars")
 
 
 @functools.lru_cache(maxsize=1)
@@ -36,31 +33,6 @@ def _index(output: str) -> tuple[KeyTable, pa.Table]:
     locators = read_table(prefix_join(output, LOCATORS))
     rows = np.arange(locators.num_rows)
     return KeyTable(locators.column("key1_hash").to_numpy(), rows), locators
-
-
-def record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table, width: int = WINDOW) -> list[dict]:
-    """One pair per item whose key-1 window a reading of *text* holds; an item keyed by several streams
-    takes the first locator row found."""
-    streams = [(reading, text_stream(reading)) for reading in readings(text)]
-    found = table.found(np.concatenate([window_hashes(stream, width) for _, stream in streams]))
-    pairs: dict[str, dict] = {}
-    for row in table.items_of(found):
-        located = {name: locators.column(name)[int(row)].as_py() for name in LOCATOR_COLUMNS if name != "key1_hash"}
-        if located["item"] in pairs:
-            continue
-        right, _, at = excerpt(
-            streams, located["question_chars"], located["question"], located["key"], located["offset"]
-        )
-        pairs[located["item"]] = {
-            "record": record_id,
-            "item": located["item"],
-            "kind": located["kind"],
-            "eval": located["eval"],
-            "right": right,
-            "record_chars": len(text),
-            "located": at >= 0,
-        }
-    return list(pairs.values())
 
 
 def make_scan(output: str, width: int):

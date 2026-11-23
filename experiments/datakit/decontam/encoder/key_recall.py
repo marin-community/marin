@@ -3,7 +3,7 @@
 
 """Stage-1 recall on judged copies: does the excerpt of each judged copy hold its item's key?
 
-The excerpt is read as stage 1 reads a record (``text_keys.readings``). Judged pairs name their
+The excerpt is read as stage 1 reads a record (``decon_keys.readings``). Judged pairs name their
 item by question text; the item table maps that text to item ids, and the stage-1 keys table
 gives each id its keys. Reports, per judges' label, the share of excerpts that hold the first
 window, key 1, and key 2.
@@ -14,11 +14,11 @@ import json
 import logging
 from collections import Counter
 
+from marin.datakit.decon_keys import readings, text_stream, window_hashes
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.encoder.tables import parquet_files, read_frame
-from experiments.datakit.decontam.encoder.text_keys import readings, text_stream, window_hashes
 
 logger = logging.getLogger(__name__)
 

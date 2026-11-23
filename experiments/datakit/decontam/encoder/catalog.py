@@ -20,12 +20,13 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import pyarrow as pa
 from fray.types import ResourceConfig
+from marin.datakit.decon_keys import LOCATOR_COLUMNS, WINDOW, KeyStream, key_streams, text_stream
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.datakit.decontam.encoder.candidates import LOCATOR_COLUMNS, LOCATORS, make_scan
+from experiments.datakit.decontam.encoder.candidates import LOCATORS, make_scan
 from experiments.datakit.decontam.encoder.tables import (
     item_texts,
     parquet_files,
@@ -34,7 +35,6 @@ from experiments.datakit.decontam.encoder.tables import (
     write_frame,
     write_table,
 )
-from experiments.datakit.decontam.encoder.text_keys import WINDOW, KeyStream, key_streams, text_stream
 
 logger = logging.getLogger(__name__)
 

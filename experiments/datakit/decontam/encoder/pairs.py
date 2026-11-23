@@ -18,6 +18,7 @@ from collections.abc import Iterator
 import pyarrow as pa
 import pyarrow.compute as pc
 from fray.types import ResourceConfig
+from marin.datakit.decon_keys import WINDOW, KeyStream, excerpt, key_streams, record_readings, text_stream
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
@@ -26,11 +27,8 @@ from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
 from experiments.datakit.decontam.encoder.tables import parquet_files, read_table, shard_name, write_table
-from experiments.datakit.decontam.encoder.text_keys import WINDOW, KeyStream, key_streams, readings, text_stream
 
 logger = logging.getLogger(__name__)
-BEFORE = 1500
-AFTER = 3000
 
 
 def join_items(items_root: str, stage1: str, output: str) -> None:
@@ -62,47 +60,6 @@ def join_items(items_root: str, stage1: str, output: str) -> None:
     logger.info("items: %d sampled candidate rows, %d items found of %d", sample.num_rows, items.num_rows, len(wanted))
 
 
-def _offset(text: str, position: int) -> int:
-    """The smallest prefix length of *text* whose stream is longer than *position*."""
-    low, high = 0, len(text)
-    while low < high:
-        middle = (low + high) // 2
-        if len(text_stream(text[:middle])) > position:
-            high = middle
-        else:
-            low = middle + 1
-    return low
-
-
-def _located(streams: list[tuple[str, str]], question: str, key: str, offset: int) -> tuple[str, str, int]:
-    """The first reading with the question or key, its stream, and estimated item position (-1 if absent)."""
-    for text, stream in streams:
-        # A question shorter than a window is no place marker: it can occur anywhere. Its key holds the choices.
-        at = stream.find(question) if len(question) >= WINDOW else -1
-        if at < 0 and key:
-            # The record holds the key (stage 1 found it); the item starts that far before it.
-            hit = stream.find(key)
-            at = max(0, hit - offset) if hit >= 0 else -1
-        if at >= 0:
-            return text, stream, at
-    return *streams[0], -1
-
-
-def excerpt(
-    streams: list[tuple[str, str]], question_chars: int, question: str, key: str, offset: int
-) -> tuple[str, str, int]:
-    """The record text around the item (``BEFORE`` characters before it, ``AFTER`` after its question), the
-    reading's stream, and the item's position in that stream (-1 when only an estimate exists).
-
-    *streams* are the record's readings with their streams, *question* the item's question stream and
-    *question_chars* the length of its question text, *key* the matched key window and *offset* its position
-    in the keyed stream.
-    """
-    text, stream, at = _located(streams, question, key, offset)
-    start = _offset(text, max(at, 0)) - 1 if at >= 0 else 0
-    return text[max(0, start - BEFORE) : start + question_chars + AFTER], stream, at
-
-
 def make_extract(output: str):
     def extract(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
         rows = read_table(prefix_join(output, "sample_rows.parquet")).to_pylist()
@@ -118,12 +75,12 @@ def make_extract(output: str):
                 if record_id not in wanted:
                     continue
                 record_text = str(record.get("text") or "")
-                streams = [(reading, text_stream(reading)) for reading in readings(record_text)]
+                streams = record_readings(record_text)
                 for candidate in wanted[record_id]:
                     item_id, kind, offset = candidate["item"], candidate["kind"], candidate["key1_offset"]
                     item = items[item_id]
                     question = text_stream(item["question"])
-                    # The key window comes from the stream that stage 1 keyed (see text_keys.key_streams).
+                    # The key window comes from the stream that stage 1 keyed (see decon_keys.key_streams).
                     keyed = key_streams(item["question"], list(item["choices"] or []), item["passage"] or "")
                     stream_of_kind = keyed.get(KeyStream(kind), "")
                     key = stream_of_kind[offset : offset + WINDOW] if offset >= 0 else ""

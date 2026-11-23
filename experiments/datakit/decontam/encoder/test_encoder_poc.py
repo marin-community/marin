@@ -1,60 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import random
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 import pytest
-
-from experiments.datakit.decontam.encoder import rarest_key
-from experiments.datakit.decontam.encoder.candidates import LOCATOR_COLUMNS, record_pairs
-from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
-from experiments.datakit.decontam.encoder.pairs import _located
-from experiments.datakit.decontam.encoder.planted import holds_key, negative_forms, positive_forms
-from experiments.datakit.decontam.encoder.synthetic import context_pairs, generic_pairs
-from experiments.datakit.decontam.encoder.tables import ItemText
-from experiments.datakit.decontam.encoder.text_keys import (
+from marin.datakit.decon_keys import (
     WINDOW,
-    KeyStream,
-    hit_indices,
     item_stream,
-    key_streams,
-    readings,
-    record_hit_indices,
     text_stream,
     window_hashes,
 )
+
+from experiments.datakit.decontam.encoder import rarest_key
+from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
+from experiments.datakit.decontam.encoder.planted import holds_key, negative_forms, positive_forms
+from experiments.datakit.decontam.encoder.synthetic import context_pairs, generic_pairs
+from experiments.datakit.decontam.encoder.tables import ItemText
 from experiments.datakit.decontam.encoder.train import pair_left
-
-
-def test_text_stream_ignores_case_spacing_markup_and_latex_commands():
-    assert text_stream("**What is $\\frac{1}{3}$ of 12?**") == text_stream("what is 1/3 of 12")
-    # Full-width letters and digits fold to their ASCII forms.
-    assert text_stream("\uff31\uff11: \uff21") == "q1a"
-
-
-def test_hit_indices_find_a_key_inside_other_text():
-    key = text_stream("the stylomastoid foramen will cause ipsilateral")[:WINDOW]
-    keys = np.sort(window_hashes(key))
-    assert len(hit_indices(text_stream("Notes. The stylomastoid foramen will cause ipsilateral palsy."), keys)) == 1
-    assert len(hit_indices(text_stream("An unrelated sentence about the weather."), keys)) == 0
-
-
-def test_a_copy_inside_json_once_or_twice_holds_every_window_of_the_item():
-    item = (
-        "from typing import List\n\n\ndef has_close_elements(numbers: List[float]) -> bool:\n"
-        '    """ Check $\\theta \\neq \\nu$'
-    )
-    keys = np.sort(window_hashes(text_stream(item)))
-    once = json.dumps({"prompt": item})
-    twice = json.dumps({"row": once}, ensure_ascii=True)
-    assert len(hit_indices(text_stream(once), keys)) < len(keys)
-    for record in (once, twice):
-        assert len(record_hit_indices("Data: " + record, keys)) == len(keys)
 
 
 class _Task:
@@ -249,21 +214,6 @@ def test_context_variants_skip_candidates_that_already_hold_the_item():
     assert set(rows.loc[rows["kind"] == "ctx_copy", "item"]) == {"i0", "i1"}
 
 
-def test_a_short_question_is_located_by_its_key_with_the_choices():
-    question, choices = "Which is it?", ["the first rather long choice", "the second rather long choice"]
-    keyed = item_stream(question, choices)
-    offset = len(keyed) - WINDOW
-    record = (
-        "Which is it? "
-        + "filler words " * 400
-        + "Which is it?\nA. the first rather long choice\nB. the second rather long choice"
-    )
-    streams = [(reading, text_stream(reading)) for reading in readings(record)]
-    _, stream, at = _located(streams, text_stream(question), keyed[offset : offset + WINDOW], offset)
-    # The copy with its choices starts after the filler, not at the record's first "Which is it?".
-    assert at == stream.rindex(text_stream(question))
-
-
 def test_every_planted_form_of_an_item_holds_its_key():
     item = {
         "question": "Which gas do plants take in from the air during photosynthesis?",
@@ -321,60 +271,3 @@ def test_a_generic_stem_shared_by_several_items_is_not_their_passage():
     item = lmh_item("mmlu_x", "mmlu_x-0", task, docs[0], shared_values(docs))
     assert item["passage"] == ""
     assert item["question"].startswith("Which of the following statements is correct?")
-
-
-def test_a_short_item_has_a_letter_free_key_and_a_passage_item_a_passage_key():
-    short = key_streams("Which is it?", ["the first rather long choice", "the second rather long choice"], "")
-    assert set(short) == {KeyStream.QUESTION, KeyStream.UNLETTERED}
-    # A copy that lists the choices without letters holds every window of the letter-free stream.
-    keys = set(window_hashes(short[KeyStream.UNLETTERED]).tolist())
-    copy = "- Which is it?\n- the first rather long choice\n- the second rather long choice"
-    assert keys <= set(window_hashes(text_stream(copy)).tolist())
-    assert not set(window_hashes(short[KeyStream.QUESTION]).tolist()) <= set(window_hashes(text_stream(copy)).tolist())
-    with_passage = key_streams("How many?", [], "Ann has three red apples and two green pears today.")
-    assert set(with_passage) == {KeyStream.QUESTION, KeyStream.PASSAGE}
-
-
-def test_an_extra_key_is_kept_only_when_no_reference_record_holds_it():
-    # Streams: 0 = question of item a, 1 = passage of item a, 2 = passage of item b.
-    windows = rarest_key.Windows(
-        hashes=np.array([11, 12, 21, 22, 31], dtype=np.uint64),
-        owners=np.array([0, 0, 1, 1, 2]),
-        offsets=np.array([0, 25, 0, 25, 0]),
-        ids=np.array(["a", "a", "b"]),
-        kinds=np.array([KeyStream.QUESTION, KeyStream.PASSAGE, KeyStream.PASSAGE]),
-    )
-    rows = rarest_key.keys_table(windows, np.array([3, 5, 2, 4, 0])).to_pandas().set_index(["id", "kind"])
-    # The question keeps its rarest window even though reference records hold it.
-    assert rows.loc[("a", KeyStream.QUESTION), "key1_hash"] == 11
-    # A passage whose rarest window occurs in reference text (a generic stem) gets no key.
-    assert rows.loc[("a", KeyStream.PASSAGE), "key1_hash"] == 0
-    assert rows.loc[("b", KeyStream.PASSAGE), "key1_hash"] == 31
-
-
-def test_a_catalog_record_yields_one_pair_per_item_with_the_text_around_it():
-    question = "Which planet of the solar system has the most moons in total?"
-    stream = text_stream(question)
-    key, offset = stream[10:30], 10
-    rows = {
-        "item": ["planets-0", "planets-0"],
-        "kind": [KeyStream.QUESTION, KeyStream.PASSAGE],
-        "eval": ["planets", "planets"],
-        "key1_hash": [int(window_hashes(key)[0]), int(window_hashes(stream[25:45])[0])],
-        "key": [key, stream[25:45]],
-        "offset": [offset, 25],
-        "question": [stream, stream],
-        "question_chars": [len(question), len(question)],
-    }
-    locators = pa.table(
-        {name: pa.array(rows[name], pa.uint64() if name == "key1_hash" else None) for name in LOCATOR_COLUMNS}
-    )
-    table = rarest_key.KeyTable(np.array(rows["key1_hash"], dtype=np.uint64), np.arange(2))
-    record = "intro " * 400 + "Q: " + question + " A: Saturn." + " outro" * 900
-    pairs = record_pairs("r1", record, table, locators)
-    # Both streams of the item match, but the record gets one pair for the item.
-    assert [pair["item"] for pair in pairs] == ["planets-0"]
-    assert question in pairs[0]["right"] and len(pairs[0]["right"]) < len(record)
-    escaped = json.dumps({"text": "Q: " + question.replace(" ", "\n")})
-    assert [pair["item"] for pair in record_pairs("r2", escaped, table, locators)] == ["planets-0"]
-    assert record_pairs("r3", "nothing about planets here " * 20, table, locators) == []

@@ -36,11 +36,11 @@ from itertools import pairwise
 from typing import Any, NamedTuple, Protocol
 
 import pyarrow as pa
+from marin.datakit.decon_keys import WINDOW, text_stream
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.encoder.tables import write_table
-from experiments.datakit.decontam.encoder.text_keys import WINDOW, text_stream
 from experiments.datakit.decontam.lmh_loader import (
     flatten_task_dict,
     materialize_first_nonempty_split,
