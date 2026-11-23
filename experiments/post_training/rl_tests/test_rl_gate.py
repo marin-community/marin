@@ -48,6 +48,7 @@ from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
+    cache_native_compositions,
     controls,
     edit_receipt,
     evaluation_task_rows,
@@ -677,6 +678,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     parent, key = path.rsplit(".", 1)
                     assert get_path(receipt, parent).pop(key) == original
     if case == "schema-timeout":
+        cache_native_compositions(monkeypatch)
         original_subprocess = subprocess.run
         for diagnostic in ("timeout", "empty", "whitespace", "oserror"):
             with monkeypatch.context() as unavailable:
