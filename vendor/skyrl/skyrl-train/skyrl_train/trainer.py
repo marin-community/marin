@@ -194,12 +194,15 @@ _MODEL_INITIALIZATION_TIMEOUT = 60 * 60
 
 @dataclass(frozen=True)
 class LearnerStartup:
+    """Model loads in flight before the trainer takes ownership of the workers."""
+
     policy: PPORayActorGroup
     reference: PPORayActorGroup | None
     model_loads: list[ObjectRef]
     deadline: float
 
     def stop(self) -> None:
+        """Release learner workers when setup fails before the trainer is ready."""
         _kill_learner_actors(self.policy, self.reference)
 
 
@@ -212,7 +215,14 @@ def _kill_learner_actors(policy: PPORayActorGroup | None, reference: PPORayActor
                 logger.warning("Error killing {} actors: {}", name, error)
 
 
-def _training_step_counts(cfg: DictConfig, prompt_count: int) -> tuple[int, int, int]:
+@dataclass(frozen=True)
+class _TrainingStepCounts:
+    per_epoch: int
+    available: int
+    total: int
+
+
+def _training_step_counts(cfg: DictConfig, prompt_count: int) -> _TrainingStepCounts:
     batch_size = cfg.trainer.train_batch_size
     steps_per_epoch = prompt_count // batch_size
     if steps_per_epoch == 0:
@@ -220,7 +230,7 @@ def _training_step_counts(cfg: DictConfig, prompt_count: int) -> tuple[int, int,
     available_steps = steps_per_epoch * cfg.trainer.epochs
     max_steps = cfg.trainer.get("max_steps")
     total_steps = min(available_steps, max_steps) if max_steps is not None and max_steps > 0 else available_steps
-    return steps_per_epoch, available_steps, total_steps
+    return _TrainingStepCounts(per_epoch=steps_per_epoch, available=available_steps, total=total_steps)
 
 
 def _enqueue_learner_loads(
@@ -419,9 +429,10 @@ class RayPPOTrainer:
 
     def _configure_training_schedule(self):
         """Count steps in batches of prompt groups; one pass over the dataset is one epoch."""
-        self.num_steps_per_epoch, self.available_training_steps, self.total_training_steps = _training_step_counts(
-            self.cfg, len(self.train_dataset)
-        )
+        steps = _training_step_counts(self.cfg, len(self.train_dataset))
+        self.num_steps_per_epoch = steps.per_epoch
+        self.available_training_steps = steps.available
+        self.total_training_steps = steps.total
         logger.info(f"Steps per epoch: {self.num_steps_per_epoch}, total training steps: {self.total_training_steps}")
 
     def _create_trainer_state(self, epoch: int, *, active_step_duration: float | None = None) -> TrainerState:
@@ -1845,11 +1856,11 @@ class RayPPOTrainer:
         cls, cfg: DictConfig, PolicyWorker, RefWorker, *, policy_pg: PlacementGroup, prompt_count: int
     ) -> LearnerStartup:
         """Queue model loading on reserved learner GPUs without joining the inference workers."""
-        _, _, total_steps = _training_step_counts(cfg, prompt_count)
+        steps = _training_step_counts(cfg, prompt_count)
         policy, reference = cls._create_learner_actors(cfg, PolicyWorker, RefWorker, policy_pg=policy_pg)
         deadline = time.monotonic() + _MODEL_INITIALIZATION_TIMEOUT
         try:
-            loads = _enqueue_learner_loads(cfg, policy, reference, total_steps)
+            loads = _enqueue_learner_loads(cfg, policy, reference, steps.total)
         except BaseException:
             _kill_learner_actors(policy, reference)
             raise

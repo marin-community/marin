@@ -645,6 +645,17 @@ class BasePPOExp:
             config=self.cfg,
         )
 
+    def _can_overlap_learner_startup(self) -> bool:
+        placement = self.cfg.trainer.placement
+        # The policy group must cover the entire learner footprint, including any reference workers.
+        return (
+            self.policy_pg is not None
+            and not placement.colocate_all
+            and (placement.colocate_policy_ref or not reference_model_required(self.cfg.trainer.algorithm))
+            and self.cfg.generator.run_engines_locally
+            and inference_engines_required(self.cfg)
+        )
+
     def _setup_trainer(self, tracker):
         """Construct the trainer and models with the experiment's active tracker."""
         logger.info(self.get_cfg_as_str(self.cfg))
@@ -658,18 +669,10 @@ class BasePPOExp:
         from skyrl_train.trainer import RayPPOTrainer  # noqa: PLC0415
 
         prepared_distillation = prepare_distillation_runtime(self.cfg, tokenizer)
-        placement = self.cfg.trainer.placement
         startup = None
         trainer = None
         try:
-            # A separate, unreserved reference group could compete with vLLM for GPUs.
-            if (
-                self.policy_pg is not None
-                and not placement.colocate_all
-                and (placement.colocate_policy_ref or not reference_model_required(self.cfg.trainer.algorithm))
-                and self.cfg.generator.run_engines_locally
-                and inference_engines_required(self.cfg)
-            ):
+            if self._can_overlap_learner_startup():
                 logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
                 startup = RayPPOTrainer.start_learner_models(
                     self.cfg, PolicyWorker, RefWorker, policy_pg=self.policy_pg, prompt_count=len(self.train_dataset)
