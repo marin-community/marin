@@ -313,6 +313,16 @@ def reference_attention(
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
         return _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype)
+    if out_sharding.mesh.size == 1:
+        # Resolve the reference contractions within the explicit mesh for eager autodiff.
+        replicated = out_sharding.update(spec=PartitionSpec())
+        q, k, v = (reshard(x, replicated) for x in (q, k, v))
+        if isinstance(mask, AttentionMask):
+            mask = mask.materialize_mask(q.shape[1], k.shape[1])
+        if mask is not None:
+            mask = reshard(mask, replicated)
+        context = _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype)
+        return reshard(context, out_sharding)
     # jax 0.11.1 explicit-sharding mode cannot infer layouts for the two contractions
     # (align_kv_heads drops the head-axis sharding, and a sharded head_dim makes the
     # score contraction ambiguous), so run the math under Auto axes and pin only the
