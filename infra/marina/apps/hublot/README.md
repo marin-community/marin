@@ -47,5 +47,5 @@ runtime and its Finelog access.
 uv run marina release infra/marina/apps/hublot --base-version 0
 ```
 
-After release, sign in at the production `/hublot/` route and open one
-bounded run link to check the service's Finelog read.
+After release, sign in at the production `/hublot/` route and open the
+largest reference window in the private handoff. Check that the full window loads.

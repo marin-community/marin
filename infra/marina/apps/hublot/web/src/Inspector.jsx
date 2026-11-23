@@ -389,6 +389,7 @@ export function InspectorCard({
   const byGroup = populated.filter((signal) => signal.group === (group || null));
   const units = [...new Set(byGroup.map((signal) => signal.unit))];
   const unit = units.includes(unitChoice) ? unitChoice : units[0];
+  const perGpu = unit === 'tokens/s/GPU';
   const series = useMemo(() => populated.filter((signal) => signal.group === (group || null) && signal.unit === unit),
     [populated, group, unit]);
   const unavailable = all.filter((signal) => signal.group === (group || null) && !populated.includes(signal));
@@ -410,7 +411,7 @@ export function InspectorCard({
   const grouped = series.find((s) => definition.summaries?.[s.id]);
   const summaryCount = grouped?.data.filter((p) => inRange(p, range)).length;
   let caption = '';
-  if (unit === 'tokens/s/GPU') caption = model.run.inferenceGpus + ' configured inference GPUs';
+  if (perGpu) caption = model.run.inferenceGpus + ' configured inference GPUs';
   if (unit === 's per 10 s') caption = '10 s means it waited through the whole bin.';
   if (unit === 's') caption = 'Duration in seconds';
   if (definition.lagCaption && unit === 'policy steps' && model.maxStaleness != null) caption = 'Configured staleness limit · ' + model.maxStaleness + ' steps';
@@ -433,7 +434,7 @@ export function InspectorCard({
             {definition.tabs?.[item] ?? tabNames[item] ?? item}
           </button>)}
         </div>
-        {groups.length + Number(hasAggregate) > 1 && (!definition.evalSummary || unit === 's') &&
+        {!perGpu && groups.length + Number(hasAggregate) > 1 && (!definition.evalSummary || unit === 's') &&
           <select aria-label={definition.engines ? 'Inference engine' : definition.groupLabel ?? 'Breakdown'} value={group}
             onChange={(event) => { setGroupChoice(event.target.value); setHover(null); }}>
             {hasAggregate && <option value="">{definition.engines ? 'All engines' : definition.groupDefault ?? 'All reasons'}</option>}
@@ -489,7 +490,7 @@ export function InspectorCard({
             <summary aria-label={'How to read ' + definition.title}>?</summary>
             <div className="help-popover">
               <p>{definition.helpByUnit?.[unit] ?? definition.help}</p>
-              {unit === 'tokens/s/GPU' && <p>Per GPU divides the fleet rate by the configured inference GPU count.</p>}
+              {perGpu && <p>Per GPU divides the fleet rate by the configured inference GPU count.</p>}
             </div>
           </details>
           {series.length > 0 && <button type="button" aria-label={'Full screen ' + definition.title} title="Full screen"
