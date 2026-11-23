@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { fetchHealth, fetchInfo } from '../lib/api'
 import { comparisonBaseUrl, comparisonTurns } from '../lib/comparison'
+import { isSendKey } from '../lib/composer_keys'
 import type { PreferenceChoice } from '../lib/comparison'
 import { loadComparison, newComparison, saveComparison } from '../lib/comparison_storage'
 import type { SamplingParams, ServingInfo } from '../lib/types'
@@ -117,7 +118,7 @@ async function send() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.isComposing || event.key !== 'Enter' || event.shiftKey) return
+  if (!isSendKey(event)) return
   event.preventDefault()
   send()
 }
@@ -126,14 +127,14 @@ function onKeydown(event: KeyboardEvent) {
 <template>
   <div class="flex min-h-0 flex-1 flex-col">
     <div class="flex flex-wrap items-center gap-2 border-b border-surface-border px-4 py-2">
-      <label class="min-w-0 flex flex-1 items-center gap-2 text-xs text-text-secondary">
+      <label class="flex w-full min-w-0 items-center gap-2 text-xs text-text-secondary sm:w-auto sm:flex-1">
         Second dashboard URL
         <input
           v-model="rightUrl"
           type="url"
           placeholder="https://iris.example/proxy/t/.../"
           aria-label="Second model dashboard URL"
-          class="min-w-40 flex-1 rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-sm text-text outline-none focus:border-accent"
+          class="min-w-0 flex-1 rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-sm text-text outline-none focus:border-accent"
           @keydown.enter="connect"
         />
       </label>

@@ -4,13 +4,17 @@ import contextlib
 import logging
 import threading
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from harbor.agents.base import TurnCapExhaustedError
+from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
+from finestore.reader import ReadView
+from harbor.archive import open_archive
 from harbor.environments.base import SandboxDiskFullError
-from harbor.models.job.config import RetryConfig
+from rigging.task_errors import RetrySettings
+from harbor_config.errors import ERROR_CATEGORIES
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import (
@@ -34,8 +38,10 @@ from harbor.utils.artifact_writer import (
     ArtifactUploadTimeoutError,
     ArtifactWriter,
 )
-from harbor_config import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
 from harbor_config.errors import is_resume_retryable
+from harbor_config.models.job.config import ArchiveConfig
+from shellbox.backends.daytona.machine import DaytonaOutputUnavailable
 from shellbox.machine import CommandOutputLost
 
 from tests.unit.agents.terminus_2.bare_agent import make_bare_terminus2
@@ -239,7 +245,7 @@ async def test_agent_damage_to_its_sandbox_is_a_model_failure(
         )
 
     assert raised.value.__cause__ is original
-    assert error_category(type(raised.value).__name__) is ErrorCategory.AGENT
+    assert error_category(type(raised.value).__name__, categories=ERROR_CATEGORIES) is ErrorCategory.AGENT
     assert trial.result.agent_execution.finished_at is not None
 
 
@@ -454,7 +460,7 @@ async def test_finalization_waits_for_queued_trajectory_or_stays_incomplete(
             assert native.verifier_result is None
             error = native.exception_info.exception_type
             assert error == "ArtifactWriteTimeoutError"
-            assert error_category(error) is ErrorCategory.INFRASTRUCTURE
+            assert error_category(error, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
             assert is_resume_retryable(error)
         else:
             assert native.completion is not None
@@ -562,7 +568,7 @@ async def test_cancelled_agent_final_upload_failure_leaves_native_result_incompl
         )
     else:
         assert error == "ArtifactPersistenceError"
-        assert error_category(error) is ErrorCategory.INFRASTRUCTURE
+        assert error_category(error, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
     assert not trajectory_path.exists()
 
 
@@ -717,7 +723,7 @@ async def test_unconfirmed_teardown_retries_outside_include_list(
     )
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=3,
             include_exceptions={"APIConnectionError"},
             min_wait_sec=0,
@@ -733,6 +739,46 @@ async def test_unconfirmed_teardown_retries_outside_include_list(
     )
     assert selected.trial_relpath == "lost/attempts/001"
     assert selected.completion is not None
+
+
+@pytest.mark.unit
+async def test_daytona_output_unavailable_retries_by_name(
+    tmp_path: Path, monkeypatch
+) -> None:
+    async def fail_command(trial: FakeTrial) -> None:
+        trial.result.completion = TrialCompletion(trajectory_present=False)
+        raise DaytonaOutputUnavailable("Cannot collect Daytona command output")
+
+    async def finish(trial: FakeTrial) -> None:
+        trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
+
+    config = _config(tmp_path, "daytona-command", attempt_timeout=None)
+    _install_factory(
+        monkeypatch,
+        {
+            (config.trial_name, 0): FakeTrial(config, 0, fail_command),
+            (config.trial_name, 1): FakeTrial(config, 1, finish),
+        },
+    )
+    queue = TrialQueue(
+        n_concurrent=1,
+        retry_config=RetrySettings(
+            max_retries=1,
+            include_exceptions={"DaytonaOutputUnavailable"},
+            min_wait_sec=0,
+            max_wait_sec=0,
+        ),
+    )
+
+    result = await queue.submit(config)
+    first = TrialResult.model_validate_json(
+        (config.trials_dir / config.trial_name / "attempts" / "000" / "result.json").read_text()
+    )
+    assert first.completion is not None
+    assert first.exception_info.exception_type == "DaytonaOutputUnavailable"
+    assert error_category(first.exception_info.exception_type, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
+    assert result.trial_relpath == "daytona-command/attempts/001"
+    assert result.verifier_result.rewards == {"reward": 1.0}
 
 
 @pytest.mark.unit
@@ -794,7 +840,7 @@ async def test_cancelling_queued_trial_does_not_start_or_retry_it(
     monkeypatch.setattr(Trial, "create", classmethod(create))
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(max_retries=2, min_wait_sec=0, max_wait_sec=0),
+        retry_config=RetrySettings(max_retries=2, min_wait_sec=0, max_wait_sec=0),
     )
 
     async with asyncio.timeout(1):
@@ -812,26 +858,125 @@ async def test_cancelling_queued_trial_does_not_start_or_retry_it(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "grading", ["ungraded", "verified", "empty", "unpersisted", "slow_hook"]
+)
 async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, grading: str
 ) -> None:
-    never = asyncio.Event()
+    release_publication = asyncio.Event()
+    publication_started = asyncio.Event()
 
     async def hang(trial: FakeTrial) -> None:
-        await never.wait()
+        if grading != "ungraded":
+            rewards = {} if grading == "empty" else {"reward": 0.0}
+            trial.result.verifier_result = VerifierResult(rewards=rewards)
+            trial.result.exception_info = ExceptionInfo.from_exception(
+                AgentTimeoutError("Agent ran out of time before verification")
+            )
+            trial.first_phase_timeout = TimeoutError("Agent session cleanup timed out")
+        if grading == "slow_hook":
+            trial.result.completion = TrialCompletion(trajectory_present=False)
+        await asyncio.Event().wait()
 
-    config = _config(tmp_path, "hung", attempt_timeout=0.01)
-    _install_factory(monkeypatch, {("hung", 0): FakeTrial(config, 0, hang)})
+    async def reverify(trial: FakeTrial) -> None:
+        trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
+        trial.result.completion = TrialCompletion(trajectory_present=False)
+        trial.result.finished_at = datetime.now(timezone.utc)
 
-    async with asyncio.timeout(1):
-        result = await TrialQueue(n_concurrent=1).submit(config)
+    async def hold_verified_hook(event: TrialHookEvent) -> None:
+        if event.result is not None and event.result.verifier_result is not None:
+            publication_started.set()
+            await release_publication.wait()
 
-    assert result.exception_info is not None
-    assert result.exception_info.exception_type == "TrialTimeoutError"
+    config = _config(
+        tmp_path, "hung", attempt_timeout=0.05,
+        cleanup_grace=1.0 if grading == "verified" else 0.2,
+    )
+    _install_factory(
+        monkeypatch,
+        {("hung", 0): FakeTrial(config, 0, hang), ("hung", 1): FakeTrial(config, 1, reverify)},
+    )
+    retry = RetrySettings(
+        max_retries=1 if grading in {"verified", "empty"} else 0,
+        include_exceptions={"APIConnectionError"},
+        exclude_exceptions=None,
+        min_wait_sec=0,
+        max_wait_sec=0,
+    )
+    queue = TrialQueue(n_concurrent=1, retry_config=retry)
+    if grading == "slow_hook":
+        queue.on_result_persistence_started(hold_verified_hook)
+    if grading == "unpersisted":
+        writer = artifact_writer.get_artifact_writer()
+        submit_required = writer.submit_required
+
+        async def hold_verified_write(path, producer, **kwargs):
+            if TrialResult.model_validate_json(producer()).verifier_result is not None:
+                publication_started.set()
+                await release_publication.wait()
+            return await submit_required(path, producer, **kwargs)
+
+        monkeypatch.setattr(writer, "submit_required", hold_verified_write)
+
+    archive_root = str(tmp_path / "archive")
+    with contextlib.ExitStack() as cleanup:
+        archive = None
+        if grading == "verified":
+            archive = open_archive(
+                ArchiveConfig(root=archive_root, dataset="harbor"),
+                trials_dir=config.trials_dir,
+            )
+            assert archive is not None
+            cleanup.callback(archive.close)
+            queue.add_hook(TrialEvent.END, archive.on_trial_end)
+        try:
+            async with asyncio.timeout(5):
+                result = await queue.submit(config)
+        finally:
+            release_publication.set()
+        if archive is not None:
+            await archive.finalize([result])
+            archive.seal()
+
     selected = TrialResult.model_validate_json(
         (tmp_path / "trials" / "hung" / "result.json").read_text()
     )
-    assert selected.exception_info == result.exception_info
+    assert selected == result
+    if grading in {"slow_hook", "unpersisted"}:
+        assert publication_started.is_set()
+    if grading in {"verified", "empty"}:
+        assert selected.trial_relpath == "hung/attempts/001"
+        assert selected.verifier_result.rewards == {"reward": 1.0}
+        if grading == "verified":
+            first = TrialResult.model_validate_json(
+                (config.trials_dir / "hung" / "attempts" / "000" / "result.json").read_text()
+            )
+            assert first.exception_info.exception_type == "TimeoutError"
+            assert first.completion is None
+            assert first.verifier_result.rewards == {"reward": 0.0}
+            reader = ReadView(archive_root)
+            assert reader.is_sealed()
+            native = reader.read_blob(f"sources/harbor/hung/attempts/{first.id}/result.json")
+            assert TrialResult.model_validate_json(native) == first
+            [sample] = reader.scan(ARCHIVE_SAMPLES_TABLE).to_pylist(maps_as_pydicts="strict")
+            assert sample_from_archive_row(sample).grading.score == 1.0
+        return
+    assert selected.trial_relpath == "hung/attempts/000"
+    if grading == "slow_hook":
+        assert selected.verifier_result is not None
+        assert selected.verifier_result.rewards == {"reward": 0.0}
+        assert selected.exception_info.exception_type == "AgentTimeoutError"
+        assert selected.completion is not None
+        assert [error.exception_type for error in selected.secondary_exception_info] == [
+            "TimeoutError"
+        ]
+    else:
+        assert selected.verifier_result is None
+        expected = (
+            "ArtifactPersistenceError" if grading == "unpersisted" else "TrialTimeoutError"
+        )
+        assert selected.exception_info.exception_type == expected
 
 
 @pytest.mark.unit
@@ -893,6 +1038,7 @@ async def test_result_persistence_failure_is_primary_and_retryable(
 
     async def finish_with_prior_model_error(trial: FakeTrial) -> None:
         attempts.append(len(attempts))
+        trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
         trial.result.exception_info = ExceptionInfo.from_exception(
             RuntimeError("model failed before persistence")
         )
@@ -912,7 +1058,7 @@ async def test_result_persistence_failure_is_primary_and_retryable(
     monkeypatch.setattr("harbor.trial.attempt.get_artifact_writer", FailingWriter)
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=1,
             include_exceptions={"ArtifactUploadTimeoutError"},
             min_wait_sec=0,
@@ -925,6 +1071,7 @@ async def test_result_persistence_failure_is_primary_and_retryable(
     assert attempts == [0, 1]
     assert result.exception_info is not None
     assert result.exception_info.exception_type == "ArtifactUploadTimeoutError"
+    assert result.verifier_result is None
     assert any(
         error.exception_type == "RuntimeError"
         for error in result.secondary_exception_info
@@ -998,7 +1145,7 @@ async def test_cancellation_resistant_attempt_quarantines_capacity_until_termina
     )
     queue = TrialQueue(
         n_concurrent=1,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=1,
             min_wait_sec=0,
             max_wait_sec=0,
@@ -1069,7 +1216,7 @@ async def test_late_attempt_cannot_overwrite_retry_selection_or_terminal_hook(
     )
     queue = TrialQueue(
         n_concurrent=2,
-        retry_config=RetryConfig(
+        retry_config=RetrySettings(
             max_retries=1,
             min_wait_sec=0,
             max_wait_sec=0,

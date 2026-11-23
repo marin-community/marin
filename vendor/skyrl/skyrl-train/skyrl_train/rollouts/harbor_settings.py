@@ -1,4 +1,4 @@
-"""Harbor task runtime, verifier, and retry settings."""
+"""Harbor task runtime and verifier settings."""
 
 from collections.abc import Mapping
 from enum import StrEnum
@@ -35,23 +35,3 @@ class VerifierConfig(BaseModel):
     override_timeout_sec: float | None = None
     max_timeout_sec: float | None = None
     disable: bool = False
-
-
-DEFAULT_RETRY_EXCLUSIONS = frozenset(
-    {
-        "AgentTimeoutError",
-        "VerifierTimeoutError",
-        "RewardFileNotFoundError",
-        "RewardFileEmptyError",
-        "VerifierOutputParseError",
-    }
-)
-
-
-class RetryConfig(BaseModel):
-    max_retries: int = Field(default=0, ge=0)
-    include_exceptions: set[str] | None = None
-    exclude_exceptions: set[str] | None = Field(default_factory=lambda: set(DEFAULT_RETRY_EXCLUSIONS))
-    wait_multiplier: float = 1.0
-    min_wait_sec: float = 1.0
-    max_wait_sec: float = 60.0

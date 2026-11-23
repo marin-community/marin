@@ -411,11 +411,11 @@ def _embedding_pass(
 @click.option(
     "--image-backend",
     type=click.Choice([Backend.GVISOR.value, Backend.DAYTONA.value]),
-    help="Image controls: gvisor via Iris or daytona. Omit for local and simulator controls only.",
+    help="Image controls: gvisor (an Iris SANDBOX job) or daytona. Omit for local and simulator controls only.",
 )
 @click.option(
     "--controller-url",
-    help="Controller for --image-backend gvisor; defaults to the current Iris job's controller.",
+    help="Controller for --image-backend gvisor (Iris SANDBOX jobs); defaults to the current Iris job's controller.",
 )
 @click.option(
     "--simulator-catalog",

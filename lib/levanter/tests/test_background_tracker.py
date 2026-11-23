@@ -15,6 +15,7 @@ These tests cover the behavior we want for robustness against W&B failures:
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
@@ -28,7 +29,7 @@ import wandb
 from levanter.tracker import BackgroundTracker, CompositeTracker
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import Tracker
-from levanter.tracker.wandb import WandbTracker
+from levanter.tracker.wandb import MAX_WANDB_ARTIFACT_BYTES, WandbTracker
 
 
 class RecordingTracker(Tracker):
@@ -117,6 +118,41 @@ def test_background_tracker_forwards_calls(tmp_path):
     _, art_name, art_type = inner.artifacts[0]
     assert (art_name, art_type) == ("x", "model")
     assert inner.finished is True
+
+
+def test_background_tracker_skips_oversized_wandb_artifact_with_one_warning(tmp_path, caplog):
+    """The default training path wraps W&B in BackgroundTracker: an oversized artifact
+    must be skipped with one warning (not an exception traceback) and normal
+    artifacts must still upload."""
+    uploaded: list[str] = []
+
+    class FakeRun:
+        def log_artifact(self, artifact_path, *, name=None, type=None):
+            uploaded.append(name)
+
+        def finish(self):
+            pass
+
+    oversized = tmp_path / "train_step.jaxpr.txt.gz"
+    with oversized.open("wb") as artifact_file:
+        artifact_file.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
+    normal = tmp_path / "config.yaml"
+    normal.write_text("hello: world\n")
+
+    bt = BackgroundTracker(WandbTracker(FakeRun()))
+    try:
+        with caplog.at_level(logging.WARNING):
+            bt.log_artifact(str(oversized), name="train_step.jaxpr.txt.gz", type="jaxpr")
+            bt.log_artifact(str(normal), name="config.yaml", type="config")
+            assert bt._wait_until_idle(timeout=5)
+    finally:
+        bt.finish()
+
+    assert uploaded == ["config.yaml"]
+    # The oversize skip is one warning on the producer thread, not an error traceback.
+    skip_warnings = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert len(skip_warnings) == 1
+    assert skip_warnings[0].levelno == logging.WARNING
 
 
 def test_background_tracker_stages_artifact_so_source_can_be_deleted(tmp_path):

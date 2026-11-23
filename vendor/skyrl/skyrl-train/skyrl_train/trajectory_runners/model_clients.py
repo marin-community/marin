@@ -1,6 +1,7 @@
 """Model transports used by trajectory runners."""
 
 import asyncio
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable, Sequence
@@ -9,6 +10,7 @@ from uuid import uuid4
 
 import numpy as np
 from transformers import PreTrainedTokenizerBase
+from rolloutengine.harness.core import OUTPUT_LIMIT_OPTION_KEYS
 from rolloutengine.models import RolloutContractError
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
@@ -47,12 +49,19 @@ from skyrl_train.rollout_observability import rollout_phase
 
 # The per-turn output limit, as the trainer config (`max_generate_length`) and vLLM (`max_tokens`) spell it. Chat
 # requests carry it only as `max_completion_tokens`, which vLLM prefers over `max_tokens`.
-_OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
-_CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
+_SAMPLING_OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
+_CHAT_SAMPLING_EXCLUSIONS = frozenset({*_SAMPLING_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 
 REASONING_VIOLATIONS_KEY = "reasoning_violations"
 REASONING_VIOLATION_TOKENS_KEY = "reasoning_violation_tokens"
+
+# vLLM's Hermes parser serializes tool-call arguments with ensure_ascii=False, so a JSON \u escape for half of
+# a surrogate pair becomes a lone surrogate, which the tokenizer cannot encode when it renders the next turn.
+# vLLM decodes the arguments before the chat template writes them, so an escape in the arguments string does
+# not help: the decoded value must be valid Unicode.
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+_REPLACEMENT_CHARACTER = "\ufffd"
 
 
 class ModelClientOutput(InferenceEngineOutput):
@@ -93,7 +102,7 @@ class GenerationBudgetExceededError(ContextLengthExceededError):
 
 
 def _generation_token_budget(
-    request: InferenceEngineInput, prompt_ids: list[int], requested_tokens: list[int]
+    request: InferenceEngineInput, prompt_ids: list[int], options: dict[str, Any]
 ) -> int | None:
     """Return the tightest output cap, or None when uncapped.
 
@@ -103,8 +112,8 @@ def _generation_token_budget(
     if max_prompt_length is not None and len(prompt_ids) > max_prompt_length:
         raise GenerationBudgetExceededError(prompt_ids)
     sampling = request.get("sampling_params") or {}
-    configured = [int(sampling[key]) for key in _OUTPUT_LIMIT_KEYS if sampling.get(key) is not None]
-    configured.extend(requested_tokens)
+    configured = [int(sampling[key]) for key in _SAMPLING_OUTPUT_LIMIT_KEYS if sampling.get(key) is not None]
+    configured.extend(int(value) for key in OUTPUT_LIMIT_OPTION_KEYS if (value := options.get(key)) is not None)
     max_context_length = request.get("max_context_length")
     if max_context_length is not None:
         remaining = max_context_length - len(prompt_ids)
@@ -187,6 +196,23 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
     if all(result.policy_steps is not None for result in results):
         output["response_policy_steps"] = [result.policy_steps for result in results]
     return output
+
+
+def _replace_lone_surrogates(message: dict[str, Any]) -> dict[str, Any]:
+    """Replace each lone surrogate in the message's tool-call arguments with U+FFFD."""
+    if not message.get("tool_calls"):
+        return message
+    tool_calls = [
+        {
+            **call,
+            "function": {
+                **call["function"],
+                "arguments": _LONE_SURROGATE.sub(_REPLACEMENT_CHARACTER, call["function"]["arguments"]),
+            },
+        }
+        for call in message["tool_calls"]
+    ]
+    return {**message, "tool_calls": tool_calls}
 
 
 async def _render_chat_prompt(
@@ -291,12 +317,7 @@ class DirectModelClient:
         prompt_ids = assistant_prefix_token_ids(self._client.tokenizer, messages, options)
         sampling = dict(request.get("sampling_params") or {})
         skip_special_tokens = options.get("skip_special_tokens", sampling.get("skip_special_tokens", True))
-        requested_tokens = [
-            int(options[key])
-            for key in ("max_completion_tokens", "max_output_tokens")
-            if options.get(key) is not None
-        ]
-        token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
+        token_budget = _generation_token_budget(request, prompt_ids, options)
         if token_budget is not None:
             sampling["max_tokens"] = token_budget
         sampling.pop("max_generate_length", None)
@@ -333,21 +354,13 @@ class DirectModelClient:
         )
 
     @staticmethod
-    def _chat_options(options: dict[str, Any], sampling_params: dict[str, Any]) -> dict[str, Any]:
+    def _chat_options(options: dict[str, Any]) -> dict[str, Any]:
         result = dict(options)
         result.pop("input", None)
         if not result.get("tools"):
             result.pop("tools", None)
-        if "max_output_tokens" in result:
-            result["max_completion_tokens"] = result.pop("max_output_tokens")
-        for key in _OUTPUT_LIMIT_KEYS:
-            if sampling_params.get(key) is None:
-                continue
-            configured_max = int(sampling_params[key])
-            requested_max = result.get("max_completion_tokens")
-            result["max_completion_tokens"] = (
-                configured_max if requested_max is None else min(configured_max, int(requested_max))
-            )
+        for key in OUTPUT_LIMIT_OPTION_KEYS:
+            result.pop(key, None)
         return result
 
     async def _generate_chat(self, request: InferenceEngineInput) -> ModelClientOutput:
@@ -370,7 +383,7 @@ class DirectModelClient:
                 if continuation is not None:
                     raise ValueError("An initial assistant prefix cannot reuse a sampled chat continuation")
                 return await self._generate_assistant_prefix(request, messages, row_options, session_id)
-            chat_options = self._chat_options(row_options, sampling_params)
+            chat_options = self._chat_options(row_options)
             tokenize_options = {key: value for key, value in chat_options.items() if key in CHAT_TOKENIZE_FIELDS}
             render_request = {
                 "json": {
@@ -383,15 +396,9 @@ class DirectModelClient:
             }
             with rollout_phase("tokenize"):
                 messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
-            requested_tokens = (
-                [] if chat_options.get("max_completion_tokens") is None else [int(chat_options["max_completion_tokens"])]
-            )
-            token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
+            token_budget = _generation_token_budget(request, prompt_ids, row_options)
             if token_budget is not None:
-                # Preserve chat's explicit-null handling when context supplies a budget.
-                chat_options["max_completion_tokens"] = min(
-                    int(chat_options.get("max_completion_tokens", token_budget)), token_budget
-                )
+                chat_options["max_completion_tokens"] = token_budget
 
             body = {
                 "model": self._client.model_name,
@@ -431,7 +438,7 @@ class DirectModelClient:
             response_ids = choice.get("token_ids")
             if not isinstance(response_ids, list) or not all(isinstance(token, int) for token in response_ids):
                 raise RuntimeError("vLLM chat completion did not return exact token IDs")
-            message = choice["message"]
+            message = _replace_lone_surrogates(choice["message"])
             text = message.get("content") or ""
             # Some serving configurations omit reasoning parsers and remove
             # special delimiters from content. Exact tokens retain the boundary.

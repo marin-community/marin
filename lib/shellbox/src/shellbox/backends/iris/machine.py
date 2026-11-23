@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a registry image as a gVisor Iris job and exec into its container."""
+"""Run a registry image as an Iris SANDBOX job and exec into its container."""
 
 import asyncio
 import base64
@@ -303,7 +303,7 @@ class IrisMachine:
 
 
 class IrisMachineFactory:
-    """Submit a CPU-only gVisor job from a registry image.
+    """Submit a CPU-only Iris SANDBOX job from a registry image.
 
     Secret references are resolved only at job submission. A factory configured
     with secrets must be reserved for trusted private grading, never actor jobs.

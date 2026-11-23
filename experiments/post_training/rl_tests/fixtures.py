@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
+import yaml
 from finestore.reader import ReadView
 from finestore.rl.run_records import (
     EVALUATIONS_TABLE,
@@ -50,6 +51,7 @@ from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun
+from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.grading_result import Outcome
@@ -65,7 +67,11 @@ from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
-from experiments.post_training.skyrl_test_support import selection_summary, with_current_control_revisions
+from experiments.post_training.skyrl_test_support import (
+    selection_summary,
+    with_current_control_revisions,
+    write_training_families,
+)
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
 
 SELECTION_IDENTITY = "fixture-selection@2026.11.10"
@@ -75,6 +81,33 @@ NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_t
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
+
+
+def cache_native_compositions(monkeypatch) -> None:
+    """Reuse successful compositions of equivalent launch documents within one test."""
+    compose_configs = gate.compose_configs
+    cached = {}
+    # Attempt IDs also appear in derived fields such as the Iris job name.
+    attempt_placeholder = "<generated-attempt-id>"
+
+    def compose(paths, *, validate_driver=False):
+        documents = [Path(path).read_text() for path in paths]
+        attempts = [yaml.safe_load(document)["run"]["attempt_id"] for document in documents]
+        key = validate_driver, tuple(
+            document.replace(attempt, attempt_placeholder) for document, attempt in zip(documents, attempts, strict=True)
+        )
+        if key not in cached:
+            configs = compose_configs(paths, validate_driver=validate_driver)
+            cached[key] = [
+                json.dumps(config).replace(attempt, attempt_placeholder)
+                for config, attempt in zip(configs, attempts, strict=True)
+            ]
+        return [
+            json.loads(config.replace(attempt_placeholder, attempt))
+            for config, attempt in zip(cached[key], attempts, strict=True)
+        ]
+
+    monkeypatch.setattr(gate, "compose_configs", compose)
 
 
 def fake_s3(monkeypatch, *paths: str) -> None:
@@ -272,12 +305,15 @@ def selection(tmp_path, monkeypatch):
         write_json(Path(recipe.selection_artifact(binding).path()) / "summary.json", summary)
     candidate = recipe.selection_artifact(SELECTION_IDENTITY)
     candidate_summary = deepcopy(summary)
+    counts = {"agentic": 256, "nonagentic": 256}
+    candidate_summary["training_family_counts"] = counts
     candidate_summary["recipe"]["exclusions"] = [
         {"uri": str(Path(task_set.path()) / FULL_VALIDATION_FILENAME), "version": task_set.version}
         for binding in sorted(task_sets)
         for task_set in (recipe.selection_artifact(binding),)
     ]
     write_json(Path(candidate.path()) / "summary.json", candidate_summary)
+    write_training_families(StoragePath(candidate.path()), counts)
     for binding in task_sets:
         write_json(
             Path(recipe.selection_artifact(binding).path()) / "summary.json",

@@ -77,6 +77,8 @@ message runs under the assistant-prefix harness. The `structure-closure` tasks o
 curation [task-selection artifact](task-curation.md#final-task-selection) end this way.
 Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
 `default_harness`, which defaults to Shellbox.
+A task that needs a machine uses `task_machine_by_dataset[task.source.dataset]`, or else
+`task_machine_by_command_semantics` for its command semantics; without either, it fails validation.
 Image graders use the configured image verifier backend; package
 graders use the configured local verifier. The task-selection artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
@@ -181,8 +183,8 @@ and token limits:
   exact prompt `token_ids`. It returns the model's turn. A later `start` starts another conversation, for
   example after the harness makes its history shorter or changes its tools. The rollout keeps each
   conversation as a `ConversationRecord`, and the task machine does not reset.
-- `reply(observations, *, token_ids=None)` sends new messages after the model's last message and returns the
-  next turn. `token_ids` pins the exact tokens of the next prompt.
+- `reply(observations, *, token_ids=None, options=None)` sends new messages after the model's last message
+  and returns the next turn. `token_ids` pins the exact tokens of the next prompt. `options` can update output caps.
 - `record(*, observations=(), data=None, metrics=None)` adds to the step of the last turn, between model
   requests: final observations that the model never receives, the harness's data, and metrics. A turn with
   recorded observations takes no `reply`.
@@ -280,7 +282,11 @@ engine = RolloutEngine(machine_factories, {"agent": AgentHarness(run_agent)})
 `complete` obeys these rules:
 
 - A prompt that extends the last prompt with the model's message, under the same options, is a `reply`. Its
-  `token_ids`, if any, pin the next request. Any other prompt starts a new conversation.
+  `token_ids`, if any, pin the next request. After a turn that finishes within its token limit, a prompt
+  without pinned tokens can also reply with equivalent messages and updated output caps (`max_tokens`,
+  `max_completion_tokens`, or `max_output_tokens`). Message comparison accepts empty optional text fields
+  and reserialized tool argument JSON.
+  Other prompts start a new conversation.
 - The agent can call `complete` from other tasks, such as HTTP handlers. One model request can be open at a
   time: a call that needs the model while another call waits for it raises `RuntimeError`.
 - The last prompt again, for example after the HTTP client lost the response, gets the same turn without a new
@@ -451,23 +457,28 @@ Archive command failures, archive timeouts, and provider or host I/O failures re
 
 `RolloutEngine(machine_factories, harnesses, observer=observer)` reports progress while an attempt runs.
 The observer implements `async def on_event(self, event: RolloutEvent) -> None`.
-A `RolloutEvent` carries the attempt's `run_id`, the task's `task_id`, and a `payload`.
+A `RolloutEvent` carries the attempt's `run_id`, the task's `task_id`, its `index`, its `emitted_at`, and a
+`payload`. `index` is the event's position in the attempt, counted when the engine emits it, so a missing index
+is an event that the observer did not receive. The last events of an attempt can be lost without a gap, so the
+events are complete when `AttemptEnded` is among them and every lower index is present. `emitted_at` is the
+wall-clock time of the emit in seconds since the epoch, because delivery is later.
 `run_task(spec, model, run_id=...)` sets the run ID. Without one, each attempt gets a new random ID, so the events
-of repeated attempts of a task stay apart. `Rollout.run_id` returns the ID, so a caller can match a rollout with
-its events.
+of repeated attempts of a task stay apart. `(run_id, index)` identifies an event and `index` starts at 0 in each
+attempt, so a caller that sets the run ID must give each `run_task` call a new one, also when it retries the same
+task. `Rollout.run_id` returns the ID, so a caller can match a rollout with its events.
 Each payload is a frozen dataclass from `rolloutengine.models` whose `type` field is a `RolloutEventType`, so a payload serialized with `dataclasses.asdict` keeps its type.
 Durations are wall-clock seconds.
 
 | Payload | Emitted | Fields |
 | --- | --- | --- |
-| `AttemptStarted` | After validation, before machine acquisition | |
+| `AttemptStarted` | After validation, before machine acquisition | `harness`; `trace`, which tells whether the attempt's token counts are checked; and the `dataset` of the task's source |
 | `MachineReady` | After task-machine setup; not emitted without a task machine | `duration` |
 | `ConversationStarted` | When the session records the first request of a conversation: the model answered or failed, or the harness ended | the request's `messages` and `options`; `duration` from the start of the harness, or from the last model turn, to the request |
 | `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, assistant `message`, `stop_reason`, prompt and response token counts (as reported and unchecked under `TraceMode.MESSAGES`), `usage`, `ModelTurn.metadata`, `duration` |
 | `ToolCallCompleted` | By a harness, per tool call that returns an observation | `call_id`, `name`, `observation_bytes`, `done`, `duration` |
 | `TransitionCompleted` | When the session records what followed a turn: the harness's next request, a refusal at a limit, or the end of the harness | `turn_index`, `done`, `observations`; `duration` from the turn to the next request or the end |
 | `Graded` | After grading returns | `status`, `reward`, `error`, `failure`, `duration` of output capture and grading |
-| `AttemptEnded` | After cleanup, when `run_task()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` and its `error`; `duration` of the whole attempt |
+| `AttemptEnded` | After cleanup, when `run_task()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` and its `error`; `duration` of the whole attempt; `turns` and `total_tokens` |
 
 The engine's events carry the conversations: `ConversationStarted` the first request of each conversation,
 then for each turn `ModelTurnCompleted` the assistant message and `TransitionCompleted` the observations, so an
@@ -655,6 +666,9 @@ A model adapter reports `stop_reason="length"` for every response that ends on i
 This includes a response that the server's tool parser reports as tool calls; vLLM's GLM tool parser reports such a response with finish reason `tool_calls`.
 `ChatModel` with a `context_window` also reports `length` for a `tool_calls` response whose prompt and completion tokens fill that window.
 The shell harness does not execute tool calls from a `length` response.
+
+SkyRL's model client replaces a lone surrogate in tool-call arguments with U+FFFD, because the tokenizer cannot
+encode a lone surrogate in the next turn. Response token IDs do not change.
 
 ## Trace modes
 

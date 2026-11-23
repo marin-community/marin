@@ -50,6 +50,43 @@ Iris forwards available HF/W&B/CoreWeave credentials and the current application
 bundle as read-only files; ordinary child jobs inherit that bundle by default.
 See [secret delivery](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
 
+Use `--sft PRESET` on the RL command to train a starting model and use its export for RL.
+Both stages use the RL layout's storage prefix.
+
+```bash
+MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_training.snowball_rl \
+  --preset train-long --sft mixture-262k-32node --version 2026.11.19.1 --plan
+```
+
+The Mochi RL presets default to the completed production Mochi SFT export. The export
+supplies its own tokenizer. Use `--init NAME@VERSION` to start from another published model,
+or select an SFT preset with `--sft`. Mochi writes artifacts under the cluster's
+`tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to use a durable prefix.
+
+```bash
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-medium --sft mixture-262k-176node --version 2026.11.19.1 --plan
+```
+
+Use Mochi's `train-medium-agentic` for two updates on a task mix. Pass a versioned selection
+containing both task families with `--tasks NAME@VERSION`. Enable recovery with
+`--checkpoints latest`. Add `--export latest` to export the final policy.
+
+The Snowball and Mochi preset commands use `--resume NAME@VERSION` to start from
+the newest retained recovery checkpoint of a finished run. Use a checkpointing
+preset and an immutable version. If the source checkpoint changes between
+submission and coordinator startup, the command refuses the launch and shows
+both step numbers. The source checkpoint stays in temporary storage for the
+retention period recorded by its run.
+
+Use the run's resolved launch document to export its best committed native
+checkpoint, including after an early stop.
+
+```bash
+uv run --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpoint \
+  --launch-config ./training-launch.yaml --recover-best
+```
+
 ## One Hydra launch document
 
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
@@ -59,8 +96,10 @@ The nested runtime uses the checkout's RolloutEngine for task execution and mode
 Harbor tasks use Shellbox. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
 See [task rollouts](task-rollouts.md) for task execution and backend limits.
 
-The launcher runs `uv run --isolated --project vendor/skyrl --frozen --no-group dev
-marinskyrl` in a child process. SkyRL has its own lock and is excluded from Marin's
+The launcher runs the vendored uv version through `uv tool run`, then starts
+SkyRL's frozen CPU environment with `uv run --project vendor/skyrl`. Both uv
+selections prefer a compatible system interpreter over cached managed builds,
+matching Iris task setup. SkyRL has its own lock and is excluded from Marin's
 workspace. The child discards the parent's Python environment selection. SkyRL
 installs Marin libraries and Harbor from editable paths in the checkout.
 Marin calls SkyRL through the executable.
@@ -232,6 +271,14 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
+Set `trainer.rollout_buffer.groups_per_family` for fixed numbers of prompt groups per task family in
+each training batch. Each Parquet training row supplies its `family`. The counts must sum to
+`trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
+Each family needs its group count times `max_staleness_steps + 1` usable rows so that every batch in
+the rollout window can use distinct prompts. A rejected group releases a slot in its own family.
+Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
+family’s order. Omit the family counts to use the configured prompt order, including curriculum sampling.
+
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
@@ -281,11 +328,12 @@ Marin translates this policy to `trainer.max_ckpts_to_keep`; standalone SkyRL
 recipes can set that field directly. Cleanup runs after the replacement checkpoint
 has uploaded and its latest-checkpoint marker has been published. Pending HF
 exports and the selected best native checkpoint remain protected beyond this
-rolling window. HF export is opt-in: `skyrl_step(..., export_hf=True)` requests a durable terminal
-model and a separate export job. The structured launch config defaults `run.export_hf`
-to false as well. Without export, successful runs retain native recovery checkpoints,
-in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
-is null. Pipelines that serve the resulting model for downstream evaluation must request export.
+rolling window. On success, waiting preset launches apply `checkpoints` and `keep_every` after
+writing the terminal receipt. Detached launches keep the trainer's rolling window. HF export is
+opt-in. `skyrl_step(..., export_hf=True)` requests a durable terminal model and a separate export
+job. With `run.export_hf: false`, `SkyRLRun.hf_model_uri` is null. Successful runs still write
+evaluation, resolved configuration, and terminal result records. Pipelines that serve the
+resulting model for downstream evaluation must request export.
 
 Every HF export writes `generation_config.json` through SkyRL's Hugging Face
 model lifecycle utilities. It keeps the explicit fields of the source model's
