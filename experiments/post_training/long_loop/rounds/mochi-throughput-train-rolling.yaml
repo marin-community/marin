@@ -143,10 +143,6 @@ rl:
         initial_model_uri: model-input
         ema_window: 5
         evaluation_interval: 3
-      - type: wall_time_budget
-        seconds: 36000
-        drain_margin: 1800
-        groups_per_step: 64
       - type: inference_stats
         poll_interval_seconds: 5.0
         log_every_steps: 1
