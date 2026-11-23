@@ -2128,6 +2128,13 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   so the two-update comparison needs a fresh attempt.
   [Verified interrupted attempt][held-native-matched-current-preemption]
 
+  The inventory preset sets the artifact revision. The outer `--version`
+  flag alone still resolved to the spent artifact namespace. An offline
+  render with an explicit preset revision produced a fresh namespace and
+  the same bound workload and Iris resources. It retained both evaluation
+  panels and per-update checkpoints. The live operator still needs a fresh
+  claim and a pin to that exact plan.
+
   Regional telemetry recorded 32 group calls and 128 model waits in the
   first lease. Five group calls finished just after the 1,800-second model
   deadline and reported four projected tokens each. The buffer separately
@@ -2154,6 +2161,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   nor replay frame changes. A loopback run through the real Ray processes and
   a committed CPU snapshot joined all four choices to one admitted group and
   traced one queued cancellation. H100 timing still needs a matched run.
+
+  A two-CPU rehearsal combined the serving changes with the production
+  rollout coordinator, task worker, and admission buffer. The reference
+  and blocked-attention arms each graded two quartets per update, applied
+  two Levanter optimizer updates, installed policy versions 0 through 2,
+  and generated under policy 2. All 16 paired binary replays matched after
+  normalizing the actor-assigned request ID. Raw serving scores, fused
+  learner scores, model weights, and optimizer state matched in both arms.
+  The blocked arm happened to dispatch eight choices in each training
+  exchange. This fixture establishes correctness for the combined changes.
 
   A fresh-start diagnostic can skip the initial evaluation callback and
   keep the final panel. The callback ran for 26m55s in the interrupted
