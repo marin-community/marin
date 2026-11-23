@@ -17,6 +17,7 @@ from lib.taskforge.tests.resources.inference_fakes import (
     Fails,
     LoopTime,
     ScriptedProvider,
+    Time,
     chunk,
     report,
     request,
@@ -54,19 +55,6 @@ from taskforge.wiring import provider_policy, solver_turn
 DEFAULTS = Path(__file__).parents[2] / "src/taskforge/policy/defaults"
 TOOL_STALL = Fails(AttemptOutcome.STALLED, (chunk(role="assistant"), chunk(tool_calls=[{"index": 0, "id": "c"}])))
 """A stall after a tool call opened: the server buffers its arguments."""
-
-
-class Time:
-    def __init__(self) -> None:
-        self.now = 0.0
-        self.waits: list[float] = []
-
-    def clock(self) -> float:
-        return self.now
-
-    async def sleep(self, delay: float) -> None:
-        self.waits.append(delay)
-        self.now += delay
 
 
 def client(
