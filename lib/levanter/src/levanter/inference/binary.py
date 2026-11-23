@@ -15,6 +15,9 @@ from safetensors.numpy import load, save
 MEDIA_TYPE = "application/vnd.levanter.generate.v1"
 GENERATE_PATH = "/v1/levanter/generate"
 PROMPT_TOKEN_IDS = "prompt_token_ids"
+TOKEN_IDS = "token_ids"
+EXPERT_IDS = "expert_ids"
+EXPERT_VALID = "expert_valid"
 _MAGIC = b"LEVANTER-GENERATE\x01"
 _HEADER_LENGTH = struct.Struct(">I")
 _MAX_METADATA_BYTES = 64 * 1024
@@ -85,16 +88,19 @@ async def read_generate_request(request: Request) -> tuple[np.ndarray, GenerateO
     return prompt, options
 
 
+def choice_tensor_key(choice: int, field: str) -> str:
+    return f"choice.{choice}.{field}"
+
+
 def choice_expert_routes(
     tensors: dict[str, np.ndarray], choice: int, input_ids: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return captured IDs and validity when the frame tokens match the learner input."""
-    prefix = f"choice.{choice}."
     try:
         prompt = tensors[PROMPT_TOKEN_IDS]
-        generated = tensors[prefix + "token_ids"]
-        expert_ids = tensors[prefix + "expert_ids"]
-        valid = tensors[prefix + "expert_valid"]
+        generated = tensors[choice_tensor_key(choice, TOKEN_IDS)]
+        expert_ids = tensors[choice_tensor_key(choice, EXPERT_IDS)]
+        valid = tensors[choice_tensor_key(choice, EXPERT_VALID)]
     except KeyError as exc:
         raise ValueError("Response has no captured expert routes for this choice") from exc
     if prompt.ndim != 1 or generated.ndim != 1 or prompt.dtype != np.int32 or generated.dtype != np.int32:

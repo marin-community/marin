@@ -39,10 +39,14 @@ from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
 from levanter.inference.binary import (
+    EXPERT_IDS,
+    EXPERT_VALID,
     GENERATE_PATH,
     MEDIA_TYPE,
     PROMPT_TOKEN_IDS,
+    TOKEN_IDS,
     GenerateOptions,
+    choice_tensor_key,
     encode_frame,
     read_generate_request,
 )
@@ -64,7 +68,6 @@ from levanter.inference.openai_protocol import (
 )
 from levanter.inference.utils import INVALID
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.snowball import SnowballLMHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
 
@@ -831,7 +834,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
 
 
 def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
-    if options.return_route_captures and not isinstance(ctx.model, SnowballLMHeadModel):
+    if options.return_route_captures and not ctx.engine.supports_route_capture:
         raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
     config = ctx.engine.config
     max_prefill_size = config.max_prefill_size or config.max_seq_len
@@ -883,13 +886,12 @@ def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse])
     choices = []
     for choice, output in enumerate(outputs):
         choices.append({"completion_tokens": output.completion_tokens})
-        prefix = f"choice.{choice}."
-        tensors[prefix + "token_ids"] = np.asarray(output.tokens, dtype=np.int32)
+        tensors[choice_tensor_key(choice, TOKEN_IDS)] = np.asarray(output.tokens, dtype=np.int32)
         if output.logprobs is not None:
-            tensors[prefix + "behavior_logprobs"] = np.asarray(output.logprobs, dtype=np.float32)
+            tensors[choice_tensor_key(choice, "behavior_logprobs")] = np.asarray(output.logprobs, dtype=np.float32)
         if output.expert_routes is not None:
-            tensors[prefix + "expert_ids"] = np.ascontiguousarray(output.expert_routes.expert_ids)
-            tensors[prefix + "expert_valid"] = output.expert_routes.valid
+            tensors[choice_tensor_key(choice, EXPERT_IDS)] = np.ascontiguousarray(output.expert_routes.expert_ids)
+            tensors[choice_tensor_key(choice, EXPERT_VALID)] = output.expert_routes.valid
     return encode_frame({"choices": choices}, tensors)
 
 
