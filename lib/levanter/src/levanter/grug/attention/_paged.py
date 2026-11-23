@@ -46,7 +46,7 @@ def ragged_paged_attention(
         implementation: Use the reference or the upstream FP32 TPU kernel.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
-    Padding queries produce zero. By default, FP32 inputs on TPU use Pallas
+    Padding queries produce zero. By default, FP32 inputs on supported TPUs use Pallas
     and other inputs use the reference. The KV-head axis can be sharded.
     Page and slot axes and sequence metadata must be replicated.
     """
