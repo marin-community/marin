@@ -116,6 +116,14 @@ class PreparedMoERouteCapture(NamedTuple):
     qb_alpha: Float[Array, "T 1"]
 
 
+def validate_captured_experts(expert_ids: np.ndarray, num_experts: int) -> None:
+    """Validate the range and uniqueness of the expert IDs for each token."""
+    if np.any((expert_ids < 0) | (expert_ids >= num_experts)):
+        raise ValueError("captured expert IDs must be in [0, num_experts)")
+    if np.any(np.diff(np.sort(expert_ids, axis=-1), axis=-1) == 0):
+        raise ValueError("captured routes must not contain duplicate experts for a token")
+
+
 def prepare_moe_route_capture(
     capture: MoERouteCapture,
     token_valid: Bool[Array, "T"],
@@ -149,11 +157,7 @@ def prepare_moe_route_capture(
         raise TypeError("qb_alpha must have floating dtype and shape [T, 1]")
     if not np.array_equal(captured_valid, actual_valid):
         raise ValueError("captured token_valid does not match the actual replay batch mask")
-    if np.any(selected < 0) or np.any(selected >= num_experts):
-        raise ValueError("captured expert IDs must be in [0, num_experts)")
-    duplicate = selected[:, :, None] == selected[:, None, :]
-    if np.any(duplicate & ~np.eye(num_experts_per_token, dtype=bool)[None, :, :]):
-        raise ValueError("captured routes must not contain duplicate experts for a token")
+    validate_captured_experts(selected, num_experts)
     if not np.all(np.isfinite(qb_alpha)):
         raise ValueError("qb_alpha must contain finite values")
     return PreparedMoERouteCapture(

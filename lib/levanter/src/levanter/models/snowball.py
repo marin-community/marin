@@ -50,7 +50,7 @@ from levanter.grug.attention import (
     attention,
     ragged_paged_attention,
 )
-from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp
+from levanter.grug.grug_moe import MoEExpertMlpPspecs, MoeImplementation, MoEExpertMlp, validate_captured_experts
 from levanter.grug.sharding import (
     Pembed_vocab,
     Plm_head,
@@ -1097,11 +1097,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if ids.shape != expected or ids.dtype.kind not in "iu" or token_valid.dtype != jnp.bool_:
             raise ValueError(f"Expected integer expert IDs of shape {expected} and a boolean token mask")
         active = np.broadcast_to(np.asarray(token_valid.array), ids.shape[:-1])
-        valid = ids[active]
-        if np.any((valid < 0) | (valid >= self.config.num_experts)):
-            raise ValueError("Captured token has an invalid expert ID")
-        if np.any(np.diff(np.sort(valid, axis=-1), axis=-1) == 0):
-            raise ValueError("Captured token has a duplicate expert ID")
+        validate_captured_experts(ids[active], self.config.num_experts)
         # Padding is excluded from dispatch, but gather still needs valid IDs.
         ids = np.where(active[..., None], ids, np.arange(expected[-1], dtype=np.int32))
         return SnowballRouteReplay(jnp.asarray(ids, dtype=jnp.int32), token_valid)
@@ -1148,17 +1144,21 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def next_token_loss_and_metrics(
         self, example: LmExample, *, key=None, route_replay: SnowballRouteReplay | None = None, **kwargs
     ):
-        """Return loss and the dropped assignment fraction over all positions, including padding."""
+        """Return loss and the fraction of routed assignments dropped. Replay counts valid positions."""
         activations, _, counts = self._activations(
             example.tokens, False, example.attn_mask, collect_counts=True, route_replay=route_replay
         )
         assert counts is not None
         loss = self._loss_from_activations(example, activations, **kwargs)
-        num_tokens = example.tokens.array.size if route_replay is None else jnp.sum(route_replay.token_valid.array)
+        num_tokens = (
+            float(example.tokens.array.size)
+            if route_replay is None
+            else jnp.sum(route_replay.token_valid.array, dtype=jnp.float32)
+        )
         assignments = num_tokens * self.config.num_experts_per_token * self.config.num_layers
         return loss, {
             "moe/dropped_assignment_fraction": Metric.from_value(
-                counts.dropped.sum(dtype=jnp.float32) / jnp.maximum(assignments, 1), ReductionType.MEAN
+                counts.dropped.sum(dtype=jnp.float32) / jnp.maximum(assignments, 1.0), ReductionType.MEAN
             )
         }
 
