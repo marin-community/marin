@@ -1286,7 +1286,7 @@ async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
     clients = [live.inference, *live.role_inference.values()]
     assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
     assert payers(root, replayed=False) == PAID  # the cold rerun paid for nothing
-    replayed = payers(root, replayed=True)  # nineteen resolutions, none naming a payer
+    replayed = payers(root, replayed=True)
     assert sum(replayed.values()) == 19 and {payer for _, payer in replayed} == {None}
 
 
