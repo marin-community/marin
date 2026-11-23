@@ -98,8 +98,8 @@ async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutO
     assert engine.run_ids == ["arithmetic:4:2"]
 
 
-# Review 2026-11-21: the solver batch narrowed the executor's retry to failures before the first model turn, so a lost
-# controller after the model acted moved from the earlier executor's and live Forge's in-place retry to a stage replay.
+# Regression: the solver batch narrowed the executor's retry to failures before the first model turn, so a lost
+# controller after the model acted became a stage replay instead of an in-place retry on a fresh machine.
 @pytest.mark.parametrize(
     "failure",
     [MachineUnavailable("controller unavailable"), MachineCancelled("parent job terminated"), ExecSetupFailed("ws")],

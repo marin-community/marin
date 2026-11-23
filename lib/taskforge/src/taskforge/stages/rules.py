@@ -74,7 +74,7 @@ INSTRUCTIONS = {
 
 
 def band_line(result: ValidationResult, band: BandRules) -> tuple[BandOutcome, str]:
-    """The placement of ``result``'s scored solver trials, and live Forge's line telling the author what it asks for."""
+    """The placement of ``result``'s scored solver trials, and the line telling the author what it asks for."""
     scored = [trial for trial in result.solver if not missing(trial)]
     solved = sum(passed(trial.grade) for trial in scored if trial.grade is not None and trial.cause is None)
     place = band.place(solved / len(scored))
@@ -100,8 +100,8 @@ def tagged(band: BandOutcome) -> tuple[str, ...]:
 
 def fallback_for(workpiece: Workpiece, placement: BandOutcome | None, band: BandRules) -> Fallback | None:
     """The one choice of the submission to fall back to, or accept: the current submission at ``placement`` when the
-    policy accepts that, else the stored fallback while the policy accepts its band. Owner's ruling (2026-11-13): "A
-    band change is never a regression. Only real faults or an author stopping revert to the fallback." Returning the
+    policy accepts that, else the stored fallback while the policy accepts its band. A band change is never a
+    regression: only real faults or an author stopping revert to the fallback. Returning the
     stored object itself is what names it: a digest covers the task and controls, not the author's notes, so it cannot
     tell rounds apart."""
     if workpiece.submission is not None and placement is not None and placement in band.accepted:
@@ -152,7 +152,7 @@ def unrevised(revise: Revise | None, why: str, details: Sequence[str] = ()) -> A
 
 
 def author_stopped(workpiece: Workpiece, summary: str) -> Decision:
-    """Owner's ruling (2026-11-13): an author stopping reverts to the stored fallback, or abandons without one."""
+    """An author stopping reverts to the stored fallback, or abandons without one."""
     why = f"author stopped: {summary}"
     if revise := final_revision(workpiece):
         return unrevised(revise, why)

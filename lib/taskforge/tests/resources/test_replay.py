@@ -199,7 +199,7 @@ async def siblings(
     return dict(zip(order, results, strict=True)), envs
 
 
-# Review 2026-11-20: siblings whose readiness order reversed on resume received each other's output, and siblings
+# Regression: siblings whose readiness order reversed on resume received each other's output, and siblings
 # whose identical commands overlapped held although their results agreed.
 @pytest.mark.parametrize(
     ("recorded", "fresh", "overlap"),

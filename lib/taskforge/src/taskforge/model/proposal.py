@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Source: Taskforge integration 9807c5cfb3, stage10_proposal/model.py.
-
 """Typed proposal JSON with a Markdown body.
 
 The JSON object holds ``header`` and ``body``; ``TASK_PROPOSAL`` decodes it. Canonical rendering sorts
@@ -130,7 +128,7 @@ class ProposalHeader:
     @model_validator(mode="before")
     @classmethod
     def legacy_header(cls, value: object) -> object:
-        """Existing input catalogs carry solver_machine; environment is now the sole choice."""
+        """Input catalogs may carry solver_machine, which environment replaces; the header drops it."""
         return {k: v for k, v in value.items() if k != "solver_machine"} if isinstance(value, dict) else value
 
 

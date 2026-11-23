@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The confirmation step: five more solves of the shipped submission, the final review over all eight, and the
-decisions live Forge makes on them."""
+decisions made on them."""
 
 import asyncio
 import json
@@ -355,8 +355,8 @@ async def test_a_task_too_easy_after_eight_trials_is_tagged_or_revised_then_aban
 
 
 async def test_a_revise_finding_buys_one_revision_outside_a_spent_budget(proposal: TaskProposal) -> None:
-    """Owner's ruling (2026-11-13): "A revision asked for by the final review is outside the 2-round budget and always
-    happens (one)." With no modification round at all, the revision is validated and confirmed again; the second
+    """A revision asked for by the final review is outside the modification budget and always happens, once. With no
+    modification round at all, the revision is validated and confirmed again; the second
     final review's revise finding is then a note."""
     first, second = found(3, what="first"), found(4, what="second")
     engine, reviewer = Trials(), Reviewer(finals=[([first], []), ([second], [])])
@@ -396,9 +396,9 @@ async def test_budget_final_revisions_sets_how_many_revisions_the_final_review_b
     assert final.notes == (finding(3 + revisions, what=f"revision {revisions}"),)
 
 
-# Review 2026-11-23: a second final revision with the same placement and the same failed-fix request rendered the first
+# Regression: a second final revision with the same placement and the same failed-fix request rendered the first
 # one's author request, so it replayed the first revision's answers instead of buying an author attempt.
-# Review 2026-11-23, again: an ``author.revision`` overlay without ``{kind}`` dropped the ordinal and replayed again.
+# Regression: an ``author.revision`` overlay without ``{kind}`` dropped the ordinal and replayed again.
 @pytest.mark.parametrize(
     "prompt", [{}, {"author.revision": "Address these findings:\n\n{detail}"}], ids=["stock", "custom"]
 )
@@ -488,8 +488,8 @@ LIVE_CONFIRMATION = tuple(
     for used in (True, False)
     for in_band in (True, False)
 )
-"""(revise finding, note finding, final revision used, in band over every trial) -> live Forge's decision at
-marin-forge-passes ``rules.py`` ``confirmation_review`` and the number of notes it accepts with: placement over every
+"""(revise finding, note finding, final revision used, in band over every trial) -> the confirmation review's decision
+and the number of notes it accepts with: placement over every
 trial tags the acceptance in any band; a revise finding sends the task back once, and is a note after."""
 
 
@@ -537,8 +537,8 @@ def after_revise(proposal: TaskProposal, result: ValidationResult) -> Workpiece:
 def test_the_final_revision_s_round_decides_as_live_forge(
     proposal: TaskProposal, case: str, kind: str, reason: str
 ) -> None:
-    """Live Forge (``placed``, ``with_solve_review``, ``stopped``): the final review's revision keeps no fallback, so a
-    fault or an author stop abandons; its placement is final; a round finding is a note, rounds left or not."""
+    """The final review's revision keeps no fallback, so a fault or an author stop abandons; its placement is final;
+    a round finding is a note, rounds left or not."""
     config = setup(**{"budget.max_modify_rounds": 3})
     rewards = {"too easy": (1.0, 1.0)}.get(case, (1.0, 0.0))
     solver = tuple(TrialResult(i, GradeResult(Outcome.GRADED, reward)) for i, reward in enumerate(rewards))
@@ -621,7 +621,7 @@ def test_a_confirmation_placed_too_easy_after_its_final_revision_is_abandoned_na
     assert isinstance(decision, Abandon) and "band.accept_too_easy is false" in decision.reasons[0]
 
 
-# Review 2026-11-23: a band-only abandonment listed every earlier final-review finding as unresolved, though the
+# Regression: a band-only abandonment listed every earlier final-review finding as unresolved, though the
 # revision had repaired it and the final review reported nothing.
 @pytest.mark.parametrize("repeated", [False, True], ids=["repaired, then refused", "reported again"])
 async def test_a_refused_confirmation_names_its_placement_setting_and_budget_and_only_open_findings(
@@ -643,7 +643,7 @@ async def test_a_refused_confirmation_names_its_placement_setting_and_budget_and
     assert isinstance(abandoned, Abandon) and abandoned.reasons == (why, *unresolved)
 
 
-# Review 2026-11-23, again: a finding declined, then revised twice with a clean last review, was named unresolved
+# Regression: a finding declined, then revised twice with a clean last review, was named unresolved
 # because every historical decline counted; a decline that is the author's latest answer still is.
 @pytest.mark.parametrize("last", [Response.REVISED, Response.DECLINED], ids=["revised last", "declined last"])
 def test_a_refused_confirmation_reads_the_latest_answer_to_a_final_revision_finding(
@@ -747,7 +747,7 @@ async def test_the_first_final_reviewer_request_keeps_its_recorded_identity() ->
     )
 
 
-# Review 2026-11-21: each case below reproduces one fault in the confirmation step or the final review, one test or
+# Regression: each case below reproduces one fault in the confirmation step or the final review, one test or
 # parameter each.
 
 BASE = tuple(TrialResult(i, GradeResult(Outcome.GRADED, float(i % 2 == 0))) for i in range(3))
@@ -1039,7 +1039,7 @@ def test_an_omission_both_reviews_name_is_listed_once(proposal: TaskProposal) ->
     assert isinstance(decision, Accept) and decision.missing == (gone,)
 
 
-# Review 2026-11-21: each case below reproduces one fault in how the final review carried findings and notes across
+# Regression: each case below reproduces one fault in how the final review carried findings and notes across
 # revisions.
 
 
@@ -1136,7 +1136,7 @@ def test_a_fault_revision_writes_no_placement() -> None:
     assert adapter.validate_json(adapter.dump_json(placed)) == placed
 
 
-# Review 2026-11-21: every submitted version is checked before versions of one finding merge.
+# Regression: every submitted version is checked before versions of one finding merge.
 
 
 def failed_trials(*trials: int) -> Evidence:
@@ -1201,7 +1201,7 @@ async def test_a_finding_the_round_review_repeats_is_one_numbered_item_declined_
     assert [(r.review, r.response, r.reason) for r in wp.responses] == [(0, Response.DECLINED, "the grader is right")]
 
 
-# Review 2026-11-21: a provider's context refusal of the author's revision was raised
+# Regression: a provider's context refusal of the author's revision was raised
 # past the effect, so a cold resume asked again; when the provider then answered, the restored round's response became
 # a revision and the run bought a second confirmation (16 solves, not 8).
 async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskProposal, tmp_path: Path) -> None:
@@ -1219,7 +1219,7 @@ async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskP
     assert isinstance(resumed.inference, FakeInference) and not resumed.inference.requests
 
 
-# Review 2026-11-21: one note in two versions, a quote trial 4 keeps and one only trial 6's first
+# Regression: one note in two versions, a quote trial 4 keeps and one only trial 6's first
 # confirmation attempt holds. Merged into one citation set, the note was dropped after a revision that kept trial 4.
 UNITS = "the prompt does not say which units"
 STABLE, SPECIFIC = found(4, FindingKind.AMBIGUOUS_PROMPT, UNITS), found(
@@ -1433,7 +1433,7 @@ def payers(root: Path, replayed: bool) -> Counter[tuple[str, str | None]]:
     )
 
 
-# Review 2026-11-21: the report guessed each call's role from the scopes open when it resolved, so an adversary call
+# Regression: the report guessed each call's role from the scopes open when it resolved, so an adversary call
 # that completed inside an open judge scope was charged to the judge: 80,100 judge and 0 adversary tokens here.
 async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
     proposal: TaskProposal, tmp_path: Path
@@ -1461,7 +1461,7 @@ async def test_a_format_9_root_charges_its_tokens_as_unattributed(tmp_path: Path
     assert charged(await report(str(root))) == {**dict.fromkeys(CHARGED, 0), "unattributed": 82160}
 
 
-# Review 2026-11-21: a clean three-and-five confirmation built its evidence index three times (3, 8 and 8 trials) and
+# Regression: a clean three-and-five confirmation built its evidence index three times (3, 8 and 8 trials) and
 # digested it six times (three times each for 3 and 8 trials).
 async def test_each_review_builds_its_evidence_index_and_digests_it_once(
     proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
@@ -1491,7 +1491,7 @@ def always_too_easy(workpiece: Workpiece, band: BandRules, budget: Budget) -> De
     return Accept(BandOutcome.TOO_EASY)
 
 
-# Coordinator's ruling 2026-11-23: a strict band is a shipping invariant. A custom review rule that publishes a terminal
+# A strict band is a shipping invariant. A custom review rule that publishes a terminal
 # acceptance at a refused band is a programming error; a pending one still goes to its confirmation.
 @pytest.mark.parametrize("confirmation_k", [0, 5])
 async def test_no_review_rule_publishes_a_terminal_acceptance_at_a_refused_band(

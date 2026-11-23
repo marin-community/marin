@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Source: Taskforge integration 9807c5cfb3, stage60_review/{decision,rules}.py and stage50_validate/outcome.py.
-
 """Completed validation evidence and the decisions made from it."""
 
 import math
@@ -294,7 +292,7 @@ type Decision = Annotated[Accept | Reject | Modify | Revise | Retry | Incomplete
 
 @dataclass(frozen=True, slots=True)
 class BandRules:
-    """Inclusive solve-rate band, copied from Taskforge's review rules."""
+    """Inclusive solve-rate band."""
 
     low: float
     high: float

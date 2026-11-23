@@ -70,8 +70,8 @@ that Iris names in `IRIS_CONTROLLER_URL`.
   in `proposals.environments` (default: reasoning and shellsim) and prints `SKIP <id>: environment=container`.
 - **Policy overlay**: a JSON object of `key: value` pairs layered over
   `src/taskforge/policy/defaults/policy.json`, stored on S3. The default roster runs the two
-  adversary briefs; the earlier pilots' `{"adversary.roster": ["adversary"]}` still selects their
-  single legacy adversary.
+  adversary briefs; `{"adversary.roster": ["adversary"]}` selects the single general
+  adversary.
 - **Ranks**: `--ranks 0,1,2` selects proposals by rank; no trailing comma (BSD `seq -s,` adds
   one, strip it with `sed 's/,$//'`).
 
@@ -147,10 +147,10 @@ root as another format. Format 10 adds a row's `billed` field, outside the event
 paid for a physical cached resolution; a format-9 reader refuses a format-10 root as another format. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its
 decision-model grade, below), which a format-8 reader cannot decode; at 9 that reader refuses the root as another
 format, untouched, instead of reporting it corrupt. Such roots are converted once by a separate migration, or rebuilt. Format 5 covers two writers that its
-header cannot tell apart: the previous branch, whose readers cannot decode a `decision_model.read` row, and interim
-commits of this branch, which could write `decision_model.read` rows but had no `effect.invalidated` row (the marker
+header cannot tell apart: one whose readers cannot decode a `decision_model.read` row, and one that could write
+`decision_model.read` rows but had no `effect.invalidated` row (the marker
 naming the refused slot result an operator-authorised replacement supersedes); a bare request row in either cannot
-establish an operator's intent. Format 6 refuses both alike, and a previous-branch reader refuses a format-6 root
+establish an operator's intent. Format 6 refuses both alike, and a reader of the first kind refuses a format-6 root
 the same way instead of misreading its new rows. Before claiming, the reader
 validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
 one envelope field; `billed` only on a plain row holding a resolution that was not replayed; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
@@ -314,7 +314,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   reports it again or the author declined it).
   The coordinator enforces it for any review rule (`TaskforgeConfig.review`): a terminal acceptance at a band
   `config.band` refuses raises `ValueError` naming the setting, while a pending one still goes to its confirmation.
-  As in live Forge, in this order: a clean revision placed outside its fallback's band is accepted at its new
+  In this order: a clean revision placed outside its fallback's band is accepted at its new
   placement, tagged; a round with review findings is a defect round, not the band-only one, even out of band;
   and the band-only round is spent only by a round revised for its placement alone.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`, and `budget.final_revisions` (default 1,
@@ -328,7 +328,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   that renders only `{name}` (`Review strategy: {name}`) uses the roster name itself as the strategy
   and runs any name. The default briefs: `false_accept` looks for a submission
   the grader accepts but should not, `false_reject` for a correct submission the grader rejects, and
-  `adversary` is the earlier single adversary's strategy line. An overlay may rewrite a brief's text;
+  `adversary` is a single general strategy line. An overlay may rewrite a brief's text;
   a new brief is a new prompt entry in the policy (`Policy({**policy.entries, "adversary.brief.mine":
   Prompt("...")})`) and a name on the roster. Every brief reports through one schema: a defect
   direction (`false_accept`, `false_reject`, `grader_crash`), the candidate, the grade the grader
@@ -507,8 +507,7 @@ cd lib/taskforge && uv run --frozen pyrefly check
 
 `tests/test_end_to_end.py` drives the workflow through fakes (inference, environments, grading);
 `tests/resources/` covers each executor. Any change that touches the sandbox backend must also
-run on `cw-rno2a` before it is relaunched into a pilot: the fakes have passed while the real
-backend failed three times.
+run on `cw-rno2a` before it is relaunched: the fakes can pass while the real backend fails.
 
 ## Known limits
 

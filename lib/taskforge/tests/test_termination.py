@@ -157,7 +157,7 @@ def assert_reopened(tmp_path: Path, sources: list[Path], command: str) -> None:
     assert all(published_workpiece(root).terminal is Terminal.ACCEPTED for root in roots(tmp_path, sources))
 
 
-# Review 2026-11-21: a cancelled or preempted driver job's children kept working after SIGTERM, spent their stage
+# Regression: a cancelled or preempted driver job's children kept working after SIGTERM, spent their stage
 # attempts on sandboxes that had died with the job and published holds only --resume-held clears; and a driver killed
 # outright left its children running, buying work, as orphans. SIGTERM is now a crash, and children die with it.
 @pytest.mark.timeout(300)
@@ -180,7 +180,7 @@ def test_a_terminated_run_takes_its_children_and_a_relaunch_finishes_both(
     assert_reopened(tmp_path, sources, "run")
 
 
-# Review 2026-11-21: a signal could arrive while run was starting a child or collecting one that had exited; neither
+# Regression: a signal could arrive while run was starting a child or collecting one that had exited; neither
 # window may leave a child behind.
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize(
@@ -200,7 +200,7 @@ def test_a_terminated_run_leaves_no_child_while_it_spawns_or_reaps_one(
     assert parent.signal(signal.SIGTERM) == TERMINATED
 
 
-# Review 2026-11-21: once one child had exited, a sibling that held the parent's end of a pipe would keep its own
+# Regression: once one child had exited, a sibling that held the parent's end of a pipe would keep its own
 # watcher from ever reading end of file. The child left running dies when its parent is killed.
 @pytest.mark.timeout(300)
 def test_a_child_that_outlives_its_sibling_still_dies_with_the_parent(proposal: TaskProposal, tmp_path: Path) -> None:
@@ -210,7 +210,7 @@ def test_a_child_that_outlives_its_sibling_still_dies_with_the_parent(proposal: 
     assert parent.signal(signal.SIGKILL) == -signal.SIGKILL
 
 
-# Review 2026-11-21: a standalone child ignored SIGTERM while it worked. It now exits 143 at once, at the first signal
+# Regression: a standalone child ignored SIGTERM while it worked. It exits 143 at once, at the first signal
 # or a repeated one, and its root reopens.
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("signals", [1, 2])
@@ -226,7 +226,7 @@ def test_a_terminated_standalone_child_exits_and_its_root_reopens(
     assert_reopened(tmp_path, sources, "one")
 
 
-# Review 2026-11-21: a forced exit that flushed output first could block on a full stdout or stderr pipe nobody read.
+# Regression: a forced exit that flushed output first could block on a full stdout or stderr pipe nobody read.
 @pytest.mark.timeout(300)
 def test_unread_full_output_pipes_do_not_delay_the_exit(proposal: TaskProposal, tmp_path: Path) -> None:
     inputs(proposal, tmp_path)
@@ -251,7 +251,7 @@ HIGH = 1100
 """A descriptor number above ``FD_SETSIZE`` (1024), which ``select.select`` refuses."""
 
 
-# Review 2026-11-21: a child started after its parent had died would see a closed pipe only once its watching thread
+# Regression: a child started after its parent had died would see a closed pipe only once its watching thread
 # ran; it checks before anything else, so it claims nothing. A parent with many files open passed its pipe at fd 1030,
 # which the readiness check refused, so every proposal failed before it ran.
 @pytest.mark.timeout(300)
@@ -323,7 +323,7 @@ def is_open(descriptor: int) -> bool:
     return True
 
 
-# Review 2026-11-21: an embedding caller cancelled run() while it waited for a child during cleanup; both ends of the
+# Regression: an embedding caller cancelled run() while it waited for a child during cleanup; both ends of the
 # pipe stayed open after it returned, and the open writer kept the surviving child from ever reading end of file.
 @pytest.mark.timeout(300)
 async def test_a_run_cancelled_during_cleanup_closes_its_pipe_and_its_child_follows(
@@ -382,7 +382,7 @@ async def test_a_run_cancelled_during_cleanup_closes_its_pipe_and_its_child_foll
             child.kill()
 
 
-# Review 2026-11-21: a crash can land after a head's conditional write committed but before the driver heard back. The
+# Regression: a crash can land after a head's conditional write committed but before the driver heard back. The
 # relaunch reads the committed head: a hold it skips, buying nothing, and an outage-only hold it enters and finishes.
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("scenario", ["held", "deferred"])

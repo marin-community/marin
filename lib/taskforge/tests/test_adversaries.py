@@ -192,7 +192,7 @@ def graded_then_reported(brief: str, reply: str, report: dict[str, object]) -> S
     return Scripted({brief: turns})
 
 
-# Review 2026-11-21: a report whose grader_observed_* contradicted the adversary's own grade of that exact candidate
+# Regression: a report whose grader_observed_* contradicted the adversary's own grade of that exact candidate
 # reproduced on the real grader in the claimed direction and turned a correct grader into Modify.
 @pytest.mark.parametrize(
     ("brief", "reply", "report", "refused"),
@@ -225,7 +225,7 @@ async def test_a_report_must_copy_the_adversarys_own_grade_of_that_candidate(
         assert isinstance(decision, Modify) and [grade.candidate.reply for grade in fresh] == ["12.0"]
 
 
-# Review 2026-11-21: a nonempty report whose claim failed reproduction ended the search, so a real false reject the
+# Regression: a nonempty report whose claim failed reproduction ended the search, so a real false reject the
 # adversary would have reported on its one revision was recorded as a search that ran out of budget.
 async def test_a_claim_that_fails_reproduction_gets_one_revision_in_the_same_session(workpiece: Workpiece) -> None:
     setup = build_config(load_policy(DEFAULTS_DIR), {})
@@ -280,9 +280,9 @@ class Exhausting(Environments):
         return env
 
 
-# Review 2026-11-21: a revision that ran a shell command and then ran out of output kept the search's end at "reported"
-# and recorded the one-turn conversation of its first report. Owner's ruling: the exception consumes the remaining
-# opportunity (live Forge retried on a fresh machine and found the correction), and the last report stands.
+# Regression: a revision that ran a shell command and then ran out of output kept the search's end at "reported"
+# and recorded the one-turn conversation of its first report. The exception consumes the remaining opportunity, and
+# the last report stands.
 async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_conversation_it_ended_with(
     workpiece: Workpiece,
 ) -> None:
@@ -318,7 +318,7 @@ async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_con
     assert isinstance(decision, Accept)
 
 
-# Review 2026-11-21: a revision that ran into the context window, through a provider rejection or the
+# Regression: a revision that ran into the context window, through a provider rejection or the
 # harness's own prompt-window cutoff, kept the last report but typed the search end as reported with the generic note.
 # A voluntary finish is the control.
 @pytest.mark.parametrize(
@@ -367,7 +367,7 @@ async def test_a_revision_that_runs_into_the_context_window_ends_out_of_budget_w
     assert isinstance(default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget), Accept)
 
 
-# Review 2026-11-21: a report alleging a wrong score whose fresh verifier crashed correctly led to Modify, but the review
+# Regression: a report alleging a wrong score whose fresh verifier crashed correctly led to Modify, but the review
 # repeated the unverified score as the finding and the search said it ran out of budget without one.
 async def test_a_claim_whose_fresh_verifier_crashes_is_reported_by_its_graded_cause(workpiece: Workpiece) -> None:
     setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_reject"]}), {})
@@ -398,7 +398,7 @@ async def test_a_claim_whose_fresh_verifier_crashes_is_reported_by_its_graded_ca
     )
 
 
-# Review 2026-11-21: with adversary.max_revisions=-1 the revision loop also skipped reproducing the report itself, so a
+# Regression: with adversary.max_revisions=-1 the revision loop also skipped reproducing the report itself, so a
 # genuine false reject was accepted after zero fresh grades and saved no finding.
 async def test_a_zero_revision_budget_still_reproduces_the_report_and_a_negative_one_fails_at_wiring(
     workpiece: Workpiece,
@@ -427,7 +427,7 @@ def test_a_roster_name_without_a_brief_fails_at_wiring() -> None:
         build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_accept", "finder"]}), {})
 
 
-# Review 2026-11-21: an indexed or attribute {brief} field escaped the check and indexed the roster name instead.
+# Regression: an indexed or attribute {brief} field escaped the check and indexed the roster name instead.
 @pytest.mark.parametrize("field", ["{brief[0]}", "{brief.upper}"])
 def test_an_indexed_brief_field_still_needs_a_brief_at_wiring(field: str) -> None:
     policy = load_policy(DEFAULTS_DIR).overlaid({"adversary.user": f"{field} {{task}}", "adversary.roster": ["finder"]})
@@ -449,7 +449,7 @@ def named_strategy_policy(roster: Sequence[str], *, briefs: bool) -> Policy:
     return Policy({**entries, "adversary.user": Prompt(NAMED_STRATEGY)}).overlaid({"adversary.roster": list(roster)})
 
 
-# Review 2026-11-21: an earlier policy's single `adversary` or custom roster name failed at wiring, and the documented
+# Regression: an earlier policy's single `adversary` or custom roster name failed at wiring, and the documented
 # user-prompt override `Review strategy: {name}` raised KeyError('name') before a sandbox opened.
 @pytest.mark.parametrize(
     ("roster", "briefs"),
@@ -472,7 +472,7 @@ N6_POLICY = Path(__file__).parent / "fixtures" / "n6-policy"
 """The complete default policy directory of 40d35b8bcc, which predates ``adversary.max_revisions``."""
 
 
-# Review 2026-11-21: a complete policy directory written before the revision budget, loaded on its own rather than
+# Regression: a complete policy directory written before the revision budget, loaded on its own rather than
 # overlaid on the defaults, rendered the adversary prompt and spent one inference before raising
 # KeyError('adversary.max_revisions').
 @pytest.mark.parametrize("roster", [["adversary"], ["custom"]])
@@ -493,7 +493,7 @@ async def test_a_complete_policy_without_a_revision_budget_fails_at_wiring_and_i
     assert result.status is AdversaryStatus.REPORTED and len(client.requests) == 1
 
 
-# Owner's ruling 2026-11-21: a search that ends without a reproduced finding counts for a strong task, but every record
+# A search that ends without a reproduced finding counts for a strong task, but every record
 # says it ran out of search budget without a finding, never that it validated the task.
 async def test_searches_without_a_finding_accept_and_say_the_budget_ran_out_with_a_continuation(
     proposal: TaskProposal,

@@ -167,7 +167,7 @@ class ModelUnavailable(Exception):
 class GenerationTimedOut(Exception):
     """A call generated for ``RetryPolicy.generation_timeout`` seconds without finishing.
 
-    Evidence about the request, not the provider (production 2026-11-19: three solver turns of 70 minutes each).
+    Evidence about the request, not the provider: a healthy provider can stream one solver turn for over an hour.
     """
 
 

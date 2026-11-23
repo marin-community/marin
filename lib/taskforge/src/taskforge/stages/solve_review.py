@@ -217,7 +217,7 @@ async def solve_review(
     missing = (MissingEvidence(EvidenceKind.TRANSCRIPTS, f"solver trials {cut} have no complete transcript"),) * bool(
         cut
     )
-    if not any(read.values()):  # owner's ruling: missing evidence is named on acceptance, never a hold
+    if not any(read.values()):  # missing evidence is named on acceptance, never a hold
         return SolveReview(index.version, ReviewEnd.SKIPPED, missing=missing)
     opening = Fresh(
         policy.prompt(f"{prompts}.system").template,

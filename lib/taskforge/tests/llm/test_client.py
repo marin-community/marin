@@ -307,7 +307,7 @@ def test_stall_abandons_attempt_and_retries(fake_glm: FakeGlm, run: Run) -> None
     assert len(stalled.events) == 2
 
 
-# Review 2026-11-21: tool-call frames with no generated text kept a stream alive past the stall timeout.
+# Regression: tool-call frames with no generated text kept a stream alive past the stall timeout.
 def test_tool_call_frames_without_generated_text_stall(fake_glm: FakeGlm, run: Run) -> None:
     frame = {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0}]}, "finish_reason": None}]}
     fake_glm.responses.append(ScriptedStream([frame] * 8, True, None, 0.1))
@@ -317,7 +317,7 @@ def test_tool_call_frames_without_generated_text_stall(fake_glm: FakeGlm, run: R
     assert outcomes(completion) == [AttemptOutcome.STALLED, AttemptOutcome.COMPLETED]
 
 
-# Review 2026-11-21: a /health body trickling whitespace outlived a 100 ms window under a 50 ms timeout.
+# Regression: a /health body trickling whitespace outlived a 100 ms window under a 50 ms timeout.
 def test_a_trickling_health_read_ends_with_the_availability_window(fake_glm: FakeGlm) -> None:
     fake_glm.health_trickle = 200
     fake_glm.status(503, "busy")
@@ -525,7 +525,7 @@ def test_endpoint_output_limit_survives_pickling_and_preserves_tool_calls(
     assert result.attempts[0].max_tokens == 0
 
 
-# Review 2026-11-21: with the only pooled connection leased, a solver call made no request and ended at `length`.
+# Regression: with the only pooled connection leased, a solver call made no request and ended at `length`.
 def test_a_call_waiting_for_a_local_connection_is_unavailable_not_a_generation(
     fake_glm: FakeGlm, fast_retry: RetryPolicy, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -553,7 +553,7 @@ def test_a_call_waiting_for_a_local_connection_is_unavailable_not_a_generation(
 SHORT_WINDOW = RetryPolicy(1.0, 0.001, 0.001, 1.0)
 
 
-# Review 2026-11-21: under a 300 ms stall timeout and one pooled connection, the second of two replies whose
+# Regression: under a 300 ms stall timeout and one pooled connection, the second of two replies whose
 # headers took 195 ms was abandoned after both requests reached the server.
 def test_a_request_queued_for_the_pool_keeps_the_read_timeout_for_its_own_reply(fake_glm: FakeGlm) -> None:
     for reply in ("first", "second"):
@@ -570,7 +570,7 @@ def test_a_request_queued_for_the_pool_keeps_the_read_timeout_for_its_own_reply(
     assert len(fake_glm.requests) == 2
 
 
-# Review 2026-11-21: a 200 whose head arrived in fragments 110 ms apart under a 170 ms read timeout
+# Regression: a 200 whose head arrived in fragments 110 ms apart under a 170 ms read timeout
 # exhausted the client after 4 POSTs and 3 GETs; it had completed after 1 POST and 0 GETs.
 def test_a_reply_whose_head_arrives_in_fragments_within_the_read_timeout_completes(fake_glm: FakeGlm) -> None:
     fake_glm.stream(content="served", head_interval=0.11)
@@ -579,7 +579,7 @@ def test_a_reply_whose_head_arrives_in_fragments_within_the_read_timeout_complet
     assert (len(fake_glm.requests), fake_glm.health_polls) == (1, 0)
 
 
-# Review 2026-11-21: JSON false compared equal to zero workers.
+# Regression: JSON false compared equal to zero workers.
 @pytest.mark.parametrize(("workers", "empty"), [(0, True), (False, False), (None, False), ("0", False), (1, False)])
 def test_only_an_integer_zero_worker_count_reports_the_pool_empty(
     fake_glm: FakeGlm, workers: object, empty: bool
@@ -594,7 +594,7 @@ def test_only_an_integer_zero_worker_count_reports_the_pool_empty(
     assert asyncio.run(call()) is empty
 
 
-# Review 2026-11-21: a 529 was a rejection; a 503 then an HTML /health reply escaped as JSONDecodeError.
+# Regression: a 529 was a rejection; a 503 then an HTML /health reply escaped as JSONDecodeError.
 @pytest.mark.parametrize(("status", "health"), [(529, None), (503, "<html>gateway</html>")], ids=["529", "html-health"])
 def test_every_5xx_is_an_outage_and_an_undecodable_health_reply_is_unknown(
     fake_glm: FakeGlm, run: Run, status: int, health: str | None
@@ -634,7 +634,7 @@ class BlockingEndpoint:
         raise EndpointUnavailable("released")
 
 
-# Review 2026-11-21: the synchronous registry lookup, with its 1,800 s retry budget, ran on the event loop.
+# Regression: the synchronous registry lookup, with its 1,800 s retry budget, ran on the event loop.
 def test_a_blocked_registry_lookup_is_bounded_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(glm_provider, "RESOLVE_TIMEOUT", 0.05, raising=False)
     source = BlockingEndpoint(threading.Event())
@@ -673,7 +673,7 @@ class FailingRegistry:
         raise ConnectError(Code.UNAVAILABLE, "controller returned 503")
 
 
-# Review 2026-11-21: a controller 503 during the lazy relay lookup escaped author inference as a raw ConnectError.
+# Regression: a controller 503 during the lazy relay lookup escaped author inference as a raw ConnectError.
 def test_a_registry_outage_during_relay_lookup_is_an_unavailable_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wiring, "iris_ctx", lambda: SimpleNamespace(client=FailingRegistry()))
     source = wiring.RelayEndpoint("/me/glm53-relay", "token", Pool.HIGH, GLM_MODEL)
