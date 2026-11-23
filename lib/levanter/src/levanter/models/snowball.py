@@ -21,7 +21,7 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Optional, Type, cast
+from typing import Any, Literal, NamedTuple, Optional, Type, cast
 
 import equinox as eqx
 import jax
@@ -550,12 +550,12 @@ class SnowballAttention(eqx.Module):
         batch_info: PageBatchInfo,
         pos_ids: jax.Array,
         *,
-        use_long: bool,
+        mode: Literal["short", "long"],
     ) -> tuple[jax.Array, KvPageCache]:
-        """Write the new keys and values, then attend over each request’s cached prefix."""
+        """Write the new keys and values, then attend over each request's cached prefix."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
-        q, k, v = self._project_qkv(x, disable_rope=use_long, position_ids=pos_ids[:, None])
+        q, k, v = self._project_qkv(x, disable_rope=mode == "long", position_ids=pos_ids[:, None])
         token_axis = batch_info.new_token_dests.axes[0]
         kv_axes = (token_axis, Axis("kv_head", cfg.num_kv_heads), Axis("head_size", head_dim))
         cache_k = reshard(k[:, 0], P(None, "model", None))
@@ -571,7 +571,7 @@ class SnowballAttention(eqx.Module):
             batch_info.cu_q_lens.array,
             batch_info.num_seqs,
             sm_scale=head_dim**-0.5,
-            sliding_window=None if use_long else cfg.sliding_window,
+            sliding_window=cfg.sliding_window if mode == "short" else None,
             implementation=cfg.inference_attention_implementation,
         ).reshape(x.shape[0], 1, cfg.num_heads, head_dim)
         return self._project_output(x, out, v), cache
@@ -829,10 +829,39 @@ class SnowballBlock(eqx.Module):
             lambda _: self.attn(attn_in, short_mask, disable_rope=False),
             operand=None,
         )
+        return self._after_attention(x, attn_out, return_routes, token_valid, collect_counts=collect_counts)
+
+    def _after_attention(
+        self,
+        x: Array,
+        attn_out: Array,
+        return_routes: bool,
+        token_valid: Array | None = None,
+        *,
+        collect_counts: bool = False,
+    ) -> MoeForwardOutput:
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         routed = self.mlp._forward(mlp_in, return_routes, token_valid, collect_counts=collect_counts)
         return MoeForwardOutput(x + (routed.output + self.shared(mlp_in)), routed.routes, routed.counts)
+
+    def decode(
+        self,
+        x: Array,
+        cache: KvPageCache,
+        batch_info: PageBatchInfo,
+        pos_ids: Array,
+        use_long: Bool[Array, ""],
+        token_valid: Array,
+    ) -> tuple[Array, KvPageCache]:
+        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_out, cache = jax.lax.cond(
+            use_long,
+            lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="long"),
+            lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="short"),
+            operand=None,
+        )
+        return self._after_attention(x, attn_out, return_routes=False, token_valid=token_valid).output, cache
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
@@ -1107,14 +1136,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         kv_cache: ListCache[KvPageCache],
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
-        *,
-        key: PRNGKeyArray | None = None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
         Tokens occupy a flat position axis, with a valid prefix described by batch_info.
-        Expert-parallel inference uses dropless ring dispatch so unrelated requests and
-        padded tokens cannot change a token's routed result.
+        Expert assignments are independent of other requests and padding.
         """
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Snowball decode requires matching flat token and position arrays")
@@ -1124,13 +1150,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())
         hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
         token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
-        stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)
-        expert_size = _mesh_axis_size(_current_mesh(), "expert")
-        if expert_size > 1:
-            experts = dataclasses.replace(
-                stacked.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
-            )
-            stacked = eqx.tree_at(lambda b: b.mlp.expert_mlp, stacked, experts)
+        stacked = self._stacked_inference_blocks()
         cache_pages = jnp.stack([cache.kv_pages.array for cache in kv_cache])
         cache_axes = kv_cache[0].kv_pages.axes
         long_schedule = long_attention_layer_mask(len(kv_cache))
@@ -1138,18 +1158,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         def layer_step(x, layer_data):
             block, pages, use_long = layer_data
             cache = KvPageCache(hax.named(pages, cache_axes))
-            attn_in = block.attn_gated_norm(block.rms_attn(x))
-            attn_out, cache = jax.lax.cond(
-                use_long,
-                lambda _: block.attn.decode(attn_in, cache, batch_info, pos_ids.array, use_long=True),
-                lambda _: block.attn.decode(attn_in, cache, batch_info, pos_ids.array, use_long=False),
-                operand=None,
-            )
-            x = x + attn_out
-            mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
-            x = x + (
-                block.mlp._forward(mlp_in, return_routes=False, token_valid=token_valid).output + block.shared(mlp_in)
-            )
+            x, cache = block.decode(x, cache, batch_info, pos_ids.array, use_long, token_valid)
             return x, cache.kv_pages.array
 
         hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
@@ -1159,6 +1168,18 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         )
         caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
         return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches
+
+    def _stacked_inference_blocks(self) -> SnowballBlock:
+        stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)
+        expert_size = _mesh_axis_size(_current_mesh(), "expert")
+        if expert_size <= 1:
+            return stacked
+        # A receiver can get every sender's assignments. Reserve that worst-case
+        # capacity so expert dispatch cannot drop tokens at serving time.
+        experts = dataclasses.replace(
+            stacked.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
+        )
+        return eqx.tree_at(lambda block: block.mlp.expert_mlp, stacked, experts)
 
     # --- state dict (bidirectional HF serialization) ---
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
