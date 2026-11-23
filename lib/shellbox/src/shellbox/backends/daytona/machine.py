@@ -16,7 +16,7 @@ import uuid
 from asyncio import sleep
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -204,15 +204,28 @@ async def _stop_keepalive(task: asyncio.Task[None]) -> None:
         await task
 
 
-async def _delete_sandbox(client: AsyncDaytonaV2Client, name: str, created: list[AsyncSandbox]) -> None:
-    """Delete the created sandbox, retrying gateway errors and state changes until the interrupt deadline.
+@dataclass
+class _SandboxClaim:
+    """The sandbox one create owns: its handle, or whether an unanswered create may have made it."""
 
-    When the create request never returned a handle, the sandbox may still have
-    been accepted. Sandbox search is eventually consistent, so the caller-owned
-    name is looked up until the deadline before cleanup gives up; the lifecycle
-    policy reclaims a sandbox that appears later. When the deadline expires
-    after a provider error, raise that error rather than a bare timeout.
+    name: str
+    sandboxes: list[AsyncSandbox] = field(default_factory=list)
+    # False once the create returned a handle or was refused outright.
+    unanswered: bool = True
+
+
+async def _delete_sandbox(client: AsyncDaytonaV2Client, claim: _SandboxClaim) -> None:
+    """Delete the claimed sandbox, retrying gateway errors and state changes until the interrupt deadline.
+
+    A create that never answered may still have been accepted. Sandbox search
+    is eventually consistent, so its caller-owned name is looked up until the
+    deadline before cleanup gives up; the lifecycle policy reclaims a sandbox
+    that appears later. When the deadline expires after a provider error, raise
+    that error rather than a bare timeout.
     """
+    name, created = claim.name, claim.sandboxes
+    if not created and not claim.unanswered:
+        return
     backoff = ExponentialBackoff(initial=1, maximum=4, factor=2, jitter=0)
     retried: DaytonaError | None = None
     try:
@@ -803,20 +816,26 @@ class DaytonaMachineFactory:
                 self._check_spec(spec)
                 image = await ensure_image(client, image_request_for_spec(spec))
                 name = f"shellbox-{uuid.uuid4().hex}"
-                created: list[AsyncSandbox] = []
-                lifetime.push_async_callback(_delete_sandbox, client, name, created)
-                sandbox = await _create_sandbox(
-                    client,
-                    image,
-                    name=name,
-                    timeout=timeout,
-                    env=spec.env,
-                    labels=dict(self.labels),
-                    resources=sandbox_resources(spec),
-                    lifecycle_policy=self._lifecycle_policy(),
-                    network_policy=network,
-                )
-                created.append(sandbox)
+                claim = _SandboxClaim(name)
+                lifetime.push_async_callback(_delete_sandbox, client, claim)
+                try:
+                    sandbox = await _create_sandbox(
+                        client,
+                        image,
+                        name=name,
+                        timeout=timeout,
+                        env=spec.env,
+                        labels=dict(self.labels),
+                        resources=sandbox_resources(spec),
+                        lifecycle_policy=self._lifecycle_policy(),
+                        network_policy=network,
+                    )
+                except DaytonaError as error:
+                    # A refused create made no sandbox, so cleanup has nothing to look for.
+                    claim.unanswered = is_ambiguous_daytona_error(error)
+                    raise
+                claim.sandboxes.append(sandbox)
+                claim.unanswered = False
                 if sandbox.state != STARTED_STATE:
                     raise RuntimeError(f"Daytona sandbox {sandbox.id} is {sandbox.state}: {sandbox.error}")
             if self.idle_timeout_minutes:

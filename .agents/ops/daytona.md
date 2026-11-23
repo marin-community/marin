@@ -134,13 +134,13 @@ uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-images \
    ```
 
    Sandbox creation also ensures its image, so preflight only moves the import
-   or build ahead of the first trial. A failed registry import is submitted once
-   more; a failed Dockerfile build raises with the provider's error.
+   or build ahead of the first trial. A failed image is submitted once more,
+   because concurrent identical builds can report a transient failure; a second
+   failure raises with the provider's error.
 
 Shellbox has no automatic image purge: an unreferenced image can be one prepared
-for trials that have not started. The 2026-10-07 one-hour purge authorization
-covered v0 snapshots and does not extend to v2 images. Delete images only on an
-explicit operator request.
+for trials that have not started. Delete images only on an explicit operator
+request.
 
 `shellbox-daytona-usage` reads the project's limits and live use: the
 organization's concurrent-sandbox, image, volume and snapshot limits, the
@@ -306,7 +306,5 @@ Transferred from MarinSkyRL revision
 - [RL diagnostics](https://github.com/marin-community/MarinSkyRL/blob/544d5d6f14116a06bde0209352585903133bd618/.agents/ops/rl-diagnostics.md):
   agentic failure interpretation, progress, concurrency, and timing semantics.
 
-The operator's 2026-10-07 instruction to purge every v0 snapshot unused for more
-than one hour applied to the v0 snapshot quota and does not cover v2 images. The
-cancellation incident is additional operational evidence, not cross-account
+The cancellation incident is additional operational evidence, not cross-account
 cleanup authority.

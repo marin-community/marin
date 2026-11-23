@@ -40,7 +40,9 @@ class DaytonaConnection:
             # Over HTTP/2 the sandbox proxy stalls stdin writes to a process whose log the
             # client follows on the same connection, which hangs the HTTP relay. The SDK
             # enables HTTP/2 whenever h2 is importable and offers no setting, so this turns
-            # it off for every Daytona client in the process.
+            # it off for every Daytona client in the process. Assigning a name the SDK no
+            # longer reads would silently re-enable HTTP/2, so a renamed switch fails here.
+            assert hasattr(_transport, "_HTTP2_AVAILABLE"), "The Daytona SDK no longer has its HTTP/2 switch"
             _transport._HTTP2_AVAILABLE = False
             return AsyncDaytona(DaytonaConfig(api_key=api_key)).v2
 

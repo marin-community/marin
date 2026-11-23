@@ -47,6 +47,7 @@ from shellbox.backends.daytona.machine import (
     DaytonaOutputUnavailable,
     _create_sandbox,
     _delete_sandbox,
+    _SandboxClaim,
     sandbox_resources,
 )
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
@@ -474,6 +475,25 @@ def test_daytona_failed_creation_deletes_an_accepted_sandbox(monkeypatch, failur
         assert client.closed
 
     asyncio.run(scenario())
+
+
+def test_daytona_refused_creation_skips_the_name_search():
+    class RefusedCreate(LocalDaytona):
+        searches = 0
+
+        async def create(self, image, **kwargs):
+            raise LimitExceededError("concurrent sandbox limit reached", status_code=429)
+
+        async def find_by_name(self, name):
+            self.searches += 1
+            return ()
+
+    client = RefusedCreate()
+    with pytest.raises(LimitExceededError):
+        asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(source=RegistryImage("fixture:tag"))))
+    # A refused create made no sandbox, so cleanup does not wait out eventually consistent search.
+    assert client.searches == 0
+    assert client.closed
 
 
 def test_image_preflight_builds_without_starting_sandbox_and_ignores_resources():
@@ -1814,7 +1834,7 @@ def test_sandbox_deletion_retries_a_transient_error(monkeypatch, transient) -> N
     monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", no_wait)
     client = DeletionClient(transient)
 
-    asyncio.run(_delete_sandbox(client, "fixture", []))
+    asyncio.run(_delete_sandbox(client, _SandboxClaim("fixture")))
 
     assert client.deleted == ["fixture"]
 
@@ -1828,7 +1848,7 @@ def test_sandbox_deletion_reports_a_recovered_sandbox_whose_deletion_hangs(monke
 
     # The sandbox was found by name, so a deletion that never finishes is a failure, not "nothing appeared".
     with pytest.raises(TimeoutError):
-        asyncio.run(_delete_sandbox(HangingDeletion(), "fixture", []))
+        asyncio.run(_delete_sandbox(HangingDeletion(), _SandboxClaim("fixture")))
 
 
 def test_sandbox_deletion_reports_a_conflict_that_outlasts_the_deadline(monkeypatch) -> None:
@@ -1841,6 +1861,6 @@ def test_sandbox_deletion_reports_a_conflict_that_outlasts_the_deadline(monkeypa
     monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", short_wait)
 
     with pytest.raises(ConflictError) as caught:
-        asyncio.run(_delete_sandbox(DeletionClient(*([conflict] * 1000)), "fixture", []))
+        asyncio.run(_delete_sandbox(DeletionClient(*([conflict] * 1000)), _SandboxClaim("fixture")))
 
     assert caught.value is conflict
