@@ -22,6 +22,7 @@ hit (``excerpt``), for the stage-2 classifier.
 import bisect
 import functools
 import itertools
+import os
 import re
 import unicodedata
 from enum import StrEnum
@@ -161,14 +162,42 @@ def record_window_hashes(text: str, width: int = WINDOW) -> np.ndarray:
     return np.concatenate([window_hashes(text_stream(reading), width) for reading in readings(text)])
 
 
-def candidate_windows(streams: list[str], width: int = WINDOW) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Hashes of the candidate windows, the item of each, and its offset in the item stream."""
+def template_bounds(streams: list[str], groups: list[str], width: int = WINDOW) -> list[tuple[int, int]]:
+    """For each stream, the part outside the prefix and suffix that every stream of its group shares (an eval's
+    prompt template: "Question: ... Answer:", a fixed instruction). A copy of an item always holds the item's own
+    part, whatever template it was written with; a stream whose own part is shorter than a window keeps all of it.
+    """
+    members: dict[str, list[int]] = {}
+    for number, group in enumerate(groups):
+        members.setdefault(group, []).append(number)
+    bounds = [(0, len(stream)) for stream in streams]
+    for numbers in members.values():
+        if len(numbers) < 2:
+            continue
+        group_streams = [streams[n] for n in numbers]
+        prefix = len(os.path.commonprefix(group_streams))
+        suffix = len(os.path.commonprefix([stream[::-1] for stream in group_streams]))
+        for n in numbers:
+            low, high = prefix, len(streams[n]) - suffix
+            if high - low >= width:
+                bounds[n] = (low, high)
+    return bounds
+
+
+def candidate_windows(
+    streams: list[str], width: int = WINDOW, bounds: list[tuple[int, int]] | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Hashes of the candidate windows, the item of each, and its offset in the item stream. With *bounds*, a
+    stream's windows lie inside its (start, end) bound (see ``template_bounds``)."""
     hashes, owners, offsets = [], [], []
     for number, stream in enumerate(streams):
         if len(stream) < width:
             continue
-        last = len(stream) - width
-        starts = sorted({round(k * last / (WINDOWS_PER_ITEM - 1)) for k in range(WINDOWS_PER_ITEM)}) if last else [0]
+        low, high = bounds[number] if bounds is not None else (0, len(stream))
+        last = high - width - low
+        starts = (
+            sorted({low + round(k * last / (WINDOWS_PER_ITEM - 1)) for k in range(WINDOWS_PER_ITEM)}) if last else [low]
+        )
         window = window_hashes(stream, width)
         hashes.append(window[starts])
         owners.append(np.full(len(starts), number, dtype=np.int32))

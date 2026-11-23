@@ -24,6 +24,7 @@ from marin.datakit.decon_keys import (
     record_hit_indices,
     record_pairs,
     record_readings,
+    template_bounds,
     text_stream,
     window_hashes,
 )
@@ -300,3 +301,21 @@ def test_a_middle_key_finds_a_copy_without_the_prompt_wrapper_and_the_earliest_k
     middle = keys_table(windows, counts, middle=True).column("key1_hash").to_pylist()[0]
     assert earliest not in held
     assert middle in held
+
+
+def test_keys_from_outside_the_eval_template_find_a_copy_without_the_template():
+    questions = [
+        "Question: Henry made two stops during his 60-mile bike trip.\nAnswer:",
+        "Question: A robe takes 2 bolts of blue fiber and half that much white fiber.\nAnswer:",
+        "Question: Short.\nAnswer:",
+    ]
+    streams = [text_stream(q) for q in questions]
+    bounds = template_bounds(streams, ["gsm8k"] * 3)
+    assert bounds[0] == (len("question"), len(streams[0]) - len("answer"))
+    # A stream whose own part is shorter than a window keeps its whole range.
+    assert bounds[2] == (0, len(streams[2]))
+    hashes, owners, offsets = candidate_windows(streams[:1], bounds=bounds[:1])
+    windows = Windows(hashes, owners, offsets, np.array(["gsm8k-0"]), np.array([KeyStream.QUESTION]))
+    key = keys_table(windows, np.zeros(len(hashes), dtype=np.int64)).column("key1_hash").to_pylist()[0]
+    record = "Solve this problem: Henry made two stops during his 60-mile bike trip. Show your work."
+    assert key in set(window_hashes(text_stream(record)).tolist())

@@ -37,6 +37,7 @@ from marin.datakit.decon_keys import (
     keys_table,
     record_hit_indices,
     record_window_hashes,
+    template_bounds,
 )
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
@@ -53,21 +54,25 @@ MEASURE_SEED = 7
 REFERENCE_SEED = 11
 
 
-def item_streams(root: str, width: int) -> tuple[list[str], list[str], list[str]]:
-    """One entry per item and key stream (``decon_keys.key_streams``): item ids, stream kinds, streams."""
-    ids, kinds, streams = [], [], []
+def item_streams(root: str, width: int) -> tuple[list[str], list[str], list[str], list[str]]:
+    """One entry per item and key stream (``decon_keys.key_streams``): item ids, stream kinds, streams, evals."""
+    ids, kinds, streams, evals = [], [], [], []
     for path in parquet_files(root):
-        for row in read_table(path, ["id", "question", "choices", "passage"]).to_pylist():
+        for row in read_table(path, ["id", "eval", "question", "choices", "passage"]).to_pylist():
             for kind, stream in key_streams(row["question"], row["choices"] or [], row["passage"] or "", width).items():
                 ids.append(row["id"])
                 kinds.append(str(kind))
                 streams.append(stream)
-    return ids, kinds, streams
+                evals.append(row["eval"])
+    return ids, kinds, streams, evals
 
 
-def prepare(items: str, output: str, width: int) -> None:
-    ids, kinds, streams = item_streams(items, width)
-    hashes, owners, offsets = candidate_windows(streams, width)
+def prepare(items: str, output: str, width: int, content: bool = False) -> None:
+    ids, kinds, streams, evals = item_streams(items, width)
+    # With content, keys come from outside each eval's shared template (per stream kind).
+    groups = [f"{e}\t{k}" for e, k in zip(evals, kinds, strict=True)]
+    bounds = template_bounds(streams, groups, width) if content else None
+    hashes, owners, offsets = candidate_windows(streams, width, bounds)
     buffer = io.BytesIO()
     np.savez(
         buffer,
@@ -245,9 +250,12 @@ def main() -> None:
     parser.add_argument(
         "--middle", action="store_true", help="choose: break ties by the window nearest the stream middle"
     )
+    parser.add_argument(
+        "--content", action="store_true", help="prepare: windows only outside each eval's shared template"
+    )
     args = parser.parse_args()
     if args.step == "prepare":
-        prepare(args.items, args.output, args.width)
+        prepare(args.items, args.output, args.width, args.content)
         return
     if args.step == "choose":
         choose(args.output, args.width, args.middle)
