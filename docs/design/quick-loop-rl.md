@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 2:40 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 3:04 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -652,6 +652,13 @@ per FSDP slice. The requests were small and numerous, so the merged loader
 switched to large contiguous reads on each host.
 [Direct Hub loading][hf-direct-loading] · [Current range planning][hf-current-range-planning] ·
 [Original slice reader][original-hf-slice-reader] · [Loader history][hf-loader-history]
+
+The running 40-H100 native arm confirmed full reads of all 39 files on
+each of its four original learner hosts. Three hosts finished in 2m05s to
+2m34s. The fourth took 29m48s from its first shard log. The trainer began
+publishing policy 0 after all four learners initialized. The shard times
+measure this initializer and stay separate from rollout and update timings.
+[Per-host startup receipt][held-native-matched-current-shards]
 
 The held vLLM pilot uses distributed Run:ai streaming for the same
 regional source. The eight processes on its inference host divide the
@@ -2083,6 +2090,13 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   least two eligible samples, and a 16,896-token request limit.
   [Effective workload parity proof][held-native-matched-current-config]
 
+  All four learners initialized, and the serving host acknowledged policy 0
+  at 11:04 UTC. Snapshot publication took 100.0 seconds and installation
+  took 159.3 seconds. The 502 tensor records and weight digest matched the
+  earlier verified policy 0. The fixed baseline evaluation then started
+  under that installed identity.
+  [Original policy-0 installation proof][held-native-matched-current-policy0]
+
   A CPU probe ran the normal step-end callback with one and two native
   learner processes, local storage and a local Ray dispatch adapter. It
   restored exact learner state and the next prompt selection from the
@@ -2375,6 +2389,8 @@ arms. [Prior timing comparison][timing]
 [iris-held-native-matched-current]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-7de5313-in-424011b4-2026.11.23.2-a7416ff4d7c8
 [held-native-matched-current-startup]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-startup-proof.tar.zst
 [held-native-matched-current-config]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-effective-workload.tar.zst
+[held-native-matched-current-shards]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-shard-load-proof.tar.zst
+[held-native-matched-current-policy0]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-policy0-proof.tar.zst
 [held-native-continuation]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-direct-same-artifact-rehearsal.tar.zst
 [held-native-step-one-operator]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-same-run-latest-7de5313.tar.gz
 [held-native-pair-acceptance]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-held-pair-acceptance-proof.tar.zst
