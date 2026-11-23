@@ -967,14 +967,14 @@ class InferenceEngine:
 
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
-        self.gen_state = eqx.filter_jit(self.gen_state.reset, donate="all")()
+        self.gen_state = eqx.filter_jit(GenState.reset, donate="all", keep_unused=True)(self.gen_state)
         self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()
         self.results = {}
 
     def can_reuse_cache(self, model: LmHeadModel) -> bool:
-        """Check whether a replacement has the same configuration and array placements."""
+        """Check configuration, shapes, dtypes, and placements before reusing cache storage."""
         old_leaves, old_structure = jax.tree.flatten(self.model)
         new_leaves, new_structure = jax.tree.flatten(model)
         if old_structure != new_structure:

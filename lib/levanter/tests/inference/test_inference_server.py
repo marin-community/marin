@@ -726,8 +726,11 @@ def _assert_binary_policy_fence(client, server):
         )
 
     engine = server.inference_context.engine
+    page_buffers = jax.tree.leaves(engine.gen_state.cache)
+    previous_storage = [buffer.addressable_data(0).unsafe_buffer_pointer() for buffer in page_buffers]
     assert server.reload(lambda model: model, expected_version=0, policy_id="policy-a") == 1
-    assert server.inference_context.engine is engine
+    new_buffers = jax.tree.leaves(server.inference_context.engine.gen_state.cache)
+    assert [buffer.addressable_data(0).unsafe_buffer_pointer() for buffer in new_buffers] == previous_storage
     first_metadata, first_tensors = decode_frame(generate("policy-a").content)
     assert first_metadata["choices"][0] == {"completion_tokens": 2, "model_version": 1, "policy_id": "policy-a"}
 

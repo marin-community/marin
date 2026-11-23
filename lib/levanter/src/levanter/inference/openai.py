@@ -239,7 +239,7 @@ class InferenceContext:
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
     ) -> int:
-        """Install new weights and return the serving version after resetting the cache."""
+        """Install new weights with empty KV state and return the new serving version."""
         with self._publication_lock:
             self._publication_pending.set()
             try:
