@@ -148,6 +148,7 @@ class PromptLoader:
         routes: Mapping[str, str] | None = None,
         families: Mapping[str, str] | None = None,
         family_minimums: Mapping[str, int] | None = None,
+        sources: Mapping[str, str] | None = None,
     ):
         if max_stale_retries < 0:
             raise ValueError(f"max_stale_retries must be non-negative, got {max_stale_retries}")
@@ -163,6 +164,7 @@ class PromptLoader:
         self._dataset = dataset
         self._routes = dict(routes or {})
         self._families = dict(families or {})
+        self._sources = dict(sources or {})
         self._family_minimums = dict(family_minimums or {})
         self._order = order
         self._family_rows: dict[str, list[int]] = collections.defaultdict(list)
@@ -186,8 +188,10 @@ class PromptLoader:
         self._retries_exhausted = 0
         self._scan_start = 0
 
-    def next_prompt(self, live: Collection[str], route: str | None = None, family: str | None = None) -> dict | None:
-        """Offer a non-live, non-quarantined prompt in the requested route and family, or None.
+    def next_prompt(
+        self, live: Collection[str], route: str | None = None, family: str | None = None, source: str | None = None
+    ) -> dict | None:
+        """Offer a non-live, non-quarantined prompt in the requested route, family and source, or None.
 
         Prompts awaiting regeneration come first. A family lease advances only that family's seeded pass. Without
         a family lease, two batches' worth of draws precede a scan that can pick a row the order weights at zero.
@@ -197,6 +201,7 @@ class PromptLoader:
             return self._available(uid, live) and (
                 (route is None or self._routes.get(uid) == route)
                 and (family is None or self._families.get(uid) == family)
+                and (source is None or self._sources.get(uid) == source)
             )
 
         for position, prompt in enumerate(self._retries):
@@ -204,7 +209,7 @@ class PromptLoader:
                 del self._retries[position]
                 return self._label_family(prompt)
         if family is not None:
-            return self._next_family_prompt(live, family, route)
+            return self._next_family_prompt(live, family, route, source)
         # Every usable dataset uid is live, so drawing would only advance the order. A quarantined uid is never live.
         if len(live) + len(self._quarantined) >= self._uid_count:
             return None
@@ -220,14 +225,17 @@ class PromptLoader:
                 return self._offer(index)
         return None
 
-    def _next_family_prompt(self, live: Collection[str], family: str, route: str | None = None) -> dict | None:
+    def _next_family_prompt(
+        self, live: Collection[str], family: str, route: str | None, source: str | None
+    ) -> dict | None:
         rows = self._family_rows.get(family)
         if not rows:
             return None
 
         def row_eligible(index: int) -> bool:
             uid = self._dataset.uid(index)
-            return self._available(uid, live) and (route is None or self._routes.get(uid) == route)
+            return (self._available(uid, live) and (route is None or self._routes.get(uid) == route)
+                    and (source is None or self._sources.get(uid) == source))
 
         if len(live) + len(self._quarantined) >= len(rows) and all(not row_eligible(index) for index in rows):
             return None

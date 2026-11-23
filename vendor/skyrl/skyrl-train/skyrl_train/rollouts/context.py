@@ -7,7 +7,7 @@ import collections
 import dataclasses
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, TypeVar
 
@@ -27,6 +27,7 @@ from skyrl_train.config.rollout_validation import (
     minimum_family_pool_sizes,
     validate_family_pools,
     validate_groups_per_family,
+    full_batch_fill_from_config,
 )
 from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
 from skyrl_train.dataset import PromptDataset
@@ -42,6 +43,7 @@ from skyrl_train.rollouts.buffer import (
     Admission,
     AdmittedRollout,
     BufferSnapshot,
+    BatchFillDeadlineExceeded,
     ReadyRollout,
     RolloutBuffer,
     RolloutBufferConfig,
@@ -49,6 +51,7 @@ from skyrl_train.rollouts.buffer import (
     RolloutContentPolicy,
     RolloutGroup,
     RolloutTask,
+    RolloutStratum,
 )
 from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, PromptOrder, SeededPasses
 from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, PayloadStore
@@ -102,6 +105,7 @@ class TrainingContextState:
     loader: PromptLoaderState
     ready: list[ReadyRollout]
     object_store_root: str | None
+    replacement_slots: dict[int, list[RolloutStratum]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -208,6 +212,7 @@ class TrainingContext:
             max_candidate_groups=max_sample_batches * batch_size if max_sample_batches > 0 else None,
             consumed_route_quotas=dict(config.trainer.rollout_buffer.consumed_route_quotas),
             groups_per_family=groups_per_family,
+            full_batch_fill=full_batch_fill_from_config(config),
         )
         routes = {}
         if buffer_config.consumed_route_quotas:
@@ -234,6 +239,13 @@ class TrainingContext:
             validate_family_pools(
                 groups_per_family, collections.Counter(families.values()), buffer_config.max_staleness_steps
             )
+        sources = {}
+        if buffer_config.full_batch_fill is not None:
+            if not isinstance(dataset, PromptDataset):
+                raise ValueError("Bounded batch fill requires source provenance in PromptDataset")
+            sources = {dataset.uid(index): source for index, source in enumerate(dataset.dataframe["data_source"])}
+            if not all(sources.values()):
+                raise ValueError("Bounded batch fill requires a source on every training row")
         plan = compile_distillation_plan_from_config(config)
         admission = GroupAdmissionPolicy(
             GroupAdvantageInvariant.from_config(algorithm.resolved_group_advantage),
@@ -259,6 +271,7 @@ class TrainingContext:
                 routes=routes,
                 families=families,
                 family_minimums=minimum_family_pool_sizes(groups_per_family, buffer_config.max_staleness_steps),
+                sources=sources,
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),
@@ -383,6 +396,29 @@ class TrainingContext:
         on_admitted: Callable[[tuple[AdmittedRollout, ...]], Awaitable[None]] | None = None,
     ) -> RolloutBatchMetadata:
         """Wait for a selected batch without reading its trajectory payloads."""
+        if self.config.full_batch_fill is None:
+            return await self._next_batch_metadata(stall_timeout, on_admitted)
+        # This also bounds payload fetches and the learner's on-admission callback;
+        # a little progress or a new replacement must not reset the batch clock.
+        try:
+            async with asyncio.timeout(self.config.full_batch_fill.timeout) as deadline:
+                return await self._next_batch_metadata(stall_timeout, on_admitted)
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            record_event("rollout_batch_fill_deadline", {
+                "batch_id": self._policy_step, "timeout_seconds": self.config.full_batch_fill.timeout,
+                "phase": "admission_or_payload_fetch",
+            })
+            raise BatchFillDeadlineExceeded(
+                f"batch {self._policy_step} admission/payload fetch exceeded "
+                f"{self.config.full_batch_fill.timeout}s; no partial batch will train"
+            ) from error
+
+    async def _next_batch_metadata(
+        self, stall_timeout: float,
+        on_admitted: Callable[[tuple[AdmittedRollout, ...]], Awaitable[None]] | None,
+    ) -> RolloutBatchMetadata:
         loop = asyncio.get_running_loop()
         groups: list[AdmittedRollout] = []
         deadline = loop.time() + stall_timeout
@@ -442,7 +478,8 @@ class TrainingContext:
         ]
         retries = [*loader.retries, *snapshot.retries, *uncommitted]
         return TrainingContextState(
-            dataclasses.replace(loader, retries=retries), ready, self._payloads.object_store_root
+            dataclasses.replace(loader, retries=retries), ready, self._payloads.object_store_root,
+            snapshot.replacement_slots,
         )
 
     async def load_state_dict(self, state: TrainingContextState) -> None:
@@ -473,7 +510,9 @@ class TrainingContext:
                     ready[index].verdict, row_facts=RowFacts.from_batch(group.trajectory_batch)
                 )
                 ready[index] = dataclasses.replace(ready[index], verdict=verdict)
-        await self._buffer.restore.remote(BufferSnapshot(ready=ready, retries=[], leases=frozenset()))
+        await self._buffer.restore.remote(BufferSnapshot(
+            ready=ready, retries=[], leases=frozenset(), replacement_slots=state.replacement_slots,
+        ))
         self._live_uids.update(rollout.verdict.uid for rollout in ready)
         logger.info(
             "Restored rollout state: {} committed groups and {} prompts to regenerate",
@@ -492,7 +531,10 @@ class TrainingContext:
                 with self._wait("prompt"):
                     async with self._uids_released:
                         prompt = await self._uids_released.wait_for(
-                            lambda: self.loader.next_prompt(self._live_uids, lease.route, lease.family)
+                            lambda: self.loader.next_prompt(
+                                self._live_uids, lease.route, lease.family,
+                                None if lease.stratum is None else lease.stratum.source,
+                            )
                         )
                         if lease.lease_id in self._aborted_leases:
                             self.loader.requeue(prompt)
@@ -500,6 +542,13 @@ class TrainingContext:
                         self._live_uids[prompt["uid"]] += 1
                 task = RolloutTask(lease, prompt, self._request_spec.request(prompt, lease.policy_step))
                 self._in_flight[lease.lease_id] = task
+                if self.config.full_batch_fill is not None:
+                    bound = await self._buffer.bind_prompt.remote(lease.lease_id, prompt)
+                    if bound is None or lease.lease_id in self._aborted_leases:
+                        continue
+                    lease = bound
+                    task = dataclasses.replace(task, lease=lease)
+                    self._in_flight[lease.lease_id] = task
                 # A lease or prompt wait may span an evaluation boundary. Keep
                 # the held prompt in checkpoint state without submitting it yet.
                 await self._submission_allowed.wait()
@@ -549,7 +598,11 @@ class TrainingContext:
         """Await ``awaitable`` unless a rollout task fails first, then raise that failure."""
         assert self._failure is not None, "start the training context before reading from it"
         work: asyncio.Future[Any] = asyncio.ensure_future(awaitable)
-        await asyncio.wait({work, self._failure}, return_when=asyncio.FIRST_COMPLETED)
+        try:
+            await asyncio.wait({work, self._failure}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            work.cancel()
+            raise
         if work.done():
             return work.result()
         work.cancel()

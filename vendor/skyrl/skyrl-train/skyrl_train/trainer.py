@@ -1462,6 +1462,10 @@ class RayPPOTrainer:
                 "lookahead_groups": buffer.max_untrained_groups,
                 "max_staleness_steps": buffer.max_staleness_steps,
                 "batch_policy": buffer.batch_policy.value,
+                "batch_straggler_timeout_seconds": (
+                    None if buffer.full_batch_fill is None else buffer.full_batch_fill.straggler_timeout
+                ),
+                "batch_fill_timeout_seconds": None if buffer.full_batch_fill is None else buffer.full_batch_fill.timeout,
                 "consumed_route_quotas": json.dumps(buffer.consumed_route_quotas, sort_keys=True),
                 "eval_drain": self.cfg.trainer.rollout_buffer.eval_drain,
                 "samples_per_group": self.cfg.generator.n_samples_per_prompt,

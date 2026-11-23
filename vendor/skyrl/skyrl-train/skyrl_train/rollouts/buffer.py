@@ -13,11 +13,11 @@ import asyncio
 import collections
 import time
 import uuid
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
-from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY, BatchPolicy
+from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY, BatchPolicy, FullBatchFill
 from skyrl_train.dynamic_sampling import DynamicSamplingType, GroupSelectionPolicy, GroupSelectionResult
 from skyrl_train.group_admission import (
     AdmissionRejection,
@@ -27,7 +27,7 @@ from skyrl_train.group_admission import (
 )
 from skyrl_train.rollout_observability import rollout_wait
 from skyrl_train.rollouts.loader import JudgedGroup
-from skyrl_train.telemetry import GeneratedWork
+from skyrl_train.telemetry import GeneratedWork, record_event
 from skyrl_train.trajectory_runners.trajectory_processing import get_outcome_rewards, get_trajectory_passes
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward
 from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
@@ -60,8 +60,13 @@ class RolloutBufferConfig:
     max_candidate_groups: int | None
     consumed_route_quotas: dict[str, int] = field(default_factory=dict)
     groups_per_family: dict[str, int] = field(default_factory=dict)
+    full_batch_fill: FullBatchFill | None = None
 
     def __post_init__(self) -> None:
+        if self.full_batch_fill is not None and (
+            self.batch_policy is not BatchPolicy.FULL_BATCH or self.dynamic_sampling is not None
+        ):
+            raise ValueError("Bounded batch fill requires full_batch without dynamic sampling")
         if self.consumed_route_quotas:
             if self.batch_policy is not BatchPolicy.FULL_BATCH:
                 raise ValueError("Consumed route quotas require full_batch admission")
@@ -99,6 +104,27 @@ class RolloutLease:
     batch_id: int
     route: str | None = None
     family: str | None = None
+    stratum: RolloutStratum | None = None
+
+
+@dataclass(frozen=True)
+class RolloutStratum:
+    """A sampled curriculum slot; replacements must keep all three labels."""
+
+    source: str
+    route: str | None
+    family: str | None
+
+    @classmethod
+    def from_prompt(cls, prompt: dict) -> RolloutStratum:
+        source = prompt["input"].metadata.data_source
+        if not source:
+            raise ValueError("Bounded batch fill requires source provenance on every prompt")
+        return cls(source, prompt.get("group_route"), prompt.get(FAMILY_COLUMN))
+
+
+class BatchFillDeadlineExceeded(GroupAdmissionStalledError):
+    """A full curriculum-preserving batch was unavailable by its absolute deadline."""
 
 
 @dataclass(frozen=True)
@@ -361,6 +387,7 @@ class BufferSnapshot:
     ready: list[ReadyRollout]
     retries: list[dict]
     leases: frozenset[str]
+    replacement_slots: dict[int, list[RolloutStratum]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -559,8 +586,11 @@ class RolloutBuffer:
     sampling decides the rest. Groups admitted to a later batch wait for its step.
     """
 
-    def __init__(self, config: RolloutBufferConfig):
+    def __init__(self, config: RolloutBufferConfig, *, clock: Callable[[], float] = time.monotonic):
         self.config = config
+        self._clock = clock
+        self._fill_started: float | None = None
+        self._replacement_slots: collections.defaultdict[int, list[RolloutStratum]] = collections.defaultdict(list)
         self._policy = async_rollout_policy(config)
         self._policy_step = 0
         self._route_order = collections.deque(config.consumed_route_quotas)
@@ -597,6 +627,12 @@ class RolloutBuffer:
         async with self._changed:
             await self._changed.wait_for(self._lease_available)
             batch_id = self._lease_batch()
+            assert batch_id is not None
+            if self._replacement_slots[batch_id]:
+                stratum = self._replacement_slots[batch_id].pop(0)
+                lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, stratum.route, stratum.family, stratum)
+                self._leases[lease.lease_id] = lease
+                return lease
             route = None
             if self.config.consumed_route_quotas:
                 occupied = collections.Counter(lease.route for lease in self._leases.values() if lease.batch_id == batch_id)
@@ -656,6 +692,8 @@ class RolloutBuffer:
             if lease_id in self._aborted_leases:
                 return
             lease = self._leases[lease_id]
+            if self.config.full_batch_fill is not None and RolloutStratum.from_prompt(prompt) != lease.stratum:
+                raise ValueError("Committed prompt does not match its curriculum stratum")
             if lease.route is not None and prompt.get("group_route") != lease.route:
                 raise ValueError("Committed prompt does not match its consumed-route lease")
             if lease.family is not None and prompt.get(FAMILY_COLUMN) != lease.family:
@@ -670,11 +708,32 @@ class RolloutBuffer:
             self._select()
             self._changed.notify_all()
 
+    async def bind_prompt(self, lease_id: str, prompt: dict) -> RolloutLease | None:
+        """Pin the source drawn for a slot before generation can become a straggler."""
+        async with self._changed:
+            if lease_id in self._aborted_leases:
+                return None
+            lease = self._leases[lease_id]
+            stratum = RolloutStratum.from_prompt(prompt)
+            if lease.stratum is not None and lease.stratum != stratum:
+                raise ValueError("Replacement prompt does not match its curriculum stratum")
+            if lease.route != stratum.route or lease.family != stratum.family:
+                raise ValueError("Bound prompt does not match its route/family lease")
+            lease = replace(lease, stratum=stratum)
+            self._leases[lease_id] = lease
+            self._exchange_stragglers()
+            self._changed.notify_all()
+            return self._leases[lease_id]
+
     async def abort_leases(self) -> tuple[str, ...]:
         """Revoke all uncommitted leases and reject their late results until cleanup finishes."""
         async with self._changed:
             self._leasing_paused = True
             leases = tuple(self._leases)
+            if self.config.full_batch_fill is not None:
+                for lease in self._leases.values():
+                    if lease.stratum is not None:
+                        self._replacement_slots[lease.batch_id].append(lease.stratum)
             self._aborted_leases.update(leases)
             self._leases.clear()
             self._changed.notify_all()
@@ -693,7 +752,9 @@ class RolloutBuffer:
             if self._policy_step and not self._batch_taken:
                 raise RuntimeError("cannot publish a new policy step before taking the current batch")
             self._admitted.pop(self._policy_step, None)
+            self._replacement_slots.pop(self._policy_step, None)
             self._policy_step = policy_step
+            self._fill_started = None
             self._unreported = list(self._admitted[policy_step])
             self._batch_taken = False
             self._select()
@@ -729,23 +790,43 @@ class RolloutBuffer:
         async with self._changed:
             if self._batch_taken:
                 raise RuntimeError("the current batch was already taken; publish the next policy step first")
-            try:
-                await asyncio.wait_for(
-                    self._changed.wait_for(
-                        lambda: self._unreported
-                        or self._retries
-                        or self._dispositions
-                        or self._batch_complete()
-                        or self._over_budget_batch() is not None
-                    ),
-                    timeout,
-                )
-            except TimeoutError as error:
-                raise GroupAdmissionStalledError(
-                    f"no rollout group admitted for {timeout:.0f}s: policy_step={self._policy_step} "
-                    f"admitted={len(self._admitted[self._policy_step])}/{self.config.batch_size} "
-                    f"leases={len(self._leases)} rejections={dict(self._stats[self._policy_step].rejections)}"
-                ) from error
+            if self._fill_started is None:
+                self._fill_started = self._clock()
+            progress_deadline = self._clock() + timeout
+            while True:
+                self._exchange_stragglers()
+                fill = self.config.full_batch_fill
+                elapsed = self._clock() - self._fill_started
+                if fill is not None and elapsed >= fill.timeout and not self._batch_complete():
+                    deficit = self.config.batch_size - len(self._admitted[self._policy_step])
+                    record_event("rollout_batch_fill_deadline", {
+                        "batch_id": self._policy_step, "elapsed_seconds": elapsed, "missing_groups": deficit,
+                        "pending_strata": [str(lease.stratum) for lease in self._leases.values()
+                                           if lease.batch_id == self._policy_step],
+                    })
+                    raise BatchFillDeadlineExceeded(
+                        f"batch {self._policy_step} fill exceeded {fill.timeout}s: missing_groups={deficit}; "
+                        "no full curriculum-preserving batch available"
+                    )
+                if (self._unreported or self._retries or self._dispositions or self._batch_complete()
+                        or self._over_budget_batch() is not None):
+                    break
+                remaining = progress_deadline - self._clock()
+                if remaining <= 0:
+                    raise GroupAdmissionStalledError(
+                        f"no rollout group admitted for {timeout:.0f}s: policy_step={self._policy_step} "
+                        f"admitted={len(self._admitted[self._policy_step])}/{self.config.batch_size} "
+                        f"leases={len(self._leases)} rejections={dict(self._stats[self._policy_step].rejections)}"
+                    )
+                if fill is not None:
+                    remaining = min(remaining, fill.timeout - elapsed)
+                    if elapsed < fill.straggler_timeout:
+                        remaining = min(remaining, fill.straggler_timeout - elapsed)
+                try:
+                    await asyncio.wait_for(self._changed.wait(), remaining)
+                except TimeoutError:
+                    # Re-evaluate both absolute deadlines, including when no group commits.
+                    continue
             selection = None
             if self._batch_complete():
                 route_counts = collections.Counter(rollout.prompt.get("group_route") for rollout in self._admitted[self._policy_step])
@@ -806,13 +887,21 @@ class RolloutBuffer:
             if not (self._batch_taken and batch_id == self._policy_step)
             for rollout in groups
         ]
+        slots = {batch: list(slots) for batch, slots in self._replacement_slots.items() if slots}
+        if self.config.full_batch_fill is not None:
+            for lease in self._leases.values():
+                if lease.stratum is not None:
+                    slots.setdefault(lease.batch_id, []).append(lease.stratum)
         return BufferSnapshot(
-            ready=[*admitted, *self._ready], retries=list(self._retries), leases=frozenset(self._leases)
+            ready=[*admitted, *self._ready], retries=list(self._retries), leases=frozenset(self._leases),
+            replacement_slots=slots,
         )
 
     async def restore(self, snapshot: BufferSnapshot) -> None:
         """Load a checkpoint's groups into an unpublished, empty buffer."""
         async with self._changed:
+            if snapshot.replacement_slots and self.config.full_batch_fill is None:
+                raise ValueError("Checkpoint has pinned replacement slots; restore with full_batch_fill enabled")
             if self._policy_step or self._leases or self._ready or self._retries or any(self._admitted.values()):
                 raise RuntimeError("a rollout buffer can only be restored before training starts")
             if self.config.groups_per_family:
@@ -824,10 +913,13 @@ class RolloutBuffer:
                     raise ValueError(f"Checkpoint rollout groups do not fit {GROUPS_PER_FAMILY_KEY}")
             self._ready.extend(snapshot.ready)
             self._retries.extend(snapshot.retries)
+            self._replacement_slots.update(snapshot.replacement_slots)
 
     def _reject(self, stats: _SelectionStats, rollout: ReadyRollout, rejection: AdmissionRejection) -> None:
         stats.reject(rejection)
         self._dispose(rollout, rejection.value)
+        if self.config.full_batch_fill is not None:
+            self._replacement_slots[rollout.batch_id].append(RolloutStratum.from_prompt(rollout.prompt))
 
     def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
         dwell = None if rollout.committed_at is None else time.monotonic() - rollout.committed_at
@@ -882,3 +974,41 @@ class RolloutBuffer:
                 if batch_id == self._policy_step:
                     self._unreported.append(rollout)
         self._ready = []
+        self._exchange_stragglers()
+
+    def _exchange_stragglers(self) -> None:
+        """Exchange slots, never discard a slow prompt or borrow from a different stratum."""
+        fill = self.config.full_batch_fill
+        if fill is None or self._fill_started is None or self._batch_taken:
+            return
+        if self._clock() - self._fill_started < fill.straggler_timeout:
+            return
+        current = self._admitted[self._policy_step]
+        for lease_id, lease in list(self._leases.items()):
+            if lease.batch_id != self._policy_step or lease.stratum is None:
+                continue
+            for donor_batch in sorted(self._admitted):
+                if not self._policy_step < donor_batch <= lease.policy_step + self.config.max_staleness_steps:
+                    continue
+                donor = next((group for group in self._admitted[donor_batch]
+                              if RolloutStratum.from_prompt(group.prompt) == lease.stratum
+                              and self._policy_step - group.policy_step <= self.config.max_staleness_steps), None)
+                if donor is None:
+                    continue
+                self._admitted[donor_batch].remove(donor)
+                promoted = replace(donor, batch_id=self._policy_step)
+                current.append(promoted)
+                self._unreported.append(promoted)
+                self._leases[lease_id] = replace(lease, batch_id=donor_batch)
+                old_stats, new_stats = self._stats[donor_batch], self._stats[self._policy_step]
+                old_stats.inspected -= 1
+                judged = next(group for group in old_stats.judged if group.uid == donor.verdict.uid)
+                old_stats.judged.remove(judged)
+                new_stats.inspected += 1
+                new_stats.judged.append(judged)
+                record_event("rollout_batch_straggler_exchange", {
+                    "batch_id": self._policy_step, "donor_batch_id": donor_batch,
+                    "pending_lease_id": lease_id, "promoted_uid": donor.verdict.uid,
+                    "source": lease.stratum.source, "route": lease.stratum.route, "family": lease.stratum.family,
+                })
+                break

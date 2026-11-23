@@ -401,6 +401,45 @@ the number of prompt groups from each route in every consumed batch.
 groups. Rejected groups are replaced within their route. Generation slots
 rotate between routes so one repeatedly failing route cannot occupy every slot.
 
+`trainer.rollout_buffer.full_batch_fill` is an opt-in bound for `full_batch`
+with dynamic sampling disabled. For example:
+
+```yaml
+full_batch_fill:
+  straggler_timeout: 600
+  timeout: 900
+```
+
+Both clocks start when the learner begins admitting a batch, after any
+evaluation/publish fence. Rejected groups retain their original source,
+route and family slot; a replacement cannot silently draw from another source
+in the same route. At `straggler_timeout`, an already valid lookahead group
+can exchange slots with a pending group of exactly the same source, route and
+family. The pending prompt keeps generating for the donor's later batch;
+neither prompt is dropped or scored again. Both directions of the exchange
+must fit the policy-staleness window. The source allocation drawn for each
+batch and its route/family counts therefore remain unchanged, although the
+within-source prompt order and staleness can change. Existing admission
+rejection still excludes unusable groups; this does not eliminate that
+within-source selection bias.
+
+At `timeout`, admission fails with `BatchFillDeadlineExceeded` if a full valid
+batch is unavailable. The absolute clock covers admission callbacks and payload
+fetches and does not reset on partial progress, rejection or replacement.
+Failure never trains an underfilled batch or relaxes quotas. A deadline bounds
+waiting, not the existence of usable data: without a matching ready reserve,
+it can stop the run instead of producing an update. These settings do not
+shorten trajectory budgets, change timeout verifier scoring, add generation
+slots or change any existing recipe when left null. Pending source slots
+survive checkpoint/restart; a new process starts a new admission clock.
+
+The startup concurrency event records both limits. Native
+`rollout_batch_straggler_exchange` events record the batch pair, promoted UID,
+pending lease and stratum. `rollout_batch_fill_deadline` records an exhausted
+batch and its pending strata. Require source provenance on every input, use a
+fresh artifact version, and review these events and actual fill times before
+claiming a performance improvement.
+
 The `wall_time_budget` callback stops after a completed update when `seconds`
 have elapsed since this process's first optimizer completion. Startup is
 excluded; subsequent evaluation and checkpoint work counts toward the budget.

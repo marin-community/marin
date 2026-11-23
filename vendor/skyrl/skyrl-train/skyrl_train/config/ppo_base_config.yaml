@@ -241,6 +241,10 @@ trainer:
     # fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout never
     # blocks training, but quick rollouts train more often and at lower staleness.
     batch_policy: full_batch
+    # Opt-in absolute batch-admission bound. Same-source/route/family lookahead exchanges begin at
+    # straggler_timeout; timeout fails rather than underfilling or changing the curriculum mix.
+    # Example: {straggler_timeout: 600, timeout: 900}. Does not shorten trajectory timeouts or alter scoring.
+    full_batch_fill: null
     # How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
     # prompt waits until the prompt order offers it again.
     max_stale_retries: 1

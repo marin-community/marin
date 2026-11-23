@@ -1,7 +1,9 @@
 """Validate launch requirements for the shared task rollout engine."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import StrEnum
+import math
 
 from omegaconf import DictConfig, OmegaConf
 
@@ -22,6 +24,34 @@ class BatchPolicy(StrEnum):
 class EntrypointOperation(StrEnum):
     TRAIN = "train"
     GENERATE = "generate"
+
+
+@dataclass(frozen=True)
+class FullBatchFill:
+    """Seconds from batch admission to reserve exchange and to terminal failure."""
+
+    straggler_timeout: float
+    timeout: float
+
+    def __post_init__(self) -> None:
+        if not (
+            math.isfinite(self.timeout)
+            and math.isfinite(self.straggler_timeout)
+            and 0 < self.straggler_timeout < self.timeout
+        ):
+            raise ValueError("full_batch_fill requires finite 0 < straggler_timeout < timeout")
+
+
+def full_batch_fill_from_config(cfg: DictConfig) -> FullBatchFill | None:
+    """Resolve opt-in batch deadlines without changing existing recipes."""
+    raw = OmegaConf.select(cfg, "trainer.rollout_buffer.full_batch_fill")
+    if raw is None:
+        return None
+    if cfg.trainer.rollout_buffer.batch_policy != BatchPolicy.FULL_BATCH:
+        raise ValueError("full_batch_fill requires batch_policy=full_batch")
+    if cfg.trainer.algorithm.dynamic_sampling.type is not None:
+        raise ValueError("full_batch_fill requires dynamic sampling disabled")
+    return FullBatchFill(**dict(raw))
 
 
 def validate_groups_per_family(cfg: DictConfig) -> dict[str, int]:
@@ -73,6 +103,7 @@ def validate_rollout_launch(
     operation: EntrypointOperation = EntrypointOperation.TRAIN,
 ) -> None:
     """Validate exact-token transport and training-only distillation requirements."""
+    full_batch_fill_from_config(cfg)
     if cfg.generator.backend != "vllm":
         raise ValueError("Task rollouts require generator.backend=vllm for exact structured-chat transport")
     if (

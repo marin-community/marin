@@ -7,8 +7,9 @@ from types import SimpleNamespace
 import pytest
 from rolloutengine.cleanup import finish_cleanup
 from skyrl_train.dynamic_sampling import GroupSelectionResult
+from skyrl_train.config.rollout_validation import FullBatchFill
 from skyrl_train.rollouts.buffer import (
-    BatchPolicy, GroupRewards, PayloadReference, RolloutBuffer, RolloutBufferConfig, RolloutVerdict,
+    BatchPolicy, BatchFillDeadlineExceeded, GroupRewards, PayloadReference, RolloutBuffer, RolloutBufferConfig, RolloutVerdict,
 )
 from skyrl_train.rollouts.context import EvalDrainStrategy, RolloutRequestSpec, TrainingContext
 from skyrl_train.rollouts.loader import PromptLoader, SeededPasses
@@ -49,10 +50,14 @@ def local_actor(runner):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", [EvalDrainStrategy.WAIT, EvalDrainStrategy.ABORT, EvalDrainStrategy.PRIORITY])
+@pytest.mark.parametrize("bounded_fill", [False, True])
 async def test_eval_drain_preserves_or_discards_groups_and_acknowledges_sandbox_cleanup(
-    monkeypatch, telemetry_endpoint, strategy
+    monkeypatch, telemetry_endpoint, strategy, bounded_fill
 ):
-    buffer = RolloutBuffer(RolloutBufferConfig(1, 2, 1, BatchPolicy.FULL_BATCH, None, None))
+    buffer = RolloutBuffer(RolloutBufferConfig(
+        1, 2, 1, BatchPolicy.FULL_BATCH, None, None,
+        full_batch_fill=FullBatchFill(600, 900) if bounded_fill else None,
+    ))
     started = asyncio.Event()
     finish_generation = asyncio.Event()
     cleanup_started = asyncio.Event()
@@ -104,10 +109,12 @@ async def test_eval_drain_preserves_or_discards_groups_and_acknowledges_sandbox_
             "acquire_lease": buffer.acquire_lease, "snapshot": snapshot, "publish": buffer.publish,
             "admit": buffer.admit,
             "abort_leases": buffer.abort_leases, "resume_leasing": buffer.resume_leasing,
+            "bind_prompt": buffer.bind_prompt,
         }.items()
     })
     context = TrainingContext(
-        PromptLoader(Dataset(), SeededPasses(2, seed=0, shuffle=False), batch_size=1, max_stale_retries=0, max_unusable_groups=4),
+        PromptLoader(Dataset(), SeededPasses(2, seed=0, shuffle=False), batch_size=1, max_stale_retries=0, max_unusable_groups=4,
+                     sources={str(i): Dataset()[i]["input"].metadata.data_source for i in range(2)}),
         buffer.config, actor_buffer, None, RolloutRequestSpec(1, {}),
         SimpleNamespace(run_task=remote_run, abort_training=actor.abort_training), MemoryPayloads(),
         rollout_spans=False, eval_drain=strategy,
@@ -191,3 +198,47 @@ async def test_eval_drain_preserves_or_discards_groups_and_acknowledges_sandbox_
             if not task.done():
                 task.cancel()
         await asyncio.gather(*remote_tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload_timeout", [False, True])
+async def test_absolute_batch_deadline_covers_admission_callback_without_hiding_io_timeout(monkeypatch, payload_timeout):
+    config = RolloutBufferConfig(1, 1, 0, BatchPolicy.FULL_BATCH, None, None,
+                               full_batch_fill=FullBatchFill(.01, .1))
+    buffer = RolloutBuffer(config)
+    transport = SimpleNamespace(**{name: SimpleNamespace(remote=method) for name, method in {
+        "publish": buffer.publish, "admit": buffer.admit,
+    }.items()})
+    context = TrainingContext(
+        PromptLoader(Dataset(), SeededPasses(2, seed=0, shuffle=False), batch_size=1,
+                     max_stale_retries=0, max_unusable_groups=4),
+        config, transport, None, RolloutRequestSpec(1, {}), SimpleNamespace(), MemoryPayloads(),
+        rollout_spans=False, eval_drain=EvalDrainStrategy.PRIORITY,
+    )
+    monkeypatch.setattr("skyrl_train.rollouts.context.ray.kill", lambda actor: None)
+    context.pause()
+    context.start()
+    entered = asyncio.Event()
+    hold_payload = asyncio.Event()
+
+    async def read_payload(groups):
+        assert [group.uid for group in groups] == ["0"]
+        entered.set()
+        if payload_timeout:
+            raise TimeoutError("payload transport timeout")
+        await hold_payload.wait()
+
+    try:
+        await context.publish(1)
+        lease = await buffer.acquire_lease()
+        row = Dataset()[0]
+        await buffer.bind_prompt(lease.lease_id, row)
+        await buffer.commit(lease.lease_id, row, verdict("0"), PayloadReference("0"))
+        expected = TimeoutError if payload_timeout else BatchFillDeadlineExceeded
+        with pytest.raises(expected) as error:
+            await context.next_batch_metadata(stall_timeout=10000, on_admitted=read_payload)
+        assert entered.is_set()
+        if payload_timeout:
+            assert type(error.value) is TimeoutError
+    finally:
+        await context.close()
