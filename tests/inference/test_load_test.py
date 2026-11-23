@@ -16,7 +16,8 @@ from marin.inference.load_test import (
 from marin.inference.load_workloads import replay_requests, synthetic_requests
 
 
-def test_streaming_usage_counts_tokens_and_ignores_role_only_events():
+@pytest.mark.parametrize("data_parallel_rank", [None, 0, 3])
+def test_streaming_usage_counts_tokens_and_ignores_role_only_events(data_parallel_rank):
     now = [100.0]
     received = []
     events = [
@@ -34,7 +35,7 @@ def test_streaming_usage_counts_tokens_and_ignores_role_only_events():
                 yield f"data: {event if isinstance(event, str) else json.dumps(event)}\n\n".encode()
 
     async def handle(request):
-        received.append(json.loads(request.content))
+        received.append((json.loads(request.content), request.headers.get("X-data-parallel-rank")))
         return httpx.Response(200, stream=Stream())
 
     async def run():
@@ -46,6 +47,7 @@ def test_streaming_usage_counts_tokens_and_ignores_role_only_events():
                 LoadRequest("task-1", "chat/completions", {"messages": []}),
                 seed=17,
                 clock=lambda: now[0],
+                data_parallel_rank=data_parallel_rank,
             )
 
     result = asyncio.run(run())
@@ -54,8 +56,11 @@ def test_streaming_usage_counts_tokens_and_ignores_role_only_events():
     assert result.prompt_tokens == 128 and result.output_tokens == 5
     assert result.ttft == 1.0 and result.tpot == 1.0
     assert result.ended == 107.0 and result.finish_reason == "length"
-    assert received[0]["stream_options"] == {"include_usage": True}
-    assert received[0]["seed"] == 17
+    body, requested_rank = received[0]
+    assert body["stream_options"] == {"include_usage": True}
+    assert body["seed"] == 17
+    assert requested_rank == (None if data_parallel_rank is None else str(data_parallel_rank))
+    assert result.requested_data_parallel_rank == data_parallel_rank
 
 
 def test_truncated_stream_remains_a_failed_request_even_with_partial_usage():

@@ -85,27 +85,31 @@ async def prefix_scores(base_url: str, probes: list[dict], concurrency: int) -> 
 
         async def score(probe: dict) -> tuple[str, dict]:
             async with semaphore:
+                prompt = probe["prompt"][:-1]
                 response = await client.post(
                     f"{base_url}/completions",
                     json={
                         "model": "mochi",
-                        "prompt": probe["prompt"],
+                        "prompt": prompt,
                         "max_tokens": 1,
                         "temperature": 0,
-                        "prompt_logprobs": 1,
+                        "logprobs": 1,
+                        "logprob_token_ids": [probe["token"]],
+                        "ignore_eos": True,
                         "return_token_ids": True,
-                        "routed_experts_prompt_start": len(probe["prompt"]) - 2,
+                        "return_tokens_as_token_ids": True,
+                        "routed_experts_prompt_start": len(prompt) - 1,
                     },
                 )
                 response.raise_for_status()
                 choice = response.json()["choices"][0]
-                entries = choice["prompt_logprobs"][-1]
-                top = min(entries, key=lambda token: (-entries[token]["logprob"], int(token)))
-                routes = decode_routed_experts(choice["routed_experts"], 2)
+                entries = choice["logprobs"]["top_logprobs"][0]
+                top = choice["token_ids"][0]
+                routes = decode_routed_experts(choice["routed_experts"], 1)
                 return probe["identity"], {
-                    "logprob": entries[str(probe["token"])]["logprob"],
-                    "top1": int(top),
-                    "top1_logprob": entries[top]["logprob"],
+                    "logprob": entries[f"token_id:{probe['token']}"],
+                    "top1": top,
+                    "top1_logprob": entries[f"token_id:{top}"],
                     "routes": routes[0].tolist(),
                 }
 
@@ -285,6 +289,7 @@ async def benchmark(environment: VllmEnvironment, spec: dict, arm: dict) -> None
                     warmup_seconds=spec["warmup_seconds"],
                     measurement_seconds=spec["measurement_seconds"],
                     request_timeout_seconds=spec["request_timeout_seconds"],
+                    data_parallel_size=spec["load_data_parallel_size"],
                 )
                 load, counters = await asyncio.gather(
                     run_load(environment.server_url, environment.metrics_url, "mochi", requests, config),
