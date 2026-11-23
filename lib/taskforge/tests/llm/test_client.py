@@ -342,6 +342,9 @@ HEALTH_BODY = 2000
 """Bytes of the trickled ``/health`` body: 10 s, longer than the window and shorter than ``HEALTH_TIMEOUT``."""
 CUT_SEEN = 30.0
 """Seconds within which the fake router's next write sees that the client closed a connection."""
+HEALTH_CEILING = 1.5 * HEALTH_WINDOW
+"""Seconds from the first backoff by which the call has ended: the window plus 0.5 s of scheduling slack, and well
+short of twice the window, which a read bounded by more than the window's remainder would take."""
 
 
 # Review 2026-11-21: a /health body trickling whitespace outlived a 100 ms window under a 50 ms timeout.
@@ -352,17 +355,23 @@ def test_a_trickling_health_read_ends_with_the_availability_window(fake_glm: Fak
     fake_glm.stream(content="never sent")
     clock = StartsAtBackoff()
 
+    ended: list[float] = []
+
     async def call() -> Completion:
         async with provider(FixedEndpoint(endpoint(fake_glm.base_url)), 600.0) as glm:
             retry = RetryPolicy(HEALTH_WINDOW, 0.001, 0.001, 1.0)
             client = ModelClient(glm, LIMITED, retry, role="test", clock=clock.clock, sleep=clock.sleep)
-            return await client.complete(MESSAGES, LLMPolicy())
+            try:
+                return await client.complete(MESSAGES, LLMPolicy())
+            finally:
+                ended.append(clock.clock())
 
     with pytest.raises(ModelUnavailable):
         asyncio.run(call())
     # One attempt, one health read and no retry after it: the window closed during the read, which was cut before its
     # body completed. A read left to finish would end at 10 s, after the body.
     assert (len(fake_glm.requests), fake_glm.health_polls) == (1, 1)
+    assert ended[0] < HEALTH_CEILING, f"the call ended {ended[0]:.3f} s after its first backoff"
     assert fake_glm.cut.acquire(timeout=CUT_SEEN), "the health body was read to its end"
 
 
