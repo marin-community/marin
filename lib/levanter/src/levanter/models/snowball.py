@@ -140,6 +140,7 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 
 _GATED_NORM_RANK = 128
 # June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
+_CACHE_LAYER_AXIS = "layer"
 _LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
@@ -1118,7 +1119,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
         kv_heads, head_size = Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim)
-        layer = Axis("layer", len(self.transformer.blocks))
+        layer = Axis(_CACHE_LAYER_AXIS, len(self.transformer.blocks))
         pages = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype).kv_pages
         stacked = pages.broadcast_axis(layer).rearrange((layer, ...))
         # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
@@ -1169,7 +1170,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Snowball decode requires matching flat token and position arrays")
         num_layers = len(self.transformer.blocks)
-        if kv_cache.kv_pages.axis_size("layer") != num_layers:
+        if kv_cache.kv_pages.axis_size(_CACHE_LAYER_AXIS) != num_layers:
             raise ValueError("Snowball decode requires one KV cache per transformer layer")
         tokens = reshard(input_ids.array[:, None], P(_BATCH_AXES, None))
         hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())

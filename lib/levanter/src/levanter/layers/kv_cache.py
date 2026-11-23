@@ -30,10 +30,28 @@ class PageCache(eqx.Module):
         raise NotImplementedError
 
 
-class KvPageCache(PageCache):
-    """Concrete KV cache storing interleaved key/value pages for paged attention."""
+_PAGE_AXIS = "page"
 
-    kv_pages: NamedArray  # [Page, Slot, 2 * KVHeads, Embed]
+
+class _InterleavedKvPageCache(PageCache):
+    kv_pages: NamedArray
+
+    def reset(self) -> Self:
+        """Return a reset version of this cache."""
+        reset_pages = jnp.zeros_like(self.kv_pages.array)
+        return dataclasses.replace(self, kv_pages=NamedArray(reset_pages, self.kv_pages.axes))
+
+    def copy_page(self, src_page: int, dst_page: int) -> Self:
+        """Copy the entire contents of page ``src_page`` into ``dst_page``.
+
+        This is used when creating clones that should have an identical last partial page, but mapped to a fresh page.
+        """
+        pages = self.kv_pages.at[_PAGE_AXIS, dst_page].set(self.kv_pages[_PAGE_AXIS, src_page])
+        return dataclasses.replace(self, kv_pages=pages)
+
+
+class KvPageCache(_InterleavedKvPageCache):
+    """Interleaved K/V stored in [Page, Slot, 2 * KVHeads, Embed]."""
 
     @staticmethod
     def init(spec: PageTableSpec, kv_heads: Axis, head_size: Axis, dtype=jnp.float32) -> "KvPageCache":
@@ -48,7 +66,7 @@ class KvPageCache(PageCache):
         """
         kv_pages = hax.zeros(
             {
-                "page": spec.num_pages,
+                _PAGE_AXIS: spec.num_pages,
                 "slot": spec.page_size,
                 "kv_head": 2 * kv_heads.size,
                 head_size.name: head_size.size,
@@ -56,11 +74,6 @@ class KvPageCache(PageCache):
             dtype=dtype,
         )
         return KvPageCache(kv_pages)
-
-    def reset(self) -> "KvPageCache":
-        """Return a reset version of this cache."""
-        reset_pages = jnp.zeros_like(self.kv_pages.array)
-        return dataclasses.replace(self, kv_pages=NamedArray(reset_pages, self.kv_pages.axes))
 
     @named_call
     def update(
@@ -91,26 +104,9 @@ class KvPageCache(PageCache):
         updated = NamedArray(updated, self.kv_pages.axes)
         return dataclasses.replace(self, kv_pages=updated)
 
-    def copy_page(self, src_page: int, dst_page: int) -> "KvPageCache":
-        """Copy the entire contents of page ``src_page`` into ``dst_page``.
 
-        This is used when creating clones that should have an identical last partial page, but mapped to a fresh page.
-        """
-        new_k = self.kv_pages.at["page", dst_page].set(self.kv_pages["page", src_page])
-        return dataclasses.replace(self, kv_pages=new_k)
-
-
-class StackedKvPageCache(PageCache):
-    """Interleaved KV pages for a model that scans homogeneous layers."""
-
-    kv_pages: NamedArray  # [Layer, Page, Slot, 2 * KVHeads, Embed]
-
-    def reset(self) -> "StackedKvPageCache":
-        return StackedKvPageCache(hax.zeros_like(self.kv_pages))
-
-    def copy_page(self, src_page: int, dst_page: int) -> "StackedKvPageCache":
-        pages = self.kv_pages.at["page", dst_page].set(self.kv_pages["page", src_page])
-        return StackedKvPageCache(pages)
+class StackedKvPageCache(_InterleavedKvPageCache):
+    """Interleaved K/V stored in [Layer, Page, Slot, 2 * KVHeads, Embed]."""
 
 
 PageCacheT = TypeVar("PageCacheT", bound=PageCache)
