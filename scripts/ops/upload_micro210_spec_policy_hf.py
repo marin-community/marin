@@ -13,15 +13,9 @@ from huggingface_hub import HfApi, create_repo
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.micro210_policy import (
-<<<<<<< HEAD
     POLICY_REPO,
     PREPARED_REPO,
     SPEC_POLICY_REFERENCE,
-=======
-    SPEC_POLICY_REFERENCE,
-    POLICY_REPO,
-    PREPARED_REPO,
->>>>>>> 5aaf8ba75b ([eval] Bind the Micro210 execution route to the model, not the protocol)
 )
 from experiments.evaluation.micro210_spec_grading import driver_sha256
 from scripts.ops.upload_micro210_policy_hf import prepare_hf_token, publish_version, read_and_verify
