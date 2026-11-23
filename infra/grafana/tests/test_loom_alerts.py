@@ -79,8 +79,8 @@ def client_for(
 ):
     """A client whose Slack and Loom legs are both mocked.
 
-    `runs` collects the run requests. `loom_status` fails every Loom-side call
-    with that status instead, leaving Slack working.
+    `runs` collects the run requests. `loom_status` can be changed through a
+    one-element list to simulate a Loom outage and recovery.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -423,18 +423,20 @@ def test_loom_failure_retries_keep_one_thread_reply_until_delivery_recovers(monk
 
     assert len(slack.roots) == 1
     assert len(slack.reply_texts) == 1
-    assert "No Loom triage session opened" in slack.reply_texts[0]
+    failure_reply = slack.reply_texts[0]
+    assert "No Loom triage session opened" in failure_reply
 
     status[0] = None
     clock[0] = 41 * 60
     asyncio.run(client.submit(alert_payload()))
-    assert slack.reply_texts.count("Triage session: https://loom.example.com/s/session-1") == 1
+    assert len(slack.reply_texts) == 2
+    assert "https://loom.example.com/s/session-1" in slack.reply_texts[-1]
 
     status[0] = 503
     clock[0] = 42 * 60
     with pytest.raises(LoomAlertDeliveryError):
         asyncio.run(client.submit(alert_payload()))
-    assert len([reply for reply in slack.reply_texts if "No Loom triage session opened" in reply]) == 2
+    assert slack.reply_texts.count(failure_reply) == 2
 
 
 def test_a_slack_failure_still_opens_the_triage_session():
