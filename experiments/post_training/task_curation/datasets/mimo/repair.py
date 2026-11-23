@@ -328,7 +328,11 @@ def load_bindings(path: Path) -> dict[str, ImageBinding]:
         if binding.task_id in bindings:
             raise RepairRejected(f"the image binding repeats task {binding.task_id}")
         repository, _, suffix = binding.image.partition("@")
-        if not repository.startswith("ghcr.io/marin-community/") or suffix != f"sha256:{binding.digest}":
+        if (
+            not repository.startswith("ghcr.io/marin-community/")
+            or not binding.digest.startswith("sha256:")
+            or suffix != binding.digest
+        ):
             raise RepairRejected(f"the pinned image reference is not digest-pinned for task {binding.task_id}")
         bindings[binding.task_id] = binding
     return bindings

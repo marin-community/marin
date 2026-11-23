@@ -105,7 +105,7 @@ def retained_row(task_id: str) -> dict:
     }
 
 
-def binding_for(row: dict, digest: str = "b" * 64) -> ImageBinding:
+def binding_for(row: dict, digest: str = "sha256:" + "b" * 64) -> ImageBinding:
     task = json.loads(row["task_spec"])
     dockerfile = base64.b64decode(
         task["environment_requirements"]["docker_build"]["files"][0]["source"]["content_base64"]
@@ -113,7 +113,7 @@ def binding_for(row: dict, digest: str = "b" * 64) -> ImageBinding:
     recipe = parse_recipe(dockerfile.decode())
     return ImageBinding(
         task_id=row["id"],
-        image=f"ghcr.io/marin-community/rl-data-mimo-prepared@sha256:{digest}",
+        image=f"ghcr.io/marin-community/rl-data-mimo-prepared@{digest}",
         digest=digest,
         base_digest=recipe.base_digest,
         recipe_sha256=hashlib.sha256(dockerfile).hexdigest(),
@@ -188,7 +188,7 @@ def test_repair_refuses_a_binding_built_from_other_bytes():
         task_id=binding.task_id,
         image=binding.image,
         digest=binding.digest,
-        base_digest="e" * 64,
+        base_digest="sha256:" + "e" * 64,
         recipe_sha256=binding.recipe_sha256,
     )
     with pytest.raises(RepairRejected, match="own base digest"):
@@ -222,8 +222,12 @@ def test_bindings_document_is_validated(tmp_path):
     path = tmp_path / "bindings.json"
     path.write_text(json.dumps(document))
     assert load_bindings(path)[binding.task_id] == binding
-    bad = dict(binding.__dict__, image="docker.io/evil/repo@sha256:" + "b" * 64)
+    bad = dict(binding.__dict__, image="docker.io/evil/repo@" + binding.digest)
     path.write_text(json.dumps({"images": [bad]}))
+    with pytest.raises(RepairRejected, match="not digest-pinned"):
+        load_bindings(path)
+    unprefixed = dict(binding.__dict__, digest="b" * 64)
+    path.write_text(json.dumps({"images": [unprefixed]}))
     with pytest.raises(RepairRejected, match="not digest-pinned"):
         load_bindings(path)
 
