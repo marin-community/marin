@@ -61,7 +61,7 @@ from levanter.grug.sharding import (
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
-from levanter.layers.kv_cache import KvPageCache, StackedKvPageCache
+from levanter.layers.kv_cache import KvPageCache, ListCache, StackedKvPageCache
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
@@ -141,6 +141,7 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 _GATED_NORM_RANK = 128
 # June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
 _CACHE_LAYER_AXIS = "layer"
+_STACKED_CACHE_SHARDING = P(None, None, None, "model", None)
 _LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
@@ -982,10 +983,15 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     transformer: SnowballTransformer
     _config: SnowballConfig = eqx.field(static=True)
     _unroll_decode: bool = eqx.field(static=True, default=False)
+    _split_decode_cache: bool = eqx.field(static=True, default=False)
 
     def with_unrolled_decode(self) -> "SnowballLMHeadModel":
         """Return a model that unrolls its layer loop during token decode."""
         return dataclasses.replace(self, _unroll_decode=True)
+
+    def with_split_decode_cache(self) -> "SnowballLMHeadModel":
+        """Keep one KV buffer per layer for unrolled token decode."""
+        return dataclasses.replace(self, _unroll_decode=True, _split_decode_cache=True)
 
     @property
     def config(self) -> SnowballConfig:
@@ -1119,7 +1125,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         new_tf = eqx.tree_at(lambda t: (t.token_embed, t.output_proj, t.config), self.transformer, (te, op, new_cfg))
         return dataclasses.replace(self, transformer=new_tf, _config=new_cfg)
 
-    def initial_cache(self, spec: PageTableSpec, *, dtype: jnp.dtype) -> StackedKvPageCache:
+    def initial_cache(self, spec: PageTableSpec, *, dtype: jnp.dtype) -> StackedKvPageCache | ListCache[KvPageCache]:
         """Allocate paged KV state on a serving mesh with context parallelism disabled."""
         if _context_axis() is not None:
             raise ValueError("Snowball paged inference requires context_axis_size=1")
@@ -1129,17 +1135,18 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         pages = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype).kv_pages
         stacked = pages.broadcast_axis(layer).rearrange((layer, ...))
         # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
-        stacked = hax.named(reshard(stacked.array, P(None, None, None, "model", None)), stacked.axes)
-        return StackedKvPageCache(stacked)
+        stacked = hax.named(reshard(stacked.array, _STACKED_CACHE_SHARDING), stacked.axes)
+        cache = StackedKvPageCache(stacked)
+        return _split_layer_cache(cache) if self._split_decode_cache else cache
 
     @named_call
     def decode(
         self,
         input_ids: NamedArray,
-        kv_cache: StackedKvPageCache,
+        kv_cache: StackedKvPageCache | ListCache[KvPageCache],
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
-    ) -> tuple[NamedArray, StackedKvPageCache]:
+    ) -> tuple[NamedArray, StackedKvPageCache | ListCache[KvPageCache]]:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
         Tokens occupy a flat position axis, with a valid prefix described by batch_info.
@@ -1155,11 +1162,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def decode_for_sampling(
         self,
         input_ids: NamedArray,
-        kv_cache: StackedKvPageCache,
+        kv_cache: StackedKvPageCache | ListCache[KvPageCache],
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         sample_indices: NamedArray,
-    ) -> tuple[NamedArray, StackedKvPageCache]:
+    ) -> tuple[NamedArray, StackedKvPageCache | ListCache[KvPageCache]]:
         """Return logits in sample_indices order and update KV state for valid tokens."""
         hidden, caches = self._decode_hidden(input_ids, kv_cache, batch_info, pos_ids)
         sampled = hidden[:, 0].at[sample_indices.array].get(out_sharding=P())
@@ -1169,22 +1176,37 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def _decode_hidden(
         self,
         input_ids: NamedArray,
-        kv_cache: StackedKvPageCache,
+        kv_cache: StackedKvPageCache | ListCache[KvPageCache],
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
         unroll: bool = False,
-    ) -> tuple[jax.Array, StackedKvPageCache]:
+    ) -> tuple[jax.Array, StackedKvPageCache | ListCache[KvPageCache]]:
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Snowball decode requires matching flat token and position arrays")
         num_layers = len(self.transformer.blocks)
-        if kv_cache.kv_pages.axis_size(_CACHE_LAYER_AXIS) != num_layers:
+        cache_layers = (
+            len(kv_cache) if isinstance(kv_cache, ListCache) else kv_cache.kv_pages.axis_size(_CACHE_LAYER_AXIS)
+        )
+        if cache_layers != num_layers:
             raise ValueError("Snowball decode requires one KV cache per transformer layer")
         tokens = reshard(input_ids.array[:, None], P(_BATCH_AXES, None))
         hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())
         hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
         token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
-        cache_axes = kv_cache.kv_pages.axes[1:]
+        if isinstance(kv_cache, ListCache) and unroll:
+            layers = []
+            for layer_index, (block, cache) in enumerate(zip(self.transformer.blocks, kv_cache, strict=True)):
+                use_long = _is_long_attention_layer(layer_index, num_layers)
+                hidden, cache = self._inference_block(block).decode(
+                    hidden, cache, batch_info, pos_ids.array, use_long, token_valid
+                )
+                layers.append(cache)
+            return self.transformer.final_gated_norm(self.transformer.final_norm(hidden)), ListCache(tuple(layers))
+
+        split_cache = isinstance(kv_cache, ListCache)
+        stacked_cache = _stack_layer_cache(kv_cache) if isinstance(kv_cache, ListCache) else kv_cache
+        cache_axes = stacked_cache.kv_pages.axes[1:]
 
         def layer_step(carry, layer_data):
             x, pages = carry
@@ -1195,7 +1217,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             pages = jax.lax.dynamic_update_index_in_dim(pages, cache.kv_pages.array, layer, axis=0)
             return (x, pages), None
 
-        initial = (hidden, kv_cache.kv_pages.array)
+        initial = (hidden, stacked_cache.kv_pages.array)
         if unroll:
             state = initial
             for layer_index, block in enumerate(self.transformer.blocks):
@@ -1211,8 +1233,8 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             )
             (hidden, cache_pages), _ = jax.lax.scan(layer_step, initial, layer_data)
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
-        caches = StackedKvPageCache(hax.named(cache_pages, kv_cache.kv_pages.axes))
-        return hidden, caches
+        caches = StackedKvPageCache(hax.named(cache_pages, stacked_cache.kv_pages.axes))
+        return hidden, _split_layer_cache(caches) if split_cache else caches
 
     def _inference_block(self, block: SnowballBlock) -> SnowballBlock:
         expert_size = _mesh_axis_size(_current_mesh(), "expert")
@@ -1230,6 +1252,23 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "SnowballLMHeadModel":
         new_tf = snowball_from_state_dict(self.transformer, state_dict, prefix=prefix)
         return dataclasses.replace(self, transformer=new_tf)
+
+
+def _split_layer_cache(cache: StackedKvPageCache) -> ListCache[KvPageCache]:
+    pages = cache.kv_pages
+    layer_sharding = P(*_STACKED_CACHE_SHARDING[1:])
+    return ListCache(
+        tuple(
+            KvPageCache(hax.named(reshard(layer, layer_sharding), pages.axes[1:]))
+            for layer in jnp.unstack(pages.array, axis=0)
+        )
+    )
+
+
+def _stack_layer_cache(caches: ListCache[KvPageCache]) -> StackedKvPageCache:
+    layer = Axis(_CACHE_LAYER_AXIS, len(caches))
+    pages = hax.stack(layer, [cache.kv_pages for cache in caches])
+    return StackedKvPageCache(hax.named(reshard(pages.array, _STACKED_CACHE_SHARDING), pages.axes))
 
 
 def _resize_axis(arr: jax.Array, axis: int, new_size: int, std: float, key) -> jax.Array:
