@@ -67,6 +67,7 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 
 from levanter.kernels.logsumexp import batch_invariant_logsumexp

@@ -1387,7 +1387,7 @@ def test_snowball_fixed_projection_scores_and_differentiates():
         selected = np.take_along_axis(host_logits[:, :-1], targets, axis=-1).squeeze(-1)
         expected = np.logaddexp.reduce(host_logits[:, :-1], axis=-1) - selected
         np.testing.assert_allclose(np.asarray(loss.array)[:, :-1], np.asarray(expected), atol=2e-6, rtol=0)
-        _, grad = jax.jit(jax.value_and_grad(lambda m: m.compute_next_token_loss(example)))(model)
+        _, grad = jax.jit(jax.value_and_grad(lambda m: m.compute_next_token_loss(example).array))(model)
         gate_grad = np.asarray(grad.transformer.blocks[0].attn.attn_gate)
         assert np.isfinite(gate_grad).all() and np.any(gate_grad != 0)
 
