@@ -1295,6 +1295,7 @@ class InferenceEngine:
         *,
         on_complete: Callable[[int, GenerationResult], None],
         poll_requests: Callable[[int], Sequence[Request]] | None = None,
+        on_tokens: Callable[[int, int, list[int]], None] | None = None,
         step_callback: Callable[[int], None] | None = None,
         capture_routes: bool = False,
     ) -> None:
@@ -1303,6 +1304,7 @@ class InferenceEngine:
         The nonblocking poll receives free sequence capacity. It returns requests
         with unique IDs and at most that many choices in total. When no work
         remains, the loop returns and the caller can wait for another request.
+        The token callback receives the request ID, choice, and new tokens in order.
         """
         if not requests:
             return
@@ -1367,7 +1369,7 @@ class InferenceEngine:
             if pending and self.free_slots:
                 prefill_outputs = self._prefill_batch(pending, capture_routes)
                 if prefill_outputs is not None:
-                    self._extract_outputs(prefill_outputs, route_chunks)
+                    self._extract_outputs(prefill_outputs, route_chunks, on_tokens)
                     pending = [request for request in pending if request.request_id not in self.sequences]
                     publish_finished()
                     if poll_requests is None or not self.local_map:
@@ -1384,7 +1386,7 @@ class InferenceEngine:
                 self.config.max_rounds,
                 capture_routes,
             )
-            generated = self._extract_outputs(outputs, route_chunks)
+            generated = self._extract_outputs(outputs, route_chunks, on_tokens)
             publish_finished()
             logger.debug("Decode iteration generated %d tokens in %.3fs", generated, time.monotonic() - started)
             decode_iteration += 1
@@ -1479,6 +1481,7 @@ class InferenceEngine:
         self,
         pending_outputs: _DecodeOutputs | None,
         route_chunks: dict[tuple[int, int], list[tuple[np.ndarray, np.ndarray]]] | None = None,
+        on_tokens: Callable[[int, int, list[int]], None] | None = None,
     ) -> int:
         """Append newly available tokens into outputs per (request_id, child_id).
 
@@ -1503,6 +1506,7 @@ class InferenceEngine:
         toks_arr = pending_outputs.tokens.array
         sids_arr = pending_outputs.slot_ids.array
 
+        token_updates: dict[tuple[int, int], list[int]] = {}
         appended = 0
         unmapped = 0
         for i in range(n):
@@ -1515,10 +1519,16 @@ class InferenceEngine:
             rid, cid = info
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
             dr.token_list.append(tok)
+            if on_tokens is not None:
+                token_updates.setdefault(info, []).append(tok)
             if pending_outputs.logprobs is not None:
                 dr.logprobs.append(float(pending_outputs.logprobs.array[i]))
             dr.tokens_decoded += 1
             appended += 1
+
+        if on_tokens is not None:
+            for (request_id, choice), tokens in token_updates.items():
+                on_tokens(request_id, choice, tokens)
 
         # Finish outputs before releasing slots, so a new request can reuse them.
         released_slots = []

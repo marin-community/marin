@@ -17,6 +17,7 @@ Usage:
 import contextlib
 import dataclasses
 import functools
+from collections.abc import Callable
 import json
 import logging
 import os
@@ -40,6 +41,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.factory import filesystem, open_url
 from tokenizers import Encoding as HfEncoding
 from tokenizers import Tokenizer as HfBaseTokenizer
+from tokenizers.decoders import DecodeStream
 
 logger = logging.getLogger(__name__)
 
@@ -639,6 +641,11 @@ class HfMarinTokenizer:
 
     def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
         return self._tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
+
+    def streaming_decoder(self) -> Callable[[list[int]], str | None]:
+        """Create a decoder that delays incomplete byte sequences between token batches."""
+        stream = DecodeStream(skip_special_tokens=True)
+        return functools.partial(stream.step, self._tokenizer)
 
     def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]:
         # Copy strings to release references to potentially large source buffers,
