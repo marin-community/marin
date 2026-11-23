@@ -17,16 +17,22 @@ import jax
 import jax.numpy as jnp
 import jmp
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
-from levanter.inference.engine import InferenceEngineConfig, Request
+from levanter.inference.engine import Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
-from levanter.inference.snowball_loading import load_snowball_serving_model
-from levanter.layers.sampler import LogprobMode
 from levanter.models.snowball import SnowballConfig
 from levanter.tokenizers import load_tokenizer
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+from marin.inference.config import SNOWBALL_AGENTX_EXPERT_SHARDS
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
+from marin.inference.snowball_agentx import (
+    AGENTX_BATCH_TIMEOUT,
+    AGENTX_CONTEXT,
+    agentx_engine_config,
+    load_agentx_model,
+    require_agentx_devices,
+)
 
 from experiments.evaluation.knotmeter.artifacts import PROFILE_EXPORT_RELATIVE_PATH, read_record
 from experiments.evaluation.knotmeter.processes import run_logged
@@ -34,9 +40,6 @@ from experiments.evaluation.knotmeter.recipe import SERIES_PATH, benchmark_comma
 from experiments.evaluation.knotmeter.workload import check_native_cache, restore_workload
 
 logger = logging.getLogger(__name__)
-_TPU_CHIPS = 4
-_PREFILL_BUCKETS = (256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 49152)
-_DECODE_BUCKETS = (4, 8, 16)
 
 
 def _request(tokens: list[int], request_id: int, generated: int) -> Request:
@@ -51,8 +54,11 @@ def _warmup(server: InferenceServer, capture_routes: bool) -> None:
     with ctx.model_lock, ctx.config.trainer.use_device_mesh(), hax.axis_mapping(ctx.config.trainer.compute_axis_mapping):
         ctx.engine.generate([_request([filler], 0, 2)], capture_routes=capture_routes)
         for index, lower in enumerate(config.prefill_bucket_sizes):
-            prompt = [index, *([filler] * lower)]
-            ctx.engine.generate([_request(prompt, 0, 1)], capture_routes=capture_routes)
+            length = lower + 1 if lower < config.prefill_bucket_sizes[-1] else config.max_seq_len - 1
+            prompt = [index, *([filler] * (length - 1))]
+            result = ctx.engine.generate([_request(prompt, 0, 1)], capture_routes=capture_routes)
+            if result.total_generated != 1:
+                raise RuntimeError(f"Expected one token after a {length}-token AgentX probe prompt")
         for lower in config.decode_bucket_sizes:
             requests = [_request([filler], i, 2) for i in range(lower + 1)]
             ctx.engine.generate(requests, capture_routes=capture_routes)
@@ -64,43 +70,35 @@ def main() -> None:
     parser.add_argument("--weights", required=True)
     parser.add_argument("--workload", required=True)
     parser.add_argument("--concurrency", type=int, default=128)
-    parser.add_argument("--max-rounds", type=int, default=8)
+    parser.add_argument("--max-rounds", type=int, default=None)
     parser.add_argument("--capture-routes", action="store_true")
     args = parser.parse_args()
-    if args.concurrency < 1:
-        parser.error("concurrency must be positive")
-    devices = jax.devices()
-    if len(devices) != _TPU_CHIPS or any(device.device_kind != "TPU v5" for device in devices):
-        raise RuntimeError(f"Expected four v5p chips, got {devices}")
+    require_agentx_devices()
+    config = (
+        agentx_engine_config(args.concurrency)
+        if args.max_rounds is None
+        else agentx_engine_config(args.concurrency, max_rounds=args.max_rounds)
+    )
     logging.basicConfig(level=logging.INFO)
     series = load_series()
+    if series["max_context"] != AGENTX_CONTEXT:
+        raise ValueError("The workload context does not match the native AgentX profile")
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     output.mkdir(parents=True, exist_ok=True)
     receipt = read_record(args.workload)
-    config = InferenceEngineConfig(
-        max_seq_len=series["max_context"],
-        max_seqs=args.concurrency,
-        max_pages=49152,
-        window_cache_max_pages=5120,
-        window_cache_retained_spans=2,
-        max_retained_prompts=512,
-        max_queued_tokens=max(32, args.concurrency),
-        max_seqs_in_prefill=min(4, args.concurrency),
-        max_prefill_size=series["max_context"],
-        max_rounds=args.max_rounds,
-        max_tokens_per_round=32,
-        prefill_bucket_sizes=_PREFILL_BUCKETS,
-        decode_bucket_sizes=tuple(size for size in _DECODE_BUCKETS if size < args.concurrency),
-        compute_dtype=jnp.bfloat16,
-        logprob_mode=LogprobMode.POLICY,
-    )
     trainer = TrainerConfig(
         mp=jmp.get_policy("p=bf16,c=bf16"),
-        mesh=MeshConfig(axes={"replica": 1, "data": 1, "model": 1, "expert": _TPU_CHIPS, "context": 1}),
+        mesh=MeshConfig(
+            axes={"replica": 1, "data": 1, "model": 1, "expert": SNOWBALL_AGENTX_EXPERT_SHARDS, "context": 1}
+        ),
         use_explicit_mesh_axes=True,
     )
     server_config = InferenceServerConfig(
-        trainer=trainer, model_name=series["model"], service=config, batch_timeout=0.001, initial_policy_id=args.weights
+        trainer=trainer,
+        model_name=series["model"],
+        service=config,
+        batch_timeout=AGENTX_BATCH_TIMEOUT,
+        initial_policy_id=args.weights,
     )
     with tempfile.TemporaryDirectory(prefix="snowball-agentx-") as directory:
         bundle = Path(directory) / "bundle"
@@ -117,16 +115,7 @@ def main() -> None:
         tokenizer = load_tokenizer(str(snapshot))
         started = time.monotonic()
         with trainer.use_device_mesh():
-            model = load_snowball_serving_model(
-                converter,
-                ref,
-                model_config,
-                dtype=trainer.mp.compute_dtype,
-                axis_mapping=trainer.parameter_axis_mapping,
-                pack_expert_weights=True,
-            )
-            model = model.with_paged_attention("tpu_v3").with_split_decode_cache()
-            model = model.with_expert_sharded_kv().with_selected_ep_decode()
+            model = load_agentx_model(converter, ref, model_config, trainer.parameter_axis_mapping)
             server = InferenceServer.create(server_config, model, tokenizer)
         logger.info("Loaded Snowball and KV in %.1f seconds", time.monotonic() - started)
         try:
@@ -145,7 +134,7 @@ def main() -> None:
                     "weights": args.weights,
                     "workload_uri": args.workload,
                     "workload_sha256": receipt["archive_sha256"],
-                    "devices": [device.device_kind for device in devices],
+                    "devices": [device.device_kind for device in jax.devices()],
                     "concurrency": args.concurrency,
                     "capture_routes": args.capture_routes,
                     "rounds": config.max_rounds,
