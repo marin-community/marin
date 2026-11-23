@@ -131,8 +131,9 @@ def _parse_reference(text: str) -> tuple[list, bool]:
 
     try:
         parsed = parse_whole()
-    except Exception:
-        return [], strip_units
+    except Exception as error:
+        # latex2sympy reports syntax errors as bare Exception.
+        raise InvalidTask(f"math-verify cannot parse expected {text!r}") from error
     return ([parsed] if parsed is not None else []), strip_units
 
 
