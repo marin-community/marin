@@ -359,7 +359,7 @@ def write_outputs(output: StoragePath, records: list[BuildRecord], package: str,
     }
     binding_path = directory / "image-bindings.json"
     binding_path.write_text(json.dumps(bindings, indent=1) + "\n")
-    binding_path.parent.mkdir(parents=True, exist_ok=True)
+    directory.mkdirs(exist_ok=True)
     return binding_path
 
 
