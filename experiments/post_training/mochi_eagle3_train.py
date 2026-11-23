@@ -9,12 +9,14 @@ import logging
 import shutil
 import tempfile
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorTrainingConfig
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.filesystem.transfer import copy_plan, execute_copies
 from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
@@ -28,6 +30,7 @@ from skyrl_train.io import io
 from experiments.post_training.mochi_eagle3 import STOP_TOKEN_IDS, TARGET_IDENTITY, initialize_draft, worker_spec
 
 logger = logging.getLogger(__name__)
+ARTIFACT_PROGRESS_INTERVAL = 128
 
 
 @dataclass(frozen=True)
@@ -37,10 +40,23 @@ class PreparedDraftTraining:
     fold: dict
 
 
+def copy_training_artifacts(source: str, destination: str, workers: int) -> None:
+    """Stream a capture tree with bounded per-file buffers through fsutil's copy APIs."""
+    plan = copy_plan((source,), destination, recursive=True, no_clobber=False)
+    for directory in plan.directories:
+        directory.destination.filesystem.makedirs(directory.destination.path, exist_ok=True)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for completed, _ in enumerate(pool.map(execute_copies, ((action,) for action in plan.copies)), start=1):
+            if completed % ARTIFACT_PROGRESS_INTERVAL == 0 or completed == len(plan.copies):
+                logger.info(
+                    "Copied %d/%d training artifacts: %s -> %s", completed, len(plan.copies), source, destination
+                )
+
+
 def prepare_training_capture(spec: dict, directory: Path) -> PreparedDraftTraining:
     """Bind immutable captured features to a vocabulary selected from the training fold."""
     captures = directory / "ranks"
-    io.download_directory(spec["captures"], str(captures))
+    copy_training_artifacts(spec["captures"], str(captures), spec["artifact_workers"])
     merged = directory / "training-capture"
     manifest = merge_online_eagle_captures(
         captures,
@@ -102,7 +118,7 @@ def prepare_training_capture(spec: dict, directory: Path) -> PreparedDraftTraini
     }
     (merged / "mochi-training-fold.json").write_text(json.dumps(split, indent=2))
     io.upload_directory(str(seed), split["initial_draft"])
-    io.upload_directory(str(merged), prefix_join(spec["output"], "training-capture"))
+    copy_training_artifacts(str(merged), prefix_join(spec["output"], "training-capture"), spec["artifact_workers"])
     job = OnlineEagleTrainingJob(
         step=1,
         capture_dir=str(merged),
