@@ -445,12 +445,13 @@ class MiniSweAgent(BaseInstalledAgent):
         return match.group(1) if match else stdout.strip()
 
     async def install(self, environment: BaseEnvironment) -> None:
-        # Install curl and git only when missing: end-of-life base images (such as
-        # Debian bullseye) can fail package downloads that the agent does not need.
+        # Install packages only when bash, curl or git is missing: end-of-life base images
+        # (such as Debian bullseye) can fail package downloads that the agent does not need.
         await self.exec_as_root(
             environment,
             command=(
-                "if command -v curl &>/dev/null && command -v git &>/dev/null; then"
+                "if command -v bash &>/dev/null && command -v curl &>/dev/null"
+                " && command -v git &>/dev/null; then"
                 "  true;"
                 " elif command -v apt-get &>/dev/null; then"
                 "  apt-get update && apt-get install -y curl build-essential git;"
