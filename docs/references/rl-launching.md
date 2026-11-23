@@ -50,7 +50,7 @@ Each execution declares its required names in `required_env_vars`. The launcher
 checks the union across the graph before submission and reports all absent or
 empty names in one error, without their values. Long-loop RL recipes require
 `DAYTONA_RL_API_KEY`, `DAYTONA_EVAL_API_KEY`, `DAYTONA_TARGET`, `MARIN_PREFIX`,
-`MARIN_TEMP_PREFIX`, and their declared judge key, such as `TOGETHER_API_KEY`.
+`MARIN_TEMP_PREFIX`, `HF_TOKEN`, and their declared judge key, such as `TOGETHER_API_KEY`.
 The US Daytona recipe uses `DAYTONA_TARGET=us`; resolve its separate RL and EVAL
 keys through the [Daytona credential procedure](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md).
 Iris forwards available HF/W&B/CoreWeave credentials and the current application-secret
