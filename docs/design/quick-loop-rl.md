@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 2:30 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 2:40 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2075,6 +2075,14 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   [Running native matched arm][iris-held-native-matched-current] ·
   [Verified 40-rank startup][held-native-matched-current-startup]
 
+  The conventional vLLM launch receipt records the configuration before
+  driver validation. The native direct-root receipt already includes
+  derived driver fields. Replaying validation confirmed the two actual
+  workers used the same model, train and evaluation data, and resolved
+  learner settings. Both original logs confirm four RLOO-N samples, at
+  least two eligible samples, and a 16,896-token request limit.
+  [Effective workload parity proof][held-native-matched-current-config]
+
   A CPU probe ran the normal step-end callback with one and two native
   learner processes, local storage and a local Ray dispatch adapter. It
   restored exact learner state and the next prompt selection from the
@@ -2366,6 +2374,7 @@ arms. [Prior timing comparison][timing]
 [held-native-direct-operator]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-first-attempt-7de5313.tar.gz
 [iris-held-native-matched-current]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-7de5313-in-424011b4-2026.11.23.2-a7416ff4d7c8
 [held-native-matched-current-startup]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-startup-proof.tar.zst
+[held-native-matched-current-config]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-effective-workload.tar.zst
 [held-native-continuation]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-direct-same-artifact-rehearsal.tar.zst
 [held-native-step-one-operator]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-same-run-latest-7de5313.tar.gz
 [held-native-pair-acceptance]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-held-pair-acceptance-proof.tar.zst
