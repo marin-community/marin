@@ -338,7 +338,7 @@ _AGENTIC_PATCH = RecipePatch(
 _TRAIN_LONG_AGENTIC = agentic_preset(
     replace(
         _TRAIN_LONG.with_updates(10_000),
-        revision="2026.11.20.5",
+        revision="2026.11.23.1",
         recipe=replace(_TRAIN_LONG.recipe, layout=_AGENTIC_LAYOUT),
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
@@ -482,7 +482,7 @@ _PRESETS = (
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",
-        revision="2026.11.20.7",
+        revision="2026.11.23.1",
         harbor=HARBOR_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
     ),
