@@ -1,10 +1,25 @@
 {
-  "FWeindel:validated-tasks/mimo_v1": {
-    "source_id": "FWeindel:validated-tasks/mimo_v1",
+  "FWeindel:validated-tasks/mimo_v1": {    "source_id": "FWeindel:validated-tasks/mimo_v1",
     "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
     "task_specs_sha256": "68eb433d8678142985976688d4bdbdceb5b9bbf3b4170c752f5dd92c97d880a5",
     "reason": "CONSUMER_EXECUTION_UNSUPPORTED",
     "status": "Pending",
     "user_ruling": "Coordinator ruling 2026-11-23 (r39): MiMo stays Pending and is not admitted in r39; it ships with the six admitted sources. Basis: the frozen-population backend survey receipt s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json (sha256 c6c67d44eec1f02c3e881d1dc3a7f3c3a2717ce32cd2e10217175ca358b1b277, git revision 4689abce0ed241fe31b57d585db3308a3f62d365, basis converted_spec_census) measured every production backend unsupported on all 2,509 census tasks: 2,501 daytona-assigned tasks fail with 'Unresolved Docker build context must be built and pinned before execution', 8 tasks require the local backend, and the grader role is absent on all 2,509. The r39 catalog load blocked admission on exactly this finding. The consumer receipt staged beside this decision records the same frozen population (task_specs_sha256 68eb433d...) with the survey as its evidence. Repair plan (backend-repair dispatch, retyped under the r40 stage taxonomy after r39): (1) build and pin the grader Docker build contexts for the 2,501 daytona-assigned tasks; (2) reconcile the 8 local-only tasks with the daytona deployment tier; (3) declare the grader environment. Until the repair lands, the source queues as Admission pending."
+  },
+  "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified": {
+    "source_id": "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+    "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+    "task_specs_sha256": "66bfbacc22a65832ee3d84783c36f6d5705d221ce170991716c5dd53a25281cf",
+    "reason": "CONSUMER_EXECUTION_UNSUPPORTED",
+    "status": "Pending",
+    "user_ruling": "Coordinator ruling 2026-11-23 (r39, extension of the mimo ruling): SWE-Lego stays Pending and is not admitted in r39; it ships as metadata without admission. Basis: the frozen-population backend survey receipt s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json (sha256 c6c67d44eec1f02c3e881d1dc3a7f3c3a2717ce32cd2e10217175ca358b1b277, git revision 4689abce0ed241fe31b57d585db3308a3f62d365, basis converted_spec_census) measured every production backend unsupported on all 4,264 census tasks: all daytona-assigned with 'Unresolved Docker build context must be built and pinned before execution', grader role absent on all 4,264. The r39 catalog load blocked admission on exactly this finding. The source's existing consumer receipt (20261120 scoped consumer-runtime audit, same census binding) emits the matching typed finding (11 execution-unsupported tasks in the pinned consumer runtime) and is kept unchanged. Repair plan (backend-repair dispatch, retyped under the r40 stage taxonomy after r39): (1) build and pin the grader Docker build contexts for the 4,264 daytona-assigned tasks; (2) declare the grader environment. Until the repair lands, the source queues as Admission pending."
+  },
+  "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified": {
+    "source_id": "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
+    "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+    "task_specs_sha256": "6939018302a9e933b8e9aa97f8a0a332756144423ba7ff2da23499ff3d437843",
+    "reason": "CONSUMER_EXECUTION_UNSUPPORTED",
+    "status": "Pending",
+    "user_ruling": "Coordinator ruling 2026-11-23 (r39, extension of the mimo ruling): Scale-SWE stays Pending and is not admitted in r39; it ships as metadata without admission. Basis: the frozen-population backend survey receipt s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json (sha256 c6c67d44eec1f02c3e881d1dc3a7f3c3a2717ce32cd2e10217175ca358b1b277, git revision 4689abce0ed241fe31b57d585db3308a3f62d365, basis converted_spec_census) measured every production backend unsupported on all 1,929 census tasks: all daytona-assigned with 'Unresolved Docker build context must be built and pinned before execution', grader role absent on all 1,929. The r39 catalog load would block admission on exactly this finding. The source's prior consumer receipt (20261120 scoped consumer-runtime audit, same census binding, 0 failed in the pinned consumer sandbox) emitted no typed finding, so it is re-measured by the frozen backend survey: the receipt now records all 1,929 tasks execution-unsupported with the survey as evidence, and the prior measurement remains in the registry history and the audit artifact. Repair plan (backend-repair dispatch, retyped under the r40 stage taxonomy after r39): (1) build and pin the grader Docker build contexts for the 1,929 daytona-assigned tasks; (2) declare the grader environment. Until the repair lands, the source queues as Admission pending."
   }
 }
