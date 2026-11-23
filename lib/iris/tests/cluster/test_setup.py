@@ -207,6 +207,7 @@ printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
         bundle_id="bundle-id",
         controller_address=None,
         task_token=None,
+        container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
         environment=job_pb2.EnvironmentConfig(),
         constraints=(),
         ports=(),

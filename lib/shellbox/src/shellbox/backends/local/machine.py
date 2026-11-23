@@ -19,19 +19,21 @@ import re
 import resource
 import shutil
 import signal
+import socket
+import struct
 import sys
 import tarfile
 import tempfile
 from collections.abc import Awaitable, Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import cast
 
 from shellbox.backends.local import launch, nix
 from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, delegated_cgroup_parent
-from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
+from shellbox.backends.local.images import PreparedLocalImage, prepare_broker_runtime, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.backends.local.transfers import unpack_local_archive
 from shellbox.image import PreparedImage, RegistryImage, process_image_cache
@@ -117,10 +119,70 @@ ROOT_MODE = 0o755
 STICKY_WORLD_WRITABLE = 0o1777
 PROBE_TIMEOUT = 30
 NS_GET_USERNS = 0xB701
+IRIS_BUBBLEWRAP_PROFILE = "CONTAINER_PROFILE_BUBBLEWRAP"
+IRIS_PRIVILEGED_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
+BUBBLEWRAP_UID = 65534
+BUBBLEWRAP_GID = 65534
+BROKER_GUEST_SOCKET = "/.shellbox-broker"
+BROKER_GUEST_RUNTIME = "/.shellbox-runtime"
+
+
+def _broker_executable(name: str) -> list[str]:
+    return [
+        f"{BROKER_GUEST_RUNTIME}/ld-linux",
+        "--library-path",
+        f"{BROKER_GUEST_RUNTIME}/libdeps",
+        f"{BROKER_GUEST_RUNTIME}/bin/{name}",
+    ]
+
+
+@dataclass
+class _BrokeredKeeperArguments:
+    program: list[str]
+    substitutions: list[tuple[int, int, bool]]
+    sources: list[int]
+
+
+def _brokered_keeper_arguments(arguments: list[str]) -> _BrokeredKeeperArguments:
+    """Pin bwrap mount inputs so a peer keeper can resolve them inside its own root."""
+    program = [*_broker_executable("bwrap"), *arguments[1:]]
+    substitutions = []
+    sources = []
+    try:
+        for index, option in enumerate(program):
+            if option == "--info-fd":
+                substitutions.append((index + 1, 4, False))
+            elif option == "--block-fd":
+                substitutions.append((index + 1, 5, False))
+            elif option in ("--bind", "--ro-bind", "--ro-bind-try"):
+                try:
+                    descriptor = os.open(program[index + 1], os.O_PATH | os.O_CLOEXEC)
+                except FileNotFoundError:
+                    if option == "--ro-bind-try":
+                        continue
+                    raise
+                program[index] = "--bind-fd" if option == "--bind" else "--ro-bind-fd"
+                substitutions.append((index + 1, 6 + len(sources), False))
+                sources.append(descriptor)
+            elif option in ("--overlay-src", "--overlay"):
+                for offset in range(1, 3 if option == "--overlay" else 2):
+                    path = program[index + offset]
+                    descriptor = os.open(path, os.O_PATH | os.O_CLOEXEC)
+                    substitutions.append((index + offset, 6 + len(sources), True))
+                    sources.append(descriptor)
+    except BaseException:
+        for descriptor in sources:
+            os.close(descriptor)
+        raise
+    return _BrokeredKeeperArguments(program, substitutions, sources)
 
 
 class SandboxUnavailable(RuntimeError):
     """No bwrap executable can build a command sandbox on this host."""
+
+
+class ContainerProfileRequired(SandboxUnavailable):
+    """An Iris task needs a supported container profile for the local backend."""
 
 
 class SystemDirectories(StrEnum):
@@ -199,10 +261,18 @@ def _layer(layers: Path, directory: str) -> Path:
     return layers / directory.strip("/")
 
 
-def _prepare_layers(layers: Path) -> None:
+def _prepare_layers(layers: Path, bwrap_user: tuple[int, int] | None) -> None:
+    if bwrap_user is not None:
+        os.chown(layers, *bwrap_user)
     for directory in _overlaid_directories():
-        (_layer(layers, directory) / "upper").mkdir(parents=True)
-        (_layer(layers, directory) / "work").mkdir()
+        layer = _layer(layers, directory)
+        upper = layer / "upper"
+        work = layer / "work"
+        upper.mkdir(parents=True)
+        work.mkdir()
+        if bwrap_user is not None:
+            for path in (layer, upper, work):
+                os.chown(path, *bwrap_user)
 
 
 def _submounts(mountinfo: str, directories: Iterable[str]) -> tuple[str, ...]:
@@ -232,7 +302,7 @@ def _sandbox_argv(
     """The bwrap invocation that runs a program over ``root`` with the system directories and ``mounts``.
 
     The system directories are read-only, or, with ``layers``, overlaid by the machine's layer of each.
-    The program runs without capabilities; as root, bwrap needs no user namespace for its own.
+    The program runs without capabilities; a non-root bwrap uses a user namespace.
     """
     argv = [str(bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try"]
     if network == NetworkPolicy.DENY:
@@ -276,12 +346,18 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
 
 
 def _prepare_sandbox(
-    bwrap: Path, system_directories: SystemDirectories, mounts: tuple[Mount, ...], environment: dict[str, str]
+    bwrap: Path,
+    system_directories: SystemDirectories,
+    mounts: tuple[Mount, ...],
+    environment: dict[str, str],
+    bwrap_user: tuple[int, int] | None,
 ) -> str | None:
     """Return why namespace creation or command entry fails, or None when both work."""
 
     async def probe() -> str | None:
-        root, layers = _machine_directories(None, copy_on_write=system_directories is SystemDirectories.COPY_ON_WRITE)
+        root, layers = _machine_directories(
+            None, copy_on_write=system_directories is SystemDirectories.COPY_ON_WRITE, bwrap_user=bwrap_user
+        )
         machine = LocalMachine(
             MachineSpec(HostImage(), workdir="/"),
             bwrap=bwrap,
@@ -289,6 +365,7 @@ def _prepare_sandbox(
             layers=layers,
             mounts=mounts,
             environment=environment,
+            bwrap_user=bwrap_user,
         )
         try:
             try:
@@ -318,10 +395,11 @@ def _working_bwrap(
     system_directories: SystemDirectories,
     mounts: tuple[Mount, ...],
     environment: dict[str, str],
+    bwrap_user: tuple[int, int] | None,
 ) -> Path:
     errors = []
     for candidate in candidates:
-        error = _prepare_sandbox(candidate, system_directories, mounts, environment)
+        error = _prepare_sandbox(candidate, system_directories, mounts, environment, bwrap_user)
         if error is None:
             return candidate
         errors.append(f"{candidate}: {error}")
@@ -330,11 +408,43 @@ def _working_bwrap(
         if system_directories == SystemDirectories.COPY_ON_WRITE
         else ""
     )
-    raise SandboxUnavailable(
-        "No bwrap can sandbox commands on this host. A root process needs CAP_SYS_ADMIN, CAP_NET_ADMIN, no "
-        "AppArmor confinement and a seccomp filter that allows pivot_root; another user needs unprivileged "
-        "user namespaces. " + overlay + "; ".join(errors)
+    required = (
+        "Unprivileged user namespaces and AppArmor mount permission are required. "
+        if bwrap_user is not None
+        else "A root process needs CAP_SYS_ADMIN, CAP_NET_ADMIN, no AppArmor confinement and a seccomp filter "
+        "that allows pivot_root; another user needs unprivileged user namespaces. "
     )
+    raise SandboxUnavailable("No bwrap can sandbox commands on this host. " + required + overlay + "; ".join(errors))
+
+
+def _probe_image_broker(bwrap: Path, runtime: Path, identity: tuple[int, int]) -> None:
+    """Verify that the staged interpreter starts in an OCI-style root with no programs."""
+
+    async def probe() -> None:
+        root = Path(tempfile.mkdtemp(prefix="shellbox-image-probe-"))
+        os.chown(root, *identity)
+        image = PreparedLocalImage(root, {}, "/", (), (), None)
+        machine = LocalMachine(
+            MachineSpec(HostImage(), workdir="/"),
+            bwrap=bwrap,
+            root=root,
+            layers=None,
+            mounts=(),
+            environment=CONTROL_ENVIRONMENT,
+            image=image,
+            bwrap_user=identity,
+            broker_runtime=runtime,
+        )
+        try:
+            await machine._start_keeper()
+        finally:
+            await machine.close()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            executor.submit(asyncio.run, probe()).result()
+        except (OSError, RuntimeError, TimeoutError) as error:
+            raise SandboxUnavailable(f"Staged OCI bubblewrap broker cannot start: {error}") from error
 
 
 def _resource_limits() -> list[tuple[int, int]]:
@@ -346,9 +456,9 @@ def _resource_limits() -> list[tuple[int, int]]:
     ]
 
 
-def _command_account(user: str | None) -> pwd.struct_passwd | None:
-    """The host account a command switches to, or None to run as this process's user."""
-    uid = os.geteuid()
+def _command_account(user: str | None, sandbox_uid: int) -> pwd.struct_passwd | None:
+    """The host account a command switches to, or None to keep the sandbox identity."""
+    uid = sandbox_uid
     if user is None or user == str(uid):
         return None
     try:
@@ -362,8 +472,10 @@ def _command_account(user: str | None) -> pwd.struct_passwd | None:
     return account
 
 
-def _prepare_root(root: Path, workdir: PurePosixPath | None) -> None:
+def _prepare_root(root: Path, workdir: PurePosixPath | None, bwrap_user: tuple[int, int] | None) -> None:
     root.chmod(ROOT_MODE)
+    if bwrap_user is not None:
+        os.chown(root, *bwrap_user)
     for directory in (*PRIVATE_SYSTEM_DIRECTORIES, "/opt"):
         (root / directory.lstrip("/")).mkdir(parents=True)
     for configuration in RUNTIME_CONFIGURATION:
@@ -376,7 +488,10 @@ def _prepare_root(root: Path, workdir: PurePosixPath | None) -> None:
         path.mkdir(parents=True)
         path.chmod(STICKY_WORLD_WRITABLE)
     if workdir is not None:
-        (root / workdir.relative_to("/")).mkdir(parents=True, exist_ok=True)
+        path = root / workdir.relative_to("/")
+        path.mkdir(parents=True, exist_ok=True)
+        if bwrap_user is not None:
+            os.chown(path, *bwrap_user)
 
 
 def _archive(source: Path, name: str) -> bytes:
@@ -455,7 +570,7 @@ class LocalProcessScope:
 
 
 class LocalMachine:
-    """A persistent bubblewrap member, with commands entering pinned namespaces."""
+    """A persistent bubblewrap member with commands launched in its namespaces."""
 
     def __init__(
         self,
@@ -469,6 +584,9 @@ class LocalMachine:
         image: PreparedLocalImage | None = None,
         bundle: Path | None = None,
         cgroup_parent: Path | None = None,
+        bwrap_user: tuple[int, int] | None = None,
+        broker_runtime: Path | None = None,
+        broker_runtime_directory: tempfile.TemporaryDirectory[str] | None = None,
     ):
         self.spec = spec
         self.root = root
@@ -484,6 +602,10 @@ class LocalMachine:
         self._scopes: set[LocalProcessScope] = set()
         self._keeper_cgroup: MachineCgroup | None = None
         self._bwrap = bwrap
+        self._sandbox_identity = bwrap_user or (os.geteuid(), os.getegid())
+        self._drop_bwrap_privileges = bwrap_user is not None
+        self._broker_runtime = broker_runtime
+        self._broker_runtime_directory = broker_runtime_directory
         self._environment = environment
         self._closed = False
         self._closing: asyncio.Task[None] | None = None
@@ -491,6 +613,7 @@ class LocalMachine:
         self._keeper: asyncio.subprocess.Process | None = None
         self._keeper_pidfd: int | None = None
         self._init_pidfd: int | None = None
+        self._init_pid: int | None = None
         self._namespaces: tuple[int, ...] = ()
         self._owned_namespaces: tuple[int, ...] = ()
         self._network_namespaces: tuple[int, ...] = ()
@@ -549,12 +672,20 @@ class LocalMachine:
             ]
             if peer is None and self.spec.network is NetworkPolicy.DENY:
                 arguments.append("--unshare-net")
+        if self._broker_runtime is not None:
+            runtime_mount = self.root / BROKER_GUEST_RUNTIME.lstrip("/")
+            if runtime_mount.is_symlink():
+                raise UnsupportedMachineSpec(f"The local backend reserves {BROKER_GUEST_RUNTIME}")
+            runtime_mount.mkdir(exist_ok=True)
+            os.chown(runtime_mount, *self._sandbox_identity)
+            arguments += ["--ro-bind", str(self._broker_runtime), BROKER_GUEST_RUNTIME]
         # A new user namespace is needed for each independent mount namespace,
         # including members that inherit a peer's network namespace.
-        if os.geteuid() != 0 and "--unshare-user" not in arguments:
+        bwrap_uid, bwrap_gid = self._sandbox_identity
+        if bwrap_uid != 0 and "--unshare-user" not in arguments:
             arguments.insert(1, "--unshare-user")
-        if self.image is None and os.geteuid() != 0:
-            arguments[1:1] = ["--uid", str(os.geteuid()), "--gid", str(os.getegid())]
+        if self.image is None and bwrap_uid != 0:
+            arguments[1:1] = ["--uid", str(bwrap_uid), "--gid", str(bwrap_gid)]
         block_read, block_write = os.pipe()
         allocation = asyncio.create_task(self._allocate_keeper(arguments, peer, block_read, block_write))
         try:
@@ -578,6 +709,8 @@ class LocalMachine:
                     self._keeper.stdin.close()
                 os.close(block_read)
                 os.close(block_write)
+            if self._drop_bwrap_privileges:
+                await self._wait_broker_ready()
         except BaseException:
             await asyncio.shield(self._close_local())
             raise
@@ -585,10 +718,44 @@ class LocalMachine:
         self._watcher = asyncio.create_task(self._watch_keeper(os.dup(self._keeper_pidfd)))
         self._watcher.add_done_callback(_log_task_failure)
 
+    async def _wait_broker_ready(self) -> None:
+        assert self._init_pid is not None
+        path = str(self.root / BROKER_GUEST_SOCKET.lstrip("/"))
+        async with asyncio.timeout(PROBE_TIMEOUT):
+            while True:
+                try:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as connection:
+                        connection.connect(path)
+                        pid, _, _ = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                        if pid != self._init_pid:
+                            raise SandboxUnavailable("Bubblewrap broker identity changed during startup")
+                        return
+                except (FileNotFoundError, ConnectionRefusedError) as error:
+                    if self._keeper is not None and self._keeper.returncode is not None:
+                        assert self._keeper.stderr is not None
+                        stderr = (await self._keeper.stderr.read()).decode(errors="replace")
+                        raise SandboxUnavailable(f"Persistent bubblewrap broker failed: {stderr.strip()}") from error
+                    await asyncio.sleep(0.01)
+
     async def _allocate_keeper(
         self, arguments: list[str], peer: "LocalMachine | None", block_read: int, block_write: int
     ) -> None:
-        with tempfile.TemporaryFile() as information:
+        with tempfile.TemporaryFile() as information, tempfile.TemporaryFile() as host_information:
+            if self._drop_bwrap_privileges:
+                if self._broker_runtime is not None:
+                    interpreter = _broker_executable("python3")
+                else:
+                    host_python = shutil.which("python3", path=DEFAULT_PATH)
+                    if host_python is None:
+                        raise SandboxUnavailable("The BUBBLEWRAP broker requires Python in the host system directories")
+                    interpreter = [host_python]
+                program = [*interpreter, "-I", "-S", "-c", LAUNCH_SOURCE, "--broker", BROKER_GUEST_SOCKET]
+            else:
+                program = [
+                    "/bin/sh",
+                    "-c",
+                    'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
+                ]
             arguments += [
                 "--block-fd",
                 str(block_read),
@@ -598,34 +765,71 @@ class LocalMachine:
                 "--setenv",
                 "PATH",
                 self._environment["PATH"],
-                "/bin/sh",
-                "-c",
-                'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
+                *program,
             ]
             prefix = () if peer is None else peer._network_namespaces
-            config = {
-                "namespaces": prefix,
-                "program": arguments,
-                "cgroup": None if self._keeper_cgroup is None else str(self._keeper_cgroup.path / "cgroup.procs"),
-            }
-            with tempfile.TemporaryFile() as configuration:
-                configuration.write(json.dumps(config).encode())
-                configuration.seek(0)
-                self._keeper = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-I",
-                    "-S",
-                    "-c",
-                    LAUNCH_SOURCE,
-                    str(configuration.fileno()),
-                    pass_fds=(configuration.fileno(), information.fileno(), block_read, *prefix),
-                    env=CONTROL_ENVIRONMENT,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.PIPE,
-                    start_new_session=True,
-                )
-                self._keeper_pidfd = os.pidfd_open(self._keeper.pid)
+            membership = None if self._keeper_cgroup is None else str(self._keeper_cgroup.path / "cgroup.procs")
+            source_fds: list[int] = []
+            if peer is not None and self._drop_bwrap_privileges:
+                assert peer._init_pid is not None
+                brokered = _brokered_keeper_arguments(arguments)
+                source_fds = brokered.sources
+                config = {
+                    "broker": str(peer.root / BROKER_GUEST_SOCKET.lstrip("/")),
+                    "broker_pid": peer._init_pid,
+                    "program": brokered.program,
+                    "program_fds": brokered.substitutions,
+                    "environment": CONTROL_ENVIRONMENT,
+                    "cgroup": membership,
+                }
+            else:
+                config = {
+                    "namespaces": prefix,
+                    "program": arguments,
+                    "program_user": self._sandbox_identity if self._drop_bwrap_privileges else None,
+                    "cgroup": membership,
+                }
+            try:
+                with tempfile.TemporaryFile() as configuration:
+                    configuration.write(json.dumps(config).encode())
+                    configuration.seek(0)
+                    if peer is not None and self._drop_bwrap_privileges:
+                        launcher = (
+                            "--relay",
+                            str(configuration.fileno()),
+                            str(host_information.fileno()),
+                            str(information.fileno()),
+                            str(block_read),
+                            *map(str, source_fds),
+                        )
+                        passed = (
+                            configuration.fileno(),
+                            host_information.fileno(),
+                            information.fileno(),
+                            block_read,
+                            *source_fds,
+                        )
+                    else:
+                        launcher = (str(configuration.fileno()),)
+                        passed = (configuration.fileno(), information.fileno(), block_read, *prefix)
+                    self._keeper = await asyncio.create_subprocess_exec(
+                        sys.executable,
+                        "-I",
+                        "-S",
+                        "-c",
+                        LAUNCH_SOURCE,
+                        *launcher,
+                        pass_fds=passed,
+                        env=CONTROL_ENVIRONMENT,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.PIPE,
+                        start_new_session=True,
+                    )
+                    self._keeper_pidfd = os.pidfd_open(self._keeper.pid)
+            finally:
+                for descriptor in source_fds:
+                    os.close(descriptor)
             async with asyncio.timeout(PROBE_TIMEOUT):
                 while True:
                     # The inherited file description shares bwrap's write
@@ -634,15 +838,25 @@ class LocalMachine:
                     if payload:
                         try:
                             status = json.loads(payload)
-                            pid = status["child-pid"]
+                            if peer is not None and self._drop_bwrap_privileges:
+                                host_pid = os.pread(
+                                    host_information.fileno(), os.fstat(host_information.fileno()).st_size, 0
+                                )
+                                if not host_pid:
+                                    await asyncio.sleep(0.01)
+                                    continue
+                                pid = int(host_pid)
+                            else:
+                                pid = status["child-pid"]
                             if self._init_pidfd is None:
                                 self._init_pidfd = _pin_init(pid, status["pid-namespace"])
+                                self._init_pid = pid
                             # info-fd is written before bwrap finishes mounting
                             # and pivoting. Pinning root earlier would capture
                             # the host root rather than the guest root.
                             expected = self.root.stat()
                             actual = os.stat(f"/proc/{pid}/root")
-                            expected_uid = 0 if self.image is not None else os.geteuid()
+                            expected_uid = 0 if self.image is not None else self._sandbox_identity[0]
                             mapped = Path(f"/proc/{pid}/uid_map").read_text().splitlines()
                             final_user = any(int(row.split()[0]) == expected_uid for row in mapped)
                             if final_user and (actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino):
@@ -731,14 +945,20 @@ class LocalMachine:
                     configuration.write(json.dumps(config).encode())
                     configuration.seek(0)
                     assert self._root_fd is not None
+                    launcher = (
+                        ("--relay", str(configuration.fileno()))
+                        if self._drop_bwrap_privileges
+                        else (str(configuration.fileno()),)
+                    )
+                    private_fds = () if self._drop_bwrap_privileges else (self._root_fd, *self._namespaces)
                     process = await asyncio.create_subprocess_exec(
                         sys.executable,
                         "-I",
                         "-S",
                         "-c",
                         LAUNCH_SOURCE,
-                        str(configuration.fileno()),
-                        pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
+                        *launcher,
+                        pass_fds=(configuration.fileno(), *dict.fromkeys(private_fds)),
                         env=CONTROL_ENVIRONMENT,
                         stdin=asyncio.subprocess.PIPE,
                         stdout=asyncio.subprocess.PIPE,
@@ -809,11 +1029,11 @@ class LocalMachine:
                 raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
             account = None
         else:
-            selected = _command_account(command.user)
+            selected = _command_account(command.user, self._sandbox_identity[0])
             account = None if selected is None else (selected.pw_uid, selected.pw_gid)
         config = {
-            "namespaces": self._namespaces,
-            "root": self._root_fd,
+            "namespaces": () if self._drop_bwrap_privileges else self._namespaces,
+            "root": None if self._drop_bwrap_privileges else self._root_fd,
             "limits": _resource_limits(),
             "account": account,
             "script": RUN_SCRIPT,
@@ -822,6 +1042,10 @@ class LocalMachine:
             "environment": environment,
             "cgroup": None,
         }
+        if self._drop_bwrap_privileges:
+            assert self._init_pid is not None
+            config["broker"] = str(self.root / BROKER_GUEST_SOCKET.lstrip("/"))
+            config["broker_pid"] = self._init_pid
         if any("\0" in argument for argument in (*command.argv, *environment, *environment.values())):
             raise ValueError("Sandbox arguments cannot contain NUL bytes")
         return config
@@ -902,6 +1126,12 @@ class LocalMachine:
             config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
             configuration.write(json.dumps(config).encode())
             configuration.seek(0)
+            launcher = (
+                ("--relay", str(configuration.fileno()))
+                if self._drop_bwrap_privileges
+                else (str(configuration.fileno()),)
+            )
+            private_fds = () if self._drop_bwrap_privileges else (self._root_fd, *self._namespaces)
             acquisition = asyncio.create_task(
                 asyncio.create_subprocess_exec(
                     sys.executable,
@@ -909,8 +1139,8 @@ class LocalMachine:
                     "-S",
                     "-c",
                     LAUNCH_SOURCE,
-                    str(configuration.fileno()),
-                    pass_fds=(configuration.fileno(), status_write, self._root_fd, *dict.fromkeys(self._namespaces)),
+                    *launcher,
+                    pass_fds=(configuration.fileno(), status_write, *dict.fromkeys(private_fds)),
                     env=CONTROL_ENVIRONMENT,
                     stdin=stdin_file,
                     stdout=stdout_file,
@@ -1181,6 +1411,20 @@ class LocalMachineFactory:
         umoci: Path = Path("umoci"),
         cgroup_parent: Path | None = None,
     ):
+        bwrap_user = None
+        if "IRIS_TASK_ID" in os.environ:
+            # Existing Iris task code constructs this factory directly. The stamped profile
+            # is its admission signal; Iris remains an optional Shellbox dependency.
+            from iris.cluster.runtime.env import IRIS_CONTAINER_PROFILE_ENV  # noqa: PLC0415
+
+            profile = os.environ.get(IRIS_CONTAINER_PROFILE_ENV)
+            if profile not in (IRIS_BUBBLEWRAP_PROFILE, IRIS_PRIVILEGED_PROFILE):
+                raise ContainerProfileRequired(
+                    f"LocalMachineFactory in an Iris task requires {IRIS_BUBBLEWRAP_PROFILE} or "
+                    f"{IRIS_PRIVILEGED_PROFILE}"
+                )
+            if profile == IRIS_BUBBLEWRAP_PROFILE:
+                bwrap_user = (BUBBLEWRAP_UID, BUBBLEWRAP_GID) if os.geteuid() == 0 else (os.geteuid(), os.getegid())
         if ttl is not None and ttl <= 0:
             raise ValueError("Local machine TTL must be positive")
         self.ttl = ttl
@@ -1198,13 +1442,28 @@ class LocalMachineFactory:
         self.package_cache = package_cache if package_cache is not None else Path.home() / ".cache/shellbox/python"
         self.python_version = python_version
         self.system_directories = system_directories
+        self._bwrap_user = bwrap_user
         candidates = _bwrap_candidates(bwrap)
         self._system_mounts, self._system_bin_dirs = nix.system_programs()
         environment = {
             **CONTROL_ENVIRONMENT,
             "PATH": os.pathsep.join((DEFAULT_PATH, *map(str, self._system_bin_dirs))),
         }
-        self.bwrap = _working_bwrap(candidates, system_directories, self._system_mounts, environment)
+        self.bwrap = _working_bwrap(candidates, system_directories, self._system_mounts, environment, bwrap_user)
+        self._broker_runtime_directory: tempfile.TemporaryDirectory[str] | None = None
+        self._broker_runtime: Path | None = None
+        if bwrap_user is not None:
+            python = shutil.which("python3", path=DEFAULT_PATH)
+            if python is None:
+                raise SandboxUnavailable("The BUBBLEWRAP broker requires host Python 3")
+            self._broker_runtime_directory = tempfile.TemporaryDirectory(prefix="shellbox-runtime-")
+            self._broker_runtime = Path(self._broker_runtime_directory.name)
+            try:
+                prepare_broker_runtime(self._broker_runtime, python=Path(python), bwrap=self.bwrap, identity=bwrap_user)
+                _probe_image_broker(self.bwrap, self._broker_runtime, bwrap_user)
+            except BaseException:
+                self._broker_runtime_directory.cleanup()
+                raise
         logger.info("Local backend sandboxes commands with %s, system directories %s", self.bwrap, system_directories)
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
@@ -1311,7 +1570,9 @@ class LocalMachineFactory:
         ):
             raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host path")
         # A workdir in an overlaid directory is made by a command once the machine runs, so it lands in the layer.
-        root, layers = _machine_directories(None if overlaid_workdir else workdir, copy_on_write=copy_on_write)
+        root, layers = _machine_directories(
+            None if overlaid_workdir else workdir, copy_on_write=copy_on_write, bwrap_user=self._bwrap_user
+        )
         if aliases is not None:
             # The copied host file can be read-only, as on NixOS.
             (root / "etc/hosts").unlink(missing_ok=True)
@@ -1338,6 +1599,9 @@ class LocalMachineFactory:
             mounts=mounts,
             environment=environment,
             cgroup_parent=self.cgroup_parent,
+            bwrap_user=self._bwrap_user,
+            broker_runtime=self._broker_runtime,
+            broker_runtime_directory=self._broker_runtime_directory,
         )
         tools = source.tools if isinstance(source, PackageSpec) else ()
         try:
@@ -1354,6 +1618,8 @@ class LocalMachineFactory:
         if self.read_only or self.bin_dirs or self.system_directories is not SystemDirectories.READ_ONLY:
             raise UnsupportedMachineSpec("Prepared local images cannot use host program mounts or overlays")
         parent = Path(tempfile.mkdtemp(prefix="shellbox-image-"))
+        if self._bwrap_user is not None:
+            parent.chmod(0o711)
         bundle = parent / "bundle"
         machine = None
 
@@ -1363,13 +1629,17 @@ class LocalMachineFactory:
                 if isinstance(source, PreparedImage)
                 else await asyncio.to_thread(self.image_cache.prepare, source)
             )
-            return await asyncio.to_thread(prepare_local_image, prepared, bundle, umoci=self.umoci)
+            return await asyncio.to_thread(
+                prepare_local_image, prepared, bundle, umoci=self.umoci, owner=self._bwrap_user
+            )
 
         preparation = asyncio.create_task(prepare())
         try:
             image = await asyncio.shield(preparation)
             if image.user not in (None, "", "0", "0:0"):
                 raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
+            if self._bwrap_user is not None:
+                os.chown(image.root, *self._bwrap_user)
             effective = replace(spec, workdir=spec.workdir or image.workdir)
             machine = LocalMachine(
                 effective,
@@ -1381,6 +1651,9 @@ class LocalMachineFactory:
                 image=image,
                 bundle=parent,
                 cgroup_parent=self.cgroup_parent,
+                bwrap_user=self._bwrap_user,
+                broker_runtime=self._broker_runtime,
+                broker_runtime_directory=self._broker_runtime_directory,
             )
             await machine._start_keeper(peer)
             if aliases is not None:
@@ -1433,15 +1706,17 @@ def _companion_finished(task: Task, monitor: asyncio.Task[Result], closing_tasks
     reclaim.add_done_callback(_log_task_failure)
 
 
-def _machine_directories(workdir: PurePosixPath | None, *, copy_on_write: bool) -> tuple[Path, Path | None]:
+def _machine_directories(
+    workdir: PurePosixPath | None, *, copy_on_write: bool, bwrap_user: tuple[int, int] | None
+) -> tuple[Path, Path | None]:
     """A new machine's root, with ``workdir`` made in it, and its layers when its system directories are overlaid."""
     root = Path(tempfile.mkdtemp(prefix="shellbox-local-"))
     layers = None
     try:
-        _prepare_root(root, workdir)
+        _prepare_root(root, workdir, bwrap_user)
         if copy_on_write:
             layers = Path(tempfile.mkdtemp(prefix="shellbox-layers-"))
-            _prepare_layers(layers)
+            _prepare_layers(layers, bwrap_user)
     except BaseException:
         _remove(root)
         if layers is not None:

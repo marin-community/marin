@@ -33,6 +33,7 @@ from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerContainerHandle
 from iris.cluster.runtime.env import (
     IRIS_ATTEMPT_UID_ENV,
+    IRIS_CONTAINER_PROFILE_ENV,
     IRIS_TASK_TOKEN_ENV,
     IRIS_WORKER_REGION_ENV,
     TASK_OUTPUT_FINALIZING_STATUS,
@@ -213,6 +214,7 @@ def build_iris_env(
         bundle_id=req.bundle_id,
         controller_address=controller_address,
         task_token=task_token,
+        container_profile=req.container_profile,
         environment=req.environment,
         constraints=req.constraints,
         ports=req.ports,
@@ -839,9 +841,14 @@ class TaskAttempt:
         # CPU tasks on TPU hosts also need to share the cache's package files.
         if self._worker_metadata.device.HasField("tpu"):
             env[UV_LINK_MODE_ENV] = "symlink"
-        # The controller owns the process-incarnation identity and the task's
-        # credential and shutdown budget. User and cluster env cannot replace them.
-        for controller_owned in (IRIS_ATTEMPT_UID_ENV, IRIS_TASK_TOKEN_ENV, TERMINATION_GRACE_ENV):
+        # The controller owns the attempt identity, profile, credential, and shutdown budget.
+        # User and cluster env cannot replace them.
+        for controller_owned in (
+            IRIS_ATTEMPT_UID_ENV,
+            IRIS_CONTAINER_PROFILE_ENV,
+            IRIS_TASK_TOKEN_ENV,
+            TERMINATION_GRACE_ENV,
+        ):
             env.pop(controller_owned, None)
             if value := iris_env.get(controller_owned):
                 env[controller_owned] = value

@@ -4,7 +4,8 @@
 """Generate TaskSpecs for catalog capabilities with the agentic Taskforge: one GLM agent for each capability.
 
 The agent and its reviewer use GLM, and the solver rollouts use DeepSeek without thinking by default. The agent's
-shell runs in a bubblewrap sandbox, so the Iris job needs ``--container-profile container_profile_privileged``.
+shell runs in a bubblewrap sandbox, so the Iris job needs ``--container-profile container_profile_bubblewrap``
+on Kubernetes or ``--container-profile container_profile_privileged`` on either backend.
 ``--pool`` selects the GLM bearer token as in ``generate_tasks``, and ``PARALLEL_API_KEY`` holds the key of the
 agent's web tools.
 Inside an Iris task::
@@ -118,8 +119,8 @@ def workspace_factory() -> LocalMachineFactory:
     """A bubblewrap sandbox whose shell has this environment's Python, and with it taskcompendium and verifyit.
 
     It mounts the directory of the virtual environment read-only, for example ``/app`` with ``/app/.venv`` on Iris,
-    and the base interpreter. Bubblewrap needs namespaces, which an Iris task has only under the privileged container
-    profile.
+    and the base interpreter. Bubblewrap needs namespaces, which an Iris task gets under the bubblewrap profile on
+    Kubernetes or the privileged profile on either backend.
     """
     venv = Path(sys.prefix)
     return LocalMachineFactory(read_only=(venv.parent, *interpreter_mounts(venv)), bin_dirs=(venv / "bin",))
@@ -340,7 +341,10 @@ def _write(path: StoragePath, text: str) -> None:
     type=click.Choice([Backend.SHELLSIM.value, Backend.LOCAL.value]),
     default=Backend.SHELLSIM.value,
     show_default=True,
-    help="The machines of the solver rollouts: ShellSim, or bubblewrap (local), which needs the privileged profile.",
+    help=(
+        "The machines of the solver rollouts: ShellSim, or bubblewrap (local), which needs the bubblewrap profile "
+        "on Kubernetes or the privileged profile."
+    ),
 )
 @click.option("--concurrency", type=click.IntRange(min=1), default=4, show_default=True, help="Ideas at once.")
 def main(

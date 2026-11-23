@@ -812,17 +812,20 @@ def test_cpu_task_uses_worker_host_uv_link_mode(mock_bundle_store, mock_runtime,
     assert env["UV_LINK_MODE"] == expected_link_mode
 
 
-def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
-    """Job env wins over task defaults without replacing attempt identity.
+def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path, monkeypatch):
+    """Job env wins over task defaults without replacing controller-owned values.
 
     The merge order in _create_container is:
       1. iris system vars (IRIS_TASK_ID, etc.)
       2. task_env (worker-level defaults, overrides iris vars)
       3. job-level env_vars (from the request, wins over user-visible values)
-      4. controller-owned attempt identity
+      4. controller-owned attempt identity and container profile
 
     This test verifies the observable precedence and reserved identity.
     """
+    monkeypatch.setattr("iris.cluster.worker.env_probe._is_gcp_vm", lambda: False)
+    monkeypatch.setattr("iris.cluster.worker.env_probe.probe_outbound_ip", lambda: "127.0.0.1")
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
@@ -854,6 +857,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
                 "SHARED_KEY": "job_value",
                 "JOB_ONLY": "from_job",
                 "IRIS_ATTEMPT_UID": "shared-job-value",
+                "IRIS_CONTAINER_PROFILE": "CONTAINER_PROFILE_BUBBLEWRAP",
                 "IRIS_TERMINATION_GRACE_MS": "999999",
             },
         ),
@@ -877,6 +881,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     # Iris system vars are always injected.
     assert "IRIS_TASK_ID" in env
     assert env["IRIS_ATTEMPT_UID"] == "uid-env-test"
+    assert env["IRIS_CONTAINER_PROFILE"] == "CONTAINER_PROFILE_DEFAULT"
     assert env["IRIS_TERMINATION_GRACE_MS"] == "60000"
 
 

@@ -4,9 +4,11 @@
 """Persistent launcher behavior at the namespace and exec boundaries."""
 
 import asyncio
+import json
 import os
 import select
 import signal
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -15,8 +17,8 @@ import pytest
 from shellbox.backends.local import machine as local
 from shellbox.machine import Command, HostImage, MachineSpec
 
-# Inject a failing kernel boundary in the separately executed launcher. Keeper
-# creation needs no setns; entering the already-created machine does.
+# Inject the EPERM a launcher sees without SYS_ADMIN. Brokered commands must
+# avoid setns; privileged external launchers still use it.
 DENIED_NAMESPACE_ENTRY = """
 import os
 def denied_setns(descriptor, flags):
@@ -31,6 +33,302 @@ def factory() -> local.LocalMachineFactory:
         return local.LocalMachineFactory()
     except local.SandboxUnavailable as error:
         pytest.skip(str(error))
+
+
+@pytest.mark.parametrize("profile", [None, "CONTAINER_PROFILE_DEFAULT", "CONTAINER_PROFILE_RESTRICTED"])
+def test_local_factory_in_iris_task_rejects_unsupported_profile(monkeypatch, profile):
+    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
+    if profile is None:
+        monkeypatch.delenv("IRIS_CONTAINER_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("IRIS_CONTAINER_PROFILE", profile)
+    with pytest.raises(local.ContainerProfileRequired, match="CONTAINER_PROFILE_BUBBLEWRAP"):
+        local.LocalMachineFactory()
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="Only root can switch the bwrap keeper to uid 65534")
+@pytest.mark.parametrize("system_directories", list(local.SystemDirectories))
+def test_iris_bubblewrap_factory_writes_to_workdir_as_sandbox_user(monkeypatch, system_directories):
+    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
+    monkeypatch.setenv("IRIS_CONTAINER_PROFILE", local.IRIS_BUBBLEWRAP_PROFILE)
+    monkeypatch.setattr(local, "LAUNCH_SOURCE", DENIED_NAMESPACE_ENTRY + local.LAUNCH_SOURCE)
+    probe_entered = False
+    control = local.LocalMachine._control
+
+    async def observed_control(self, *args, **kwargs):
+        nonlocal probe_entered
+        probe_entered = True
+        return await control(self, *args, **kwargs)
+
+    monkeypatch.setattr(local.LocalMachine, "_control", observed_control)
+    try:
+        factory = local.LocalMachineFactory(system_directories=system_directories)
+    except local.SandboxUnavailable as error:
+        if probe_entered:
+            raise
+        pytest.skip(str(error))
+    assert probe_entered
+
+    async def check():
+        machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+        try:
+            result = await machine.run(Command(("/bin/sh", "-c", "id -u; echo written > result; cat result")))
+            assert result.exit_code == 0, result.stderr.decode()
+            assert result.stdout == f"{local.BUBBLEWRAP_UID}\nwritten\n".encode()
+            for user in ("root", "0"):
+                with pytest.raises(local.UnsupportedMachineSpec):
+                    await machine.run(Command(("id", "-u"), user=user))
+            if system_directories is local.SystemDirectories.COPY_ON_WRITE:
+                script = "echo overlaid > /usr/local/shellbox-overlay; cat /usr/local/shellbox-overlay"
+                overlay = await machine.run(Command(("/bin/sh", "-c", script)))
+                assert overlay.exit_code == 0, overlay.stderr.decode()
+                assert overlay.stdout == b"overlaid\n"
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="This path requires a non-root Iris task")
+def test_iris_bubblewrap_factory_uses_broker_as_non_root(monkeypatch):
+    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
+    monkeypatch.setenv("IRIS_CONTAINER_PROFILE", local.IRIS_BUBBLEWRAP_PROFILE)
+    monkeypatch.setattr(local, "LAUNCH_SOURCE", DENIED_NAMESPACE_ENTRY + local.LAUNCH_SOURCE)
+    probe_entered = False
+    control = local.LocalMachine._control
+
+    async def observed_control(self, *args, **kwargs):
+        nonlocal probe_entered
+        probe_entered = True
+        return await control(self, *args, **kwargs)
+
+    monkeypatch.setattr(local.LocalMachine, "_control", observed_control)
+    try:
+        factory = local.LocalMachineFactory()
+    except local.SandboxUnavailable as error:
+        if probe_entered:
+            raise
+        pytest.skip(str(error))
+
+    async def check():
+        machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+        try:
+            result = await machine.run(Command(("id", "-u")))
+            assert result.exit_code == 0, result.stderr.decode()
+            assert result.stdout == f"{os.geteuid()}\n".encode()
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="The privileged Iris path requires a root task")
+def test_iris_privileged_factory_keeps_root_command_identity(monkeypatch):
+    monkeypatch.setenv("IRIS_TASK_ID", "/job/task-0")
+    monkeypatch.setenv("IRIS_CONTAINER_PROFILE", local.IRIS_PRIVILEGED_PROFILE)
+    try:
+        factory = local.LocalMachineFactory()
+    except local.SandboxUnavailable as error:
+        pytest.skip(str(error))
+
+    async def check():
+        machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+        try:
+            result = await machine.run(Command(("id", "-u"), user="root"))
+            assert result.exit_code == 0, result.stderr.decode()
+            assert result.stdout == b"0\n"
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="Only root can switch the bwrap launcher to an unprivileged uid")
+def test_keeper_launcher_drops_to_non_root_before_exec(tmp_path):
+    configuration = tmp_path / "launcher.json"
+    configuration.write_text(
+        json.dumps(
+            {
+                "namespaces": [],
+                "program": [sys.executable, "-c", "import os; print(os.geteuid())"],
+                "program_user": [local.BUBBLEWRAP_UID, local.BUBBLEWRAP_GID],
+                "cgroup": None,
+            }
+        )
+    )
+    with configuration.open("rb") as source:
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, str(source.fileno())],
+            pass_fds=(source.fileno(),),
+            capture_output=True,
+            check=False,
+        )
+    assert result.returncode == 0, result.stderr.decode()
+    assert result.stdout.strip() == str(local.BUBBLEWRAP_UID).encode()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="This path requires a non-root launcher")
+def test_keeper_launcher_accepts_current_non_root_identity(tmp_path):
+    configuration = tmp_path / "launcher.json"
+    configuration.write_text(
+        json.dumps(
+            {
+                "namespaces": [],
+                "program": [sys.executable, "-c", "import os; print(os.geteuid())"],
+                "program_user": [os.geteuid(), os.getegid()],
+                "cgroup": None,
+            }
+        )
+    )
+    with configuration.open("rb") as source:
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, str(source.fileno())],
+            pass_fds=(source.fileno(),),
+            capture_output=True,
+            check=False,
+        )
+    assert result.returncode == 0, result.stderr.decode()
+    assert result.stdout.strip() == str(os.geteuid()).encode()
+
+
+@pytest.mark.parametrize(
+    ("command", "cgroup", "expected_output"),
+    [
+        ("printf brokered", False, b"brokered"),
+        ("printf '%s' $$", True, None),
+        ("yes | head -n 1", False, b"y\n"),
+    ],
+)
+def test_keeper_broker_launches_command_from_inside_its_namespace(command, cgroup, expected_output):
+    with tempfile.TemporaryDirectory(prefix="shellbox-broker-") as directory:
+        socket_path = Path(directory) / "broker.sock"
+        membership = Path(directory) / "cgroup.procs"
+        if cgroup:
+            membership.touch()
+        broker = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, "--broker", str(socket_path)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            assert broker.stdout is not None
+            assert select.select([broker.stdout], [], [], 5)[0]
+            assert broker.stdout.read(1) == b"R"
+            assert broker.stdin is not None
+            broker.stdin.write(b"shellbox-ready\n")
+            broker.stdin.flush()
+            with tempfile.TemporaryFile() as configuration:
+                configuration.write(
+                    json.dumps(
+                        {
+                            "broker": str(socket_path),
+                            "broker_pid": broker.pid,
+                            "cgroup": str(membership) if cgroup else None,
+                            "limits": [],
+                            "script": local.RUN_SCRIPT,
+                            "cwd": "/",
+                            "argv": ["/bin/sh", "-c", command],
+                            "environment": local.CONTROL_ENVIRONMENT,
+                        }
+                    ).encode()
+                )
+                configuration.seek(0)
+                result = subprocess.run(
+                    [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, "--relay", str(configuration.fileno())],
+                    pass_fds=(configuration.fileno(),),
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+            if result.returncode != 0:
+                broker.kill()
+                broker.wait(timeout=5)
+                pytest.fail(result.stderr.decode() + broker.stderr.read().decode())
+            if cgroup:
+                assert result.stdout == membership.read_bytes()
+            else:
+                assert result.stdout == expected_output
+            assert result.stderr == b""
+        finally:
+            broker.kill()
+            broker.wait(timeout=5)
+
+
+def test_keeper_broker_launches_companion_with_pinned_source_fd():
+    with tempfile.TemporaryDirectory(prefix="shellbox-broker-") as directory:
+        socket_path = Path(directory) / "broker.sock"
+        source = Path(directory) / "source"
+        source.write_text("companion")
+        broker = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-c", local.LAUNCH_SOURCE, "--broker", str(socket_path)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            assert broker.stdout is not None
+            assert select.select([broker.stdout], [], [], 5)[0]
+            assert broker.stdout.read(1) == b"R"
+            assert broker.stdin is not None
+            broker.stdin.write(b"shellbox-ready\n")
+            broker.stdin.flush()
+            with tempfile.TemporaryFile() as configuration, tempfile.TemporaryFile() as information:
+                with source.open("rb") as pinned:
+                    host_pid_read, host_pid_write = os.pipe()
+                    configuration.write(
+                        json.dumps(
+                            {
+                                "broker": str(socket_path),
+                                "broker_pid": broker.pid,
+                                "cgroup": None,
+                                "program": [
+                                    sys.executable,
+                                    "-c",
+                                    "import json,os,sys; from pathlib import Path; "
+                                    "os.write(int(sys.argv[2]), json.dumps({"
+                                    "'child-pid': os.getpid(), 'pid-namespace': os.stat('/proc/self/ns/pid').st_ino"
+                                    "}).encode()); sys.stdin.read(1); print(Path(sys.argv[1]).read_text())",
+                                    "unused",
+                                    "unused",
+                                ],
+                                "program_fds": [(3, 6, True), (4, 4, False)],
+                                "environment": local.CONTROL_ENVIRONMENT,
+                            }
+                        ).encode()
+                    )
+                    configuration.seek(0)
+                    try:
+                        relay = subprocess.Popen(
+                            [
+                                sys.executable,
+                                "-I",
+                                "-S",
+                                "-c",
+                                local.LAUNCH_SOURCE,
+                                "--relay",
+                                str(configuration.fileno()),
+                                str(host_pid_write),
+                                str(information.fileno()),
+                                str(pinned.fileno()),
+                                str(pinned.fileno()),
+                            ],
+                            pass_fds=(configuration.fileno(), host_pid_write, information.fileno(), pinned.fileno()),
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                        )
+                        os.close(host_pid_write)
+                        assert select.select([host_pid_read], [], [], 5)[0]
+                        assert int(os.read(host_pid_read, 20)) > 0
+                        stdout, stderr = relay.communicate(input=b"x", timeout=5)
+                        assert relay.returncode == 0, stderr.decode()
+                    finally:
+                        os.close(host_pid_read)
+            assert stdout == b"companion\n"
+        finally:
+            broker.kill()
+            broker.wait(timeout=5)
 
 
 def test_factory_rejects_namespace_entry_failure_and_removes_probe_files(factory, monkeypatch, tmp_path):

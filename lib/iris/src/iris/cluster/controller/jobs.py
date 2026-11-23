@@ -1009,6 +1009,11 @@ def launch_job(
     request = _inject_resource_constraints(request)
     plan = _plan_launch(dependencies, request, launch)
     if plan.disposition == SubmitDisposition.LOCAL:
+        if (
+            request.container_profile == job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
+            and dependencies.runtime.backend.descriptor.kind is not BackendKind.KUBERNETES
+        ):
+            raise ConnectError(Code.INVALID_ARGUMENT, "BUBBLEWRAP container profile requires the Kubernetes backend")
         _resolve_egress(dependencies, request, launch)
         if request.coscheduling.group_sizes and dependencies.runtime.backend.descriptor.kind != BackendKind.KUBERNETES:
             raise ConnectError(Code.INVALID_ARGUMENT, "coscheduling group_sizes requires the Kubernetes backend")

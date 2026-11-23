@@ -8,6 +8,7 @@ in [`job.proto`](../src/iris/rpc/job.proto):
 |---|---|---|
 | `CONTAINER_PROFILE_RESTRICTED` | `--container-profile CONTAINER_PROFILE_RESTRICTED` | Hardened: drops all Linux capabilities, blocks privilege escalation, keeps the default seccomp profile. No profiling cap. For untrusted/sandboxed workloads. |
 | `CONTAINER_PROFILE_DEFAULT` | default (or `--container-profile CONTAINER_PROFILE_DEFAULT`) | `SYS_PTRACE` for profiling (plus `SYS_RESOURCE` on TPU). The everyday training/eval pod. |
+| `CONTAINER_PROFILE_BUBBLEWRAP` | `--container-profile CONTAINER_PROFILE_BUBBLEWRAP` | Kubernetes only. DEFAULT capabilities and seccomp behavior with container AppArmor set to `Unconfined`, so a non-root process can create a bubblewrap user namespace and mount inside it. Egress and task environment follow DEFAULT. **Not elevated**, but processes lose the runtime's AppArmor confinement. |
 | `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | For model-controlled workloads. Runs the whole container under the cluster's sandbox runtime: gVisor `runsc` on Docker workers; on Kubernetes, the RuntimeClass named by `kubernetes_provider.sandbox_runtime_class` (default `gvisor`). The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address or task token; no node-shared caches; no Kubernetes service account token. Its [egress policy](#egress-policy) defaults to `INTERNET` and cannot be `CLUSTER` or `ALLOWLIST`. The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** CPU-only: accelerator requests are rejected. See [Sandbox jobs](#sandbox-jobs). |
 | `CONTAINER_PROFILE_DOCKER_ACCESS` | `--container-profile CONTAINER_PROFILE_DOCKER_ACCESS` | DEFAULT **plus** the host docker socket (`/var/run/docker.sock`) — lets the container drive the host Docker daemon to build images or run sibling containers. **Elevated.** |
 | `CONTAINER_PROFILE_PRIVILEGED` | `--container-profile CONTAINER_PROFILE_PRIVILEGED` | Full `--privileged` / `securityContext.privileged` with broad capabilities. Needed to run nested runtimes inside the container (e.g. a gVisor `runsc` sandbox). **Elevated.** |
@@ -49,12 +50,19 @@ at submission:
   already opted into an untrusted cluster. This mirrors how the `PRODUCTION`
   priority band behaves in null-auth.
 
-`RESTRICTED` and `DEFAULT` are unprivileged and need no authorization — anyone
-may use them. `RESTRICTED` is strictly safer than the default.
+`RESTRICTED`, `DEFAULT`, and `BUBBLEWRAP` need no admin authorization.
+`BUBBLEWRAP` removes the container runtime's AppArmor confinement, exposing
+namespace and mount operations inside an unprivileged user namespace to task
+processes. It does not grant capabilities in the host user namespace. Use it
+only for tasks that need nested bubblewrap without elevated privileges.
+Shellbox's local backend accepts `BUBBLEWRAP` and `PRIVILEGED` inside Iris tasks.
+Under `BUBBLEWRAP`, a root-run factory starts its keeper as uid/gid 65534 in a
+user namespace. A factory already running as non-root keeps its uid/gid and
+uses the same in-namespace command broker. Under `PRIVILEGED`, it keeps the
+existing root path.
 
-The numeric ordering is used only to decide whether a profile is *elevated*; it
-is **not** a relative-danger ladder. `DOCKER_ACCESS` and `PRIVILEGED` are
-distinct dangerous capabilities — neither implies the other.
+The controller checks elevation by profile name, not numeric value.
+`DOCKER_ACCESS` and `PRIVILEGED` grant distinct host-equivalent capabilities.
 
 ## How profiles map to each backend
 
@@ -68,6 +76,7 @@ whichever backend runs the task.
 |---|---|
 | `RESTRICTED` | `--cap-drop ALL --security-opt no-new-privileges` (default seccomp applies; no `SYS_PTRACE`) |
 | `DEFAULT` | `--cap-drop ALL --cap-add SYS_PTRACE --security-opt no-new-privileges` |
+| `BUBBLEWRAP` | **rejected** — Docker's default seccomp profile blocks the mount and namespace calls bubblewrap needs. |
 | `SANDBOX` | `--runtime runsc`; the worker's `task_env` and controller address are withheld and cache bind mounts are omitted |
 | `DOCKER_ACCESS` | DEFAULT **+** `-v /var/run/docker.sock:/var/run/docker.sock` |
 | `PRIVILEGED` | `--privileged --cap-add SYS_PTRACE` |
@@ -83,6 +92,7 @@ container is created.
 |---|---|
 | `RESTRICTED` | `capabilities.drop:[ALL]`, `allowPrivilegeEscalation:false`, `seccompProfile.type:RuntimeDefault` (not full PSS Restricted — `runAsNonRoot` is not forced) |
 | `DEFAULT` | `capabilities.add:[SYS_PTRACE (+SYS_RESOURCE on TPU)]` |
+| `BUBBLEWRAP` | DEFAULT `securityContext` plus `appArmorProfile.type:Unconfined`; no added capabilities or seccomp override. The task receives `IRIS_CONTAINER_PROFILE=CONTAINER_PROFILE_BUBBLEWRAP`. |
 | `SANDBOX` | DEFAULT `securityContext` (no privilege) plus `spec.runtimeClassName` set to the configured sandbox RuntimeClass (default `gvisor`) — the node RuntimeClass provides isolation, not the container context — and `automountServiceAccountToken: false`, no `serviceAccountName`, no ambient task credential volume, no cluster `task_env`, and no node cache `hostPath` mounts (cache paths stay in the container layer) |
 | `DOCKER_ACCESS` | **rejected** — k8s nodes run containerd, not dockerd, so there is no host docker socket. Use the docker worker backend, or `PRIVILEGED` with an in-pod runtime. |
 | `PRIVILEGED` | `privileged:true`, `allowPrivilegeEscalation:true`, plus the DEFAULT caps |
