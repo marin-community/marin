@@ -162,11 +162,18 @@ def worker_resources() -> ResourceConfig:
 
 
 def iris_config() -> IrisConfig:
+    # Startup patience: "placed" includes a K8s-Pending pod, so on a saturated
+    # cluster the budget must cover queueing for preempted capacity plus the
+    # engine boot (~30 min with in-region streaming). PRODUCTION preemption is
+    # real but not instant (observed >30 min during the 16:30Z saturation).
+    ready_timeout_seconds = 4 * 3600.0
     return IrisConfig(
         worker_resources=worker_resources(),
         # The default environment bundles the launching checkout's workspace, matching
         # `marin-serve iris` GPU serving.
         worker_environment=create_environment(),
+        endpoint_ready_timeout_seconds=ready_timeout_seconds,
+        endpoint_health_timeout_seconds=ready_timeout_seconds,
         max_retries_preemption=MAX_RETRIES_PREEMPTION,
         priority=PRIORITY,
     )
