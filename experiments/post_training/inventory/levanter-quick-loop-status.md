@@ -5,8 +5,8 @@ November 22, 2026 (PST).
 For the implementation inventory and remaining transfer, protocol, router-replay
 and zero-KL work, see [inference integration status](../../../INFERENCE_HANDOFF.md).
 
-The latest full-model run passed initial and step-one finite-state checks on all
-four native learners; model and Adam fingerprints changed and step-1/version-1
+The latest completed full-model run passed initial and step-one finite-state
+checks on all four native learners; model and Adam fingerprints changed and step-1/version-1
 checkpoint metadata was committed. It failed again at the five-second natural
 process-exit check. Fresh-process continuation, updated-weight publication and
 generation, and the matched 25-update comparison remain unverified.
@@ -39,8 +39,8 @@ and Adam fingerprints changed after the update. All seven cleanup phases,
 including public backend release, returned before shutdown acknowledgement and
 Python `atexit`; natural exit still exceeded the unchanged five-second limit.
 The uploaded exception record preserves that `TimeoutError`. All five GPU pods
-are gone; the coordinator's failed CPU pod is retained. No accelerator job is
-active. Updated-policy publication, restore and step two remain unverified.
+are gone; the coordinator's failed CPU pod is retained. That attempt is terminal.
+Updated-policy publication, restore and step two remain unverified.
 
 A subsequent ownership audit found that the module-global publication transform
 cache retains a JAX backend client after publisher release. Exact JAX 0.11.0 CPU
@@ -51,6 +51,16 @@ publication tests pass; required lint and type checks pass. This removes one
 demonstrated lifetime gap, with GPU exit cause and remedy still unproven. The
 five-second grace period, numerical code, transfer layouts and precision remain
 unchanged.
+
+Controlled follow-up `2026.11.22.4` is running from
+`768ea250307c746f95464a81ab5944338c8ddc5c` with the owned-cache repair. Its
+coordinator is
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.22.4-coordinator-4367d39b`;
+the GPU child suffix is `2026.11.22.4-a686371921e7`. At 17:09 PST all five GPU
+tasks were running with zero failures/preemptions. Both accepted bundles match
+all 4,590 frozen source entries and 49 required runtime files. The two-update,
+40-H100 BATCH recipe, numerical settings and five-second exit requirement are
+unchanged; no remedy or completed update is established by startup.
 
 BATCH smoke `2026.11.22.1`, from
 `8dde046e6980e120e13f577f0035be16c62d77f7`, failed at 00:56 PST during

@@ -1,6 +1,6 @@
 # Native learner and inference integration
 
-November 22, 2026, 16:45 PST snapshot. Branch:
+November 22, 2026, 17:09 PST snapshot. Branch:
 [`codex/dlwh-levanter-rl`](https://github.com/marin-community/marin/tree/codex/dlwh-levanter-rl).
 This branch contains the unified policy learner, pipeline backend, native
 Snowball learner, inference integration, and the validation/diagnostic work from
@@ -106,7 +106,16 @@ No training/serving parity result is claimed here.
 
 ## Evidence and open gates
 
-The latest full-model diagnostic is `2026.11.22.3`, executed from
+The controlled follow-up `2026.11.22.4` is running from
+`768ea250307c746f95464a81ab5944338c8ddc5c`, including the owned-cache repair.
+Its coordinator is
+`/dlwh/users-dlwh-checkpoints-snowball-inventory-2026.11.22.4-coordinator-4367d39b`.
+At 17:09 PST all five GPU tasks were running with zero failures or preemptions.
+Both accepted bundles match all 4,590 frozen entries and 49 required runtime
+files. This is a two-update, 40-H100 BATCH diagnostic with the original numerical
+settings and five-second exit requirement; startup does not qualify the repair.
+
+The previous full-model diagnostic, `2026.11.22.3`, executed from
 `baa10702aec4cfd62e0aebb2cef8c336974172ae`. Its accepted coordinator and GPU
 bundles match all 4,588 frozen source entries. All 670 materialized configuration
 fields match the frozen recipe after the two generated attempt identifiers and
@@ -125,7 +134,7 @@ The run failed at 16:30 PST during the checkpoint validator's five-second natura
 process-exit check. Cleanup phases, including public backend release and
 distributed shutdown, returned; the learners wrote shutdown acknowledgements and
 entered Python `atexit`. This did not establish successful process exit or fresh
-restoration. All five GPU pods are gone; no accelerator job is active.
+restoration. All five GPU pods from that failed run are gone.
 
 This establishes a finite first full-model update, initial publication and
 returned generation. Updated-policy publication, full-model restart/continuation, and the matched 25-update
