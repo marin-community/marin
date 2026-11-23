@@ -309,4 +309,5 @@ export const cards = {
 };
 
 export const MAX_WINDOW_MINUTES = 60;
+export const MIN_WINDOW_MS = 10_000;
 export const SPAN_LOOKAHEAD_MS = 30 * 60_000;

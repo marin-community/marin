@@ -398,7 +398,7 @@ export function createMeasurements(rawRows, window, configRows = [], inferenceGp
       }];
     }
   }
-  const config = [...configRows.map(decode), ...rows].find((row) => includes(row, signals.batchTarget));
+  const config = configRows.map(decode).find((row) => includes(row, signals.batchTarget));
   const batchTarget = config ? field(config, signals.batchTarget.value) : null;
   const maxStaleness = config?.body.max_staleness_steps;
   const configFields = {

@@ -4,12 +4,12 @@ import { Flow } from './Flow.jsx';
 import { InspectorCard } from './Inspector.jsx';
 import { NodeInfo } from './NodeInfo.jsx';
 import { ChartLegend, FlowLegend, TimeLegend } from './Legends.jsx';
-import { flowGraph, MAX_WINDOW_MINUTES } from './contracts.js';
+import { flowGraph, MAX_WINDOW_MINUTES, MIN_WINDOW_MS } from './contracts.js';
 import { cardsWithSamples, elapsed, shortName, utc } from './display.js';
 import { createRunModel } from './run.js';
 import './style.css';
 
-const minRange = 10_000;
+const minRange = MIN_WINDOW_MS;
 const appBase = import.meta.env.BASE_URL;
 
 function urlParams(run, window) {
@@ -110,6 +110,7 @@ function RunHeading({ model, onLoadFull }) {
             </>}
             {model.maxStaleness != null && <><dt>Staleness limit</dt><dd>{model.maxStaleness} policy steps</dd></>}
             <dt>Loaded window</dt><dd>{utc(model.window.from)} to {utc(model.window.to)}</dd>
+            {model.run.driverReadFailed && <><dt>Driver logs</dt><dd>Finelog could not load driver timings for this window.</dd></>}
             {canLoadFull && <dd><button type="button" onClick={() => onLoadFull(model.run.id, fullRun)}>Open full run</button></dd>}
           </dl>
         </details>
@@ -216,7 +217,7 @@ function App() {
     const to = Date.parse(fields.to);
     if (!endsInZone(fields.from) || !endsInZone(fields.to) || !Number.isFinite(from) ||
         !Number.isFinite(to) || to - from < minRange || to - from > MAX_WINDOW_MINUTES * 60_000) {
-      setInputError('Enter ISO times with a UTC offset, 10 seconds to ' + MAX_WINDOW_MINUTES + ' minutes apart.');
+      setInputError('Enter ISO times with a UTC offset, ' + MIN_WINDOW_MS / 1000 + ' seconds to ' + MAX_WINDOW_MINUTES + ' minutes apart.');
       return;
     }
     openRun(runInput, { from, to });

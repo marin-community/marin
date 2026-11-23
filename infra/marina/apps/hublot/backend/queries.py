@@ -16,6 +16,9 @@ PAGE_ROWS = 6_000
 _CLUSTER = "coalesce(nullif(cluster, ''), 'local')"
 _JOB = "coalesce(job_id, '')"
 _UID = r"iris:[a-zA-Z0-9_.-]+"
+_SERVICE_FILTER = "service = 'marinskyrl'"
+_CONFIG_EVENT = "'async_run_configuration'"
+_CAPACITY_EVENT = "'rollout_capacity'"
 _WAIT = "name = 'async_phase_window' AND json_get(attributes_json, 'phase') = 'rollout_wait'"
 _GRADING = """name = 'training_metric_value' AND json_get(attributes_json, 'metric') IN
 ('eval/all/timing/grading/mean', 'eval/all/outcome/graded', 'generate/outcome/graded')"""
@@ -29,7 +32,7 @@ class Window:
     start: int
     end: int
 
-    def as_json(self) -> dict[str, int]:
+    def as_dict(self) -> dict[str, int]:
         return {"from": self.start, "to": self.end}
 
 
@@ -66,20 +69,20 @@ def _run_predicate(run: str) -> str:
     return f"(run_id = {_literal(run)} OR job_id = {_literal(run)})"
 
 
-def _gpu_sample(role: str) -> str:
+def _gpu_sample_predicate(role: str) -> str:
     metric = _literal(f"async/performance/configured_{role}_gpus")
     return f"name = 'training_metric_value' AND json_get(attributes_json, 'metric') = {metric}"
 
 
 def resolution_sql(run: str, search: Window) -> str:
-    inference_gpus, policy_gpus = _gpu_sample("inference"), _gpu_sample("policy")
+    inference_gpus, policy_gpus = _gpu_sample_predicate("inference"), _gpu_sample_predicate("policy")
     # A bounded aggregate returns just enough metadata to choose and open one execution.
     return f"""
 SELECT {_CLUSTER} AS cluster, execution_uid, {_JOB} AS job_id, min(run_id) AS run_id,
        min(timestamp_ms) AS first_ms, max(timestamp_ms) AS last_ms,
        max(CASE WHEN {_WAIT} THEN timestamp_ms END) AS wait_ms,
-       count(DISTINCT CASE WHEN name = 'async_run_configuration' THEN body_json END) AS configurations,
-       max(CASE WHEN name = 'async_run_configuration' THEN body_json END) AS configuration,
+       count(DISTINCT CASE WHEN name = {_CONFIG_EVENT} THEN body_json END) AS configurations,
+       max(CASE WHEN name = {_CONFIG_EVENT} THEN body_json END) AS configuration,
        max(CASE WHEN {_GRADING} THEN timestamp_ms END) AS grading_ms,
        min(CASE WHEN {_START} THEN timestamp_ms END) AS start_ms,
        max(CASE WHEN {_END} THEN timestamp_ms END) AS end_ms,
@@ -87,14 +90,14 @@ SELECT {_CLUSTER} AS cluster, execution_uid, {_JOB} AS job_id, min(run_id) AS ru
        max(CASE WHEN {inference_gpus} THEN value END) AS inference_gpu_max,
        min(CASE WHEN {policy_gpus} THEN value END) AS policy_gpu_min,
        max(CASE WHEN {policy_gpus} THEN value END) AS policy_gpu_max,
-       min(CASE WHEN name = 'rollout_capacity' THEN value END) AS buffer_capacity_min,
-       max(CASE WHEN name = 'rollout_capacity' THEN value END) AS buffer_capacity_max
+       min(CASE WHEN name = {_CAPACITY_EVENT} THEN value END) AS buffer_capacity_min,
+       max(CASE WHEN name = {_CAPACITY_EVENT} THEN value END) AS buffer_capacity_max
 FROM "{NAMESPACE}"
-WHERE timestamp_ms >= {search.start} AND timestamp_ms < {search.end} AND service = 'marinskyrl'
+WHERE timestamp_ms >= {search.start} AND timestamp_ms < {search.end} AND {_SERVICE_FILTER}
   AND execution_uid IS NOT NULL AND execution_uid <> ''
   AND ({_run_predicate(run)})
-  AND (name IN ('async_phase_window', 'async_run_configuration', 'generation_tokens_total',
-                'rollout_queue_depth', 'rollout_capacity')
+  AND (name IN ('async_phase_window', {_CONFIG_EVENT}, 'generation_tokens_total',
+                'rollout_queue_depth', {_CAPACITY_EVENT})
        OR ({_GRADING}) OR ({_START}) OR ({_END}) OR ({inference_gpus}) OR ({policy_gpus}))
 GROUP BY {_CLUSTER}, execution_uid, {_JOB}
 ORDER BY last_ms DESC LIMIT {CHOICE_LIMIT + 1}"""
@@ -105,7 +108,7 @@ def telemetry_sql(execution: Execution, page: Window, visible: Window) -> str:
 SELECT cluster, service, run_id, execution_uid, job_id, region, node_name, process_index, seq,
        timestamp_ms, name, value, body_json, attributes_json, resource_attributes_json
 FROM "{NAMESPACE}"
-WHERE timestamp_ms >= {page.start} AND timestamp_ms < {page.end} AND service = 'marinskyrl'
+WHERE timestamp_ms >= {page.start} AND timestamp_ms < {page.end} AND {_SERVICE_FILTER}
   AND ({execution.predicate})
   AND (name IN ('async_phase_window', 'rollout_call', 'weight_sync_completed') OR ({DISPATCH_WAITS})
        OR (timestamp_ms < {visible.end + COUNTER_MARGIN_MS} AND (name = 'rollout_groups' OR ({REGULAR_SIGNALS}))))

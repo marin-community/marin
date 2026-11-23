@@ -8,7 +8,14 @@ import math
 import re
 from typing import Any
 
-from .query_contract import ATTRIBUTE_FIELDS, BODY_FIELDS, CUMULATIVE_NAMES, SNAPSHOT_NAMES
+from .query_contract import (
+    ATTRIBUTE_FIELDS,
+    BODY_FIELDS,
+    CUMULATIVE_NAMES,
+    DRIVER_LINE_PATTERNS,
+    DRIVER_TIMESTAMP,
+    SNAPSHOT_NAMES,
+)
 
 _CONFIG_FIELDS = (
     "mini_batch_size",
@@ -24,22 +31,16 @@ _CONFIG_FIELDS = (
 )
 _SOURCE_FIELDS = ("cluster", "service", "run_id", "job_id", "execution_uid", "region", "node_name", "process_index")
 _ANSI_COLOR = re.compile(r"\x1b\[[0-9;]*m")
-_LOG_TIME = re.compile(r"\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \|")
-_DRIVER_FACT = re.compile(
-    r"skyrl_train\.trainer:(?:_run_pretraining_evaluation|_finalize_training):\d+"
-    r" - (?:Finished: '(?:eval_before_train|eval|save_checkpoints)', time cost: \d+(?:\.\d+)?s|Saved final checkpoint\.)"
-    r"|skyrl_train\.dataset\.dataset:_read_files_and_tokenize:\d+ - Filtered dataset size:\s+\d+\s*$"
-    r"|\bbatch_policy:\s+(?:full_batch|rolling)\s*$"
-    r"|\beval_interval:\s+-1\s*$"
-)
+_LOG_TIME = re.compile(DRIVER_TIMESTAMP)
+_DRIVER_FACT = re.compile("|".join(DRIVER_LINE_PATTERNS))
 
 
-def _object(raw: str | None) -> dict[str, Any]:
+def _object(raw: str | None) -> dict[str, Any] | None:
     try:
         value = json.loads(raw) if raw else None
     except json.JSONDecodeError:
-        return {}
-    return value if isinstance(value, dict) else {}
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _scalars(values: dict[str, Any], fields: tuple[str, ...]) -> dict[str, str | int | float | bool]:
@@ -52,7 +53,7 @@ def _scalars(values: dict[str, Any], fields: tuple[str, ...]) -> dict[str, str |
 
 
 def run_configuration(raw: str | None) -> dict[str, str | int | float | bool]:
-    return _scalars(_object(raw), _CONFIG_FIELDS)
+    return _scalars(_object(raw) or {}, _CONFIG_FIELDS)
 
 
 def telemetry_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -61,8 +62,11 @@ def telemetry_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     series_ids: dict[tuple, int] = {}
     output = []
     for row in rows:
-        attributes = _object(row["attributes_json"])
-        resource = json.dumps(_object(row["resource_attributes_json"]), sort_keys=True)
+        attributes = _object(row["attributes_json"]) or {}
+        resource_text = row["resource_attributes_json"]
+        resource_data = _object(resource_text)
+        # Keep unreadable resource labels distinct so their counters are not merged.
+        resource = json.dumps(resource_data, sort_keys=True) if resource_data is not None else resource_text or "{}"
         origin = (*(row[key] for key in _SOURCE_FIELDS), resource)
         source = origins.setdefault(origin, len(origins))
         name = row["name"]
@@ -73,7 +77,7 @@ def telemetry_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "timestamp_ms": row["timestamp_ms"],
             "value": row["value"] if row["value"] is not None and math.isfinite(row["value"]) else None,
             "attributes_json": _scalars(attributes, ATTRIBUTE_FIELDS),
-            "body_json": _scalars(_object(row["body_json"]), BODY_FIELDS),
+            "body_json": _scalars(_object(row["body_json"]) or {}, BODY_FIELDS),
         }
         if name in CUMULATIVE_NAMES or name in SNAPSHOT_NAMES:
             if name in SNAPSHOT_NAMES:

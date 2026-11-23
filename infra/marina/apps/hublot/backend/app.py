@@ -9,6 +9,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from connectrpc.code import Code
@@ -25,25 +26,62 @@ from rigging.credentials import iap_provider_for
 from . import queries
 from .project import driver_facts, run_configuration, telemetry_rows
 from .queries import Execution, Window
-from .query_contract import COUNTER_MARGIN_MS, MAX_WINDOW_MS, SPAN_LOOKAHEAD_MS
+from .query_contract import COUNTER_MARGIN_MS, MAX_WINDOW_MS, MIN_WINDOW_MS, SPAN_LOOKAHEAD_MS
 
 logger = logging.getLogger(__name__)
 
 MINUTE_MS = 60_000
-MIN_WINDOW_MS = 10_000
-LOOKBACK_MS = 72 * 60 * MINUTE_MS
+LOOKBACK_HOURS = 72
 MAX_WINDOW_ROWS = 36_000
 MAX_PAGE_QUERIES = 24
 MAX_RESPONSE_BYTES = 24 * 1024 * 1024
-READ_BUDGET = 75
+# Leave time for Marina to encode the response before Cloud Run's 60-second deadline.
+READ_BUDGET = 50
 RPC_TIMEOUT = 22
 NO_STORE = {"Cache-Control": "private, no-store"}
 
 type ReadRows = Callable[[str, int], list[dict[str, Any]]]
+type RunChoice = dict[str, str | int | None]
+
+
+@dataclass(frozen=True)
+class RunMatch:
+    cluster: str
+    execution_uid: str
+    job_id: str
+    run_id: str | None
+    first_ms: int
+    last_ms: int
+    wait_ms: int | None
+    configurations: int
+    configuration: str | None
+    grading_ms: int | None
+    start_ms: int | None
+    end_ms: int | None
+    inference_gpu_min: float | None
+    inference_gpu_max: float | None
+    policy_gpu_min: float | None
+    policy_gpu_max: float | None
+    buffer_capacity_min: float | None
+    buffer_capacity_max: float | None
+
+    @property
+    def execution(self) -> Execution:
+        return Execution(self.cluster, self.execution_uid, self.job_id)
+
+    def choice(self) -> RunChoice:
+        return {
+            "id": self.execution.link_id,
+            "cluster": self.cluster,
+            "execution_uid": self.execution_uid,
+            "job_id": self.job_id,
+            "run_id": self.run_id,
+            "last_ms": self.last_ms,
+        }
 
 
 class RunError(Exception):
-    def __init__(self, status: int, message: str, *, choices: list[dict[str, Any]] | None = None):
+    def __init__(self, status: int, message: str, *, choices: list[RunChoice] | None = None):
         super().__init__(message)
         self.status = status
         self.choices = choices
@@ -69,33 +107,28 @@ def _requested_window(start: str | None, end: str | None) -> Window | None:
         window = Window(int(start), int(end))
         if MIN_WINDOW_MS <= window.end - window.start <= MAX_WINDOW_MS:
             return window
-    minutes = MAX_WINDOW_MS // MINUTE_MS
-    raise RunError(400, f"Enter two UTC times 10 seconds to {minutes} minutes apart.")
+    seconds, minutes = MIN_WINDOW_MS // 1000, MAX_WINDOW_MS // MINUTE_MS
+    raise RunError(400, f"Enter two UTC times {seconds} seconds to {minutes} minutes apart.")
 
 
-def _resolve_execution(read: ReadRows, run: str, requested: Window | None) -> tuple[Execution, dict[str, Any]]:
+def _resolve_execution(read: ReadRows, run: str, requested: Window | None) -> RunMatch:
     now = int(time.time() * 1000)
     search = (
-        Window(requested.start - 60 * MINUTE_MS, requested.end + SPAN_LOOKAHEAD_MS)
+        Window(requested.start - MAX_WINDOW_MS, requested.end + SPAN_LOOKAHEAD_MS)
         if requested
-        else Window(now - LOOKBACK_MS, now)
+        else Window(now - LOOKBACK_HOURS * 60 * MINUTE_MS, now)
     )
-    matches = read(queries.resolution_sql(run, search), queries.CHOICE_LIMIT + 1)
+    matches = [RunMatch(**row) for row in read(queries.resolution_sql(run, search), queries.CHOICE_LIMIT + 1)]
     if not matches:
         if requested:
             raise RunError(404, "No matching execution in or near this UTC window.")
-        raise RunError(404, "No matching execution in the last 72 hours. For an older run, enter its UTC window.")
+        raise RunError(
+            404, f"No matching execution in the last {LOOKBACK_HOURS} hours. For an older run, enter its UTC window."
+        )
     if len(matches) > 1:
-        choices = [
-            {
-                "id": Execution(match["cluster"], match["execution_uid"], match["job_id"]).link_id,
-                **{key: match[key] for key in ("cluster", "execution_uid", "job_id", "run_id", "last_ms")},
-            }
-            for match in matches[: queries.CHOICE_LIMIT]
-        ]
+        choices = [match.choice() for match in matches[: queries.CHOICE_LIMIT]]
         raise RunError(409, "This ID matches more than one execution. Choose one.", choices=choices)
-    match = matches[0]
-    return Execution(match["cluster"], match["execution_uid"], match["job_id"]), match
+    return matches[0]
 
 
 def _window_too_large() -> RunError:
@@ -139,7 +172,7 @@ def _read_telemetry(read: ReadRows, execution: Execution, visible: Window) -> li
 
 def _read_driver(
     read: ReadRows, execution: Execution, visible: Window, start: int | None, end: int | None
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | None:
     if execution.cluster == "local" or not execution.job.startswith("/") or start is None:
         return []
     search_end = visible.end + SPAN_LOOKAHEAD_MS
@@ -151,7 +184,7 @@ def _read_driver(
         rows = read(queries.driver_sql(execution, window), queries.DRIVER_LIMIT)
     except (StatsError, ConnectError, OSError, RunError) as error:
         logger.warning("Finelog did not return driver timing facts (%s)", type(error).__name__)
-        return []
+        return None
     if len(rows) == queries.DRIVER_LIMIT or len({row["key"] for row in rows}) != 1:
         return []
     return driver_facts(rows)
@@ -164,15 +197,16 @@ def _stable_count(low: float | None, high: float | None) -> int | None:
 
 
 def _load_run(read: ReadRows, run: str, requested: Window | None) -> dict[str, Any]:
-    execution, resolved = _resolve_execution(read, run, requested)
-    start, end = resolved["start_ms"], resolved["end_ms"]
+    resolved = _resolve_execution(read, run, requested)
+    execution = resolved.execution
+    start, end = resolved.start_ms, resolved.end_ms
     if start is None or end is None or end < start:
         end = None
     full = None
     if start is not None and end is not None and MIN_WINDOW_MS <= end - start + 1 <= MAX_WINDOW_MS:
         full = Window(start, end + 1)
-    newest = resolved["wait_ms"] or resolved["last_ms"]
-    default_start = max(resolved["first_ms"] - MINUTE_MS, newest - 20 * MINUTE_MS) // MIN_WINDOW_MS * MIN_WINDOW_MS
+    newest = resolved.wait_ms or resolved.last_ms
+    default_start = max(resolved.first_ms - MINUTE_MS, newest - 20 * MINUTE_MS) // MIN_WINDOW_MS * MIN_WINDOW_MS
     default_end = (newest + 2 * MINUTE_MS + MIN_WINDOW_MS - 1) // MIN_WINDOW_MS * MIN_WINDOW_MS
     visible = requested or full or Window(default_start, max(default_start + MINUTE_MS, default_end))
     rows = _read_telemetry(read, execution, visible)
@@ -180,23 +214,23 @@ def _load_run(read: ReadRows, run: str, requested: Window | None) -> dict[str, A
     return {
         "deployment": "marin",
         "namespace": queries.NAMESPACE,
-        "window": visible.as_json(),
+        "window": visible.as_dict(),
         "run": {
             "id": execution.link_id,
             "cluster": execution.cluster,
             "execution_uid": execution.uid,
             "job_id": execution.job,
-            "run_id": resolved["run_id"],
+            "run_id": resolved.run_id,
             "start_ms": start,
             "end_ms": end,
-            "fullRun": full.as_json() if full else None,
-            "inferenceGpus": _stable_count(resolved["inference_gpu_min"], resolved["inference_gpu_max"]),
-            "policyGpus": _stable_count(resolved["policy_gpu_min"], resolved["policy_gpu_max"]),
-            "bufferCapacity": _stable_count(resolved["buffer_capacity_min"], resolved["buffer_capacity_max"]),
-            "separateGrading": resolved["grading_ms"] is not None,
+            "fullRun": full.as_dict() if full else None,
+            "inferenceGpus": _stable_count(resolved.inference_gpu_min, resolved.inference_gpu_max),
+            "policyGpus": _stable_count(resolved.policy_gpu_min, resolved.policy_gpu_max),
+            "bufferCapacity": _stable_count(resolved.buffer_capacity_min, resolved.buffer_capacity_max),
+            "separateGrading": resolved.grading_ms is not None,
         },
         "rows": telemetry_rows(rows),
-        "configuration": run_configuration(resolved["configuration"]) if resolved["configurations"] == 1 else None,
+        "configuration": run_configuration(resolved.configuration) if resolved.configurations == 1 else None,
         "driverRows": driver,
     }
 
