@@ -5,6 +5,7 @@ import base64
 import dataclasses
 import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import equinox as eqx
@@ -216,6 +217,57 @@ def test_endpoints_exist(test_client):
     assert "/v1/models" in routes
     assert "/v1/completions" in routes
     assert "/v1/chat/completions" in routes
+
+
+def test_shutdown_waits_for_active_generation(
+    monkeypatch, trainer_config, inference_server_config, generated_model_and_tokenizer
+):
+    model, tokenizer = generated_model_and_tokenizer
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+        server = InferenceServer.create(inference_server_config, model, tokenizer)
+
+    ctx = server.inference_context
+    started = threading.Event()
+    unblock = threading.Event()
+    shutdown_started = threading.Event()
+    wait_timeout = 15
+    original_execute = ctx._execute_batch
+
+    def blocked_execute(requests, poll):
+        started.set()
+        assert unblock.wait(timeout=wait_timeout)
+        original_execute(requests, poll)
+
+    def shutdown():
+        shutdown_started.set()
+        server.shutdown()
+
+    monkeypatch.setattr(ctx, "_execute_batch", blocked_execute)
+    try:
+        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as executor:
+            result = executor.submit(
+                client.post,
+                "/v1/chat/completions",
+                json={
+                    "model": TEST_MODEL_NAME,
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 2,
+                    "seed": 483,
+                },
+            )
+            try:
+                assert started.wait(timeout=wait_timeout)
+                stopping = executor.submit(shutdown)
+                assert shutdown_started.wait(timeout=wait_timeout)
+                with pytest.raises(TimeoutError):
+                    stopping.result(timeout=2.5)
+            finally:
+                unblock.set()
+
+            stopping.result(timeout=wait_timeout)
+            assert result.result(timeout=wait_timeout).status_code == 200
+    finally:
+        server.shutdown()
 
 
 def test_models_endpoint_reports_the_configured_model(test_client):
