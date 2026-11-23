@@ -216,7 +216,10 @@ of the weak families, sibling negatives and the current rubric's relabels.
 | Iteration 16, 0.3 (lowest passing on set 23) | 0.799 [0.765] / 0.879 | 0.757 [0.716] / 0.815 |
 | Iteration 16, 0.5 | 0.862 [0.829] / 0.818 | 0.818 [0.777] / 0.750 |
 
-Set 19 held few flags of the families that fail in the catalog; set 23 chose iteration 16 at 0.3. On
+Set 19 held few flags of the families that fail in the catalog; set 23 chose iteration 16 at 0.3.
+Recall counts edited copies: on set 23 at 0.5, iteration 16 removes 97% of the copies that both judges
+call exact and 64% of edited ones (changed choices, a reworded question, OCR errors), which carry about
+two thirds of the weight; most misses are in BBQ, SQuAD, MMLU, RACE and MMLU-Pro. On
 labeled flags of iteration 16 at 0.3 (sets 19 and 23), precision is 0.84-1.00 for MMLU, MMLU-Pro,
 Minerva, Hendrycks math, ASDiv, GSM8K, HumanEval, ARC and RTE (54-125 flags each), and low for SQuAD
 (0.26), DROP (0.13), QQP (0.08), QNLI (0.21), RACE (0.45), BBH (0.38), AGIEval (0.54), CareQA and
@@ -260,7 +263,8 @@ a copy.
 
 - **Stage 1 misses about a fifth of clear catalog copies.** On 3,020 records in 2,000 sampled catalog
   shards that the block rule of PR #10836 marks (an eval question with all its choices), stage 1 gives a
-  candidate for 79.8%: MMLU 93%, HumanEval 100%, GSM8K 46%. Planted copies (G2) include the eval's prompt
+  candidate for 79.8%: MMLU 93%, HumanEval 100%, GSM8K 46%; stage 2 removes 98.7% of those, so the run
+  removes 78.7% of these records (GSM8K 45%). Planted copies (G2) include the eval's prompt
   text, so they did not show this. A rendered GSM8K question starts with "Question:", and the bare
   question's windows occur in the reference shards (GSM8K copies are common), so the rarest window spans
   the prompt and a record with the bare question lacks it. Two key options fix this (`rarest_key prepare
