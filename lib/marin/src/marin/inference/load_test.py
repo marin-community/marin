@@ -259,9 +259,14 @@ async def run_load(
         or config.concurrency < 1
         or min(config.measurement_seconds, config.gpu_count, config.metrics_interval_seconds) <= 0
         or config.warmup_seconds < 0
-        or (config.data_parallel_size is not None and config.data_parallel_size < 1)
+        or (
+            config.data_parallel_size is not None
+            and (config.data_parallel_size < 1 or config.concurrency % config.data_parallel_size)
+        )
     ):
-        raise ValueError("A load run requires requests, positive load/window/GPU counts and nonnegative warmup")
+        raise ValueError(
+            "A load run requires requests, positive load/window/GPU counts, nonnegative warmup and balanced DP clients"
+        )
     order = list(requests)
     random.Random(config.seed).shuffle(order)
     rows: list[RequestMeasurement] = []
@@ -301,8 +306,14 @@ async def run_load(
         async def drive(rank: int) -> None:
             index = rank
             data_parallel_rank = None if config.data_parallel_size is None else rank % config.data_parallel_size
+            request_index = rank if config.data_parallel_size is None else rank // config.data_parallel_size
+            request_stride = (
+                config.concurrency
+                if config.data_parallel_size is None
+                else config.concurrency // config.data_parallel_size
+            )
             while time.perf_counter() < deadline and not failed.is_set():
-                request = order[index % len(order)]
+                request = order[request_index % len(order)]
                 row = await measure_request(
                     client, base_url, model, request, seed=config.seed + index, data_parallel_rank=data_parallel_rank
                 )
@@ -310,6 +321,7 @@ async def run_load(
                 if row.error is not None:
                     failed.set()
                 index += config.concurrency
+                request_index += request_stride
 
         await asyncio.gather(observe(), *(drive(rank) for rank in range(config.concurrency)))
     server = summarize_metrics(samples, config.gpu_count)

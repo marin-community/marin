@@ -3,13 +3,17 @@
 
 import asyncio
 import json
+import time
 
 import httpx
 import pytest
+from marin.inference import load_test
 from marin.inference.load_test import (
+    LoadConfig,
     LoadRequest,
     RequestMeasurement,
     measure_request,
+    run_load,
     summarize_metrics,
     summarize_requests,
 )
@@ -76,6 +80,44 @@ def test_truncated_stream_remains_a_failed_request_even_with_partial_usage():
     assert result.error is not None
     summary = summarize_requests([result], result.started, result.ended)
     assert summary["failed"] == 1 and summary["succeeded"] == 0
+
+
+def test_pinned_clients_cover_the_same_prompts_on_each_rank_with_distinct_seeds(monkeypatch):
+    now = [time.perf_counter()]
+    received = []
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(load_test.time, "perf_counter", lambda: now[0])
+    monkeypatch.setattr(load_test.PrometheusScraper, "scrape", lambda self: [])
+
+    async def run():
+        ready = asyncio.Event()
+
+        async def handle(request):
+            body = json.loads(request.content)
+            received.append((request.headers["X-data-parallel-rank"], tuple(body["prompt"]), body["seed"]))
+            if len(received) == 4:
+                now[0] += 1
+                ready.set()
+            await ready.wait()
+            event = {"choices": [{"text": "ok"}], "usage": {"prompt_tokens": 1, "completion_tokens": 2}}
+            return httpx.Response(200, text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n")
+
+        transport = httpx.MockTransport(handle)
+        monkeypatch.setattr(load_test.httpx, "AsyncClient", lambda **kwargs: client_type(transport=transport, **kwargs))
+        return await run_load(
+            "http://model/v1",
+            "http://model/metrics",
+            "policy",
+            [LoadRequest(str(token), "completions", {"prompt": [token]}) for token in (1, 2)],
+            LoadConfig(4, 0, 1, 10, 2, 17, data_parallel_size=2),
+        )
+
+    result = asyncio.run(run())
+    assert {(rank, prompt) for rank, prompt, _ in received} == {
+        (rank, (token,)) for rank in ("0", "1") for token in (1, 2)
+    }
+    assert len({seed for _, _, seed in received}) == 4
+    assert len(result["requests"]) == 4 and all(row["error"] is None for row in result["requests"])
 
 
 def test_server_counter_window_excludes_warmup_and_preserves_counter_reset():

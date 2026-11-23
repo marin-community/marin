@@ -990,7 +990,8 @@ For controlled vLLM occupancy measurements, set `LoadConfig.data_parallel_size`
 to the server's DP size. Each client sends `X-data-parallel-rank` for its fixed
 rank, and its measurement records `requested_data_parallel_rank`. Use concurrency
 equal to the requested clients per rank times the DP size. An unset DP size uses
-the server's routing. In both modes, verify actual running counts from labeled
+the server's routing. Each fixed rank traverses the same request inventory;
+request seeds remain unique across clients. In both modes, verify actual running counts from labeled
 engine gauges; client concurrency alone does not establish occupancy.
 
 Submit through Iris at production priority, with explicit GPU count, rack
