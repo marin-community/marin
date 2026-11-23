@@ -4,11 +4,19 @@
 import copy
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
+from levanter import training_budget
+from levanter.training_budget import TimeLimitedIterator, TrainingStopReason
 
+from experiments.post_training.long_loop.execution_policy import (
+    SFT_FINALIZATION_RESERVE,
+    SFT_TRAINING_DURATION,
+    SFT_UPDATE_RESERVE,
+)
 from experiments.post_training.long_loop.round_runner import RoundSft, load_round
 from experiments.post_training.long_loop.run_spec import FilePin
 from experiments.post_training.long_loop.sft_epoch import (
@@ -16,7 +24,9 @@ from experiments.post_training.long_loop.sft_epoch import (
     bind_sft_stopping,
     epoch_exposure,
     packing_code_sha256,
+    step_exposure,
 )
+from experiments.post_training.long_loop.shared_sft import validate_epoch_completion
 
 
 @pytest.fixture
@@ -90,7 +100,7 @@ def test_default_epoch_covers_complete_sources_and_derives_steps_from_capacity(e
     )
     updates = bind_sft_stopping(recipe, controls.stopping, pin)
     receipt = recipe["sft_exposure"]
-    assert controls.training_budget is None and controls.stage_guard is None
+    assert controls.training_budget.duration == SFT_TRAINING_DURATION and controls.stage_guard is None
     assert updates == 250
     assert receipt["components"]["sft/large"]["samples"] == 47_999
     assert receipt["components"]["sft/tiny"]["samples"] == 1
@@ -134,7 +144,7 @@ def test_epoch_keeps_explicit_iid_reservations_out_of_the_training_quota(epoch_i
     assert exposure["required_samples"] == exposure["training_sequences"]
 
 
-def test_round_yaml_omitting_stopping_selects_one_epoch_without_an_inherited_clock(tmp_path):
+def test_round_yaml_omitting_stopping_selects_one_epoch_with_the_shared_time_cap(tmp_path):
     source = Path(__file__).parents[1] / "rounds/exp5-setup.yaml"
     document = yaml.safe_load(source.read_text())
     for field in ("stopping", "training_budget", "stage_guard", "wall_clock_cooldown_fraction"):
@@ -143,4 +153,64 @@ def test_round_yaml_omitting_stopping_selects_one_epoch_without_an_inherited_clo
     path.write_text(yaml.safe_dump(document))
     spec = load_round(path)
     assert spec.sft.stopping == MixtureEpochs(1)
-    assert spec.sft.training_budget is None
+    assert spec.sft.training_budget.duration == SFT_TRAINING_DURATION
+    assert spec.sft.training_budget.finalization_reserve == SFT_FINALIZATION_RESERVE
+    assert spec.sft.training_budget.update_reserve == SFT_UPDATE_RESERVE
+    assert spec.sft.task_timeout_seconds == SFT_TRAINING_DURATION.total_seconds()
+
+
+@pytest.mark.parametrize("time_bound", [False, True])
+def test_default_epoch_stops_at_epoch_or_clock_whichever_is_first(epoch_inputs, monkeypatch, time_bound):
+    recipe, _, pin = epoch_inputs
+    controls = RoundSft(
+        batch_size=256, min_lr_ratio=0.1, learning_rate=1e-4, adam_learning_rate=1e-4, mesh={}, resources={}
+    )
+    updates = bind_sft_stopping(recipe, controls.stopping, pin)
+    clock = [0.0]
+    monkeypatch.setattr(training_budget, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(training_budget, "time", lambda: 1000 + clock[0])
+    budget = replace(
+        controls.training_budget, deadline_epoch_seconds=1000 + controls.training_budget.duration.total_seconds()
+    )
+    batches = TimeLimitedIterator(range(updates), budget)
+    advance = budget.training_duration.total_seconds() if time_bound else 1
+    consumed = []
+    for _ in range(updates):
+        try:
+            consumed.append(next(batches))
+        except StopIteration:
+            break
+        clock[0] += advance
+    assert consumed == list(range(1 if time_bound else updates))
+    assert batches.stop_reason == (TrainingStopReason.TIME_BOUND if time_bound else None)
+
+
+def test_round_cannot_disable_the_shared_sft_time_cap(tmp_path):
+    document = yaml.safe_load((Path(__file__).parents[1] / "rounds/exp5-setup.yaml").read_text())
+    document["sft"]["training_budget"] = None
+    source = tmp_path / "disabled-clock.yaml"
+    source.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match="cannot disable its training budget"):
+        load_round(source)
+
+
+@pytest.mark.parametrize(
+    "complete,reason",
+    [
+        (True, TrainingStopReason.MAXIMUM_UPDATES),
+        (False, TrainingStopReason.TIME_BOUND),
+        (False, TrainingStopReason.DATA_EXHAUSTED),
+        (False, TrainingStopReason.MAXIMUM_UPDATES),
+    ],
+)
+def test_epoch_completion_accepts_only_coverage_or_certified_time_limit(epoch_inputs, complete, reason):
+    recipe, _, pin = epoch_inputs
+    updates = bind_sft_stopping(recipe, MixtureEpochs(), pin)
+    actual = step_exposure(recipe, recipe["sft_capacity"]["sources"], updates if complete else 1)
+    actual.update(epoch_target_complete=complete, stop_reason=reason)
+    if not complete and reason != TrainingStopReason.TIME_BOUND:
+        with pytest.raises(ValueError, match="without a native time-bound completion"):
+            validate_epoch_completion(actual)
+        return
+    validate_epoch_completion(actual)
+    assert actual["full_sft_coverage"] == complete

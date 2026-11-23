@@ -36,7 +36,12 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.__main__ import validate_graph
-from experiments.post_training.long_loop.execution_policy import SFT_CHECKPOINT_INTERVAL, SFT_TRAINING_DURATION
+from experiments.post_training.long_loop.execution_policy import (
+    SFT_CHECKPOINT_INTERVAL,
+    SFT_FINALIZATION_RESERVE,
+    SFT_TRAINING_DURATION,
+    SFT_UPDATE_RESERVE,
+)
 from experiments.post_training.long_loop.exp3_recipe import TOKEN_IDS, verified_initializer_model
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.run_spec import resolve_spec
@@ -204,7 +209,7 @@ def production_sft_recipe(release: DataRelease, *, initial_eval_inputs: str) -> 
             process_timeout=timedelta(minutes=30),
             startup_grace_period=timedelta(0),
         ),
-        training_budget=TrainingBudgetConfig(SFT_TRAINING_DURATION, timedelta(minutes=40), timedelta(minutes=10)),
+        training_budget=TrainingBudgetConfig(SFT_TRAINING_DURATION, SFT_FINALIZATION_RESERVE, SFT_UPDATE_RESERVE),
     )
     reference_data = draccus.decode(
         LmDataConfig, json.loads((StoragePath(initial_eval_inputs) / "c4-data.json").read_text())

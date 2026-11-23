@@ -13,7 +13,7 @@ import draccus
 from fray.types import GpuConfig, ResourceConfig
 from iris.rpc.proto_display import priority_band_value
 from levanter.data.text.datasets import LmDataConfig
-from levanter.training_budget import TrainingBudgetConfig, read_training_completion
+from levanter.training_budget import TrainingBudgetConfig, TrainingStopReason, read_training_completion
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.buckets import filesystem_for
@@ -179,13 +179,20 @@ def native_sft_step(
             actual = step_exposure(recipe, recipe["sft_capacity"]["sources"], selected["completed_updates"])
             actual["completed_updates"] = selected["completed_updates"]
             actual["epoch_target_complete"] = selected["completed_updates"] == spec.num_train_steps
+            actual["stop_reason"] = selected.get("training_completion", {}).get("stop_reason")
             (StoragePath(config.output_path) / "sft_actual_exposure.json").write_text(json.dumps(actual, indent=2))
-            if recipe["sft_exposure"]["stopping"]["type"] == "mixture_epochs" and (
-                not actual["epoch_target_complete"] or not actual["full_sft_coverage"]
-            ):
-                raise ValueError("SFT stopped before the declared full-store epoch; see sft_actual_exposure.json")
+            if recipe["sft_exposure"]["stopping"]["type"] == "mixture_epochs":
+                validate_epoch_completion(actual)
 
     return replace(trained, run=execute, build_config=build_config)
+
+
+def validate_epoch_completion(actual: dict) -> None:
+    """Accept a partial epoch only when the native receipt certifies its time limit."""
+    if actual["epoch_target_complete"] and not actual["full_sft_coverage"]:
+        raise ValueError("Completed SFT epoch lacks full training coverage; see sft_actual_exposure.json")
+    if not actual["epoch_target_complete"] and actual["stop_reason"] != TrainingStopReason.TIME_BOUND:
+        raise ValueError("SFT stopped before the declared epoch without a native time-bound completion")
 
 
 def select_shared_sft(*, output: str, completed_updates: int) -> None:

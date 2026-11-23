@@ -320,7 +320,6 @@ def test_round_schema_rejects_unknown_and_mistyped_fields(tmp_path):
 def _round_spec(recipe: dict, **sft_overrides) -> RoundSpec:
     sft = RoundSft(
         stopping=SftSteps(360),
-        training_budget=draccus.decode(TrainingBudgetConfig | None, recipe.get("trainer", {}).get("training_budget")),
         batch_size=recipe["batch_size"],
         min_lr_ratio=0.1,
         learning_rate=5.0e-05,
@@ -329,6 +328,10 @@ def _round_spec(recipe: dict, **sft_overrides) -> RoundSpec:
         resources=recipe["resources"],
         special_token_lr_multiplier=math.sqrt(32),
     )
+    if recipe.get("trainer", {}).get("training_budget") is not None:
+        sft = dataclasses.replace(
+            sft, training_budget=draccus.decode(TrainingBudgetConfig, recipe["trainer"]["training_budget"])
+        )
     return RoundSpec(
         schema=1,
         name="long-loop-exp4/round4",

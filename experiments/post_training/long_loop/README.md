@@ -64,16 +64,18 @@ sft:
   stopping: {type: mixture_epochs, count: 1}
   epoch_capacity: {path: "<capacity.json URI>", sha256: "<SHA-256>"}
   data_seed: 0
-  training_budget: null
 ```
 
 The round derives `num_train_steps` and the optimizer horizon from that epoch.
-The LR schedule remains explicit. A wall-clock cooldown requires an explicit
-`sft.training_budget`; it scales the scheduled LR using the remaining training
-time. Without that budget, the step-based optimizer horizon controls annealing. There is no default training-clock or allocation-hour budget.
-The separate operational task timeout interrupts an unfinished run; it does not
-certify an epoch as complete. Historical step-controlled round YAMLs retain
-their original step and budget settings explicitly.
+Training stops after the epoch or at the shared 20-hour SFT limit, whichever
+comes first. The 20-hour envelope includes the default reserves of 40 minutes
+for finalization and 10 minutes for the next update, leaving time to save the permanent final
+checkpoint and export. Omit `training_budget` to use this default; `null` is
+rejected. The LR schedule remains explicit. A wall-clock cooldown scales it
+using remaining training time when configured. There is no default allocation-hour
+budget. A time-bound completion records its actual exposure and does not claim
+the full planned epoch was consumed. The operational task timeout remains a
+separate last resort and does not certify successful completion.
 
 Every plan and SFT output carries `sft_capacity.json` and the planned
 `sft_exposure.json`. After training, `sft_actual_exposure.json` records the
@@ -572,8 +574,9 @@ Outer deadlines remain explicit in
 Frozen recovery plans and native resume accounting retain their recorded
 budget; the lost-time deadline-extension rule is unchanged. Updating the
 source constant does not change a running job.
-Time-limited SFT rounds read the 20-hour `SFT_TRAINING_DURATION` from the same
-module. Their YAML keeps finalization and update reserves but does not repeat
+All new SFT rounds, including one-epoch runs, read the 20-hour
+`SFT_TRAINING_DURATION` from the same module. The standard finalization and update
+reserves are shared there too. Their YAML can specify reserves but does not repeat
 the duration. The shared SFT builder and the SFT stage deadline use that constant.
 
 Future RL validation runs every two optimizer steps. Checkpoint selection uses

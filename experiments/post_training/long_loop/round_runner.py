@@ -53,10 +53,10 @@ from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.adopted_sft import pinned_json
 from experiments.post_training.long_loop.archive import PERMANENT_TMP_SEGMENT
 from experiments.post_training.long_loop.execution_policy import (
-    DEFAULT_TASK_TIMEOUT_SECONDS,
     RL_TRAINING_BUDGET,
+    SFT_FINALIZATION_RESERVE,
     SFT_TRAINING_DURATION,
-    STAGE_TIMEOUT_SECONDS,
+    SFT_UPDATE_RESERVE,
     rl_training_callbacks,
 )
 from experiments.post_training.long_loop.exp3_production import (
@@ -142,9 +142,16 @@ class RoundSft:
     resources: dict
     stopping: SftStopping = dataclasses.field(default_factory=MixtureEpochs)
     epoch_capacity: FilePin | None = None
-    training_budget: TrainingBudgetConfig | None = None
+    training_budget: TrainingBudgetConfig = dataclasses.field(
+        default_factory=partial(
+            TrainingBudgetConfig,
+            duration=SFT_TRAINING_DURATION,
+            finalization_reserve=SFT_FINALIZATION_RESERVE,
+            update_reserve=SFT_UPDATE_RESERVE,
+        )
+    )
     stage_guard: StageGuard | None = None
-    task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
+    task_timeout_seconds: int = int(SFT_TRAINING_DURATION.total_seconds())
     data_seed: int = 0
     special_token_lr_multiplier: float | None = None
     warmup_steps: int = 0
@@ -155,6 +162,10 @@ class RoundSft:
     wall_clock_cooldown_fraction: float | None = None
     first_collective_call_timeout: int | None = None
     xla_flags: list[str] = dataclasses.field(default_factory=list)
+
+    def __post_init__(self):
+        if self.training_budget is None or self.training_budget.duration != SFT_TRAINING_DURATION:
+            raise ValueError("Long-loop SFT requires the canonical training budget")
 
 
 @dataclass(frozen=True)
@@ -386,6 +397,8 @@ def _decode_strict(section: dict, target: type, label: str):
             if not isinstance(value, dict):
                 raise ValueError(f"{label}.{name} must be a mapping")
             value = _decode_strict(value, field.type, f"{label}.{name}")
+        elif field.type is timedelta:
+            value = draccus.decode(timedelta, value)
         elif field.type is not bool and isinstance(value, bool):
             raise ValueError(f"{label}.{name} must be {field.type.__name__}, got bool")
         elif not isinstance(value, value_type):
@@ -399,6 +412,8 @@ def load_round(path: Path) -> RoundSpec | AdoptedHfRound | AdoptedRlRound | Reco
     document = yaml.safe_load(path.read_text())
     if not isinstance(document, dict):
         raise ValueError(f"{path} must contain a mapping")
+    if "sft" in document and "training_budget" in document["sft"] and document["sft"]["training_budget"] is None:
+        raise ValueError("Long-loop SFT cannot disable its training budget; omit training_budget to use the default")
     if "sft" in document and document["sft"].get("training_budget") is not None:
         budget = document["sft"]["training_budget"]
         if "duration" in budget and draccus.decode(timedelta, budget["duration"]) != SFT_TRAINING_DURATION:
@@ -783,9 +798,7 @@ def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict)
         if round_spec.sft.wall_clock_cooldown_fraction is not None
         else None
     )
-    expected_budget = round_spec.sft.training_budget
-    if expected_budget is not None:
-        expected_budget = dataclasses.replace(expected_budget, cooldown=expected_cooldown)
+    expected_budget = dataclasses.replace(round_spec.sft.training_budget, cooldown=expected_cooldown)
     if budget != expected_budget:
         raise ValueError("Built training budget differs from the round declaration")
     if (budget.cooldown if budget is not None else None) != expected_cooldown:
@@ -820,13 +833,6 @@ def round_plan(
     sft["stage_guard"] = draccus.encode(round_spec.sft.stage_guard)
     sft["task_timeout_seconds"] = round_spec.sft.task_timeout_seconds
     resolved["execution"]["task_timeouts"]["sft"] = round_spec.sft.task_timeout_seconds
-    coordinator = resolved["execution"]["coordinator"]
-    envelope = round_spec.sft.task_timeout_seconds + sum(
-        STAGE_TIMEOUT_SECONDS[stage] for stage in ("rl", "evaluation", "export", "archive")
-    )
-    if round_spec.sft.training_budget is None:
-        coordinator["job_timeout_seconds"] = max(coordinator["job_timeout_seconds"], envelope)
-        coordinator["coordinator_timeout_hours"] = math.ceil(coordinator["job_timeout_seconds"] / 3600)
     sft["data_seed"] = round_spec.sft.data_seed
     updates = bind_sft_stopping(sft, round_spec.sft.stopping, round_spec.sft.epoch_capacity)
     sft["stop_after_steps"] = updates
@@ -843,8 +849,6 @@ def round_plan(
         sft["trainer"]["mp"] = round_spec.sft.mp
     if round_spec.sft.wall_clock_cooldown_fraction is not None:
         budget = sft["trainer"]["training_budget"]
-        if budget is None:
-            raise ValueError("Declared wall-clock cooldown requires a training budget")
         budget["cooldown"] = draccus.encode(
             WallClockCooldown(
                 fraction=round_spec.sft.wall_clock_cooldown_fraction, min_lr_ratio=round_spec.sft.min_lr_ratio

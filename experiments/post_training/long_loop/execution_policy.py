@@ -9,6 +9,8 @@ from types import MappingProxyType
 DEFAULT_TASK_TIMEOUT_SECONDS = 3 * 24 * 60 * 60
 SFT_CHECKPOINT_INTERVAL = timedelta(hours=2)
 SFT_TRAINING_DURATION = timedelta(hours=20)
+SFT_FINALIZATION_RESERVE = timedelta(minutes=40)
+SFT_UPDATE_RESERVE = timedelta(minutes=10)
 RL_TRAINING_BUDGET = MappingProxyType({"seconds": 43200, "drain_margin": 1800})
 
 
