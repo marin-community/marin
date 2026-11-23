@@ -8,6 +8,7 @@ import json
 import httpx
 import openai
 import pytest
+from taskcompendium.models import ReplyStatus
 
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
@@ -63,7 +64,44 @@ async def test_completion_transport_sends_exact_input_without_chat_template(toke
     assert turn.stop_reason == "length"
     assert turn.usage == TokenUsage(7, 3)
     assert turn.metadata == {"response_id": "response-1"}
+    assert turn.reply_status == ReplyStatus(
+        origin="provider", finish_reason="length", truncated=True, provider_refusal=False, tool_events=()
+    )
     assert request.options == options
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", ["stop", "content_filter"])
+async def test_completion_retains_provider_termination_evidence(finish_reason):
+    def serve(_request):
+        return httpx.Response(
+            200,
+            json={
+                "id": "status-evidence",
+                "object": "text_completion",
+                "created": 0,
+                "model": "fixture",
+                "choices": [{"index": 0, "finish_reason": finish_reason, "text": "same answer"}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9},
+            },
+        )
+
+    async with openai.AsyncOpenAI(
+        api_key="test",
+        base_url="http://completion.test/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(serve)),
+    ) as client:
+        turn = await CompletionModel(client, "fixture")(ModelRequest(({"role": "user", "content": "prompt"},), {}))
+
+    assert turn.text == "same answer"
+    assert turn.reply_status == ReplyStatus(
+        origin="provider",
+        finish_reason=finish_reason,
+        truncated=False,
+        provider_refusal=finish_reason == "content_filter",
+        tool_events=(),
+    )
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,8 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from openai.types.completion import Completion
+from taskcompendium.chat import tool_event_paths
+from taskcompendium.models import ReplyStatus
 
 from rolloutengine.models import ModelRequest, ModelResponseError, ModelTurn, TokenUsage
 
@@ -51,4 +53,11 @@ class CompletionModel:
             text=choice.text,
             metadata={"response_id": response.id},
             usage=TokenUsage(response.usage.prompt_tokens, response.usage.completion_tokens),
+            reply_status=ReplyStatus(
+                origin="provider",
+                finish_reason=choice.finish_reason,
+                truncated=choice.finish_reason == "length",
+                provider_refusal=choice.finish_reason == "content_filter",
+                tool_events=tool_event_paths(response.model_dump(mode="json")),
+            ),
         )
