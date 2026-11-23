@@ -62,4 +62,4 @@ def load_agentx_model(
         converter, ref, config, dtype=jnp.bfloat16, axis_mapping=axis_mapping, pack_expert_weights=True
     )
     model = model.with_paged_attention("tpu_v3").with_split_decode_cache()
-    return model.with_expert_sharded_kv().with_selected_ep_decode()
+    return model.with_expert_sharded_kv()
