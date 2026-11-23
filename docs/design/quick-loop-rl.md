@@ -2189,11 +2189,11 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   recovery and the full native match remain unverified.
   [Final evaluation recovery proof][held-native-final-panel-recovery]
 
-  The first training batch contained no tool calls in either arm. The
-  native arm returned fewer tokens and took about 204 times longer to
-  admit its 32 groups. Its serving process runs batches of up to four
-  requests serially. The captured native logs combine queueing with model
-  execution. On one eight-H100 host, profile an identical captured prompt
+  The earlier prompt-aligned replacement and the held vLLM control both
+  completed their first admission windows without tool calls. The native
+  worker served batches of up to four requests serially. Its logs combine
+  queueing with model execution. On one eight-H100 host, profile an identical
+  captured prompt
   group cold and warm, then repeat with a bounded queue. Time enqueue to
   dispatch, record realized batch size, and measure prefill, decode and
   replay serialization. The serve-only fixture uses four matched short
