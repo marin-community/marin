@@ -138,6 +138,23 @@ async def test_image_pi_preserves_requested_version(temp_dir, monkeypatch, reque
         assert agent.version() == "0.87.0"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("installed_version", ["7.0.0", "6.9.0"])
+async def test_image_pi_checks_requested_mcp_adapter_version(temp_dir, installed_version):
+    environment = AsyncMock()
+    environment.exec.side_effect = [
+        SimpleNamespace(return_code=0, stdout="0.87.0\n", stderr=""),
+        SimpleNamespace(return_code=0, stdout=f"{installed_version}\n", stderr=""),
+    ]
+    agent = Pi(logs_dir=temp_dir, mcp_adapter_version="7.0.0")
+
+    if installed_version == "7.0.0":
+        await agent.install(environment)
+    else:
+        with pytest.raises(RuntimeError, match="Image provides Pi MCP adapter 6.9.0"):
+            await agent.install(environment)
+
+
 class TestPiAgent:
     @pytest.mark.asyncio
     async def test_run_command_structure(self, temp_dir):

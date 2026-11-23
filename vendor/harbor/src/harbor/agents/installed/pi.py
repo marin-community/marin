@@ -321,6 +321,7 @@ export default function (pi) {
         thinking_format: str | None = None,
         http_idle_timeout: float | None = None,
         mcp_excluded_tools: Sequence[str] = (),
+        mcp_adapter_version: str | None = None,
         **kwargs,
     ) -> None:
         if api_base is not None and (not isinstance(api_base, str) or not api_base):
@@ -361,6 +362,7 @@ export default function (pi) {
         self._thinking_format = thinking_format
         self._http_idle_timeout = http_idle_timeout
         self._mcp_excluded_tools = tuple(mcp_excluded_tools)
+        self._mcp_adapter_version = mcp_adapter_version
         model_info = model_info or {}
         self._configure_compaction = (
             api_base is not None
@@ -508,6 +510,19 @@ export default function (pi) {
                 f"Image provides Pi {installed_version}, but the agent requires {self._version}"
             )
         self._version = installed_version
+        if self._mcp_adapter_version is not None:
+            result = await self.exec_as_agent(
+                environment,
+                command=(
+                    "node -p \"require('/opt/harbor-pi/node_modules/pi-mcp-extension/package.json').version\""
+                ),
+            )
+            installed_adapter_version = result.stdout.strip()
+            if installed_adapter_version != self._mcp_adapter_version:
+                raise RuntimeError(
+                    f"Image provides Pi MCP adapter {installed_adapter_version}, "
+                    f"but the agent requires {self._mcp_adapter_version}"
+                )
 
     def _build_register_skills_command(self) -> str | None:
         """Return a shell command that copies skills to Pi's skills directory."""
