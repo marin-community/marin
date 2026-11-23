@@ -39,8 +39,13 @@ def standard_tools(
     settings: LoweringSettings,
     gate: Gate,
 ) -> Mapping[str, Tool[object]]:
-    """The author's tools: the adversary's, with write, submit and web tools at their places in the order."""
-    shared = adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings)
-    shell, read, grade, finish = shared.values()
-    submit = SubmitTool(gate, task_path, controls_path)
-    return _named(shell, read, WriteFileTool(), grade, submit, finish, WebSearchTool(), WebFetchTool())
+    return _named(
+        ShellTool(policy.setting("solver.command_timeout", float), policy.setting("solver.tool_timeout", float)),
+        ReadFileTool(),
+        WriteFileTool(),
+        GradeTool(task_path, factories, settings),
+        SubmitTool(gate, task_path, controls_path),
+        FinishTool(),
+        WebSearchTool(),
+        WebFetchTool(),
+    )
