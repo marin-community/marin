@@ -61,6 +61,7 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.devices import use_cpu_devices, use_test_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -2703,3 +2704,29 @@ def test_route_capture_validation_rejects_duplicate_experts():
     )
     with pytest.raises(ValueError, match="duplicate"):
         validate_moe_route_capture(capture, num_experts=3, num_experts_per_token=2)
+
+
+def test_small_ep_decode_matches_ring_with_a_padded_token():
+    with use_cpu_devices(2), jax.set_mesh(compact_grug_mesh(expert_axis_size=2)):
+        mesh = jax.sharding.get_abstract_mesh()
+        mlp = MoEExpertMlp.init(
+            num_experts=4,
+            hidden_dim=8,
+            intermediate_dim=16,
+            initializer_std=0.1,
+            key=jax.random.key(23),
+            implementation="ring",
+            capacity_factor=2.0,
+        )
+        token_spec = P("expert", None)
+        tokens = jax.sharding.reshard(jax.random.normal(jax.random.key(17), (2, 8)), token_spec)
+        indices = jax.sharding.reshard(jnp.array([[0, 3], [2, 1]], dtype=jnp.int32), token_spec)
+        combine = jax.sharding.reshard(jnp.array([[0.25, 0.75], [0.4, 0.6]], dtype=jnp.float32), token_spec)
+        valid = jax.sharding.reshard(jnp.array([True, False]), P("expert"))
+        args = (tokens, indices, combine)
+        reference = mlp(*args, token_valid=valid, mesh=mesh)
+        decoded = mlp.decode_small_ep(*args, token_valid=valid, mesh=mesh)
+
+    np.testing.assert_allclose(decoded, reference, atol=1e-6, rtol=1e-5)
+    assert np.any(np.asarray(decoded)[0] != 0)
+    np.testing.assert_array_equal(np.asarray(decoded)[1], 0)

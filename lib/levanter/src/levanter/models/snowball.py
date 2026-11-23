@@ -736,6 +736,7 @@ class SnowballMoEMLP(eqx.Module):
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
     cfg: SnowballConfig = eqx.field(static=True)
+    selected_decode: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballMoEMLP":
@@ -806,20 +807,30 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights = combine_weights_f if self.cfg.router_combine_fp32 else combine_weights_f.astype(x.dtype)
 
         valid_flat = None if token_valid is None else reshard(token_valid.reshape(b * s), P(_token_spec()[0]))
-        report_capacity_overflow = token_valid is not None or collect_counts
-        result = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            token_valid=valid_flat,
-            report_capacity_overflow=report_capacity_overflow,
-        )
         counts = None
-        if report_capacity_overflow:
-            routed_flat, counts = cast(tuple[Array, MoeDispatchCounts], result)
+        if self.selected_decode:
+            assert valid_flat is not None
+            routed_flat = self.expert_mlp.decode_small_ep(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                token_valid=valid_flat,
+                mesh=get_abstract_mesh(),
+            )
         else:
-            routed_flat = cast(Array, result)
+            report_capacity_overflow = token_valid is not None or collect_counts
+            result = self.expert_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                token_valid=valid_flat,
+                report_capacity_overflow=report_capacity_overflow,
+            )
+            if report_capacity_overflow:
+                routed_flat, counts = cast(tuple[Array, MoeDispatchCounts], result)
+            else:
+                routed_flat = cast(Array, result)
         out = jax.lax.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
         if not return_routes:
             return MoeForwardOutput(out, None, counts)
@@ -836,6 +847,10 @@ class SnowballBlock(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: SnowballMoEMLP
     shared: DenseMLP
+
+    def with_packed_experts(self) -> "SnowballBlock":
+        """Pack the two routed expert input projections for inference."""
+        return eqx.tree_at(lambda block: block.mlp.expert_mlp, self, self.mlp.expert_mlp.with_packed_gate_up())
 
     @staticmethod
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballBlock":
@@ -1091,6 +1106,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     _split_decode_cache: bool = eqx.field(static=True, default=False)
     _paged_attention: PagedAttentionImplementation | None = eqx.field(static=True, default=None)
     _kv_axis: Literal["model", "expert"] = eqx.field(static=True, default="model")
+    _selected_ep_decode: bool = eqx.field(static=True, default=False)
 
     def with_expert_sharded_kv(self) -> "SnowballLMHeadModel":
         """Shard paged KV heads across the expert axis during generation."""
@@ -1107,6 +1123,15 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def with_split_decode_cache(self) -> "SnowballLMHeadModel":
         """Keep one KV buffer per layer for unrolled token decode."""
         return dataclasses.replace(self, _unroll_decode=True, _split_decode_cache=True)
+
+    def with_packed_experts(self) -> "SnowballLMHeadModel":
+        """Keep routed gate and up weights in the grouped inference layout."""
+        blocks = tuple(block.with_packed_experts() for block in self.transformer.blocks)
+        return eqx.tree_at(lambda model: model.transformer.blocks, self, blocks)
+
+    def with_selected_ep_decode(self) -> "SnowballLMHeadModel":
+        """Read selected matrix slices for eligible small expert-parallel decode batches."""
+        return dataclasses.replace(self, _selected_ep_decode=True)
 
     @property
     def config(self) -> SnowballConfig:
@@ -1435,7 +1460,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             for layer_index, (block, cache) in enumerate(zip(self.transformer.blocks, kv_cache, strict=True)):
                 use_long = _is_long_attention_layer(layer_index, num_layers)
                 layer_batch = window_batch if window_batch is not None and not use_long else batch_info
-                result, cache = self._inference_block(block).decode(
+                result, cache = self._inference_block(block, tokens.shape[0]).decode(
                     hidden,
                     cache,
                     layer_batch,
@@ -1486,7 +1511,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             routes_by_layer = []
             for layer_index, block in enumerate(self.transformer.blocks):
                 use_long = _is_long_attention_layer(layer_index, num_layers)
-                state, routes = layer_step(state, (layer_index, self._inference_block(block), use_long))
+                state, routes = layer_step(state, (layer_index, self._inference_block(block, tokens.shape[0]), use_long))
                 if routes is not None:
                     routes_by_layer.append(routes)
             hidden, cache_pages = state
@@ -1495,7 +1520,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)
             layer_data = (
                 jnp.arange(num_layers),
-                self._inference_block(stacked),
+                self._inference_block(stacked, tokens.shape[0]),
                 long_attention_layer_mask(num_layers),
             )
             (hidden, cache_pages), expert_ids = jax.lax.scan(layer_step, initial, layer_data)
@@ -1504,14 +1529,26 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         routes = SnowballDecodeRoutes(expert_ids, token_valid) if expert_ids is not None else None
         return hidden, _split_layer_cache(caches, self._kv_axis) if split_cache else caches, routes
 
-    def _inference_block(self, block: SnowballBlock) -> SnowballBlock:
+    def _inference_block(self, block: SnowballBlock, token_rows: int) -> SnowballBlock:
         expert_size = _mesh_axis_size(_current_mesh(), "expert")
         if expert_size <= 1:
             return block
         # A receiver can get every sender's assignments. Reserve that worst-case
         # capacity so expert dispatch cannot drop tokens at serving time.
-        experts = dataclasses.replace(block.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size))
-        return eqx.tree_at(lambda block: block.mlp.expert_mlp, block, experts)
+        experts = dataclasses.replace(
+            block.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
+        )
+        selected = (
+            self._selected_ep_decode
+            and token_rows == expert_size
+            and not self.config.router_combine_fp32
+            and _mesh_axis_size(_current_mesh(), "data") == 1
+            and _mesh_axis_size(_current_mesh(), "replica_dcn") == 1
+            and _mesh_axis_size(_current_mesh(), "replica") == 1
+            and _mesh_axis_size(_current_mesh(), "model") == 1
+        )
+        mlp = dataclasses.replace(block.mlp, expert_mlp=experts, selected_decode=selected)
+        return eqx.tree_at(lambda candidate: candidate.mlp, block, mlp)
 
     # --- state dict (bidirectional HF serialization) ---
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
@@ -1589,6 +1626,7 @@ def snowball_final_to_state_dict(model: SnowballTransformer, prefix: Optional[st
 
 def snowball_block_to_state_dict(block: SnowballBlock, layer_index: int, prefix: Optional[str] = None) -> StateDict:
     """Export one layer under its global HF layer index."""
+    gate, up = block.mlp.expert_mlp.split_gate_up()
     p = f"model.layers.{layer_index}"
     tensors = {
         f"{p}.input_layernorm.weight": block.rms_attn.weight,
@@ -1604,8 +1642,8 @@ def snowball_block_to_state_dict(block: SnowballBlock, layer_index: int, prefix:
         f"{p}.mlp_gated_norm.up_proj.weight": _T(block.mlp_gated_norm.w_up),
         f"{p}.mlp.router.weight": _T(block.mlp.router),
         f"{p}.mlp.router.bias": block.mlp.router_bias,
-        f"{p}.mlp.experts.gate_proj.weight": _T(block.mlp.expert_mlp.w_gate),
-        f"{p}.mlp.experts.up_proj.weight": _T(block.mlp.expert_mlp.w_up),
+        f"{p}.mlp.experts.gate_proj.weight": _T(gate),
+        f"{p}.mlp.experts.up_proj.weight": _T(up),
         f"{p}.mlp.experts.down_proj.weight": _T(block.mlp.expert_mlp.w_down),
         f"{p}.shared_expert.gate_proj.weight": _T(block.shared.w_gate),
         f"{p}.shared_expert.up_proj.weight": _T(block.shared.w_up),
@@ -1689,21 +1727,16 @@ def snowball_block_from_state_dict(
     )
     m = eqx.tree_at(lambda t: t.mlp.router, m, _reshard_replicated(_T(g(f"{p}.mlp.router.weight"))))
     m = eqx.tree_at(lambda t: t.mlp.router_bias, m, g(f"{p}.mlp.router.bias"))
-    m = eqx.tree_at(
-        lambda t: t.mlp.expert_mlp.w_gate,
-        m,
-        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+    experts = m.mlp.expert_mlp
+    loaded = dataclasses.replace(
+        experts,
+        w_gate=_reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        w_up=_reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        w_down=_reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
     )
-    m = eqx.tree_at(
-        lambda t: t.mlp.expert_mlp.w_up,
-        m,
-        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
-    )
-    m = eqx.tree_at(
-        lambda t: t.mlp.expert_mlp.w_down,
-        m,
-        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
-    )
+    if experts.w_up is None:
+        loaded = loaded.with_packed_gate_up()
+    m = eqx.tree_at(lambda t: t.mlp.expert_mlp, m, loaded)
     m = eqx.tree_at(
         lambda t: t.shared.w_gate,
         m,

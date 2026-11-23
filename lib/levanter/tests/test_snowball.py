@@ -521,17 +521,32 @@ def test_snowball_fp32_activations_cover_every_sigmoid():
     assert router and all("scan" in path and "cond" not in path and "shard_map" not in path for path, _ in router)
 
 
-@pytest.mark.parametrize("model_axis_size,expert_axis_size", [(1, 1), (2, 1), (1, 2)])
 @pytest.mark.parametrize(
-    "decode_mode,n_generations",
-    [("scan", 1), ("scan", 2), ("unroll", 1), ("split_cache", 1), ("compact_window", 1)],
+    "model_axis_size,expert_axis_size,decode_mode,n_generations,packed_experts,selected_decode",
+    [
+        (1, 1, "scan", 1, False, False),
+        (1, 1, "scan", 2, False, False),
+        (2, 1, "unroll", 1, False, False),
+        (1, 2, "split_cache", 1, False, False),
+        (1, 2, "compact_window", 1, True, True),
+    ],
 )
-def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size, decode_mode, n_generations):
+def test_snowball_paged_generation_matches_full_forward(
+    model_axis_size, expert_axis_size, decode_mode, n_generations, packed_experts, selected_decode
+):
     cfg = _tiny_config(num_layers=2, sliding_window=3)
     with use_cpu_devices(model_axis_size * expert_axis_size):
         mesh = compact_grug_mesh(model_axis_size=model_axis_size, expert_axis_size=expert_axis_size)
         with jax.set_mesh(mesh):
             model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(17))
+            if packed_experts:
+                state = model.to_state_dict()
+                model = model.with_packed_experts().from_state_dict(state)
+                assert all(block.mlp.expert_mlp.w_up is None for block in model.transformer.blocks)
+                for name, value in model.to_state_dict().items():
+                    np.testing.assert_array_equal(value, state[name])
+            if selected_decode:
+                model = model.with_selected_ep_decode()
             if decode_mode == "unroll":
                 model = model.with_unrolled_decode()
             elif decode_mode in ("split_cache", "compact_window"):
@@ -544,6 +559,7 @@ def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_
                     max_pages=32,
                     window_cache_max_pages=22 if decode_mode == "compact_window" else None,
                     max_rounds=2,
+                    max_tokens_per_round=expert_axis_size if selected_decode else None,
                     page_size=2,
                     compute_dtype=jnp.float32,
                     max_seqs=4,

@@ -15,6 +15,7 @@ Implementation overview:
 """
 
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from typing import NamedTuple, cast
 
@@ -57,6 +58,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import (
     _gather_dispatch_combine,
     _moe_mlp_ep_ring_local,
+    _moe_mlp_ep_small_local,
     _scatter_add_dispatch_combine,
 )
 from levanter.grug._moe.ep_ring_filtered import _moe_mlp_ep_ring_filtered_local
@@ -554,7 +556,8 @@ class MoEExpertMlp(eqx.Module):
     """Expert MLP weights for routed MoE calls."""
 
     w_gate: jax.Array
-    w_up: jax.Array
+    """Gate projection, followed by the up projection when packed."""
+    w_up: jax.Array | None
     w_down: jax.Array
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
@@ -600,6 +603,22 @@ class MoEExpertMlp(eqx.Module):
             combine_in_fp32=combine_in_fp32,
         )
 
+    def with_packed_gate_up(self) -> "MoEExpertMlp":
+        """Store both projections in the layout consumed by grouped experts."""
+        if self.w_up is None:
+            return self
+        return replace(self, w_gate=self._gate_up(), w_up=None)
+
+    def split_gate_up(self) -> tuple[jax.Array, jax.Array]:
+        """Return the separate gate and up weights, in that order."""
+        if self.w_up is not None:
+            return self.w_gate, self.w_up
+        gate, up = jnp.split(self.w_gate, 2, axis=-1)
+        return gate, up
+
+    def _gate_up(self) -> jax.Array:
+        return self.w_gate if self.w_up is None else jnp.concatenate((self.w_gate, self.w_up), axis=-1)
+
     @named_call
     def __call__(
         self,
@@ -611,7 +630,7 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
-        w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
+        w_gate_up = self._gate_up()
         return moe_mlp(
             x,
             selected_experts,
@@ -628,6 +647,47 @@ class MoEExpertMlp(eqx.Module):
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
             combine_in_fp32=self.combine_in_fp32,
+        )
+
+    @named_call
+    def decode_small_ep(
+        self,
+        x: Float[Array, "T D"],
+        selected_experts: Int[Array, "T K"],
+        combine_weights: Float[Array, "T K"],
+        *,
+        token_valid: Bool[Array, "T"],
+        mesh: jax.sharding.AbstractMesh,
+    ) -> Float[Array, "T D"]:
+        """Return weighted expert outputs for one token per EP shard, with zero output for padding."""
+        ep_size = _mesh_axis_size(mesh, "expert")
+        if ep_size <= 1 or x.shape[0] != ep_size or self.capacity_factor < ep_size:
+            raise ValueError("Small expert decode requires one token row per EP shard and capacity for all routes")
+        if combine_weights.dtype != x.dtype or self.combine_in_fp32:
+            raise ValueError("Small expert decode requires activation-dtype expert combination")
+        if _mesh_axis_size(mesh, "model") > 1:
+            raise ValueError("Small expert decode requires unpartitioned expert matrix dimensions")
+        activation = (
+            self.activation.to_jax_fn() if isinstance(self.activation, ActivationFunctionEnum) else self.activation
+        )
+        token_spec = _token_spec_from_x(x, mesh)
+        expert_spec = P("expert", None, None)
+        gate, up = self.split_gate_up()
+        run = shard_map(
+            partial(_moe_mlp_ep_small_local, activation=activation),
+            mesh=mesh,
+            in_specs=(token_spec, token_spec, token_spec, token_spec, expert_spec, expert_spec, expert_spec),
+            out_specs=token_spec,
+            check_vma=False,
+        )
+        return run(
+            _reshard_for_shard_map(x, mesh, token_spec),
+            _reshard_for_shard_map(selected_experts, mesh, token_spec),
+            _reshard_for_shard_map(combine_weights, mesh, token_spec),
+            _reshard_for_shard_map(token_valid, mesh, token_spec),
+            _reshard_for_shard_map(gate, mesh, expert_spec),
+            _reshard_for_shard_map(up, mesh, expert_spec),
+            _reshard_for_shard_map(self.w_down, mesh, expert_spec),
         )
 
 
