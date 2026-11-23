@@ -85,12 +85,12 @@ keeps its checkpoint and fails before downstream RL can treat it as complete.
 Exp5 setup reuses qualified V7, whose four science components already derive
 from the sealed accepted/repaired science release. It preserves Exp4's SWE
 bug-fix pool, adds the pinned Atlas IFBench training release and base HARDMath,
-and reserves five percent of RL rollout groups for OpenResearcher. Its retrieval
-service remains in qualification, so it is excluded from the prepared pool.
+and assigns five percent of RL rollout groups to OpenResearcher through its
+qualified thin image and hosted retrieval service.
 `exp5.py --stage sft --run` submits only
-SFT and its input verification. It does not bind the RL pools or construct RL,
-handoff, evaluation or archive stages. Downstream submission remains blocked
-until OpenResearcher's runtime is admitted; its reserved share is not redistributed.
+SFT and its input verification as terminal stages. Downstream submission
+requires the certified SFT handoff and the published, training-ready
+eleven-source pools.
 Run the same command without `--run` first to validate the SFT graph and record
 the resolved plan. This check does not qualify the downstream RL stages.
 
@@ -134,10 +134,10 @@ The science inputs are `rqa`, `so`, `syn_mcq` and `vendor` at revision
 `1583049c1df02b418e07d14047eb37db9df46eba`; V7's existing publisher and native
 consumer receipts qualify their retained population.
 
-The intended shares total one. The static preparation graph records the
-prepared 0.95 and reserved 0.05 separately. Its sampler weights remain absolute;
-a training sampler would normalize the prepared subset, so this graph must not
-be submitted. The launch hold also preserves the user's Exp4 evaluation review.
+The curriculum owns a 200-prompt holdout removed from its training pools. At a
+64-group batch, its mixture derives 13 agentic and 51 nonagentic groups.
+Validation requires at least 180 scored prompts for best-checkpoint selection.
+The launch verifies the pool producer and file hashes before using those pools.
 
 ```bash
 uv run python -m experiments.post_training.long_loop.exp5 \

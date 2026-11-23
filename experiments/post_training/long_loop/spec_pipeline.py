@@ -33,6 +33,7 @@ from experiments.post_training.long_loop.runtime_timing import report_step, time
 from experiments.post_training.long_loop.sft import HANDOFF_DIR, export_sft
 from experiments.post_training.long_loop.sft_accounting import write_sft_accounting
 from experiments.post_training.long_loop.shared_sft import export_shared_sft, legacy_sft_step, native_sft_step
+from experiments.post_training.task_curation.curriculum_manifest import rollout_source_routes
 
 
 @dataclass(frozen=True)
@@ -286,7 +287,7 @@ def build_spec_graph(
     declared_sources = set(rl_config["trainer"]["rollout_buffer"].get("source_routes") or {})
     if declared_sources and declared_sources != set(routes):
         raise ValueError("The pool manifest's teacher routes differ from the recipe's declared source routes")
-    rl_config["trainer"]["rollout_buffer"]["source_routes"] = routes
+    rl_config["trainer"]["rollout_buffer"]["source_routes"] = rollout_source_routes(routes)
     rl_execution = stage_execution(rl["execution"], coordinator)
     budget = rl.get("wall_clock_budget")
     callbacks = rl_config["trainer"].get("callbacks", [])

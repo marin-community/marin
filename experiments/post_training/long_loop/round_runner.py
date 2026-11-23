@@ -78,8 +78,8 @@ from experiments.post_training.long_loop.sft_epoch import MixtureEpochs, SftStop
 from experiments.post_training.long_loop.shared_sft import native_sft_step, shared_sft_spec
 from experiments.post_training.long_loop.spec_pipeline import CompletedSft, build_spec_graph, runtime_execution
 from experiments.post_training.long_loop.stage_guard import StageGuard
+from experiments.post_training.task_curation.curriculum_manifest import curriculum_from_manifest, rollout_source_routes
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.long_loop_rl import TEACHER_ROUTE_LABELS
 from experiments.post_training.task_curation.exp4_curriculum import (
     SOURCE_ROUTES,
     exp4_rl_curriculum,
@@ -402,9 +402,7 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
     validate_model_geometry(config, profile)
     pools_manifest_bytes = (StoragePath(prefix_join(rl.pools["uri"], "manifest.json"))).read_bytes()
     pools_manifest = json.loads(pools_manifest_bytes)
-    curriculum = exp4_rl_curriculum(exp4_validation_from_manifest(pools_manifest["validation"]))
-    if pools_manifest["curriculum"] != curriculum.identity:
-        raise ValueError("Round pools were prepared for another curriculum")
+    curriculum = curriculum_from_manifest(pools_manifest)
     files = {
         **pools_manifest["files"],
         "manifest.json": hashlib.sha256(pools_manifest_bytes).hexdigest(),
@@ -433,15 +431,7 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
             f"the round curriculum derives at batch {roles.train_batch_size}: {derived_quotas!r}"
         )
     recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
-    # The runtime classifies each row by its raw ``data_source``; the stamped pools
-    # rename provenance in ``teacher_route`` only, so alias the raw names the
-    # stamping renamed (the reasoning-gym wheel URL and the Nemotron IF dataset)
-    # to their teacher routes alongside the manifest's route map.
-    routes = dict(pools_manifest["routes"])
-    for raw, teacher in TEACHER_ROUTE_LABELS.items():
-        if teacher in routes:
-            routes.setdefault(raw, routes[teacher])
-    routes.setdefault(NEMOTRON_SOURCE, routes["nemotron_if"])
+    routes = rollout_source_routes(pools_manifest["routes"])
     declared_routes = recipe["trainer"]["rollout_buffer"].get("source_routes") or {}
     if set(declared_routes) != set(pools_manifest["routes"]):
         raise ValueError("Round source routes differ from the pools manifest's teacher-route map")

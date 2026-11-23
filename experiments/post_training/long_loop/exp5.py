@@ -6,7 +6,7 @@
 The 2026-11-20 user decision restores R1's sqrt(32) token multiplier,
 reversing the earlier 1.0 ruling. SFT uses a 1000-step safety cap, 30 warmup
 steps and a peak plateau before its wall-clock-only cooldown.
-OpenResearcher's reserved share prevents downstream RL submission.
+Downstream RL adopts the certified final SFT and the published eleven-source pools.
 """
 
 import hashlib
@@ -71,8 +71,6 @@ INITIAL_EVAL_FILES = (
         "f44c06454e7a44a2d28fc1dd9fd674e6d40d84481724065de22e49cd595a880b",
     ),
 )
-# The inherited 64-group window apportions the prepared 0.95 to 14 SWE groups.
-# This diagnostic subset remains unlaunchable while the research slot is pending.
 EXPECTED_ROUTE_QUOTAS = {"agentic": 13, "nonagentic": 51}
 """The curriculum-derived window quotas at the round's 64-group batch: 0.20 of 64 rounds to 13."""
 

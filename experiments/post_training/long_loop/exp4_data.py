@@ -58,6 +58,7 @@ from experiments.post_training.task_curation.datasets.reasoning_gym.tasks import
 )
 from experiments.post_training.task_curation.datasets.skyrl.ifeval import convert_nemotron_if
 from experiments.post_training.task_curation.exp4_curriculum import (
+    NEMOTRON_SOURCE,
     SOURCE_ROUTES,
     exp4_rl_curriculum,
     exp4_validation_split,
@@ -68,7 +69,6 @@ NEMOTRON_JSONL_URL = (
     "hf://datasets/nvidia/Llama-Nemotron-Post-Training-Dataset"
     "@ab2a40d258a6a4d9d4c277d702aeea445081766c/RL/instruction_following/instruction_following.jsonl"
 )
-NEMOTRON_SOURCE = "nvidia/Llama-Nemotron-Post-Training-Dataset"
 NEMOTRON_REVISION = "ab2a40d258a6a4d9d4c277d702aeea445081766c"
 NEMOTRON_UPSTREAM_ROWS = 56_339
 NEMOTRON_KEPT_ROWS = 56_083

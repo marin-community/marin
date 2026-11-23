@@ -12,7 +12,7 @@ import pytest
 import yaml
 from marin.execution.lazy import StepContext
 from marin.experiment.cli import graph_handles
-from marin.rl.curriculum import PoolRow, consumed_route_quotas
+from marin.rl.curriculum import PoolRow, consumed_route_quotas, validation_payload
 
 from experiments.post_training.long_loop.archive import assert_best_rl_checkpoint
 from experiments.post_training.long_loop.launch_validation import validate_launch
@@ -23,6 +23,8 @@ from experiments.post_training.task_curation.exp4_curriculum import (
     exp4_validation_from_manifest,
     exp4_validation_split,
 )
+from experiments.post_training.task_curation.exp5_curriculum import TARGET_SHARES as EXP5_TARGET_SHARES
+from experiments.post_training.task_curation.exp5_curriculum import exp5_rl_curriculum, exp5_validation_split
 
 
 def _pools_rows() -> dict[str, tuple[PoolRow, ...]]:
@@ -296,3 +298,42 @@ def test_round_best_and_final_native_checkpoints_use_permanent_storage(
     receipt = assert_best_rl_checkpoint(str(tmp_path / "archive"), inventory)
     assert receipt["selected"]["uri"] == str(output / "checkpoints" / "global_step_14")
     assert receipt["final"]["uri"] == str(output / "checkpoints" / "global_step_15")
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_adopted_exp5_round_uses_its_eleven_source_curriculum(local_round, tmp_path):
+    shares = dict(EXP5_TARGET_SHARES)
+    rows = {label: tuple(PoolRow(id=f"{label}-{i}", sha256=f"{i:064x}") for i in range(80)) for label in shares}
+    curriculum = exp5_rl_curriculum(exp5_validation_split(rows).validation)
+    root = Path(local_round.rl.pools["uri"])
+    manifest = json.loads((root / "manifest.json").read_text())
+    manifest["curriculum"] = curriculum.identity
+    manifest["validation"] = validation_payload(curriculum.validation)
+    manifest["composition"] = {label: 80 for label in shares}
+    routes = {label: "agentic" if label == "long-loop-smartie-swesmith" else "nonagentic" for label in shares}
+    manifest["routes"] = routes
+    for label in shares:
+        path = root / label / "train.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"pinned {label} pool".encode())
+        manifest["files"][f"{label}/train.parquet"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (root / "manifest.json").write_text(json.dumps(manifest))
+    recipe = copy.deepcopy(local_round.rl.recipe)
+    recipe["trainer"]["rollout_buffer"]["source_routes"] = routes
+    recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe))
+    terminal = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "exp5-run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+    buffer = launch["skyrl"]["trainer"]["rollout_buffer"]
+    assert buffer["consumed_route_quotas"] == consumed_route_quotas(
+        curriculum, routes, launch["skyrl"]["trainer"]["train_batch_size"]
+    )
+    for raw in (
+        "allenai/IF_multi_constraints_upto5",
+        "OpenResearcher/OpenResearcher-Dataset",
+        "pafitis/HARDMath_processed_training",
+    ):
+        assert buffer["source_routes"][raw] == "nonagentic"

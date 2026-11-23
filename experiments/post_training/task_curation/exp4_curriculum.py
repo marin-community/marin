@@ -64,6 +64,7 @@ from experiments.post_training.task_curation.sources import runnable_sources
 CURRICULUM_NAME = "long-loop/exp4-rl"
 CURRICULUM_VERSION = "2026.11.18"
 NEMOTRON_IF_LABEL = "nemotron_if"
+NEMOTRON_SOURCE = "nvidia/Llama-Nemotron-Post-Training-Dataset"
 
 AGENTIC_SHARE = 0.35
 NEMOTRON_IF_SHARE = 0.15

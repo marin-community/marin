@@ -37,6 +37,7 @@ from experiments.post_training.task_curation.exp4_curriculum import TARGET_SHARE
 
 IFBENCH_LABEL = "AllenAI:IF_multi_constraints_upto5"
 OPENRESEARCHER_LABEL = "OpenResearcher:OpenResearcher-Dataset"
+OPENRESEARCHER_SOURCE = "OpenResearcher/OpenResearcher-Dataset"
 HARDMATH_LABEL = "pafitis:hardmath"
 
 IFBENCH_REPO = "open-athena/allenai-if-multi-constraints-upto5-7bcdabaf-retained-20261116-b-v1"
