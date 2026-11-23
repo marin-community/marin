@@ -355,9 +355,10 @@ async def test_a_task_too_easy_after_eight_trials_is_tagged_or_revised_then_aban
 
 
 async def test_a_revise_finding_buys_one_revision_outside_a_spent_budget(proposal: TaskProposal) -> None:
-    """A revision asked for by the final review is outside the modification budget and always happens, once. With no
-    modification round at all, the revision is validated and confirmed again; the second
-    final review's revise finding is then a note."""
+    """A revision asked for by the final review is outside the modification budget and happens up to
+    ``budget.final_revisions`` times, once under this fixture's default (other tests cover 0 and 2). With no
+    modification round at all, the revision is validated and confirmed again; the second final review's revise finding
+    is then a note."""
     first, second = found(3, what="first"), found(4, what="second")
     engine, reviewer = Trials(), Reviewer(finals=[([first], []), ([second], [])])
     live = bundle(engine, reviewer, (*script(), *RESUBMIT))
