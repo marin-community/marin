@@ -825,10 +825,13 @@ Exp6 admits initial prompts up to 32,768 tokens. Pi's compaction reserve keeps
 24,576 tokens free for the next reply within the request window. Its RL
 batch remains 64 prompts times eight samples, with gradient clip 0.5. Its MuonH
 optimizer follows Mochi's RL routing: main learning rate 1e-5, Adam fallback
-learning rate 2.307692307692308e-6, and CPU momentum storage. AdamW CPU optimizer
-offload is disabled. Qualify the retained batch with warm optimizer state before
-launching a full run. Bind this patch from the Exp6 round after its model and data
-are ready.
+learning rate 2.307692307692308e-6, and CPU storage for MuonH momentum. Adam
+fallback state stays on the accelerator; AdamW CPU optimizer offload is disabled.
+Before a full run, use `trainer_memory_probe` to qualify the retained 64-by-eight
+batch after optimizer state is initialized. Require the native updates to apply
+and the warm sizing checks to leave at least 10% memory headroom, as described
+under [trainer memory sizing](#trainer-memory-sizing-and-chunked-output-projection).
+Bind this patch from the Exp6 round after its model and data are ready.
 
 `sft.first_collective_call_timeout` sets XLA's first-call rendezvous termination
 timeout in seconds. It allows cold-start skew between local GPUs without changing
@@ -1187,7 +1190,7 @@ Declare `max_sequence_length`, `valid_token_counts` (which may be empty), and
 `minimum_headroom_fraction` explicitly in the same mapping; use `0.1` for a 10%
 device-memory reserve. Omitting an enabled check's capacity or reserve fails preflight.
 The check runs on every policy rank before initial weight publication and rollout
-admission. It initializes Adam, then runs forward, backward and optimizer steps
+admission. It initializes optimizer state, then runs forward, backward and optimizer steps
 at each `memory_profile.valid_token_counts` value and at the explicit
 `memory_profile.max_sequence_length` (262,144 for Exp5). Include observed long trajectories, such as
 85,557 valid tokens, as well as the configured maximum. The scheduler fills the
