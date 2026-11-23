@@ -593,8 +593,8 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    if isinstance(model, SnowballLMHeadModel):
-        binfo = binfo.with_seq_capacity(max_seqs_in_prefill)
+    if gen_state.window_pages is not None:
+        binfo = binfo.trim_sequence_padding(max_seqs_in_prefill)
     gen_state, window_batch = gen_state.remap_window_pages(decode_state, binfo)
     route_buffer = _capture_buffer(model, tokens.size) if capture_routes else None
     logits_at_samples, cache, routes = _decode_for_sampling(
@@ -900,9 +900,9 @@ def _run_generation_loop(
         decode_state, binfo = decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
 
         max_sample_indices = min(decode_state.page_table.max_seqs, max_tokens_per_round)
-        if isinstance(model, SnowballLMHeadModel):
+        if gen_state.window_pages is not None:
             # Every participating sequence contributes at least one token row.
-            binfo = binfo.with_seq_capacity(max_sample_indices)
+            binfo = binfo.trim_sequence_padding(max_sample_indices)
         sample_locally = (
             isinstance(model, SnowballLMHeadModel)
             and model.has_expert_sharded_kv
