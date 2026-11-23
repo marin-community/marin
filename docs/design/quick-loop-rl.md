@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 6:55 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 7:27 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -16,13 +16,13 @@ typed binary protocol for rollout replay and isolated worker commands.
 | Milestone | Evidence | Next gate |
 | --- | --- | --- |
 | Megatron learner with vLLM | The frozen control completed 25 updates on 40 H100s. It passed 208 receiver checks, committed step 25 and scored 0.1902 to 0.2700 on the fixed panel. | Use the frozen control to evaluate changes to the maintained learner. |
-| Levanter learner with vLLM | The frozen smoke and 25-update comparison passed on 40 H100s. The Levanter arm scored 0.2310 to 0.3201. Its median warm update took 3.0 times the control’s wall time. | Qualify and profile maintained binary publication on H100 before changing the learner default. |
-| Learner port based on `main` | The local port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Eight CPU worker and publisher cases passed, including continuation after fresh-process restore. | Qualify the deployed worker and maintained preset on H100. |
+| Levanter learner with vLLM | The frozen 25-update arm scored 0.2310 to 0.3201 on 40 H100s. Its median warm update took 3.0 times the Megatron control’s wall time. The maintained two-update H100 arm also passed exact restore and all 24 receiver checks. | Profile maintained publication and run a longer comparison before changing the learner default. |
+| Learner port based on `main` | The port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Four deployed learner hosts applied two updates, including exact continuation after restart, with vLLM serving. | Finish the matched native arm with the same learner. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched frozen comparison is complete. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 67B live swap and real tool-turn replay passed. The repaired binary worker generated all 100 fixed-panel prompts in 26.1 minutes on one eight-H100 host and passed an assistant-prefix replay case there. The latest full-context probe found one score ratio outside the permitted range across 32,768 sampled tokens. | Complete the held comparison and resolve the full-context scoring discrepancy. |
-| Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
+| Native inventory backend | The 67B live swap and real tool-turn replay passed. The repaired binary worker generated all 100 fixed-panel prompts in 26.1 minutes on one eight-H100 host and passed an assistant-prefix replay case there. The latest completed full-context scoring run found one ratio outside the permitted range across 32,768 sampled tokens. | Complete the held comparison and resolve the full-context scoring discrepancy. |
+| Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Verify the full native handoff at 67B. The frozen H100 comparison uses its original worker transport. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
 [TPUv4 queue and cache proof][iris-native-install] · [TPUv4 separate-process proof][iris-native-runtime-reference] ·
@@ -1951,19 +1951,23 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   the CPU coordinator as baseline evaluation began. This child recorded
   no scored baseline tasks or optimizer updates. Iris admitted the
   replacement on the same 40-H100 layout.
-  A separate eight-H100 diagnostic is running with the existing PPO
+  A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
   scores to the same typed frames from one original attempt. The first
   diagnostic installed both policies and started the full-context
   group. Its CPU coordinator was preempted at the same time as the
-  held native coordinator. The replacement is running with a distinct
-  task identity.
+  held native coordinator. The replacement stopped at the 1,800-second
+  policy-2 install deadline. The original task archive contains both
+  tool-turn frames and the install timeout. The full-context group and
+  scorer never ran. Retry with a separate deadline for that install while
+  retaining the tool replay, generation bounds and PPO thresholds.
   [Original calibration][iris-native-serving-eval-first] ·
   [Revised calibration][iris-native-serving-eval-retry] ·
   [Verified calibration archive][native-serving-eval-archive] ·
   [First matched native child][iris-held-native-validation-retry] ·
   [Matched native replacement][iris-held-native-validation-replacement] ·
-  [Same-attempt score diagnostic][iris-native-same-attempt-score]
+  [Same-attempt score diagnostic][iris-native-same-attempt-score] ·
+  [Original install-timeout archive][native-same-attempt-timeout-archive]
 
   Both plans use a 24,576-token serving limit and a 16,896-token request
   limit. Native uses the cache geometry from the 67B live-swap run. Use the same learner, selection and fixed panel to
@@ -2081,6 +2085,7 @@ arms. [Prior timing comparison][timing]
 [iris-held-native-validation-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-coordinator-1f166fa9%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-a9875414cfa5
 [iris-held-native-validation-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-coordinator-1f166fa9%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-aabb141-in-424011b4-2026.11.22.3-aa86eb747b53
 [iris-native-same-attempt-score]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122m%2Fnative-native-fused-20261122m-tool-fused
+[native-same-attempt-timeout-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122m%2Fb14120ce5f263e2c-original-task-outputs.tar.zst
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
 [iris-native-head-comparison]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused
 [iris-held-native-repaired]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-ac90c03-in-424011b4-2026.11.22.1-coordinator-f7d86071
