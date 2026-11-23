@@ -215,9 +215,13 @@ def _chat_rows(files: list[StoragePath]) -> Iterator[dict]:
             parquet = pq.ParquetFile(stream)
             columns = ["messages"]
             message_type = parquet.schema_arrow.field("messages").type
-            harmony = pa.types.is_list(message_type) and message_type.value_type.get_field_index("recipient") >= 0
+            harmony = (
+                pa.types.is_list(message_type)
+                and pa.types.is_struct(message_type.value_type)
+                and message_type.value_type.get_field_index("recipient") >= 0
+            )
             if harmony:
-                from marin.datakit.chat_render import inference_messages  # noqa: PLC0415 - Datakit extra
+                from marin.datakit.chat_render import to_template_messages  # noqa: PLC0415 - Datakit extra
             if "chat_template_kwargs" in parquet.schema_arrow.names:
                 columns.append("chat_template_kwargs")
             for batch in parquet.iter_batches(batch_size=64, columns=columns):
@@ -228,7 +232,7 @@ def _chat_rows(files: list[StoragePath]) -> Iterator[dict]:
                     if "chat_template" in kwargs:
                         raise ValueError(f"Per-row template override in {path}")
                     if harmony:
-                        row["messages"] = list(inference_messages([Message.from_dict(m) for m in row["messages"]]))
+                        row["messages"] = list(to_template_messages([Message.from_dict(m) for m in row["messages"]]))
                     row["chat_template_kwargs"] = kwargs
                     yield row
 

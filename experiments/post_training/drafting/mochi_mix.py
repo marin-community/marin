@@ -3,23 +3,44 @@
 
 """Freeze a bounded chat mix for the Mochi DSpark qualification."""
 
+from dataclasses import dataclass
 from itertools import islice
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.execution.lazy import OUT, ArtifactStep, apply
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 _VERSION = "2026.11.22"
 _NEMOTRON = "gs://marin-us-central2/normalized-chat/nemotron_sft_v3"
+
+
+@dataclass(frozen=True, kw_only=True)
+class SmokeSource:
+    name: str
+    path: str
+    version: str
+    rows_per_shard: int
+
+
 _SOURCES = (
-    ("nemotron-tool-calling", f"{_NEMOTRON}/agentic_v2/tool_calling_bc0791c0", "2026.10.18", 256),
-    ("nemotron-instruction", f"{_NEMOTRON}/instruction_following_chat_v2/reasoning_off_e4fcbd89", "2026.10.23", 256),
-    (
-        "agenttrove",
-        "s3://marin-us-east-02a/marin/normalized-chat/agenttrove_8ada38cb",
-        "2026.11.22",
-        128,
+    SmokeSource(
+        name="nemotron-tool-calling",
+        path=prefix_join(_NEMOTRON, "agentic_v2/tool_calling_bc0791c0"),
+        version="2026.10.18",
+        rows_per_shard=256,
+    ),
+    SmokeSource(
+        name="nemotron-instruction",
+        path=prefix_join(_NEMOTRON, "instruction_following_chat_v2/reasoning_off_e4fcbd89"),
+        version="2026.10.23",
+        rows_per_shard=256,
+    ),
+    SmokeSource(
+        name="agenttrove",
+        path="s3://marin-us-east-02a/marin/normalized-chat/agenttrove_8ada38cb",
+        version="2026.11.22",
+        rows_per_shard=128,
     ),
 )
 
@@ -57,7 +78,11 @@ def smoke_mix() -> ArtifactStep:
         version=_VERSION,
         output=OUT,
         sources=tuple(
-            (name, ArtifactStep.adopt(f"dspark/mix-inputs/{name}", version, path), rows)
-            for name, path, version, rows in _SOURCES
+            (
+                source.name,
+                ArtifactStep.adopt(f"dspark/mix-inputs/{source.name}", source.version, source.path),
+                source.rows_per_shard,
+            )
+            for source in _SOURCES
         ),
     )

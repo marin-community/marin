@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 
 import click
 import draccus
@@ -48,17 +49,20 @@ class TeacherFamily(StrEnum):
 
 
 _SNOWBALL = SnowballConfig()
-_TARGETS = {
-    TeacherFamily.SNOWBALL: (
-        GrugShape.from_hf_config(_SNOWBALL.to_hf_config(_SNOWBALL.vocab_size).to_dict()),
-        (2, 12, 22),
-    ),
-    TeacherFamily.MOCHI: (
-        GrugShape.from_hf_config(HERO_MODEL.to_hf_config(HERO_MODEL.vocab_size).to_dict()),
-        (2, 24, 45),
-    ),
-}
+_TARGETS = MappingProxyType(
+    {
+        TeacherFamily.SNOWBALL: (
+            GrugShape.from_hf_config(_SNOWBALL.to_hf_config(_SNOWBALL.vocab_size).to_dict()),
+            (2, 12, 22),
+        ),
+        TeacherFamily.MOCHI: (
+            GrugShape.from_hf_config(HERO_MODEL.to_hf_config(HERO_MODEL.vocab_size).to_dict()),
+            (2, 24, 45),
+        ),
+    }
+)
 _RECIPE_VERSION = "2026.11.22.4"
+_MOCHI_AGENTIC_PRESET = "mochi-agentic"
 
 
 @dataclass(frozen=True)
@@ -183,24 +187,15 @@ def artifacts(
     return prepared, replace(draft, name=f"{draft.name}/{fingerprint}", expected_fingerprint=fingerprint)
 
 
-@click.command()
-@click.option("--config", help="Path or object storage URI of the DSpark JSON recipe.")
-@click.option("--preset", type=click.Choice(("mochi-agentic",)))
-@click.option("--data", help="Replace the named preset's smoke mix with a completed train/validation chat mix.")
-@click.option("--stage", type=click.Choice(("plan", "preflight", "prepare", "train")), default="plan")
-def main(config: str | None, preset: str | None, data: str | None, stage: str) -> None:
-    """Plan and preflight offline DSpark or execute it in one Iris GPU job."""
-
-    if stage == "train" and "IRIS_TASK_ID" not in os.environ:
-        raise click.UsageError("Run the train stage with iris job run on one GPU worker")
-    configure_coreweave_s3()
-    prefix = marin_prefix()
+def _resolve_recipe(
+    config: str | None, preset: str | None, data: str | None, prefix: str
+) -> tuple[OfflineDSpark, ArtifactStep]:
     if config is not None:
         if preset is not None or data is not None:
             raise click.UsageError("Use --config or --preset")
         recipe = draccus.decode(OfflineDSpark, json.loads(StoragePath(config).read_text()))
-        mix = _adopt_input(recipe.data)
-    elif preset == "mochi-agentic":
+        return recipe, _adopt_input(recipe.data)
+    if preset == _MOCHI_AGENTIC_PRESET:
         mix = _adopt_input(data) if data is not None else smoke_mix()
         recipe = OfflineDSpark(
             teacher=MOCHI_STEP_400407,
@@ -211,12 +206,45 @@ def main(config: str | None, preset: str | None, data: str | None, stage: str) -
             max_sequence_length=8192,
             max_anchors=1024,
         )
-    else:
-        raise click.UsageError("Specify --config or --preset mochi-agentic")
+        return recipe, mix
+    raise click.UsageError(f"Specify --config or --preset {_MOCHI_AGENTIC_PRESET}")
+
+
+def _preflight(recipe: OfflineDSpark, teacher: ArtifactStep, prefix: str) -> dict:
     settings = recipe.training_recipe()
+    teacher_root = StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path
+    if recipe.teacher.source.startswith("hf://") and not teacher_root.isdir():
+        raise click.UsageError("Run the prepare stage to stage the pinned Hub teacher in Marin storage")
+    tokenizer = _hub_model(recipe.teacher.tokenizer_source) if recipe.teacher.tokenizer_source else None
+    tokenizer_ref = f"{tokenizer.hf_repo_id}@{tokenizer.hf_revision}" if tokenizer else None
+    decoder = inspect_teacher(teacher_root, settings.data, tokenizer_source=tokenizer_ref)
+    train, validation = inspect_mix(StoragePath(recipe.data))
+    return {
+        "decoder": decoder,
+        "extraction_taps": settings.extraction_taps,
+        "train_shards": len(train),
+        "validation_shards": len(validation),
+        "gpus": settings.teacher_replicas + settings.trainer_ranks,
+        "training_supported": not settings.data.shape.sconv,
+    }
+
+
+@click.command()
+@click.option("--config", help="Path or object storage URI of the DSpark JSON recipe.")
+@click.option("--preset", type=click.Choice((_MOCHI_AGENTIC_PRESET,)))
+@click.option("--data", help="Replace the named preset's smoke mix with a completed train/validation chat mix.")
+@click.option("--stage", type=click.Choice(("plan", "preflight", "prepare", "train")), default="plan")
+def main(config: str | None, preset: str | None, data: str | None, stage: str) -> None:
+    """Plan and preflight offline DSpark or execute it in one Iris GPU job."""
+
+    if stage == "train" and "IRIS_TASK_ID" not in os.environ:
+        raise click.UsageError("Run the train stage with iris job run on one GPU worker")
+    configure_coreweave_s3()
+    prefix = marin_prefix()
+    recipe, mix = _resolve_recipe(config, preset, data, prefix)
     mix_root = StoragePath(recipe.data)
     if stage == "train":
-        require_qualified_teacher(settings)
+        require_qualified_teacher(recipe.training_recipe())
         locations = [mix_root, StoragePath(prefix)]
         if not recipe.teacher.source.startswith("hf://"):
             locations.append(StoragePath(recipe.teacher.source))
@@ -228,26 +256,7 @@ def main(config: str | None, preset: str | None, data: str | None, stage: str) -
     teacher = _teacher_artifact(recipe.teacher)
     prepared, draft = artifacts(recipe, teacher=teacher, mix=mix)
     if stage == "preflight":
-        teacher_root = StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path
-        if recipe.teacher.source.startswith("hf://") and not teacher_root.isdir():
-            raise click.UsageError("Run the prepare stage to stage the pinned Hub teacher in Marin storage")
-        tokenizer = _hub_model(recipe.teacher.tokenizer_source) if recipe.teacher.tokenizer_source else None
-        tokenizer_ref = f"{tokenizer.hf_repo_id}@{tokenizer.hf_revision}" if tokenizer else None
-        decoder = inspect_teacher(teacher_root, settings.data, tokenizer_source=tokenizer_ref)
-        train, validation = inspect_mix(mix_root)
-        click.echo(
-            json.dumps(
-                {
-                    "decoder": decoder,
-                    "extraction_taps": settings.extraction_taps,
-                    "train_shards": len(train),
-                    "validation_shards": len(validation),
-                    "gpus": settings.teacher_replicas + settings.trainer_ranks,
-                    "training_supported": not settings.data.shape.sconv,
-                },
-                indent=2,
-            )
-        )
+        click.echo(json.dumps(_preflight(recipe, teacher, prefix), indent=2))
         return
     terminal = prepared if stage == "prepare" else draft
     StepRunner().run([lower(terminal)], dry_run=stage == "plan")
