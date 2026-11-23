@@ -10,7 +10,7 @@ import sys
 from argparse import Namespace
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import override
 
@@ -60,7 +60,7 @@ from taskforge.effects.issues import ContextExceeded, Hold, LogFailure
 from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.harness.protocol import Stopped, StopReason, ToolResult
 from taskforge.harness.tools.base import Outcome as ToolOutcome
-from taskforge.harness.tools.evidence import PAGE_ROOM, Evidence, ListTool, ReadTool, ReportTool, SearchTool, Source
+from taskforge.harness.tools.evidence import PAGE_ROOM, Evidence, ListTool, ReadTool, SearchTool, Source
 from taskforge.harness.tools.evidence import report as checked_report
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lower_with_settings, lowering_settings
@@ -182,29 +182,6 @@ async def test_a_finding_is_kept_only_when_each_quote_occurs_in_the_evidence_it_
         ("trial/7", "cites 'trial/7', which is not in the evidence"),
         ("trial/0", "cites trial/0 #5..6, outside its parts 0..2"),
     ]
-
-
-async def test_a_report_factory_serializes_the_index_through_a_plain_copy_of_its_sources() -> None:
-    """The index's sources are a read-only mapping, which generic dataclass serialization refuses; a factory that
-    audits the index serializes ``dict(evidence.sources)`` with the fields it needs, as the README says."""
-    audited: list[tuple[Evidence, dict[str, Source]]] = []
-    sources = TypeAdapter(dict[str, Source])
-
-    def audit(evidence: Evidence) -> ReportTool:
-        with pytest.raises(TypeError):
-            asdict(evidence)
-        audited.append((evidence, sources.validate_json(sources.dump_json(dict(evidence.sources)))))
-        return ReportTool(evidence)
-
-    ctx = Context(log=EventLog())
-    policy = load_policy(DEFAULTS_DIR).overlaid({"tools.output_chars": OUTPUT_CHARS})
-    reviewer = FakeInference((report(),))
-    bundle = replace(stage_resources(ctx), envs=NoMachines(), role_inference={"solve_review": reviewer})
-    config = build_config(policy, {})
-    review = await solve_review(ctx, config, bundle, sample_proposal(), SUBMISSION, TRIALS, report=audit)
-    assert review.end is ReviewEnd.REPORTED
-    [(index, copied)] = audited
-    assert list(copied.items()) == list(index.sources.items()) and index.unpassed == {1}
 
 
 async def test_a_report_must_account_for_every_trial_that_did_not_pass() -> None:

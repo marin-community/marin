@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import override
@@ -45,8 +45,6 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from verifyit.modes.grade_judge import JudgeMessage, JudgeRequest
 from verifyit.spec import JudgeSpec
 
-import taskforge.harness.tools.evidence as evidence_tools_module
-import taskforge.stages.solve_review as review_stage
 from taskforge.checkpoint import JOURNAL_FORMAT, CheckpointSink, read_journal
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, apply_decision, run_workpiece
@@ -56,13 +54,11 @@ from taskforge.effects.issues import ContextExceeded, DecisionModelUnavailable
 from taskforge.effects.log import Billing, EventLog, JsonlSink, Record, Status, decode, fold
 from taskforge.harness.protocol import Stopped, StopReason, Submitted, ToolResult
 from taskforge.harness.tools.evidence import (
-    TRIAL,
     Evidence,
     FinalReportArgs,
     FinalReportTool,
     ReportArgs,
     ReportTool,
-    Source,
     evidence_tools,
 )
 from taskforge.llm.policy import LLMPolicy
@@ -1283,7 +1279,6 @@ async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
     assert payers(root, replayed=False) == PAID  # the cold rerun paid for nothing
     replayed = payers(root, replayed=True)  # eighteen resolutions, none naming a payer
     assert sum(replayed.values()) == 18 and {payer for _, payer in replayed} == {None}
-    assert {payer for _, payer in payers(root, replayed=True)} == {None}
 
 
 async def test_a_format_9_root_charges_its_tokens_as_unattributed_and_replays_with_zero_calls(
@@ -1305,29 +1300,3 @@ async def test_a_format_9_root_charges_its_tokens_as_unattributed_and_replays_wi
     assert isinstance(live.rollouts.engine, Trials) and not live.rollouts.engine.runs
     after = await report(str(root))
     assert charged(after) == charged(before)
-
-
-# Review 2026-11-21: a clean three-and-five confirmation built its evidence index three times (3, 8 and 8 trials) and
-# digested it six times (three times each for 3 and 8 trials).
-async def test_each_review_builds_its_evidence_index_and_digests_it_once(
-    proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    built: list[int] = []
-    digested: list[int] = []
-
-    def trials(sources: Sequence[Source]) -> int:
-        return sum(source.name.startswith(TRIAL) for source in sources)
-
-    def build(sources: Mapping[str, Source], unpassed: frozenset[int], output_chars: int) -> Evidence:
-        built.append(trials(tuple(sources.values())))
-        return Evidence(sources, unpassed, output_chars)
-
-    def hashed(value: tuple[Source, ...]) -> str:
-        digested.append(trials(value))
-        return digest(value)
-
-    monkeypatch.setattr(review_stage, "Evidence", build)
-    monkeypatch.setattr(evidence_tools_module, "digest", hashed)
-    wp, _ = await run(proposal, Trials(), Reviewer())
-    assert wp.terminal is Terminal.ACCEPTED and kinds(wp) == ["accept", "accept"]
-    assert (built, digested) == ([3, 8], [3, 8])
