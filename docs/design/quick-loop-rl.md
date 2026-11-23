@@ -2305,9 +2305,26 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   state after a fresh-process restore. Each group still sampled four
   choices. A concurrent two-group rehearsal also reproduced its 16
   replay pairs and the restored step-1 state. Its step-2 learner hashes
-  differed. The learner's input row order remains unknown. The sealed
-  H100 comparison uses its original sampler. Concurrent step-2
-  equivalence and H100 qualification of the candidate remain open.
+  differed. That rehearsal recorded reply completion order.
+
+  A second two-group CPU run captured the learner's binary scoring and
+  training requests. The continuous learner received the third prompt
+  group before the fourth. The resumed learner received those groups in
+  reverse order. After aligning rows by sampled choice, all packed
+  arrays, including old logprobs, advantages and policy weights,
+  matched byte for byte. Four fresh learners restored the same step-1
+  checkpoint. For each captured training payload, one learner replayed
+  its original order and one replayed it with the two groups swapped.
+  Changing only group order reproduced the other run's model and Adam
+  hashes in both directions. The measured gradient norm was the same.
+
+  For bitwise restart equivalence in a future candidate, preserve the
+  selected groups and order the completed batch by persisted draw and
+  repetition before scoring and optimizer minibatch partitioning. Keep
+  generation and admission concurrent, and measure admission time where
+  the buffer admits groups. The sealed H100
+  comparison uses its originally prepared source, and live comparative
+  throughput and reward still need the completed native run.
 
   A separate offline rehearsal replayed the archived CPU checkpoints
   through stock retention. It reproduced the archived step-2 index bytes and joined the
