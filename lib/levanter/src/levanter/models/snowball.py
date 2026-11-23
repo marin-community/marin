@@ -68,6 +68,7 @@ from levanter.grug.sharding import (
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.kernels.logsumexp import batch_invariant_logsumexp
+from levanter.kernels.pallas.fixed_schedule_linear import _BLOCK_SIZE as _FIXED_PROJECTION_TILE
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
@@ -155,7 +156,6 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 
 
 _GATED_NORM_RANK = 128
-_FIXED_PROJECTION_TILE = 128
 # June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
 _LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
