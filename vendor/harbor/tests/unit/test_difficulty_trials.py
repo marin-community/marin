@@ -155,6 +155,7 @@ def deadline_fixture(root, source_id="fixture:hardmath", task_id="hardmath"):
     )
     config = SimpleNamespace(
         attempts_per_task=6, settings=settings, environment_options={},
+        daytona_provisioning="snapshot",
         identity=SimpleNamespace(model="fixture", revision="pin"), api_model="fixture",
     )
     sample = DifficultySample(
