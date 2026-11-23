@@ -229,7 +229,9 @@ class SnowballConfig(HFCompatConfig):
     qk_mult: float = _DEFAULT_QK_MULT
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
-    shared_attention_implementation: Literal["native", "fixed_schedule"] = "native"
+    shared_attention_implementation: Literal["native", "fixed_schedule"] = dataclasses.field(
+        default="native", metadata={"fingerprint_omit_default": True}
+    )
     """Use the bounded shared TPUv4 schedule for both paged attention and learner forward."""
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
