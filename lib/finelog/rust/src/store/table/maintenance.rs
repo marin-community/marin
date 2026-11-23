@@ -199,13 +199,12 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
         TableWork::Eviction => {
             let runtime = Arc::clone(runtime);
             tokio::task::spawn_blocking(move || {
-                let policy = runtime.storage_policy.lock().unwrap().clone();
                 archive::evict_to_policy(
                     runtime.name(),
                     &runtime.catalog,
                     &runtime.segments,
                     &runtime.query_visibility,
-                    &policy,
+                    &runtime.storage_policy(),
                     &runtime.compaction_config,
                 )
             })

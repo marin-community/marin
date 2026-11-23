@@ -872,11 +872,11 @@ baseline and compare result digests before interpreting a sampled speedup.
 
 ## Diagnosing blocked ingestion and registration
 
-A Ready pod can have a blocked storage path. Compare visible, published, and
-settled positions in the table's Forwarding card. Inspect process threads when
-all three stop. A full blocking pool can prevent ingestion and publication
-while `/health` still returns `ok`. The ingest buffer does not include queued
-RPC data.
+A Ready pod can have a blocked storage path. A full blocking pool can prevent
+ingestion and publication while `/health` still returns `ok`. Compare visible,
+published, and settled positions in the table's Forwarding card. Inspect
+process threads when all three stop. The ingest buffer does not count queued
+RPC requests, so RSS can increase while the buffer stays small.
 
 Use WebSocket exec if the Kubernetes endpoint rejects SPDY upgrades:
 
@@ -886,12 +886,11 @@ KUBECTL_REMOTE_COMMAND_WEBSOCKETS=true kubectl \
   exec <pod> -c finelog -- cat /proc/1/status
 ```
 
-Stacks in `register_table_with`, `update_policy`, and `evict_segment` can
-identify a policy mutex held across a `query_visibility` wait. See
-[incident 1046](https://marina.oa.dev/echo/wiki/1046) for the stack evidence and
-capture procedure. An approved container restart in the same pod preserves its
-`emptyDir` cache. Pod replacement discards that cache.
-Neither action preserves queued requests in process memory.
+[Incident 1046](https://marina.oa.dev/echo/wiki/1046) shows how to capture
+thread stacks from a temporary debug container with `SYS_PTRACE`. With a
+`node-local` cache, an approved container restart in the same pod keeps the
+`emptyDir` cache. Pod replacement discards that cache. Neither action keeps
+queued requests in process memory.
 
 ## Diagnosing Kubernetes mirror readiness
 

@@ -75,7 +75,7 @@ pub struct TableRuntime {
     object_state_active: AtomicBool,
     /// Per-table retention overrides; `None` fields inherit the cluster-wide
     /// [`CompactionConfig`] caps.
-    pub(super) storage_policy: Mutex<StoragePolicy>,
+    storage_policy: Mutex<StoragePolicy>,
     /// Leveled-compaction tuning: the scheduler reads `check_interval`, the
     /// planner reads `level_targets`/`max_segments_per_level`.
     pub(super) compaction_config: CompactionConfig,
@@ -320,6 +320,12 @@ impl TableRuntime {
     /// Swap in a new retention policy (re-register). Picked up next eviction.
     pub fn update_policy(&self, policy: StoragePolicy) {
         *self.storage_policy.lock().unwrap() = policy;
+    }
+
+    /// A copy of the retention policy. The lock is released on return, so a
+    /// caller cannot hold it across eviction's wait for query readers.
+    pub(super) fn storage_policy(&self) -> StoragePolicy {
+        self.storage_policy.lock().unwrap().clone()
     }
 
     /// Swap in the operating policy a new specification resolves to.
