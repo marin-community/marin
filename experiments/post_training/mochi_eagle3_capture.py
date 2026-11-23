@@ -199,7 +199,7 @@ async def generate(environment: VllmEnvironment, spec: dict) -> None:
 
 
 def mochi_model_spec(max_model_len: int) -> ModelSpec:
-    """Pin the adopted TP1/BF16 Mochi verifier and its tokenizer."""
+    """Pin the adopted BF16 Mochi verifier and its tokenizer."""
     return ModelSpec(
         weights=TARGET_URI,
         api_model="mochi",
