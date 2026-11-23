@@ -27,7 +27,10 @@ def test_chunked_sizing_accepts_ppo_and_rejects_incompatible_execution():
     config.trainer.policy.model.path = "Qwen/Qwen3-0.6B"
     config.trainer.logger = "console"
     megatron = config.trainer.policy.megatron_config
+    with open_dict(config.generator.engine_init_kwargs):
+        config.generator.engine_init_kwargs.enable_return_routed_experts = True
     with open_dict(megatron):
+        megatron.moe_router_replay = True
         megatron.output_projection_chunk_size = 1024
         megatron.memory_profile = {
             "enabled": True,

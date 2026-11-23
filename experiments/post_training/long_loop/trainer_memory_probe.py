@@ -121,6 +121,7 @@ class QualifyingWrapper(MegatronModelWrapper):
 class QualifyingWorker(MegatronPolicyWorkerBase):
     def init_model(self, *args, **kwargs):
         super().init_model(*args, **kwargs)
+        replay = self.model.router_replay
         self.model = QualifyingWrapper(
             self.cfg,
             self.actor_module,
@@ -129,6 +130,7 @@ class QualifyingWorker(MegatronPolicyWorkerBase):
             vocabulary_size=self.strategy.hf_config.vocab_size,
             output_projection_chunk_size=self.cfg.trainer.policy.megatron_config.output_projection_chunk_size,
         )
+        self.model.router_replay = replay
         return {"rank": self._rank, "gpu_uuid": str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid)}
 
     def qualify_real_batch(self, batch):

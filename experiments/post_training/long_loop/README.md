@@ -1158,6 +1158,9 @@ at each `memory_profile.valid_token_counts` value and at the explicit
 `memory_profile.max_sequence_length` (262,144 for Exp5). Include observed long trajectories, such as
 85,557 valid tokens, as well as the configured maximum. The scheduler fills the
 pipeline's activation slots with native microbatches.
+For router-replay policies the synthetic response carries complete, balanced
+expert choices through the normal replay controller; receipts name that routing
+mode. This tests capacity, not a bound on arbitrary expert-load imbalance.
 
 Each rank writes `trainer-sizing/rank-<rank>.json` under the run's export root.
 The receipt includes allocator peaks, duration and an estimate of device headroom
