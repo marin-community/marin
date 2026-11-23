@@ -112,6 +112,9 @@ def _parse_reference(text: str) -> tuple[list, bool]:
         _, first_close = _scan_brackets(value[text_group.end() - 1 :])
         if first_close is None or value[text_group.end() + first_close :].strip():
             return [], strip_units
+        if text_group.start() == 0:
+            # A standalone text group has no math expression to compare.
+            return [], strip_units
     latex = LatexExtractionConfig(boxed_match_priority=-1)
     if not strip_units:
         # The default unit normalizer also removes trailing variable names, such

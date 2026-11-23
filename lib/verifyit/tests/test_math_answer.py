@@ -186,6 +186,14 @@ def test_math_partial_reference_is_invalid_before_scoring(expected, math_type):
         grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "32")
 
 
+@pytest.mark.parametrize("math_type", [MathType.SCALAR, MathType.LIST])
+def test_math_prose_only_text_reference_or_list_member_is_invalid_before_scoring(math_type):
+    prose = "\\text{No \u2013 the limit need not exist; the matrices can stay bounded\nbut fail to converge.}"
+    expected = prose if math_type is MathType.SCALAR else f"[1, {prose}]"
+    with pytest.raises(InvalidTask, match="cannot parse expected"):
+        grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "No")
+
+
 def test_math_symbolic_reference_preserves_unit_like_candidate_factor():
     spec = MathSpec(expected="2 s")
     assert grade_math.grade_math_candidate(spec, "2 s").reward == 1.0
