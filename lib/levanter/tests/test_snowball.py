@@ -1280,8 +1280,10 @@ def test_snowball_fixed_projection_scores_and_differentiates():
         loss_weight = LmExample.causal_loss_mask(inputs.resolve_axis("position")).broadcast_to(inputs.axes)
         example = LmExample(tokens=inputs, loss_weight=loss_weight.astype(jnp.float32))
         logits = jax.jit(lambda m: m(inputs))(model)
-        target = hax.roll(inputs, -1, "position")
-        expected = -hax.take(hax.nn.log_softmax(logits, "vocab"), "vocab", target).array[:, :-1]
+        host_logits = np.asarray(logits.array)
+        targets = np.asarray(inputs.array)[:, 1:, None]
+        selected = np.take_along_axis(host_logits[:, :-1], targets, axis=-1).squeeze(-1)
+        expected = np.logaddexp.reduce(host_logits[:, :-1], axis=-1) - selected
         loss = jax.jit(lambda m: m.compute_next_token_loss(example, reduction=None))(model)
         np.testing.assert_allclose(np.asarray(loss.array)[:, :-1], np.asarray(expected), atol=2e-6, rtol=0)
         _, grad = jax.jit(jax.value_and_grad(lambda m: m.compute_next_token_loss(example)))(model)
