@@ -415,3 +415,35 @@ def test_livecodebench_program_that_stalls_mid_message_fails_at_the_deadline(tmp
 )
 def test_livecodebench_return_value_compares_as_the_value_the_program_returned(program: str, tmp_path: Path):
     assert livecodebench_reward(tmp_path, FUNCTIONAL_RANGE, program) == 1.0
+
+
+ULTRA_CODE = ScorerClosure(
+    {
+        **ULTRA_BASE,
+        **shipped(ULTRA, f"{ULTRA_ENVS}/code_gen.py"),
+        "skyrl_gym/envs/lcb/livecodebench.py": SKYRL / "livecodebench.py",
+    },
+    LIVECODEBENCH.requires,
+)
+"""What the Ultra code grade script ships: ``code_gen`` imports the one vendored LiveCodeBench evaluator."""
+
+ULTRA_CODE_CHECK = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from skyrl_gym.envs.nemotron_ultra.code_gen import grade_code
+reward, detail = grade_code(sys.stdin.read(), {"verifier_metadata": {"unit_tests": json.loads(sys.argv[2])}})
+print(json.dumps([reward, detail["result"], detail["test_results"]]))
+"""
+
+
+def test_ultra_code_grade_scores_a_program_without_the_tested_function_zero(tmp_path: Path):
+    ULTRA_CODE.skip_if_unavailable()
+    tests = ULTRA_CODE.stage(tmp_path)
+    result = subprocess.run(
+        (sys.executable, "-I", "-c", ULTRA_CODE_CHECK, str(tests), json.dumps(FUNCTIONAL_ADD)),
+        input="```python\nclass Solution:\n    def solve(self, a, b):\n        return a + b\n```",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.splitlines()[-1]) == [0.0, "failed_tests", [-4]]

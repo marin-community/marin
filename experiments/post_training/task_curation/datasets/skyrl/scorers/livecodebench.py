@@ -449,13 +449,14 @@ class _ChildMessage(StrEnum):
     """The first field of each message a verifier child sends its parent."""
 
     READY = "ready"
-    MISSING = "missing"
     SETUP_ERROR = "setup_error"
     VALUE = "value"
     UNSUPPORTED = "unsupported"
     ERROR = "error"
 
 
+_MISSING_FUNCTION = "the program does not define the function the tests call"
+"""The setup error a verifier child reports for a program that compiles but lacks the tested function."""
 _FRAME_LENGTH = struct.Struct("!Q")
 """The length prefix of each message a verifier child writes to its parent's pipe."""
 _PIPE_READ_BYTES = 1 << 20
@@ -495,13 +496,11 @@ class _ChildProgram:
         (size,) = _FRAME_LENGTH.unpack(self._read(_FRAME_LENGTH.size))
         return json.loads(self._read(size))
 
-    def compiled(self) -> bool:
-        """Whether the program compiled and defines the tested function; raises what compiling raised."""
+    def wait_until_ready(self) -> None:
+        """Wait until the program has compiled and defines the tested function; raise why it cannot run otherwise."""
         match self._receive():
             case [_ChildMessage.READY]:
-                return True
-            case [_ChildMessage.MISSING]:
-                return False
+                return
             case [_ChildMessage.SETUP_ERROR, str(text)]:
                 raise _ProgramError(text)
             case message:
@@ -542,8 +541,7 @@ def grade_call_based(
     all_outputs: list,
     execution_mode: TestExecutionMode = TestExecutionMode.collect_all,
 ):
-    if not program.compiled():
-        return
+    program.wait_until_ready()
 
     all_inputs = _call_arguments(all_inputs)
 
@@ -595,8 +593,7 @@ def grade_stdio(
     all_outputs: list,
     execution_mode: TestExecutionMode = TestExecutionMode.collect_all,
 ):
-    if not program.compiled():
-        return
+    program.wait_until_ready()
 
     all_results = []
     total_execution_time = 0
@@ -931,7 +928,7 @@ def _run_program_in_subprocess(generation, fn_name, all_inputs, connection, time
         _send(connection, _message(_ChildMessage.SETUP_ERROR, str(e)))
         return
     if method is None:
-        _send(connection, _message(_ChildMessage.MISSING))
+        _send(connection, _message(_ChildMessage.SETUP_ERROR, _MISSING_FUNCTION))
         return
     _send(connection, _message(_ChildMessage.READY))
     code_type = CODE_TYPE.standard_input if fn_name is None else CODE_TYPE.call_based
