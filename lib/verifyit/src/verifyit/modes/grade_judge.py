@@ -63,6 +63,7 @@ from verifyit.spec import (
     EmptyOutputPolicy,
     ExactSpec,
     JudgeCompletionPolicy,
+    JudgePromptFormat,
     JudgeRuntimeSource,
     JudgeSpec,
     Spec,
@@ -183,6 +184,10 @@ def grade(
 def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
     if not isinstance(spec.completion_policy, JudgeCompletionPolicy):
         raise InvalidTask("Unknown judge completion policy")
+    if not isinstance(spec.prompt_format, JudgePromptFormat):
+        raise InvalidTask("Unknown judge prompt format")
+    if spec.prompt_format is JudgePromptFormat.JSON and spec.rubric != RUBRIC_LABELS:
+        raise InvalidTask("JSON judge prompts require the labels rubric")
     if type(spec.transport_attempts) is not int or spec.transport_attempts < 1:
         raise InvalidTask("Judge transport attempts must be positive")
     if (
@@ -357,8 +362,11 @@ def grade_judge_candidate(
 
 
 def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
-    if len(references) != 1 or len(spec.references) != 1 or not spec.prompt_template.strip() or not spec.label_scores:
-        raise InvalidTask("label rubric requires one reference, a prompt template and labels")
+    sends_json = spec.prompt_format is JudgePromptFormat.JSON
+    if len(references) != 1 or len(spec.references) != 1 or not spec.label_scores:
+        raise InvalidTask("label rubric requires one reference and labels")
+    if sends_json == bool(spec.prompt_template.strip()):
+        raise InvalidTask("label rubric requires a prompt template, or none with JSON prompts")
     if not isinstance(spec.label_scan, str) or spec.label_scan not in {"literal", "lines", "whole"}:
         raise InvalidTask("label_scan must be literal, lines or whole")
     if type(spec.strip_reasoning_blocks) is not bool:
@@ -376,7 +384,8 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
             )
         ):
             raise InvalidTask("label metrics require named finite observations")
-    if not {"reference", "candidate"} <= _template_fields(spec, LABEL_FIELDS):
+    used = _template_fields(spec, LABEL_FIELDS) | (LABEL_FIELDS if sends_json else set())
+    if not {"reference", "candidate"} <= used:
         raise InvalidTask("judge template must include reference and candidate")
 
 
@@ -491,7 +500,11 @@ def _judge_messages(spec: JudgeSpec, fields: dict[str, str]) -> list[ChatComplet
     messages: list[ChatCompletionMessageParam] = []
     if spec.system_prompt:
         messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
-    messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
+    if spec.prompt_format is JudgePromptFormat.JSON:
+        content = json.dumps(fields, ensure_ascii=False)
+    else:
+        content = spec.prompt_template.format(**fields)
+    messages.append({"role": "user", "content": content})
     return messages
 
 
