@@ -2647,9 +2647,19 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   `557733f6d4f7f42c5c5072a29325da03d489a5fd77b456054bc34003b2f16e95`.
   Require all four attempt-scoped panels at steps 0 and 2, with each task
   ID, prompt token sequence and score reconciled against the successful
-  attempts. Collect logs from the successful rank-zero attempt in each
-  exact Iris GPU job. Match the receipts and panel paths to those
-  attempts, and recheck the attempt identities after collection. Compare
+  attempts. For each native panel, join the driver's evaluation policy
+  ID to the install and publication for that step. The typed serving
+  client checks that each reply echoes that ID. For a resumed run,
+  check the successor's startup evaluation binding too. The original
+  native step-0 capture passed this check.
+
+  Match the model digest, layout digest and addressable bytes before
+  the first update on each of the four logical JAX learner ranks.
+  Archived native and vLLM captures matched on all four ranks, and the
+  sealed run needs its own receipts. Collect logs from the successful
+  rank-zero attempt in each exact Iris GPU job. Match the receipts and
+  panel paths to those attempts, and recheck the attempt identities
+  after collection. Compare
   step 2 separately because step 1 includes the learner
   subprocess checkpoint round trip. Both maintained arms log
   `timing/rollout_admission_window_seconds`
