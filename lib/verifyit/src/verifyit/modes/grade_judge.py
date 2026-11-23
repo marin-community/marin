@@ -3,12 +3,14 @@
 
 """Mode judge: IFEval gate, exact gate, then an LLM judge.
 
-Four rubrics. ``reference`` ports the Nemotron open-QA harness: most correct responses match a
+Five rubrics. ``reference`` ports the Nemotron open-QA harness: most correct responses match a
 reference verbatim once normalized, so the exact gate answers them for free and only the survivors
 reach the model. ``checklist`` ports the rewardkit checklist graders: each criterion is a yes/no
 question put to the model on its own, and the reward is the fraction answered yes, as rewardkit's
 default mean aggregation scored them. ``labels`` maps a configured final verdict label to its
 explicit task score. ``pairwise`` ports Arena-Hard's two-game comparison against a baseline answer.
+``answers`` follows Humanity's Last Exam's judge, extended to several results: one call returns a
+JSON verdict per reference, and the task scores 1 only when every one is correct.
 All rubrics can sit behind ``constraints``, deterministic IFEval checks that must all pass first.
 
 The judge is any OpenAI-compatible chat endpoint, configured through ``VERIFYIT_JUDGE_BASE_URL``,
@@ -54,6 +56,7 @@ from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.modes.ifeval import Check
 from verifyit.reasoning_markup import REASONING_DELIMITERS
 from verifyit.spec import (
+    RUBRIC_ANSWERS,
     RUBRIC_CHECKLIST,
     RUBRIC_LABELS,
     RUBRIC_PAIRWISE,
@@ -116,6 +119,7 @@ SCORE: <0|1>
 LABEL_FIELDS = frozenset({"question", "reference", "candidate"})
 PAIRWISE_METRIC = "win_rate"
 PAIRWISE_FIELDS = frozenset({"question", "answer_a", "answer_b"})
+ANSWERS_FIELDS = frozenset({"question", "references", "candidate"})
 
 SCORE_PATTERN = re.compile(r"score\s*:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 
@@ -153,6 +157,15 @@ class _ScoreResult:
     score: float
     reply: str
     attempts: tuple[_CompletionAttempt, ...]
+
+
+@dataclass(frozen=True)
+class _AnswerVerdict:
+    index: int
+    label: Any
+    extracted_final_answer: Any
+    reasoning: str
+    correct: bool
 
 
 @dataclass(frozen=True)
@@ -203,7 +216,7 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
     if not isinstance(spec.strip_candidate_reasoning_blocks, bool):
         raise InvalidTask("strip_candidate_reasoning_blocks must be boolean")
-    if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE) and (
+    if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE, RUBRIC_ANSWERS) and (
         not isinstance(spec.system_prompt, str)
         or not isinstance(spec.prompt_template, str)
         or not isinstance(spec.question, str)
@@ -218,6 +231,8 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask("judge rubric 'checklist' needs non-empty criteria")
     if spec.rubric == RUBRIC_LABELS:
         _validate_label_spec(spec, references)
+    if spec.rubric == RUBRIC_ANSWERS:
+        _validate_answers_spec(spec, references)
     if spec.rubric == RUBRIC_PAIRWISE:
         _validate_pairwise_spec(spec)
     elif spec.label_weights or spec.verdict_patterns:
@@ -277,7 +292,7 @@ def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> 
     try:
         with client:
             completion = _label_completion(
-                spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens
+                spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens, 0.0
             )
     except GradingInfraError as error:
         raise GradingInfraError(str(error), model=model, **error.detail) from error
@@ -354,6 +369,8 @@ def grade_judge_candidate(
             return _judge_labels(spec, validated.references[0], candidate, client, model)
         if spec.rubric == RUBRIC_PAIRWISE:
             return _judge_pairwise(spec, spec.references[0], candidate, client, model)
+        if spec.rubric == RUBRIC_ANSWERS:
+            return _judge_answers(spec, validated.references, candidate, client, model)
         return _judge_checklist(spec, validated.criteria, context, candidate, client, model)
 
 
@@ -379,6 +396,13 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
             raise InvalidTask("label metrics require named finite observations")
     if not {"reference", "candidate"} <= _template_fields(spec, LABEL_FIELDS):
         raise InvalidTask("judge template must include reference and candidate")
+
+
+def _validate_answers_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
+    if not references or len(references) != len(spec.references) or not spec.prompt_template.strip():
+        raise InvalidTask("answers rubric requires nonempty references and a prompt template")
+    if not {"references", "candidate"} <= _template_fields(spec, ANSWERS_FIELDS):
+        raise InvalidTask("judge template must include references and candidate")
 
 
 def _validate_pairwise_spec(spec: JudgeSpec) -> None:
@@ -470,7 +494,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     messages = _judge_messages(spec, {"question": spec.question, "reference": reference, "candidate": candidate})
     labels = _case_normalized(spec, spec.label_scores)
     label_metrics = _case_normalized(spec, spec.label_metrics)
-    answer, detail = _judged_answer(spec, client, model, messages)
+    answer, detail = _judged_answer(spec, client, model, messages, temperature=_temperature(spec))
     if spec.label_scan == "whole":
         final = answer
         observed = {answer}
@@ -497,12 +521,23 @@ def _judge_messages(spec: JudgeSpec, fields: dict[str, str]) -> list[ChatComplet
 
 
 def _judged_answer(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list[ChatCompletionMessageParam]
+    spec: JudgeSpec,
+    client: openai.OpenAI,
+    model: str,
+    messages: list[ChatCompletionMessageParam],
+    *,
+    temperature: float | None,
 ) -> tuple[str, dict[str, Any]]:
-    """The judge's final answer, case-normalized, after retrying incomplete replies with larger budgets."""
+    """The judge's final answer, case-normalized, after retrying incomplete replies with larger budgets.
+
+    ``temperature=None`` leaves sampling to the judge's defaults.
+    """
     budgets = _completion_budgets(spec)
     for index, budget in enumerate(budgets):
-        completion = _label_completion(spec, client, model, messages, budget)
+        completion = _label_completion(spec, client, model, messages, budget, temperature)
+        request: dict[str, Any] = {"model": model, "messages": messages, "max_completion_tokens": budget}
+        if temperature is not None:
+            request["temperature"] = temperature
         detail: dict[str, Any] = {
             "model": model,
             "requested_model": model,
@@ -511,12 +546,7 @@ def _judged_answer(
             "finish_reason": completion.finish_reason,
             "transport_attempts": completion.transport_attempts,
             "completion": completion.text,
-            "judge_request": {
-                "model": model,
-                "messages": messages,
-                "max_completion_tokens": budget,
-                **_temperature(spec),
-            },
+            "judge_request": request,
         }
         if completion.incomplete:
             if index + 1 < len(budgets):
@@ -538,7 +568,7 @@ def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: open
     weight = 0.0
     for candidate_position, answer_a, answer_b in (("B", baseline, candidate), ("A", candidate, baseline)):
         messages = _judge_messages(spec, {"question": spec.question, "answer_a": answer_a, "answer_b": answer_b})
-        answer, detail = _judged_answer(spec, client, model, messages)
+        answer, detail = _judged_answer(spec, client, model, messages, temperature=_temperature(spec))
         verdict = _pairwise_verdict(answer, spec.verdict_patterns)
         if verdict is None or verdict not in labels:
             raise GradingInfraError("judge returned no recognized pairwise verdict", verdict=verdict, **detail)
@@ -566,6 +596,58 @@ def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: open
     )
 
 
+def _judge_answers(
+    spec: JudgeSpec, references: tuple[str, ...], candidate: str, client: openai.OpenAI, model: str
+) -> Reward:
+    listed = "\n".join(f"{index}. {reference}" for index, reference in enumerate(references))
+    messages = _judge_messages(spec, {"question": spec.question, "references": listed, "candidate": candidate})
+    reply, detail = _judged_answer(spec, client, model, messages, temperature=None)
+    verdicts = _answer_verdicts(reply, len(references))
+    if verdicts is None:
+        raise GradingInfraError("judge returned malformed per-answer verdicts", **detail)
+    answers, confidence = verdicts
+    correct = [answer.correct for answer in answers]
+    strict = float(all(correct))
+    detail.update(
+        answers=[asdict(answer) for answer in answers],
+        confidence=confidence,
+        partial_credit=sum(correct) / len(correct),
+    )
+    return scored(strict, **detail)
+
+
+def _answer_verdicts(reply: str, count: int) -> tuple[list[_AnswerVerdict], int | None] | None:
+    start, end = reply.find("{"), reply.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        data = json.loads(reply[start : end + 1])
+    except ValueError:
+        return None
+    answers = data.get("answers") if isinstance(data, dict) else None
+    if not isinstance(answers, list) or len(answers) != count:
+        return None
+    verdicts = []
+    for index, answer in enumerate(answers):
+        verdict = str(answer.get("correct", "")).strip().lower() if isinstance(answer, dict) else ""
+        if verdict not in {"yes", "no"}:
+            return None
+        verdicts.append(
+            _AnswerVerdict(
+                index=index,
+                label=answer.get("label"),
+                extracted_final_answer=answer.get("extracted_final_answer"),
+                reasoning=str(answer.get("reasoning", ""))[:REASONING_LIMIT],
+                correct=verdict == "yes",
+            )
+        )
+    try:
+        confidence = max(0, min(100, round(float(str(data.get("confidence")).rstrip("%")))))
+    except (ValueError, OverflowError):
+        confidence = None
+    return verdicts, confidence
+
+
 def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
     """The last nonempty match of the first pattern with one, as Arena-Hard parses verdicts."""
     for pattern in patterns:
@@ -576,17 +658,13 @@ def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
 
 
 def _label_completion(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int
+    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int, temperature: float | None
 ) -> _LabelCompletion:
     if spec.api == "chat_completions":
         options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-        request = {
-            "model": model,
-            "messages": messages,
-            **_temperature(spec),
-            "max_completion_tokens": budget,
-            **options,
-        }
+        if temperature is not None:
+            options["temperature"] = temperature
+        request = {"model": model, "messages": messages, "max_completion_tokens": budget, **options}
         response, attempts = _judge_transport(
             spec,
             lambda timeout: _chat_completion(client, timeout=timeout, **request),
@@ -785,7 +863,9 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
     if not model:
         raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
-    options: dict[str, Any] = {"max_retries": 0} if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE) else {}
+    options: dict[str, Any] = (
+        {"max_retries": 0} if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE, RUBRIC_ANSWERS) else {}
+    )
     return (
         openai.OpenAI(
             base_url=base_url,
@@ -877,8 +957,8 @@ def _attempt_detail(attempts: tuple[_CompletionAttempt, ...] | list[_CompletionA
     return {"attempt_count": len(attempts), "attempts": [asdict(attempt) for attempt in attempts]}
 
 
-def _temperature(spec: JudgeSpec) -> dict[str, float]:
-    return {"temperature": 0.0} if spec.sampling is JudgeSampling.ZERO_TEMPERATURE else {}
+def _temperature(spec: JudgeSpec) -> float | None:
+    return 0.0 if spec.sampling is JudgeSampling.ZERO_TEMPERATURE else None
 
 
 def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
@@ -889,11 +969,12 @@ def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
 
 def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, budget: int) -> ChatCompletion:
     options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
+    if (temperature := _temperature(spec)) is not None:
+        options["temperature"] = temperature
     return _chat_completion(
         client,
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        **_temperature(spec),
         timeout=spec.request_timeout,
         max_completion_tokens=budget,
         **options,

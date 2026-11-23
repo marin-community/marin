@@ -706,20 +706,10 @@ class Job:
 
     @staticmethod
     def _is_resume_retryable_result(trial_result: TrialResult) -> bool:
-        """True if this on-disk trial result should be RE-RUN on a fresh resume.
+        """Return whether a saved trial needs another attempt on resume.
 
-        Results without confirmed teardown and final timestamps are incomplete
-        regardless of their score or exception type. Confirmed results use the shared
-        :func:`harbor_config.errors.is_resume_retryable` taxonomy. Kept separate
-        from :meth:`_is_cancelled_result`, which drives cancelled-specific
-        progress bookkeeping (``n_cancelled_trials``); this predicate is only
-        the resume-level "re-run vs keep" decision and defaults to include BOTH
-        CancelledError and SandboxBuildFailedError.
-
-        Also re-runs legacy ``BadRequestError`` results whose payload is the
-        exact context-budget-exhausted signal (see
-        :data:`_BAD_REQUEST_MAX_TOKENS_ZERO_SIGNAL`) — those predate
-        :class:`ContextManagementInfrastructureError` but are the same failure.
+        Incomplete teardown, retryable failures, and historical zero-budget
+        BadRequestError results need a fresh attempt.
         """
         if trial_result.completion is None or trial_result.finished_at is None:
             return True

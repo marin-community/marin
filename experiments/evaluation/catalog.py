@@ -28,6 +28,7 @@ from experiments.evaluation.benchmarks import (
     mmlu_redux,
     multiple_choice,
     nupa,
+    physics_verified,
     question_answering,
     reasoning,
     simpleqa,
@@ -73,6 +74,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             longbench,
             nupa,
             supergpqa,
+            physics_verified,
         )
         for benchmark in family.benchmarks()
     ]
