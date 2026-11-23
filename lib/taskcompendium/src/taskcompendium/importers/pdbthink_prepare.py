@@ -84,10 +84,10 @@ def prepare_bundle(dataset: Path) -> tuple[bytes, dict]:
         "definitions_sha256": build["definitions_sha256"],
         "parent_archive_sha256": build["parent_archive_sha256"],
         "families": build["families"],
-        "n_instances": len({row["report_metadata"]["semantic_instance_id"] for row in records}),
+        "n_instances": len({render.semantic_instance_id for render in renders}),
         "n_renders": len(records),
         "curation": dict(sorted(Counter(instance.curation_status for instance in instances).items())),
-        "representations": dict(sorted(Counter(row["report_metadata"]["representation"] for row in records).items())),
+        "representations": dict(sorted(Counter(render.representation for render in renders).items())),
         "source_structure_sha256s": sorted(
             {digest for instance in instances for digest in instance.source_file_sha256s}
         ),
