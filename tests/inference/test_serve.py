@@ -1141,6 +1141,52 @@ def test_iris_serve_keeps_explicit_streamer_bounds(monkeypatch):
     assert filled["concurrency"] == 4
 
 
+def test_backend_serves_object_store_weights_with_bounded_streamer_buffers():
+    """The backend injects distributed loading for object-store weights on its own; that
+    injected config carries the runai streamer's host RAM buffer bounds so a checkpoint
+    streamed through the serve child's cgroup cannot OOM it mid-load."""
+    backend = VllmBackend(VllmEngineConfig())
+    spec = ModelSpec(
+        weights="s3://bucket/export",
+        api_model="export",
+        num_chips=None,
+        tensor_parallel_size=None,
+        dtype="bfloat16",
+        max_model_len=None,
+        chat_template_content=None,
+    )
+    args = backend._serve_args(spec, (), ())
+    index = args.index("--model-loader-extra-config")
+    assert json.loads(args[index + 1]) == {
+        "distributed": True,
+        "concurrency": 4,
+        "memory_limit": 17179869184,
+    }
+
+    explicit = backend._serve_args(spec, (), ("--model-loader-extra-config", '{"distributed":true}'))
+    assert explicit.count("--model-loader-extra-config") == 1
+    assert '{"distributed":true}' in explicit
+
+
+def test_iris_serve_rejects_malformed_streamer_config_at_the_cli_boundary(monkeypatch):
+    result, _client, _services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--gpu",
+        "H100x8",
+        "--tensor-parallel-size",
+        "1",
+        "--vllm-arg",
+        "--model-loader-extra-config",
+        "--vllm-arg",
+        "{not json",
+        "--no-wait",
+    )
+
+    assert result.exit_code != 0
+    assert "not valid JSON" in result.output
+    _client.submit.assert_not_called()
+
+
 def test_iris_serve_delivers_secret_without_putting_it_in_the_service_config(monkeypatch):
     monkeypatch.setenv("TEST_PARALLEL_KEY", "parallel-key")
 
