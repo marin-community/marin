@@ -870,6 +870,28 @@ because their bounds come from their SQL. RPC wall time includes queueing;
 it does not isolate planner CPU. Keep the original Parquet files for the
 baseline and compare result digests before interpreting a sampled speedup.
 
+## Diagnosing blocked ingestion and registration
+
+A Ready pod can have a blocked storage path. Compare visible, published, and
+settled positions, then inspect process threads when all three stop. A full
+blocking pool can prevent ingestion and publication while `/health` still
+returns `ok`. The ingest buffer does not include queued RPC data.
+
+Use WebSocket exec if the Kubernetes endpoint rejects SPDY upgrades:
+
+```bash
+KUBECTL_REMOTE_COMMAND_WEBSOCKETS=true kubectl \
+  --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  exec <pod> -c finelog -- cat /proc/1/status
+```
+
+Stacks in `register_table_with`, `update_policy`, and `evict_segment` can
+identify a policy mutex held across a visibility wait. Release policy guards
+before eviction. See [incident 1046](https://marina.oa.dev/echo/wiki/1046) for
+the stack evidence and capture procedure. An approved container restart in the
+same pod preserves its `emptyDir` cache. Pod replacement discards that cache.
+Neither action preserves queued requests in process memory.
+
 ## Diagnosing Kubernetes mirror readiness
 
 Use the kubeconfig and context from `config/<cluster>.yaml`; do not rely on the
