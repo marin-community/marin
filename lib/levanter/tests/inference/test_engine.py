@@ -171,6 +171,7 @@ def test_continuous_generation_finishes_a_new_short_request_while_the_first_is_a
         short_request = Request([3, 2, 1], 11, replace(params, max_num_tokens=jnp.asarray(4)), n_generations=1)
         incoming = [short_request]
         completed = {}
+        updates = []
 
         def poll(free_slots):
             if not incoming:
@@ -179,8 +180,19 @@ def test_continuous_generation_finishes_a_new_short_request_while_the_first_is_a
             assert engine.results[10][0].tokens_decoded > 0 and not engine.results[10][0].done
             return [incoming.pop()]
 
-        engine.generate_continuously([long_request], poll_requests=poll, on_complete=completed.__setitem__)
+        def record_tokens(request_id, choice, tokens):
+            assert request_id not in completed
+            updates.append((request_id, choice, tokens))
 
+        engine.generate_continuously(
+            [long_request], poll_requests=poll, on_complete=completed.__setitem__, on_tokens=record_tokens
+        )
+
+    assert updates[0] == (10, 0, [3])
+    for request_id, result in completed.items():
+        assert [
+            token for rid, choice, tokens in updates if (rid, choice) == (request_id, 0) for token in tokens
+        ] == result.tokens[0]
     assert list(completed) == [11, 10]
     assert completed[11].tokens == [[3]]
     assert completed[10].tokens == [[3] * 5]
