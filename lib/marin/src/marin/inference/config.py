@@ -391,13 +391,19 @@ class VllmEngineConfig:
         object.__setattr__(self, "extra_metric_families", extra_metric_families)
 
 
+DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE = 1
+
+
 @dataclass(frozen=True)
 class LevanterEngineConfig:
     max_seqs: int = 16
     page_size: int = 128
     hbm_utilization: float = 0.8
+    expert_parallel_size: int = DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE
 
     def __post_init__(self) -> None:
+        if self.expert_parallel_size < 1:
+            raise ValueError("expert_parallel_size must be positive")
         if self.max_seqs <= 0:
             raise ValueError("max_seqs must be positive")
         if self.page_size <= 0:
