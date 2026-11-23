@@ -43,6 +43,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from skyrlrecipe import RecipePatch, SkyRLRecipe
 
 from experiments.evaluation.micro210 import Micro210ServingProfile, micro210_artifact_step
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
@@ -164,6 +165,7 @@ class RoundSpec:
     initializer: str
     sft: RoundSft
     openresearcher_service: OpenResearcherService | None = None
+    rl_recipe_patch: FilePin | None = None
 
 
 @dataclass(frozen=True)
@@ -220,6 +222,7 @@ class RoundRl:
     selection_eligibility: str
     native_checkpoint: str | None = None
     gpu_variant: str = "GB200"
+    recipe_patch: FilePin | None = None
     draft: str | None = None
     """Registered speculative-decoding draft to serve during rollout; ``None`` keeps plain decoding."""
     openresearcher_service: OpenResearcherService | None = None
@@ -503,6 +506,14 @@ def verified_certified_export(model: RoundAdoptedHf) -> None:
         raise ValueError("The certified export's model manifest does not bind its payload files")
 
 
+def patched_rl_recipe(recipe: dict, patch: FilePin | None) -> dict:
+    """Apply a content-pinned stage patch through the typed recipe boundary."""
+    if patch is None:
+        return recipe
+    authored = RecipePatch.from_document(read_pin(patch, Path.cwd()))
+    return SkyRLRecipe.from_document(recipe).merge(authored).to_skyrl()
+
+
 def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactStep:
     """Adopt a pinned HF export or a native RL checkpoint without an SFT stage."""
     model = spec.adopted_model
@@ -608,6 +619,7 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
                 else math.ceil(0.9 * callback["expected_tasks"])
             )
             callback["selection_eligibility"] = rl.selection_eligibility
+    recipe = patched_rl_recipe(recipe, rl.recipe_patch)
     resume = (
         ArtifactStep.adopt(f"{spec.name}/native-input", spec.version, rl.native_checkpoint)
         if rl.native_checkpoint
@@ -841,6 +853,7 @@ def round_plan(
     recipe["trainer"]["callbacks"] = curriculum_validation_callbacks(
         recipe["trainer"]["callbacks"], pools.curriculum.validation
     )
+    recipe = patched_rl_recipe(recipe, round_spec.rl_recipe_patch)
     resolved["rl"] = {
         **rl,
         "name": f"{round_spec.slug}-rl",

@@ -171,3 +171,20 @@ def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_reci
         schema.RecipePatch(terminal_bench=removed)
     with pytest.raises(ValueError, match="micro_forward_batch_size_per_gpu"):
         base.with_settings(["trainer.micro_forward_batch_size_per_gpu=null"])
+
+
+def test_multiturn_response_cap_is_distinct_from_turn_output_and_prompt_reserve():
+    budget = ContextBudget(
+        request_window_tokens=131072,
+        max_new_tokens_per_turn=24576,
+        max_new_tokens_per_trajectory=98304,
+        max_turns=128,
+    )
+    values = budget.derived_values({})
+    assert values["generator.sampling_params.max_generate_length"] == 98304
+    assert values["generator.max_input_length"] == values["trainer.max_prompt_length"] == 32768
+    assert budget.max_new_tokens_per_turn == 24576
+    with pytest.raises(ValueError, match="request_window_tokens must exceed"):
+        budget.replace(request_window_tokens=98304)
+    with pytest.raises(ValueError, match="must cover max_new_tokens_per_turn"):
+        budget.replace(max_new_tokens_per_trajectory=16384)

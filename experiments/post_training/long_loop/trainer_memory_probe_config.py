@@ -38,7 +38,7 @@ def compiled_config(args):
         megatron.optimizer_config_kwargs.optimizer_offload_fraction = 1.0 if args.variant == "offload" else 0.0
         megatron.memory_profile = {
             "enabled": True,
-            "max_sequence_length": 262144,
+            "max_sequence_length": args.max_sequence_length,
             "valid_token_counts": [85557],
             "minimum_headroom_fraction": 0.1,
         }

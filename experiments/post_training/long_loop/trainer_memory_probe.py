@@ -154,6 +154,7 @@ def main():
     parser.add_argument("--config-sha256", required=True)
     parser.add_argument("--output-prefix", required=True)
     parser.add_argument("--batch-uri", required=True)
+    parser.add_argument("--max-sequence-length", type=int, required=True)
     parser.add_argument("--variant", required=True, choices=("chunked", "offload"))
     args = parser.parse_args()
     if args.driver:
@@ -174,7 +175,14 @@ def main():
         num_tasks=placement.policy_num_nodes,
         gpus_per_task=placement.policy_num_gpus_per_node,
         driver_module=MODULE,
-        driver_arguments=("--batch-uri", args.batch_uri, "--variant", args.variant),
+        driver_arguments=(
+            "--batch-uri",
+            args.batch_uri,
+            "--variant",
+            args.variant,
+            "--max-sequence-length",
+            str(args.max_sequence_length),
+        ),
     )
 
 

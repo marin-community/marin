@@ -748,3 +748,37 @@ def test_round_adopts_a_certified_export_through_the_seal(round_inputs, local_ro
 
 def pins_export_manifest(model_dir):
     return hashlib.sha256((model_dir / "export-manifest.json").read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_exp6_pinned_patch_resolves_exact_context_staleness_and_snowball_optimizer(local_round, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    source = Path(__file__).parents[1] / "specs/exp6-rl.yaml"
+    patch = tmp_path / "exp6-rl.yaml"
+    patch.write_bytes(source.read_bytes())
+    pin = FilePin(str(patch), hashlib.sha256(patch.read_bytes()).hexdigest())
+    roles = {**local_round.rl.role_plan, "train_batch_size": 64, "policy_mini_batch_size": 64, "n_samples_per_prompt": 8}
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe_patch=pin, role_plan=roles))
+    terminal = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    validate_launch(terminal.build_config(context).launch_config_yaml, tmp_path / "composed", model_config=b"{}")
+    config = yaml.safe_load((tmp_path / "composed/compiled.yaml").read_text())["skyrl"]
+    trainer, generator = config["trainer"], config["generator"]
+    assert trainer["rollout_buffer"]["max_staleness_steps"] == 3
+    assert trainer["max_prompt_length"] == 32768
+    assert trainer["algorithm"]["max_seq_len"] == 131072
+    assert generator["max_input_length"] == 32768
+    assert generator["sampling_params"]["max_generate_length"] == 98304
+    assert generator["eval_sampling_params"]["max_generate_length"] == 98304
+    assert generator["engine_init_kwargs"]["max_model_len"] == 131072
+    agent = config["terminal_bench_config"]["installed_agent"]["agent"]["kwargs"]
+    assert agent["model_info"] == {"max_input_tokens": 131072, "max_output_tokens": 24576}
+    assert agent["compaction_reserve_tokens"] == 24576
+    assert (trainer["train_batch_size"], generator["n_samples_per_prompt"]) == (64, 8)
+    assert trainer["policy"]["optimizer_config"]["max_grad_norm"] == 0.5
+    assert trainer["policy"]["optimizer_config"]["lr"] == 1e-6
+    patch.write_text(patch.read_text().replace("max_staleness_steps: 3", "max_staleness_steps: 4"))
+    with pytest.raises(ValueError, match="Pinned file changed"):
+        adopted_round_rl(spec)

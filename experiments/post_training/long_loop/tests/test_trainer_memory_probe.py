@@ -33,10 +33,13 @@ def test_probe_derives_native_loss_context_before_worker_start(tmp_path, variant
             config_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
             output_prefix=str(tmp_path / variant),
             variant=variant,
+            max_sequence_length=131072,
         )
     )
     assert config.trainer.algorithm.max_seq_len == reference.trainer.algorithm.max_seq_len == 1024
     assert config.trainer.algorithm.resolved_group_advantage == reference.trainer.algorithm.resolved_group_advantage
+    assert config.trainer.policy.megatron_config.memory_profile.max_sequence_length == 131072
+    assert list(config.trainer.policy.megatron_config.memory_profile.valid_token_counts) == [85557]
 
 
 def test_cpu_driver_publishes_complete_receipts_after_training_and_warm_profile(tmp_path, monkeypatch):
@@ -129,6 +132,7 @@ def test_cpu_driver_publishes_complete_receipts_after_training_and_warm_profile(
             output_prefix=str(output),
             batch_uri=str(batch_path),
             variant="chunked",
+            max_sequence_length=131072,
         ),
         CPUActors,
     )

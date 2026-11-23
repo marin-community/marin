@@ -1,0 +1,28 @@
+# Exp6 RL stage patch. Bind this file by FilePin from the round's recipe_patch.
+# Total response and per-turn output budgets are distinct; data/model/SFT pins are supplied by the round.
+context_budget:
+  request_window_tokens: 131072
+  max_new_tokens_per_trajectory: 98304
+  max_new_tokens_per_turn: 24576
+  max_turns: 128
+  generated_budget_fraction: 0.75
+  overlong_cache_fraction: 0.16666666666666666
+trainer:
+  train_batch_size: 64
+  policy_mini_batch_size: 64
+  rollout_buffer:
+    max_staleness_steps: 3
+  policy:
+    optimizer_config:
+      lr: 1.0e-6
+      max_grad_norm: 0.5
+generator:
+  n_samples_per_prompt: 8
+terminal_bench:
+  installed_agent:
+    agent:
+      kwargs:
+        model_info:
+          max_input_tokens: 131072
+          max_output_tokens: 24576
+        compaction_reserve_tokens: 24576

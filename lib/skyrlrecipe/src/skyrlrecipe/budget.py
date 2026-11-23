@@ -17,14 +17,17 @@ class ContextBudget(Section):
     request_window_tokens: PositiveInt
     serving_window_tokens: PositiveInt = unset_field()
     max_new_tokens_per_turn: PositiveInt
+    max_new_tokens_per_trajectory: PositiveInt = unset_field()
     max_turns: PositiveInt
     generated_budget_fraction: Annotated[int | float, Field(gt=0, le=1)] = 0.5
     overlong_cache_fraction: Annotated[int | float, Field(ge=0, le=1)] = 0.25
 
     @model_validator(mode="after")
     def _response_fits(self) -> Self:
-        if self.request_window_tokens <= self.max_new_tokens_per_turn:
-            raise ValueError("request_window_tokens must exceed max_new_tokens_per_turn")
+        if self.response_budget_tokens < self.max_new_tokens_per_turn:
+            raise ValueError("max_new_tokens_per_trajectory must cover max_new_tokens_per_turn")
+        if self.request_window_tokens <= self.response_budget_tokens:
+            raise ValueError("request_window_tokens must exceed the response token budget")
         if self.effective_serving_window_tokens < self.request_window_tokens:
             raise ValueError("serving_window_tokens must cover the complete request_window_tokens")
         return self
@@ -36,8 +39,14 @@ class ContextBudget(Section):
         return self.request_window_tokens
 
     @property
+    def response_budget_tokens(self) -> int:
+        if "max_new_tokens_per_trajectory" in self.model_fields_set:
+            return self.max_new_tokens_per_trajectory
+        return self.max_new_tokens_per_turn
+
+    @property
     def max_input_tokens(self) -> int:
-        return self.request_window_tokens - self.max_new_tokens_per_turn
+        return self.request_window_tokens - self.response_budget_tokens
 
     @property
     def generated_tokens_per_trajectory(self) -> int:
@@ -54,7 +63,7 @@ class ContextBudget(Section):
             "trainer.max_prompt_length": self.max_input_tokens,
             "generator.max_input_length": self.max_input_tokens,
             "generator.max_turns": self.max_turns,
-            "generator.sampling_params.max_generate_length": self.max_new_tokens_per_turn,
+            "generator.sampling_params.max_generate_length": self.response_budget_tokens,
             "generator.engine_init_kwargs.max_model_len": self.effective_serving_window_tokens,
             "generator.trajectory_reward_shaping.overlong.l_max": self.generated_tokens_per_trajectory,
             "generator.trajectory_reward_shaping.overlong.l_cache": self.overlong_cache_tokens,

@@ -809,6 +809,22 @@ the updates actually run, final LR near min_lr), the special-token LR multiplier
 default of 1.0 with explicit-override semantics (R2), a permanent output prefix,
 and the final-SFT-checkpoint retention rule (R1, enforced again at archive time).
 
+A round can bind a content-pinned RL stage patch with `rl_recipe_patch: {path, sha256}`.
+An adopted RL-only round uses `rl.recipe_patch` with the same `FilePin` fields.
+The runner verifies the bytes, applies the patch to the base recipe, and validates
+the merged `SkyRLRecipe` after curriculum-owned validation settings are resolved. Model, curriculum, SFT and
+canonical Micro210 bindings remain round inputs.
+
+`specs/exp6-rl.yaml` sets a 131,072-token request window, 98,304 total response
+tokens and 24,576 output tokens per turn. `context_budget.max_new_tokens_per_trajectory`
+sets the total response cap separately from `max_new_tokens_per_turn`; prompt
+capacity is the request window minus the total response cap. Without an explicit
+trajectory cap, the effective total response cap equals `max_new_tokens_per_turn`.
+Exp6 admits initial prompts up to 32,768 tokens. Pi's compaction reserve keeps
+24,576 tokens free for the next reply within the request window. Its RL
+batch remains 64 prompts times eight samples, with learning rate 1e-6 and gradient
+clip 0.5. Bind this patch from the Exp6 round after its model and data are ready.
+
 `sft.first_collective_call_timeout` sets XLA's first-call rendezvous termination
 timeout in seconds. It allows cold-start skew between local GPUs without changing
 the training computation or the separate NCCL operation watchdog. Exp5 uses
@@ -1170,7 +1186,11 @@ admission. It initializes Adam, then runs forward, backward and optimizer steps
 at each `memory_profile.valid_token_counts` value and at the explicit
 `memory_profile.max_sequence_length` (262,144 for Exp5). Include observed long trajectories, such as
 85,557 valid tokens, as well as the configured maximum. The scheduler fills the
-pipeline's activation slots with native microbatches.
+pipeline's activation slots with native microbatches. The trainer-only
+`trainer_memory_probe` requires `--max-sequence-length` explicitly; use 131,072
+for the Exp6 context. The same qualification run measures 85,557 valid tokens
+and the configured maximum with warm optimizer state. This does not change a
+running trainer's configuration.
 For router-replay policies the synthetic response carries complete, balanced
 expert choices through the normal replay controller; receipts name that routing
 mode. This tests capacity, not a bound on arbitrary expert-load imbalance.
