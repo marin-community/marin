@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 12:40 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 1:35 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2056,17 +2056,17 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   preflight. The candidate awaits H100 validation.
   [Verified per-update checkpoint plan][held-native-recovery-plan]
 
-  A local launch fixture rendered the recovery candidate both through the
-  coordinator and as a root GPU job on the regional controller. Both
-  use the original artifact fingerprint and the same five-host BATCH
-  allocation. The regional root relies on the managed H100 pool. Its
-  request omits the inherited region selector that blocked an earlier
-  direct submission. The fixture reattached to the exact terminal
-  attempt after interruption and wrote the typed result under the
-  existing artifact lease. A root GPU job removes the CPU coordinator
-  from the GPU group's lifecycle. Live native dispatch and recovery
-  on this route remain open.
-  [Regional root request and terminal fixture][held-native-recovery-root]
+  The staged regional root launcher uses the same artifact fingerprint
+  and five-host BATCH request as the nested launch. Its request uses the
+  managed H100 pool directly, which avoids the inherited region selector
+  that blocked an earlier submission. The local test suite covered a
+  single exact submission and passive finalization under the artifact
+  lease after an interrupted result write. The finalizer captures the
+  original step-2 checkpoint marker before retention prunes step 1.
+  Removing the CPU coordinator from the GPU group's lifecycle reduces
+  one source of eviction. Live admission on this route remains open.
+  [Regional request fixture][held-native-recovery-root] ·
+  [Exact first-attempt launcher][held-native-direct-operator]
 
   A CPU probe ran the normal step-end callback with one and two native
   learner processes, local storage and a local Ray dispatch adapter. It
@@ -2094,7 +2094,11 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   the rollout cursor. The official cross-artifact initializer path starts
   the dataset from the beginning. Require the successor to load the exact
   indexed checkpoint, restore the trainer and rollout state, and reinstall
-  the same policy digest before training resumes.
+  the same policy digest before training resumes. The local artifact
+  rehearsal retained the failed root's attempt record, assigned a fresh
+  root ID under the same artifact, linked it to the first committed
+  checkpoint and finalized the second generation.
+  [Same-artifact continuation rehearsal][held-native-continuation]
 
   Prefer an uninterrupted allocation to measure native update two at
   steady state. If the comparison spans attempts, report requeue, restore,
@@ -2104,6 +2108,11 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   report checkpoint time separately. Use policy 0 for the baseline panel
   and policy 2 for the terminal panel, including when a restart from a
   committed step 2 runs the final evaluation without another optimizer update.
+  The paired audit replayed the accepted vLLM receipt byte for byte and
+  independently verified all four learner logs from the interrupted native
+  update. It can pair the two native panels across a step-1 recovery while
+  holding each update and its elapsed time to its original attempt.
+  [Matched-pair acceptance checker and proof][held-native-pair-acceptance]
 
   The first training batch contained no tool calls in either arm. The
   native arm returned fewer tokens and took about 204 times longer to
@@ -2296,6 +2305,9 @@ arms. [Prior timing comparison][timing]
 [held-native-recovery-plan]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fverified-recovery-plan.json
 [held-native-recovery-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fordinary-checkpoint-cpu-proof.tar.zst
 [held-native-recovery-root]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fparentless-regional-launch-proof.tar.zst
+[held-native-direct-operator]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-first-attempt-7de5313.tar.gz
+[held-native-continuation]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-direct-same-artifact-rehearsal.tar.zst
+[held-native-pair-acceptance]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-held-pair-acceptance-proof.tar.zst
 [held-native-recovery-deadline]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fordinary-checkpoint-deadline-proof.tar.zst
 [held-native-admission-probe]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Foffline-native-admission-probe.tar.zst
 [held-publication-overlap]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fverified-publication-overlap-proof.tar.zst
