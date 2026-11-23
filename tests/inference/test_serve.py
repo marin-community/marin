@@ -72,7 +72,7 @@ from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import local_inference
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import InferenceWorkerMetadata, OpenAIEndpoint, RunningModel
-from marin.inference.vllm_backend import VllmBackend, vllm_launcher
+from marin.inference.vllm_backend import VllmBackend, _resolved_chat_template, vllm_launcher
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
     vllm_gpu_wheel_provenance,
@@ -90,6 +90,9 @@ from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
+from tokenizers import Tokenizer
+from tokenizers.models import WordPiece
+from transformers import PreTrainedTokenizerFast
 
 
 @pytest.mark.parametrize(
@@ -1055,6 +1058,38 @@ def test_iris_serve_passes_tokenizer_to_the_served_model(monkeypatch):
     model = services[0].model
     assert model.tokenizer == "marin-community/marin-tokenizer-tools"
     assert model.tokenizer_revision == "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09"
+
+
+def _write_tokenizer_fixture(directory: Path, template: str) -> Path:
+    """A loadable tokenizer dir with one chat template, built without network access."""
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer(WordPiece(vocab={"[UNK]": 0, "a": 1})))
+    tokenizer.chat_template = template
+    tokenizer.save_pretrained(directory)
+    return directory
+
+
+def test_backend_resolves_the_chat_template_from_the_separate_tokenizer(tmp_path):
+    """The regression behind the --tokenizer option: an export whose weights dir carries no
+    tokenizer files must not be consulted when the served model names a tokenizer source."""
+    weights = tmp_path / "export-weights"
+    weights.mkdir()  # no tokenizer files inside, like an object-store checkpoint export
+    tokenizer_dir = _write_tokenizer_fixture(tmp_path / "tokenizer", "PROBE-MARKER {{ messages }}")
+
+    with_tokenizer = ModelSpec(
+        weights=str(weights),
+        api_model="export",
+        num_chips=None,
+        tensor_parallel_size=None,
+        dtype="bfloat16",
+        max_model_len=None,
+        chat_template_content=None,
+        tokenizer=str(tokenizer_dir),
+    )
+    assert _resolved_chat_template(with_tokenizer) is not None
+
+    without_tokenizer = dataclasses.replace(with_tokenizer, tokenizer=None)
+    with pytest.raises(ValueError, match="Couldn't instantiate the backend tokenizer"):
+        _resolved_chat_template(without_tokenizer)
 
 
 def test_iris_serve_delivers_secret_without_putting_it_in_the_service_config(monkeypatch):
