@@ -18,7 +18,7 @@ from taskforge.effects.context import Context
 from taskforge.effects.events import Committed, Note, StageCompleted
 from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart, Transient, describe_exception
 from taskforge.effects.log import EventLog
-from taskforge.harness.loop import stock
+from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Stopped, Submitted
 from taskforge.model.content_hash import digest
 from taskforge.model.llm import Message, Role
@@ -42,10 +42,10 @@ from taskforge.model.workpiece import Conversation, Fallback, Terminal, Workpiec
 from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
+from taskforge.stages.classify import commitments
 from taskforge.stages.exits import Decided, Validated
 from taskforge.stages.rules import author_stopped, default_review
 from taskforge.stages.solve_review import finding_lines
-from taskforge.stages.visits import Commitments
 
 
 def reasons(error: BaseException) -> tuple[str, ...]:
@@ -199,14 +199,13 @@ def compatibility(config: TaskforgeConfig, resources: Resources) -> str | None:
         return None
     roles = []
     for role in (config.adversary, config.solve_review):
-        if not stock(harness := role.harness):
+        if type(harness := role.harness) is not AgenticHarness:  # a subclass may run otherwise
             return None
         session = (harness.max_prompt_tokens, harness.sampling, harness.nudge, harness.output_chars)
         tools = tuple((tool.schema, type(tool).__module__, type(tool).__qualname__) for tool in role.tools.values())
         roles.append((role.name, session, tools, resources.inference_for(role.name).fingerprint()))
-    model = resources.decision_model
-    used = (resources.rollouts, resources.grading, *(() if model is None else (model,)))
-    fingerprints = tuple(resource.fingerprint() for resource in used)
+    used = (resources.rollouts, resources.grading, resources.decision_model)
+    fingerprints = tuple(resource.fingerprint() for resource in used if resource is not None)
     return digest((config.policy, config.band, config.budget, tuple(roles), fingerprints, sorted(resources.factories)))
 
 
@@ -230,7 +229,7 @@ async def run_workpiece(
         logging.warning(
             "Workpiece %s reuses no committed visit: its review rule or a role has no stable identity", wp.id
         )
-    commits = Commitments(log.records)
+    commits = commitments(log.records)
     pending: Committed | None = None  # the executed visit a continuing review commits
     try:
         async with ctx.scope("workpiece"):
@@ -239,7 +238,7 @@ async def run_workpiece(
             while True:
                 reached(wp)
                 visit = digest((stage, wp, compat)) if compat and stage in (Stage.VALIDATE, Stage.CONFIRM) else None
-                hit, entered = commits.visits.get(visit or ""), len(wp.evidence)
+                hit, entered = commits.get(visit or ""), len(wp.evidence)
                 try:
                     # A committed visit returns its evidence and runs nothing: no call, scope, observer or read.
                     result = Validated(hit.result) if hit else await STAGES[stage](ctx, wp, config, resources)
@@ -264,9 +263,6 @@ async def run_workpiece(
                         pending = Committed(visit, entered, result.result) if visit and not hit else None
                     commit = pending if stage is Stage.REVIEW and following is not None else None
                     marker = StageCompleted(stage, config_digest, type(result).__name__, wp.round, wp.terminal, commit)
-                    if commit is not None:
-                        records = log.records
-                        commits.add(records, len(records) + 1, marker)
                     await ctx.emit(marker)
                     if following is None:
                         break  # keep the terminal stage, which a hold raised while the scope exits records

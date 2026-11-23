@@ -66,7 +66,6 @@ from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import sandbox_limits
 from taskforge.stages.classify import (
     CAUSE_DECISIONS,
-    budget_exhausted,
     grade_cause,
     grader_infra_unavailable,
     trial_cause,
@@ -101,7 +100,7 @@ async def solver_result(
         if (cause := trial_cause(result, spec.task)) is Cause.HELD:
             return TrialResult(trial, None, cause, result.grade.error or "", receipt=receipt)
         return TrialResult(trial, result.grade, cause, receipt=receipt)
-    return budget_exhausted(trial)
+    return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
 
 
 async def solver_batch(

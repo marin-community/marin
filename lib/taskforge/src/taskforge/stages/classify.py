@@ -17,12 +17,12 @@ from rolloutengine.models import (
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import NoGrader, TaskSpec
 
-from taskforge.effects.events import Resolved
-from taskforge.effects.issues import Hold
-from taskforge.effects.log import Record
-from taskforge.model.review import Cause, Incomplete, Modify, Reject, Retry, TrialResult
+from taskforge.effects.events import Committed, Resolved, StageCompleted
+from taskforge.effects.issues import Hold, LogFailure
+from taskforge.effects.log import Record, physical
+from taskforge.model.review import Cause, Incomplete, Modify, Reject, Retry
 from taskforge.model.verdict import grader_checks
-from taskforge.resources.rollouts import refused
+from taskforge.resources.rollouts import SolverRollout, refused
 
 # One review disposition per cause; solver generation limits are handled as failed trials. GRADER_INFRA
 # has none: the grader_infra_unavailable observer holds validation before review sees such a grade.
@@ -45,11 +45,6 @@ CAUSE_DECISIONS = MappingProxyType(
         Cause.VERIFIER_SKIPPED: Modify,
     }
 )
-
-
-def budget_exhausted(trial: int) -> TrialResult:
-    """A solver slot whose output budget ran out on both of its attempts: the one trial with no journal row."""
-    return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
 
 
 def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | None:
@@ -123,3 +118,20 @@ def replaced_refusals(previous: Sequence[Record], resume: bool) -> Callable[[Res
     refusal it replaces as it starts, so a later launch resumes the replacement and still replays any other refusal."""
     stale = {id(record.event) for record in previous if resume and isinstance(record.event, Resolved)}
     return lambda event: id(event) in stale and refused(event.value)
+
+
+def commitments(records: Sequence[Record]) -> dict[str, Committed]:
+    """The journal's committed visits by identity, after a best-effort check for accidental corruption: each committed
+    trial's receipt names an earlier physical solver resolution of that trial's slot. A deliberately rewritten journal is
+    out of scope; reading a transcript at its receipt checks the full request again, and a mismatch there holds."""
+    found: dict[str, Committed] = {}
+    for record in records:
+        if not isinstance(marker := record.event, StageCompleted) or (commit := marker.committed) is None:
+            continue
+        for trial in commit.result.solver:
+            row = None if trial.receipt is None else physical(records, trial.receipt, record.sequence)
+            request = None if row is None else row.request
+            if trial.receipt is not None and not (isinstance(request, SolverRollout) and request.trial == trial.trial):
+                raise LogFailure(f"Row {record.sequence}: trial {trial.trial}'s receipt names no resolution of its slot")
+        found[commit.visit] = commit
+    return found

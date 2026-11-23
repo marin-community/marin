@@ -11,7 +11,8 @@ the replay digest, so classes may move or be renamed freely. Changing a kind bre
 """
 
 import errno
-from dataclasses import Field, dataclass, field, fields
+from collections.abc import Iterator
+from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from types import get_original_bases
 from typing import ClassVar, Generic, TypeVar, get_args, get_origin
@@ -65,10 +66,7 @@ class Event(Generic[T_co]):
     _digest: str | None = field(default=None, init=False, repr=False, compare=False, metadata={"serialize": False})
 
     def identity(self) -> object:
-        return {
-            item.name: event_digest(value) if isinstance(value := getattr(self, item.name), Event) else value
-            for item in recorded_fields(self)
-        }
+        return {name: event_digest(value) if isinstance(value, Event) else value for name, value in recorded_items(self)}
 
     def __init_subclass__(cls) -> None:
         for base in get_original_bases(cls):
@@ -86,17 +84,14 @@ class Event(Generic[T_co]):
         EVENT_TYPES[kind] = cls
 
 
-ABSENT_WHEN_NONE = {"absent_when_none": True}
-"""Field metadata: a later optional field left out of identity and payload while None, so earlier rows keep both."""
-
-
-def recorded_fields(event: Event[object]) -> list[Field[object]]:
-    return [
-        item
-        for item in fields(event)
-        if item.metadata.get("serialize", True)
-        and not (item.metadata.get("absent_when_none") and getattr(event, item.name) is None)
-    ]
+def recorded_items(event: Event[object]) -> Iterator[tuple[str, object]]:
+    """Fields in both the journal and its replay identity; an ``absent_when_none`` field left at None is in neither, so
+    rows written before it existed keep both."""
+    for item in fields(event):
+        if item.metadata.get("serialize", True):
+            value = getattr(event, item.name)
+            if value is not None or not item.metadata.get("absent_when_none"):
+                yield item.name, value
 
 
 # Event registration is the sole module-state exception; logs never import classes.
@@ -202,4 +197,4 @@ class StageCompleted(Event[None]):
     exit: str
     round: int = 0
     terminal: Terminal | None = None
-    committed: Committed | None = field(default=None, metadata=ABSENT_WHEN_NONE)
+    committed: Committed | None = field(default=None, metadata={"absent_when_none": True})

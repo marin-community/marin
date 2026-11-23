@@ -144,15 +144,13 @@ def launch(
     solver: Paid,
     grader: Grader | None = None,
     inference: FakeInference | None = None,
-    rollouts: str | None = None,
 ) -> Launch:
-    """``rollouts`` names another solver configuration digest, so every slot resolves under another fingerprint."""
     grader, reviewer = grader or Grader(), CleanReviewer()
     live = resources(Envs(), AUTHOR)
     bundle = replace(
         live,
         inference=inference or live.inference,
-        rollouts=replace(live.rollouts, engine=solver, config_digest=rollouts or live.rollouts.config_digest),
+        rollouts=replace(live.rollouts, engine=solver),
         grading=GradingResource(grader, "grader"),
         role_inference={"solve_review": reviewer},
     )
@@ -362,37 +360,21 @@ async def refuses_the_damaged_root(launches: Driver, lines: list[bytes], at: int
     republish(launches.root, b"".join(lines))
     before = tree(launches.root)
     launches.monkeypatch.setattr(driver, "runtime", unexpected_runtime)
-    with pytest.raises(
-        LogFailure, match=r"trial \d+'s (receipt names no resolution its visit issued|grade or cause)"
-    ) as e:
+    with pytest.raises(LogFailure, match=r"trial \d+'s receipt names no resolution of its slot") as e:
         await driver.one(launches.args)
     assert driver.exit_code(e.value) == driver.CORRUPT
     assert tree(launches.root) == before
 
 
-@pytest.mark.parametrize("damage", ["another row", "a sibling slot", "a changed grade"])
+@pytest.mark.parametrize("damage", ["another row", "a sibling slot"])
 async def test_a_malformed_commitment_leaves_the_held_head_byte_identical(launches: Driver, damage: str) -> None:
     assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
     lines = published_events(launches.root).splitlines(keepends=True)
     [(at, row, (first, second))] = committed_trials(lines)
     if damage == "another row":
         first["receipt"] = 1
-    elif damage == "a sibling slot":  # a same-type resolution of the wrong slot
+    else:  # a same-type resolution of the wrong slot
         first["receipt"], second["receipt"] = second["receipt"], first["receipt"]
-    else:  # the right slot's own row, under a grade it did not give
-        first["grade"]["reward"] = 0.75
-    await refuses_the_damaged_root(launches, lines, at, row)
-
-
-async def test_a_real_receipt_from_another_fingerprint_is_refused_before_claim(launches: Driver) -> None:
-    """Regression: a receipt naming a genuine physical resolution of the same (trial, attempt), bought under another
-    rollout fingerprint, passed claim; confirmation found it only after the head swap and published a manual hold."""
-    assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
-    assert await launches.run(launch(Paid(outage={(2, 1)}), rollouts="another")) == driver.DEFERRED
-    lines = published_events(launches.root).splitlines(keepends=True)
-    (_, _, (old, _)), (at, row, (new, _)) = committed_trials(lines)
-    assert (old["trial"], old["receipt"] != new["receipt"]) == (new["trial"], True)
-    new["receipt"] = old["receipt"]
     await refuses_the_damaged_root(launches, lines, at, row)
 
 
@@ -546,3 +528,38 @@ async def test_a_reviewer_subclass_reuses_no_stock_visit_and_decides_as_a_fresh_
     fresh = published_workpiece(launches.root)
     assert cold.terminal is fresh.terminal is Terminal.HELD
     assert cold.decisions[-1] == fresh.decisions[-1] and "sends every round to a person" in str(cold.decisions[-1])
+
+
+def invalid_in_confirmation(trial: int, attempt: int) -> GradeResult:
+    """Round 0 solves half; its confirmation's slot 3 reports an invalid task, which buys a final revision."""
+    return GradeResult(Outcome.INVALID_TASK, None) if (trial, attempt) == (3, 1) else even(trial, attempt)
+
+
+@pytest.mark.parametrize("plans", [(120, 240, 120), (240, 120, 240)])
+async def test_a_relaunch_under_another_plan_leaves_the_shipped_round_its_own(
+    launches: Driver, plans: tuple[int, int, int]
+) -> None:
+    """Regression: a confirmation found the round it ships by evidence index, the latest commitment winning, and a
+    relaunch under another solver tool timeout commits its own round 0. Back on the first plan, the live check compared
+    the carried trials with the other plan's round and held a run that, relaunched on its own plan, accepts."""
+
+    async def run(timeout: int, solver: Paid, inference: FakeInference | None = None) -> Launch:
+        attempt = launch(solver, inference=inference)
+        settings = {"budget.final_revisions": 1, "solver.tool_timeout": timeout}
+        assert await launches.run(attempt, settings) in (0, driver.DEFERRED)
+        return attempt
+
+    first, other, last = plans
+    await run(first, Paid(invalid_in_confirmation, outage={(2, 1)}))
+    await run(other, Paid(invalid_in_confirmation, outage={(2, 1)}))
+    final = await run(last, Paid(invalid_in_confirmation), FakeInference(REVISION))
+    mixed = published_workpiece(launches.root)
+    launches.args.output += "-control"
+    await run(first, Paid(invalid_in_confirmation, outage={(2, 1)}))
+    control = await run(first, Paid(invalid_in_confirmation), FakeInference(REVISION))
+    alone = published_workpiece(launches.root)
+    assert mixed.terminal is alone.terminal is Terminal.ACCEPTED
+    assert kinds(mixed) == kinds(alone) and "revise" in kinds(mixed)
+    assert sorted(final.solver.runs) == sorted(control.solver.runs)
+    assert (final.grader.calls, final.round_reviews) == (control.grader.calls, control.round_reviews)
+    assert [slot for slot in final.solver.runs if slot[1] == 0] == []  # round 0 is bought by no later launch

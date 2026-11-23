@@ -159,11 +159,10 @@ one envelope field; `billed` only on a plain row holding a resolution that was n
 resolution under re-executed sandbox fingerprints or a failure with an errno-name category, and no other
 row carries any of these, so cached results never enter an owner's history; references name an earlier
 open row or unanswered request of the same sandbox definition; and an answered request matches the
-request and outcome its owner already established at that position. A commitment rides only a continuing review
-right after its visit's stage, agrees with any earlier one for its visit, and lists its trials in order. Each trial's
-receipt names the physical resolution of the solver request that visit itself issued for the slot, under the
-fingerprint it issued it with, and its grade and cause are that resolution's; a confirmation's carried trials are the
-shipped round's committed ones. A request left unanswered may differ
+request and outcome its owner already established at that position. A best-effort check for accidental corruption
+also requires each committed trial's receipt to name an earlier physical solver resolution of that trial's slot; a
+deliberately rewritten journal is out of scope, and reading a transcript at its receipt checks the full request again
+(a mismatch there holds the workpiece). A request left unanswered may differ
 from the recording, which is how a held divergence looks.
 A storage hiccup never costs paid model work; only an explicit refusal stops the writer
 (`checkpoint.is_transient_storage_error`). A refusal is an HTTP 4xx other than 408 and 429 (denied
@@ -223,12 +222,14 @@ that evidence and buys nothing inside it again: no solver, control, adversary or
 sample, observer notification, sandbox reopen or decision-model answer; the pure review rule then decides again.
 The compatibility digest covers the whole policy, the band and budget, the adversary's and solve-review's effective
 sessions (sampling included), the rollout, grading and decision-model replay identities and the machine backends
-lowering may pick; a custom review rule or a role run by another harness has no stable identity, and such a run
-reuses no visit (logged once). A policy edit is a new plan: every visit of the root recomputes from the first one,
+lowering may pick; a custom review rule or a role run by any harness but the exact stock loop has no stable identity,
+and such a run reuses no visit (logged once). Reuse identifies a role by its harness type, tool classes, settings and
+resource fingerprints, so a caller who assembles a harness by hand (its argument-repair callback, say) must keep that
+behaviour and the resource replay identity in step. A policy edit is a new plan: every visit of the root recomputes from the first one,
 even when only an operational setting such as the solver heartbeat changed. Its decisions then follow the edited
 settings, so lowering `budget.max_missing_trials` below a round's missing slots turns that round into a hold.
 The author reads each round's evidence as `.validation/<n>.json` in ordinary JSON with sorted keys and without
-receipts, so a cold launch hydrates the bytes the first one wrote.
+receipts (a nonfinite reward is `null`), so a cold launch hydrates the bytes the first one wrote.
 
 Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear. A held

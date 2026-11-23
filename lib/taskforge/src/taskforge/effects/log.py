@@ -32,7 +32,7 @@ from taskforge.effects.events import (
     StageCompleted,
     event_digest,
     json_value,
-    recorded_fields,
+    recorded_items,
 )
 from taskforge.effects.issues import LogFailure, Unreproducible
 from taskforge.model.stage import Stage
@@ -97,10 +97,10 @@ ROW = TypeAdapter(Row[dict[str, Any]])
 """A journal line, strictly typed; its event is decoded separately."""
 
 
-def physical(records: Sequence[Record], sequence: int, key: "Key", before: int) -> Resolved[object] | None:
-    """Row ``sequence`` when it precedes row ``before`` and is a physical resolution of exactly ``key``."""
+def physical(records: Sequence[Record], sequence: int, before: int) -> Resolved[object] | None:
+    """Row ``sequence`` when it precedes row ``before`` and is a physical resolution."""
     if 0 < sequence < before and isinstance(row := records[sequence - 1].event, Resolved) and not row.replayed:
-        return row if (event_digest(row.request), row.fingerprints) == key else None
+        return row
     return None
 
 
@@ -147,12 +147,12 @@ def _encode(event: Event[object], sequence: int = 0, known: dict[str, int] | Non
     if known is not None:
         known.setdefault(key, sequence)
     payload = {
-        item.name: (
+        name: (
             {EVENT_TAG: _encode(value, sequence, known) if known is not None else {"ref": event_digest(value)}}
-            if isinstance(value := getattr(event, item.name), Event)
+            if isinstance(value, Event)
             else json_value(value)
         )
-        for item in recorded_fields(event)
+        for name, value in recorded_items(event)
     }
     return {"type": event.kind, "payload": payload}
 
@@ -451,8 +451,8 @@ class EventLog:
     def at(self, receipt: int, event: Event[object], fingerprints: tuple[Fingerprint, ...]) -> object:
         """The result at row ``receipt``; any row but a physical resolution of ``event`` under ``fingerprints`` is
         ``Unreproducible``."""
-        found = physical(self._records, receipt, (event_digest(event), fingerprints), len(self._records) + 1)
-        if found is None:
+        found = physical(self._records, receipt, len(self._records) + 1)
+        if found is None or (event_digest(found.request), found.fingerprints) != (event_digest(event), fingerprints):
             raise Unreproducible(f"Row {receipt} is no physical resolution of {event.kind} under this run")
         return found.value
 

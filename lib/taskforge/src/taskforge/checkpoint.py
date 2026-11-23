@@ -31,7 +31,7 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFailed, Superseded, UnsupportedFormat
 from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
-from taskforge.stages.visits import Commitments
+from taskforge.stages.classify import commitments
 
 JOURNAL_FORMAT = 13
 """Format 13 commits each visit a continuing review decided on (``stage.completed``'s ``committed``) and names each
@@ -279,7 +279,7 @@ class CheckpointSink(Sink):
         try:
             records = self.local.start(events)
             Owners(records)  # owner references, pairing, outcomes and continuity, before anything is claimed
-            Commitments(records)  # each committed visit's placement and receipts, as reconstruction checks them
+            commitments(records)  # each committed trial's receipt, as reconstruction checks it
         except LogFailure as error:
             raise CorruptJournal(f"{self.destination}: {error}") from error
         chunks, size = (journal.head.chunks, journal.head.size) if journal else ((), 0)
