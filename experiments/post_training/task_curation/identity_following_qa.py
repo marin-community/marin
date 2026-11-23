@@ -34,7 +34,6 @@ from experiments.post_training.task_curation.full_qc import (
     REVIEW_REQUEST_TIMEOUTS,
     REVIEW_RUBRIC,
     SAMPLE_REVIEWER_VERSION,
-    WORKER_IMAGE,
     ReadyChatReviewer,
     local_reviewer,
     qualify_reviewer,
@@ -158,8 +157,7 @@ def run_controls(parquet_uri: str, output: str) -> dict[str, Any]:
         context_window_tokens=MEDIUM_CONTEXT_WINDOW_TOKENS,
         accelerator=_medium_accelerator(),
         priority=_batch_priority(),
-        env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-08a"},
-        worker_image=WORKER_IMAGE,
+        env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-02a"},
     )
     results: list[dict[str, Any]] = []
     with endpoint.connect() as connection:
