@@ -49,6 +49,8 @@ class FakeGlm:
     health_trickle: int = 0
     """Bytes of JSON whitespace sent ``TRICKLE_INTERVAL`` apart before the ``/health`` body."""
     released: threading.Event = field(default_factory=threading.Event)
+    cut: threading.Semaphore = field(default_factory=lambda: threading.Semaphore(0))
+    """Released once for each trickled body whose connection the client closed before the body ended."""
 
     def stream(
         self,
@@ -124,11 +126,16 @@ def _handler(fake: FakeGlm) -> type[BaseHTTPRequestHandler]:
             if trickle:
                 self.send_header("Content-Length", str(trickle + len(body)))
             self.end_headers()
-            for _ in range(trickle):
-                self.wfile.write(b" ")
-                self.wfile.flush()
-                time.sleep(TRICKLE_INTERVAL)
-            self.wfile.write(body.encode())
+            try:
+                for _ in range(trickle):
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(TRICKLE_INTERVAL)
+                self.wfile.write(body.encode())
+            except (BrokenPipeError, ConnectionResetError):
+                if not trickle:
+                    raise
+                fake.cut.release()
 
         def do_GET(self) -> None:
             assert self.path == "/health"

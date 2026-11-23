@@ -227,24 +227,29 @@ def test_a_terminated_standalone_child_exits_and_its_root_reopens(
 
 
 # Review 2026-11-21: a forced exit that flushed output first could block on a full stdout or stderr pipe nobody read.
+# A SIGTERM that landed just before the driver's write to such a pipe never interrupted it, so the Python handler never
+# ran: ``uninterrupted`` puts the driver in that state on purpose.
 @pytest.mark.timeout(300)
-def test_unread_full_output_pipes_do_not_delay_the_exit(proposal: TaskProposal, tmp_path: Path) -> None:
+@pytest.mark.parametrize("scenario", ["flood", "flood+uninterrupted"])
+def test_unread_full_output_pipes_do_not_delay_the_exit(proposal: TaskProposal, tmp_path: Path, scenario: str) -> None:
     inputs(proposal, tmp_path)
-    os.mkfifo(tmp_path / "flooding")
-    reader = os.open(tmp_path / "flooding", os.O_RDONLY | os.O_NONBLOCK)
     child = subprocess.Popen(
-        [sys.executable, "-m", MODULE, "child", "flood", *argv("one", tmp_path)],
+        [sys.executable, "-m", MODULE, "child", scenario, *argv("one", tmp_path)],
         cwd=ROOT,
-        stdout=subprocess.PIPE,  # never read
+        stdout=subprocess.PIPE,  # read only once the child is gone
         stderr=subprocess.PIPE,  # never read
+        start_new_session=True,
     )
     try:
-        assert select.select([reader], [], [], STARTUP)[0], "the child never began to flood its output"
+        # The first byte on stdout means stderr is full and the driver is inside a write that cannot complete.
+        assert select.select([child.stdout], [], [], STARTUP)[0], "the child never began to flood its output"
         child.send_signal(signal.SIGTERM)
         assert child.wait(timeout=PROMPT) == TERMINATED
+        assert child.stdout is not None and child.stdout.read(1) == b"x", "something else wrote to stdout first"
     finally:
-        child.kill()
-        os.close(reader)
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        child.communicate()
 
 
 HIGH = 1100

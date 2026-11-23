@@ -15,8 +15,6 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
 from experiments.grug.moe_hero_pipeline.tiny_hero import packed_batch, tiny_hero
 
 
-# Compiling both gradient paths can exceed the default minute on shared CI CPUs.
-@pytest.mark.timeout(180)
 @pytest.mark.parametrize("remat_mode", ["recompute_all", "offload_carry"])
 def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):
     # Two layers cover local and global attention across a stage boundary
@@ -38,8 +36,8 @@ def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):
         )
 
     with jax.set_mesh(mesh):
-        expected_loss, expected_grads = jax.value_and_grad(ordinary_loss)(model)
-        actual_loss, pullback = jax.vjp(pipeline_loss, model)
+        expected_loss, expected_grads = jax.jit(jax.value_and_grad(ordinary_loss))(model)
+        actual_loss, pullback = jax.vjp(jax.jit(pipeline_loss), model)
         if remat_mode == "offload_carry":
             host_residuals = [
                 value
