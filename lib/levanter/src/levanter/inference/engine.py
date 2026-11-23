@@ -1249,10 +1249,10 @@ class InferenceEngine:
         )
 
     def _retained_page_refs(self, table: PageTable) -> np.ndarray:
-        refs = np.zeros(table.num_pages, dtype=np.int32)
-        for cached in self._cached_prompts:
-            np.add.at(refs, cached.pages, 1)
-        return refs
+        if not self._cached_prompts:
+            return np.zeros(table.num_pages, dtype=np.int32)
+        pages = np.concatenate([cached.pages for cached in self._cached_prompts])
+        return np.bincount(pages, minlength=table.num_pages).astype(np.int32)
 
     def _reserved_page_usage(self, table: PageTable) -> tuple[int, np.ndarray]:
         shared = np.zeros(table.num_pages, dtype=bool)
@@ -1354,7 +1354,8 @@ class InferenceEngine:
                 continue
             # Leave one query so prefill can compute next-token logits.
             limit = min(len(tokens) - 1, len(cached.tokens))
-            if limit // page_size <= len(pages):
+            next_page_end = (len(pages) + 1) * page_size - 1
+            if next_page_end >= limit or tokens[next_page_end] != cached.tokens[next_page_end]:
                 continue
             mismatches = tokens[:limit] != cached.tokens[:limit]
             first = int(np.argmax(mismatches))
