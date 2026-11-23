@@ -55,9 +55,9 @@ from levanter.grug.attention import (
 )
 from levanter.grug.attention._paged import (
     FUSED_KV_APPEND_MAX_TOKENS,
-    FUSED_KV_PREFILL_MAX_TOKENS,
     RPA_V3_ALIGNMENT,
     PagedAttentionImplementation,
+    fused_kv_prefill_token_limit,
     ragged_paged_attention_append,
 )
 from levanter.grug.attention.fixed_schedule import (
@@ -1922,7 +1922,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
                 unroll=unroll,
                 window_batch=window_batch,
                 capture_routes=capture_routes,
-                fused_kv_tokens=(FUSED_KV_PREFILL_MAX_TOKENS if prefill else FUSED_KV_APPEND_MAX_TOKENS),
+                fused_kv_tokens=(fused_kv_prefill_token_limit() if prefill else FUSED_KV_APPEND_MAX_TOKENS),
             )
         if self.config.projection_implementation == "fixed_schedule":
             rows = hax.named(hidden[:, 0], (*input_ids.axes, self.Embed))

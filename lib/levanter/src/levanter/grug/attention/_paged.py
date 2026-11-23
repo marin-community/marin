@@ -30,7 +30,8 @@ _RPA_V3_VMEM_LIMIT_BYTES = MappingProxyType(
 )
 _RPA_V3_WIDE_DECODE_TILES = (4096, 2048)
 FUSED_KV_APPEND_MAX_TOKENS = 32
-FUSED_KV_PREFILL_MAX_TOKENS = 8192
+_FUSED_KV_PREFILL_MAX_TOKENS = 8192
+_V5P_FUSED_KV_PREFILL_MAX_TOKENS = 65_536
 RPA_V3_ALIGNMENT = 128
 
 
@@ -152,6 +153,13 @@ def _tpu_v3_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *
     return output
 
 
+def fused_kv_prefill_token_limit() -> int:
+    """Return the largest prefill width supported by fused KV append."""
+    if jax.default_backend() == "tpu" and pltpu.get_tpu_info().chip_version == pltpu.ChipVersion.TPU_V5P:
+        return _V5P_FUSED_KV_PREFILL_MAX_TOKENS
+    return _FUSED_KV_PREFILL_MAX_TOKENS
+
+
 def ragged_paged_attention_append(
     q: jax.Array,
     k: jax.Array,
@@ -172,8 +180,9 @@ def ragged_paged_attention_append(
     """
     if not _tpu_v3_available():
         raise ValueError("Fused paged KV append requires TPU v5p or v6e")
-    if q.shape[0] > FUSED_KV_PREFILL_MAX_TOKENS:
-        raise ValueError(f"Fused paged KV append supports batches of up to {FUSED_KV_PREFILL_MAX_TOKENS} tokens")
+    max_tokens = fused_kv_prefill_token_limit()
+    if q.shape[0] > max_tokens:
+        raise ValueError(f"Fused paged KV append supports batches of up to {max_tokens} tokens")
     if q.dtype != k.dtype or q.dtype != v.dtype or q.dtype != kv_pages.dtype or q.dtype != jnp.bfloat16:
         raise ValueError("Fused paged KV append requires BF16 queries, keys, values, and cache pages")
     if q.shape[-1] != RPA_V3_ALIGNMENT or kv_pages.shape[1] != RPA_V3_ALIGNMENT:

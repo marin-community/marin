@@ -207,3 +207,36 @@ def test_grug_tpu_fused_append_updates_only_addressed_tokens(window, width, quer
     args = _PagedCase(q, expected_pages, lengths, indices, offsets, num_seqs)
     expected = _dense_reference(args, window, None, scale)
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), rtol=0.008, atol=2e-4)
+
+
+@pytest.mark.tpu
+@pytest.mark.skipif(jax.devices()[0].device_kind != "TPU v5", reason="wide fused prefill requires TPU v5p")
+@pytest.mark.parametrize("window", [None, 2048])
+def test_grug_tpu_wide_fused_prefill_matches_separate_append(window):
+    width = 16_384
+    valid = width - 3
+    prefix = 129
+    page_size = 128
+    length = prefix + valid
+    pages_per_seq = (length + page_size - 1) // page_size
+    q = jax.random.normal(jax.random.key(31), (width, 2, 4, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(jax.random.key(32), (width, 2, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(jax.random.key(33), (width, 2, 128), dtype=jnp.bfloat16)
+    pages = jax.random.normal(jax.random.key(34), (pages_per_seq + 2, page_size, 4, 128), dtype=jnp.bfloat16)
+    indices = jnp.arange(pages_per_seq - 1, -1, -1, dtype=jnp.int32)[None]
+    lengths = jnp.array([length], dtype=jnp.int32)
+    offsets = jnp.array([0, valid], dtype=jnp.int32)
+    num_seqs = jnp.int32(1)
+    scale = 128**-0.5
+
+    fused = jax.jit(partial(ragged_paged_attention_append, sm_scale=scale, sliding_window=window))
+    actual, actual_pages = fused(q, k, v, pages, lengths, indices, offsets, num_seqs)
+    logical, slots = jnp.divmod(jnp.arange(prefix, length, dtype=jnp.int32), page_size)
+    destinations = indices[0, logical]
+    updated = pages.at[destinations, slots, 0::2].set(k[:valid])
+    updated = updated.at[destinations, slots, 1::2].set(v[:valid])
+    separate = jax.jit(partial(ragged_paged_attention, sm_scale=scale, sliding_window=window, implementation="tpu_v3"))
+    expected = separate(q, updated, lengths, indices, offsets, num_seqs)
+
+    np.testing.assert_array_equal(actual_pages, updated)
+    np.testing.assert_array_equal(actual, expected)
