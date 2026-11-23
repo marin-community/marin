@@ -111,7 +111,9 @@ def main() -> None:
         model_config = converter.default_config
         if not isinstance(model_config, SnowballConfig):
             raise ValueError(f"Expected a Snowball checkpoint, got {type(model_config).__name__}")
-        tokenizer = load_tokenizer(series["tokenizer"], revision=series["tokenizer_revision"])
+        repo = "models--" + series["tokenizer"].replace("/", "--")
+        snapshot = bundle / "hf" / "hub" / repo / "snapshots" / series["tokenizer_revision"]
+        tokenizer = load_tokenizer(str(snapshot))
         started = time.monotonic()
         with trainer.use_device_mesh():
             model = load_snowball_serving_model(
