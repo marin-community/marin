@@ -13,6 +13,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 import pyarrow.parquet as pq
+from cloud.iris.iris_backend import config_task_environment
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS, RLEntrypoint
 from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_role_plan
@@ -138,6 +139,20 @@ def validate_source_tasks(launch, worker) -> list[dict]:
     return receipts
 
 
+def configure_worker_environment(launch) -> None:
+    """Project the native launch environment after restoring named credentials from secret files."""
+    sessions = launch.skyrl.environment.task_sessions
+    for settings in (
+        sessions.get("remote_judge") or {},
+        sessions.get("daytona") or {},
+        launch.skyrl.terminal_bench_config.get("harbor", {}),
+    ):
+        for key, name in settings.items():
+            if key.endswith("api_key_env") and name is not None and (value := get_secret(name)) is not None:
+                os.environ[name] = value
+    os.environ.update(config_task_environment(launch))
+
+
 async def validate_rollout_worker(launch, *, check_task_inputs: bool = False) -> dict:
     """Build and close the production worker without starting inference engines."""
     if sys.platform == "linux":
@@ -155,15 +170,7 @@ async def validate_rollout_worker(launch, *, check_task_inputs: bool = False) ->
         config,
         {"trainer": {"policy": {"model": {"tokenizer_path": prepared.local_path, "tokenizer_revision": None}}}},
     )
-    sessions = config.environment.task_sessions
-    for settings in (
-        sessions.get("remote_judge") or {},
-        sessions.get("daytona") or {},
-        config.terminal_bench_config.get("harbor", {}),
-    ):
-        for key, name in settings.items():
-            if key.endswith("api_key_env") and name is not None and (value := get_secret(name)) is not None:
-                os.environ[name] = value
+    configure_worker_environment(launch)
     worker = TaskRolloutWorkerSpec.from_config(config, [], harbor_config=config.terminal_bench_config).build(
         tokenizer_from_config(tokenizer_config), WorkerShard(0, 1)
     )
@@ -174,6 +181,8 @@ async def validate_rollout_worker(launch, *, check_task_inputs: bool = False) ->
             "judge_base_url": None if worker.judge_connection is None else worker.judge_connection.base_url,
             "inference_engines": 0,
             "source_tasks": validate_source_tasks(launch, worker) if check_task_inputs else [],
+            "task_environment_names": sorted(launch.runtime.task_env),
+            "judge_model": os.environ.get("VERIFYIT_JUDGE_MODEL"),
         }
     finally:
         await worker.shutdown()

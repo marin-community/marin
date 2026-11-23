@@ -4,6 +4,7 @@
 """Exercise source admission without inference or sandbox allocation."""
 
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,12 +24,15 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
 )
+from verifyit.modes.grade_judge import JudgeConnection
 
-from experiments.post_training.long_loop.validate_launch import validate_source_tasks
+from experiments.post_training.long_loop.validate_launch import configure_worker_environment, validate_source_tasks
 
 
 def main(tmp_path: Path) -> None:
+    os.environ.pop("VERIFYIT_JUDGE_MODEL", None)
     plain = TaskSpec(
         id="plain",
         context=ConversationInput(events=(TextMessage(role="user", content="Question"),)),
@@ -45,12 +49,23 @@ def main(tmp_path: Path) -> None:
         }
     ).model_copy(
         update={
+            "grader": VerifyitGrader(
+                mode="judge",
+                parameters={
+                    "references": ["12"],
+                    "rubric": "labels",
+                    "system_prompt": "Grade the response.",
+                    "prompt_template": "Reference: {reference}\nCandidate: {candidate}",
+                    "label_scores": {"PASS": 1.0, "FAIL": 0.0},
+                    "model": "",
+                },
+            ),
             "environment_requirements": EnvironmentRequirements.model_validate(
                 {
                     "command_semantics": "linux_process",
                     "docker_image": "fixture@sha256:" + "0" * 64,
                 }
-            )
+            ),
         }
     )
     inputs = []
@@ -66,7 +81,11 @@ def main(tmp_path: Path) -> None:
     launch = OmegaConf.create(
         {
             "inputs": {"train_data": inputs, "validation_data": []},
-            "skyrl": {"environment": {"task_sessions": {"task_spec": config}}},
+            "runtime": {"task_env": {"VERIFYIT_JUDGE_MODEL": "fixture-judge"}, "entrypoint": "training"},
+            "skyrl": {
+                "environment": {"task_sessions": {"task_spec": config}},
+                "terminal_bench_config": {"harbor": {}},
+            },
         }
     )
 
@@ -81,7 +100,9 @@ def main(tmp_path: Path) -> None:
         {"daytona": DaytonaMachineFactory(client_factory=allocate)},
         shutdown_timeout=5,
         retrieval_service="http://retrieval.invalid",
+        judge_connection=JudgeConnection("http://judge.invalid", "fixture-key"),
     )
+    configure_worker_environment(launch)
     try:
         validate_source_tasks(launch, worker)
     except ValueError as error:

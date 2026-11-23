@@ -1126,7 +1126,9 @@ machine bindings. The isolated CPU child receives the parent's W&B, Hugging Face
 object-store, Daytona and judge secrets. An unsupported binding or missing
 required credential fails the parent before GPU allocation. Daytona target and
 API URL remain nonsecret environment settings so native clients read the
-configured route.
+configured route. CPU worker construction applies the same resolved task
+environment as the GPU launcher, including the declared judge model; it does
+not select another judge. The receipt records the model and environment names.
 
 The full-index OpenResearcher admission pin runs on LOCAL/Iris. Daytona RL uses
 `open-athena/openresearcher-openresearcher-dataset-service-20261121-v1` at
