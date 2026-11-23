@@ -102,10 +102,16 @@ def submit_watchdog_job(client: IrisClient, suffix: str):
     )
 
 
-def wait_for_endpoint(client: IrisClient, timeout: Duration = _ENDPOINT_READY_TIMEOUT) -> str:
-    """Poll the controller registry until the pool endpoint registers; return its URL."""
+def wait_for_endpoint(client: IrisClient, timeout: Duration = _ENDPOINT_READY_TIMEOUT, coordinator=None) -> str:
+    """Poll the controller registry until the pool endpoint registers; return its URL.
+
+    With `coordinator`, abort as soon as that job reaches a terminal state — a failed
+    engine boot must wake the caller instead of burning the whole wait budget.
+    """
     deadline = time.monotonic() + timeout.to_seconds()
     while time.monotonic() < deadline:
+        if coordinator is not None and is_job_finished(coordinator.status().state):
+            raise RuntimeError(f"coordinator {coordinator.job_id} finished before registering the endpoint")
         if client.list_endpoint_instances(pool.ENDPOINT_NAME):
             return client.resolve_endpoint(pool.ENDPOINT_NAME)
         time.sleep(_ENDPOINT_POLL_SECONDS)
@@ -154,9 +160,7 @@ def main() -> None:
             if args.attach_only:
                 base_url = wait_for_endpoint(client)
                 click.echo(f"READY — endpoint: {base_url}")
-                return
-
-            if not args.skip_stage:
+                return            if not args.skip_stage:
                 stage_job = submit_stage_job(client, suffix)
                 logger.info("staging job %s", stage_job.job_id)
                 stage_job.wait(timeout=_STAGE_TIMEOUT.to_seconds())
@@ -173,7 +177,7 @@ def main() -> None:
                 logger.info("submitted without waiting; the endpoint registers when the engines are up")
                 return
 
-            base_url = wait_for_endpoint(client)
+            base_url = wait_for_endpoint(client, coordinator=coordinator)
             click.echo("")
             click.echo(f"READY — endpoint: {base_url}")
             click.echo(f"        model:    {pool.SERVED_MODEL_NAME}  ({pool.MODEL_REPO}@{pool.MODEL_REVISION})")
