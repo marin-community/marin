@@ -2658,7 +2658,14 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   final group admission. Divide the sum of elapsed seconds by the sum of
   admitted groups across the same measured updates. Report the trainer's
   `timing/wait_for_generation_buffer` separately as buffer wait, along
-  with `timing/step` and `timing/sync_weights`. Use trajectory timings
+  with `timing/step` and `timing/sync_weights`. The final comparison
+  reports both per-update windows, total lease seconds, total admitted
+  groups, and the pooled rate. The frozen vLLM run admitted 64 groups
+  in 21.185 lease seconds across updates 1 and 2, or 0.331 seconds per
+  group. The driver log timestamps also include work after admission
+  and are recorded separately. For a resumed native attempt, label
+  update 2 as the successor's first training window and report requeue,
+  restore, and resumed evaluation separately. Use trajectory timings
   to distinguish generation, tool execution and grading.
 
 The prior FP8 comparison reported a 13% reduction in mean decode time
