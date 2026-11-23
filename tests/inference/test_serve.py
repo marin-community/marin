@@ -72,7 +72,14 @@ from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import local_inference
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import InferenceWorkerMetadata, OpenAIEndpoint, RunningModel
-from marin.inference.vllm_backend import VllmBackend, _resolved_chat_template, vllm_launcher
+from marin.inference.vllm_backend import (
+    DISTRIBUTED_STREAMER_BOUNDS,
+    RUNAI_STREAMER_LOADER_FLAG,
+    VllmBackend,
+    _resolved_chat_template,
+    bound_distributed_streamer_buffers,
+    vllm_launcher,
+)
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
     vllm_gpu_wheel_provenance,
@@ -1092,55 +1099,8 @@ def test_backend_resolves_the_chat_template_from_the_separate_tokenizer(tmp_path
         _resolved_chat_template(without_tokenizer)
 
 
-def test_iris_serve_caps_distributed_streamer_buffers_by_default(monkeypatch):
-    """A distributed runai loader config without bounds made the streamer buffer unbounded and
-    OOM the serve container mid-load (1.07 TB export, 880 GiB request). The iris subcommand
-    fills in the evaluation path's proven defaults; explicit values pass through untouched."""
-    result, _client, services, _mint = _invoke_iris_serve(
-        monkeypatch,
-        "--gpu",
-        "H100x8",
-        "--tensor-parallel-size",
-        "1",
-        "--vllm-arg",
-        "--enable-expert-parallel",
-        "--vllm-arg",
-        "--model-loader-extra-config",
-        "--vllm-arg",
-        '{"distributed":true}',
-        "--no-wait",
-    )
-
-    assert result.exit_code == 0, result.output
-    args = services[0].engine.extra_args
-    filled = json.loads(args[args.index("--model-loader-extra-config") + 1])
-    assert filled == {"distributed": True, "concurrency": 4, "memory_limit": 17179869184}
-
-
-def test_iris_serve_keeps_explicit_streamer_bounds(monkeypatch):
-    result, _client, services, _mint = _invoke_iris_serve(
-        monkeypatch,
-        "--gpu",
-        "H100x8",
-        "--tensor-parallel-size",
-        "1",
-        "--vllm-arg",
-        "--model-loader-extra-config",
-        "--vllm-arg",
-        '{"distributed":true,"memory_limit":8589934592}',
-        "--no-wait",
-    )
-
-    assert result.exit_code == 0, result.output
-    args = services[0].engine.extra_args
-    filled = json.loads(args[args.index("--model-loader-extra-config") + 1])
-    assert filled["distributed"] is True
-    assert filled["memory_limit"] == 8589934592
-    assert filled["concurrency"] == 4
-
-
 def test_backend_serves_object_store_weights_with_bounded_streamer_buffers():
-    """The backend injects distributed loading for object-store weights on its own; that
+    """The backend injects distributed loading for object-store weights on its own; the
     injected config carries the runai streamer's host RAM buffer bounds so a checkpoint
     streamed through the serve child's cgroup cannot OOM it mid-load."""
     backend = VllmBackend(VllmEngineConfig())
@@ -1154,35 +1114,38 @@ def test_backend_serves_object_store_weights_with_bounded_streamer_buffers():
         chat_template_content=None,
     )
     args = backend._serve_args(spec, (), ())
-    index = args.index("--model-loader-extra-config")
-    assert json.loads(args[index + 1]) == {
-        "distributed": True,
-        "concurrency": 4,
-        "memory_limit": 17179869184,
-    }
-
-    explicit = backend._serve_args(spec, (), ("--model-loader-extra-config", '{"distributed":true}'))
-    assert explicit.count("--model-loader-extra-config") == 1
-    assert '{"distributed":true}' in explicit
+    index = args.index(RUNAI_STREAMER_LOADER_FLAG)
+    assert json.loads(args[index + 1]) == {"distributed": True, **DISTRIBUTED_STREAMER_BOUNDS}
 
 
-def test_iris_serve_rejects_malformed_streamer_config_at_the_cli_boundary(monkeypatch):
-    result, _client, _services, _mint = _invoke_iris_serve(
-        monkeypatch,
-        "--gpu",
-        "H100x8",
-        "--tensor-parallel-size",
-        "1",
-        "--vllm-arg",
-        "--model-loader-extra-config",
-        "--vllm-arg",
-        "{not json",
-        "--no-wait",
+def test_backend_bounds_a_caller_provided_distributed_streamer_config():
+    backend = VllmBackend(VllmEngineConfig())
+    spec = ModelSpec(
+        weights="s3://bucket/export",
+        api_model="export",
+        num_chips=None,
+        tensor_parallel_size=None,
+        dtype="bfloat16",
+        max_model_len=None,
+        chat_template_content=None,
     )
+    args = backend._serve_args(spec, (), ("--model-loader-extra-config", '{"distributed":true}'))
+    index = args.index(RUNAI_STREAMER_LOADER_FLAG)
+    assert json.loads(args[index + 1]) == {"distributed": True, **DISTRIBUTED_STREAMER_BOUNDS}
 
-    assert result.exit_code != 0
-    assert "not valid JSON" in result.output
-    _client.submit.assert_not_called()
+    explicit = backend._serve_args(
+        spec, (), ("--model-loader-extra-config", '{"distributed":true,"memory_limit":8589934592}')
+    )
+    index = explicit.index(RUNAI_STREAMER_LOADER_FLAG)
+    filled = json.loads(explicit[index + 1])
+    assert filled["memory_limit"] == 8589934592
+    assert filled["concurrency"] == DISTRIBUTED_STREAMER_BOUNDS["concurrency"]
+    assert explicit.count(RUNAI_STREAMER_LOADER_FLAG) == 1
+
+
+def test_bound_distributed_streamer_buffers_rejects_malformed_json():
+    with pytest.raises(ValueError, match="not valid JSON"):
+        bound_distributed_streamer_buffers(("--model-loader-extra-config", "{not json"))
 
 
 def test_iris_serve_delivers_secret_without_putting_it_in_the_service_config(monkeypatch):

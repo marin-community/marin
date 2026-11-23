@@ -81,7 +81,6 @@ from marin.inference.config import (
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 from marin.inference.iris_tpu_vllm import RAY_PORTS
 from marin.inference.model_cache import ModelPreparationError, prepare_hf_models
-from marin.inference.vllm_backend import bound_distributed_streamer_buffers
 from marin.inference.vllm_release import load_vllm_gpu_release
 
 # The GPU serve worker only runs the dashboard/registry glue plus a `vllm serve`
@@ -630,12 +629,6 @@ def main(
         plan = replace(plan, engine=replace(plan.engine, release=load_vllm_gpu_release(vllm_release)))
 
     geometry = None
-    if plan.gpu_count is not None and isinstance(plan.engine, VllmEngineConfig):
-        try:
-            bounded_args = bound_distributed_streamer_buffers(plan.engine.extra_args)
-        except ValueError as error:
-            raise click.ClickException(str(error)) from error
-        plan = replace(plan, engine=replace(plan.engine, extra_args=bounded_args))
     if data_parallel_size is not None:
         if plan.gpu_count is None or backend != "vllm" or tensor_parallel_size is None:
             raise click.ClickException("native DP geometry requires --gpu, --backend vllm and --tensor-parallel-size")
