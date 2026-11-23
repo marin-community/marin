@@ -10,7 +10,7 @@ import logging
 from argparse import Namespace
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, override
 
@@ -39,18 +39,23 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskforge import driver
 from taskforge.checkpoint import HEAD
 from taskforge.config import TaskforgeConfig
+from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, ScopeEntered, StageCompleted
-from taskforge.effects.issues import LogFailure
+from taskforge.effects.issues import Hold, LogFailure
 from taskforge.effects.log import EventLog, JsonlSink, Record
+from taskforge.harness.loop import AgenticHarness
+from taskforge.harness.protocol import Tool
 from taskforge.llm.glm_provider import EndpointSource
 from taskforge.llm.policy import GLM_5_3, LLMPolicy, ModelProfile
 from taskforge.model.content_hash import digest
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import EvidenceKind, Incomplete, MissingEvidence
-from taskforge.model.workpiece import Terminal, Workpiece
+from taskforge.model.stage import Exit
+from taskforge.model.workpiece import Conversation, Terminal, Workpiece
 from taskforge.policy import Policy
 from taskforge.resources.bundle import Resources
 from taskforge.resources.grading import GradingResource
+from taskforge.resources.inference import InferenceClient
 from taskforge.resources.rollouts import Engine, SolverRollout
 from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config
@@ -452,3 +457,36 @@ async def test_a_custom_review_rule_reuses_no_visit_and_says_so_once(
     assert scopes(launches.rows()[held:], "validate") == 1
     assert not [r for r in launches.rows() if isinstance(r.event, StageCompleted) and r.event.committed]
     assert sum("reuses no committed visit" in record.message for record in caplog.records) == 1
+
+
+@dataclass(frozen=True, slots=True)
+class HoldsEveryRound(AgenticHarness):
+    """A reviewer session that sends every round to a person: a subclass of the stock loop that runs otherwise."""
+
+    @override
+    async def run(
+        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
+    ) -> Exit:
+        raise Hold("this reviewer sends every round to a person")
+
+
+def holding_reviewer(config: TaskforgeConfig) -> TaskforgeConfig:
+    stock = config.solve_review.harness
+    assert type(stock) is AgenticHarness
+    harness = HoldsEveryRound(**{item.name: getattr(stock, item.name) for item in fields(stock)})
+    return replace(config, solve_review=replace(config.solve_review, harness=harness))
+
+
+# Review 2026-11-23: a reviewer subclass shared the stock compatibility digest, so a cold launch accepted on the stock
+# reviewer's committed evidence while a fresh run with that reviewer held.
+async def test_a_reviewer_subclass_reuses_no_stock_visit_and_decides_as_a_fresh_run(launches: Driver) -> None:
+    assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
+    held = len(launches.rows())
+    assert await launches.run(launch(Paid()), configure=holding_reviewer) == 0
+    cold = published_workpiece(launches.root)
+    assert scopes(launches.rows()[held:], "validate") == 1  # the visit executes again
+    launches.args.output += "-fresh"
+    assert await launches.run(launch(Paid()), configure=holding_reviewer) == 0
+    fresh = published_workpiece(launches.root)
+    assert cold.terminal is fresh.terminal is Terminal.HELD
+    assert cold.decisions[-1] == fresh.decisions[-1] and "sends every round to a person" in str(cold.decisions[-1])

@@ -18,7 +18,7 @@ from taskforge.effects.context import Context
 from taskforge.effects.events import Committed, StageCompleted
 from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart, Transient, describe_exception
 from taskforge.effects.log import EventLog
-from taskforge.harness.loop import AgenticHarness
+from taskforge.harness.loop import stock
 from taskforge.harness.protocol import Stopped, Submitted
 from taskforge.model.content_hash import digest
 from taskforge.model.llm import Message, Role
@@ -199,10 +199,10 @@ def compatibility(config: TaskforgeConfig, resources: Resources) -> str | None:
         return None
     roles = []
     for role in (config.adversary, config.solve_review):
-        if not isinstance(harness := role.harness, AgenticHarness):
+        if not stock(harness := role.harness):
             return None
         session = (harness.max_prompt_tokens, harness.sampling, harness.nudge, harness.output_chars)
-        tools = tuple(tool.schema for tool in role.tools.values())
+        tools = tuple((tool.schema, type(tool).__module__, type(tool).__qualname__) for tool in role.tools.values())
         roles.append((role.name, session, tools, resources.inference_for(role.name).fingerprint()))
     model = resources.decision_model
     used = (resources.rollouts, resources.grading, *(() if model is None else (model,)))

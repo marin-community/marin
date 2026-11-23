@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import PurePosixPath
-from typing import override
+from typing import TypeGuard, override
 
 from taskforge.effects.context import Context
 from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted
@@ -50,6 +50,11 @@ async def settled(event: InferenceRequest, client: InferenceClient, *, notify: N
         return await complete(event, client, notify=notify)
     except ContextExceeded as error:
         return Completion(str(error), finish_reason=FinishReason.CONTEXT_EXCEEDED, retries=error.retries)
+
+
+def stock(harness: Harness) -> TypeGuard["AgenticHarness"]:
+    """The library's own loop; a subclass may run otherwise, so it is custom."""
+    return type(harness) is AgenticHarness
 
 
 @dataclass(frozen=True, slots=True)
