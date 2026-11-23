@@ -16,6 +16,7 @@ three ways: as it is, with its JSON escapes read once, and read twice.
 
 import re
 import unicodedata
+from enum import StrEnum
 
 import numpy as np
 
@@ -46,6 +47,27 @@ def item_stream(question: str, choices: list[str], width: int = WINDOW) -> str:
     if len(stream) < width and choices:
         stream += "".join(_LETTERS[i % len(_LETTERS)] + text_stream(c) for i, c in enumerate(choices))
     return stream
+
+
+class KeyStream(StrEnum):
+    """A stream that stage 1 takes keys from; an item can have keys from several."""
+
+    QUESTION = "question"
+    """The question, or a short question with its lettered choices (``item_stream``)."""
+    UNLETTERED = "unlettered"
+    """A short question with its choices and no letters, for copies that do not letter the choices."""
+    PASSAGE = "passage"
+    """The item's passage, so a copy is found when its question alone is common."""
+
+
+def key_streams(question: str, choices: list[str], passage: str, width: int = WINDOW) -> dict[KeyStream, str]:
+    """The streams of one item that stage 1 keys, by kind."""
+    streams = {KeyStream.QUESTION: item_stream(question, choices, width)}
+    if len(text_stream(question)) < width and choices:
+        streams[KeyStream.UNLETTERED] = text_stream(question) + "".join(text_stream(c) for c in choices)
+    if passage and len(text_stream(passage)) >= width:
+        streams[KeyStream.PASSAGE] = text_stream(passage)
+    return streams
 
 
 def json_unescaped(text: str) -> str:

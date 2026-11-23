@@ -44,7 +44,7 @@ def lettered(question: str, choices: list[str]) -> str:
 
 
 def positive_forms(item: dict[str, Any], other_choice: str, rng: random.Random) -> dict[str, str]:
-    """Copies of the item as a record could hold them."""
+    """Copies of the item as a record could hold them; a copy of an item with a passage holds the passage."""
     question, choices, answer = item["question"], list(item["choices"]), item["answer"] or ""
     plain = lettered(question, choices)
     shuffled = choices[:]
@@ -65,6 +65,8 @@ def positive_forms(item: dict[str, Any], other_choice: str, rng: random.Random) 
         "escaped_twice": json.dumps(json.dumps(plain))[1:-1],
         "question_only": question,
     }
+    if passage := item.get("passage") or "":
+        forms = {form: f"{passage}\n\n{text}" for form, text in forms.items()}
     return forms
 
 
@@ -72,6 +74,10 @@ def negative_forms(item: dict[str, Any], other_choice: str, far_text: str) -> di
     """Records that share the item's text but do not hold the item."""
     question, choices = item["question"], list(item["choices"])
     forms = {}
+    if passage := item.get("passage") or "":
+        # An item with a passage is held only with both parts.
+        forms["passage_only"] = passage
+        forms["question_without_passage"] = lettered(question, choices)
     if choices:
         changed = choices[:]
         changed[len(changed) // 2] = other_choice
@@ -90,13 +96,13 @@ def negative_forms(item: dict[str, Any], other_choice: str, far_text: str) -> di
     return forms
 
 
-def reading_with_key(record: str, key: int, width: int = WINDOW) -> str | None:
-    """The first reading of *record* that holds *key*, as ``pairs.extract`` cuts its excerpt from it."""
-    return next((r for r in readings(record) if key in set(window_hashes(text_stream(r), width).tolist())), None)
+def reading_with_key(record: str, keys: set[int], width: int = WINDOW) -> str | None:
+    """The first reading of *record* that holds any of *keys*, as ``pairs.extract`` cuts its excerpt from it."""
+    return next((r for r in readings(record) if keys & set(window_hashes(text_stream(r), width).tolist())), None)
 
 
-def holds_key(record: str, key: int, width: int = WINDOW) -> bool:
-    return reading_with_key(record, key, width) is not None
+def holds_key(record: str, keys: set[int], width: int = WINDOW) -> bool:
+    return reading_with_key(record, keys, width) is not None
 
 
 def make_plant(
@@ -104,17 +110,20 @@ def make_plant(
 ) -> Callable:
     def plant(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
         keys = read_frame(keys_path, ["id", "key1_hash"])
-        key_of = dict(zip(keys["id"], keys["key1_hash"].to_numpy(dtype="uint64").tolist(), strict=True))
+        key_of: dict[str, set[int]] = {}
+        for item_id, key in zip(keys["id"], keys["key1_hash"].to_numpy(dtype="uint64").tolist(), strict=True):
+            if key:
+                key_of.setdefault(item_id, set()).add(key)
         hosts = [text for text in read_frame(hosts_path, ["text"])["text"] if text and len(text) >= MIN_HOST]
         rng = random.Random(shard.shard_idx)
         for path in paths:
-            items = read_table(path, ["id", "eval", "question", "choices", "answer", "reason"]).to_pylist()
+            items = read_table(path, ["id", "eval", "question", "choices", "answer", "passage", "reason"]).to_pylist()
             items = [item for item in items if not item["reason"] and item["question"]]
             sampled = random.Random(0).sample(items, min(per_eval, len(items)))
             counts: Counter = Counter()
             misses, pairs = [], []
             for number, item in enumerate(sampled):
-                key = key_of.get(item["id"], 0)
+                key = key_of.get(item["id"], set())
                 if not key:
                     counts["not_indexable"] += 1
                     continue

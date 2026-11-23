@@ -17,8 +17,10 @@ from experiments.datakit.decontam.encoder.synthetic import context_pairs, generi
 from experiments.datakit.decontam.encoder.tables import ItemText
 from experiments.datakit.decontam.encoder.text_keys import (
     WINDOW,
+    KeyStream,
     hit_indices,
     item_stream,
+    key_streams,
     readings,
     record_hit_indices,
     text_stream,
@@ -153,7 +155,12 @@ def test_key_choice_takes_the_rarest_window_and_a_second_one_that_does_not_overl
     ]
     hashes, owners, offsets = rarest_key.candidate_windows(streams)
     np.savez(
-        tmp_path / "windows.npz", hashes=hashes, owners=owners, offsets=offsets, ids=np.array(["a", "b"], dtype=object)
+        tmp_path / "windows.npz",
+        hashes=hashes,
+        owners=owners,
+        offsets=offsets,
+        ids=np.array(["a", "b"], dtype=object),
+        kinds=np.array(["question", "question"], dtype=object),
     )
     (tmp_path / "counts").mkdir()
     # Later windows are rarer in the reference sample.
@@ -265,7 +272,7 @@ def test_every_planted_form_of_an_item_holds_its_key():
     key = int(window_hashes(stream)[len(stream) // 2 - WINDOW])
     host = "Some unrelated record text. " * 120
     for form, text in positive_forms(item, "Argon", random.Random(0)).items():
-        assert holds_key(f"{host}\n{text}\n{host}", key), form
+        assert holds_key(f"{host}\n{text}\n{host}", {key}), form
     # Negatives share the key; stage 2, not stage 1, has to reject them.
     assert set(negative_forms(item, "Argon", host)) == {"changed_choice", "choices_far", "missing_choice"}
 
@@ -312,3 +319,32 @@ def test_a_generic_stem_shared_by_several_items_is_not_their_passage():
     item = lmh_item("mmlu_x", "mmlu_x-0", task, docs[0], shared_values(docs))
     assert item["passage"] == ""
     assert item["question"].startswith("Which of the following statements is correct?")
+
+
+def test_a_short_item_has_a_letter_free_key_and_a_passage_item_a_passage_key():
+    short = key_streams("Which is it?", ["the first rather long choice", "the second rather long choice"], "")
+    assert set(short) == {KeyStream.QUESTION, KeyStream.UNLETTERED}
+    # A copy that lists the choices without letters holds every window of the letter-free stream.
+    keys = set(window_hashes(short[KeyStream.UNLETTERED]).tolist())
+    copy = "- Which is it?\n- the first rather long choice\n- the second rather long choice"
+    assert keys <= set(window_hashes(text_stream(copy)).tolist())
+    assert not set(window_hashes(short[KeyStream.QUESTION]).tolist()) <= set(window_hashes(text_stream(copy)).tolist())
+    with_passage = key_streams("How many?", [], "Ann has three red apples and two green pears today.")
+    assert set(with_passage) == {KeyStream.QUESTION, KeyStream.PASSAGE}
+
+
+def test_an_extra_key_is_kept_only_when_no_reference_record_holds_it():
+    # Streams: 0 = question of item a, 1 = passage of item a, 2 = passage of item b.
+    windows = rarest_key.Windows(
+        hashes=np.array([11, 12, 21, 22, 31], dtype=np.uint64),
+        owners=np.array([0, 0, 1, 1, 2]),
+        offsets=np.array([0, 25, 0, 25, 0]),
+        ids=np.array(["a", "a", "b"]),
+        kinds=np.array([KeyStream.QUESTION, KeyStream.PASSAGE, KeyStream.PASSAGE]),
+    )
+    rows = rarest_key.keys_table(windows, np.array([3, 5, 2, 4, 0])).to_pandas().set_index(["id", "kind"])
+    # The question keeps its rarest window even though reference records hold it.
+    assert rows.loc[("a", KeyStream.QUESTION), "key1_hash"] == 11
+    # A passage whose rarest window occurs in reference text (a generic stem) gets no key.
+    assert rows.loc[("a", KeyStream.PASSAGE), "key1_hash"] == 0
+    assert rows.loc[("b", KeyStream.PASSAGE), "key1_hash"] == 31

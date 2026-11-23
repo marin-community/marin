@@ -26,7 +26,7 @@ from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
 from experiments.datakit.decontam.encoder.tables import parquet_files, read_table, shard_name, write_table
-from experiments.datakit.decontam.encoder.text_keys import WINDOW, item_stream, readings, text_stream
+from experiments.datakit.decontam.encoder.text_keys import WINDOW, KeyStream, key_streams, readings, text_stream
 
 logger = logging.getLogger(__name__)
 BEFORE = 1500
@@ -41,12 +41,21 @@ def join_items(items_root: str, stage1: str, output: str) -> None:
     wanted = set(sample.column("item").to_pylist())
     rows = []
     for path in parquet_files(items_root):
-        table = read_table(path, ["id", "eval", "question", "choices", "answer"]).to_pylist()
+        table = read_table(path, ["id", "eval", "question", "choices", "answer", "passage"]).to_pylist()
         rows += [row for row in table if row["id"] in wanted]
-    keys = read_table(prefix_join(stage1, "keys.parquet")).select(["id", "key1_offset"]).to_pylist()
-    offsets = {row["id"]: row["key1_offset"] for row in keys if row["id"] in wanted}
-    for row in rows:
-        row["key1_offset"] = offsets.get(row["id"], -1)
+    keys = read_table(prefix_join(stage1, "keys.parquet")).select(["id", "kind", "key1_offset"]).to_pylist()
+    offsets = {(row["id"], row["kind"]): row["key1_offset"] for row in keys if row["id"] in wanted}
+    # The key offset belongs to the stream kind that matched, so it is kept on each sample row.
+    sample = sample.append_column(
+        "key1_offset",
+        pa.array(
+            [
+                offsets.get((item, kind), -1)
+                for item, kind in zip(sample.column("item").to_pylist(), sample.column("kind").to_pylist(), strict=True)
+            ],
+            pa.int64(),
+        ),
+    )
     items = pa.Table.from_pylist(rows)
     write_table(items, prefix_join(output, "sample_items.parquet"))
     write_table(sample, prefix_join(output, "sample_rows.parquet"))
@@ -84,10 +93,10 @@ def make_extract(output: str):
         rows = read_table(prefix_join(output, "sample_rows.parquet")).to_pylist()
         items = {row["id"]: row for row in read_table(prefix_join(output, "sample_items.parquet")).to_pylist()}
         for path in paths:
-            wanted: dict[str, list[str]] = defaultdict(list)
+            wanted: dict[str, list[dict]] = defaultdict(list)
             for row in rows:
                 if row["path"] == path and row["item"] in items:
-                    wanted[row["id"]].append(row["item"])
+                    wanted[row["id"]].append(row)
             pairs = []
             for record in load_file(InputFileSpec(path=path, columns=["id", "text"])):
                 record_id = str(record["id"])
@@ -95,13 +104,14 @@ def make_extract(output: str):
                     continue
                 record_text = str(record.get("text") or "")
                 streams = [(reading, text_stream(reading)) for reading in readings(record_text)]
-                for item_id in wanted[record_id]:
+                for candidate in wanted[record_id]:
+                    item_id, kind, offset = candidate["item"], candidate["kind"], candidate["key1_offset"]
                     item = items[item_id]
                     question = text_stream(item["question"])
-                    offset = item.get("key1_offset", -1)
-                    # The key window comes from the stream that stage 1 keyed (see text_keys.item_stream).
-                    keyed = item_stream(item["question"], list(item["choices"] or []))
-                    key = keyed[offset : offset + WINDOW] if offset is not None and offset >= 0 else ""
+                    # The key window comes from the stream that stage 1 keyed (see text_keys.key_streams).
+                    keyed = key_streams(item["question"], list(item["choices"] or []), item["passage"] or "")
+                    stream_of_kind = keyed.get(KeyStream(kind), "")
+                    key = stream_of_kind[offset : offset + WINDOW] if offset >= 0 else ""
                     text, stream, at = _located(streams, question, key, offset)
                     start = _offset(text, max(at, 0)) - 1 if at >= 0 else 0
                     right = text[max(0, start - BEFORE) : start + len(item["question"]) + AFTER]
@@ -112,6 +122,7 @@ def make_extract(output: str):
                             "path": path,
                             "record": record_id,
                             "item": item_id,
+                            "kind": kind,
                             "eval": item["eval"],
                             "question": item["question"],
                             "choices": list(item["choices"] or []),

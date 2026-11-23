@@ -36,7 +36,13 @@ from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
 from experiments.datakit.decontam.encoder.tables import parquet_files, read_table, shard_name, write_table
-from experiments.datakit.decontam.encoder.text_keys import WINDOW, item_stream, record_hit_indices, window_hashes
+from experiments.datakit.decontam.encoder.text_keys import (
+    WINDOW,
+    KeyStream,
+    key_streams,
+    record_hit_indices,
+    window_hashes,
+)
 
 logger = logging.getLogger(__name__)
 WINDOWS_PER_ITEM = 16
@@ -46,14 +52,16 @@ MEASURE_SEED = 7
 REFERENCE_SEED = 11
 
 
-def item_streams(root: str, width: int) -> tuple[list[str], list[str]]:
-    """Item ids and the stream that their keys come from: the question, or the block for a short question."""
-    ids, streams = [], []
+def item_streams(root: str, width: int) -> tuple[list[str], list[str], list[str]]:
+    """One entry per item and key stream (``text_keys.key_streams``): item ids, stream kinds, streams."""
+    ids, kinds, streams = [], [], []
     for path in parquet_files(root):
-        for row in read_table(path, ["id", "question", "choices"]).to_pylist():
-            ids.append(row["id"])
-            streams.append(item_stream(row["question"], row["choices"] or [], width))
-    return ids, streams
+        for row in read_table(path, ["id", "question", "choices", "passage"]).to_pylist():
+            for kind, stream in key_streams(row["question"], row["choices"] or [], row["passage"] or "", width).items():
+                ids.append(row["id"])
+                kinds.append(str(kind))
+                streams.append(stream)
+    return ids, kinds, streams
 
 
 def candidate_windows(streams: list[str], width: int = WINDOW) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -72,13 +80,21 @@ def candidate_windows(streams: list[str], width: int = WINDOW) -> tuple[np.ndarr
 
 
 def prepare(items: str, output: str, width: int) -> None:
-    ids, streams = item_streams(items, width)
+    ids, kinds, streams = item_streams(items, width)
     hashes, owners, offsets = candidate_windows(streams, width)
     buffer = io.BytesIO()
-    np.savez(buffer, hashes=hashes, owners=owners, offsets=offsets, ids=np.array(ids, dtype=object))
+    np.savez(
+        buffer,
+        hashes=hashes,
+        owners=owners,
+        offsets=offsets,
+        ids=np.array(ids, dtype=object),
+        kinds=np.array(kinds, dtype=object),
+    )
     StoragePath(prefix_join(output, "windows.npz")).write_bytes(buffer.getvalue())
     logger.info(
-        "prepare: %d items, %d candidate windows, %d without a key",
+        "prepare: %d items, %d key streams, %d candidate windows, %d streams without a key",
+        len(set(ids)),
         len(ids),
         len(hashes),
         len(ids) - len(np.unique(owners)),
@@ -86,17 +102,19 @@ def prepare(items: str, output: str, width: int) -> None:
 
 
 class Windows(NamedTuple):
-    """The candidate windows of all items: hash, item number, and offset in the item stream; and item ids."""
+    """The candidate windows of all key streams: hash, stream number, and offset in the stream; and the item id
+    and stream kind of each stream."""
 
     hashes: np.ndarray
     owners: np.ndarray
     offsets: np.ndarray
     ids: np.ndarray
+    kinds: np.ndarray
 
 
 def load_windows(output: str) -> Windows:
     data = np.load(io.BytesIO(StoragePath(prefix_join(output, "windows.npz")).read_bytes()), allow_pickle=True)
-    return Windows(data["hashes"], data["owners"], data["offsets"], data["ids"])
+    return Windows(data["hashes"], data["owners"], data["offsets"], data["ids"], data["kinds"])
 
 
 class KeyTable:
@@ -134,13 +152,27 @@ def make_count(output: str, width: int):
     return count
 
 
-KEY_COLUMNS = ("id", "first_hash", "first_count", "key1_hash", "key1_count", "key1_offset", "key2_hash", "key2_count")
+KEY_COLUMNS = (
+    "id",
+    "kind",
+    "first_hash",
+    "first_count",
+    "key1_hash",
+    "key1_count",
+    "key1_offset",
+    "key2_hash",
+    "key2_count",
+)
 
 
 def keys_table(windows: Windows, window_counts: np.ndarray, width: int = WINDOW) -> pa.Table:
-    """One row per item: its first window, its rarest window (key 1), and the rarest window that does not
-    overlap key 1 (key 2). Hash columns are uint64; 0 means "no such key", and its count is -1."""
-    hashes, owners, offsets, ids = windows
+    """One row per key stream: its first window, its rarest window (key 1), and the rarest window that does
+    not overlap key 1 (key 2). Hash columns are uint64; 0 means "no such key", and its count is -1.
+
+    A stream other than the question keeps its key only when its rarest window occurs in no reference
+    record: an extra key that common text holds (a generic stem taken for a passage) would only add load.
+    """
+    hashes, owners, offsets, ids, kinds = windows
     columns: dict[str, list] = {name: [] for name in KEY_COLUMNS}
     order = np.lexsort((offsets, window_counts, owners))
     keyed: set[int] = set()
@@ -152,11 +184,15 @@ def keys_table(windows: Windows, window_counts: np.ndarray, width: int = WINDOW)
             end += 1
         group = order[start:end]
         first = group[0]
+        if str(kinds[owner]) != KeyStream.QUESTION and window_counts[first] > 0:
+            start = end
+            continue
         second = next((k for k in group[1:] if abs(int(offsets[k]) - int(offsets[first])) >= width), None)
         lowest = group[int(np.argmin(offsets[group]))]
         keyed.add(owner)
         values = (
             str(ids[owner]),
+            str(kinds[owner]),
             int(hashes[lowest]),
             int(window_counts[lowest]),
             int(hashes[first]),
@@ -170,7 +206,7 @@ def keys_table(windows: Windows, window_counts: np.ndarray, width: int = WINDOW)
         start = end
     for owner in range(len(ids)):
         if owner not in keyed:
-            for name, value in zip(columns, (str(ids[owner]), 0, -1, 0, -1, -1, 0, -1), strict=True):
+            for name, value in zip(columns, (str(ids[owner]), str(kinds[owner]), 0, -1, 0, -1, -1, 0, -1), strict=True):
                 columns[name].append(value)
     return pa.table(
         {
@@ -212,12 +248,12 @@ def make_measure(output: str, width: int):
     def measure(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
         keys = read_table(prefix_join(output, "keys.parquet")).to_pandas()
         keys = keys[keys["key1_hash"] != 0]
+        # Each key row stands for an item and the stream kind it was taken from.
+        entries = (keys["id"] + "\t" + keys["kind"]).to_numpy()
         tables = {}
         for name, column in (("first", "first_hash"), ("key1", "key1_hash"), ("key2", "key2_hash")):
-            present = keys[column] != 0
-            tables[name] = KeyTable(
-                keys.loc[present, column].astype("uint64").to_numpy(), keys.loc[present, "id"].to_numpy()
-            )
+            present = (keys[column] != 0).to_numpy()
+            tables[name] = KeyTable(keys.loc[present, column].astype("uint64").to_numpy(), entries[present])
         rng = random.Random(shard.shard_idx)
         for path in paths:
             started = time.monotonic()
@@ -233,15 +269,19 @@ def make_measure(output: str, width: int):
                 stats["records"] += 1
                 stats["chars"] += len(text)
                 found = {name: record_hit_indices(text, table.unique, width) for name, table in tables.items()}
-                first = tables["first"].items_of(found["first"])
-                items1 = set(tables["key1"].items_of(found["key1"]))
-                either = items1 | set(tables["key2"].items_of(found["key2"]))
+                first = {entry.split("\t")[0] for entry in tables["first"].items_of(found["first"])}
+                kind_of = {}
+                for entry in tables["key1"].items_of(found["key1"]):
+                    item, kind = entry.split("\t")
+                    kind_of.setdefault(item, kind)
+                items1 = set(kind_of)
+                either = items1 | {entry.split("\t")[0] for entry in tables["key2"].items_of(found["key2"])}
                 for name, items in (("first", first), ("key1", items1), ("either", either)):
                     stats[f"{name}_records"] += bool(items)
                     stats[f"{name}_pairs"] += len(items)
                 for item in items1:
                     # Reservoir sample of stage-1 (key 1) candidate rows for the classifier data.
-                    row = {"id": str(record["id"]), "item": str(item), "via": "key1"}
+                    row = {"id": str(record["id"]), "item": str(item), "via": "key1", "kind": kind_of[item]}
                     seen = stats["key1_pairs"]
                     if len(sample) < SAMPLE_ROWS_PER_SHARD:
                         sample.append(row)
