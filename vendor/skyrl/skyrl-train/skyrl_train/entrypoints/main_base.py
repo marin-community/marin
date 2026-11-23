@@ -226,7 +226,7 @@ def create_ray_wrapped_inference_engines_from_config(
         engine_kwargs["node_label_selectors"] = [dict(selector) for selector in selectors]
     if cfg.generator.weight_sync_transport == WeightSyncTransport.EXPERT_BLOCK:
         engine_kwargs["require_verified_placements"] = True
-    if cfg.trainer.strategy == "megatron":
+    if cfg.trainer.strategy in ("megatron", "levanter"):
         engine_kwargs["nccl_buffer_size_bytes"] = cfg.trainer.policy.nccl_buffer_size_bytes
 
     # Conditionally add LoRA parameters if LoRA is enabled
@@ -506,7 +506,10 @@ class BasePPOExp:
 
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
         selector = dict(OmegaConf.select(self.cfg, "runtime.placement.policy", default={}))
-        if not policy_strict_spread_eligible(self.cfg) and not selector:
+        levanter = self.cfg.trainer.strategy == "levanter"
+        if levanter and (self.cfg.trainer.placement.colocate_all or policy_per_gpu_bundles_enabled(self.cfg)):
+            raise ValueError("Levanter policy actors require disaggregated whole-node placement bundles")
+        if not levanter and not policy_strict_spread_eligible(self.cfg) and not selector:
             return None
 
         from ray.util.placement_group import placement_group as _placement_group
@@ -623,6 +626,9 @@ class BasePPOExp:
 
     def get_worker_classes(self):
         """Return policy and reference Ray actor classes."""
+        if self.cfg.trainer.strategy == "levanter":
+            # Levanter owns one model-free actor per host and launches JAX children.
+            return None, None
         if self.cfg.trainer.strategy != "megatron":
             raise ValueError(f"Unknown strategy type: {self.cfg.trainer.strategy}")
         from skyrl_train.workers.megatron.megatron_worker import PolicyWorker, RefWorker  # noqa: PLC0415
