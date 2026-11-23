@@ -80,6 +80,9 @@ _EP: int = 1
 _REPLICA_AXIS: int = 8
 _SLICE: str = "v4-2048"
 _LOGIT_Z_LOSS_WEIGHT: float = 1e-4
+# Seconds before a train step counts as hung and the process exits. This shape's steps on v4-2048 took a median
+# 37 s (p99 38 s, slowest 197 s) over the 3,150-step cooldown from step 39,000.
+_STEP_TIMEOUT: float = 600.0
 
 # Cooldown schedule
 _RESUME_STEP: int = 39_000
@@ -240,6 +243,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
                 ema_beta=None,
                 log_every=1,
                 replica_axis_size=_REPLICA_AXIS,
+                step_timeout=_STEP_TIMEOUT,
             ),
             eval=GrugEvalConfig(
                 # rep=8 * data=128 * expert=1 = 1024 batch shards, so
