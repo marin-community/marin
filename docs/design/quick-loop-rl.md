@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 8:15 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 8:23 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2175,6 +2175,12 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   ID reproduced. Read-only checks found the candidate's resolved config,
   terminal receipt, and executor marker absent. The live launch needs a
   current namespace check and an exclusive claim for that attempt.
+  An offline Iris controller rehearsal dropped the reply after committing
+  the job. The SDK retried the same request, and the controller kept one
+  root with five tasks. Readback recovered the registered bundle and
+  clean source identity. After an ambiguous reply, keep the claim and
+  observe the saved regional job ID, including when the first read
+  returns `NOT_FOUND`.
   [Interrupted native attempt][iris-held-native-matched-preempted] ·
   [Accepted vLLM attempt][iris-held-vllm-validation-replacement]
 
