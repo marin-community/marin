@@ -160,7 +160,9 @@ def main() -> None:
             if args.attach_only:
                 base_url = wait_for_endpoint(client)
                 click.echo(f"READY — endpoint: {base_url}")
-                return            if not args.skip_stage:
+                return
+
+            if not args.skip_stage:
                 stage_job = submit_stage_job(client, suffix)
                 logger.info("staging job %s", stage_job.job_id)
                 stage_job.wait(timeout=_STAGE_TIMEOUT.to_seconds())
