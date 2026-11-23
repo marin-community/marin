@@ -96,8 +96,9 @@ The worker runs the artifact graph and provisions the trainer from pinned
 Speculators revision `77eaa2390cab54ff7e5315345137394ee44b7a98`. Marin's isolated
 CUDA launcher provisions the promoted vLLM wheel and its CUDA toolchain.
 The recipe partitions the worker's assigned GPUs between TP1 expert-parallel
-teacher prefill and Speculators training. The two processes exchange hidden
-states over the worker's local filesystem.
+teacher prefill and Speculators training. Teacher prefill uses FlashAttention
+and Triton MoE, matching the Snowball rollout preset. The two processes
+exchange hidden states over the worker's local filesystem.
 
 Preparation verifies the data shard digests, renders assistant masks with
 Levanter's SFT chat processor, and rejects exact rendered sequences shared
@@ -112,8 +113,9 @@ The Iris job prints the versioned `hf/` directory in object storage. It contains
 Speculators config, serving weights, vocabulary offsets and
 `dspark-export.json` with input identities, package versions, validation
 metrics and file digests. A complete export has this receipt. Stage the draft
-for vLLM and use the same teacher and tokenizer. Pass this speculative
-configuration to the promoted Marin wheel for Snowball.
+for vLLM and use the same teacher and tokenizer. Launch the promoted Marin
+wheel for Snowball with `--attention-backend FLASH_ATTN --moe-backend triton`
+and pass this JSON to `--speculative-config`.
 
 ```json
 {

@@ -296,6 +296,8 @@ def _teacher_command(teacher: Path, recipe: DraftRecipe, hidden_states: Path) ->
         "dtype": "bfloat16",
         "tensor-parallel-size": "1",
         "data-parallel-size": str(recipe.teacher_replicas),
+        "attention-backend": "FLASH_ATTN",
+        "moe-backend": "triton",
         "max-model-len": str(recipe.max_sequence_length + 1),
         "speculative-config": json.dumps(speculative),
         "kv-transfer-config": json.dumps(transfer),
