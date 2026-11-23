@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 3:04 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 3:35 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched frozen comparison is complete. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 67B live swap, real tool-turn replay and full-context fused scoring passed together on one eight-H100 host. The repaired five-host arm matched all 100 baseline prompt token sequences and completed one exact learner update and restore before GPU preemption. Its per-update-checkpoint replacement is running on 40 H100s. | Verify both updates and the final 100-task panel on the replacement. Qualify H100 recovery after scheduler eviction and improve sustained admission before promoting native serving. |
+| Native inventory backend | The 67B live swap, real tool-turn replay and full-context fused scoring passed together on one eight-H100 host. The repaired five-host arm completed one exact learner update and restore before GPU preemption. Its 40-H100 replacement matched all 100 baseline prompts and started admitting the first training batch. | Verify both updates and the final 100-task panel on the replacement. Qualify H100 recovery after scheduler eviction and improve sustained admission before promoting native serving. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Verify the full native handoff at 67B. The frozen H100 comparison uses its original worker transport. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -1109,8 +1109,11 @@ combined local source and used fused scoring for both actual optimizer
 updates. Each group drew four independently seeded answers. The second
 group sampled from the first update's verified weights, and both updates
 changed the weight digest. An independent decode verified eight binary
-frames and all 128 sampled tokens. The maximum absolute raw-score
-difference was `4.29e-6`.
+frames and all 128 sampled tokens. This deterministic single-turn fixture
+uses the all-eligible RLOO-N calculation on four rows padded to 256
+positions. Its learner recomputes raw old-policy logprobs for the loss
+and compares them with a separate array of serving scores. The maximum
+absolute score difference was `4.29e-6`.
 [Fused TPUv4 run][iris-native-fused] · [Fused proof archive in Filer][native-fused-archive]
 
 The fused proof archive is
@@ -2097,6 +2100,13 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   under that installed identity.
   [Original policy-0 installation proof][held-native-matched-current-policy0]
 
+  The fixed baseline scored all 100 tasks in 1,615.3 seconds. An
+  independent read of the original panel found exact prompt token matches
+  on all 100 tasks against the held vLLM control. The policy-0 mean
+  verifier score was 0.12 for native and 0.21 for vLLM. The native trainer
+  opened its first 32-group admission window at 11:31 UTC.
+  [Original matched baseline receipt][held-native-matched-current-panel0]
+
   A CPU probe ran the normal step-end callback with one and two native
   learner processes, local storage and a local Ray dispatch adapter. It
   restored exact learner state and the next prompt selection from the
@@ -2391,6 +2401,7 @@ arms. [Prior timing comparison][timing]
 [held-native-matched-current-config]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-effective-workload.tar.zst
 [held-native-matched-current-shards]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-shard-load-proof.tar.zst
 [held-native-matched-current-policy0]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-policy0-proof.tar.zst
+[held-native-matched-current-panel0]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-policy0-panel-proof.tar.zst
 [held-native-continuation]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-direct-same-artifact-rehearsal.tar.zst
 [held-native-step-one-operator]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-same-run-latest-7de5313.tar.gz
 [held-native-pair-acceptance]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-held-pair-acceptance-proof.tar.zst
