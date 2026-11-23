@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 10:47 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 11:44 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2012,8 +2012,14 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   filling the equivalent batch. Some native model calls hit the
   1,800-second per-turn limit, which includes queue wait. The coordinator
   kept the lease open and filled the batch. All four learners started
-  writing the step-one validation checkpoint. The exact restore and
-  first trained-policy install remain open.
+  writing the step-one validation checkpoint. The checkpoint committed
+  in 21 minutes. The fresh workers streamed the pinned HF export again,
+  then each read about 187.4 GiB from TensorStore in 170 seconds. The
+  original receipts verify changed model bytes and exact model, Adam,
+  RNG, step and averaging state on four fresh processes. Policy-1
+  publication started after the restore. The restore took about 36
+  minutes from checkpoint commit to exact verification.
+  [Verified first-update restore][held-native-step1-restore]
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
@@ -2188,6 +2194,7 @@ arms. [Prior timing comparison][timing]
 [iris-held-native-prompt-aligned]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-9a7e3ee-in-424011b4-2026.11.22.3-coordinator-f0713ab7%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-9a7e3ee-in-424011b4-2026.11.22.3-a6705fa4611d
 [iris-held-native-prompt-aligned-replacement]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-9a7e3ee-in-424011b4-2026.11.22.3-coordinator-f0713ab7%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-9a7e3ee-in-424011b4-2026.11.22.3-afb17423cacb
 [held-native-live-prompt-parity]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-afb17423cacb%2Fverified-baseline-prompt-parity.json
+[held-native-step1-restore]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-afb17423cacb%2Fverified-step1-four-fresh-learners.json
 [iris-native-emission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122p
 [native-passing-diagnostic-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122p%2Findependently-verified-passing-diagnostic.json
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
