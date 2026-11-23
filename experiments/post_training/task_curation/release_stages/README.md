@@ -1,0 +1,191 @@
+# atlas-release — the scripted Atlas release pipeline (R40 gate)
+
+One entry point builds an Atlas release end to end. Every stage is a maintained
+module in this package; the graph, the plan document and the guard live here too.
+Nothing outside this repository is read or executed: no per-release scripts, no
+`sed`ed workers, nothing under `~/Documents/experiments` (this README and the
+sealed receipts the pipeline itself writes are the only things that ever appear
+there). See `DESIGN.md` for the design note and `INVENTORY.md` (written to the
+retired-scripts directory by `inventory.py`) for the retirement mapping.
+
+## The release plan document
+
+Everything release-specific lives in one typed JSON document — the release plan.
+It is the only place a release id, load ID or snapshot name enters the system;
+stage sources carry none of them (`guard.py` refuses any that appear as literals).
+Resolve the plan with the release owner, write it to a file, and pass it to every
+invocation. The document is sealed write-once under the release prefix the first
+time the pipeline runs, so a changed plan means a new release prefix and a bumped
+`artifact_version`.
+
+Schema (see `ReleasePlan` in `graph.py` for the authoritative field list):
+
+```json
+{
+  "kind": "atlas-release-plan",
+  "release_id": "<release id, e.g. the version this cut is named after>",
+  "source_revision": "<40-hex landed atlas-env-audit sha this release cuts from>",
+  "release_root": "s3://<region-bucket>/marin/rl-data/atlas/preview-release/<cut-id>",
+  "catalog_root": "s3://<region-bucket>/marin/rl-data/atlas/catalog/production",
+  "artifact_version": "YYYY.MM.DD(.N)",
+  "prior": {
+    "release_id": "<prior release>", "load_id": "<32-hex prior catalog load>",
+    "snapshot_uri": "s3://…/prior-snapshot", "snapshot_sha256": "<64-hex>",
+    "catalog_uri": "s3://…/prior-catalog"
+  },
+  "prior_snapshot_id": "<prior assembly snapshot id>",
+  "snapshot_id": "<this release's assembly snapshot id>",
+  "targets": ["<newly admitted source ids>"],
+  "expected_source_count": 0, "expected_browse_source_count": 0,
+  "expected_contract_count": 0, "expected_contract_tasks": 0,
+  "expected_selected_panels": 0, "expected_prior_sources": 0,
+  "expected_panels": 0, "expected_population_tasks": 0,
+  "region_prefix": "s3://<region-bucket>/marin/rl-data/atlas/",
+  "populations": {"<source id>": "<frozen population artifact dir>"},
+  "scan_regions": {"<region label>": "s3://<region-bucket>/…/"},
+  "pins": {
+    "prior_declarations": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "prior_identity": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "prior_backend": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "prior_release": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "prior_coverage": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "prior_manifest": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "backend_survey": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "backend_validation_receipt": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "registry_index": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "fresh_qc_index": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "oracle_inventory": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "source_counts": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "exposure_input_check": {"uri": "s3://…", "sha256": "<64-hex>"},
+    "parity_receipt": {"uri": "s3://…", "sha256": "<64-hex>"}
+  },
+  "service": {
+    "service_url": "https://marina.oa.dev",
+    "applet_id": "<preview applet uuid>",
+    "applet_origin": "https://applets.marina.oa.dev/a/<applet-id>",
+    "public_root": "https://atlas.<host>",
+    "production_version": 0,
+    "preview_base_version": 0
+  },
+  "measured": {
+    "module": "<backend survey module path>", "revision": "<its revision>",
+    "sha256": "<64-hex module digest>", "schema_sha256": "<64-hex schema digest>"
+  },
+  "catalog_target_load_id": "<32-hex, pre-allocated>",
+  "curriculum_target_load_id": "<32-hex, pre-allocated>",
+  "prior_curriculum_load_id": "<32-hex>",
+  "embed_cache_root": "s3://…/embedding-cache",
+  "package_output_root": "<local dir OUTSIDE the repo checkout>",
+  "gpu_runtime": null,
+  "previously_available": ["<source ids Available in the prior selected load>"],
+  "qc_exclusions": [], "migrations": [],
+  "rebound_source": "", "rebound_tasks": 0,
+  "strict_audit_local": false,
+  "slice_output_root": ""
+}
+```
+
+Field notes:
+
+- `prior_manifest` may be `null` for the first release published from this pipeline.
+- `parity_receipt` + `gpu_runtime` decide GPU vs CPU embedding: both set → CUDA
+  (a valid parity receipt for the serving runtime is required, BRIEF requirement 4);
+  both null → CPU.
+- `rebound_source`/`rebound_tasks` are typed passthroughs. The maintained
+  additions-mode compose refuses a declared rebound (the projection pass is not
+  wired into the compose yet) — resolve the rebound before composing.
+- `slice_output_root` (optional) redirects preflight slice artifacts; the default
+  is `<release_root>/preflight-slices`.
+
+## Modes
+
+All modes validate `--version` against the plan (`plan.release_id`) first.
+
+### `plan` — the lowered graph, I/O-free
+
+```bash
+uv run atlas-release --version <release-id> --plan <plan.json> plan
+```
+
+Prints every node of the lazy artifact graph (name, dependencies, fingerprint) and
+lists the full dry-run schedule. Nothing is executed, nothing is written. Use this
+to review the build shape before anything touches a cluster or a store.
+
+### `preflight` — per-stage type-check + small slice on real inputs
+
+```bash
+uv run atlas-release --version <release-id> --plan <plan.json> preflight \
+  [--stage <node>]... [--source <source id>] [--max-files N]
+```
+
+For each requested node: a `pyrefly` type-check of its module plus a small-slice
+run of the stage's real code path on a bounded slice of real inputs (one census
+source, one corpus preparation, the real prior-load SQL reads, the real registry
+compose verification — never synthetic fixtures). Each slice seals a write-once
+`PreflightReceipt` under `<release_root>/preflight/<node>/`, binding the landed
+repo sha and the slice-input digests.
+
+Slices available before any write-mode upstream receipt exists: `declarations`,
+`census_inputs`, `census`, `corpus_assembly`, `embed`, `admission_check`,
+`history_staging`, `identity_backend_compose`, `qc_browse_plan`, `package_preview`.
+
+Every other node is reported `BLOCKED` with its reason — its real inputs are
+write-mode receipts of upstream stages, so its preflight runs after those stages
+complete (see the list in `preflight_slices.BLOCK_REASONS`). Blocked nodes do not
+fail the mode; a failed slice does (exit 1).
+
+### `run` — the submission path
+
+```bash
+uv run atlas-release --version <release-id> --plan <plan.json> run [--stage <node>]...
+```
+
+The submission guard (`guard.py`) refuses — with no bypass — unless the checkout
+HEAD is landed on `atlas-env-audit` and no stage source carries release-identifying
+literals. Then every stage gates on its own fresh preflight receipt immediately
+before it executes (a runnable slice runs automatically if the receipt is missing
+or stale; a blocked node without a fresh receipt refuses the stage), and the lazy
+graph builds the release: driver-local stages run in the entry-point process,
+cluster stages submit through `marin.execution.remote` with resources from the
+measured sizing curves. A failed stage stops its downstream stages; fix and use
+`resume`.
+
+### `status` — what has run
+
+```bash
+uv run atlas-release --version <release-id> --plan <plan.json> status [--json]
+```
+
+Per node: the lazy-artifact record state under the storage prefix and the preflight
+receipt state (`fresh`, `stale`, `failed`, or `missing`).
+
+### `resume` — failed stages restart alone
+
+```bash
+uv run atlas-release --version <release-id> --plan <plan.json> resume [--stage <node>]...
+```
+
+A rerun with `force_run_failed`: stages whose artifact records exist with matching
+fingerprints are skipped (pruned by the runner); failed stages restart alone; a
+changed plan fingerprint is a hard refusal (bump `artifact_version` and use a fresh
+release prefix instead of mixing recipes).
+
+## Where artifacts land
+
+- Release documents and stage receipts: `<release_root>/<stage>/…`, sealed
+  write-once with byte-identical readback.
+- Lazy-artifact records (provenance, config, typed results): the storage prefix,
+  `atlas-release-<release-id>-<node>/<artifact_version>`.
+- Preflight receipts: `<release_root>/preflight/<node>/preflight-receipt.json`.
+- Stage alerts: every stage emits start/finish/fail events directly to the ops
+  feed / job-watchdog `alerts.jsonl`; each stage submission proposes its own
+  watchdog registry entry (the registry stays operator-owned).
+
+## Acceptance
+
+A fresh cold reader must be able to dry-run the whole build from a clean checkout
+with this README and the entry point alone: `plan` lists the full graph I/O-free,
+`preflight` exercises every runnable slice on real inputs and reports the blocked
+ones with reasons, `status` reports state, and `run` refuses anything unqualified
+through the guard — all without reading or executing anything outside the
+repository.

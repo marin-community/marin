@@ -61,6 +61,8 @@ dependencies = [
 fast-track = "experiments.grug.fast_track.launch:main"
 # Data Belay, which tests a Hugging Face dataset on the fast_track dense model: `uv run data-belay ...`.
 data-belay = "experiments.data_belay.__main__:cli"
+# The scripted Atlas release pipeline: `atlas-release --version <id> --plan <doc> <mode>`.
+atlas-release = "experiments.post_training.task_curation.release_stages.__main__:main"
 
 [project.optional-dependencies]
 # Keep this CUDA stack separate from marin-levanter[gpu] while JaxPP requires

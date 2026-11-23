@@ -796,13 +796,135 @@ def _compose_manifest_step(
 
 @dataclasses.dataclass(frozen=True)
 class StageSpec:
-    """One registered stage: its module, graph edges and dispatch mode."""
+    """One registered graph node: its module, executor key, edges and dispatch mode.
 
+    ``node`` is the unique graph key (also the preflight-receipt and graph-receipt
+    key); ``stage`` is the write-mode executor key in ``_STAGE_EXECUTORS`` (shared by
+    phase variants such as the two audits and the three release checks).
+    """
+
+    node: str
     stage: str
     module: str
     depends_on: tuple[str, ...]
     cluster: bool
     receipt_key: str = "receipt"
+
+
+_STAGE_SPECS: dict[str, StageSpec] = {
+    "declarations": StageSpec("declarations", "declarations", declarations_stage.__name__, (), False),
+    "admission_check": StageSpec(
+        "admission_check", "admission_check", admission_check_stage.__name__, ("declarations",), False
+    ),
+    "census": StageSpec("census", "census", census_stage.__name__, ("census_inputs",), True),
+    "corpus_assembly": StageSpec(
+        "corpus_assembly", "corpus_assembly", corpus_assembly_stage.__name__, ("census",), True
+    ),
+    "embed": StageSpec("embed", "embed", embed_stage.__name__, ("corpus_assembly",), True),
+    "curriculum_compose": StageSpec(
+        "curriculum_compose", "curriculum_compose", curriculum_compose_stage.__name__, ("compose_manifest",), True
+    ),
+    "identity_backend_compose": StageSpec(
+        "identity_backend_compose",
+        "identity_backend_compose",
+        identity_backend_compose_stage.__name__,
+        (),
+        True,
+        receipt_key="documents.identity_receipt",
+    ),
+    "history_staging": StageSpec("history_staging", "history_staging", history_staging_stage.__name__, (), True),
+    "text_scan_region": StageSpec(
+        "text_scan_region", "text_scan_region", text_scans_stage.__name__, ("curriculum_compose",), True
+    ),
+    "text_scans": StageSpec(
+        "text_scans",
+        "text_scans",
+        text_scans_stage.__name__,
+        ("curriculum_compose", "text_scan_region[*]"),
+        False,
+    ),
+    "qc_browse_plan": StageSpec("qc_browse_plan", "qc_browse_plan", qc_browse_stage.__name__, ("declarations",), True),
+    "qc_browse": StageSpec(
+        "qc_browse", "qc_browse", qc_browse_stage.__name__, ("qc_browse_plan",), True, receipt_key="completion"
+    ),
+    "snapshot_publication": StageSpec(
+        "snapshot_publication",
+        "snapshot_publication",
+        snapshot_publication_stage.__name__,
+        ("census", "identity_backend_compose", "admission_check"),
+        False,
+    ),
+    "catalog_stage": StageSpec(
+        "catalog_stage",
+        "catalog_stage",
+        catalog_stage_stage.__name__,
+        ("declarations", "snapshot_publication", "history_staging", "qc_browse"),
+        False,
+    ),
+    "catalog_load": StageSpec("catalog_load", "catalog_load", catalog_load_stage.__name__, ("catalog_stage",), True),
+    "curriculum_load": StageSpec(
+        "curriculum_load",
+        "curriculum_load",
+        curriculum_load_stage.__name__,
+        ("curriculum_compose", "text_scans"),
+        True,
+    ),
+    "strict_audit_before": StageSpec(
+        "strict_audit_before",
+        "strict_audit",
+        strict_audit_stage.__name__,
+        ("catalog_load", "curriculum_load"),
+        False,
+    ),
+    "strict_audit_after": StageSpec(
+        "strict_audit_after", "strict_audit", strict_audit_stage.__name__, ("marina_release",), False
+    ),
+    "package_preview": StageSpec(
+        "package_preview", "package_preview", package_preview_stage.__name__, ("strict_audit_before",), False
+    ),
+    "release_check_preflight": StageSpec(
+        "release_check_preflight", "release_check", release_check_stage.__name__, ("package_preview",), False
+    ),
+    "release_check_hosted": StageSpec(
+        "release_check_hosted", "release_check", release_check_stage.__name__, ("release_check_preflight",), False
+    ),
+    "marina_release": StageSpec(
+        "marina_release",
+        "marina_release",
+        marina_release_stage.__name__,
+        ("package_preview", "release_check_preflight", "release_check_hosted"),
+        False,
+        receipt_key="manifest",
+    ),
+    "hosted_check": StageSpec("hosted_check", "hosted_check", hosted_check_stage.__name__, ("marina_release",), False),
+    "release_check_postpublish": StageSpec(
+        "release_check_postpublish",
+        "release_check",
+        release_check_stage.__name__,
+        ("release_check_preflight", "release_check_hosted", "marina_release"),
+        False,
+    ),
+    "exposure_probe": StageSpec(
+        "exposure_probe",
+        "exposure_probe",
+        exposure_probe_stage.__name__,
+        ("marina_release", "hosted_check", "release_check_postpublish", "strict_audit_after"),
+        False,
+    ),
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class PreflightPolicy:
+    """Per-stage preflight gating wired into the graph's stage steps.
+
+    ``ensure`` is called with the node key immediately before a stage executes
+    (driver-local or cluster): it must guarantee a fresh preflight receipt for the
+    node — running the small-slice runner when needed — or raise to refuse the
+    stage before any submission (DESIGN.md §5-§6).
+    """
+
+    ensure: Callable[[str], None]
 
 
 def _resources_config(resources: StageResources) -> ResourceConfig:
@@ -897,7 +1019,7 @@ def _resolved_proof(ctx: StepContext, handle: ArtifactStep) -> dict:
 
 
 def _declarations_step(plan: ReleasePlan, plan_handle: ArtifactStep) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(stage="declarations", module=declarations_stage.__name__, depends_on=(), cluster=False)
+    spec = _STAGE_SPECS["declarations"]
     identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count", "targets", "pins")
 
     def build_inputs(_ctx: StepContext) -> dict:
@@ -922,9 +1044,7 @@ def _declarations_step(plan: ReleasePlan, plan_handle: ArtifactStep) -> Artifact
 
 
 def _admission_check_step(plan: ReleasePlan, declarations: ArtifactStep) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="admission_check", module=admission_check_stage.__name__, depends_on=("declarations",), cluster=False
-    )
+    spec = _STAGE_SPECS["admission_check"]
     identity = _identity_fields(
         plan, "release_id", "source_revision", "snapshot_id", "catalog_root", "expected_source_count", "service"
     )
@@ -959,7 +1079,7 @@ def _admission_check_step(plan: ReleasePlan, declarations: ArtifactStep) -> Arti
 
 
 def _census_step(plan: ReleasePlan, census_inputs: ArtifactStep) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(stage="census", module=census_stage.__name__, depends_on=("census_inputs",), cluster=True)
+    spec = _STAGE_SPECS["census"]
     identity = _identity_fields(plan, "release_id", "source_revision", "region_prefix", "expected_source_count")
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -989,9 +1109,7 @@ def _census_step(plan: ReleasePlan, census_inputs: ArtifactStep) -> ArtifactStep
 def _corpus_assembly_step(
     plan: ReleasePlan, census_inputs: ArtifactStep, census: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="corpus_assembly", module=corpus_assembly_stage.__name__, depends_on=("census",), cluster=True
-    )
+    spec = _STAGE_SPECS["corpus_assembly"]
     identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count")
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1019,7 +1137,7 @@ def _corpus_assembly_step(
 
 
 def _embed_step(plan: ReleasePlan, corpus: ArtifactStep, census: ArtifactStep) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(stage="embed", module=embed_stage.__name__, depends_on=("corpus_assembly",), cluster=True)
+    spec = _STAGE_SPECS["embed"]
     identity = _identity_fields(
         plan, "release_id", "source_revision", "expected_source_count", "expected_population_tasks", "gpu_runtime"
     )
@@ -1058,12 +1176,7 @@ def _embed_step(plan: ReleasePlan, corpus: ArtifactStep, census: ArtifactStep) -
 def _curriculum_compose_step(
     plan: ReleasePlan, compose_manifest: ArtifactStep, census: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="curriculum_compose",
-        module=curriculum_compose_stage.__name__,
-        depends_on=("compose_manifest",),
-        cluster=True,
-    )
+    spec = _STAGE_SPECS["curriculum_compose"]
     identity = _identity_fields(plan, "release_id", "source_revision", "targets", "expected_population_tasks")
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1102,13 +1215,7 @@ def _sql_stage_resources() -> ResourceConfig:
 
 
 def _identity_backend_compose_step(plan: ReleasePlan) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="identity_backend_compose",
-        module=identity_backend_compose_stage.__name__,
-        depends_on=(),
-        cluster=True,
-        receipt_key="documents.identity_receipt",
-    )
+    spec = _STAGE_SPECS["identity_backend_compose"]
     identity = _identity_fields(plan, "release_id", "source_revision", "targets", "expected_source_count")
 
     def build_inputs(_ctx: StepContext) -> dict:
@@ -1137,7 +1244,7 @@ def _identity_backend_compose_step(plan: ReleasePlan) -> ArtifactStep[StageRecei
 
 
 def _history_staging_step(plan: ReleasePlan) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(stage="history_staging", module=history_staging_stage.__name__, depends_on=(), cluster=True)
+    spec = _STAGE_SPECS["history_staging"]
     identity = _identity_fields(
         plan,
         "release_id",
@@ -1176,9 +1283,7 @@ def _history_staging_step(plan: ReleasePlan) -> ArtifactStep[StageReceipt]:
 
 
 def _text_scan_region_step(plan: ReleasePlan, compose: ArtifactStep, region: str) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="text_scan_region", module=text_scans_stage.__name__, depends_on=("curriculum_compose",), cluster=True
-    )
+    spec = _STAGE_SPECS["text_scan_region"]
     identity = _identity_fields(plan, "release_id", "source_revision", "scan_regions")
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1209,12 +1314,7 @@ def _text_scan_region_step(plan: ReleasePlan, compose: ArtifactStep, region: str
 def _text_scan_merge_step(
     plan: ReleasePlan, compose: ArtifactStep, regions: tuple[ArtifactStep, ...]
 ) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="text_scans",
-        module=text_scans_stage.__name__,
-        depends_on=tuple(f"text_scan_region[{region}]" for region in sorted(plan.scan_regions)),
-        cluster=False,
-    )
+    spec = _STAGE_SPECS["text_scans"]
     identity = _identity_fields(plan, "release_id", "source_revision", "scan_regions")
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1257,7 +1357,7 @@ def _qc_browse_inputs(plan: ReleasePlan, declarations_ref: dict) -> dict:
 
 
 def _qc_browse_plan_step(plan: ReleasePlan, declarations: ArtifactStep) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(stage="qc_browse_plan", module=qc_browse_stage.__name__, depends_on=("declarations",), cluster=True)
+    spec = _STAGE_SPECS["qc_browse_plan"]
     identity = _identity_fields(
         plan, "release_id", "prior", "catalog_target_load_id", "source_revision", "expected_panels", "qc_exclusions"
     )
@@ -1278,7 +1378,7 @@ def _qc_browse_plan_step(plan: ReleasePlan, declarations: ArtifactStep) -> Artif
 
 
 def _qc_browse_copy_step(plan: ReleasePlan, browse_plan: ArtifactStep) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(stage="qc_browse", module=qc_browse_stage.__name__, depends_on=("qc_browse_plan",), cluster=True)
+    spec = _STAGE_SPECS["qc_browse"]
     identity = _identity_fields(
         plan, "release_id", "prior", "catalog_target_load_id", "source_revision", "expected_panels", "qc_exclusions"
     )
@@ -1312,12 +1412,7 @@ def _snapshot_publication_step(
     identity_backend: ArtifactStep,
     admission_check: ArtifactStep,
 ) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="snapshot_publication",
-        module=snapshot_publication_stage.__name__,
-        depends_on=("census", "identity_backend_compose", "admission_check"),
-        cluster=False,
-    )
+    spec = _STAGE_SPECS["snapshot_publication"]
     identity = _identity_fields(
         plan,
         "release_id",
@@ -1368,12 +1463,7 @@ def _catalog_stage_step(
     history: ArtifactStep,
     qc_browse: ArtifactStep,
 ) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="catalog_stage",
-        module=catalog_stage_stage.__name__,
-        depends_on=("declarations", "snapshot_publication", "history_staging", "qc_browse"),
-        cluster=False,
-    )
+    spec = _STAGE_SPECS["catalog_stage"]
     identity = _identity_fields(
         plan,
         "release_id",
@@ -1425,9 +1515,7 @@ def _catalog_stage_step(
 
 
 def _catalog_load_step(plan: ReleasePlan, catalog_stage: ArtifactStep) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="catalog_load", module=catalog_load_stage.__name__, depends_on=("catalog_stage",), cluster=True
-    )
+    spec = _STAGE_SPECS["catalog_load"]
     identity = _identity_fields(
         plan,
         "release_id",
@@ -1490,12 +1578,7 @@ def _catalog_load_step(plan: ReleasePlan, catalog_stage: ArtifactStep) -> Artifa
 def _curriculum_load_step(
     plan: ReleasePlan, compose: ArtifactStep, text_scans: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="curriculum_load",
-        module=curriculum_load_stage.__name__,
-        depends_on=("curriculum_compose", "text_scans"),
-        cluster=True,
-    )
+    spec = _STAGE_SPECS["curriculum_load"]
     identity = _identity_fields(
         plan,
         "release_id",
@@ -1566,12 +1649,7 @@ def _strict_audit_step(
         if origin_handle is None:
             raise ValueError("the after-phase audit needs the marina release for its published origin")
         deps = (declarations, identity_backend, origin_handle)
-    spec = StageSpec(
-        stage="strict_audit",
-        module=strict_audit_stage.__name__,
-        depends_on=("catalog_load", "curriculum_load") if phase == "before" else ("marina_release",),
-        cluster=False,
-    )
+    spec = _STAGE_SPECS[f"strict_audit_{phase}"]
     identity = _identity_fields(
         plan, "release_id", "source_revision", "expected_source_count", "expected_population_tasks"
     )
@@ -1608,12 +1686,7 @@ def _strict_audit_step(
 
 
 def _package_preview_step(plan: ReleasePlan, audit: ArtifactStep) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="package_preview",
-        module=package_preview_stage.__name__,
-        depends_on=("strict_audit_before",),
-        cluster=False,
-    )
+    spec = _STAGE_SPECS["package_preview"]
     identity = _identity_fields(plan, "release_id", "source_revision", "pins", "package_output_root")
 
     def build_inputs(_ctx: StepContext) -> dict:
@@ -1645,12 +1718,7 @@ def _release_check_step(
     marina: ArtifactStep | None,
 ) -> ArtifactStep[StageReceipt]:
     deps = tuple(handle for handle in (package, preflight, hosted, marina) if handle is not None)
-    spec = StageSpec(
-        stage="release_check",
-        module=release_check_stage.__name__,
-        depends_on=tuple(f"atlas-release-{plan.release_id}-{_node_of(handle)}" for handle in deps),
-        cluster=False,
-    )
+    spec = _STAGE_SPECS[f"release_check_{phase}"]
     identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count", "service")
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1695,13 +1763,7 @@ def _node_of(handle: ArtifactStep) -> str:
 def _marina_release_step(
     plan: ReleasePlan, package: ArtifactStep, preflight: ArtifactStep, hosted: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="marina_release",
-        module=marina_release_stage.__name__,
-        depends_on=("package_preview", "release_check_preflight", "release_check_hosted"),
-        cluster=False,
-        receipt_key="manifest",
-    )
+    spec = _STAGE_SPECS["marina_release"]
     identity = _identity_fields(plan, "release_id", "source_revision", "service", "pins")
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1732,9 +1794,7 @@ def _marina_release_step(
 def _hosted_check_step(
     plan: ReleasePlan, declarations: ArtifactStep, identity_backend: ArtifactStep, marina: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="hosted_check", module=hosted_check_stage.__name__, depends_on=("marina_release",), cluster=False
-    )
+    spec = _STAGE_SPECS["hosted_check"]
     identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count", "service")
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1766,12 +1826,7 @@ def _hosted_check_step(
 def _exposure_probe_step(
     plan: ReleasePlan, marina: ArtifactStep, hosted: ArtifactStep, postpublish: ArtifactStep, audit_after: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
-    spec = StageSpec(
-        stage="exposure_probe",
-        module=exposure_probe_stage.__name__,
-        depends_on=("marina_release", "hosted_check", "release_check_postpublish", "strict_audit_after"),
-        cluster=False,
-    )
+    spec = _STAGE_SPECS["exposure_probe"]
     identity = _identity_fields(plan, "release_id", "service", "pins")
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1822,8 +1877,29 @@ class ReleaseGraph:
         return self.stages[stage]
 
 
-def release_graph(plan: ReleasePlan) -> ReleaseGraph:
-    """Build the full release graph for one sealed plan; constructs handles only."""
+def _preflight_wrapped_run(handle: ArtifactStep, node: str, policy: PreflightPolicy) -> Callable[[Any], StageReceipt]:
+    """Wrap a stage's run so its fresh preflight receipt is ensured before execution.
+
+    ``run`` never enters a fingerprint, so wrapping it after construction keeps every
+    artifact identity unchanged; the gate fires exactly once per stage, immediately
+    before the stage does anything (DESIGN.md §5: refuse a stage whose receipt is
+    missing or stale for the landed source SHA).
+    """
+    original = handle.run
+
+    def run(config: dict) -> StageReceipt:
+        policy.ensure(node)
+        return original(config)
+
+    return run
+
+
+def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None) -> ReleaseGraph:
+    """Build the full release graph for one sealed plan; constructs handles only.
+
+    With a :class:`PreflightPolicy`, every stage node gates its own execution on a
+    fresh preflight receipt (auto-preflight at submission time).
+    """
     plan.validate_shape()
     plan_handle = _plan_document_step(plan)
 
@@ -1886,6 +1962,11 @@ def release_graph(plan: ReleasePlan) -> ReleaseGraph:
     }
     for region, handle in zip(sorted(plan.scan_regions), region_handles, strict=True):
         stages[f"text_scan_region[{region}]"] = handle
+    if preflight is not None:
+        stages = {
+            key: dataclasses.replace(handle, run=_preflight_wrapped_run(handle, key, preflight))
+            for key, handle in stages.items()
+        }
     return ReleaseGraph(
         plan=plan,
         plan_handle=plan_handle,
