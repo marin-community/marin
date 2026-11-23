@@ -34,7 +34,7 @@ from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, d
 from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.backends.local.transfers import unpack_local_archive
-from shellbox.image import ImageArchitecture, PreparedImage, RegistryImage, host_architecture, process_image_cache
+from shellbox.image import PreparedImage, RegistryImage, host_architecture, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     LINUX_PROCESS_CAPABILITIES,
@@ -1189,12 +1189,11 @@ class LocalMachineFactory:
     when none can.
 
     Prepared images use private rootless umoci bundles, without host program mounts. Registry inputs
-    must be digest pinned. Bubblewrap is not a virtual machine: images run natively, so
-    ``image_architecture`` must be the host's architecture, which is also the default. A registry
-    index selects that architecture's manifest; an image of another architecture fails before it is
-    unpacked. Only numeric root image users are supported. ``ttl`` bounds the lifetime of
-    a task. With delegated cgroups, command interruption preserves the task;
-    without delegation it closes every container in the task.
+    must be digest pinned. Bubblewrap is not a virtual machine: images run natively, so the factory
+    prepares them for the host's architecture. A registry index selects that architecture's manifest;
+    an image of another architecture fails before it is unpacked. Only numeric root image users are
+    supported. ``ttl`` bounds the lifetime of a task. With delegated cgroups, command interruption
+    preserves the task; without delegation it closes every container in the task.
     """
 
     backend: Backend = Backend.LOCAL
@@ -1215,12 +1214,8 @@ class LocalMachineFactory:
         policy: Path | None = None,
         umoci: Path = Path("umoci"),
         cgroup_parent: Path | None = None,
-        image_architecture: ImageArchitecture | None = None,
     ):
-        host = host_architecture()
-        if image_architecture not in (None, host):
-            raise ValueError(f"The local backend runs images natively; this {host} host cannot run {image_architecture}")
-        self.image_architecture = host
+        self.image_architecture = host_architecture()
         if ttl is not None and ttl <= 0:
             raise ValueError("Local machine TTL must be positive")
         self.ttl = ttl
