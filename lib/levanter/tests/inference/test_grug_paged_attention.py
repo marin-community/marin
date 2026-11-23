@@ -23,10 +23,13 @@ class _PagedCase(NamedTuple):
     num_seqs: jax.Array
 
 
-def _mixed_case(dtype):
+_SCALE = 0.17
+
+
+def _mixed_case(dtype, kv_heads=2):
     rng = np.random.default_rng(12)
-    q = rng.normal(size=(8, 2, 3, 32)).astype(np.float32)
-    pages = rng.normal(size=(7, 4, 4, 32)).astype(np.float32)
+    q = rng.normal(size=(8, kv_heads, 3, 32)).astype(np.float32)
+    pages = rng.normal(size=(7, 4, 2 * kv_heads, 32)).astype(np.float32)
     pages[0] = np.nan
     indices = np.array([[4, 2, -1], [6, 1, 3], [-1, -1, -1]], np.int32)
     lengths = np.array([7, 10, -1], np.int32)
@@ -64,10 +67,10 @@ def _dense_reference(args, window, cap, scale):
 def test_grug_paged_attention_mixed_prefixes_match_reference(window, cap, dtype):
     args = _mixed_case(dtype)
     fn = jax.jit(partial(ragged_paged_attention, sliding_window=window, soft_cap=cap, implementation="reference"))
-    actual = fn(*args, sm_scale=jnp.array(0.17))
-    expected = _dense_reference(args, window, cap, 0.17)
+    actual = fn(*args, sm_scale=jnp.array(_SCALE))
+    expected = _dense_reference(args, window, cap, _SCALE)
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-5, rtol=1e-5)
-    empty = fn(*args._replace(num_seqs=jnp.array(0, jnp.int32)), sm_scale=jnp.array(0.17))
+    empty = fn(*args._replace(num_seqs=jnp.array(0, jnp.int32)), sm_scale=jnp.array(_SCALE))
     np.testing.assert_array_equal(empty, jnp.zeros_like(args.q))
 
 
@@ -82,20 +85,23 @@ def test_grug_paged_attention_explicit_head_sharding_matches_reference(num_devic
                 jax.device_put(arg, NamedSharding(mesh, spec)) for arg, spec in zip(args, specs, strict=True)
             )
             actual = jax.jit(
-                partial(ragged_paged_attention, sm_scale=0.17, sliding_window=5, implementation="reference")
+                partial(ragged_paged_attention, sm_scale=_SCALE, sliding_window=5, implementation="reference")
             )(*sharded)
-        np.testing.assert_allclose(actual, _dense_reference(args, 5, None, 0.17), atol=1e-5, rtol=1e-5)
+        np.testing.assert_allclose(actual, _dense_reference(args, 5, None, _SCALE), atol=1e-5, rtol=1e-5)
         assert actual.sharding == sharded[0].sharding
 
 
 @pytest.mark.tpu
 @pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
 @pytest.mark.parametrize("runtime_scale", [False, True])
-def test_grug_tpu_paged_attention_matches_reference(runtime_scale):
-    args = _mixed_case(jnp.float32)
+@pytest.mark.parametrize("kv_heads", [2, 3])
+def test_grug_tpu_paged_attention_matches_reference(runtime_scale, kv_heads):
+    args = _mixed_case(jnp.float32, kv_heads)
     fn = partial(ragged_paged_attention, sliding_window=5, implementation="tpu")
     actual = (
-        jax.jit(fn)(*args, sm_scale=jnp.array(0.17)) if runtime_scale else jax.jit(partial(fn, sm_scale=0.17))(*args)
+        jax.jit(fn)(*args, sm_scale=jnp.array(_SCALE))
+        if runtime_scale
+        else jax.jit(partial(fn, sm_scale=_SCALE))(*args)
     )
-    expected = _dense_reference(args, 5, None, 0.17)
+    expected = _dense_reference(args, 5, None, _SCALE)
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)

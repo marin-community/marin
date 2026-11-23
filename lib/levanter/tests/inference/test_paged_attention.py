@@ -19,6 +19,7 @@ from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.utils import INVALID
 import levanter.layers.attention as attention_module
+from levanter.kernels.pallas import paged_attention as paged_kernel
 from levanter.layers.attention import AttentionConfig, AttentionBackend, Attention
 from levanter.layers.attention import AttentionMask, ragged_paged_attention, simple_attention_with_dropout
 from levanter.layers.kv_cache import KvPageCache
@@ -225,12 +226,13 @@ def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
         num_seqs_arr,
         *,
         sm_scale,
+        sliding_window,
         soft_cap,
     ):
-        del kv_pages_arr, kv_lens_arr, page_indices_arr, cu_q_lens_arr, num_seqs_arr, soft_cap
+        del kv_pages_arr, kv_lens_arr, page_indices_arr, cu_q_lens_arr, num_seqs_arr, sliding_window, soft_cap
         return q_arr * jnp.asarray(sm_scale, dtype=q_arr.dtype)
 
-    monkeypatch.setattr(attention_module, "tpu_ragged_paged_attention", _fake_tpu_rpa)
+    monkeypatch.setattr(paged_kernel, "tpu_ragged_paged_attention", _fake_tpu_rpa)
 
     q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_random_case(jr.PRNGKey(123), [8, 4])
 
