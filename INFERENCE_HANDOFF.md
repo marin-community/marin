@@ -88,6 +88,7 @@ its standard response fields.
 | Native, replay off | 570.53 | 1.340 |
 | Native replay, original archive and framing | 442.62 | 2.153 |
 | Native replay, original archive and byte-oriented framing | 463.50 | 1.577 |
+| Native compact replay, two prefill slots | 522.65 | 1.782 |
 | Native compact replay, four prefill slots | 518.90 | 1.619 |
 | Native compact replay, eight prefill slots | 522.62 | 1.687 |
 
@@ -117,10 +118,12 @@ median interval from final text to HTTP completion fell from 420 to 179 ms.
 All 366 measured requests completed with zero errors. Compact replay was
 5.6% behind compiled vLLM on output throughput and 9.0% behind native with
 replay off. Its p90 first token was 21.0% above compiled vLLM, 13 ms above
-the 20% limit. Increasing the prefill batch limit to eight added 3.72 output
-tokens/s and 68 ms of p90 first-token latency. All 370 requests completed
-with zero errors. The two-slot run tests the smaller batch limit while
-holding the other settings fixed.
+the 20% limit. Two and eight prefill slots each added fewer than four
+output tokens/s. Their p90 first-token latencies increased by 162 ms and
+68 ms, respectively. All compact runs completed their measured requests
+with zero errors. Use four prefill slots for this workload. It had the
+lowest measured p90 among the compact runs while staying within the 10%
+throughput target.
 [Four prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-compact-wire-replay-20261122)
 · [Eight prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-eight-prefill-replay-20261122)
 · [Two prefill slots](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-rl-agentx-v5p8-c128-two-prefill-replay-20261122)
