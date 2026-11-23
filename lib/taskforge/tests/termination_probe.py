@@ -192,4 +192,6 @@ def main(scenario: str, argv: list[str]) -> None:
 
 if __name__ == "__main__":
     assert sys.argv[1] == "child"
+    # A probe launched from a shell without job control inherits SIGINT ignored, and Python keeps it.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
     main(sys.argv[2], sys.argv[3:])
