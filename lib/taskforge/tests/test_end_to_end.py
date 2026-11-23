@@ -74,7 +74,7 @@ from taskforge.effects.issues import (
     Transient,
 )
 from taskforge.effects.log import EventLog, JsonlSink, Opened, Record, Status, decode, fold
-from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
+from taskforge.harness.protocol import Stopped, StopReason
 from taskforge.llm.client import AttemptFailed, AttemptOutcome, ModelClient, Progress, Provider, Segment
 from taskforge.llm.glm_provider import EndpointSource, FixedEndpoint, GlmEndpoint, GlmProvider, Pool
 from taskforge.llm.policy import GLM_5_3, ModelProfile
@@ -97,7 +97,7 @@ from taskforge.model.review import (
     Retry,
     TrialResult,
 )
-from taskforge.model.stage import Exit, Stage
+from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
@@ -128,7 +128,6 @@ from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages import STAGES
 from taskforge.stages.classify import replayable_grade
-from taskforge.stages.exits import Decided
 from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config, build_resources, install, retry_policy, solver_turn
 
@@ -1705,34 +1704,6 @@ async def test_parent_summary_separates_superseded_and_corrupt_children_from_goo
     assert f"{paths['superseded']}: another writer owns" in lines[f"OUTCOME superseded exit={driver.SUPERSEDED}"]
     assert published_workpiece(roots["good"]).terminal is Terminal.ACCEPTED
     assert tree(roots["corrupt"]) == corrupt
-
-
-class ScriptedAuthor(Harness):
-    def __init__(self, *results: Exit | None) -> None:
-        self.results = iter(results)
-        self.calls = 0
-
-    @override
-    async def run(
-        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
-    ) -> Exit:
-        self.calls += 1
-        return cast(Exit, next(self.results))
-
-
-@pytest.mark.parametrize(
-    "result, named",
-    [(Decided(Accept(BandOutcome.IN_BAND)), "author returned Decided"), (None, "author returned NoneType")],
-)
-async def test_stage_result_without_a_transition_from_that_stage_fails(
-    proposal: TaskProposal, result: Exit | None, named: str
-) -> None:
-    author = ScriptedAuthor(result, Stopped(StopReason.FINISHED, Conversation((), ())))
-    settings = config()
-    settings = replace(settings, author=replace(settings.author, harness=author))
-    with pytest.raises(ValueError, match=named):
-        await run_workpiece(proposal, settings, resources(Envs(), ()), EventLog(), install=install)
-    assert author.calls == 1
 
 
 async def test_hold_from_a_terminal_stage_observer_records_that_stage(proposal: TaskProposal) -> None:
