@@ -113,7 +113,13 @@ def registered_serving_profile(name: ServingProfileName) -> Micro210ServingProfi
         **{
             **profile,
             "role_plan": role_plan,
-            "execution": IrisSkyRLExecution(**{**execution, "required_env_vars": tuple(execution["required_env_vars"])}),
+            "execution": IrisSkyRLExecution(
+                **{
+                    **execution,
+                    "required_env_vars": tuple(execution["required_env_vars"]),
+                    "excluded_nvlink_domains": tuple(execution.get("excluded_nvlink_domains", ())),
+                }
+            ),
         }
     )
 

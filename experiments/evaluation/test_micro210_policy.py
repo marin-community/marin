@@ -141,7 +141,16 @@ def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch,
         )
 
 
-def test_east02a_eval_delivers_hf_secret_to_the_actual_coordinator(tmp_path, monkeypatch, policy_reference):
+@pytest.mark.parametrize(
+    "profile,target_cluster",
+    [
+        (ServingProfileName.SNOWBALL_H100_EAST02A, "cw-us-east-02a"),
+        (ServingProfileName.MOCHI_GB200, "cw-us-east-08a"),
+    ],
+)
+def test_serving_profile_delivers_hf_secret_to_the_actual_coordinator(
+    tmp_path, monkeypatch, policy_reference, profile, target_cluster
+):
     policy = json.loads(StoragePath(policy_reference.uri).read_bytes())
     judge_key = tmp_path / "judge-key"
     judge_key.write_text("fixture-judge-key")
@@ -157,9 +166,9 @@ def test_east02a_eval_delivers_hf_secret_to_the_actual_coordinator(tmp_path, mon
     monkeypatch.setenv("WANDB_API_KEY", "fixture-wandb-key")
     step = micro210_step(
         Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
-        name="fixture/east02a",
+        name="fixture/regional-eval",
         version="2026.11.23",
-        serving_profile=ServingProfileName.SNOWBALL_H100_EAST02A,
+        serving_profile=profile,
     )
     execution = skyrl_execution(step)
     required = {name: "fixture-value" for name in execution.required_env_vars}
@@ -168,8 +177,8 @@ def test_east02a_eval_delivers_hf_secret_to_the_actual_coordinator(tmp_path, mon
         StepContext.for_run(str(tmp_path / "eval"), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
     )
     assert cluster == "lib/iris/config/marin.yaml"
-    assert request.resources.target_cluster == "cw-us-east-02a"
-    assert yaml.safe_load(config.skyrl.launch_config_yaml)["iris"]["target_cluster"] == "cw-us-east-02a"
+    assert request.resources.target_cluster == target_cluster
+    assert yaml.safe_load(config.skyrl.launch_config_yaml)["iris"]["target_cluster"] == target_cluster
     assert request.environment.secrets["HF_TOKEN"] == "fixture-hf-token"
     assert "HF_TOKEN" not in request.environment.env_vars
     assert request.environment.secrets["JUDGE_API_KEY"] == "fixture-judge-key"
