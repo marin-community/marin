@@ -2149,15 +2149,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   A local CPU prototype requests a structured stop over typed evaluation
   IPC when the request supplies tools and explicitly disables parallel
   calls. The serving child uses the staged policy tokenizer and the
-  Snowball tool-call grammar. It stops at the first complete call outside
-  reasoning. Delimiters inside quoted arguments do not trigger a stop.
-  The response preserves the sampled token IDs and logprobs through the
-  closing token. In a mixed CPU batch, subsequent decode chunks advanced
-  only the other request, whose tokens and scores matched the baseline.
-  The current chunk can sample up to 31 extra tokens at the default
-  32-round setting. The assembler drops that suffix before returning the
-  response. The archived 11-reply replay reproduced the 60 to 424 token
-  range and all five prefix passes through the typed evaluation codec.
+  Snowball tool-call grammar. It returns the sampled token IDs and
+  logprobs through the first complete call outside reasoning, then retires
+  that request before the next decode chunk. Delimiters inside quoted
+  arguments are treated as argument text. At the default 32 rounds, the
+  last chunk can already have sampled up to 31 extra tokens for that
+  request. The response excludes that suffix. In a mixed CPU batch,
+  subsequent chunks advanced only the other request, whose tokens and
+  scores matched the baseline. The 11 archived prefixes ranged from 60
+  to 424 tokens. Grading after a typed-codec round trip reproduced all
+  five passes.
 
   The prototype has its own source diff. The sealed 40-H100 comparison
   still uses the frozen evaluator. Qualify the stop with a new artifact
