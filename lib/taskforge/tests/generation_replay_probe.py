@@ -11,9 +11,9 @@ and confirmation usage.
 
 The ``sibling-*`` modes run three validation slots two at a time. ``sibling-record`` checkpoints slots 0 and 1 in an
 outage. ``sibling-refused``, ``sibling-zero``, ``sibling-missing``, ``sibling-overflow`` and ``sibling-off-scale``
-resume unflagged: slot 1 grades, slot 2 generates, and once slot 2's read is in flight the gateway refuses slot 0's read with
-HTTP 400, answers it with all-zero probabilities, without the top level's probability or with a probability too large
-for a float, or answers it off the scale.
+resume unflagged: slot 1 grades, slot 2 generates, and once slot 2's read is in flight the gateway refuses slot 0's
+read with HTTP 400, answers it with all-zero probabilities, without the top level's probability or with a probability
+too large for a float, or answers it off the scale.
 ``sibling-recover`` then resumes with ``--resume-held`` and a healthy decision model."""
 
 import asyncio
