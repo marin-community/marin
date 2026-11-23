@@ -24,10 +24,12 @@ SCAN_PAGE_SIZE = 20
 CONNECTION_PAGE_SIZE = 10
 COMMIT_PARENT_PAGE_SIZE = 100
 MAX_GITHUB_CHANGED_FILES = 3_000
+# GitHub stops paginating pull-request commits here while totalCount keeps the full count.
+MAX_GITHUB_PR_COMMITS = 250
 MAX_GRAPHQL_POINTS = 900
 MAX_REST_REQUESTS = 850
 HYDRATION_BATCH_SIZE = 20
-FINGERPRINT_BATCH_SIZE = 100
+FINGERPRINT_BATCH_SIZE = 20
 REST_RETRY_RESERVE = 150
 REST_PAGE_SIZE = 100
 DIAGNOSTIC_EVENT_LIMIT = 10
@@ -65,6 +67,7 @@ class PullRequestRecord(CorpusModel):
     deletions: int
     changed_files: int
     commits: int
+    commits_truncated: bool = False
     review_comments: int
     issue_comments: int
     commit_shas: tuple[str, ...]
@@ -138,7 +141,7 @@ class ReviewEventRecord(CorpusModel):
 
 
 class PullRequestBundle(CorpusModel):
-    """Complete PR context; diff is absent only when GitHub refuses an oversized diff."""
+    """Review context with explicit GitHub limits on diff and commit availability."""
 
     pull_request: PullRequestRecord
     events: tuple[ReviewEventRecord, ...]
@@ -738,7 +741,8 @@ def _validate_connection_nodes(number: int, name: str, expected: int, nodes: lis
         node.get("databaseId") or node.get("id") or (node.get("commit") or {}).get("oid") or node.get("path")
         for node in nodes
     ]
-    _validate_record_identities(f"PR #{number} {name}", expected, ids)
+    fetched = min(expected, MAX_GITHUB_PR_COMMITS) if name == "commits" else expected
+    _validate_record_identities(f"PR #{number} {name}", fetched, ids)
 
 
 def _paginate_pull_connections(context: CollectionContext, pulls: list[dict]) -> None:
@@ -949,7 +953,8 @@ def _pull_request_record(
         additions=int(pull["additions"]),
         deletions=int(pull["deletions"]),
         changed_files=int(pull["changedFiles"]),
-        commits=len(commits),
+        commits=int(pull["commits"]["totalCount"]),
+        commits_truncated=len(commits) < int(pull["commits"]["totalCount"]),
         review_comments=review_comments,
         issue_comments=int(pull["comments"]["totalCount"]),
         commit_shas=tuple(commit.sha for commit in commits),

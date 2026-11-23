@@ -532,6 +532,27 @@ def test_collect_corpus_paginates_exact_changed_file_metadata() -> None:
     assert result.usage.rest_requests == 3
 
 
+def test_collect_corpus_records_github_commit_cap_without_losing_review_context() -> None:
+    review = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
+    scan = _scan_pull([review])
+    scan["commits"]["totalCount"] = 444
+    hydrated = _hydrated_pull(review=review, thread=None)
+    commits = []
+    for index in range(250):
+        node = _commit()
+        node["commit"]["oid"] = f"commit-{index}"
+        commits.append(node)
+    hydrated["commits"] = _page(commits, total=444)
+
+    result = github.collect_corpus(REPOSITORY, START, END, bot_logins=set(), client=FakeGitHub(scan, hydrated))
+
+    bundle = result.bundles[0]
+    assert bundle.pull_request.commits == 444
+    assert bundle.pull_request.commits_truncated
+    assert len(bundle.commits) == 250
+    assert [event.body for event in bundle.events] == ["Review this."]
+
+
 def test_collect_corpus_rejects_changed_file_cap_before_rest_context() -> None:
     review = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
     scan = _scan_pull([review], changed_files=3_001)

@@ -38,6 +38,7 @@ from .review_tables import DEFAULT_REPOSITORY
 from .rule_probe import run_rule_probe
 
 SOURCE_CONTEXT_LINES = 100
+LINT_REVIEW_TOOL = "pre-commit-review"
 
 
 def _json(value: object) -> str:
@@ -218,7 +219,10 @@ def rule_activity(days: int, repository: str) -> None:
         catalog = load_catalog()
         current_sha = catalog_sha(catalog)
         known_catalogs = catalog_snapshot_shas(engine)
-        current_runs = [row for row in activity.invocations if row.lint_catalog_sha == current_sha]
+        # Other review tools receive a catalog SHA from log_stats but do not run its rules.
+        review_runs = [row for row in activity.invocations if row.tool == LINT_REVIEW_TOOL]
+        review_ids = {row.invocation_id for row in review_runs}
+        current_runs = [row for row in review_runs if row.lint_catalog_sha == current_sha]
         current_ids = {row.invocation_id for row in current_runs}
         rows = []
         for rule in catalog.rules:
@@ -226,8 +230,8 @@ def rule_activity(days: int, repository: str) -> None:
             eligible = [
                 row
                 for row in current_runs
-                if lane.min_diff_lines == 0
-                or int(row.diff_added_lines or 0) + int(row.diff_removed_lines or 0) > lane.min_diff_lines
+                if (not row.variant or not row.variant.startswith("lane:") or row.variant == f"lane:{rule.lane}")
+                and (int(row.diff_added_lines or 0) + int(row.diff_removed_lines or 0) > lane.min_diff_lines)
             ]
             rows.append(
                 {
@@ -239,7 +243,8 @@ def rule_activity(days: int, repository: str) -> None:
                         for finding in activity.findings
                     ),
                     "window_findings_all_catalog_versions": sum(
-                        finding.code == rule.code for finding in activity.findings
+                        finding.code == rule.code and finding.invocation_id in review_ids
+                        for finding in activity.findings
                     ),
                 }
             )
@@ -247,16 +252,17 @@ def rule_activity(days: int, repository: str) -> None:
             _json(
                 {
                     "days": days,
+                    "tool": LINT_REVIEW_TOOL,
                     "catalog_sha": current_sha,
-                    "successful_runs_all_catalog_versions": len(activity.invocations),
+                    "successful_runs_all_catalog_versions": len(review_runs),
                     "successful_runs_current_catalog": len(current_runs),
                     "catalog_versions": [
                         {
                             "catalog_sha": sha,
-                            "successful_runs": sum(row.lint_catalog_sha == sha for row in activity.invocations),
+                            "successful_runs": sum(row.lint_catalog_sha == sha for row in review_runs),
                             "snapshot_available": sha in known_catalogs,
                         }
-                        for sha in sorted({row.lint_catalog_sha for row in activity.invocations if row.lint_catalog_sha})
+                        for sha in sorted({row.lint_catalog_sha for row in review_runs if row.lint_catalog_sha})
                     ],
                     "rules": rows,
                 }
