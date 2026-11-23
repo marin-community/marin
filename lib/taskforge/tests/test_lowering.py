@@ -204,6 +204,7 @@ ROLES = ("author", "solver", "adversary")
         ({"solver.model": "other-model"}, True),
         ({"sampling.temperature": 0.5}, True),
         ({"sandbox.output_budget_mb": 512}, True),
+        ({"solver.time_limit": 1800.0}, True),  # the spec no longer carries it: the solver's key must
     ],
 )
 async def test_a_completed_solver_trial_replays_unless_its_model_sampling_or_output_cap_changes(
@@ -224,7 +225,12 @@ async def test_a_completed_solver_trial_replays_unless_its_model_sampling_or_out
 
 
 @pytest.mark.parametrize(
-    "overlay, reruns", [({"provider.backoff_initial": 5.0}, False), ({"sandbox.output_budget_mb": 512}, True)]
+    "overlay, reruns",
+    [
+        ({"provider.backoff_initial": 5.0}, False),
+        ({"solver.time_limit": 1800.0}, False),  # a solver setting: no candidate grade moves
+        ({"sandbox.output_budget_mb": 512}, True),
+    ],
 )
 async def test_a_cached_candidate_grade_replays_unless_the_output_cap_changes(
     overlay: Mapping[str, object], reruns: bool

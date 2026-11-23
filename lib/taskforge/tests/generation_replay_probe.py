@@ -6,8 +6,8 @@
 ``record DIR``: the two validation answers are generated, then their grade meets a decision-model outage. ``resume DIR``
 relaunches the same root in a fresh process, unflagged, with the decision model back. Each prints one JSON line: the
 driver's exit code, the solver requests it dispatched, the candidates of the decision-model reads that answered, the
-published terminal and what it awaits; ``resume`` adds the published generation checkpoints, the payer of each paid
-slot result graded from one, and the report's solver and confirmation usage.
+published terminal, what it awaits and the head's journal format; ``resume`` adds the published generation checkpoints,
+the payer of each paid slot result graded from one, and the report's solver and confirmation usage.
 
 The ``sibling-*`` modes run three validation slots two at a time. ``sibling-record`` checkpoints slots 0 and 1 in an
 outage. ``sibling-refused``, ``sibling-zero``, ``sibling-missing``, ``sibling-overflow`` and ``sibling-off-scale``
@@ -37,6 +37,7 @@ from rolloutengine.test_support import arithmetic_task
 from taskcompendium.decision_model import DecisionModelRequest
 
 from taskforge import driver
+from taskforge.checkpoint import HEAD
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.events import Resolved, event_digest
 from taskforge.llm.glm_provider import EndpointSource
@@ -180,6 +181,7 @@ async def main(mode: str, directory: Path) -> None:
         "reads": sorted(read.candidate for read in reader.answered),
         "terminal": str(published.terminal),
         "awaits": last.awaits if isinstance(last, Incomplete) else None,
+        "format": json.loads((destination / HEAD).read_text())["format"],
     }
     if isinstance(reader, Sibling):
         outcome["reasons"] = list(last.reasons) if isinstance(last, Incomplete) else []

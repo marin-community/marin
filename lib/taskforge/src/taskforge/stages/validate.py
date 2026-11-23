@@ -39,6 +39,7 @@ from taskforge.model.controls import Control
 from taskforge.model.llm import Role
 from taskforge.model.proposal import render
 from taskforge.model.review import (
+    PARKED,
     Accept,
     AdversaryFinding,
     AdversaryResult,
@@ -55,6 +56,7 @@ from taskforge.model.review import (
     SearchEnd,
     SearchLimit,
     SolveReview,
+    TrialOutcome,
     TrialResult,
     ValidationResult,
 )
@@ -71,7 +73,7 @@ from taskforge.stages.classify import (
     trial_cause,
 )
 from taskforge.stages.exits import Validated
-from taskforge.stages.rules import actionable, assess, earlier_findings, missing, shipped
+from taskforge.stages.rules import actionable, assess, earlier_findings, shipped
 from taskforge.stages.solve_review import earlier_reports, evidence, shipped_notes, solve_review
 from taskforge.stages.summary import task_manifest
 
@@ -97,7 +99,7 @@ async def solver_result(
         receipt = ctx.receipt(SolverRollout(spec, trial, attempt))  # this outcome's own row, read before any other runs
         if rollouts is not None:
             rollouts[trial] = result
-        if (cause := trial_cause(result, spec.task)) is Cause.HELD:
+        if (cause := trial_cause(result, spec.task)) in PARKED:
             return TrialResult(trial, None, cause, result.grade.error or "", receipt=receipt)
         return TrialResult(trial, result.grade, cause, receipt=receipt)
     return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
@@ -126,7 +128,7 @@ async def solver_batch(
 
     ``concurrency`` slots run at a time and a ``Note`` lists the running ones every ``heartbeat`` seconds; neither
     enters a replay key. A slot that restarts raises once every sibling has settled, so replaying the stage
-    re-executes only it; more than ``max_missing`` held slots hold the batch instead. A decision-model outage defers
+    re-executes only it; more than ``max_missing`` parked slots hold the batch instead. A decision-model outage defers
     the batch the same way, and any other hold a slot raises holds it, each once every admitted sibling has settled.
     Once a slot waits for the decision model or holds, or ``stopped()`` says a validation sibling holds, no further
     slot starts, so no rollout is bought to wait; the batch then returns short only beside that sibling.
@@ -181,8 +183,8 @@ async def solver_batch(
 
 
 def refusal(trials: Sequence[TrialResult], max_missing: int) -> Hold | None:
-    """More than ``max_missing`` held slots: a human hold, whatever else is unfinished."""
-    held = [f"solver trial {trial.trial}: {trial.detail}" for trial in trials if trial.cause is Cause.HELD]
+    """More than ``max_missing`` parked slots: a human hold, whatever else is unfinished."""
+    held = [f"solver trial {trial.trial}: {trial.detail}" for trial in trials if trial.cause in PARKED]
     return Hold("; ".join(held)) if len(held) > max_missing else None
 
 
@@ -554,7 +556,7 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
     index = shipped(accepted, workpiece)
     round_, policy, max_missing = workpiece.evidence[index], config.policy, config.budget.max_missing_trials
     spec = solver_spec(submission, config, resources)
-    base = tuple(trial for trial in round_.solver if not missing(trial))
+    base = tuple(trial for trial in round_.solver if trial.outcome is not TrialOutcome.UNSCORED)
     async with ctx.scope("confirm", bills=Billing.CONFIRMATION):
         ctx.observe(Resolved, grader_infra_unavailable)
         # Each base trial's own transcript, at its receipt; a trial without one stays without.

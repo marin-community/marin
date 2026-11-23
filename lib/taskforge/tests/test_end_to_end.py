@@ -105,6 +105,7 @@ from taskforge.model.review import (
     Modify,
     Retry,
     ReviewEnd,
+    TrialOutcome,
     TrialResult,
 )
 from taskforge.model.stage import Stage
@@ -140,6 +141,7 @@ from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages import STAGES
 from taskforge.stages.author import AuthorReference
 from taskforge.stages.classify import replayable_grade
+from taskforge.stages.exits import Decided
 from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config, build_resources, install, retry_policy, solver_turn
 
@@ -1051,9 +1053,9 @@ class Fleet(Provider):
         raise AttemptFailed(AttemptOutcome.STALLED, f"no token for {STALL_TIMEOUT}s")
 
     async def loses_workers_late(self, progress: Progress) -> Segment:
-        """A healthy generation whose workers all go away at second 4,000 of the 4,140-second bound."""
+        """A healthy generation whose workers all go away at second 4,060 of the 4,200-second bound."""
         await self.served.wait()
-        await self.generate(progress, 4000)
+        await self.generate(progress, 4060)
         self.alive = False
         return await self.stall()
 
@@ -1081,29 +1083,29 @@ class Fleet(Provider):
         return await self.stall()
 
     async def aborts_past_the_bound(self, progress: Progress) -> Segment:
-        """Content every 10 seconds past the bound; at second 4,160 a chunk carries content and the server's abort."""
+        """Content every 10 seconds past the bound; at second 4,220 a chunk carries content and the server's abort."""
         await self.served.wait()
-        await self.generate(progress, 4150)
+        await self.generate(progress, 4210)
         await self.time.sleep(TOKEN_INTERVAL)
         report(progress, json.dumps({"choices": [{"index": 0, "delta": {"content": "x"}, "finish_reason": "abort"}]}))
         self.alive = False
         raise AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
 
     async def delivers_a_buffered_token_past_the_bound(self, progress: Progress) -> Segment:
-        """A token buffered at second 4,139.5 of the bound arrives at 4,140.5 from a worker that died meanwhile, while
+        """A token buffered at second 4,199.5 of the bound arrives at 4,200.5 from a worker that died meanwhile, while
         another replica keeps ``/health`` positive; then the stream ends."""
         await self.served.wait()
-        await self.generate(progress, 4140)
+        await self.generate(progress, 4200)
         await self.time.sleep(TOKEN_INTERVAL + 0.5)
         report(progress, chunk(content="x"))
         self.alive = False
         raise AttemptFailed(AttemptOutcome.INCOMPLETE_STREAM, "stream lacked finish_reason or usage")
 
     async def tails_past_the_bound(self, progress: Progress) -> Segment:
-        """The worker exits at second 4,140 of the bound; its queued output keeps arriving past the bound, two frames
+        """The worker exits at second 4,200 of the bound; its queued output keeps arriving past the bound, two frames
         1.2 s apart."""
         await self.served.wait()
-        await self.generate(progress, 4140)
+        await self.generate(progress, 4200)
         for delay in (TOKEN_INTERVAL + 0.5, 1.2):
             await self.time.sleep(delay)
             report(progress, chunk(content="x"))
@@ -1200,7 +1202,7 @@ async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
     assert len(solver_slots(destination)) == 2 and fleet.requests == 2
     workpiece = published_workpiece(destination)
     [evidence] = workpiece.evidence
-    assert sorted(str(trial.cause) for trial in evidence.solver) == ["None", str(Cause.GENERATION_LIMIT)]
+    assert sorted(trial.outcome for trial in evidence.solver) == [TrialOutcome.GRADED, TrialOutcome.TIME_LIMIT]
     assert workpiece.terminal == Terminal.ACCEPTED
 
 
@@ -1266,6 +1268,10 @@ FORMAT_12_REPORT = (
     "terminal=abandoned count=0",
     "terminal=held count=0",
     *(
+        f"solver_trial_outcomes scope=terminal_records outcome={outcome} count={int(outcome == 'graded') * 4}"
+        for outcome in ("graded", "generation_limit", "time_limit", "budget_exhausted", "faulted", "unscored")
+    ),
+    *(
         f"tokens role={role} prompt=0 cached=0 completion=0"
         for role in ("author", "solver", "adversary", "solve_review", "judge", "confirmation", "final_review")
     ),
@@ -1294,11 +1300,11 @@ async def test_the_report_reads_a_format_12_root_whose_markers_repeat_as_its_own
         *FORMAT_12_REPORT[1:5],
         "terminal=held count=1",
         "terminal=held reason=Hold count=1",
-        *FORMAT_12_REPORT[6:13],
+        *FORMAT_12_REPORT[6:19],
         "stage=author n=2 p50_seconds=0.011 p90_seconds=0.014",
-        *FORMAT_12_REPORT[14:17],
+        *FORMAT_12_REPORT[20:23],
         "event_gap=RunCommand n=4 p50_seconds=0.000 p90_seconds=0.000",
-        FORMAT_12_REPORT[18],
+        FORMAT_12_REPORT[24],
         "event_gap=InferenceRequest n=7 p50_seconds=0.000 p90_seconds=0.000",
     ]
 
@@ -2353,13 +2359,19 @@ FORMAT_12_HELD = Path(__file__).parent / "fixtures" / "format12-author-held-root
 """The whole root the format-12 writer published for the held first launch of ``held_after_stamp``."""
 
 
-@pytest.mark.parametrize("fixture,found", [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11), (FORMAT_12_HELD, 12)])
+FORMAT_13_HELD = Path(__file__).parent / "fixtures" / "format13-author-held-root.json.gz"
+"""The whole root the format-13 writer published for the held first launch of ``held_after_stamp``."""
+
+
+@pytest.mark.parametrize(
+    "fixture,found", [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11), (FORMAT_12_HELD, 12), (FORMAT_13_HELD, 13)]
+)
 async def test_a_held_earlier_format_root_is_refused_before_claim_and_the_report_still_reads_it(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, fixture: Path, found: int
 ) -> None:
     """A format-10 root's author calls embedded a reference this writer does not reproduce, a format-11 root's author
-    requests were worded otherwise, and a format-12 root committed no reviewed visit; the driver refuses each untouched
-    and names the ways on."""
+    requests were worded otherwise, a format-12 root committed no reviewed visit, and a format-13 root's trials were
+    recorded under another solver clock; the driver refuses each untouched and names the ways on."""
     destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), fixture)
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)

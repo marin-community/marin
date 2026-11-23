@@ -35,7 +35,14 @@ from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying,
 from taskforge.effects.issues import DecisionModelUnavailable, Hold, describe_exception
 from taskforge.llm.glm_provider import EndpointSource, EndpointUnavailable, retry_after
 from taskforge.resources.execution import Notify
-from taskforge.resources.rollouts import Engine, RolloutResource, SolverGeneration, SolverRollout, run_rollout
+from taskforge.resources.rollouts import (
+    Engine,
+    RolloutResource,
+    SolverGeneration,
+    SolverRollout,
+    graded_stop_reason,
+    run_rollout,
+)
 
 CLEF_MODEL, CLEF_QUESTION = "clef", "whole"
 DOWN_STATUSES = frozenset({404, 408, 429})
@@ -275,7 +282,7 @@ async def regraded(spec: TaskRolloutSpec, rollout: Rollout, ctx: Context) -> Gra
     the chat of its last conversation with a model turn, its captured outputs and its stop reason."""
     assert spec.decision_model is not None
     chat = [record.messages for record in rollout.conversations if record.steps][-1]
-    attempt = GradingAttempt(chat_conversation(list(chat)), rollout.outputs, stop_reason=rollout.stop_reason)
+    attempt = GradingAttempt(chat_conversation(list(chat)), rollout.outputs, stop_reason=graded_stop_reason(rollout))
     return await grade_decision_model_answer(spec.task, attempt, recorded_reads(spec.decision_model, ctx))
 
 

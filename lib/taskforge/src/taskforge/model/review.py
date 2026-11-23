@@ -7,6 +7,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Annotated, Literal
 
 from pydantic import Field, TypeAdapter
@@ -35,6 +36,8 @@ class Cause(StrEnum):
     AGENT_TIMEOUT = "agent_timeout"
     BUDGET_EXHAUSTED = "budget_exhausted"
     GENERATION_LIMIT = "generation_limit"
+    TIME_LIMIT = "time_limit"
+    """A solver generation still running at ``solver.time_limit``: an unsolved trial, never retried."""
     GRADER_TIMEOUT = "grader_timeout"
     GRADER_MISSING_REWARD = "grader_missing_reward"
     GRADER_EMPTY_REWARD = "grader_empty_reward"
@@ -48,6 +51,12 @@ class Cause(StrEnum):
     NO_GRADE = "no_grade"
     HELD = "held"
     """A solver slot whose effect held: typed missing evidence, never a failed trial."""
+    ATTEMPT_CAP = "attempt_cap"
+    """A solver slot that ran out ``solver.attempt_timeout``: missing evidence as a held slot is, never a time limit."""
+
+
+PARKED = frozenset({Cause.HELD, Cause.ATTEMPT_CAP})
+"""The causes of a recorded slot with no evidence: missing, named, and never bought again by a retry."""
 
 
 class BandOutcome(StrEnum):
@@ -250,8 +259,8 @@ class Modify:
 
 @dataclass(frozen=True, slots=True)
 class Revise:
-    """The final review's one revision, outside the shared modification budget: ``findings`` is the band line of every
-    trial of the confirmed submission, or its faults (``placement`` None), ``review`` the final review's revise
+    """A revision the final review asks for, outside the shared modification budget: ``findings`` is the band line of
+    every trial of the confirmed submission, or its faults (``placement`` None), ``review`` the final review's revise
     findings and ``notes`` its notes, which the author sees as optional. It keeps no fallback."""
 
     findings: tuple[str, ...]
@@ -310,6 +319,55 @@ class BandRules:
         return BandOutcome.IN_BAND
 
 
+class TrialOutcome(StrEnum):
+    """What one solver trial produced. Only a graded trial's reward can solve it; a generation limit is an unsolved
+    trial in the placement's denominator, a fault is a finding against the task, and an unscored trial is named and
+    left out of the placement."""
+
+    GRADED = "graded"
+    """The grader scored the answer (a submission failure is a score of zero)."""
+    GENERATION_LIMIT = "generation_limit"
+    """The solver ran out of context or output before it finished: unsolved, whatever its grade says."""
+    TIME_LIMIT = "time_limit"
+    """A generation was still running at ``solver.time_limit``: unsolved, whatever its grade says."""
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    """The solver spent a configured turn budget (``max_turns``): neither a score nor a fault of the task."""
+    FAULTED = "faulted"
+    """The grader or the task failed on the answer (``cause``): evidence against the task, not a score."""
+    UNSCORED = "unscored"
+    """No score for another reason (``cause``: held, ungraded, grader infrastructure)."""
+
+
+LIMITS = frozenset({TrialOutcome.GENERATION_LIMIT, TrialOutcome.TIME_LIMIT})
+"""The outcomes of a trial that ended without a gradable answer and counts unsolved."""
+PLACED = frozenset({TrialOutcome.GRADED, *LIMITS})
+"""The outcomes a band places: a graded trial and an unsolved limited one."""
+FAULTS = frozenset(
+    {
+        Cause.GRADER_MISSING_REWARD,
+        Cause.GRADER_EMPTY_REWARD,
+        Cause.GRADER_INVALID_REWARD,
+        Cause.GRADER_INVALID_CHECKS,
+        Cause.GRADER_TIMEOUT,
+        Cause.GRADER_EXECUTION,
+        Cause.GRADER_REWARD_RANGE,
+        Cause.INVALID_TASK,
+        Cause.VERIFIER_SKIPPED,
+    }
+)
+"""The causes that are evidence against the task: its grader or the task itself failed on the answer."""
+OUTCOMES = MappingProxyType(
+    {
+        Cause.GENERATION_LIMIT: TrialOutcome.GENERATION_LIMIT,
+        Cause.TIME_LIMIT: TrialOutcome.TIME_LIMIT,
+        Cause.BUDGET_EXHAUSTED: TrialOutcome.BUDGET_EXHAUSTED,
+        **dict.fromkeys(FAULTS, TrialOutcome.FAULTED),
+    }
+)
+"""The diagnostic outcome of each cause, independent of what a review policy decides on it; every other cause
+(held, ungraded, timed out as an agent, grader infrastructure) is unscored."""
+
+
 @dataclass(frozen=True, slots=True)
 class TrialResult:
     trial: int
@@ -318,6 +376,13 @@ class TrialResult:
     detail: Annotated[str, OMIT_EMPTY] = ""
     receipt: Annotated[int | None, OMIT_NONE] = field(default=None, kw_only=True)
     """The journal row of the physical resolution the result came from; None only when no row exists."""
+
+    @property
+    def outcome(self) -> TrialOutcome:
+        """The trial's outcome, read from its recorded cause and grade (``OUTCOMES``): every reader of a trial asks
+        this, never the cause. Derived, not stored, so a cause and an outcome can never disagree."""
+        cause = self.cause or (Cause.NO_GRADE if self.grade is None else None)
+        return TrialOutcome.GRADED if cause is None else OUTCOMES.get(cause, TrialOutcome.UNSCORED)
 
 
 @dataclass(frozen=True, slots=True)

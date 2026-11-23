@@ -30,9 +30,11 @@ from rolloutengine.models import (
     MAX_TURNS_STOP_REASON,
     ConversationRecord,
     GradedRollout,
+    GradedRolloutInterrupted,
     Model,
     ModelTurn,
     Rollout,
+    RolloutFailure,
     RolloutInterrupted,
     RolloutOperation,
     RolloutStep,
@@ -50,6 +52,7 @@ import taskforge.stages.solve_review as review_stage
 from taskforge.checkpoint import CheckpointSink, read_journal
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, apply_decision, run_workpiece
+from taskforge.driver import deferred
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, ScopeEntered, ScopeExited, StageCompleted
 from taskforge.effects.issues import ContextExceeded, DecisionModelUnavailable
@@ -93,6 +96,7 @@ from taskforge.model.review import (
     Revise,
     SolveReview,
     TrialAccount,
+    TrialOutcome,
     TrialResult,
     ValidationResult,
     grouped,
@@ -102,13 +106,13 @@ from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Terminal, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
-from taskforge.report import report
+from taskforge.report import report, trial_outcomes
 from taskforge.resources.bundle import Resources
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.inference import InferenceClient, InferenceRequest
 from taskforge.resources.rollouts import Engine, SolverRollout
-from taskforge.stages.classify import grade_cause
-from taskforge.stages.rules import CONFIRMATION_REVISION_FAILED, default_review, tagged
+from taskforge.stages.classify import grade_cause, replaced_refusals, replayable_grade
+from taskforge.stages.rules import CONFIRMATION_REVISION_FAILED, band_line, default_review, tagged
 from taskforge.stages.solve_review import earlier_reports, evidence, solve_review
 from taskforge.wiring import build_config, install
 
@@ -130,7 +134,8 @@ def even(trial: int, attempt: int) -> GradeResult:
 
 class Trials(Engine):
     """Grades each slot with ``grade``; ``runs`` is every paid execution. A ``restart`` slot is interrupted, a
-    ``refuse`` slot refused by the model server, and a ``silent`` slot records no messages."""
+    ``refuse`` slot refused by the model server, a ``capped`` slot ends at its attempt cap, and a ``silent`` slot
+    records no messages."""
 
     def __init__(
         self,
@@ -140,8 +145,10 @@ class Trials(Engine):
         refuse: frozenset[Slot] = frozenset(),
         silent: frozenset[Slot] = frozenset(),
         stop: Callable[[int, int], str] = lambda trial, attempt: "stop",
+        capped: frozenset[Slot] = frozenset(),
     ) -> None:
         self.grade, self.restart, self.refuse, self.silent, self.stop = grade, restart, refuse, silent, stop
+        self.capped = capped
         self.runs: list[Slot] = []
 
     @override
@@ -153,6 +160,10 @@ class Trials(Engine):
             raise RolloutInterrupted(Rollout(run_id, (), "interrupted"), RolloutOperation.MODEL)
         if slot in self.refuse:
             raise rejected()
+        if slot in self.capped:  # past solver.attempt_timeout, at ``stop``: RolloutEngine's record names the attempt
+            failure = RolloutFailure("TimeoutError", {"operation": RolloutOperation.ATTEMPT.value})
+            capped = Rollout(run_id, (), self.stop(trial, attempt), failure=failure)
+            raise GradedRolloutInterrupted(capped, RolloutOperation.ATTEMPT, GradeResult(Outcome.UNAVAILABLE, None))
         said = () if slot in self.silent else (transcript(f"trial {trial} attempt {attempt} answers 12"),)
         return GradedRollout(Rollout(run_id, said, self.stop(trial, attempt)), self.grade(trial, attempt))
 
@@ -797,8 +808,8 @@ def test_a_fault_in_the_revision_s_confirmation_abandons(proposal: TaskProposal)
 def test_an_ungraded_slot_is_named_and_excluded_and_a_generation_limit_counts_unsolved(
     proposal: TaskProposal,
 ) -> None:
-    """Owner's decision (e): the same slot returning no grade places over seven; a generation limit is a failed trial
-    in the denominator."""
+    """The same slot returning no grade places over seven; a generation limit is a failed trial in the denominator,
+    and the acceptance says it was counted unsolved."""
     config = setup()
     solved = [graded(t, GradeResult(Outcome.GRADED, 1.0)) for t in range(3, 7)]
     for last, over, absent in ((graded(7, UNGRADED), 7, True), (graded(7, UNGRADED, Cause.GENERATION_LIMIT), 8, False)):
@@ -806,6 +817,8 @@ def test_an_ungraded_slot_is_named_and_excluded_and_a_generation_limit_counts_un
         assert isinstance(decision, Accept) and f"Confirmation: 6 of {over} trials solved" in "|".join(decision.reasons)
         named = MissingEvidence(EvidenceKind.CONFIRMATION_TRIALS, "solver trials [7] have no score")
         assert (named in decision.missing) is absent
+        limited = "Counted unsolved without a gradable answer: 1 generation_limit"
+        assert (limited in decision.reasons) is not absent
 
 
 def invalid_in_confirmation(trial: int, attempt: int) -> GradeResult:
@@ -1470,6 +1483,131 @@ async def test_each_review_builds_its_evidence_index_and_digests_it_once(
     wp, _ = await run(proposal, Trials(), Reviewer())
     assert wp.terminal is Terminal.ACCEPTED and kinds(wp) == ["accept", "accept"]
     assert (built, digested) == ([3, 8], [3, 8])
+
+
+# Regression: an ordinary grader's infrastructure error on a time-limited slot's output held the workpiece, and
+# the explicit resume bought that slot again; its replacement solved, so the accepted evidence showed no time limit.
+@pytest.mark.parametrize("answered", [True, False], ids=["answer before the cutoff", "no answer before it"])
+async def test_a_limited_slot_whose_grade_failed_is_a_settled_loss_and_replays(
+    proposal: TaskProposal, tmp_path: Path, answered: bool
+) -> None:
+    broken = GradeResult(Outcome.INFRA_ERROR, None, "verifier unreachable", failure=GradingFailure.EXECUTION)
+
+    def engine() -> Trials:
+        return Trials(
+            lambda trial, attempt: broken if trial == 1 else even(trial, attempt),
+            stop=lambda trial, attempt: "time_limit" if trial == 1 else "stop",
+            silent=frozenset() if answered else frozenset({(1, 0)}),
+        )
+
+    first, sink = engine(), JsonlSink(str(tmp_path / "events.jsonl"))
+    wp, _ = await run(proposal, first, Reviewer(), sink=sink)
+    assert wp.terminal is Terminal.ACCEPTED and first.runs.count((1, 0)) == 1 and len(first.runs) == 8
+    [limited] = [t for t in wp.evidence[-1].solver if t.trial == 1]
+    assert (limited.cause, limited.outcome, limited.grade) == (Cause.TIME_LIMIT, TrialOutcome.TIME_LIMIT, broken)
+    accepted = wp.decisions[-1]
+    assert isinstance(accepted, Accept) and accepted.reasons == (
+        "Confirmation: 4 of 8 trials solved: in_band",
+        "Counted unsolved without a gradable answer: 1 time_limit",
+    )
+    again = engine()
+    log = EventLog(replay_from=local_records(sink), replayable=replayable_grade)
+    resumed = await run_workpiece(proposal, setup(), bundle(again, Reviewer()), log, install=install)
+    assert again.runs == [] and resumed.evidence == wp.evidence
+
+
+# Regression: the attempt cap fired while a proven time-limited loss was being graded, and the row read
+# as a parked slot: excluded from the denominator with an allowance, bought again on an explicit resume without one.
+@pytest.mark.parametrize("allowance", [0, 1])
+@pytest.mark.parametrize("proven", [True, False], ids=["limit then cap", "cap first"])
+async def test_the_attempt_cap_parks_a_slot_only_before_a_limit_is_proven(
+    proposal: TaskProposal, proven: bool, allowance: int
+) -> None:
+    stop = "time_limit" if proven else "interrupted"
+    engine = Trials(
+        stop=lambda trial, attempt: stop if (trial, attempt) == (0, 0) else "stop", capped=frozenset({(0, 0)})
+    )
+    config = setup(**{"budget.max_missing_trials": allowance})
+    wp, log = await run(proposal, engine, Reviewer(), config)
+    if proven or allowance:
+        cause = Cause.TIME_LIMIT if proven else Cause.ATTEMPT_CAP
+        first = wp.evidence[0]
+        assert first.solver[0].cause is cause and kinds(wp)[0] == "accept"
+        solved = "1 of 3 trials solved" if proven else "1 of 2 trials solved"  # the loss is in the denominator
+        assert band_line(first, config.band)[1].startswith(solved)
+    else:  # one parked slot beyond no allowance: a manual hold, before any record
+        held = wp.decisions[-1]
+        assert wp.terminal is Terminal.HELD and isinstance(held, Incomplete) and held.awaits is None
+    if proven:
+        grade = wp.evidence[0].solver[0].grade
+        assert grade is not None and grade.diagnostics["interrupted"]["diagnostics"]["operation"] == "attempt"
+    again = Trials()
+    replaces = replaced_refusals(log.records, resume=True)  # an explicit resume (``--resume-held``)
+    relaunch = EventLog(replay_from=log.records, replayable=replayable_grade, replaces=replaces)
+    await run_workpiece(proposal, config, bundle(again, Reviewer()), relaunch, install=install)
+    # It replaces a held parked slot, never a loss, and never a slot an accepted visit committed.
+    assert again.runs.count((0, 0)) == int(not proven and not allowance)
+
+
+def waits_for_decision_model(trial: int, attempt: int) -> GradeResult:
+    error = RolloutInterrupted(Rollout(f"arithmetic:{trial}:{attempt}", (), "stop"), RolloutOperation.GRADE)
+    raise error from DecisionModelUnavailable("clef@fixture-1 gave no read within 900s")
+
+
+async def test_a_revision_validates_with_fresh_trials(proposal: TaskProposal) -> None:
+    """A real author revision is a new submission: its validation buys solver.k new slots under its own attempt."""
+    engine = Trials(lambda trial, attempt: GradeResult(Outcome.GRADED, 1.0 if attempt else float(trial == 0)))
+    reviewer = Reviewer(rounds=[[found(0)]])
+    live = bundle(engine, reviewer, (*script(), *RESUBMIT))
+    wp = await run_workpiece(proposal, setup(**{"budget.final_revisions": 0}), live, EventLog(), install=install)
+    assert kinds(wp)[0] == "modify" and engine.runs[:6] == [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)]
+
+
+# Regression: the pending acceptance's limit count rode along beside the confirmation's own, so one baseline and
+# one new timeout read both "2 time_limit" and "1 time_limit", and a baseline timeout alone read the same line twice.
+@pytest.mark.parametrize("confirmed", [(), ((4, 1),)], ids=["baseline only", "baseline and confirmation"])
+async def test_a_confirmed_acceptance_counts_its_limits_once_over_the_combined_evidence(
+    proposal: TaskProposal, confirmed: tuple[Slot, ...]
+) -> None:
+    timed_out = {(0, 0), *confirmed}
+    engine = Trials(stop=lambda trial, attempt: "time_limit" if (trial, attempt) in timed_out else "stop")
+    wp, _ = await run(proposal, engine, Reviewer())
+    pending, final = wp.decisions
+    assert isinstance(pending, Accept) and isinstance(final, Accept) and wp.terminal is Terminal.ACCEPTED
+    assert "Counted unsolved without a gradable answer: 1 time_limit" in pending.reasons
+    counts = [reason for reason in final.reasons if reason.startswith("Counted unsolved")]
+    assert counts == [f"Counted unsolved without a gradable answer: {len(timed_out)} time_limit"]
+
+
+# Regression: a max-turns stop read as a grader or task fault, because the outcome followed the review policy's
+# decision on its cause, and a fault entered the placement's denominator.
+@pytest.mark.parametrize(
+    "cause, outcome",
+    [
+        (None, TrialOutcome.GRADED),
+        (Cause.GENERATION_LIMIT, TrialOutcome.GENERATION_LIMIT),
+        (Cause.TIME_LIMIT, TrialOutcome.TIME_LIMIT),
+        (Cause.BUDGET_EXHAUSTED, TrialOutcome.BUDGET_EXHAUSTED),
+        (Cause.GRADER_EXECUTION, TrialOutcome.FAULTED),
+        (Cause.INVALID_TASK, TrialOutcome.FAULTED),
+        (Cause.AGENT_TIMEOUT, TrialOutcome.UNSCORED),
+        (Cause.GRADER_INFRA, TrialOutcome.UNSCORED),
+        (Cause.HELD, TrialOutcome.UNSCORED),
+    ],
+)
+def test_a_trial_outcome_is_its_recorded_cause_whatever_the_review_decides(
+    cause: Cause | None, outcome: TrialOutcome
+) -> None:
+    assert TrialResult(0, GradeResult(Outcome.GRADED, 0.0), cause).outcome is outcome
+
+
+def test_only_graded_and_limited_trials_enter_the_placement() -> None:
+    faulted = TrialResult(2, GradeResult(Outcome.INFRA_ERROR, None), Cause.GRADER_EXECUTION)
+    exhausted = TrialResult(3, GradeResult(Outcome.GRADED, 0.0), Cause.BUDGET_EXHAUSTED)
+    limited = TrialResult(4, GradeResult(Outcome.GRADED, 1.0), Cause.TIME_LIMIT)
+    trials = (*SOLVED[:1], TrialResult(1, GradeResult(Outcome.GRADED, 0.0)), faulted, exhausted, limited)
+    result = ValidationResult(SUBMISSION.digest, trials, CONTROLS, ())
+    assert band_line(result, setup().band)[1].startswith("1 of 3 trials solved")
 
 
 def always_too_easy(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:

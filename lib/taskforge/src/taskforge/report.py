@@ -15,8 +15,9 @@ from taskforge.checkpoint import FORMAT_1, HEAD, read_journal
 from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted, event_digest
 from taskforge.effects.issues import UnsupportedFormat
 from taskforge.effects.log import Billing, decode
+from taskforge.model.review import TrialOutcome
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import Terminal
+from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.resources.env import RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverGeneration, SolverRollout
@@ -32,6 +33,19 @@ def reason_class(reason: str) -> str:
         types = [name for name in types if name not in {"Traceback", "ExceptionGroup", "BaseExceptionGroup"}]
         return "bug:" + (types[0] if types else "unknown")
     return reason.split(":", 1)[0].split(" <- ", 1)[0].strip()
+
+
+def trial_outcomes(workpiece: Workpiece) -> Counter[TrialOutcome]:
+    """The outcome of every solver slot the workpiece bought, once: a confirmation record repeats the trials it keeps
+    under their slots' identities."""
+    slots: dict[tuple[int, int], TrialOutcome] = {}
+    evidence = workpiece.evidence
+    for index, result in enumerate(evidence):
+        kept = set() if result.confirms is None else {t.trial for t in evidence[result.confirms].solver}
+        for trial in result.solver:
+            bought = result.confirms if result.confirms is not None and trial.trial in kept else index
+            slots[bought, trial.trial] = trial.outcome
+    return Counter(slots.values())
 
 
 async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]:
@@ -53,7 +67,7 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
     if not heads:
         found = f"; it holds {len(legacy)} journal format 1 roots ({named}), migrate them first" if legacy else ""
         raise ValueError(f"No workpiece journals at {root}{found}")
-    counts, reasons = Counter[str](), Counter[tuple[str, str]]()
+    counts, reasons, outcomes = Counter[str](), Counter[tuple[str, str]](), Counter[TrialOutcome]()
     tokens: dict[str, Counter[str]] = defaultdict(Counter)
     durations: dict[str, list[float]] = defaultdict(list)
     accepted: list[float] = []
@@ -77,8 +91,9 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                 return
             terminal = str(status.terminal or "running")
             counts[terminal] += 1
+            workpiece = await asyncio.to_thread(journal.workpiece) if status.terminal else None
+            outcomes.update(trial_outcomes(workpiece) if workpiece is not None else ())
             if status.terminal in (Terminal.HELD, Terminal.ABANDONED):
-                workpiece = await asyncio.to_thread(journal.workpiece)
                 last = workpiece.decisions[-1] if workpiece is not None and workpiece.decisions else None
                 for reason in {reason_class(value) for value in getattr(last, "reasons", ())} or {"unknown"}:
                     reasons[terminal, reason] += 1
@@ -131,6 +146,10 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
     lines += [f"terminal={terminal} count={counts[terminal]}" for terminal in ("running", *Terminal)]
     lines += [
         f"terminal={terminal} reason={reason} count={count}" for (terminal, reason), count in sorted(reasons.items())
+    ]
+    lines += [
+        f"solver_trial_outcomes scope=terminal_records outcome={outcome} count={outcomes[outcome]}"
+        for outcome in TrialOutcome
     ]
     for hours in (1, 6, 24):
         count = sum(max(cutoff, now - hours * 3600) <= stamp <= now for stamp in accepted)

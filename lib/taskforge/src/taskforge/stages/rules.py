@@ -12,6 +12,9 @@ from dataclasses import replace
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.model.review import (
+    LIMITS,
+    PARKED,
+    PLACED,
     Abandon,
     Accept,
     AdversaryFinding,
@@ -32,6 +35,7 @@ from taskforge.model.review import (
     ReviewFinding,
     Revise,
     SolveReview,
+    TrialOutcome,
     TrialResult,
     ValidationResult,
     same,
@@ -73,25 +77,31 @@ INSTRUCTIONS = {
 """What each placement asks of the author."""
 
 
+def solved(trial: TrialResult) -> bool:
+    return trial.outcome is TrialOutcome.GRADED and trial.grade is not None and passed(trial.grade)
+
+
 def band_line(result: ValidationResult, band: BandRules) -> tuple[BandOutcome, str]:
-    """The placement of ``result``'s scored solver trials, and the line telling the author what it asks for."""
-    scored = [trial for trial in result.solver if not missing(trial)]
-    solved = sum(passed(trial.grade) for trial in scored if trial.grade is not None and trial.cause is None)
-    place = band.place(solved / len(scored))
-    return place, f"{solved} of {len(scored)} trials solved: {place}. {INSTRUCTIONS[place]}"
+    """The placement of ``result``'s graded and limited solver trials (``PLACED``), and the line telling the author
+    what it asks for."""
+    scored = [trial for trial in result.solver if trial.outcome in PLACED]
+    count = sum(map(solved, scored))
+    place = band.place(count / len(scored))
+    return place, f"{count} of {len(scored)} trials solved: {place}. {INSTRUCTIONS[place]}"
 
 
 def unscored(result: ValidationResult) -> tuple[str, ...]:
-    """How many solver slots of ``result`` had no score, when any did, and how many its placement went over."""
-    scored = sum(not missing(trial) for trial in result.solver)
-    absent = len(result.solver) - scored
-    return (f"{absent} of {len(result.solver)} solver trials have no score; placed over {scored}",) * bool(absent)
+    """How many solver trials of ``result`` were unscored, when any were, and how many its placement went over."""
+    absent = sum(trial.outcome is TrialOutcome.UNSCORED for trial in result.solver)
+    over = sum(trial.outcome in PLACED for trial in result.solver)
+    return (f"{absent} of {len(result.solver)} solver trials have no score; placed over {over}",) * bool(absent)
 
 
-def missing(trial: TrialResult) -> bool:
-    """A solver slot without a score (held, timed out or ungraded): never a failed trial, never a zero."""
-    cause = trial.cause or (Cause.NO_GRADE if trial.grade is None else None)
-    return cause not in (None, Cause.GENERATION_LIMIT) and CAUSE_DECISIONS.get(cause) not in (Modify, Reject)
+def limited(result: ValidationResult) -> tuple[str, ...]:
+    """How many solver trials of ``result`` an acceptance counts unsolved because they reached a limit, by limit."""
+    counts = Counter(trial.outcome for trial in result.solver if trial.outcome in LIMITS)
+    named = ", ".join(f"{count} {outcome}" for outcome, count in sorted(counts.items()))
+    return (f"Counted unsolved without a gradable answer: {named}",) * bool(counts)
 
 
 def tagged(band: BandOutcome) -> tuple[str, ...]:
@@ -123,8 +133,9 @@ def accepted(decision: Decision, workpiece: Workpiece) -> Decision:
         return decision
     result = workpiece.evidence[shipped(decision, workpiece)] if workpiece.evidence else None
     review = result.review if result is not None else None
-    if decision.restore and result is not None:
-        decision = replace(decision, reasons=(*decision.reasons, *unscored(result), *exhausted_notes(result)))
+    if result is not None:
+        restored = (*unscored(result), *exhausted_notes(result)) if decision.restore else ()
+        decision = replace(decision, reasons=(*decision.reasons, *restored, *limited(result)))
     missing = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, "no solve-review ran"),) if review is None else review.missing
     notes = () if review is None else review.findings
     why = "of the restored round recorded as notes" if decision.restore else "recorded as notes: no revision round left"
@@ -194,7 +205,7 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         ]
         retries = sum(isinstance(item, Retry) for item in workpiece.decisions)
         cause = next((cause for cause in retryable if CAUSE_DECISIONS.get(cause) is Retry), None)
-        held = sum(trial.cause is Cause.HELD for trial in result.solver) > budget.max_missing_trials  # never re-bought
+        held = sum(trial.cause in PARKED for trial in result.solver) > budget.max_missing_trials  # never re-bought
         if cause is not None and retries < budget.max_validation_retries and not held:
             return Retry(cause, retries + 1)
     left, stored, notes = workpiece.round < budget.max_modify_rounds, workpiece.fallback, exhausted_notes(result)
@@ -241,15 +252,16 @@ CONFIRMATION_FAILED = "Confirmation failed"
 
 def confirmation_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
     """The decision on a confirmation record, after the round's own assessment: a fault in the new trials (an invalid
-    task, a grader fault) or an exhausted trial budget is decided as validation decides it, so only valid scores and
-    generation limits are placed; unscored slots are named and excluded. The placement of the shipped submission over
-    every scored trial re-tags it.
+    task, a grader fault) or an exhausted trial budget is decided as validation decides it, so only graded trials and
+    limits are placed; unscored trials are named and excluded. The placement of the shipped submission over every
+    placed trial re-tags it.
 
     The final review's NEW revise findings, a fault or a placement the policy refuses (``band.accepted``) buy a
     revision outside the shared budget (``Revise``) while ``budget.final_revisions`` has one left; a finding an earlier
     review gave counts again only as a failed fix, after the author revised for it. With none left, revise findings are
-    notes, and a fault or a refused placement abandons the task. The acceptance ships the record's notes (every earlier
-    and new note its trials still support, each once) and its missing evidence, each item once: never a hold."""
+    notes, and a fault or a refused placement abandons the task. The acceptance
+    ships the record's notes (every earlier and new note its trials still support, each once) and its missing
+    evidence, each item once: never a hold."""
     result, pending = workpiece.evidence[-1], workpiece.decisions[-1]
     assert (
         isinstance(pending, Accept) and result.confirms is not None
@@ -271,14 +283,16 @@ def confirmation_review(workpiece: Workpiece, band: BandRules, budget: Budget) -
         return Revise((line,), fresh, notes=notes, placement=place)
     if place not in band.accepted:
         return refused_band(workpiece, budget, line, revise, asked)
-    reasons = (*tagged(place), f"Confirmation: {line.split('. ')[0]}", *unscored(result))
+    reasons = (*tagged(place), f"Confirmation: {line.split('. ')[0]}", *unscored(result), *limited(result))
     reasons += ("No final revision is left: the final review's revise findings are recorded as notes",) * bool(
         asked and not left
     )
-    absent = [trial.trial for trial in result.solver if missing(trial)]
+    absent = [trial.trial for trial in result.solver if trial.outcome is TrialOutcome.UNSCORED]
     found = (MissingEvidence(EvidenceKind.SOLVE_REVIEW, "no final review ran"),) if review is None else review.missing
     found += (MissingEvidence(EvidenceKind.CONFIRMATION_TRIALS, f"solver trials {absent} have no score"),) * bool(absent)
-    kept = tuple(reason for reason in pending.reasons if reason not in tagged(pending.band))
+    confirmed = workpiece.evidence[result.confirms]
+    counted = {*tagged(pending.band), *unscored(confirmed), *limited(confirmed)}
+    kept = tuple(reason for reason in pending.reasons if reason not in counted)  # this record counts them all again
     return Accept(place, (*reasons, *kept), missing=tuple(dict.fromkeys((*pending.missing, *found))), notes=result.notes)
 
 
@@ -324,14 +338,14 @@ def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decis
         return decision((f"Lowering failed: {result.lowering_error}",))
     if not result.solver or not result.controls:
         return Incomplete(("Required solver or control evidence is absent",))
-    scored = tuple(trial for trial in result.solver if not missing(trial))
+    scored = tuple(trial for trial in result.solver if trial.outcome is not TrialOutcome.UNSCORED)
     absent = len(result.solver) - len(scored)
     solver = scored if absent <= max_missing else result.solver
     trials = (*solver, *result.controls, *(f for a in result.adversary for f in a.findings))
     causes = Counter(
         t.cause or (Cause.NO_GRADE if t.grade is None else None)
         for t in trials
-        if not (isinstance(t, TrialResult) and t.cause is Cause.GENERATION_LIMIT)
+        if not (isinstance(t, TrialResult) and t.outcome in LIMITS)
     )
     unavailable = tuple(
         f"{count} ungraded trial(s): {cause}"

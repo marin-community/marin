@@ -229,6 +229,11 @@ class LoweringSettings:
     judge_model: str = ""
     decision_model: str = field(default="", metadata={"serialize": False})
     """``decision_model.model``, empty when disabled; replay keys carry it only where one is configured."""
+    judge_wait: float = field(default=0.0, metadata={"serialize": False})
+    """``provider.unavailable_wait`` plus a stall, within which a judge call succeeds or fails."""
+    decision_model_wait: float = field(default=0.0, metadata={"serialize": False})
+    """``decision_model.unavailable_wait``, after which a read raises its typed outage. Neither wait enters a replay
+    key here: each reaches the spec's ``verifier_timeout`` only for the grader it bounds."""
 
 
 def lowering_settings(policy: Policy) -> LoweringSettings:
@@ -236,7 +241,7 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
     limits = RolloutLimits(
         max_turns=None,
         max_total_tokens=None,
-        model_turn_timeout=policy.setting("solver.turn_timeout", float),
+        model_turn_timeout=None,  # the model client owns a turn: its time limit, stalls and availability window
         tool_turn_timeout=policy.setting("solver.tool_timeout", float),
         total_turn_timeout=None,
         attempt_timeout=policy.setting("solver.attempt_timeout", float),
@@ -248,7 +253,9 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
         raise ValueError("sandbox.memory_mb must be positive")
     settings = replace(GRADING_MACHINE, limits=MachineLimits(memory_mb=memory_mb, cpus=1))
     judge, decision_model = policy.setting("judge.model", str), policy.setting("decision_model.model", str)
-    return LoweringSettings(settings, settings, limits, judge, decision_model)
+    judge_wait = policy.setting("provider.unavailable_wait", float) + policy.setting("provider.stall_timeout", float)
+    wait = policy.setting("decision_model.unavailable_wait", float)
+    return LoweringSettings(settings, settings, limits, judge, decision_model, judge_wait, wait)
 
 
 def lower_with_settings(
@@ -283,8 +290,10 @@ def lower_with_settings(
             f"grader image must be {GRADER_BASE_IMAGE} or null for ShellSim; got {grader.docker_image}"
         )
     timeout = verifier_timeout(task.grader)
-    if judge is not None or decision_model is not None:  # the model's own availability window ends first
-        timeout = max(timeout, settings.limits.model_turn_timeout or 0)
+    if judge is not None:  # the judge call's own availability window ends first
+        timeout = max(timeout, settings.judge_wait)
+    if decision_model is not None:  # the read's typed outage, then the grade's finalisation
+        timeout += settings.decision_model_wait
     limits = settings.limits.model_copy(update={"verifier_timeout": timeout})
     return lower(
         task,

@@ -51,7 +51,7 @@ from taskforge.model.review import (
 )
 from taskforge.model.workpiece import Submission, Workpiece
 from taskforge.resources.bundle import Resources
-from taskforge.stages.rules import passed
+from taskforge.stages.rules import solved
 from taskforge.stages.summary import manifest
 
 
@@ -176,7 +176,7 @@ def evidence(
     sources = (*(trial_source(*pair) for pair in trials), *task_sources(submission))
     if len({source.name for source in sources}) != len(sources):
         raise ValueError("Two evidence sources share an address")
-    unpassed = frozenset(t.trial for t, _ in trials if t.grade is None or t.cause is not None or not passed(t.grade))
+    unpassed = frozenset(t.trial for t, _ in trials if not solved(t))
     return Evidence({source.name: source for source in sources}, unpassed, output_chars)
 
 
