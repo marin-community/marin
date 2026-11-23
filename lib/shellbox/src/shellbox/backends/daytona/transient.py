@@ -33,9 +33,14 @@ def is_ambiguous_daytona_error(error: DaytonaError) -> bool:
     return is_transient_daytona_error(error) or isinstance(error, DaytonaTimeoutError)
 
 
+def retry_backoff() -> ExponentialBackoff:
+    """The wait between repeats of a Daytona request: 0.5 s, doubling to 4 s, with jitter."""
+    return ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
+
+
 async def retry_transient[T](request: Callable[[], Awaitable[T]]) -> T:
     """Repeat a provider request that failed in transit. The request must be safe to run twice."""
-    backoff = ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
+    backoff = retry_backoff()
     for _ in range(TRANSIENT_RETRIES):
         try:
             return await request()

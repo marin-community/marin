@@ -21,7 +21,7 @@ from daytona import AsyncDaytonaV2Client, DaytonaConflictError, DaytonaError, Da
 from daytona.v2 import Image
 from rigging.timing import ExponentialBackoff
 
-from shellbox.backends.daytona.transient import is_ambiguous_daytona_error, retry_transient
+from shellbox.backends.daytona.transient import is_ambiguous_daytona_error, retry_backoff, retry_transient
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 
@@ -128,7 +128,7 @@ async def ensure_image(client: AsyncDaytonaV2Client, request: ImageRequest) -> s
     """
     name = request.name
     resubmitted = False
-    backoff = ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
+    backoff = retry_backoff()
     while True:
         try:
             image = await retry_transient(lambda: client.images.get(name))
