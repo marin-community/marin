@@ -225,11 +225,11 @@ class InferenceContext:
         self.batch_thread.start()
 
     def shutdown(self):
-        """Signal shutdown and wait for threads to finish"""
+        """Stop admission and wait for active generation before returning."""
         logger.info("Shutting down inference context.")
         self.shutdown_event.set()
-        self.inference_thread.join(timeout=1)
-        self.batch_thread.join(timeout=1)
+        self.inference_thread.join()
+        self.batch_thread.join()
 
     def unload(self):
         """Unload the inference model to free up resources."""
