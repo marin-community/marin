@@ -68,8 +68,8 @@ async def control_result(ctx: Context, spec: TaskRolloutSpec, index: int, contro
 
 
 async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int) -> TrialResult:
-    """One slot's ``SolverRollout``: a slot-local hold is recorded missing evidence; any other hold or restart
-    propagates."""
+    """One slot's ``SolverRollout``: a slot-local hold is recorded missing evidence, and a rollout that exhausts its
+    output budget twice is recorded as a submission failure; any other hold or restart propagates."""
     for retry in range(2):
         try:
             result = await ctx.emit(SolverRollout(spec, trial, attempt))
