@@ -186,12 +186,47 @@ def test_math_partial_reference_is_invalid_before_scoring(expected, math_type):
         grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "32")
 
 
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "\\text{No \u2013 the limit need not exist; the matrices can stay bounded\nbut fail to converge.}",
+        r"\text{one two three four five}",
+    ],
+)
 @pytest.mark.parametrize("math_type", [MathType.SCALAR, MathType.LIST])
-def test_math_prose_only_text_reference_or_list_member_is_invalid_before_scoring(math_type):
-    prose = "\\text{No \u2013 the limit need not exist; the matrices can stay bounded\nbut fail to converge.}"
+def test_math_prose_only_text_reference_or_list_member_is_invalid_before_scoring(prose, math_type):
     expected = prose if math_type is MathType.SCALAR else f"[1, {prose}]"
     with pytest.raises(InvalidTask, match="cannot parse expected"):
         grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "No")
+
+
+def test_math_escaped_dollar_reference_stays_parseable():
+    reference = r"\$32,\!348"
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference), "32,348").reward == 1.0
+
+
+@pytest.mark.parametrize("answer", ["B", "Evelyn", "Friday", "New York City Hall"])
+def test_math_short_text_reference_stays_parseable(answer):
+    assert grade_math.grade_math_candidate(MathSpec(expected=rf"\text{{{answer}}}"), answer).reward == 1.0
+
+
+@pytest.mark.parametrize("connector", ["and", "or"])
+def test_math_text_connector_does_not_invalidate_comma_separated_reference(connector):
+    spec = MathSpec(expected=rf"2, 3, \text{{ {connector} }} 4")
+    assert grade_math.grade_math_candidate(spec, "2, 3, 4").reward == 1.0
+
+
+def test_math_terminal_unit_power_stays_parseable():
+    spec = MathSpec(expected=r"15\mbox{ cm}^2")
+    assert grade_math.grade_math_candidate(spec, "15").reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "reference,candidate",
+    [("18", r"18 \text{ dollars}"), (r"35 \mathrm{~cm}", "35")],
+)
+def test_math_candidate_units_match_reference_policy(reference, candidate):
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference), candidate).reward == 1.0
 
 
 def test_math_symbolic_reference_preserves_unit_like_candidate_factor():

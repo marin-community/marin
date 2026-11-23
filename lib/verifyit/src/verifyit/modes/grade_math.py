@@ -102,38 +102,40 @@ def _parse_reference(text: str) -> tuple[list, bool]:
     from math_verify.utils import timeout  # noqa: PLC0415
 
     value = strip_math_delimiters(text)
-    text_group = re.search(r"\\(?:text|mbox)\{", value)
+    text_group = re.search(r"\\(?:text|mbox|mathrm)\{(?!\s*(?:and|or)\s*\})", value)
     strip_units = bool(text_group)
-    if "$" in value or any(delimiter in value for delimiter in (r"\(", r"\)", r"\[", r"\]")):
+    if re.search(r"(?<!\\)\$", value) or any(delimiter in value for delimiter in (r"\(", r"\)", r"\[", r"\]")):
         return [], strip_units
     if text_group:
-        # Unit normalization removes a terminal \text{} or \mbox{} suffix. It can
+        # Unit normalization removes a terminal text-group suffix. It can
         # also swallow any intervening expression up to the final closing brace.
         _, first_close = _scan_brackets(value[text_group.end() - 1 :])
-        if first_close is None or value[text_group.end() + first_close :].strip():
+        if first_close is None or value[text_group.end() + first_close :].strip() not in ("", "^2"):
             return [], strip_units
-        if text_group.start() == 0:
-            # A standalone text group has no math expression to compare.
+        group_contents = value[text_group.end() : text_group.end() + first_close - 1]
+        if text_group.start() == 0 and len(group_contents.split()) > 4:
+            # Long standalone text groups carry prose rather than a math answer.
             return [], strip_units
     latex = LatexExtractionConfig(boxed_match_priority=-1)
-    if not strip_units:
-        # The default unit normalizer also removes trailing variable names, such
-        # as the s in x - s. Keep those variables in reference expressions.
-        latex = replace(latex, normalization_config=replace(latex.normalization_config, units=False))
 
     # math-verify can match an inner math fragment or retry only the last equation.
     @timeout(_timeout())
-    def parse_whole() -> object:
+    def parse_whole() -> tuple[object, bool]:
         normalized = normalize_latex(value, config=latex.normalization_config)
-        return latex2sympy(
+        candidate_strip_units = strip_units or normalized == value
+        if not candidate_strip_units:
+            # Default unit normalization also removes trailing symbolic factors.
+            normalized = normalize_latex(value, config=replace(latex.normalization_config, units=False))
+        parsed = latex2sympy(
             normalized,
             is_real=not should_treat_as_complex(normalized),
             convert_degrees=False,
             normalization_config=None,
         )
+        return parsed, candidate_strip_units
 
     try:
-        parsed = parse_whole()
+        parsed, strip_units = parse_whole()
     except Exception as error:
         # latex2sympy reports syntax errors as bare Exception.
         raise InvalidTask(f"math-verify cannot parse expected {text!r}") from error
