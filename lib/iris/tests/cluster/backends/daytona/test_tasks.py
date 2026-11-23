@@ -82,6 +82,7 @@ class FakeSandbox:
         self.labels, self.resources = labels, resources
         self.files: dict[str, bytes] = {}
         self.unpacked: dict[str, bytes] = {}
+        self.modes: dict[str, int] = {}
         self.started = None
         self.execs: list = []
         self.fs = SimpleNamespace(write_bytes=self.files.__setitem__)
@@ -97,6 +98,7 @@ class FakeSandbox:
         (archive,) = self.files.values()
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
             for member in tar.getmembers():
+                self.modes["/" + member.name] = member.mode
                 if member.isfile():
                     self.unpacked["/" + member.name] = tar.extractfile(member).read()
         return SimpleNamespace(exit_code=0, output="")
@@ -258,6 +260,8 @@ def test_daytona_attempt_runs_in_one_sandbox_and_reports_its_exit(bundle, result
         "/app/config.json": b"{}",
         f"{SECRETS_DIR}/HF_TOKEN": b"hf-secret",
     }
+    # Only the task's user can read its secrets.
+    assert (sandbox.modes[str(SECRETS_DIR)], sandbox.modes[f"{SECRETS_DIR}/HF_TOKEN"]) == (0o700, 0o600)
     assert sandbox.started.argv[-1].endswith("exec python main.py")
     env = sandbox.started.env
     # Cluster defaults, then the job's own variables, then Iris's, as a Kubernetes pod receives them.

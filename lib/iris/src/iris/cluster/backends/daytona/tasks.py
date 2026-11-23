@@ -482,18 +482,21 @@ class DaytonaTaskProvider:
                 {name: self._bundles.get(digest) for name, digest in run_req.entrypoint.workdir_file_refs.items()},
             )
             secrets = secret_file_contents(task_secret_values(run_req.environment))
-            secrets_dir = root / str(SECRETS_DIR).lstrip("/")
-            if secrets:
-                secrets_dir.mkdir(parents=True, mode=0o700)
-                for name, value in secrets.items():
-                    (secrets_dir / name).write_text(value)
-                    (secrets_dir / name).chmod(0o600)
             archive = io.BytesIO()
             with tarfile.open(fileobj=archive, mode="w:gz") as tar:
                 # Name each tree, so that unpacking at / leaves the parent directories as they are.
                 tar.add(app, arcname=str(app.relative_to(root)))
                 if secrets:
-                    tar.add(secrets_dir, arcname=str(secrets_dir.relative_to(root)))
+                    # Secrets go from memory into the archive and never touch the controller's disk.
+                    secrets_dir = str(SECRETS_DIR).lstrip("/")
+                    directory = tarfile.TarInfo(secrets_dir)
+                    directory.type, directory.mode = tarfile.DIRTYPE, 0o700
+                    tar.addfile(directory)
+                    for name, value in secrets.items():
+                        data = value.encode()
+                        member = tarfile.TarInfo(f"{secrets_dir}/{name}")
+                        member.size, member.mode = len(data), 0o600
+                        tar.addfile(member, io.BytesIO(data))
         remote = f"/tmp/iris-workdir-{run_req.attempt_uid}.tar.gz"
         sandbox.fs.write_bytes(remote, archive.getvalue())
         unpacked = sandbox.process.run(argv=["sh", "-c", f"tar xzf {remote} -C / && rm -f {remote}"])
