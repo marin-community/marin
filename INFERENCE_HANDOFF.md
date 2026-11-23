@@ -13,6 +13,17 @@ sampling, and policy installation. See [native inference](lib/levanter/docs/desi
 | Router replay | Capture uses the optimized forward and keeps route rows alongside retained prefixes. The learner can validate the emitted positions, align routes against padded rows, move them during packing, and consume them in differentiable policy scoring. |
 | Fixed-input qualification | The benchmark compares learner scoring, prefill and cached decode with fixed weights and input tokens. Report numerical KL separately from the reference-KL penalty used in the RL objective. |
 
+The binary serving endpoint is `/v1/levanter/generate`: a versioned frame
+containing JSON metadata and safetensors tensors. It is separate from the
+learner's local pickle-protocol-5 IPC and the protobuf worker-pipe proofs.
+
+Penalty-free training is supported by disabling both `use_kl_loss` and
+`use_kl_in_reward`. The quick-loop bridge requires both off, supplies no
+reference scores, and uses zero KL weights. A zero coefficient alone does
+not remove the reference-actor requirement when a KL flag remains enabled.
+Numerical zero KL between training and serving is a separate qualification;
+the exact result below applies to the stated TPUv4 fixture.
+
 ## Benchmarks
 
 The pinned AgentX workload uses the 67B-A2B v0.1 revision, 64K context, 128
@@ -66,6 +77,13 @@ vLLM AgentX jobs use the existing regional 67B checkpoint mirror.
 · [Compiled vLLM AgentX](https://iris.oa.dev/#/job/%2Fdlwh%2Fsnowball-vllm-cw-gb200-c128-agentx-20261122)
 
 ## Distributed rollout and publication
+
+Current distributed publication copies JAX shards to host bytes, stages them
+as Torch GPU tensors, and uses the existing SkyRL expert-block/NCCL receivers.
+Native `reload` stages and atomically installs weights within one serving
+runtime. Distributed learner-to-native transport and coordinated replica
+installation/admission still need wiring and qualification, including transfer
+latency and staging-memory measurements.
 
 The SkyRL quick-loop recipe uses its vLLM engine group and expert-block
 NCCL publication. Run `2026.11.22.3` at `baa10702ae` completed one finite
