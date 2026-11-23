@@ -25,10 +25,11 @@ Muon and the loss weights are 0.1 CE and 0.9 total variation.
 
 Use a completed Snowball or Mochi SFT export with its tokenizer and chat
 template. A Hub export needs only `"source": "hf://org/model@<full commit>"`.
-Marin's model download step stages that commit in regional storage. A Marin
-export specifies the producer's artifact directory, the fingerprint in its
-`.artifact.json`, and the HF subdirectory. Mochi supports CPU preflight and
-data preparation. GPU training requires ShortConv qualification.
+Marin's model download step stages that commit in regional storage. For a
+Marin export, give the completed artifact's fixed-version directory and the
+HF subdirectory. The runner adopts the existing directory as a dependency.
+Mochi supports CPU preflight and data preparation. GPU training requires
+ShortConv qualification.
 
 Use a completed Marin artifact containing normalized chat Parquet shards
 under `train/` and `validation/`. The shards must provide `messages` and may
@@ -37,21 +38,17 @@ building that artifact.
 
 Save the recipe as JSON and put it in the same region as the inputs and
 Iris worker. For example, a recipe for four GPUs assigns two to the teacher
-and two to Speculators. Replace each URI and fingerprint with the
-corresponding value for the selected export or mixture.
+and two to Speculators. Use the storage paths for the selected export and
+mixture. Each Marin directory ends in its fixed version.
 
 ```json
 {
   "teacher": {
     "family": "snowball",
     "source": "s3://<regional-bucket>/<snowball-sft>/<version>",
-    "fingerprint": "<teacher-artifact-fingerprint>",
     "relative_path": "hf/step-<N>"
   },
-  "data": {
-    "directory": "s3://<regional-bucket>/<versioned-chat-mix>",
-    "fingerprint": "<mix-artifact-fingerprint>"
-  },
+  "data": "s3://<regional-bucket>/<chat-mix>/<version>",
   "max_steps": 100,
   "teacher_replicas": 2,
   "trainer_ranks": 2

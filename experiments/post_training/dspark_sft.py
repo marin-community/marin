@@ -12,9 +12,9 @@ from pathlib import Path
 
 import click
 import draccus
-from marin.execution.artifact import Artifact, is_mutable_version, read_record
+from marin.execution.artifact import is_mutable_version
 from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity, lower
-from marin.execution.step_runner import StepRunner, check_cache
+from marin.execution.step_runner import StepRunner
 from marin.training.drafting.dspark_data import (
     DraftDataConfig,
     GrugShape,
@@ -62,22 +62,13 @@ class CompletedSFT:
 
     family: TeacherFamily
     source: str
-    fingerprint: str | None = None
     relative_path: str = ""
-
-
-@dataclass(frozen=True)
-class TrainingMix:
-    """Versioned normalized Marin chat Parquet files in storage."""
-
-    directory: str
-    fingerprint: str
 
 
 @dataclass(frozen=True)
 class OfflineDSpark:
     teacher: CompletedSFT
-    data: TrainingMix
+    data: str
     max_steps: int
     teacher_replicas: int
     trainer_ranks: int
@@ -105,32 +96,14 @@ class OfflineDSpark:
         )
 
 
-def _completed_artifact(path: str, fingerprint: str) -> ArtifactStep:
-    if StoragePath(path).scheme not in ("gs", "s3") and not Path(path).is_absolute():
-        raise ValueError(f"Expected a gs:// or s3:// artifact root or an absolute local path, got {path}")
-    record = read_record(path)
-    if record is None or not check_cache(path):
-        raise ValueError(f"No completed Marin artifact at {path}")
-    if not record.name or not record.version or is_mutable_version(record.version):
-        raise ValueError(f"Expected a fixed-version producer at {path}")
-    if record.source is not None or record.fingerprint_payload is None:
-        raise ValueError(f"Use the completed producer's artifact directory at {path}")
-    if not fingerprint or record.fingerprint != fingerprint:
-        raise ValueError(f"Artifact fingerprint at {path} is {record.fingerprint}, expected {fingerprint}")
-    payload = json.loads(record.fingerprint_payload)
-
-    def missing_producer(_: object) -> None:
-        raise ValueError(f"The completed producer at {path} is no longer available")
-
-    return ArtifactStep(
-        name=record.name,
-        version=record.version,
-        artifact_type=Artifact,
-        build_config=lambda _: payload,
-        run=missing_producer,
-        override_path=path,
-        expected_fingerprint=fingerprint,
-    )
+def _adopt_input(source: str) -> ArtifactStep:
+    path = StoragePath(source)
+    if path.scheme not in ("gs", "s3") and not Path(source).is_absolute():
+        raise ValueError(f"Expected a gs:// or s3:// artifact root or an absolute local path, got {source}")
+    if is_mutable_version(path.name):
+        raise ValueError(f"Use a completed artifact from a fixed-version directory, got {source}")
+    name = "/".join(filter(None, ("dspark/inputs", path.scheme or "local", path.bucket, path.parent.key)))
+    return ArtifactStep.adopt(name, path.name, str(path))
 
 
 def _teacher_artifact(teacher: CompletedSFT) -> ArtifactStep:
@@ -141,19 +114,17 @@ def _teacher_artifact(teacher: CompletedSFT) -> ArtifactStep:
         if not re.fullmatch(r"[0-9a-f]{40}", revision) or repo.count("/") != 1:
             raise ValueError("Specify the Hub teacher as hf://org/model@<full commit>")
         return download_model(ModelConfig(hf_repo_id=repo, hf_revision=revision))
-    if teacher.fingerprint is None:
-        raise ValueError("Provide the producer fingerprint from the Marin teacher's .artifact.json")
-    return _completed_artifact(teacher.source, teacher.fingerprint)
+    return _adopt_input(teacher.source)
 
 
-def artifacts(config: OfflineDSpark) -> tuple[ArtifactStep, ArtifactStep[DSparkExport]]:
+def artifacts(
+    config: OfflineDSpark, *, teacher: ArtifactStep, mix: ArtifactStep
+) -> tuple[ArtifactStep, ArtifactStep[DSparkExport]]:
     """Bind the prepared dataset and published DSpark draft artifact."""
 
     require_supported_vllm_release()
     family = config.teacher.family.value
     recipe = config.training_recipe()
-    teacher = _teacher_artifact(config.teacher)
-    mix = _completed_artifact(config.data.directory, config.data.fingerprint)
     prepared = apply(
         f"dspark/data/{family}",
         prepare_data,
@@ -195,7 +166,7 @@ def main(config: str, stage: str) -> None:
     recipe = draccus.decode(OfflineDSpark, json.loads(StoragePath(config).read_text()))
     settings = recipe.training_recipe()
     prefix = marin_prefix()
-    mix_root = StoragePath(recipe.data.directory)
+    mix_root = StoragePath(recipe.data)
     if stage == "train":
         require_qualified_teacher(settings)
         locations = [mix_root, StoragePath(prefix)]
@@ -206,12 +177,13 @@ def main(config: str, stage: str) -> None:
                 raise click.UsageError(f"Iris training requires a shared gs:// or s3:// location, got {location}")
             if is_cross_region_url(str(location)):
                 raise click.UsageError(f"Iris training requires regional inputs and output, got {location}")
-    prepared, draft = artifacts(recipe)
+    teacher = _teacher_artifact(recipe.teacher)
+    mix = _adopt_input(recipe.data)
+    prepared, draft = artifacts(recipe, teacher=teacher, mix=mix)
     if stage == "preflight":
-        teacher = prepared.deps[0]
-        if not check_cache(teacher.path(prefix)):
-            raise click.UsageError("Run the prepare stage to stage the pinned Hub teacher in Marin storage")
         teacher_root = StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path
+        if recipe.teacher.source.startswith("hf://") and not teacher_root.isdir():
+            raise click.UsageError("Run the prepare stage to stage the pinned Hub teacher in Marin storage")
         decoder = inspect_teacher(teacher_root, settings.data)
         train, validation = inspect_mix(mix_root)
         click.echo(
