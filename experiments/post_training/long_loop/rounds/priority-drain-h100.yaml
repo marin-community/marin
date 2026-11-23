@@ -1,0 +1,111 @@
+context_budget:
+  request_window_tokens: 2048
+  max_new_tokens_per_turn: 256
+  max_turns: 1
+data:
+  kind: parquet
+  shuffle: true
+terminal_bench:
+  harbor: {}
+environment:
+  env_class: aime
+  task_sessions:
+    max_verifier_workers: 16
+    task_spec:
+      session:
+        max_turns: 1
+        model_turn_timeout: 900
+        total_turn_timeout: 900
+        attempt_timeout: 1200
+        verifier_timeout: 30
+trajectory_runner:
+  max_concurrent_tasks: 2
+  rollout_workers:
+    num_workers: 8
+    cpus_per_worker: 1
+    executor_threads: 16
+    progress_timeout_seconds: 2400
+trainer:
+  strategy: megatron
+  training_metrics: true
+  policy_train_spans: true
+  rollout_spans: true
+  flash_attn: false
+  use_sample_packing: false
+  gradient_checkpointing: false
+  algorithm:
+    advantage_estimator: grpo
+    policy_loss_type: regular
+    off_policy_correction: tis
+    use_kl_loss: false
+    use_kl_in_reward: false
+    rloo_n_filter_zero_reward_groups: false
+    group_admission:
+      stall_timeout: 1800
+  rollout_buffer:
+    eval_drain: priority
+    batch_policy: full_batch
+    max_staleness_steps: 64
+    max_in_flight: 4
+  policy:
+    optimizer_config:
+      optimizer: adam
+      lr: 1.0e-6
+      max_grad_norm: 1.0
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
+      checkpoint_plan_cache: false
+  epochs: 10
+  max_steps: 8
+  update_epochs_per_batch: 1
+  eval_batch_size: 1
+  eval_num_prompts: null
+  eval_before_train: false
+  eval_interval: 2
+  ckpt_interval: -1
+  resume_mode: none
+  logger: console
+  project_name: mochi-priority-drain-debug
+  dump_eval_results: true
+  callbacks:
+  - type: checkpoint
+    save_steps: -1
+    save_on_train_end: false
+  - type: evaluation
+    eval_steps: 2
+    eval_on_train_end: false
+    eval_before_train: false
+  - type: inference_stats
+    poll_interval_seconds: 5.0
+    log_every_steps: 1
+generator:
+  backend: vllm
+  model_dtype: bfloat16
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  weight_sync_transport: broadcast
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  max_num_batched_tokens: 2048
+  max_num_seqs: 4
+  gpu_memory_utilization: 0.7
+  enforce_eager: false
+  chat_template_kwargs:
+    enable_thinking: false
+  sampling_params:
+    temperature: 0.7
+    top_p: 1.0
+    min_tokens: 0
+    logprobs: 0
+  eval_sampling_params:
+    temperature: 0.7
+    top_p: 1.0
+    min_tokens: 256
+    logprobs: 0
+  eval_n_samples_per_prompt: 1
+  trajectory_reward_shaping:
+    enabled: false
