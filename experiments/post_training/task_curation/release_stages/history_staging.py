@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -30,7 +31,7 @@ from experiments.post_training.task_curation.release_stages.sizing import Histor
 from infra.marina.apps.rl_data_catalog.load import REVIEW_COMPLETENESS_VERSION, TABLE_COLUMNS, sql_column_names
 from infra.marina.apps.rl_data_catalog.parallel_history import retain_prior_assessments_parallel
 
-Query = Callable[[str, dict], dict]
+Query = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 DEFAULT_SERVICE_URL = "https://marina.oa.dev"
 DEFAULT_APPLET_ID = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
@@ -253,20 +254,19 @@ def run_history_staging(
     Returns the proof/receipt payload. In write mode, stages the load row, copies the
     prior history in parallel, verifies the copy, and writes the receipt artifact.
     """
-    inputs.validate()
-    control = RetryControl()
-    query = query if query is not None else open_paced_query(inputs.service_url, inputs.applet_id, control)
-    query_factory = (
-        query_factory
-        if query_factory is not None
-        else (lambda: open_paced_query(inputs.service_url, inputs.applet_id, control))
-    )
-    if sizing is None:
-        sizing = history_staging_sizing(_prior_item_total(query, inputs))
     alert_feeds = feeds if feeds is not None else (alerts.WATCHDOG_FEED,)
-
     alerts.stage_started(inputs.release_id, "history_staging", {"mode": "dry-run" if dry_run else "write"}, alert_feeds)
     try:
+        inputs.validate()
+        control = RetryControl()
+        query = query if query is not None else open_paced_query(inputs.service_url, inputs.applet_id, control)
+        query_factory = (
+            query_factory
+            if query_factory is not None
+            else (lambda: open_paced_query(inputs.service_url, inputs.applet_id, control))
+        )
+        if sizing is None:
+            sizing = history_staging_sizing(_prior_item_total(query, inputs))
         prior_state = read_prior_state(query, inputs)
         plan = plan_writes(prior_state, inputs, sizing)
         assert_plan_target(plan, inputs, prior_state)
