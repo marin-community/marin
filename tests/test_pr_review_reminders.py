@@ -12,6 +12,7 @@ def test_monday_digest_keeps_only_due_reviewers_and_active_internal_prs(monkeypa
     monday = datetime.fromisoformat("2026-11-23T18:00:00Z")
     pull = dict(
         number=10,
+        title="Fix <queue> & wakeups",
         draft=False,
         created_at=thursday,
         updated_at=friday,
@@ -34,6 +35,7 @@ def test_monday_digest_keeps_only_due_reviewers_and_active_internal_prs(monkeypa
 
     timeline = [
         event("review_requested", thursday, requested="early"),
+        event("commented", "2026-11-20T16:00:00Z", user="early"),
         event("review_requested", friday, requested="requested-again"),
         event("commented", friday, user="commenter"),
         event("reviewed", None, submitted_at=friday, user="reviewer"),
@@ -44,16 +46,17 @@ def test_monday_digest_keeps_only_due_reviewers_and_active_internal_prs(monkeypa
             return pulls
         return {
             "issues/10/timeline": timeline,
-            "pulls/10/comments?since=2026-11-20T18:00:00Z": [{"user": "inline"}],
+            "pulls/10/comments": [{"user": "inline", "updated_at": friday}],
             "pulls/10/commits": [{"user": "committer", "date": friday}],
         }[endpoint]
 
     monkeypatch.setattr(reminders, "records", read)
     monkeypatch.setattr(reminders, "has_write_access", lambda login: login == "member")
     (line,) = reminders.reminder_lines(monday)
-    link, *logins = line.split()
-    assert link == "<https://github.com/marin-community/marin/pull/10|#10>"
-    assert logins == ["early"]
+    assert "<https://github.com/marin-community/marin/pull/10|#10>" in line
+    assert "Fix &lt;queue&gt; &amp; wakeups" in line
+    assert "Updated 3d ago" in line
+    assert line.split("Waiting on ")[1] == "early (3d 2h)"
 
 
 def test_digest_splits_at_pr_boundaries_only_when_needed():

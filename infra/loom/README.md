@@ -360,8 +360,9 @@ runbook session that drains the queue only when events wait. Turning dispatch of
 Belay app's admin page pauses it without a Loom deploy.
 
 The [PR review reminder watch](watches/pr-review-reminders.md) runs at 10:00
-Pacific each weekday. Loom posts a digest to `#marin-alerts` with a PR link
-and the GitHub logins of its overdue individual reviewers. A request is due
+Pacific each weekday. Loom posts a digest to `#marin-eng`. Each entry links the PR, gives its title,
+and shows how long since its last update and how long each reviewer has been
+waiting. Ages show elapsed calendar time. A request is due
 when it predates the same time on the previous weekday and the reviewer has
 had no activity since then. A new request, discussion or inline comment,
 review, or commit by that reviewer restarts the clock. Weekends are excluded

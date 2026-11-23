@@ -9,6 +9,8 @@ import subprocess
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from functools import cache
+from html import escape
+from textwrap import shorten
 from zoneinfo import ZoneInfo
 
 REPO = "marin-community/marin"
@@ -53,9 +55,25 @@ def previous_weekday(now: datetime) -> datetime:
     return cutoff
 
 
-def due_reviewers(number: int, reviewers: list[str], cutoff: datetime) -> list[str]:
-    """Return reviewers with neither a new request nor PR activity at or after cutoff."""
-    waiting = set(reviewers)
+def elapsed(start: datetime, now: datetime) -> str:
+    hours = max(0, (now - start) // timedelta(hours=1))
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days}d {hours}h" if hours else f"{days}d"
+    return f"{hours}h" if hours else "under 1h"
+
+
+def due_reviewers(number: int, reviewers: list[str], cutoff: datetime, now: datetime) -> list[str]:
+    """Describe the wait since each outstanding request or subsequent reviewer activity."""
+    latest: dict[str, datetime | None] = dict.fromkeys(reviewers)
+    requested = set()
+
+    def record(login: str | None, timestamp: datetime) -> None:
+        if login is not None and login in latest:
+            previous = latest[login]
+            if previous is None or timestamp > previous:
+                latest[login] = timestamp
+
     timeline = records(
         f"issues/{number}/timeline",
         "{event, actor: .actor.login, user: .user.login, requested: .requested_reviewer.login,"
@@ -63,25 +81,32 @@ def due_reviewers(number: int, reviewers: list[str], cutoff: datetime) -> list[s
     )
     for event in timeline:
         timestamp = event["updated_at"] or event["submitted_at"] or event["created_at"]
-        if not timestamp or datetime.fromisoformat(timestamp) < cutoff:
+        if not timestamp:
             continue
+        when = datetime.fromisoformat(timestamp)
         if event["event"] == "review_requested":
-            waiting.discard(event["requested"])
-            waiting.discard(event["actor"])
+            requested.add(event["requested"])
+            record(event["requested"], when)
+            record(event["actor"], when)
         if event["event"] in {"commented", "reviewed"}:
-            waiting.discard(event["user"])
-        # A mention or assignment can be recorded in the recipient's name.
+            record(event["user"], when)
         if event["event"] in {"labeled", "unlabeled", "closed", "reopened", "merged"}:
-            waiting.discard(event["actor"])
-    if waiting:
-        since = cutoff.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        for comment in records(f"pulls/{number}/comments?since={since}", "{user: .user.login}"):
-            waiting.discard(comment["user"])
-    if waiting:
-        for commit in records(f"pulls/{number}/commits", "{user: .author.login, date: .commit.committer.date}"):
-            if datetime.fromisoformat(commit["date"]) >= cutoff:
-                waiting.discard(commit["user"])
-    return sorted(waiting, key=str.casefold)
+            record(event["actor"], when)
+    if all(when and when >= cutoff for when in latest.values()):
+        return []
+    for comment in records(f"pulls/{number}/comments", "{user: .user.login, updated_at}"):
+        record(comment["user"], datetime.fromisoformat(comment["updated_at"]))
+    for commit in records(f"pulls/{number}/commits", "{user: .author.login, date: .commit.committer.date}"):
+        record(commit["user"], datetime.fromisoformat(commit["date"]))
+
+    result = []
+    for login in sorted(latest, key=str.casefold):
+        when = latest[login]
+        if when is None or when < cutoff:
+            # Some current requests lack a timestamp in the timeline.
+            age = elapsed(when, now) if when is not None and login in requested else "request time unavailable"
+            result.append(f"{login} ({age})")
+    return result
 
 
 def reminder_lines(now: datetime) -> Iterable[str]:
@@ -89,20 +114,25 @@ def reminder_lines(now: datetime) -> Iterable[str]:
     stale = now - timedelta(days=7)
     pulls = records(
         "pulls?state=open&sort=updated&direction=desc",
-        "{number, draft, updated_at, created_at, author: .user.login, author_type: .user.type,"
+        "{number, title, draft, updated_at, created_at, author: .user.login, author_type: .user.type,"
         ' reviewers: [.requested_reviewers[] | select(.type == "User") | .login]}',
     )
     for pull in pulls:
-        if datetime.fromisoformat(pull["updated_at"]) < stale:
+        updated = datetime.fromisoformat(pull["updated_at"])
+        if updated < stale:
             break
         if pull["draft"] or not pull["reviewers"] or datetime.fromisoformat(pull["created_at"]) >= cutoff:
             continue
         if pull["author_type"] != "User" or not has_write_access(pull["author"]):
             continue
-        reviewers = due_reviewers(pull["number"], pull["reviewers"], cutoff)
+        reviewers = due_reviewers(pull["number"], pull["reviewers"], cutoff, now)
         if reviewers:
             number = pull["number"]
-            yield f"<https://github.com/{REPO}/pull/{number}|#{number}>  " + ", ".join(reviewers)
+            title = escape(shorten(pull["title"], width=110, placeholder="…"), quote=False)
+            yield (
+                f"• <https://github.com/{REPO}/pull/{number}|#{number}>  {title}\n"
+                f"    Updated {elapsed(updated, now)} ago · Waiting on {', '.join(reviewers)}"
+            )
 
 
 def messages(lines: Iterable[str]) -> list[str]:
