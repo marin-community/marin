@@ -35,7 +35,12 @@ class DaytonaConnection:
 
         def client() -> Any:
             from daytona import AsyncDaytona, DaytonaConfig  # noqa: PLC0415  # optional SDK, loaded at client creation
+            from daytona.v2 import _transport  # noqa: PLC0415  # optional SDK, loaded at client creation
 
+            # Over HTTP/2 the sandbox proxy stalls stdin writes to a process whose log the
+            # client follows on the same connection, which hangs the HTTP relay. The SDK
+            # enables HTTP/2 whenever h2 is importable and offers no setting, so turn it off.
+            _transport._HTTP2_AVAILABLE = False
             return AsyncDaytona(DaytonaConfig(api_key=api_key)).v2
 
         return client

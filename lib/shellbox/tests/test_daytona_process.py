@@ -297,6 +297,49 @@ def test_daytona_process_fails_an_incomplete_provider_stream_and_stops_child(ses
     asyncio.run(scenario())
 
 
+def test_daytona_process_drains_the_provider_stream_while_the_reader_is_idle(session_machine):
+    # The provider multiplexes the log stream with stdin writes on one HTTP/2 connection,
+    # so a stream that waits for the reader would stall the whole sandbox connection.
+    script = "import sys; sys.stdout.buffer.write(b'x' * (1 << 20))"
+
+    async def scenario():
+        machine, _ = session_machine
+        try:
+            session = await machine.open_process(Command((sys.executable, "-c", script)))
+            assert await asyncio.wait_for(session.wait(), 10) == 0
+            assert await output(session) == b"x" * (1 << 20)
+            await session.close()
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_daytona_process_fails_once_unread_output_exceeds_its_buffer(session_machine, monkeypatch):
+    monkeypatch.setattr("shellbox.backends.daytona.process.OUTPUT_BUFFER_BYTES", 4096)
+
+    async def scenario():
+        machine, api = session_machine
+        try:
+            session = await machine.open_process(
+                Command(
+                    (
+                        sys.executable,
+                        "-c",
+                        "import signal, sys; sys.stdout.write('x' * 65536); sys.stdout.flush(); signal.pause()",
+                    )
+                )
+            )
+            with pytest.raises(BufferError):
+                await asyncio.wait_for(session.wait(), 10)
+            await session.close()
+            assert all(child.returncode is not None for child in api.children)
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
 def test_daytona_http_capability_uses_one_persistent_provider_process(session_machine, unused_tcp_port):
     async def scenario():
         machine, api = session_machine
