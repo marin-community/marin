@@ -371,7 +371,7 @@ _TRAIN_MEDIUM_AGENTIC = replace(
 _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     replace(
         _TRAIN_LONG.with_updates(10),
-        revision="2026.11.20.1",
+        revision="2026.11.20.9",
         recipe=replace(
             _TRAIN_LONG.recipe,
             config=_TRAIN_LONG.recipe.config.merge(
