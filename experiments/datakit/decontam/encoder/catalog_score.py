@@ -9,6 +9,7 @@ take every ``--parts``-th file, so the parts can run as separate jobs.
 """
 
 import argparse
+import json
 import logging
 import tempfile
 import time
@@ -39,11 +40,11 @@ LATER_MODELS_FLOOR = 0.01
 
 
 def _prepared(
-    paths: list[str], output: str, texts: dict, tokenizer, max_length: int, pool: ThreadPoolExecutor
+    paths: list[str], scores_dir: str, texts: dict, tokenizer, max_length: int, pool: ThreadPoolExecutor
 ) -> tuple[list[str], pd.DataFrame, list]:
     """The pair files of *paths* that have no scores yet, their pairs with the pair text in file order, and the
     pairs' tokenized batches (row positions, encoding)."""
-    targets = [prefix_join(output, f"scores/{Path(path).name}") for path in paths]
+    targets = [prefix_join(scores_dir, Path(path).name) for path in paths]
     todo = [
         path for path, done in zip(paths, pool.map(lambda t: StoragePath(t).exists(), targets), strict=True) if not done
     ]
@@ -90,9 +91,16 @@ def main() -> None:
     parser.add_argument("--part", type=int, required=True)
     parser.add_argument("--parts", type=int, required=True)
     parser.add_argument("--max-length", type=int, default=1024)
+    parser.add_argument("--scores", help="where the scores go; default <output>/scores")
+    parser.add_argument("--files", help="JSON list of pair file names under <output>/pairs to score, in place of all")
     args = parser.parse_args()
     torch.backends.cuda.enable_cudnn_sdp(False)
-    files = parquet_files(prefix_join(args.output, "pairs"))[args.part :: args.parts]
+    scores_dir = args.scores or prefix_join(args.output, "scores")
+    if args.files:
+        names = json.loads(StoragePath(args.files).read_text())
+        files = [prefix_join(args.output, f"pairs/{name}") for name in names][args.part :: args.parts]
+    else:
+        files = parquet_files(prefix_join(args.output, "pairs"))[args.part :: args.parts]
     models, tokenizers = [], []
     for prefix in args.models:
         with tempfile.TemporaryDirectory() as directory:
@@ -107,7 +115,7 @@ def main() -> None:
         writes = []
 
         def submit(group):
-            return prepare.submit(_prepared, group, args.output, texts, tokenizers[0], args.max_length, io)
+            return prepare.submit(_prepared, group, scores_dir, texts, tokenizers[0], args.max_length, io)
 
         upcoming = submit(groups[0]) if groups else None
         for number in range(len(groups)):
@@ -122,7 +130,7 @@ def main() -> None:
                 frame[f"score_{model_number}"] = scores[:, model_number]
             frame["score"] = np.nanmean(scores, axis=1)
             for file_number, part in frame.groupby("file"):
-                target = prefix_join(args.output, f"scores/{Path(todo[file_number]).name}")
+                target = prefix_join(scores_dir, Path(todo[file_number]).name)
                 writes.append(io.submit(write_frame, part.drop(columns="file"), target))
             scored += len(frame)
         for write in writes:

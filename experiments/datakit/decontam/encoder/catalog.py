@@ -8,7 +8,7 @@ offset, and the item's question stream, so a scan can cut the excerpt around a h
 ``scan``: a Zephyr job over every shard of the sources (worker code in ``candidates.py``).
 Scores come from ``catalog_score.py`` (GPU), which writes ``scores/<shard>.parquet``.
 ``collect``: a record is removed when one of its pairs has a mean score at or above ``--cutoff``. Writes
-the removal list and counts per eval and per source.
+the removal list and counts per eval and per source next to the scores folder.
 """
 
 import argparse
@@ -91,16 +91,19 @@ def _removed_in(path: str, cutoff: float) -> tuple[int, pd.DataFrame]:
     return len(frame), best[best["score"] >= cutoff]
 
 
-def collect(output: str, cutoff: float) -> None:
+def collect(output: str, scores_dir: str, cutoff: float) -> None:
+    """The records whose best pair in *scores_dir* reaches *cutoff*, written to ``<scores_dir>-removed.parquet``, and
+    counts per eval and source in ``<scores_dir>-summary.json``."""
     with ThreadPoolExecutor(64) as pool:
         stats = list(
             pool.map(lambda path: json.loads(path.read_text()), StoragePath(prefix_join(output, "stats/*.json")).glob())
         )
-        scored = list(pool.map(lambda path: _removed_in(path, cutoff), parquet_files(prefix_join(output, "scores"))))
+        scored = list(pool.map(lambda path: _removed_in(path, cutoff), parquet_files(scores_dir)))
     shards = json.loads(StoragePath(prefix_join(output, "shards.json")).read_text())
     removed = pd.concat([part for _, part in scored], ignore_index=True)
     removed["source"] = removed["path"].str.split("/normalized/").str[1].str.split("/").str[0]
-    write_frame(removed, prefix_join(output, "removed.parquet"))
+    result = scores_dir.rstrip("/")
+    write_frame(removed, f"{result}-removed.parquet")
     totals: Counter = Counter()
     by_source: dict[str, Counter] = {}
     for row in stats:
@@ -125,7 +128,7 @@ def collect(output: str, cutoff: float) -> None:
         "removed_by_eval": removed["eval"].value_counts().to_dict(),
         "by_source": {source: dict(counts) for source, counts in sorted(by_source.items())},
     }
-    StoragePath(prefix_join(output, "summary.json")).write_text(json.dumps(summary, indent=1))
+    StoragePath(f"{result}-summary.json").write_text(json.dumps(summary, indent=1))
     logger.info(
         "collect: %d of %d shards; %d records removed of %d (%.4f%% of chars)",
         len(stats),
@@ -149,12 +152,16 @@ def main() -> None:
     parser.add_argument("--max-workers", type=int, default=1000, help="scan: Zephyr workers")
     parser.add_argument("--ram", default="16g", help="scan: memory per worker")
     parser.add_argument("--cutoff", type=float, help="collect: a record is removed at or above this mean score")
+    parser.add_argument(
+        "--scores",
+        help="collect: scores folder (default <output>/scores); writes <scores>-removed.parquet and -summary.json",
+    )
     parser.add_argument("--width", type=int, default=WINDOW)
     args = parser.parse_args()
     if args.step == "locate":
         locate(args.stage1, args.items, args.output, args.width)
     elif args.step == "collect":
-        collect(args.output, args.cutoff)
+        collect(args.output, args.scores or prefix_join(args.output, "scores"), args.cutoff)
     else:
         if args.files:
             files = json.loads(StoragePath(args.files).read_text())
