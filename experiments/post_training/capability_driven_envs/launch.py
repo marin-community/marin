@@ -13,6 +13,8 @@ import os
 import subprocess
 from collections.abc import Mapping
 
+from taskforge.gateway import add_gateway_flags
+
 BUCKETS = 4096
 """Passed to every driver as ``--buckets``; fixed across relaunches so that each proposal keeps its bucket."""
 SECRETS = ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_API_KEY", "PARALLEL_API_KEY")
@@ -33,9 +35,7 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-cluster", default="cw-rno2a")
     parser.add_argument("--ranks")
     parser.add_argument("--resume-held", action="store_true", help="Resume published held workpieces")
-    endpoint = parser.add_mutually_exclusive_group(required=True)
-    endpoint.add_argument("--glm-relay-job", help="The Iris relay job that resolves the GLM gateway")
-    endpoint.add_argument("--glm-base-url", help="A direct GLM gateway endpoint")
+    add_gateway_flags(parser)
     return parser
 
 

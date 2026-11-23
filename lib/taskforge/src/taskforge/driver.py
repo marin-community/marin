@@ -56,6 +56,7 @@ from taskforge.effects.issues import (
     UnsupportedFormat,
 )
 from taskforge.effects.log import EventLog, Status, fold
+from taskforge.gateway import add_gateway_flags
 from taskforge.llm.glm_provider import EndpointSource
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from taskforge.model.review import Incomplete
@@ -345,9 +346,7 @@ def cli() -> argparse.ArgumentParser:
         command.add_argument("--output", required=True)
         command.add_argument("--policy", required=True)
         command.add_argument("--work-dir", default="forge-work")
-        endpoint = command.add_mutually_exclusive_group(required=True)
-        endpoint.add_argument("--glm-base-url", help="A direct GLM gateway endpoint")
-        endpoint.add_argument("--glm-relay-job", help="The Iris relay job that resolves the GLM gateway")
+        add_gateway_flags(command)
         command.add_argument(
             "--resume-held",
             action="store_true",

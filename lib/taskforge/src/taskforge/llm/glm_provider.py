@@ -36,13 +36,12 @@ import openai
 from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types import CompletionUsage
 
+from taskforge.gateway import API_ROOT
 from taskforge.llm.client import RETRYABLE_STATUSES, AttemptFailed, AttemptOutcome, Progress, Provider, Segment
 from taskforge.model.llm import FinishReason, ToolCall, Usage, served
 
 logger = logging.getLogger(__name__)
 
-API_ROOT = "/v1"
-"""The path suffix of an OpenAI-compatible base URL. The router serves ``/health`` at the URL without it."""
 CONTEXT_OVERFLOW = re.compile(r"context length|maximum model length", re.IGNORECASE)
 CONTEXT_OVERFLOW_CODE = "context_length_exceeded"
 ERROR_BODY_LIMIT = 2000
