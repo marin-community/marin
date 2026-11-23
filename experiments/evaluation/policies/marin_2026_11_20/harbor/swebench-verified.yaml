@@ -33,6 +33,8 @@ retry:
   exclude_exceptions: []
 environment:
   type: daytona
+  kwargs:
+    image_build: declarative
 agents:
 - name: mini-swe-agent
   override_setup_timeout_sec: 360

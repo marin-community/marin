@@ -35,6 +35,8 @@ retry:
   exclude_exceptions: []
 environment:
   type: daytona
+  kwargs:
+    image_build: declarative
 agents:
 - name: terminus-2
   override_setup_timeout_sec: 360

@@ -33,6 +33,8 @@ retry:
   max_wait_sec: 60.0
 environment:
   type: daytona
+  kwargs:
+    image_build: declarative
 agents:
 - name: terminus-2
   override_setup_timeout_sec: 360
