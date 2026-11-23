@@ -2318,13 +2318,24 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   Changing only group order reproduced the other run's model and Adam
   hashes in both directions. The measured gradient norm was the same.
 
-  For bitwise restart equivalence in a future candidate, preserve the
-  selected groups and order the completed batch by persisted draw and
-  repetition before scoring and optimizer minibatch partitioning. Keep
-  generation and admission concurrent, and measure admission time where
-  the buffer admits groups. The sealed H100
-  comparison uses its originally prepared source, and live comparative
-  throughput and reward still need the completed native run.
+  A native driver candidate implements that ordering at batch assembly.
+  It sorts the completed selected groups by persisted draw ID, carrying
+  each group's row facts and existing repetition order together. The
+  sort runs after the admission window closes and counts toward batch
+  assembly time. Native Levanter uses the driver batch builder.
+
+  A stock CPU restart fixture kept two groups in flight with four
+  choices each. The fixture let both groups generate and grade before
+  committing them to the buffer in opposite orders at step 2. Both
+  learners received the same ordered scoring and training arrays and
+  the same replay frames after normalizing the actor-assigned numeric
+  request ID. The resumed learner matched the continuous run's step-2
+  model, optimizer, training key, step, averaging state and installed
+  policy. Under the same fixture, the previous source fed the learner
+  opposite group orders and produced different model and optimizer
+  hashes. This tests exact restart with the same selected groups.
+  The sealed H100 comparison uses its originally prepared source.
+  Live throughput and reward still require the completed native run.
 
   A separate offline rehearsal replayed the archived CPU checkpoints
   through stock retention. It reproduced the archived step-2 index bytes and joined the
