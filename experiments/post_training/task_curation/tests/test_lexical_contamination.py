@@ -17,6 +17,7 @@ from fray.types import ResourceConfig
 from marin.datakit.decon import AllSourceDropSets, NGramConfig, build_eval_bloom, decon_to_parquet
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
+from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -24,9 +25,11 @@ from taskcompendium.models import (
     NoGrader,
     PlainText,
     ResourceGroups,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
+    VerifierCommand,
 )
 from taskcompendium.runtime.resources import inline_resource
 from zephyr.context import ZephyrContext
@@ -359,8 +362,6 @@ def test_census_reads_every_partition_and_measures_empty_actor_environments(tmp_
 
 
 def test_contract_census_separates_native_families_and_required_shared_missing():
-    from taskcompendium.models import ScriptGrader  # noqa: PLC0415
-
     environment = EnvironmentRequirements(
         command_semantics="linux_process",
         docker_image="example/image@sha256:" + "0" * 64,
@@ -385,3 +386,24 @@ def test_contract_census_separates_native_families_and_required_shared_missing()
     assert {r["native_family"] for r in groups if r["present"]} == {"pytest", "shell"}
     assert sum(r["count"] for r in groups if not r["present"]) == 2
     assert counts.required_shared == 3 and counts.shared_missing == 1
+
+
+def test_contract_census_counts_root_delivery_as_shared_with_captured_file_grader():
+    task = lexical_task("root-delivery", "Edit the workspace", "private")
+    task["grader"] = ScriptGrader(
+        argv=("true",),
+        environment=EnvironmentRequirements(
+            command_semantics="linux_process", docker_image="example/image@sha256:" + "0" * 64
+        ),
+        collect=(VerifierCommand(argv=("true",)),),
+    ).model_dump(mode="json")
+    task["integrity_contract"] = RootDeliveryContract(
+        dependency_state=SharedDependencyState.AGENT_MUTABLE,
+        agent_user=None,
+        verifier_files=(DeliveredVerifierFile(name="test.sh", mode=0o755, sha256="0" * 64),),
+    ).model_dump(mode="json")
+    census = ContractCensus()
+    census.observe(task)
+    assert census.required_shared == 1
+    assert census.shared_missing == 0
+    assert census.rows()[0]["id"] == "root-delivery"

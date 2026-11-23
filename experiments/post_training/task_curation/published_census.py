@@ -59,8 +59,13 @@ class ContractCensus:
     def observe(self, task: dict) -> None:
         self.task_count += 1
         contract = task.get("integrity_contract")
+        # Delivery contracts define their grading boundary; stripping them would
+        # misclassify their captured-file adapter as a separate grader.
+        assessment_packet = {**task, "integrity_contract": None}
+        if contract is not None and contract.get("id") in {"root-delivery", "multiswe-delivery"}:
+            assessment_packet = task
         shared = (
-            assess_grading_environment(TaskSpec.model_validate({**task, "integrity_contract": None})).required
+            assess_grading_environment(TaskSpec.model_validate(assessment_packet)).required
             is GradingEnvironmentMode.SHARED
         )
         self.required_shared += shared
