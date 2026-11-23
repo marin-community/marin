@@ -4,49 +4,52 @@
 """Hydrate a fresh environment and continue the author's saved conversation."""
 
 import json
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
+from taskforge.effects.events import Event
 from taskforge.effects.log import Billing
 from taskforge.harness.protocol import Tool
 from taskforge.harness.role import Files, Fresh, Visit, sitting
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
 from taskforge.lowering import lowering_settings, requirements
-from taskforge.model.controls import CONTROLS
+from taskforge.model.controls import CONTROL, CONTROLS
 from taskforge.model.proposal import render
 from taskforge.model.review import VALIDATION_RESULT, Modify, Revise
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
-from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
 
-# The TaskSpec and Control schemas the author is shown. Every author request embeds them, so they are pinned data: a
-# wording change in TaskCompendium cannot reprice recorded calls, and a new schema shape needs a new version.
-AUTHOR_REFERENCE = DEFAULTS_DIR / "author-reference-v1.json"
-# The decision-model grader kind, inserted into v1 only where a decision model is configured: without one, the author
-# keeps v1's bytes and recorded author calls replay.
-DECISION_MODEL_GRADER = DEFAULTS_DIR / "author-reference-v1-decision-model.json"
+
+@dataclass(frozen=True, slots=True)
+class AuthorReference(Event[str]):
+    """The TaskSpec and Control JSON schemas the author is shown, offering the decision-model grader kind only with
+    ``decision_model``. Every author request embeds the reference, so a root records it once and its later visits and
+    launches replay that text: a later wording change in TaskCompendium leaves its recorded author calls valid."""
+
+    kind = "schema.author_reference"
+    decision_model: bool
 
 
-def author_reference(decision_model: bool) -> str:
-    """The pinned reference in the compact form the system prompt embeds."""
-    reference = json.loads(AUTHOR_REFERENCE.read_text())
-    if decision_model:
-        task = reference["TaskSpec"]
-        task["$defs"]["DecisionModelGrader"] = json.loads(DECISION_MODEL_GRADER.read_text())
-        task["properties"]["grader"]["discriminator"]["mapping"]["decision_model"] = "#/$defs/DecisionModelGrader"
-        task["properties"]["grader"]["oneOf"].append({"$ref": "#/$defs/DecisionModelGrader"})
-    return json.dumps(reference, sort_keys=True, separators=(",", ":"))
+async def author_reference(event: AuthorReference) -> str:
+    """The installed schemas, in the compact form the system prompt embeds."""
+    task = TaskSpec.model_json_schema()
+    if not event.decision_model:
+        grader = task["properties"]["grader"]
+        del task["$defs"]["DecisionModelGrader"], grader["discriminator"]["mapping"]["decision_model"]
+        grader["oneOf"].remove({"$ref": "#/$defs/DecisionModelGrader"})
+    return json.dumps({"TaskSpec": task, "Control": CONTROL.json_schema()}, sort_keys=True, separators=(",", ":"))
 
 
-def system_prompt(policy: Policy) -> str:
-    """Render the author's system prompt around the pinned task and control reference."""
-    decision_model = bool(policy.setting("decision_model.model", str))
+def system_prompt(policy: Policy, reference: str) -> str:
+    """Render the author's system prompt around ``reference``, an ``AuthorReference`` result."""
+    decision_model = uses_decision_model(policy)
     environments = tuple(
         environment.model_dump(mode="json", include={"docker_image", "command_semantics"})
         for environment in (
@@ -59,7 +62,7 @@ def system_prompt(policy: Policy) -> str:
         "Python 3.12 Debian container" if image == GRADER_BASE_IMAGE else ("container" if image else "ShellSim")
     )
     return policy.prompt("author.system").render(
-        reference=author_reference(decision_model),
+        reference=reference,
         decision_model=f"\n\n{policy.prompt('author.decision_model').template}" if decision_model else "",
         environment=environment,
         author_image=image or "none (ShellSim)",
@@ -71,6 +74,10 @@ def system_prompt(policy: Policy) -> str:
             tuple(dict(value, capabilities=["shell"]) for value in environments), sort_keys=True
         ),
     )
+
+
+def uses_decision_model(policy: Policy) -> bool:
+    return bool(policy.setting("decision_model.model", str))
 
 
 def sandbox_limits(policy: Policy) -> str:
@@ -133,4 +140,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
     async with sitting(ctx, config.author, visit, resources) as session:
         if workpiece.session is not None:
             return await session(workpiece.session)
-        return await session(Fresh(system_prompt(policy), policy.prompt("author.user").render(proposal=proposal)))
+        reference = await ctx.emit(AuthorReference(uses_decision_model(policy)))
+        return await session(
+            Fresh(system_prompt(policy, reference), policy.prompt("author.user").render(proposal=proposal))
+        )

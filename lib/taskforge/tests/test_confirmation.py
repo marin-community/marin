@@ -22,6 +22,7 @@ from lib.taskforge.tests.fake_resources import resources as stage_resources
 from lib.taskforge.tests.proposal_fakes import sample_proposal
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeCommand, FakeInference
 from lib.taskforge.tests.stage_fakes import transcript
+from lib.taskforge.tests.test_author_reference import FIXTURE_WORDING, reword
 from lib.taskforge.tests.test_end_to_end import SETTINGS, Envs, call, plant_root, resources, script
 from lib.taskforge.tests.test_solve_review import SUBMISSION, TRIALS, lowered, recorded_task
 from lib.taskforge.tests.test_solver_batch import rejected
@@ -1252,6 +1253,7 @@ PAID = {
     ("inference.request", "judge"): 8,
     ("rollouts.solver_rollout", "confirmation"): 5,
     ("inference.request", "final_review"): 1,
+    ("schema.author_reference", "author"): 1,
 }
 """``billed_bundle``'s physical resolutions by kind and payer, sandbox commands and ids aside: they name none."""
 
@@ -1285,16 +1287,18 @@ async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
     clients = [live.inference, *live.role_inference.values()]
     assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
     assert payers(root, replayed=False) == PAID  # the cold rerun paid for nothing
-    replayed = payers(root, replayed=True)  # eighteen resolutions, none naming a payer
-    assert sum(replayed.values()) == 18 and {payer for _, payer in replayed} == {None}
+    replayed = payers(root, replayed=True)  # nineteen resolutions, none naming a payer
+    assert sum(replayed.values()) == 19 and {payer for _, payer in replayed} == {None}
     assert {payer for _, payer in payers(root, replayed=True)} == {None}
 
 
 async def test_a_format_9_root_charges_its_tokens_as_unattributed_and_replays_with_zero_calls(
-    proposal: TaskProposal, tmp_path: Path
+    proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Rows written before the payer was recorded name none, and their tokens are charged as unattributed; the root
-    resumes under the current reader, every request matching its recorded key."""
+    resumes under the current reader, every request matching its recorded key once the installed schemas carry the
+    wording its author was shown."""
+    reword(monkeypatch, FIXTURE_WORDING)
     root = plant_root(tmp_path / "root", FORMAT_9_ROOT)
     before = await report(str(root))
     assert charged(before) == {**dict.fromkeys(CHARGED, 0), "unattributed": 82160}

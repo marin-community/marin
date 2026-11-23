@@ -74,7 +74,7 @@ from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.env import WriteFiles
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.rollouts import SolverRollout
-from taskforge.stages.author import author
+from taskforge.stages.author import AuthorReference, author
 from taskforge.stages.classify import grade_cause, replayable_grade
 from taskforge.stages.review import review
 from taskforge.stages.rules import default_review, fallback_for
@@ -170,7 +170,7 @@ def unavailable_reference(_workpiece: Workpiece, _policy: Policy) -> tuple[TaskR
     ("failure", "rows"),
     [
         ("renderer", [ScopeEntered, ScopeExited]),
-        ("prompt", [ScopeEntered, WriteFiles, Resolved, ScopeExited]),
+        ("prompt", [ScopeEntered, WriteFiles, Resolved, AuthorReference, Resolved, ScopeExited]),
     ],
 )
 @pytest.mark.parametrize("revision", [False, True])

@@ -51,7 +51,7 @@ from taskforge.resources.decision_model import (
 )
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
-from taskforge.stages.author import author_reference, system_prompt
+from taskforge.stages.author import AuthorReference, author_reference, system_prompt, uses_decision_model
 from taskforge.stages.classify import grade_cause, replaced_refusals, replayable_grade
 from taskforge.stages.exits import Validated
 from taskforge.stages.validate import solver_batch, validate
@@ -436,10 +436,11 @@ async def test_without_a_decision_model_its_grader_is_returned_to_the_author_bef
     assert submit_gate(submission, settings=settings, factories={})[0].startswith("Decision-model grading is disabled")
 
 
-def test_the_author_schema_offers_the_decision_model_kind_only_where_one_is_configured() -> None:
-    assert "DecisionModelGrader" not in author_reference(False)
-    assert "DecisionModelGrader" in author_reference(True)
-    without, with_model = system_prompt(overlaid("")), system_prompt(overlaid())
+async def test_the_author_schema_offers_the_decision_model_kind_only_where_one_is_configured() -> None:
+    without, with_model = [
+        system_prompt(policy, await author_reference(AuthorReference(uses_decision_model(policy))))
+        for policy in (overlaid(""), overlaid())
+    ]
     assert "## Decision-model graders" not in without and "DecisionModelGrader" not in without
     assert "## Decision-model graders" in with_model and "DecisionModelGrader" in with_model
     assert digest(overlaid("")) != digest(overlaid())  # the stage completions record which mode ran

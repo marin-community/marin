@@ -435,5 +435,5 @@ async def test_a_format_8_root_resumes_its_recorded_slots_and_is_claimed_at_the_
     assert engine.started[0] == "arithmetic:4:1" and not {r for r in before.started if r != "arithmetic:4:1"} & set(
         engine.started
     )
-    assert published(destination).head.format == JOURNAL_FORMAT == 10
+    assert published(destination).head.format == JOURNAL_FORMAT == 11
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED

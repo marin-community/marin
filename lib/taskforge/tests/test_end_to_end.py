@@ -2097,14 +2097,13 @@ N4_JOURNAL = Path(__file__).parent / "fixtures" / "n4-held-drift.jsonl.gz"
 
 
 def rows(records: Sequence[Record]) -> list[Record]:
-    """Records without their wall times or payers: events and the envelopes that link sandbox rows. The fixtures
-    predate format 10, whose rows name the role that paid for each physical resolution."""
-    return [replace(record, wall_time=0.0, billed=None) for record in records]
+    """Records without their wall times: events, payers and the envelopes that link sandbox rows."""
+    return [replace(record, wall_time=0.0) for record in records]
 
 
-FIXTURE_CONFIG_DIGEST = "c2c325d70cb80fa73625a0c2b9745c52c33eea84250542b1d4013d4bd8e16f49"
-"""The policy digest the ``N3_JOURNAL`` and ``N4_JOURNAL`` fixtures recorded. The default policy has since gained the
-two adversary briefs, which changes only that digest in an author-only journal."""
+FIXTURE_CONFIG_DIGEST = "1797f796269d33067b1b26a1bbf934c262605ebaa992e42691d91cbe014f7384"
+"""The policy digest the ``N4_JOURNAL`` and ``N4_POLLS`` fixtures recorded. A later policy entry changes only that
+digest in an author-only journal."""
 
 
 def rebased(recorded: Sequence[Record], fresh: Sequence[Record]) -> list[Record]:
@@ -2935,9 +2934,9 @@ def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes
 
 
 def relabelled_inference() -> bytes:
-    """``N4_JOURNAL`` with its first inference resolution (row 9) relabelled REEXECUTE, as the review planted it."""
+    """``N4_JOURNAL`` with its first inference resolution (row 11) relabelled REEXECUTE, as the review planted it."""
     rows = [json.loads(line) for line in gzip.decompress(N4_JOURNAL.read_bytes()).splitlines()]
-    (fingerprint,) = rows[8]["event"]["payload"]["fingerprints"]
+    (fingerprint,) = rows[10]["event"]["payload"]["fingerprints"]
     assert fingerprint["resource"] == "inference" and fingerprint["replay"] == ReplayPolicy.CACHE
     fingerprint["replay"] = ReplayPolicy.REEXECUTE
     return b"".join(json.dumps(row).encode() + b"\n" for row in rows)

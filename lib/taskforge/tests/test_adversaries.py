@@ -15,6 +15,7 @@ import pytest
 from lib.taskforge.tests.fake_resources import resources as stage_resources
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeEnv, FakeInference
 from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments
+from lib.taskforge.tests.test_author_reference import FIXTURE_WORDING, described, references, reword
 from lib.taskforge.tests.test_end_to_end import (
     SETTINGS,
     Envs,
@@ -502,15 +503,21 @@ async def test_a_complete_policy_without_a_revision_budget_fails_at_wiring_and_i
 SINGLE_ADVERSARY = Path(__file__).parent / "fixtures" / "n7-single-adversary-held.jsonl.gz"
 
 
-async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: TaskProposal) -> None:
+async def test_a_single_adversary_policy_resumes_its_held_journal(
+    proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The fixture is the journal this revision (journal format 4) published for a driver launch of the ordinary author
     script under ``{"adversary.roster": ["adversary"]}``, held on the adversary's first model call. Regenerate it from
     that launch when a deliberate change to the prompts, tool schemas, event identities or envelopes invalidates it.
 
-    The single name keeps its strategy line through the ``adversary`` brief. Author turns, solver trials, control
-    grades and the adversary's hydration replay; only the adversary's model turns are new. Its solver fake recorded no
-    transcripts, so the solve-review is skipped without a call and the acceptance names that missing evidence."""
+    It records no author reference, so the resumed root generates one from the installed schemas; installed with the
+    wording its author was shown, its author turns replay. The single name keeps its strategy line through the
+    ``adversary`` brief. Author turns, solver trials, control grades and the adversary's hydration replay; only the
+    adversary's model turns are new. Its solver fake recorded no transcripts, so the solve-review is skipped without a
+    call and the acceptance names that missing evidence."""
+    reword(monkeypatch, FIXTURE_WORDING)
     recorded = decode(gzip.decompress(SINGLE_ADVERSARY.read_bytes()))
+    assert not references(recorded)
     served = [
         r.event.request
         for r in recorded
@@ -534,6 +541,7 @@ async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: Task
         MissingEvidence(EvidenceKind.TRANSCRIPTS, "solver trials [0, 1] have no complete transcript"),
     )
     assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.requests
+    assert [described(reference) for reference, _ in references(log.records)] == [FIXTURE_WORDING]
     assert executions(resumed) == (0, 0) and len(adversary.requests) == 2
     assert adversary.requests[0].conversation[1].content.startswith("Review strategy: adversary\n\n")
     was = next(r.event.config_digest for r in recorded if isinstance(r.event, StageCompleted))
