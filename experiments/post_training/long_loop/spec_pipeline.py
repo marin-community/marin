@@ -5,7 +5,6 @@
 
 import hashlib
 import json
-import math
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
@@ -28,7 +27,7 @@ from experiments.post_training.long_loop.archive_stage import archive_graph_run
 from experiments.post_training.long_loop.evaluation import TerminalPolicy
 from experiments.post_training.long_loop.execution_policy import COORDINATOR_TIMEOUT_SECONDS, STAGE_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.finalization import after_checkpoint, record_finalization
-from experiments.post_training.long_loop.rl import configured_rl_step
+from experiments.post_training.long_loop.rl import configured_rl_step, curriculum_validation_callbacks
 from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
 from experiments.post_training.long_loop.sft import HANDOFF_DIR, export_sft
@@ -290,11 +289,9 @@ def build_spec_graph(
         raise ValueError("The pool manifest's teacher routes differ from the recipe's declared source routes")
     rl_config["trainer"]["rollout_buffer"]["source_routes"] = rollout_source_routes(routes)
     if curriculum is not None:
-        for callback in rl_config["trainer"].get("callbacks", []):
-            if callback["type"] == "best_checkpoint":
-                callback["expected_tasks"] = curriculum.validation.size
-                callback["minimum_scored_tasks"] = math.ceil(0.9 * curriculum.validation.size)
-                callback["selection_eligibility"] = "covered"
+        rl_config["trainer"]["callbacks"] = curriculum_validation_callbacks(
+            rl_config["trainer"].get("callbacks", []), curriculum.validation
+        )
     rl_execution = stage_execution(rl["execution"], coordinator)
     budget = rl.get("wall_clock_budget")
     callbacks = rl_config["trainer"].get("callbacks", [])

@@ -73,6 +73,7 @@ from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_
 from experiments.post_training.long_loop.nvl72 import MochiProfile, build_run, validate_model_geometry
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
+from experiments.post_training.long_loop.rl import curriculum_validation_callbacks
 from experiments.post_training.long_loop.run_spec import FilePin, read_pin
 from experiments.post_training.long_loop.sft_epoch import MixtureEpochs, SftStopping, bind_sft_stopping
 from experiments.post_training.long_loop.shared_sft import native_sft_step, shared_sft_spec
@@ -667,6 +668,9 @@ def round_plan(
     recipe["trainer"]["callbacks"] = [
         callback for callback in recipe["trainer"]["callbacks"] if callback["type"] != "wall_time_budget"
     ]
+    recipe["trainer"]["callbacks"] = curriculum_validation_callbacks(
+        recipe["trainer"]["callbacks"], pools.curriculum.validation
+    )
     resolved["rl"] = {
         **rl,
         "name": f"{round_spec.slug}-rl",

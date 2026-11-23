@@ -14,6 +14,7 @@ from marin.experiment.cli import graph_handles
 from marin.rl.skyrl import ArtifactHfModel
 from rigging.filesystem.cluster_config import StoreType
 from rigging.filesystem.s3_compat import s3_credentials
+from rigging.secrets import get_secret
 
 from experiments.post_training.long_loop.exp5 import certified_sft_inputs, main
 from experiments.post_training.long_loop.run_spec import FilePin
@@ -101,6 +102,8 @@ def test_changed_certification_payload_refuses_model_adoption(certification, cha
 def test_exp5_rl_no_run_binds_its_published_pools_without_an_exp4_dependency(tmp_path):
     if s3_credentials(StoreType.COREWEAVE) is None:
         pytest.skip("CoreWeave credentials are required for the published Exp5 preflight")
+    if get_secret("WANDB_API_KEY") is None:
+        pytest.skip("The original W&B credential is required for strict RL composition")
     workspace = Path(__file__).resolve().parents[4]
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True).strip()
     result = CliRunner().invoke(

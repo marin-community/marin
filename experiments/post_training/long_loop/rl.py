@@ -3,12 +3,13 @@
 
 """Experiment-owned asynchronous GS8 RL recipe and artifact binding."""
 
+import math
 from dataclasses import replace
 
 import yaml
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.curriculum import RlCurriculum
+from marin.rl.curriculum import CurriculumValidation, RlCurriculum
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -26,6 +27,23 @@ from rigging.filesystem.storage_path import prefix_join
 from skyrlrecipe import RLEntrypoint
 
 from experiments.post_training.long_loop.stage_config import validate_stage_config
+
+
+def curriculum_validation_callbacks(callbacks: list[dict], validation: CurriculumValidation) -> list[dict]:
+    """Bind best-checkpoint selection to 90% coverage of the curriculum holdout."""
+    return [
+        (
+            {
+                **callback,
+                "expected_tasks": validation.size,
+                "minimum_scored_tasks": math.ceil(0.9 * validation.size),
+                "selection_eligibility": "covered",
+            }
+            if callback["type"] == "best_checkpoint"
+            else callback
+        )
+        for callback in callbacks
+    ]
 
 
 def configured_rl_step(
