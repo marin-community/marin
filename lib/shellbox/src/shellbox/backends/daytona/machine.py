@@ -26,14 +26,13 @@ from daytona import (
     DaytonaError,
     DaytonaNotFoundError,
     DaytonaRateLimitError,
-    DaytonaTimeoutError,
 )
 from daytona.v2 import DISABLED, AsyncSandbox, LifecyclePolicyOptions, LimitExceededError, NetworkPolicyInput, Resources
 from rigging.timing import ExponentialBackoff
 
 from shellbox.backends.daytona.images import ensure_image, image_request_for_spec
 from shellbox.backends.daytona.process import DaytonaProcessSession
-from shellbox.backends.daytona.transient import is_transient_daytona_error, retry_transient
+from shellbox.backends.daytona.transient import is_ambiguous_daytona_error, is_transient_daytona_error, retry_transient
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
@@ -178,8 +177,8 @@ async def _create_sandbox(
             await sleep(delay)
             continue
         except DaytonaError as error:
-            # A named create is idempotent, so a request whose response timed out is safe to repeat.
-            if not (is_transient_daytona_error(error) or isinstance(error, DaytonaTimeoutError)):
+            # A named create is idempotent, so a request whose answer was lost is safe to repeat.
+            if not is_ambiguous_daytona_error(error):
                 raise
             delay = backoff.next_interval()
             logger.warning("Retrying Daytona creation after %s: delay=%.3f", type(error).__name__, delay)
@@ -220,10 +219,11 @@ async def _delete_sandbox(client: AsyncDaytonaV2Client, name: str, created: list
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
             while True:
                 try:
-                    sandboxes = tuple(created) or await client.find_by_name(name)
-                    for sandbox in sandboxes:
+                    if not created:
+                        created.extend(await client.find_by_name(name))
+                    for sandbox in created:
                         await client.delete(sandbox, timeout=INTERRUPT_TIMEOUT)
-                    if sandboxes:
+                    if created:
                         return
                 except DaytonaNotFoundError:
                     return

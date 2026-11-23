@@ -21,7 +21,7 @@ from daytona import AsyncDaytonaV2Client, DaytonaConflictError, DaytonaError, Da
 from daytona.v2 import Image
 from rigging.timing import ExponentialBackoff
 
-from shellbox.backends.daytona.transient import is_transient_daytona_error, retry_transient
+from shellbox.backends.daytona.transient import is_ambiguous_daytona_error, retry_transient
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 
@@ -108,13 +108,13 @@ async def _submit(client: AsyncDaytonaV2Client, request: ImageRequest) -> None:
 async def _submit_and_read_back(
     client: AsyncDaytonaV2Client, request: ImageRequest, backoff: ExponentialBackoff
 ) -> None:
-    """Submit the image; a collision or a submission lost in transit is left for the next read by name."""
+    """Submit the image; a collision or a submission whose answer was lost is left for the next read by name."""
     try:
         await _submit(client, request)
     except DaytonaConflictError:
         pass
     except DaytonaError as error:
-        if not is_transient_daytona_error(error):
+        if not is_ambiguous_daytona_error(error):
             raise
         await sleep(backoff.next_interval())
 
