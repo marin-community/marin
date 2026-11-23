@@ -99,7 +99,7 @@ def test_fixed_schedule_public_forward_matches_oracle_and_decode(position: int, 
         jax.lax.bitcast_convert_type(jnp.zeros_like(decode[:, 1:]), jnp.uint32),
     )
     oracle = _dense_oracle(q[0, position], pages, page_indices[0], position, window)
-    assert jnp.allclose(full[0, position], oracle, atol=5e-3, rtol=5e-3)
+    np.testing.assert_allclose(np.asarray(full)[0, position], np.asarray(oracle), atol=5e-3, rtol=5e-3)
 
     permuted_indices = jnp.asarray([[1, 0], [3, 2], [5, 4], [7, 6]], dtype=jnp.int32)
     permuted_pages = materialize_contiguous_kv(keys, values, permuted_indices, spec=spec)
@@ -150,8 +150,9 @@ def test_fixed_schedule_public_forward_isolates_data_sharded_neighbor_changes() 
             changed_valid,
             spec=spec,
         )
-    assert jnp.array_equal(before[0], after[0])
-    assert not jnp.array_equal(before[1], after[1])
+    before_host, after_host = np.asarray(before), np.asarray(after)
+    np.testing.assert_array_equal(before_host[0], after_host[0])
+    assert not np.array_equal(before_host[1], after_host[1])
     assert before.sharding.spec == P("data", None, None, None)
 
 
@@ -242,15 +243,10 @@ def test_fixed_schedule_public_forward_empty_neighbor_preserves_target() -> None
             empty_valid,
             spec=spec,
         )
-    assert jnp.all(jnp.isfinite(empty_neighbor))
-    assert jnp.array_equal(
-        jax.lax.bitcast_convert_type(baseline[0], jnp.uint32),
-        jax.lax.bitcast_convert_type(empty_neighbor[0], jnp.uint32),
-    )
-    assert jnp.array_equal(
-        jax.lax.bitcast_convert_type(empty_neighbor[1], jnp.uint32),
-        jax.lax.bitcast_convert_type(jnp.zeros_like(empty_neighbor[1]), jnp.uint32),
-    )
+    before, after = np.asarray(baseline), np.asarray(empty_neighbor)
+    assert np.isfinite(after).all()
+    np.testing.assert_array_equal(before[0].view(np.uint32), after[0].view(np.uint32))
+    np.testing.assert_array_equal(after[1].view(np.uint32), np.zeros_like(after[1], dtype=np.uint32))
 
 
 @pytest.mark.parametrize("invalid_map", [[[3, 3]], [[4, 1]]])
@@ -361,4 +357,4 @@ def test_fixed_schedule_public_forward_poison_invalid_metadata() -> None:
             valid,
             spec=spec,
         )
-    assert jnp.all(jnp.isnan(output[0]))
+    assert np.isnan(np.asarray(output)[0]).all()
