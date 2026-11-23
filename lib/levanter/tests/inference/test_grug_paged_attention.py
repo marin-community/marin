@@ -110,3 +110,29 @@ def test_grug_tpu_paged_attention_matches_reference(runtime_scale, kv_heads):
     )
     expected = _dense_reference(args, 5, None, _SCALE)
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.tpu
+@pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
+def test_grug_tpu_paged_attention_fp32_64k():
+    # Zero scores make the output the mean of visible cache values. Reverse the
+    # page table so the expected logical positions differ from physical order.
+    num_pages, page_size, head_dim = 1024, 64, 128
+    num_queries = 129
+    context = num_pages * page_size
+    values = jnp.arange(context, dtype=jnp.float32).reshape(num_pages, page_size) / context
+    pages = jnp.zeros((num_pages, page_size, 2, head_dim), dtype=jnp.float32)
+    pages = pages.at[:, :, 1].set(values[::-1, :, None])
+    q = jnp.zeros((num_queries, 1, 4, head_dim), dtype=jnp.float32)
+    fn = jax.jit(partial(ragged_paged_attention, sm_scale=head_dim**-0.5, implementation="tpu"))
+    actual = fn(
+        q,
+        pages,
+        jnp.array([context], dtype=jnp.int32),
+        jnp.arange(num_pages - 1, -1, -1, dtype=jnp.int32)[None],
+        jnp.array([0, num_queries], dtype=jnp.int32),
+        jnp.asarray(1, dtype=jnp.int32),
+    )
+    last_visible = np.arange(context - num_queries, context, dtype=np.float32)
+    expected = np.broadcast_to((last_visible / (2 * context))[:, None, None, None], actual.shape)
+    np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)

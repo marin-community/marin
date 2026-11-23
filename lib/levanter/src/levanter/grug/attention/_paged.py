@@ -16,6 +16,8 @@ from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.paged_attention import tpu_paged_attention, tpu_paged_attention_available
 
 PagedAttentionImplementation = Literal["reference", "tpu"]
+_TPU_QUERIES_PER_BLOCK = 128
+_TPU_KV_PAGES_PER_BLOCK = 8
 
 
 def ragged_paged_attention(
@@ -164,6 +166,7 @@ def _reference_attention(
 def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap):
     # Keep both scores and softmax weights in FP32, including the AV contraction.
     with jax.default_matmul_precision("highest"):
+        # The upstream long-context tiles can exceed scoped VMEM with FP32 KV.
         output = tpu_paged_attention(
             q,
             kv_pages,
@@ -174,6 +177,8 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
             sm_scale=sm_scale,
             sliding_window=sliding_window,
             soft_cap=soft_cap,
+            num_queries_per_block=min(_TPU_QUERIES_PER_BLOCK, q.shape[0]),
+            num_kv_pages_per_block=min(_TPU_KV_PAGES_PER_BLOCK, page_indices.shape[1]),
         )
     valid = _query_metadata(q, kv_lens, cu_q_lens, num_seqs).valid
     return jnp.where(valid[:, None, None, None], output, 0)
