@@ -1391,6 +1391,7 @@ def test_snowball_fixed_projection_scores_and_differentiates():
         gate_grad = np.asarray(grad.transformer.blocks[0].attn.attn_gate)
         assert np.isfinite(gate_grad).all() and np.any(gate_grad != 0)
 
+
 @pytest.mark.tpu
 @pytest.mark.skipif(jax.default_backend() != "tpu", reason="requires TPU RMSNorm")
 def test_snowball_tpu_rmsnorm_matches_shared_reference():

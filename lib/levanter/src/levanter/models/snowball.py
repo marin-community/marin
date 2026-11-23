@@ -72,6 +72,7 @@ from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.rms_norm import Implementation as RmsNormImplementation
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm
+from levanter.kernels.pallas.xsa import xsa_forward
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.metrics import Metric, ReductionType
@@ -238,6 +239,7 @@ class SnowballConfig(HFCompatConfig):
     attention_implementation: Optional[GrugAttentionImplementation] = None
     projection_implementation: Literal["native", "fixed_schedule"] = "native"
     """Use fixed per-row dense projections in both learner and serving paths on TPUv4."""
+    replay_precision: Literal["standard", "zero_kl"] = "standard"
     shared_attention_implementation: Literal["native", "fixed_schedule"] = "native"
     """Use the bounded shared TPUv4 schedule for both paged attention and learner forward."""
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
@@ -280,6 +282,21 @@ class SnowballConfig(HFCompatConfig):
                 "pooled_transport_capacity_factor, which SnowballConfig does not set"
             )
         _ = self.inferred_head_dim
+
+    def with_zero_kl_replay(self) -> "SnowballConfig":
+        """Select shared TPUv4 arithmetic for the bounded four-slot replay fixture.
+
+        Use FP32 parameters and activations, BF16 serving KV, and highest native
+        matmul precision on both sides. Serving must return raw policy scores.
+        """
+        _validate_fixed_shared_attention_config(self)
+        return dataclasses.replace(
+            self,
+            replay_precision="zero_kl",
+            shared_attention_implementation="fixed_schedule",
+            projection_implementation="fixed_schedule",
+            moe_implementation="ring",
+        )
 
     @property
     def Embed(self) -> Axis:
@@ -418,6 +435,25 @@ def sigmoid_fp32(x: jax.Array) -> jax.Array:
     return jax.nn.sigmoid(x.astype(jnp.float32)).astype(x.dtype)
 
 
+def _replay_norm(cfg: SnowballConfig) -> RmsNormImplementation | None:
+    return "pallas_tpu" if cfg.replay_precision == "zero_kl" else None
+
+
+def _normalize_qk(x: jax.Array, cfg: SnowballConfig) -> jax.Array:
+    implementation = _replay_norm(cfg)
+    if implementation is None:
+        return rms_norm(x)
+    original_sharding = named_sharding_of(x)
+    if original_sharding is not None and not original_sharding.mesh.empty:
+        row_axes = next(iter(original_sharding.spec), None)
+        x = reshard(x, P(row_axes, None, None, None))
+    weight = jnp.ones((x.shape[-1],), dtype=jnp.float32)
+    output = batch_invariant_rms_norm(x, weight, _QK_RMS_NORM_EPS, implementation)
+    if original_sharding is not None and not original_sharding.mesh.empty:
+        return reshard(output, original_sharding)
+    return output
+
+
 class RMSNorm(eqx.Module):
     """Parametric RMS norm (eps = layer_norm_eps = 1e-5)."""
 
@@ -426,8 +462,8 @@ class RMSNorm(eqx.Module):
     implementation: RmsNormImplementation | None = eqx.field(static=True, default=None)
 
     @staticmethod
-    def init(dim: int, eps: float) -> "RMSNorm":
-        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
+    def init(dim: int, eps: float, implementation: RmsNormImplementation | None = None) -> "RMSNorm":
+        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps, implementation=implementation)
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
@@ -567,8 +603,8 @@ class SnowballAttention(eqx.Module):
         k = rearrange(project(self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(project(self.w_v), "... (m d) -> ... m d", d=head_dim)
 
-        q = rms_norm(q)
-        k = rms_norm(k)
+        q = _normalize_qk(q, self.cfg)
+        k = _normalize_qk(k, self.cfg)
         # Half-RoPE: rotary on the first half of head_dim only (second half is rope-free).
         if not disable_rope:
             half = head_dim // 2
@@ -580,17 +616,21 @@ class SnowballAttention(eqx.Module):
                 rope=self.cfg.rope,
                 position_ids=position_ids,
             )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+            q_tail, k_tail = q[..., half:], k[..., half:]
+            q = jnp.concatenate([_partition_match(q_rot, q_tail), q_tail], axis=-1)
+            k = jnp.concatenate([_partition_match(k_rot, k_tail), k_tail], axis=-1)
         return q * self.cfg.qk_mult, k, v
 
     def _project_output(self, x: jax.Array, attn_out: jax.Array, v: jax.Array) -> jax.Array:
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = _partition_match(aligned_v, attn_out)
         # Exclusive Self-Attention: subtract the component of y parallel to v, per head.
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        if self.cfg.replay_precision == "zero_kl":
+            attn_out = xsa_forward(attn_out, aligned_v, "pallas_tpu")
+        else:
+            dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: 2 * sigmoid(x @ attn_gate), one scalar per head.
         sigmoid = sigmoid_fp32 if self.cfg.fp32_activations else jax.nn.sigmoid
         if self.cfg.projection_implementation == "fixed_schedule":
@@ -1103,7 +1143,7 @@ class SnowballBlock(eqx.Module):
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballBlock":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         return SnowballBlock(
-            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, _replay_norm(cfg)),
             attn_gated_norm=GatedNorm.init(
                 cfg.hidden_dim,
                 cfg.initializer_std,
@@ -1112,7 +1152,7 @@ class SnowballBlock(eqx.Module):
                 projection_implementation=cfg.projection_implementation,
             ),
             attn=SnowballAttention.init(cfg, key=attn_key),
-            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, _replay_norm(cfg)),
             mlp_gated_norm=GatedNorm.init(
                 cfg.hidden_dim,
                 cfg.initializer_std,
@@ -1250,7 +1290,7 @@ class SnowballTransformer(eqx.Module):
         blocks = tuple(SnowballBlock.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return SnowballTransformer(
             token_embed=token_embed,
-            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, _replay_norm(cfg)),
             embed_gated_norm=GatedNorm.init(
                 cfg.hidden_dim,
                 cfg.initializer_std,
@@ -1260,7 +1300,7 @@ class SnowballTransformer(eqx.Module):
             ),
             output_proj=output_proj,
             blocks=blocks,
-            final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, _replay_norm(cfg)),
             final_gated_norm=GatedNorm.init(
                 cfg.hidden_dim,
                 cfg.initializer_std,
