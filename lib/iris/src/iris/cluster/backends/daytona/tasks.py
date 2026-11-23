@@ -248,7 +248,7 @@ class DaytonaTaskProvider:
         self._cluster_env = cluster_env
         self._attempts: dict[str, _Attempt] = {}
         self._lock = threading.Lock()
-        self._lock_release = threading.Lock()
+        self._release_lock = threading.Lock()
         self._launches = ThreadPoolExecutor(max_workers=config.launch_workers, thread_name_prefix="daytona-launch")
         # Deletions never queue behind launches.
         self._deletions = ThreadPoolExecutor(max_workers=config.launch_workers, thread_name_prefix="daytona-delete")
@@ -360,7 +360,7 @@ class DaytonaTaskProvider:
         Both the launch's done callback and ``_cancel`` call this; whichever sees
         a settled, cancelled launch first deletes the sandbox.
         """
-        with self._lock_release:
+        with self._release_lock:
             if attempt.released or not attempt.cancelled.is_set() or not attempt.launch.done():
                 return
             attempt.released = True

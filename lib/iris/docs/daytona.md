@@ -69,5 +69,7 @@ sandbox.
 - Child jobs, endpoints and task tokens need `controller_address` reachable from
   Daytona; with it empty, tasks run without controller access.
 - Egress allowlists are unavailable; sandboxes have internet access.
+- The cluster `name` must be unique in its Daytona project: a starting controller
+  deletes every sandbox named after its cluster.
 - Logs are copied by the controller, so a controller restart loses the running
   attempts.
