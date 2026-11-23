@@ -9,7 +9,7 @@ from tempfile import SpooledTemporaryFile
 from typing import Any
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.conversion import ConvertedRow, convert_record
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
@@ -29,27 +29,14 @@ from taskcompendium.pipeline.models import (
     SourceRecipe,
     TaskAudit,
 )
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.resources import resource_bytes, resource_inventory
 
 GROUP_MEMORY_BYTES = 1024 * 1024
 
 
 def task_resource_bytes(task: TaskSpec) -> int:
     """Decoded bytes across all roles and build contexts, counting each occurrence."""
-    resources = task.resources
-    environments = [task.environment_requirements]
-    if isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None:
-        environments.append(task.grader.environment)
-    build_files = tuple(
-        resource
-        for environment in environments
-        if environment.docker_build is not None
-        for resource in environment.docker_build.files
-    )
-    return sum(
-        len(resource_bytes(resource))
-        for resource in (*resources.all, *resources.worker, *resources.oracle, *resources.verifier, *build_files)
-    )
+    return sum(len(resource_bytes(resource)) for _, resource in resource_inventory(task))
 
 
 def _within_budget(task: TaskSpec, budget: int) -> TaskSpec | ImportRejection:
