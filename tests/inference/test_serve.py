@@ -1039,9 +1039,9 @@ def test_iris_serve_proxy_timeout_covers_broker_worker_and_lease(monkeypatch):
 
 
 def test_iris_serve_passes_tokenizer_to_the_served_model(monkeypatch):
-    """Object-store checkpoints carry no tokenizer files; the served model must accept a
-    separate tokenizer source so the backend resolves the tool chat template and vllm serve
-    receives --tokenizer/--tokenizer-revision instead of failing on the weights path."""
+    """Object-store checkpoints carry no tokenizer files: the iris subcommand must forward
+    an explicit tokenizer source and its revision into the served model config, so a
+    checkpoint export can be served with a tokenizer pinned elsewhere."""
     result, _client, services, _mint = _invoke_iris_serve(
         monkeypatch,
         "--tokenizer",
