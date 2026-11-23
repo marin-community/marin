@@ -22,16 +22,27 @@ from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
+    ArtifactHfModel,
     IrisSkyRLExecution,
-    ResolvedModelLocator,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
 )
+from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    PlainText,
+    Source,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+)
 
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision
@@ -67,23 +78,36 @@ class DebugData:
 
 
 def control_rows(split: str, count: int) -> list[dict]:
-    """Generate an arithmetic control cohort using the existing AIME task adapter."""
+    """Generate text-only arithmetic tasks with an in-process verifier."""
     return [
         {
-            "data_source": f"priority-drain-debug-{split}",
-            "prompt": [
-                {
-                    "role": "user",
-                    "content": (
-                        f"Problem {split}-{index}: Calculate {index + 1} + 7. "
-                        "Give a detailed explanation of at least 200 words, then give the answer as \\boxed{integer}."
+            "task_spec": (
+                TaskSpec(
+                    id=f"{split}-{index}",
+                    context=ConversationInput(
+                        events=(
+                            TextMessage(
+                                role="user",
+                                content=(
+                                    f"Problem {split}-{index}: Calculate {index + 1} + 7. "
+                                    "Give a detailed explanation of at least 200 words, "
+                                    "then give the answer as \\boxed{integer}."
+                                ),
+                            ),
+                        )
                     ),
-                }
-            ],
-            "env_class": "aime",
-            "reward_model": {"ground_truth": str(index + 8)},
-            "reward_spec": {"method": "rule", "ground_truth": str(index + 8)},
-            "extra_info": {"data_source": f"priority-drain-debug-{split}", "split": split, "index": index},
+                    environment_requirements=EnvironmentRequirements(),
+                    answer_type=AnswerType.TEXT,
+                    answer_format=PlainText(),
+                    grader=VerifyitGrader(mode="exact", parameters={"expected": [str(index + 8)], "substring": True}),
+                    source=Source(
+                        dataset=f"priority-drain-debug-{split}",
+                        revision=DATA_VERSION,
+                        row=str(index),
+                        importer_revision="1",
+                    ),
+                ).model_dump_json()
+            ),
         }
         for index in range(count)
     ]
@@ -119,10 +143,15 @@ def debug_run(drain: str, version: str) -> ArtifactStep:
             name=user_owned_name(f"long-loop/priority-drain-debug-{drain}"),
             version=version,
             config_yaml=yaml.safe_dump(recipe, sort_keys=False),
-            model=ResolvedModelLocator(
-                uri=MODEL_URI,
-                identity=MODEL_REVISION,
-                local_path="/tmp/marinskyrl/priority-debug-model",
+            model=ArtifactHfModel(
+                step=ArtifactStep.adopt(
+                    user_owned_name("long-loop/priority-drain-debug-model"),
+                    DATA_VERSION,
+                    source=MODEL_URI,
+                    kind=LevanterCheckpoint,
+                    config={"hf_revision": MODEL_REVISION, "config_sha256": MODEL_CONFIG_SHA256},
+                ),
+                relative_path="",
                 tokenizer_uri=MODEL,
                 tokenizer_revision=MODEL_REVISION,
             ),
