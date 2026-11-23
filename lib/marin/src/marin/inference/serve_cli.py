@@ -7,6 +7,7 @@ import contextlib
 import logging
 import time
 from pathlib import Path
+from typing import get_args
 
 import click
 
@@ -14,6 +15,7 @@ from marin.external_dependencies import VLLM_FORK_REQUIREMENT
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     LevanterEngineConfig,
+    LevanterServingProfile,
     ServedModelConfig,
     VllmEngineConfig,
     VllmLauncherType,
@@ -42,6 +44,7 @@ _LOCAL_LEVANTER_OPTIONS = {
     "max_seqs": "--max-seqs",
     "page_size": "--page-size",
     "hbm_utilization": "--hbm-utilization",
+    "levanter_profile": "--levanter-profile",
 }
 
 
@@ -87,6 +90,7 @@ def main() -> None:
 @click.option("--max-seqs", type=int, default=16)
 @click.option("--page-size", type=int, default=128)
 @click.option("--hbm-utilization", type=float, default=0.8)
+@click.option("--levanter-profile", type=click.Choice(get_args(LevanterServingProfile)), default="standard")
 def local(
     model: str,
     backend: str,
@@ -110,6 +114,7 @@ def local(
     max_seqs: int,
     page_size: int,
     hbm_utilization: float,
+    levanter_profile: LevanterServingProfile,
 ) -> None:
     """Start one inference server on the current host."""
 
@@ -159,6 +164,7 @@ def local(
             max_seqs=max_seqs,
             page_size=page_size,
             hbm_utilization=hbm_utilization,
+            profile=levanter_profile,
         )
     if backend == "vllm" and launcher_type is VllmLauncherType.TPU:
         click.echo(f"Using pinned TPU vLLM {VLLM_FORK_REQUIREMENT}")

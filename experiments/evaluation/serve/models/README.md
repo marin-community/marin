@@ -202,3 +202,23 @@ This gives four tasks, four local ranks per task and 16 router targets. Omitted 
 geometry; explicit TP must match. Multi-task or routed geometry requires `instances=1`, `broker=None`.
 `ServedModelConfig.object_store_load_mode` defaults to `STREAM`, which multi-task GPU serving requires.
 Single-task serving also supports local weight staging.
+
+### Native Snowball on v5p
+
+Select the 64K Snowball profile on a single v5p-8. Set the number of
+concurrent generation slots explicitly for the workload.
+
+```bash
+uv run marin-serve iris open-athena/Marin-Snowball-67B-A2B-v0.1 \
+  --cluster marin --backend levanter --tpu v5p-8 --timeout-hours 1 \
+  --levanter-profile snowball_agentx_v5p --max-seqs 128
+```
+
+On an allocated v5p-8 host, use `marin-serve local` with the same backend,
+profile, and slot count. Set `LIBTPU_INIT_ARGS` to
+`--xla_tpu_scoped_vmem_limit_kib=50000 --xla_tpu_use_enhanced_launch_barrier=true`
+before launch. Iris sets those flags in the worker environment. The profile uses BF16 weights, four expert shards,
+and raw policy log probabilities. Streaming chat callers can request
+`return_route_captures` to receive a binary generation frame in the final
+choice event. Token-ID clients can request the same frame through
+`POST /v1/levanter/generate`.
