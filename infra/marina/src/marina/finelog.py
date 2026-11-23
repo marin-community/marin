@@ -10,7 +10,6 @@ once if the client invalidates its transport underneath them.
 
 import logging
 import math
-import os
 import threading
 import time
 from collections.abc import Callable
@@ -20,9 +19,10 @@ from typing import Any
 from connectrpc.errors import ConnectError
 from finelog.client import LogClient
 from finelog.types import is_retryable_error
-from marina.discovery import resolve_internal_ip
 from rigging.connect import IapAuth
 from rigging.credentials import iap_provider_for
+
+from marina.discovery import resolve_internal_ip
 
 logger = logging.getLogger(__name__)
 

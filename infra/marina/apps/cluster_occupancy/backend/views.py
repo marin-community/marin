@@ -8,7 +8,6 @@ and history identically, and both order it the same way.
 """
 
 from dataclasses import dataclass
-from typing import Any
 
 # CoreWeave stamps the rack (NVLink domain) into each attempt's topology JSON.
 RACK_JSON_KEY = "ds.coreweave.com/nvlink.domain"
