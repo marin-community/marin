@@ -13,7 +13,6 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.model.review import (
     LIMITS,
-    PARKED,
     PLACED,
     Abandon,
     Accept,
@@ -211,7 +210,7 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         retryable = map(decision_cause, (*result.solver, *result.controls))
         retries = sum(isinstance(item, Retry) for item in workpiece.decisions)
         cause = next((cause for cause in retryable if CAUSE_DECISIONS.get(cause) is Retry), None)
-        held = sum(trial.cause in PARKED for trial in result.solver) > budget.max_missing_trials  # never re-bought
+        held = sum(trial.cause is Cause.HELD for trial in result.solver) > budget.max_missing_trials  # never re-bought
         if cause is not None and retries < budget.max_validation_retries and not held:
             return Retry(cause, retries + 1)
     left, stored, notes = workpiece.round < budget.max_modify_rounds, workpiece.fallback, exhausted_notes(result)

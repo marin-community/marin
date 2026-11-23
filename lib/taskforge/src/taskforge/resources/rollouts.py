@@ -79,12 +79,7 @@ LIMIT_STOP_REASONS = frozenset({LENGTH_STOP_REASON, TIME_LIMIT_STOP_REASON, "con
 """The stop reasons of a generation that reached a limit: an unsolved trial whatever its grade says."""
 
 
-class AttemptCapReached(Hold):
-    """The slot's attempt ran out ``solver.attempt_timeout``, an operational cap: no evidence about the task or the
-    model, and buying the slot again at once would spend the cap again."""
-
-
-SLOT_LOCAL: tuple[type[Hold], ...] = (RequestRejected, AttemptCapReached)
+SLOT_LOCAL: tuple[type[Hold], ...] = (RequestRejected,)
 """The holds that mean only "this slot produced no evidence": the batch records them as the slot's result. Every
 other hold (``Unreproducible``, host refusals, anything unknown) holds the workpiece. ``DecisionModelUnavailable`` is
 deliberately absent: a recorded result would be missing evidence, while an outage defers the slot unrecorded."""
@@ -113,7 +108,7 @@ def interruption(error: RolloutInterrupted) -> Transient | Restart | Hold:
         return any(isinstance(cause, kinds) for cause in chain)
 
     if error.operation is RolloutOperation.ATTEMPT:  # only the expired attempt deadline reports it
-        return AttemptCapReached(message)
+        return Restart(message)
     if outage := next((cause for cause in chain if isinstance(cause, DecisionModelUnavailable)), None):
         return DecisionModelUnavailable(str(outage))  # a fresh hold: chaining the original would make a cycle
     if rejected := next((cause for cause in chain if isinstance(cause, ModelRequestRejected)), None):

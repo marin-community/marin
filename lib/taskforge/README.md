@@ -31,7 +31,7 @@ This file covers how to run it.
 author → submit → validate → review → confirm → review. On *modify*, a new author conversation starts,
 seeded with the findings and the previous submission's files; on *retry*, the same submission is validated
 again with a fresh cohort of solver trials under the new round's attempt; the retried round's trials stay in its
-own record. A limited or capped slot is never bought again when the same visit or cohort is replayed, but a retry's
+own record. A limited slot is never bought again when the same visit or cohort is replayed, but a retry's
 fresh cohort buys every slot of the new round, that one's included. A limit never causes a retry. On *accept*, the confirmation step runs before the acceptance is final (see **Confirmation** below).
 
 On every author entry, including revision rounds, the workspace holds the proposal, the previous
@@ -141,8 +141,7 @@ lists it as `skipped unsupported_format <root>/journal.json has journal format N
 rest. Formats 8 to 13 differ: their rows decode at format 14, so `report` reads them, but the driver refuses
 to claim a running or held root of those formats, exiting 4 with its head untouched and naming the writer of its
 format or a fresh output prefix as the way on. Format 14 records a solver generation still running at
-`solver.time_limit` as stopped at the time limit (`time_limit`), and a slot that reached `solver.attempt_timeout` as
-`attempt_cap`, which a format-13 reader cannot decode; format 13 recorded it as a generation limit, under another
+`solver.time_limit` as stopped at the time limit (`time_limit`), which a format-13 reader cannot decode; format 13 recorded it as a generation limit, under another
 solver clock. Format 13 commits reviewed visits (above), which a format-12 root lacks, so its resumed rounds would
 decide again on re-observed evidence. Format 12 words two author requests otherwise: a final revision's request ends
 with its ordinal, and a too-easy placement's line no longer calls the round the one hardening attempt, so a resumed
@@ -425,7 +424,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   trial's outcome (`TrialResult.outcome`, read from its recorded cause and grade) is one of `graded` (a reward,
   a submission failure scoring zero), `generation_limit` (it ran out of context or output), `time_limit` (still
   generating at `solver.time_limit`), `budget_exhausted` (a configured turn budget spent: `max_turns`),
-  `faulted` (a grader or task fault, a finding) or `unscored` (held, capped at `solver.attempt_timeout`, ungraded,
+  `faulted` (a grader or task fault, a finding) or `unscored` (held, ungraded,
   grader infrastructure; its cause says which). Graded
   trials and limits, and only they, are placed: a limit is an unsolved trial whatever its grade says (a grader failure
   on its partial output, returned or raised at the verifier's deadline, is kept in its grade, never holds validation
@@ -468,21 +467,20 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   the engine's model-turn wall from before admission) bounds one solver generation, from its first generated token:
   a generation still running past it is cut, and the trial is recorded at the time limit (`time_limit`): unsolved,
   never retried. The engine has no model-turn wall: the model client owns a turn, its time limit, stalls and
-  availability window. `solver.attempt_timeout` (8400 s; the run refuses one that is not greater than `solver.time_limit`) is a spending cap on one
-  physical attempt, machine preparation and grading included: an attempt that reaches it is recorded as a parked
-  slot (`attempt_cap`, unscored, its prefix and failure record kept), counted against `budget.max_missing_trials` as
-  a held slot is, and never bought again when its visit or cohort is replayed (a validation retry's fresh cohort
-  buys the new round's slots). It is a policy choice, not a bound on healthy
-  recovery: two availability waits around a long cut stream can exceed it, and an operator who wants such recoveries
-  sets a larger cap. A judge grade's deadline is its normal minimum or `provider.unavailable_wait` plus
+  availability window. `solver.attempt_timeout` (8400 s; the run refuses one that is not greater than `solver.time_limit`) is a watchdog on
+  one physical attempt, machine preparation and grading included. Once the time limit is proven, an attempt it stops
+  is still the settled unsolved trial. An attempt it stops before that restarts the stage within the existing restart
+  bound (`STAGE_REPLAY_ATTEMPTS`, three attempts in all), after which the slot is held: at the default cap that can
+  spend about seven hours of solver time on one slot. Two availability waits around a long cut stream can reach it,
+  and an operator who wants such recoveries sets a larger cap. A judge grade's deadline is its normal minimum or `provider.unavailable_wait` plus
   `provider.stall_timeout`, whichever is larger; a decision-model grade's is its normal minimum plus
   `decision_model.unavailable_wait`, so its typed outage comes first. Neither depends on the solver settings.
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
   `provider.backoff_*`), `provider.stall_timeout`, `provider.max_connections`. The run refuses a
   `solver.time_limit` that is not positive and finite, and a `solver.attempt_timeout` that is not finite and
   greater than it. That is a configuration check, not a promise about which clock wins: the cap should leave room
-  above the time limit for machine preparation, tool turns and grading, and a cap close to the limit can park a trial
-  (`attempt_cap`, unscored) that the limit would have failed.
+  above the time limit for machine preparation, tool turns and grading, and a cap close to the limit can interrupt
+  a trial the limit would have failed, which then restarts as above.
 - **Tools**: `tools.output_chars` (at least 240); longer output is saved to `.tool-output/<digest>.txt` in
   the workspace and the model gets the head plus the path, or, for a session without a machine, is clipped.
 

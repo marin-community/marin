@@ -434,7 +434,7 @@ def test_a_time_limit_that_bounds_nothing_or_outlasts_the_attempt_cap_is_rejecte
 
 
 # Regression: at an equal cap and time limit the attempt cap fired first, so a time-limited trial was recorded as an
-# unscored attempt_cap and the task held instead of counting the trial unsolved.
+# unscored cap and the task held instead of counting the trial unsolved.
 def test_a_time_limit_equal_to_the_attempt_cap_is_rejected() -> None:
     with pytest.raises(ValueError, match=r"solver\.attempt_timeout must be finite and greater than solver\.time_limit"):
         stock(8400.0)
@@ -481,33 +481,31 @@ def cut_after(time: LoopTime, seconds: float) -> Act:
     return act
 
 
-# Regression: two availability windows around a cut stream, then a long last stream. The stock cap parks the slot
-# as missing evidence, never a time limit and never bought again at once; an explicit larger cap lets the client decide.
+# Regression: two availability windows around a cut stream, then a long last stream. The stock watchdog stops the
+# attempt before any limit is proven, which restarts the stage; an explicit larger cap lets the client decide.
 @pytest.mark.parametrize(
     ("last", "cap", "cause", "outcome"),
     [
-        (3000, 8400.0, Cause.ATTEMPT_CAP, TrialOutcome.UNSCORED),
-        (5000, 8400.0, Cause.ATTEMPT_CAP, TrialOutcome.UNSCORED),
+        (3000, 8400.0, None, None),
+        (5000, 8400.0, None, None),
         (3000, 20000.0, None, TrialOutcome.GRADED),
         (5000, 20000.0, Cause.TIME_LIMIT, TrialOutcome.TIME_LIMIT),
     ],
     ids=["answers-capped", "past-limit-capped", "answers-larger-cap", "past-limit-larger-cap"],
 )
-async def test_a_slot_past_its_attempt_cap_is_parked_and_inside_it_the_client_decides(
-    last: float, cap: float, cause: Cause | None, outcome: TrialOutcome
+async def test_a_slot_past_its_attempt_cap_restarts_and_inside_it_the_client_decides(
+    last: float, cap: float, cause: Cause | None, outcome: TrialOutcome | None
 ) -> None:
     time = LoopTime()
     retry, spec = stock(4200.0, **{"solver.attempt_timeout": cap})
     provider = ScriptedProvider((busy_for(3400), cut_after(time, 4100), busy_for(3400), generates(time, last)))
-    result = await rollout(walled(provider, time, retry), spec)
-    trial = TrialResult(0, None if cause is Cause.ATTEMPT_CAP else result.grade, trial_cause(result, spec.task))
-    assert (trial.cause, trial.outcome) == (cause, outcome)
-    if (
-        cause is Cause.ATTEMPT_CAP
-    ):  # the second wait was still running at 8,400 s; the record keeps the cap's diagnostics
-        assert result.rollout.failure is not None and result.rollout.failure.diagnostics["operation"] == "attempt"
-        assert "AttemptCapReached" in (result.grade.error or "")
+    if outcome is None:  # the second wait was still running at 8,400 s
+        with pytest.raises(Restart, match="attempt"):
+            await rollout(walled(provider, time, retry), spec)
         return
+    result = await rollout(walled(provider, time, retry), spec)
+    trial = TrialResult(0, result.grade, trial_cause(result, spec.task))
+    assert (trial.cause, trial.outcome) == (cause, outcome)
     assert len(provider.bodies) == 4 and result.rollout.failure is None and (cause or result.grade.reward == 1)
 
 

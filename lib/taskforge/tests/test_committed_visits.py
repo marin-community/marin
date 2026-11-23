@@ -37,10 +37,8 @@ from lib.taskforge.tests.test_end_to_end import (
 from lib.taskforge.tests.test_solver_batch import rejected
 from rolloutengine.models import (
     GradedRollout,
-    GradedRolloutInterrupted,
     Model,
     Rollout,
-    RolloutFailure,
     RolloutInterrupted,
     RolloutOperation,
     TaskRolloutSpec,
@@ -102,8 +100,7 @@ def even(trial: int, attempt: int) -> GradeResult:
 class Paid(Engine):
     """Grades each slot with ``grade``; ``runs`` is every paid execution, in order. An ``outage`` slot meets a
     decision-model outage while graded, an ``exhausted`` slot its output budget, a ``refused`` slot a model-server
-    refusal, a ``limited`` slot's generation ``solver.time_limit`` (then it is graded) and a ``capped`` slot
-    ``solver.attempt_timeout``."""
+    refusal and a ``limited`` slot's generation ``solver.time_limit`` (then it is graded)."""
 
     def __init__(
         self,
@@ -113,10 +110,9 @@ class Paid(Engine):
         exhausted: Iterable[Slot] = (),
         refused: Iterable[Slot] = (),
         limited: Iterable[Slot] = (),
-        capped: Iterable[Slot] = (),
     ) -> None:
         self.grade, self.outage, self.exhausted, self.refused = grade, set(outage), set(exhausted), set(refused)
-        self.limited, self.capped = set(limited), set(capped)
+        self.limited = set(limited)
         self.runs: list[Slot] = []
 
     @override
@@ -132,10 +128,6 @@ class Paid(Engine):
             raise RolloutInterrupted(stopped, RolloutOperation.ADVANCE) from limit
         if slot in self.refused:
             raise rejected()
-        if slot in self.capped:  # RolloutEngine's record of an expired attempt names the operation
-            failure = RolloutFailure("TimeoutError", {"operation": RolloutOperation.ATTEMPT.value})
-            capped = Rollout(run_id, (), "interrupted", failure=failure)
-            raise GradedRolloutInterrupted(capped, RolloutOperation.ATTEMPT, GradeResult(Outcome.UNAVAILABLE, None))
         said = (transcript(f"trial {trial} attempt {attempt} answers 12"),)
         stop = "time_limit" if slot in self.limited else "stop"
         return GradedRollout(Rollout(run_id, said, stop), self.grade(trial, attempt))
@@ -754,23 +746,6 @@ async def test_a_retry_beside_a_time_limited_trial_records_the_missing_grade_as_
     assert wp.evidence[0].solver[0].outcome is TrialOutcome.TIME_LIMIT
 
 
-async def test_an_attempt_cap_slot_is_unscored_and_no_later_launch_buys_it_again(launches: Driver) -> None:
-    """Slot 1 ran out ``solver.attempt_timeout``: no evidence, left out of the placement and spending the missing-trial
-    allowance, and bought again neither by a later launch nor by the confirmation."""
-    settings = {**RETRYING, "budget.max_missing_trials": 1}
-    first = launch(Paid(capped={(1, 0)}, outage={(2, 0)}))
-    assert await launches.run(first, settings) == driver.DEFERRED
-    last = launch(Paid())
-    assert await launches.run(last, settings) == 0
-    wp = published_workpiece(launches.root)
-    assert kinds(wp) == ["accept", "accept"] and wp.terminal is Terminal.ACCEPTED
-    trial = wp.evidence[0].solver[1]
-    assert (trial.cause, trial.outcome, trial.grade) == (Cause.ATTEMPT_CAP, TrialOutcome.UNSCORED, None)
-    assert sorted(last.solver.runs) == [(2, 0), *confirmed(1, placed=2)]
-    assert isinstance(accepted := wp.decisions[0], Accept)
-    assert "1 of 3 solver trials have no score; placed over 2" in accepted.reasons
-
-
 async def test_a_changed_time_limit_is_another_plan_and_the_old_limit_returns_to_its_visits(launches: Driver) -> None:
     """The solver's replay identity carries ``solver.time_limit``: under another limit round 0 is bought again, and
     back at the first limit it is reused, with only the first plan's open confirmation slots bought."""
@@ -786,28 +761,10 @@ async def test_a_changed_time_limit_is_another_plan_and_the_old_limit_returns_to
     assert len({c.visit for c in commits}) == len(commits) == 2  # round 0 under each limit, each once
 
 
-@pytest.mark.parametrize("parked", ["refused", "capped"])
-async def test_explicit_resume_replaces_only_the_live_parked_slots(launches: Driver, parked: str) -> None:
-    """Validation tolerated parked slot 2 and accepted; two confirmation slots parked past the allowance, a manual
-    hold. ``--resume-held`` buys only those two, never the slot the accepted visit committed."""
-    settings = {"solver.k": 3, "budget.max_missing_trials": 1}
-    slots = {(2, 0), (3, 1), (4, 1)}
-    first = launch(Paid(refused=slots) if parked == "refused" else Paid(capped=slots))
-    assert await launches.run(first, settings) == 0
-    held = published_workpiece(launches.root)
-    assert held.terminal is Terminal.HELD and kinds(held) == ["accept", "incomplete"]
-    launches.args.resume_held = True
-    resumed = launch(Paid())
-    assert await launches.run(resumed, settings) == 0
-    wp = published_workpiece(launches.root)
-    assert wp.terminal is Terminal.ACCEPTED and wp.evidence[0].solver[2] == held.evidence[0].solver[2]
-    assert sorted(resumed.solver.runs) == [(3, 1), (4, 1)] and resumed.grader.calls == 0
-
-
 async def test_explicit_resume_rereads_the_live_grade_and_keeps_the_paid_fault(launches: Driver) -> None:
-    """Round 0's slot 0 ran out its attempt cap, inside the allowance of two, and slots 1 and 2 were ungraded, so its
+    """Round 0's slot 0 was refused, inside the allowance of two, and slots 1 and 2 were ungraded, so its
     review retried. The retry's slot 1 reported an invalid task and slot 2's grader failed for infrastructure, a manual
-    hold. An unflagged launch adds nothing; ``--resume-held`` buys only slot 2 again, keeps round 0's cap and the
+    hold. An unflagged launch adds nothing; ``--resume-held`` buys only slot 2 again, keeps round 0's refusal and the
     invalid task, and abandons."""
     settings = {**RETRYING, "budget.max_missing_trials": 2}
     infra = GradeResult(Outcome.INFRA_ERROR, None, failure=GradingFailure.TIMEOUT)
@@ -815,7 +772,7 @@ async def test_explicit_resume_rereads_the_live_grade_and_keeps_the_paid_fault(l
     def grade(trial: int, attempt: int) -> GradeResult:
         return infra if (trial, attempt) == (2, 1) else graded((1, 0), (2, 0), invalid={(1, 1)})(trial, attempt)
 
-    first = launch(Paid(grade, capped={(0, 0)}))
+    first = launch(Paid(grade, refused={(0, 0)}))
     assert await launches.run(first, settings) == 0
     held = published_workpiece(launches.root)
     assert held.terminal is Terminal.HELD and kinds(held) == ["retry", "incomplete"]
@@ -829,4 +786,4 @@ async def test_explicit_resume_rereads_the_live_grade_and_keeps_the_paid_fault(l
     wp = published_workpiece(launches.root)
     assert kinds(wp) == ["retry", "abandon"] and wp.terminal is Terminal.ABANDONED
     assert resumed.solver.runs == [(2, 1)] and resumed.grader.calls == 0
-    assert wp.evidence[0].solver[0].cause is Cause.ATTEMPT_CAP and wp.evidence[1].solver[1].cause is Cause.INVALID_TASK
+    assert wp.evidence[0].solver[0].cause is Cause.HELD and wp.evidence[1].solver[1].cause is Cause.INVALID_TASK

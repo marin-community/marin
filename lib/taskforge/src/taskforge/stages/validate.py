@@ -39,7 +39,6 @@ from taskforge.model.controls import Control
 from taskforge.model.llm import Role
 from taskforge.model.proposal import render
 from taskforge.model.review import (
-    PARKED,
     Accept,
     AdversaryFinding,
     AdversaryResult,
@@ -99,7 +98,7 @@ async def solver_result(
         receipt = ctx.receipt(SolverRollout(spec, trial, attempt))  # this outcome's own row, read before any other runs
         if rollouts is not None:
             rollouts[trial] = result
-        if (cause := trial_cause(result, spec.task)) in PARKED:
+        if (cause := trial_cause(result, spec.task)) is Cause.HELD:
             return TrialResult(trial, None, cause, result.grade.error or "", receipt=receipt)
         return TrialResult(trial, result.grade, cause, receipt=receipt)
     return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
@@ -128,7 +127,7 @@ async def solver_batch(
 
     ``concurrency`` slots run at a time and a ``Note`` lists the running ones every ``heartbeat`` seconds; neither
     enters a replay key. A slot that restarts raises once every sibling has settled, so replaying the stage
-    re-executes only it; more than ``max_missing`` parked slots hold the batch instead. A decision-model outage defers
+    re-executes only it; more than ``max_missing`` held slots hold the batch instead. A decision-model outage defers
     the batch the same way, and any other hold a slot raises holds it, each once every admitted sibling has settled.
     Once a slot waits for the decision model or holds, or ``stopped()`` says a validation sibling holds, no further
     slot starts, so no rollout is bought to wait; the batch then returns short only beside that sibling.
@@ -183,8 +182,8 @@ async def solver_batch(
 
 
 def refusal(trials: Sequence[TrialResult], max_missing: int) -> Hold | None:
-    """More than ``max_missing`` parked slots: a human hold, whatever else is unfinished."""
-    held = [f"solver trial {trial.trial}: {trial.detail}" for trial in trials if trial.cause in PARKED]
+    """More than ``max_missing`` held slots: a human hold, whatever else is unfinished."""
+    held = [f"solver trial {trial.trial}: {trial.detail}" for trial in trials if trial.cause is Cause.HELD]
     return Hold("; ".join(held)) if len(held) > max_missing else None
 
 

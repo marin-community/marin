@@ -8,14 +8,14 @@ import math
 from collections.abc import Callable, Sequence
 from types import MappingProxyType
 
-from rolloutengine.models import MAX_TURNS_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON, GradedRollout, RolloutOperation
+from rolloutengine.models import MAX_TURNS_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON, GradedRollout
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import NoGrader, TaskSpec
 
 from taskforge.effects.events import Committed, Resolved, StageCompleted
 from taskforge.effects.issues import Hold, LogFailure
 from taskforge.effects.log import Record, physical
-from taskforge.model.review import FAULTS, PARKED, Cause, Incomplete, Modify, Reject, Retry
+from taskforge.model.review import FAULTS, Cause, Incomplete, Modify, Reject, Retry
 from taskforge.model.verdict import grader_checks
 from taskforge.resources.rollouts import LIMIT_STOP_REASONS, TIME_LIMIT_STOP_REASON, SolverRollout, refused
 
@@ -28,7 +28,7 @@ CAUSE_DECISIONS = MappingProxyType(
         Cause.AGENT_TIMEOUT: Retry,
         Cause.NO_GRADE: Retry,
         Cause.BUDGET_EXHAUSTED: Reject,
-        **dict.fromkeys(PARKED, Incomplete),
+        Cause.HELD: Incomplete,
         **dict.fromkeys(FAULTS, Modify),  # the stock policy returns every fault to the author
     }
 )
@@ -66,9 +66,7 @@ def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | Non
 def trial_cause(result: GradedRollout, task: TaskSpec) -> Cause | None:
     stop = result.rollout.stop_reason
     if refused(result):
-        failure = result.rollout.failure
-        capped = failure is not None and failure.diagnostics.get("operation") == RolloutOperation.ATTEMPT
-        return Cause.ATTEMPT_CAP if capped else Cause.HELD
+        return Cause.HELD
     if stop == TOTAL_TURN_TIMEOUT_STOP_REASON:
         return Cause.AGENT_TIMEOUT
     if stop == MAX_TURNS_STOP_REASON:

@@ -51,7 +51,7 @@ import taskforge.harness.tools.evidence as evidence_tools_module
 import taskforge.stages.solve_review as review_stage
 from taskforge.checkpoint import CheckpointSink, read_journal
 from taskforge.config import TaskforgeConfig
-from taskforge.coordinator import advance, apply_decision, run_workpiece
+from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, ScopeEntered, ScopeExited, StageCompleted
 from taskforge.effects.issues import ContextExceeded, DecisionModelUnavailable
@@ -1516,36 +1516,39 @@ async def test_a_limited_slot_whose_grade_failed_is_a_settled_loss_and_replays(
 
 
 # Regression: the attempt cap fired while a proven time-limited loss was being graded, and the row read
-# as a parked slot: excluded from the denominator with an allowance, bought again on an explicit resume without one.
+# as missing evidence: excluded from the denominator with an allowance, bought again on an explicit resume without one.
 @pytest.mark.parametrize("allowance", [0, 1])
-@pytest.mark.parametrize("proven", [True, False], ids=["limit then cap", "cap first"])
-async def test_the_attempt_cap_parks_a_slot_only_before_a_limit_is_proven(
-    proposal: TaskProposal, proven: bool, allowance: int
+async def test_the_attempt_cap_after_a_proven_limit_keeps_the_settled_loss(
+    proposal: TaskProposal, allowance: int
 ) -> None:
-    stop = "time_limit" if proven else "interrupted"
     engine = Trials(
-        stop=lambda trial, attempt: stop if (trial, attempt) == (0, 0) else "stop", capped=frozenset({(0, 0)})
+        stop=lambda trial, attempt: "time_limit" if (trial, attempt) == (0, 0) else "stop",
+        capped=frozenset({(0, 0)}),
     )
     config = setup(**{"budget.max_missing_trials": allowance})
     wp, log = await run(proposal, engine, Reviewer(), config)
-    if proven or allowance:
-        cause = Cause.TIME_LIMIT if proven else Cause.ATTEMPT_CAP
-        first = wp.evidence[0]
-        assert first.solver[0].cause is cause and kinds(wp)[0] == "accept"
-        solved = "1 of 3 trials solved" if proven else "1 of 2 trials solved"  # the loss is in the denominator
-        assert band_line(first, config.band)[1].startswith(solved)
-    else:  # one parked slot beyond no allowance: a manual hold, before any record
-        held = wp.decisions[-1]
-        assert wp.terminal is Terminal.HELD and isinstance(held, Incomplete) and held.awaits is None
-    if proven:
-        grade = wp.evidence[0].solver[0].grade
-        assert grade is not None and grade.diagnostics["interrupted"]["diagnostics"]["operation"] == "attempt"
+    first = wp.evidence[0]
+    assert first.solver[0].cause is Cause.TIME_LIMIT and kinds(wp)[0] == "accept" and engine.runs.count((0, 0)) == 1
+    assert band_line(first, config.band)[1].startswith("1 of 3 trials solved")  # the loss is in the denominator
+    grade = first.solver[0].grade
+    assert grade is not None and grade.diagnostics["interrupted"]["diagnostics"]["operation"] == "attempt"
     again = Trials()
     replaces = replaced_refusals(log.records, resume=True)  # an explicit resume (``--resume-held``)
     relaunch = EventLog(replay_from=log.records, replayable=replayable_grade, replaces=replaces)
-    await run_workpiece(proposal, config, bundle(again, Reviewer()), relaunch, install=install)
-    # It replaces a held parked slot, never a loss, and never a slot an accepted visit committed.
-    assert again.runs.count((0, 0)) == int(not proven and not allowance)
+    resumed = await run_workpiece(proposal, config, bundle(again, Reviewer()), relaunch, install=install)
+    assert again.runs.count((0, 0)) == 0 and resumed.evidence[0].solver[0] == first.solver[0]
+
+
+@pytest.mark.parametrize("allowance", [0, 1])
+async def test_an_attempt_the_cap_stops_before_any_limit_restarts_within_the_stage_bound_then_holds(
+    proposal: TaskProposal, allowance: int
+) -> None:
+    """The watchdog interrupts slot 0 before any limit is proven, every time: the stage restarts, so the slot is bought
+    ``STAGE_REPLAY_ATTEMPTS`` times in all and the workpiece then holds, whatever the missing-trial allowance."""
+    engine = Trials(capped=frozenset({(0, 0)}))
+    wp, _ = await run(proposal, engine, Reviewer(), setup(**{"budget.max_missing_trials": allowance}))
+    assert engine.runs.count((0, 0)) == STAGE_REPLAY_ATTEMPTS and wp.terminal is Terminal.HELD
+    assert not wp.evidence and isinstance(wp.decisions[-1], Incomplete)
 
 
 async def test_a_revision_validates_with_fresh_trials(proposal: TaskProposal) -> None:

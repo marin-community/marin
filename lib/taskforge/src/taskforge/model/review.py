@@ -50,12 +50,6 @@ class Cause(StrEnum):
     NO_GRADE = "no_grade"
     HELD = "held"
     """A solver slot whose effect held: typed missing evidence, never a failed trial."""
-    ATTEMPT_CAP = "attempt_cap"
-    """A solver slot that ran out ``solver.attempt_timeout``: missing evidence as a held slot is, never a time limit."""
-
-
-PARKED = frozenset({Cause.HELD, Cause.ATTEMPT_CAP})
-"""The causes of a recorded slot with no evidence: missing, named, and never bought again by a retry."""
 
 
 class BandOutcome(StrEnum):

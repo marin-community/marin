@@ -35,7 +35,7 @@ from taskforge.stages.classify import commitments
 
 JOURNAL_FORMAT = 14
 """Format 14 records a solver generation still running at ``solver.time_limit`` as stopped at the time limit (stop
-reason and cause ``time_limit``) and a slot that reached ``solver.attempt_timeout`` as ``attempt_cap``, which a
+reason and cause ``time_limit``), which a
 format-13 reader cannot decode; at 14 it refuses the root as another format. Format 13 recorded such a generation as a
 generation limit. Every format-8 to format-13 row decodes at 14, so the usage report reads them, but this writer claims
 only format-14 roots: an earlier root's recorded trials and slot identities were bought under other clocks and

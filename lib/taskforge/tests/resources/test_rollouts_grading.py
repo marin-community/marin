@@ -66,7 +66,7 @@ from taskforge.model.controls import Candidate
 from taskforge.resources import execution
 from taskforge.resources.env import ShellboxEnvFactory, WriteFile
 from taskforge.resources.grading import GradeCandidate, GradingResource, ScriptedModel, candidate_turns, grade
-from taskforge.resources.rollouts import AttemptCapReached, RolloutResource, SolverRollout, interruption, run_rollout
+from taskforge.resources.rollouts import RolloutResource, SolverRollout, interruption, run_rollout
 from taskforge.resources.sandbox.factories import shellsim_factory
 
 
@@ -102,10 +102,6 @@ async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutO
     interrupted.__cause__ = cause
     engine = FakeEngine((interrupted,))
     resource = RolloutResource(engine, twelve, "test-config")
-    if operation is RolloutOperation.ATTEMPT:  # the cap expired: a parked slot, recorded with what the attempt kept
-        parked = await resource.run(SolverRollout(rollout_spec(arithmetic_task()), 4, 2))
-        assert parked.rollout.failure is not None and "AttemptCapReached" in (parked.grade.error or "")
-        return
     decision = Transient if operation == RolloutOperation.START else Restart
     with pytest.raises(decision) as failure:
         await resource.run(SolverRollout(rollout_spec(arithmetic_task()), 4, 2))
@@ -247,7 +243,7 @@ def test_machine_failure_policy(operation: RolloutOperation, failure: RuntimeErr
         if isinstance(failure, MachineOutputLimitExceeded)
         else Transient
     )
-    expected = AttemptCapReached if operation is RolloutOperation.ATTEMPT else expected
+    expected = Restart if operation is RolloutOperation.ATTEMPT else expected  # the watchdog: the stage restarts
     decision = interruption(error)
     assert type(decision) is expected and str(failure) in str(decision)
 
