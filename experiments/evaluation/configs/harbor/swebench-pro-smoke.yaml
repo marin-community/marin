@@ -1,5 +1,5 @@
 # Cross-repository SWE-Bench Pro smoke run: two tasks from each of the 11 repositories, drawn
-# with random.Random(0) from the pinned registry. Otherwise identical to swebench-pro.yaml.
+# with random.Random(0) from the pinned registry.
 n_concurrent_trials: 16
 n_attempts: 1
 release_trial_payloads_in_memory: true
