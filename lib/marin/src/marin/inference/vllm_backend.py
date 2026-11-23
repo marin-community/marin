@@ -67,47 +67,44 @@ def _with_subprocess_env(
 
 
 RUNAI_STREAMER_LOADER_FLAG = "--model-loader-extra-config"
-DISTRIBUTED_STREAMER_DEFAULT_CONCURRENCY = 4
-DISTRIBUTED_STREAMER_DEFAULT_MEMORY_LIMIT_BYTES = 16 * (1 << 30)
-BOUNDED_DISTRIBUTED_STREAMER_CONFIG = json.dumps(
-    {
-        "distributed": True,
-        "concurrency": DISTRIBUTED_STREAMER_DEFAULT_CONCURRENCY,
-        "memory_limit": DISTRIBUTED_STREAMER_DEFAULT_MEMORY_LIMIT_BYTES,
-    }
-)
+DISTRIBUTED_STREAMER_BOUNDS = {"concurrency": 4, "memory_limit": 16 * (1 << 30)}
+
+
+def _fill_streamer_bounds(value: str) -> str:
+    """Return the loader-config JSON with missing streamer bounds filled in."""
+    try:
+        config = json.loads(value)
+    except ValueError as error:
+        raise ValueError(f"{RUNAI_STREAMER_LOADER_FLAG} is not valid JSON: {value!r}") from error
+    if not isinstance(config, dict) or config.get("distributed") is not True:
+        return value
+    missing = {key: value for key, value in DISTRIBUTED_STREAMER_BOUNDS.items() if key not in config}
+    if not missing:
+        return value
+    return json.dumps(dict(config, **missing))
 
 
 def bound_distributed_streamer_buffers(extra_args: Sequence[str]) -> tuple[str, ...]:
-    """Fill the runai streamer's host RAM buffer bounds into a distributed loader config.
+    """Fill the runai streamer's host RAM buffer bounds into any distributed loader config.
 
-    The evaluation serving path resolves a distributed ``--model-loader-extra-config`` with
-    these bounds; a distributed config without them lets the streamer buffer unbounded while
-    streaming a checkpoint through the serve child's cgroup, which OOMKills the container
-    mid-load. Keys the caller set explicitly pass through untouched; a config that does not
+    The streamer holds streamed checkpoint shards in host RAM before they reach device memory,
+    all charged to the serve child's cgroup; a distributed config without bounds buffers
+    unbounded and OOMKills the container mid-load. Both accepted forms are rewritten in place:
+    the flag and its JSON as separate tokens, or the glued ``--model-loader-extra-config=<json>``
+    form. Keys the caller set explicitly pass through untouched, and a config that does not
     select distributed loading is returned unchanged. Raises ``ValueError`` for a config that
     is not valid JSON.
     """
-    if RUNAI_STREAMER_LOADER_FLAG not in extra_args:
-        return tuple(extra_args)
-    index = extra_args.index(RUNAI_STREAMER_LOADER_FLAG)
-    if index + 1 >= len(extra_args):
-        return tuple(extra_args)
-    try:
-        config = json.loads(extra_args[index + 1])
-    except ValueError as error:
-        raise ValueError(f"{RUNAI_STREAMER_LOADER_FLAG} is not valid JSON: {extra_args[index + 1]!r}") from error
-    if not isinstance(config, dict) or config.get("distributed") is not True:
-        return tuple(extra_args)
-    defaults = {
-        "concurrency": DISTRIBUTED_STREAMER_DEFAULT_CONCURRENCY,
-        "memory_limit": DISTRIBUTED_STREAMER_DEFAULT_MEMORY_LIMIT_BYTES,
-    }
-    missing = {key: value for key, value in defaults.items() if key not in config}
-    if not missing:
-        return tuple(extra_args)
-    filled = dict(config, **missing)
-    return (*extra_args[: index + 1], json.dumps(filled), *extra_args[index + 2 :])
+    args = list(extra_args)
+    for position, token in enumerate(args):
+        flag, separator, inline_value = token.partition("=")
+        if flag != RUNAI_STREAMER_LOADER_FLAG:
+            continue
+        if separator:
+            args[position] = f"{flag}={_fill_streamer_bounds(inline_value)}"
+        elif position + 1 < len(args):
+            args[position + 1] = _fill_streamer_bounds(args[position + 1])
+    return tuple(args)
 
 
 @contextlib.contextmanager
@@ -209,9 +206,10 @@ class VllmBackend:
         if (
             self.config.launcher is not VllmLauncherType.TPU
             and _is_object_store_path(spec.weights)
-            and not any(arg.partition("=")[0] in {"--load-format", "--model-loader-extra-config"} for arg in loader_args)
+            and not any(arg.partition("=")[0] in {"--load-format", RUNAI_STREAMER_LOADER_FLAG} for arg in loader_args)
         ):
-            loader_args = ("--model-loader-extra-config", BOUNDED_DISTRIBUTED_STREAMER_CONFIG, *loader_args)
+            loader_args = (RUNAI_STREAMER_LOADER_FLAG, '{"distributed":true}', *loader_args)
+        loader_args = bound_distributed_streamer_buffers(loader_args)
         return [
             *(
                 ("--tensor-parallel-size", str(spec.tensor_parallel_size))
