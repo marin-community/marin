@@ -106,7 +106,8 @@ def main() -> None:
         bundle = Path(directory) / "bundle"
         restore_workload(receipt, bundle)
         check_native_cache(bundle, SERIES_PATH, output / "workload-check.log")
-        ref = RepoRef(args.weights, None)
+        revision = series["model_revision"] if args.weights == series["model"] else None
+        ref = RepoRef(args.weights, revision)
         converter = HFCheckpointConverter.from_hf(ref)
         model_config = converter.default_config
         if not isinstance(model_config, SnowballConfig):
