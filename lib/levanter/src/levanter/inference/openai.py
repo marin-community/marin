@@ -373,27 +373,29 @@ class InferenceContext:
 
     def _batch_processing_loop(self) -> None:
         waiting: collections.deque[InferenceRequest] = collections.deque()
+        # Retained-prefix admission reserves the shared KV budget across batches.
+        reserve_pages = self.config.service.max_retained_prompts > 0
 
         def poll(capacity: int, capture_routes: bool) -> InferenceBatch:
-            if not waiting:
-                try:
-                    waiting.extend(self.batch_queue.get_nowait())
-                except queue.Empty:
-                    return InferenceBatch()
             admitted = InferenceBatch()
-            while waiting and capacity >= waiting[0].n_generations:
-                if waiting[0].return_route_captures and not capture_routes:
+            while capacity > 0:
+                if not waiting:
+                    if admitted and not reserve_pages:
+                        break
+                    try:
+                        waiting.extend(self.batch_queue.get_nowait())
+                    except queue.Empty:
+                        break
+                request = waiting[0]
+                if request.n_generations > capacity or (request.return_route_captures and not capture_routes):
                     break
-                request = waiting.popleft()
-                admitted.append(request)
+                admitted.append(waiting.popleft())
                 capacity -= request.n_generations
             return admitted
 
         while not self.shutdown_event.is_set():
-            if waiting:
-                batch = InferenceBatch(waiting)
-                waiting.clear()
-            else:
+            batch = poll(self.config.service.max_seqs, capture_routes=True)
+            if not batch:
                 try:
                     batch = self.batch_queue.get(timeout=1)
                 except queue.Empty:

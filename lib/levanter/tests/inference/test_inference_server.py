@@ -270,6 +270,89 @@ def test_shutdown_waits_for_active_generation(
         server.shutdown()
 
 
+def test_continuous_poll_reads_separate_ready_http_batches(monkeypatch, inference_server_config, local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
+    model_config = SnowballConfig(
+        vocab_size=len(tokenizer),
+        hidden_dim=16,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=24,
+        num_layers=1,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=TEST_MAX_SEQ_LEN,
+        sliding_window=4,
+        attention_implementation="reference",
+    )
+    service = dataclasses.replace(inference_server_config.service, max_seqs=4, max_rounds=1, max_retained_prompts=8)
+    config = dataclasses.replace(inference_server_config, service=service)
+    mesh = compact_grug_mesh()
+    with jax.set_mesh(mesh):
+        model = SnowballLMHeadModel.init(hax.Axis("vocab", len(tokenizer)), model_config, key=jax.random.key(19))
+        server = InferenceServer.create(config, model, tokenizer, mesh=mesh)
+
+    ctx = server.inference_context
+    entered = threading.Event()
+    enqueued = threading.Event()
+    resume = threading.Event()
+    timeout = 25
+    admissions = []
+    put = ctx.batch_queue.put
+    execute = ctx._execute_batch
+
+    def put_and_signal(batch):
+        put(batch)
+        enqueued.set()
+
+    def observe_execute(initial, poll):
+        entered.set()
+        assert resume.wait(timeout=timeout)
+
+        def observe_poll(capacity, capture_routes):
+            admitted = poll(capacity, capture_routes)
+            if admitted:
+                admissions.append(len(admitted))
+            return admitted
+
+        execute(initial, observe_poll)
+
+    monkeypatch.setattr(ctx.batch_queue, "put", put_and_signal)
+    monkeypatch.setattr(ctx, "_execute_batch", observe_execute)
+    try:
+        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=4) as executor:
+
+            def submit():
+                return executor.submit(
+                    client.post,
+                    "/v1/chat/completions",
+                    json={
+                        "model": TEST_MODEL_NAME,
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "max_tokens": 5,
+                        "seed": 483,
+                    },
+                )
+
+            responses = [submit()]
+            try:
+                assert entered.wait(timeout=timeout) and enqueued.wait(timeout=timeout)
+                # Send each request only after the admission thread has queued the preceding batch.
+                for _ in range(3):
+                    enqueued.clear()
+                    responses.append(submit())
+                    assert enqueued.wait(timeout=timeout)
+            finally:
+                resume.set()
+
+            assert all(response.result(timeout=timeout).status_code == 200 for response in responses)
+            assert admissions == [3]
+    finally:
+        server.shutdown()
+
+
 def test_models_endpoint_reports_the_configured_model(test_client):
     """A client discovering the server (OpenAI SDK, dashboards) reads the id it should send back."""
     client, server = test_client
