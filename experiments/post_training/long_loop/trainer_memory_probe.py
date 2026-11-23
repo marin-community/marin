@@ -14,6 +14,9 @@ import json
 import math
 import pickle
 import time
+import traceback
+from contextlib import contextmanager
+from pathlib import Path
 
 import ray
 import torch
@@ -28,6 +31,41 @@ from skyrl_train.workers.worker import PPORayActorGroup
 from experiments.post_training.long_loop.trainer_memory_probe_config import compiled_config
 
 MODULE = "experiments.post_training.long_loop.trainer_memory_probe"
+CUDA_ALLOCATION_HISTORY_ENTRIES = 256
+
+
+@contextmanager
+def capture_cuda_failure(output_prefix, local_directory, *, rank, phase):
+    """Persist a rank-local failure without requiring any peer to enter a collective."""
+    torch.cuda.memory._record_memory_history(
+        enabled="all", context="alloc", stacks="python", max_entries=CUDA_ALLOCATION_HISTORY_ENTRIES, clear_history=True
+    )
+    try:
+        yield
+    except Exception as error:
+        directory = Path(local_directory) / "trainer-failures"
+        directory.mkdir(parents=True, exist_ok=True)
+        stem = f"{phase}-rank{rank}"
+
+        def persist(name, raw):
+            io.write_bytes_atomic(str(directory / name), raw)
+            io.write_bytes_atomic(prefix_join(output_prefix, f"failures/{name}"), raw)
+
+        try:
+            persist(
+                stem + ".json", json.dumps({"rank": rank, "phase": phase, "traceback": traceback.format_exc()}).encode()
+            )
+            if isinstance(error, torch.OutOfMemoryError):
+                persist(stem + ".memory.txt", torch.cuda.memory_summary().encode())
+                snapshot = directory / (stem + ".pickle")
+                torch.cuda.memory._dump_snapshot(str(snapshot))
+                io.write_bytes_atomic(prefix_join(output_prefix, f"failures/{snapshot.name}"), snapshot.read_bytes())
+        except Exception as capture_error:
+            error.add_note(f"Failure evidence capture also failed: {capture_error}")
+            raise error from capture_error
+        raise
+    finally:
+        torch.cuda.memory._record_memory_history(enabled=None)
 
 
 def compare_projection(hidden, weight, targets, project, *, temperature, fused):
@@ -168,6 +206,12 @@ def driver(args, worker_type):
         }
         io.write_bytes_atomic(prefix_join(args.output_prefix, "receipt.json"), json.dumps(result).encode())
         print(json.dumps({"qualification_passed": True, "policy_ranks": len(identities)}), flush=True)
+    except Exception:
+        io.write_bytes_atomic(
+            prefix_join(args.output_prefix, "driver-failure.json"),
+            json.dumps({"variant": args.variant, "traceback": traceback.format_exc()}).encode(),
+        )
+        raise
     finally:
         ray.shutdown()
 

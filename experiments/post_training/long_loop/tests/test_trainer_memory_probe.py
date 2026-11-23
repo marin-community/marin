@@ -5,6 +5,7 @@
 
 import hashlib
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 import yaml
@@ -46,7 +47,8 @@ def test_probe_derives_native_loss_context_before_worker_start(tmp_path, variant
     assert list(config.trainer.policy.megatron_config.memory_profile.valid_token_counts) == [85557]
 
 
-def test_cpu_driver_publishes_complete_receipts_after_training_and_warm_profile(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fail_second_update", [False, True])
+def test_cpu_driver_publishes_training_or_failure_receipts(tmp_path, monkeypatch, fail_second_update):
     pytest.importorskip("hydra", reason="Probe admission requires the native SkyRL CPU environment")
     import json  # noqa: PLC0415 - optional SkyRL CPU test
     import pickle  # noqa: PLC0415 - optional SkyRL CPU test
@@ -101,6 +103,8 @@ def test_cpu_driver_publishes_complete_receipts_after_training_and_warm_profile(
                 )
                 return [{"rank": 0, "pipeline_last": True, "projection": result}]
             if method == "ppo_train":
+                if fail_second_update and args[0].metadata["global_step"] == 2:
+                    raise torch.OutOfMemoryError("CPU fixture: failing native update")
                 self.step(args[0].inputs.shape[0])
                 return [
                     SimpleNamespace(
@@ -146,17 +150,23 @@ def test_cpu_driver_publishes_complete_receipts_after_training_and_warm_profile(
     monkeypatch.setattr(probe.ray, "remote", lambda **_kwargs: lambda worker: worker)
     monkeypatch.setattr(probe.ray, "get", lambda value: value)
     monkeypatch.setattr(probe.ray, "shutdown", lambda: calls.append("shutdown"))
-    probe.driver(
-        Namespace(
-            config_uri=str(source),
-            config_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-            output_prefix=str(output),
-            batch_uri=str(batch_path),
-            variant="chunked",
-            max_sequence_length=131072,
-        ),
-        CPUActors,
+    arguments = Namespace(
+        config_uri=str(source),
+        config_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        output_prefix=str(output),
+        batch_uri=str(batch_path),
+        variant="chunked",
+        max_sequence_length=131072,
     )
+    if fail_second_update:
+        with pytest.raises(torch.OutOfMemoryError, match="CPU fixture: failing native update"):
+            probe.driver(arguments, CPUActors)
+        failure = json.loads((output / "driver-failure.json").read_bytes())
+        assert "OutOfMemoryError: CPU fixture: failing native update" in failure["traceback"]
+        assert not (output / "receipt.json").exists()
+        assert len(json.loads((output / "matched-batch-timing.json").read_bytes())["timings"]) == 1
+        return
+    probe.driver(arguments, CPUActors)
     receipt = json.loads((output / "receipt.json").read_bytes())
     assert receipt["completed"] and receipt["qualification_passed"]
     assert receipt["numerical"][0]["projection"]["passed"]
@@ -186,3 +196,32 @@ def test_driver_rejects_skipped_or_nonfinite_native_updates(change):
     status = {"policy_update_steps": 1, "skipped_steps": 0, "policy_loss": 0.25, "raw_grad_norm": 0.5, **change}
     with pytest.raises(ValueError):
         applied_update_metrics([SimpleNamespace(metadata={"train_status": status})])
+
+
+def test_oom_capture_publishes_native_trace_summary_and_snapshot_before_reraising(tmp_path, monkeypatch):
+    pytest.importorskip("hydra", reason="Probe admission requires the native SkyRL CPU environment")
+    import json  # noqa: PLC0415
+
+    import torch  # noqa: PLC0415
+
+    from experiments.post_training.long_loop.trainer_memory_probe import capture_cuda_failure  # noqa: PLC0415
+
+    # CUDA is the hardware I/O boundary; all local/remote atomic file I/O is real.
+    monkeypatch.setattr(torch.cuda.memory, "_record_memory_history", lambda **kwargs: None)
+    monkeypatch.setattr(torch.cuda, "memory_summary", lambda: "CPU fixture: allocator summary")
+    monkeypatch.setattr(
+        torch.cuda.memory, "_dump_snapshot", lambda path: Path(path).write_bytes(b"CPU snapshot fixture")
+    )
+    original = torch.OutOfMemoryError("CPU fixture: native allocation failed")
+    with pytest.raises(torch.OutOfMemoryError) as raised:
+        with capture_cuda_failure(str(tmp_path / "remote"), tmp_path / "iris-output", rank=7, phase="warm-sizing"):
+            raise original
+    assert raised.value is original
+    receipt = json.loads((tmp_path / "remote/failures/warm-sizing-rank7.json").read_bytes())
+    assert (receipt["rank"], receipt["phase"]) == (7, "warm-sizing")
+    assert "OutOfMemoryError: CPU fixture: native allocation failed" in receipt["traceback"]
+    for suffix in ("json", "memory.txt", "pickle"):
+        local = tmp_path / f"iris-output/trainer-failures/warm-sizing-rank7.{suffix}"
+        remote = tmp_path / f"remote/failures/warm-sizing-rank7.{suffix}"
+        assert local.read_bytes() == remote.read_bytes()
+    assert not list(tmp_path.rglob("*.tmp"))

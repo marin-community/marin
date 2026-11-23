@@ -4,7 +4,9 @@
 """GPU workers for the trainer-only memory qualification."""
 
 import math
+import os
 import time
+from pathlib import Path
 
 import megatron.core.parallel_state as mpu
 import torch
@@ -13,7 +15,7 @@ from skyrl_train.distributed.megatron.megatron_utils import dp_weight_checksum_m
 from skyrl_train.workers.megatron.megatron_model_wrapper import MegatronModelWrapper
 from skyrl_train.workers.megatron.megatron_worker import MegatronPolicyWorkerBase
 
-from experiments.post_training.long_loop.trainer_memory_probe import compare_projection
+from experiments.post_training.long_loop.trainer_memory_probe import capture_cuda_failure, compare_projection
 
 
 class QualifyingWrapper(MegatronModelWrapper):
@@ -44,6 +46,7 @@ class QualifyingWrapper(MegatronModelWrapper):
 
 class QualifyingWorker(MegatronPolicyWorkerBase):
     def init_model(self, *args, **kwargs):
+        self.failure_directory = Path(os.environ["IRIS_OUTPUT_DIR"])
         super().init_model(*args, **kwargs)
         replay = self.model.router_replay
         self.model = QualifyingWrapper(
@@ -112,7 +115,13 @@ class QualifyingWorker(MegatronPolicyWorkerBase):
     def ppo_train(self, batch):
         self.clip_observations = []
         started = time.monotonic()
-        output = super().ppo_train(batch)
+        with capture_cuda_failure(
+            self.cfg.trainer.export_path,
+            self.failure_directory,
+            rank=self._rank,
+            phase=f"ppo-step-{batch.metadata['global_step']}",
+        ):
+            output = super().ppo_train(batch)
         learner_seconds = time.monotonic() - started
         started = time.monotonic()
         mismatch = dp_weight_checksum_mismatch(self.actor_module)
@@ -126,3 +135,9 @@ class QualifyingWorker(MegatronPolicyWorkerBase):
         if mismatch != 0 or not self.clip_observations:
             raise ValueError(f"Native update qualification failed: {output.metadata['qualification']}")
         return output
+
+    def profile_train_memory(self):
+        with capture_cuda_failure(
+            self.cfg.trainer.export_path, self.failure_directory, rank=self._rank, phase="warm-sizing"
+        ):
+            return super().profile_train_memory()
