@@ -88,6 +88,21 @@ def _located(streams: list[tuple[str, str]], question: str, key: str, offset: in
     return *streams[0], -1
 
 
+def excerpt(
+    streams: list[tuple[str, str]], question_chars: int, question: str, key: str, offset: int
+) -> tuple[str, str, int]:
+    """The record text around the item (``BEFORE`` characters before it, ``AFTER`` after its question), the
+    reading's stream, and the item's position in that stream (-1 when only an estimate exists).
+
+    *streams* are the record's readings with their streams, *question* the item's question stream and
+    *question_chars* the length of its question text, *key* the matched key window and *offset* its position
+    in the keyed stream.
+    """
+    text, stream, at = _located(streams, question, key, offset)
+    start = _offset(text, max(at, 0)) - 1 if at >= 0 else 0
+    return text[max(0, start - BEFORE) : start + question_chars + AFTER], stream, at
+
+
 def make_extract(output: str):
     def extract(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
         rows = read_table(prefix_join(output, "sample_rows.parquet")).to_pylist()
@@ -112,9 +127,7 @@ def make_extract(output: str):
                     keyed = key_streams(item["question"], list(item["choices"] or []), item["passage"] or "")
                     stream_of_kind = keyed.get(KeyStream(kind), "")
                     key = stream_of_kind[offset : offset + WINDOW] if offset >= 0 else ""
-                    text, stream, at = _located(streams, question, key, offset)
-                    start = _offset(text, max(at, 0)) - 1 if at >= 0 else 0
-                    right = text[max(0, start - BEFORE) : start + len(item["question"]) + AFTER]
+                    right, stream, at = excerpt(streams, len(item["question"]), question, key, offset)
                     after = stream[at + len(question) :] if at >= 0 and stream.startswith(question, at) else ""
                     answer = text_stream(item["answer"])
                     pairs.append(

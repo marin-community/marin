@@ -116,3 +116,8 @@ def record_hit_indices(text: str, sorted_hashes: np.ndarray, width: int = WINDOW
     """Indices into *sorted_hashes* of the windows that any reading of the record *text* holds."""
     hits = [hit_indices(text_stream(reading), sorted_hashes, width) for reading in readings(text)]
     return np.unique(np.concatenate(hits))
+
+
+def record_window_hashes(text: str, width: int = WINDOW) -> np.ndarray:
+    """The hashes of every *width*-character window of every reading of the record *text*."""
+    return np.concatenate([window_hashes(text_stream(reading), width) for reading in readings(text)])

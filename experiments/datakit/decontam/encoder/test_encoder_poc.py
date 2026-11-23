@@ -7,9 +7,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pytest
 
 from experiments.datakit.decontam.encoder import rarest_key
+from experiments.datakit.decontam.encoder.candidates import LOCATOR_COLUMNS, record_pairs
 from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
 from experiments.datakit.decontam.encoder.pairs import _located
 from experiments.datakit.decontam.encoder.planted import holds_key, negative_forms, positive_forms
@@ -348,3 +350,31 @@ def test_an_extra_key_is_kept_only_when_no_reference_record_holds_it():
     # A passage whose rarest window occurs in reference text (a generic stem) gets no key.
     assert rows.loc[("a", KeyStream.PASSAGE), "key1_hash"] == 0
     assert rows.loc[("b", KeyStream.PASSAGE), "key1_hash"] == 31
+
+
+def test_a_catalog_record_yields_one_pair_per_item_with_the_text_around_it():
+    question = "Which planet of the solar system has the most moons in total?"
+    stream = text_stream(question)
+    key, offset = stream[10:30], 10
+    rows = {
+        "item": ["planets-0", "planets-0"],
+        "kind": [KeyStream.QUESTION, KeyStream.PASSAGE],
+        "eval": ["planets", "planets"],
+        "key1_hash": [int(window_hashes(key)[0]), int(window_hashes(stream[25:45])[0])],
+        "key": [key, stream[25:45]],
+        "offset": [offset, 25],
+        "question": [stream, stream],
+        "question_chars": [len(question), len(question)],
+    }
+    locators = pa.table(
+        {name: pa.array(rows[name], pa.uint64() if name == "key1_hash" else None) for name in LOCATOR_COLUMNS}
+    )
+    table = rarest_key.KeyTable(np.array(rows["key1_hash"], dtype=np.uint64), np.arange(2))
+    record = "intro " * 400 + "Q: " + question + " A: Saturn." + " outro" * 900
+    pairs = record_pairs("r1", record, table, locators)
+    # Both streams of the item match, but the record gets one pair for the item.
+    assert [pair["item"] for pair in pairs] == ["planets-0"]
+    assert question in pairs[0]["right"] and len(pairs[0]["right"]) < len(record)
+    escaped = json.dumps({"text": "Q: " + question.replace(" ", "\n")})
+    assert [pair["item"] for pair in record_pairs("r2", escaped, table, locators)] == ["planets-0"]
+    assert record_pairs("r3", "nothing about planets here " * 20, table, locators) == []
