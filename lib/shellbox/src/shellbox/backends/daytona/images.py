@@ -105,12 +105,26 @@ async def _submit(client: AsyncDaytonaV2Client, request: ImageRequest) -> None:
         await client.images.build_from_context(source.context, dockerfile=source.dockerfile.name, name=request.name)
 
 
+async def _submit_and_read_back(
+    client: AsyncDaytonaV2Client, request: ImageRequest, backoff: ExponentialBackoff
+) -> None:
+    """Submit the image; a collision or a submission lost in transit is left for the next read by name."""
+    try:
+        await _submit(client, request)
+    except DaytonaConflictError:
+        pass
+    except DaytonaError as error:
+        if not is_transient_daytona_error(error):
+            raise
+        await sleep(backoff.next_interval())
+
+
 async def ensure_image(client: AsyncDaytonaV2Client, request: ImageRequest) -> str:
     """Create or await the ready image identified by ``request`` and return its name.
 
     The name is derived from the source, so a name another rollout already
-    submitted is the same image and is awaited instead. A submission that
-    failed in transit or collided is read back by name before it is repeated.
+    submitted is the same image and is awaited instead. Every submission is
+    read back by name, so a collision or a lost response is not a failure.
     A failed image is submitted once more, which the provider builds or imports
     again: concurrent identical builds can report a transient failure.
     """
@@ -121,14 +135,7 @@ async def ensure_image(client: AsyncDaytonaV2Client, request: ImageRequest) -> s
         try:
             image = await retry_transient(lambda: client.images.get(name))
         except DaytonaNotFoundError:
-            try:
-                await _submit(client, request)
-            except DaytonaConflictError:
-                pass
-            except DaytonaError as error:
-                if not is_transient_daytona_error(error):
-                    raise
-                await sleep(backoff.next_interval())
+            await _submit_and_read_back(client, request, backoff)
             continue
         while image.status not in FAILED_IMAGE_STATUSES | {READY_IMAGE_STATUS}:
             # One server long poll per request; callers bound the whole wait with their own deadline.
@@ -138,7 +145,7 @@ async def ensure_image(client: AsyncDaytonaV2Client, request: ImageRequest) -> s
         if resubmitted:
             raise RuntimeError(f"Daytona image {name} is {image.status}: {image.error}")
         resubmitted = True
-        await _submit(client, request)
+        await _submit_and_read_back(client, request, backoff)
 
 
 async def list_images(client: AsyncDaytonaV2Client) -> list[Image]:

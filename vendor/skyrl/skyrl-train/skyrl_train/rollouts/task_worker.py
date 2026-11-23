@@ -15,6 +15,7 @@ from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
@@ -683,7 +684,6 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
-            from shellbox.backends.daytona.connection import DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 

@@ -439,10 +439,10 @@ Measurement runs that production path rather than reimplementing it
 task's environment is materialized to a build context, the `MachineSpec` is
 built through Harbor's own task-config mapping
 (`harbor.environments.daytona.machine_spec`), and the name comes from
-`shellbox.backends.daytona.snapshot.snapshot_request_for_spec` — the same
-derivation the Daytona factory uses to name and create snapshots. A task the
-production validation rejects (for example a Dockerfile with `ADD`, which
-Daytona cannot build) counts as a failure and is reported, not treated as safe.
+`shellbox.backends.daytona.images.image_request_for_spec` — the same
+derivation the Daytona factory uses to name and create images. A task the
+production validation rejects (for example a Dockerfile outside its build
+context root) counts as a failure and is reported, not treated as safe.
 No Daytona API calls are made. `oracle_validation` separately records how
 execution was qualified; see
 [Sources without oracle solutions](#sources-without-oracle-solutions). A

@@ -10,47 +10,29 @@ import pytest
 from shellbox.process_session import BoundedByteBuffer, SubprocessSession
 
 
-def test_process_buffer_applies_backpressure_and_delivers_bytes_before_failure():
+def test_process_buffer_delivers_buffered_bytes_before_failure():
     async def scenario():
-        buffer = BoundedByteBuffer(3)
-        started = asyncio.Event()
+        buffer = BoundedByteBuffer(256)
         payload = bytes(range(256))
-
-        async def produce():
-            started.set()
-            await buffer.feed(payload)
-            await buffer.finish(ConnectionError("Transport disconnected"))
-
-        producer = asyncio.create_task(produce())
-        await started.wait()
-        assert not producer.done()
+        await buffer.append(payload)
+        await buffer.finish(ConnectionError("Transport disconnected"))
         received = bytearray()
         for _ in range(len(payload)):
             received.extend(await buffer.read(1))
         assert received == payload
         with pytest.raises(ConnectionError):
             await buffer.read(1)
-        await producer
 
     asyncio.run(scenario())
 
 
-def test_process_buffer_close_releases_backpressured_producer():
+def test_process_buffer_rejects_output_beyond_its_capacity_without_waiting():
     async def scenario():
         buffer = BoundedByteBuffer(3)
-        started = asyncio.Event()
-
-        async def produce():
-            started.set()
-            await buffer.feed(b"abcdef")
-
-        producer = asyncio.create_task(produce())
-        await started.wait()
-        assert not producer.done()
-        await buffer.finish()
-        await asyncio.wait_for(producer, 5)
+        await buffer.append(b"abc")
+        with pytest.raises(BufferError):
+            await asyncio.wait_for(buffer.append(b"d"), 5)
         assert await buffer.read(10) == b"abc"
-        assert await buffer.read(10) == b""
 
     asyncio.run(scenario())
 
