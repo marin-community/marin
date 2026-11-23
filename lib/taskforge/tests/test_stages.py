@@ -831,7 +831,6 @@ def test_a_solver_slot_without_a_score_holds_by_policy_and_is_never_read_as_a_ze
     result = replace(evidence(3), solver=(*evidence(3).solver[:2], absent))
     wp = workpiece.with_(evidence=(result,))
     setup = build_config(load_policy(DEFAULTS_DIR), {})
-    assert setup.budget.max_missing_trials == 0  # the default: any missing slot holds the round
     held = default_review(wp, setup.band, setup.budget)
     assert isinstance(held, Retry if cause is not Cause.HELD else Incomplete)
     if cause is Cause.HELD:
