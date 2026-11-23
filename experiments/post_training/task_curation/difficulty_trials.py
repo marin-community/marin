@@ -41,6 +41,7 @@ from pydantic import ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
 from rigging.secrets import require_secret
+from shellbox.machine import UnsupportedMachineSpec
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_result import GradingFailure
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
@@ -546,10 +547,29 @@ def worker_host_capabilities(
     source.pop("DAYTONA_API_KEY", None)
     if source.get("DAYTONA_DATA_API_KEY"):
         source["DAYTONA_API_KEY"] = source["DAYTONA_DATA_API_KEY"]
-    return host_capabilities_from_environment(
+    capabilities = host_capabilities_from_environment(
         source,
         model_authentication=authentication,
     )
+    connection = capabilities.daytona
+    if connection is not None and not (connection.api_key and connection.api_url and connection.target):
+        # client_factory's error names no field; name the missing one and whether the DATA
+        # credential reached this process, so a wave-side wiring gap is visible at once.
+        missing = [
+            name
+            for name, value in (
+                ("api_key", connection.api_key),
+                ("api_url", connection.api_url),
+                ("target", connection.target),
+            )
+            if not value
+        ]
+        raise UnsupportedMachineSpec(
+            "Daytona connection is incomplete for a Difficulty trial: missing "
+            f"{', '.join(missing)}; DAYTONA_DATA_API_KEY "
+            f"{'present' if source.get('DAYTONA_DATA_API_KEY') else 'ABSENT'} in the worker environment"
+        )
+    return capabilities
 
 
 async def execute_trial(
