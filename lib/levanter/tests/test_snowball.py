@@ -498,12 +498,21 @@ def test_snowball_fp32_activations_cover_every_sigmoid():
     "model_axis_size,expert_axis_size,selected_decode",
     [(1, 1, False), (2, 1, False), (1, 2, False), (1, 2, True)],
 )
-def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size, selected_decode):
+@pytest.mark.parametrize("packed_experts", [False, True])
+def test_snowball_paged_generation_matches_full_forward(
+    model_axis_size, expert_axis_size, selected_decode, packed_experts
+):
     cfg = _tiny_config(num_layers=2, sliding_window=3)
     with use_cpu_devices(model_axis_size * expert_axis_size):
         mesh = compact_grug_mesh(model_axis_size=model_axis_size, expert_axis_size=expert_axis_size)
         with jax.set_mesh(mesh):
             model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(17))
+            if packed_experts:
+                state = model.to_state_dict()
+                model = model.with_packed_experts().from_state_dict(state)
+                assert all(block.mlp.expert_mlp.w_up is None for block in model.transformer.blocks)
+                for name, value in model.to_state_dict().items():
+                    np.testing.assert_array_equal(value, state[name])
             if selected_decode:
                 model = model.with_selected_ep_decode()
             engine = InferenceEngine.from_model_with_config(
