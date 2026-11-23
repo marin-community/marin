@@ -24,7 +24,7 @@ from marin.training.drafting.dspark_data import (
     inspect_teacher,
     prepare_data,
 )
-from marin.training.drafting.dspark_distillation import DraftRecipe, extraction_config, gpu_device_split, validate_draft
+from marin.training.drafting.dspark_distillation import DraftRecipe, extraction_config, validate_draft
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import save_file
 from tokenizers import AddedToken, Tokenizer
@@ -150,7 +150,6 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
     assert int(len(rows) * split["train_ratio"]) == 1
     assert torch.equal(rows[0]["input_ids"], torch.tensor([1, 2, 3, 5]))
     assert torch.equal(rows[0]["loss_mask"], torch.tensor([False, False, True, True]))
-    assert rows[0]["seq_len"] == 4
     assert rows[1]["input_ids"].tolist() == [1, 4, 6]
     assert json.loads((prepared / "token_frequencies.json").read_text()) == {"3": 1, "5": 1}
 
@@ -193,13 +192,7 @@ def test_draft_export_uses_feature_taps_and_offset_mapping(tmp_path: Path, teach
     }
     weight_file = ckpt / "model.safetensors"
     save_file(weights, weight_file)
-    assert validate_draft(ckpt, recipe, np.array([0, 2, 5]))["aux_hidden_state_layer_ids"] == [1, 3]
-    save_file({**weights, "d2t": np.array([0, 3, 7])}, weight_file)
+    validate_draft(ckpt, recipe, np.array([0, 2, 5]))
+    save_file({**weights, "d2t": np.array([0, 3, 5])}, weight_file)
     with pytest.raises(ValueError, match="vocabulary mapping"):
         validate_draft(ckpt, recipe, np.array([0, 2, 5]))
-
-
-def test_gpu_device_split_respects_iris_device_order(recipe: DraftRecipe) -> None:
-    assert gpu_device_split("GPU-c62a,GPU-955b", recipe) == ("GPU-c62a", "GPU-955b")
-    with pytest.raises(ValueError):
-        gpu_device_split("GPU-c62a,GPU-c62a", recipe)

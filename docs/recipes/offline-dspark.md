@@ -36,10 +36,8 @@ under `train/` and `validation/`. The shards must provide `messages` and may
 provide `chat_template_kwargs`. Set the mixture and holdout membership when
 building that artifact.
 
-Save the recipe as JSON and put it in the same region as the inputs and
-Iris worker. For example, a recipe for four GPUs assigns two to the teacher
-and two to Speculators. Use the storage paths for the selected export and
-mixture. Each Marin directory ends in its fixed version.
+Save the JSON recipe in the region of the inputs and Iris worker. Each
+Marin input directory ends in its fixed version.
 
 ```json
 {
@@ -62,6 +60,7 @@ durable regional output prefix and `RECIPE_URI` to the stored recipe.
 ```bash
 uv run python -m experiments.post_training.dspark_sft --config "$RECIPE_URI"
 uv run python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --stage preflight
+uv run --extra cpu python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --stage prepare
 ```
 
 The default command prints the artifact graph. CPU preflight checks the
@@ -98,12 +97,9 @@ The trainer uses Speculators' PyTorch implementation of the weighted CE/TV
 loss to avoid a tracing error in the fused loss autotuner.
 
 Preparation renders assistant masks with Levanter's SFT chat processor and
-rejects exact rendered sequences shared
-across splits. For a large mix, `uv run --extra cpu` with `--stage prepare`
-builds the dataset in the storage region ahead of training. Runs with
-different step budgets, optimizer settings, or GPU counts reuse that
-dataset. The worker checks split sizes and counts the packed training
-batches before staging the teacher weights.
+rejects sequences shared across splits after rendering. Runs with different
+step budgets or GPU counts reuse the dataset. The worker checks split sizes
+and counts the packed batches before staging the teacher weights.
 
 ## Serve the draft
 

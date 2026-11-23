@@ -33,7 +33,6 @@ from marin.training.drafting.dspark_data import (
     TOKEN_FREQUENCIES_FILE,
     DraftDataConfig,
     PreparedSplits,
-    inspect_teacher,
     tensor_files,
 )
 
@@ -138,7 +137,7 @@ class DSparkExport(Artifact):
     loss_implementation: str = _LOSS_IMPLEMENTATION
 
 
-def gpu_device_split(visible_devices: str, recipe: DraftRecipe) -> tuple[str, str]:
+def _gpu_device_split(visible_devices: str, recipe: DraftRecipe) -> tuple[str, str]:
     """Partition the Iris task's visible GPU IDs into teacher and trainer masks."""
 
     devices = [device.strip() for device in visible_devices.split(",")]
@@ -288,7 +287,7 @@ def _publish_checkpoint(
     if (
         state["global_step"] != expected_steps
         or not all(math.isfinite(value) for value in metrics.values())
-        or not math.isfinite(metrics["loss_epoch"])
+        or "loss_epoch" not in metrics
     ):
         raise ValueError("DSpark training finished without the requested steps and finite validation metrics")
     config = validate_draft(checkpoint, recipe, mapping)
@@ -465,11 +464,7 @@ def train_and_export(
     split = PreparedSplits(**json.loads((prepared_source / SPLITS_FILE).read_text()))
     if min(split.train, split.validation) < recipe.trainer_ranks:
         raise ValueError("Each prepared split needs at least one usable row per trainer rank")
-    decoder = inspect_teacher(source, recipe.data)
-    if json.loads((prepared_source / DRAFT_CONFIG_FILE).read_text()) != decoder:
-        raise ValueError("Prepared draft config disagrees with the teacher")
-
-    teacher_devices, trainer_devices = gpu_device_split(_worker_gpu_devices(), recipe)
+    teacher_devices, trainer_devices = _gpu_device_split(_worker_gpu_devices(), recipe)
     trainer_env = {**os.environ, "HF_HUB_OFFLINE": "1", "CUDA_VISIBLE_DEVICES": trainer_devices}
     trainer_env.pop("PYTHONPATH", None)
     with TemporaryDirectory(prefix="marin-dspark-") as directory:

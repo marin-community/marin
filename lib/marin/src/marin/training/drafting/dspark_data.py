@@ -50,6 +50,19 @@ class GrugShape:
     vocab_size: int
     sconv: bool = False
 
+    @classmethod
+    def from_hf_config(cls, config: dict) -> "GrugShape":
+        """Read the dimensions needed by the draft from HF metadata."""
+        return cls(
+            hidden_size=config["hidden_size"],
+            num_hidden_layers=config["num_hidden_layers"],
+            num_attention_heads=config["num_attention_heads"],
+            num_key_value_heads=config["num_key_value_heads"],
+            head_dim=config["head_dim"],
+            vocab_size=config["vocab_size"],
+            sconv=config.get("sconv", False),
+        )
+
 
 @dataclass(frozen=True)
 class DraftDataConfig:
@@ -74,7 +87,7 @@ class PreparedSplits:
     train_ratio: float
 
 
-def _weight_map(index: Path) -> dict[str, str]:
+def _weight_map(index: Path | StoragePath) -> dict[str, str]:
     return json.loads(index.read_text())["weight_map"]
 
 
@@ -97,15 +110,15 @@ def _tensor_header(path: StoragePath) -> dict:
     return json.loads(fs.cat_file(location, start=8, end=8 + size))
 
 
-def _check_teacher_tensors(root: StoragePath, metadata: Path, shape: GrugShape) -> None:
-    index = metadata / SAFE_TENSORS_INDEX_NAME
-    if index.is_file():
+def _check_teacher_tensors(root: StoragePath, shape: GrugShape) -> None:
+    index = root / SAFE_TENSORS_INDEX_NAME
+    if index.isfile():
         weights = _weight_map(index)
         headers = {}
     else:
         name = _SAFETENSORS_FILE
         headers = {name: _tensor_header(root / name)}
-        weights = dict.fromkeys(headers[name], name)
+        weights = dict.fromkeys(headers[name].keys() - {"__metadata__"}, name)
     for shard in set(weights.values()):
         if Path(shard).name != shard or not (root / shard).isfile():
             raise ValueError(f"Missing or invalid HF weight shard {shard!r} below {root}")
@@ -139,19 +152,9 @@ def _draft_decoder(target: dict, config: DraftDataConfig) -> dict[str, str | int
         or target.get("quantization_config")
     ):
         raise ValueError("Expected an unquantized GrugMoE HF SFT export")
-    shape = config.shape
-    for key in (
-        "hidden_size",
-        "num_hidden_layers",
-        "num_attention_heads",
-        "num_key_value_heads",
-        "head_dim",
-        "vocab_size",
-    ):
-        if target[key] != getattr(shape, key):
-            raise ValueError(f"Teacher {key}={target[key]} disagrees with selected target shape {getattr(shape, key)}")
-    if bool(target.get("sconv", False)) != shape.sconv:
-        raise ValueError("Teacher ShortConv configuration disagrees with selected target")
+    shape = GrugShape.from_hf_config(target)
+    if shape != config.shape:
+        raise ValueError(f"Teacher shape {shape} disagrees with the selected target {config.shape}")
     if config.max_sequence_length >= target["max_position_embeddings"]:
         raise ValueError("Teacher needs context for the full prefill row and one output token")
 
@@ -178,22 +181,14 @@ def _draft_decoder(target: dict, config: DraftDataConfig) -> dict[str, str | int
 def _teacher_inputs(
     root: StoragePath, config: DraftDataConfig
 ) -> tuple[dict[str, str | int | float | bool | None], MarinTokenizer]:
-    with TemporaryDirectory(prefix="dspark-metadata-") as directory:
-        metadata = Path(directory)
-        for source in root.ls():
-            if source.name.endswith((".json", ".jinja")) and source.isfile():
-                source.download_to(str(metadata / source.name))
-        templates = root / "chat_templates"
-        if templates.isdir():
-            templates.download_to(str(metadata / templates.name), recursive=True)
-        decoder = _draft_decoder(json.loads((metadata / CONFIG_NAME).read_text()), config)
-        _check_teacher_tensors(root, metadata, config.shape)
-        tokenizer = load_tokenizer(str(metadata))
-        if not tokenizer.chat_template or tokenizer.vocab_size > config.shape.vocab_size:
-            raise ValueError("Teacher export needs its matching tokenizer and chat template")
-        if tokenizer.encode(GRUG_MASK_TOKEN) != [config.mask_token_id]:
-            raise ValueError("Teacher tokenizer disagrees with the DSpark mask token")
-        return decoder, tokenizer
+    decoder = _draft_decoder(json.loads((root / CONFIG_NAME).read_text()), config)
+    _check_teacher_tensors(root, config.shape)
+    tokenizer = load_tokenizer(str(root))
+    if not tokenizer.chat_template or tokenizer.vocab_size > config.shape.vocab_size:
+        raise ValueError("Teacher export needs its matching tokenizer and chat template")
+    if tokenizer.encode(GRUG_MASK_TOKEN) != [config.mask_token_id]:
+        raise ValueError("Teacher tokenizer disagrees with the DSpark mask token")
+    return decoder, tokenizer
 
 
 def inspect_teacher(root: StoragePath, config: DraftDataConfig) -> dict[str, str | int | float | bool | None]:

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import click
 import draccus
+from levanter.models.snowball import SnowballConfig
 from marin.execution.artifact import is_mutable_version
 from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity, lower
 from marin.execution.step_runner import StepRunner
@@ -35,6 +36,7 @@ from rigging.filesystem.cross_region import is_cross_region_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
 from experiments.models import ModelConfig, download_model
 
 
@@ -43,15 +45,16 @@ class TeacherFamily(StrEnum):
     MOCHI = "mochi"
 
 
-_GRUG_HEAD_DIM = 128
-_GRUG_VOCAB_SIZE = 128256
-_SHAPES = {
-    TeacherFamily.SNOWBALL: GrugShape(2560, 26, 20, 5, _GRUG_HEAD_DIM, _GRUG_VOCAB_SIZE),
-    TeacherFamily.MOCHI: GrugShape(6144, 48, 48, 12, _GRUG_HEAD_DIM, _GRUG_VOCAB_SIZE, sconv=True),
-}
-_FEATURE_TAPS = {
-    TeacherFamily.SNOWBALL: (2, 12, 22),
-    TeacherFamily.MOCHI: (2, 24, 45),
+_SNOWBALL = SnowballConfig()
+_TARGETS = {
+    TeacherFamily.SNOWBALL: (
+        GrugShape.from_hf_config(_SNOWBALL.to_hf_config(_SNOWBALL.vocab_size).to_dict()),
+        (2, 12, 22),
+    ),
+    TeacherFamily.MOCHI: (
+        GrugShape.from_hf_config(HERO_MODEL.to_hf_config(HERO_MODEL.vocab_size).to_dict()),
+        (2, 24, 45),
+    ),
 }
 _RECIPE_VERSION = "2026.11.22.3"
 
@@ -77,13 +80,14 @@ class OfflineDSpark:
     seed: int = 42
 
     def training_recipe(self) -> DraftRecipe:
+        shape, taps = _TARGETS[self.teacher.family]
         return DraftRecipe(
             data=DraftDataConfig(
-                shape=_SHAPES[self.teacher.family],
+                shape=shape,
                 mask_token_id=128004,
                 max_sequence_length=self.max_sequence_length,
             ),
-            feature_taps=_FEATURE_TAPS[self.teacher.family],
+            feature_taps=taps,
             max_anchors=self.max_anchors,
             max_steps=self.max_steps,
             trainer_ranks=self.trainer_ranks,
