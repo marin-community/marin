@@ -10,19 +10,24 @@ entrypoint; the `__main__` path supports manual `iris job run` invocations.
 """
 
 import argparse
+from dataclasses import replace
 
 from marin.inference.iris import run_iris_service
 
 from experiments.glm_synthesis_serving.pool import POOL_INSTANCES, WARM_RUN_INSTANCES, service
 
 
-def serve(instances: int = POOL_INSTANCES, extra_args: tuple[str, ...] = ()) -> None:
+def serve(instances: int = POOL_INSTANCES, extra_args: tuple[str, ...] = (), endpoint_name: str | None = None) -> None:
     """Run the brokered serving service for `instances` engines until its timeout.
 
     `extra_args` extends the engine arguments (warm-run variants such as MTP
-    speculative decoding).
+    speculative decoding); `endpoint_name` overrides the registered endpoint so a
+    variant can bench on its own URL.
     """
-    run_iris_service(service(instances, engine_extra_args=extra_args))
+    service_config = service(instances, engine_extra_args=extra_args)
+    if endpoint_name is not None:
+        service_config = replace(service_config, endpoint_name=endpoint_name)
+    run_iris_service(service_config)
 
 
 if __name__ == "__main__":

@@ -73,10 +73,20 @@ def submit_stage_job(client: IrisClient, suffix: str):
     )
 
 
-def submit_coordinator_job(client: IrisClient, *, instances: int, suffix: str, extra_args: tuple[str, ...] = ()):
+def submit_coordinator_job(
+    client: IrisClient,
+    *,
+    instances: int,
+    suffix: str,
+    extra_args: tuple[str, ...] = (),
+    endpoint_name: str | None = None,
+):
     """Submit the serving coordinator (broker + engine workers + endpoint registration)."""
+    entrypoint_args: tuple = (instances, extra_args)
+    if endpoint_name is not None:
+        entrypoint_args = (instances, extra_args, endpoint_name)
     return client.submit(
-        entrypoint=Entrypoint.from_callable(serve_pool.serve, instances, extra_args),
+        entrypoint=Entrypoint.from_callable(serve_pool.serve, *entrypoint_args),
         name=f"{pool.JOB_PREFIX}-{suffix}",
         resources=convert_resources(
             _pool_cpu_resources(cpu=_COORDINATOR_CPU, ram=_COORDINATOR_RAM, disk=_COORDINATOR_DISK)
@@ -102,23 +112,29 @@ def submit_watchdog_job(client: IrisClient, suffix: str):
     )
 
 
-def wait_for_endpoint(client: IrisClient, timeout: Duration = _ENDPOINT_READY_TIMEOUT, coordinator=None) -> str:
+def wait_for_endpoint(
+    client: IrisClient,
+    timeout: Duration = _ENDPOINT_READY_TIMEOUT,
+    coordinator=None,
+    endpoint_name: str | None = None,
+) -> str:
     """Poll the controller registry until the pool endpoint registers; return its URL.
 
     With `coordinator`, abort as soon as that job reaches a terminal state — a failed
     engine boot must wake the caller instead of burning the whole wait budget.
     """
+    name = endpoint_name or pool.ENDPOINT_NAME
     deadline = time.monotonic() + timeout.to_seconds()
     while time.monotonic() < deadline:
         if coordinator is not None:
             # Accept a JobHandle (has .status()) or an already-fetched JobStatus.
             state = coordinator.status().state if callable(getattr(coordinator, "status", None)) else coordinator.state
             if is_job_finished(state):
-                raise RuntimeError(f"coordinator finished before registering the endpoint")
-        if client.list_endpoint_instances(pool.ENDPOINT_NAME):
-            return client.resolve_endpoint(pool.ENDPOINT_NAME)
+                raise RuntimeError("coordinator finished before registering the endpoint")
+        if client.list_endpoint_instances(name):
+            return client.resolve_endpoint(name)
         time.sleep(_ENDPOINT_POLL_SECONDS)
-    raise TimeoutError(f"pool endpoint {pool.ENDPOINT_NAME} did not register within {timeout}")
+    raise TimeoutError(f"pool endpoint {name} did not register within {timeout}")
 
 
 def main() -> None:
@@ -129,6 +145,11 @@ def main() -> None:
         type=int,
         default=None,
         help="Enable MTP speculative decoding with this many speculative tokens (warm-run variant).",
+    )
+    parser.add_argument(
+        "--endpoint-name",
+        default=None,
+        help="Register this endpoint instead of the pool's (variant benching).",
     )
     parser.add_argument("--skip-stage", action="store_true", help="Assume the weights prefix is already staged.")
     parser.add_argument("--no-watchdog", action="store_true", help="Do not start the watchdog job.")
@@ -154,6 +175,7 @@ def main() -> None:
             raise SystemExit("--mtp must be positive")
         extra_args = ("--speculative-config", f'{{"method":"mtp","num_speculative_tokens":{args.mtp}}}')
     suffix = args.tag or uuid.uuid4().hex[:6]
+    endpoint_name = args.endpoint_name
     workspace = find_project_root()
     if workspace is None:
         raise SystemExit("launch_pool must run inside a marin checkout (the workspace is bundled for workers).")
@@ -177,7 +199,9 @@ def main() -> None:
                 stage_job.wait(timeout=_STAGE_TIMEOUT.to_seconds())
                 logger.info("weights staged")
 
-            coordinator = submit_coordinator_job(client, instances=instances, suffix=suffix, extra_args=extra_args)
+            coordinator = submit_coordinator_job(
+                client, instances=instances, suffix=suffix, extra_args=extra_args, endpoint_name=endpoint_name
+            )
             logger.info("coordinator job %s (instances=%d)", coordinator.job_id, instances)
 
             if not args.no_watchdog:
@@ -188,12 +212,14 @@ def main() -> None:
                 logger.info("submitted without waiting; the endpoint registers when the engines are up")
                 return
 
-            base_url = wait_for_endpoint(client, coordinator=coordinator)
+            base_url = wait_for_endpoint(client, coordinator=coordinator, endpoint_name=endpoint_name)
             click.echo("")
             click.echo(f"READY — endpoint: {base_url}")
             click.echo(f"        model:    {pool.SERVED_MODEL_NAME}  ({pool.MODEL_REPO}@{pool.MODEL_REVISION})")
             click.echo(f"        pool:     {instances} x TP{pool.GPUS_PER_ENGINE} engines on {pool.CLUSTER}")
-            response = client.mint_endpoint_token(pool.ENDPOINT_NAME, ttl=Duration.from_hours(_CAPABILITY_TTL_HOURS))
+            response = client.mint_endpoint_token(
+                endpoint_name or pool.ENDPOINT_NAME, ttl=Duration.from_hours(_CAPABILITY_TTL_HOURS)
+            )
             origin = response.capability_url or ""
             if origin:
                 click.echo(f"        shared:   {origin}/v1  (capability URL; expires in {_CAPABILITY_TTL_HOURS}h)")
