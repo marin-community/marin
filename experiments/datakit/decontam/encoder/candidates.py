@@ -4,19 +4,21 @@
 """Worker code of the catalog scan (``catalog.py scan``): the key-1 candidates of each record of a shard.
 
 Each record's key-1 candidates are written with the record text around the hit (one pair per record and
-item). A shard is done when its ``stats/<shard>.json`` exists; a restarted job skips done shards. Records
-over ``MAX_DOC_CHARS`` are not read; their ids are listed in the shard's stats. The scan function lives in
-this module, not in ``catalog.py``, so Zephyr workers import it by name.
+item). A shard is done when its ``stats/<shard>.json`` exists; a restarted job skips done shards. A record
+over ``MAX_DOC_CHARS`` is read in overlapping pieces (``decon_keys.pieces``); the shard's stats list its id
+under ``oversized``. The scan function lives in this module, not in ``catalog.py``, so Zephyr workers import
+it by name.
 """
 
 import functools
 import json
 import time
 from collections.abc import Iterator
+from enum import StrEnum
 
 import numpy as np
 import pyarrow as pa
-from marin.datakit.decon_keys import MAX_DOC_CHARS, KeyTable, record_pairs
+from marin.datakit.decon_keys import MAX_DOC_CHARS, KeyTable, pieces, record_pairs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.dataset import ShardInfo
 from zephyr.input_file import InputFileSpec
@@ -27,6 +29,14 @@ from experiments.datakit.decontam.encoder.tables import read_table, shard_name, 
 LOCATORS = "locators.parquet"
 
 
+class Records(StrEnum):
+    """Which records a scan reads."""
+
+    ALL = "all"
+    SHORT = "short"  # records up to MAX_DOC_CHARS; longer ones are listed, not read
+    OVERSIZED = "oversized"  # only records over MAX_DOC_CHARS, to complete a SHORT run
+
+
 @functools.lru_cache(maxsize=1)
 def _index(output: str) -> tuple[KeyTable, pa.Table]:
     """The key-1 table over locator rows, and the locators; loaded once per worker process."""
@@ -35,7 +45,16 @@ def _index(output: str) -> tuple[KeyTable, pa.Table]:
     return KeyTable(locators.column("key1_hash").to_numpy(), rows), locators
 
 
-def make_scan(output: str, width: int):
+def long_record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table, width: int) -> list[dict]:
+    """``record_pairs`` over the pieces of a record over ``MAX_DOC_CHARS``: one pair per item, the first found."""
+    found: dict[str, dict] = {}
+    for piece in pieces(text):
+        for pair in record_pairs(record_id, piece, table, locators, width):
+            found.setdefault(pair["item"], pair | {"record_chars": len(text)})
+    return list(found.values())
+
+
+def make_scan(output: str, width: int, records: Records):
     def scan(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
         for path in paths:
             name = shard_name(path)
@@ -49,12 +68,17 @@ def make_scan(output: str, width: int):
             pairs = []
             for record in load_file(InputFileSpec(path=path, columns=["id", "text"])):
                 text = str(record.get("text") or "")
-                if len(text) > MAX_DOC_CHARS:
+                oversized = len(text) > MAX_DOC_CHARS
+                if oversized:
                     stats["oversized"].append({"id": str(record["id"]), "chars": len(text)})
+                if (records == Records.OVERSIZED and not oversized) or (records == Records.SHORT and oversized):
                     continue
                 stats["records"] += 1
                 stats["chars"] += len(text)
-                found = record_pairs(str(record["id"]), text, table, locators, width)
+                if oversized:
+                    found = long_record_pairs(str(record["id"]), text, table, locators, width)
+                else:
+                    found = record_pairs(str(record["id"]), text, table, locators, width)
                 stats["candidate_records"] += bool(found)
                 pairs += found
             stats["pairs"] = len(pairs)

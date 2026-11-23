@@ -21,6 +21,7 @@ from marin.datakit.decon_keys import (
     item_stream,
     key_streams,
     keys_table,
+    pieces,
     record_hit_indices,
     record_pairs,
     record_readings,
@@ -310,3 +311,17 @@ def test_a_bound_narrower_than_a_window_is_rejected():
     stream = text_stream("Henry made two stops during his sixty mile bike trip.")
     with pytest.raises(ValueError):
         candidate_windows([stream], bounds=[(5, 10)])
+
+
+@pytest.mark.parametrize("length", [0, 5, 30, 31, 64, 100, 257])
+def test_pieces_hold_every_stretch_up_to_the_overlap_in_one_piece(length):
+    text = "".join(chr(ord("a") + k % 26) for k in range(length))
+    size, overlap = 30, 8
+    starts, at = [], 0
+    for piece in pieces(text, size, overlap):
+        assert len(piece) <= size
+        at = text.index(piece, at)
+        starts.append(at)
+    for begin in range(len(text)):
+        end = min(begin + overlap, len(text))
+        assert any(s <= begin and end <= s + size for s in starts), (begin, end)

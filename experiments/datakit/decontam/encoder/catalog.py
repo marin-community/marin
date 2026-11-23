@@ -26,7 +26,7 @@ from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-from experiments.datakit.decontam.encoder.candidates import LOCATORS, make_scan
+from experiments.datakit.decontam.encoder.candidates import LOCATORS, Records, make_scan
 from experiments.datakit.decontam.encoder.tables import (
     item_texts,
     parquet_files,
@@ -151,6 +151,9 @@ def main() -> None:
     parser.add_argument("--files", help="scan: JSON list of shard paths, in place of every shard of --sources")
     parser.add_argument("--max-workers", type=int, default=1000, help="scan: Zephyr workers")
     parser.add_argument("--ram", default="16g", help="scan: memory per worker")
+    parser.add_argument(
+        "--records", type=Records, help="scan: all, short (over MAX_DOC_CHARS listed, not read), or oversized only"
+    )
     parser.add_argument("--cutoff", type=float, help="collect: a record is removed at or above this mean score")
     parser.add_argument(
         "--scores",
@@ -163,6 +166,8 @@ def main() -> None:
     elif args.step == "collect":
         collect(args.output, args.scores or prefix_join(args.output, "scores"), args.cutoff)
     else:
+        if args.records is None:
+            parser.error("scan needs --records")
         if args.files:
             # A partial scan (a pilot, a rescan of a few shards) adds to the output; shards.json stays the catalog's.
             files = json.loads(StoragePath(args.files).read_text())
@@ -173,7 +178,8 @@ def main() -> None:
         resources = ResourceConfig(cpu=1, ram=args.ram)
         context = ZephyrContext(name="decon-encoder-catalog", resources=resources, max_workers=args.max_workers)
         outcome = context.execute(
-            Dataset.from_list(files).map_shard(make_scan(args.output, args.width)), map_task_resources=resources
+            Dataset.from_list(files).map_shard(make_scan(args.output, args.width, args.records)),
+            map_task_resources=resources,
         )
         logger.info(
             "scan done: %d shards, %d pairs", len(outcome.results), sum(r.get("pairs", 0) for r in outcome.results)

@@ -25,6 +25,7 @@ import itertools
 import os
 import re
 import unicodedata
+from collections.abc import Iterator
 from enum import StrEnum
 from typing import NamedTuple
 
@@ -70,6 +71,8 @@ _ALNUM = np.zeros(256, dtype=np.int32)
 _ALNUM[np.frombuffer(b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", np.uint8)] = 1
 BEFORE = 1500
 AFTER = 3000
+# Pieces of a record over MAX_DOC_CHARS overlap by this much, so a key hit and its excerpt lie in one piece.
+PIECE_OVERLAP = 2 * (BEFORE + AFTER)
 LOCATOR_COLUMNS = ("item", "kind", "eval", "key1_hash", "key", "offset", "question", "question_chars")
 
 
@@ -454,6 +457,15 @@ def excerpt(
     reading, at = _located(readings_of, question, key, offset)
     start = reading.text_offset(max(at, 0)) - 1 if at >= 0 else 0
     return reading.text[max(0, start - BEFORE) : start + question_chars + AFTER], reading.stream, at
+
+
+def pieces(text: str, size: int = MAX_DOC_CHARS, overlap: int = PIECE_OVERLAP) -> Iterator[str]:
+    """Pieces of *text* of at most *size* characters such that every stretch of up to *overlap* characters
+    lies inside one piece."""
+    if size <= overlap:
+        raise ValueError(f"piece size {size} must exceed the overlap {overlap}")
+    for start in range(0, max(len(text) - overlap, 1), size - overlap):
+        yield text[start : start + size]
 
 
 def record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table, width: int = WINDOW) -> list[dict]:
