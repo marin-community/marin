@@ -239,7 +239,7 @@ selects `default`, rather than inheriting the parent's retention policy.
 | `agentic-lint` | 8 | 60 seconds configured | Completing the lint review |
 | `codehealth-refinement` | 1 | 60 seconds configured | Working on or monitoring its PR |
 | `github-automation` | 12 | 30 minutes | Completing its assigned automation task |
-| `belay` | 1 | 60 seconds configured | Draining claimed Belay events |
+| `belay` | 1 | 60 seconds configured | Processing its claimed Belay events |
 
 Loom archives only after the active agent turn ends. Ordinary sessions have a
 15-minute idle grace period, even when the configured delay is shorter;
@@ -254,8 +254,10 @@ can create another coordinator when needed. These profile policies are captured
 at launch, so deployment changes apply to new sessions; old sessions retain
 their launch policy until explicitly archived or handed off.
 
-Keep Belay serialized: its application queue claims work for one active worker,
-and the watch prompt tells that worker to drain new events before finishing.
+Keep Belay serialized: its application queue claims a batch for one active
+worker. That worker processes the batch, reports `finish`, and exits. Events
+queued during the pass remain for the next pass; the recipe CLI does not expose
+the application's drain API or forward Loom prompts into the active worker.
 Parallel workers could race the training node-cap check. The scheduled watch
 checks every ten minutes and has a four-hour run deadline; a long-running
 training job does not need a Loom session kept open beside it.
