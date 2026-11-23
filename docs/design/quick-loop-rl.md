@@ -2128,6 +2128,26 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   so the two-update comparison needs a fresh attempt.
   [Verified interrupted attempt][held-native-matched-current-preemption]
 
+  A fresh-start diagnostic can skip the initial evaluation callback and
+  keep the final panel. The callback ran for 26m55s in the interrupted
+  attempt. The production worker composer reproduced the archived
+  configuration and rendered the diagnostic configuration offline. The
+  verifier rechecked all 100 archived scores and the 502-tensor policy
+  manifest. It permits changes only to the initial callback flag, the
+  exact policy-0 pin, and the artifact and attempt paths. At runtime the
+  pin requires the learner hosts to agree with the archived weight digest
+  and model binding before serving can install policy 0 and open lease 1.
+  The normal native launcher exercised that guard locally using committed
+  CPU snapshots. It rejected a wrong binding before serving started and
+  generated under both acknowledged policies as the lease advanced.
+
+  Dispatch for this diagnostic would also need to prove the new checkpoint
+  namespace is empty. The archived baseline stays with the original attempt.
+  Skipping evaluation changes serving warmup, and training draws vary with
+  request IDs. The diagnostic would measure a cold training start. The held
+  comparison still requires its initial and final evaluations in the same
+  attempt and remains open.
+
   A CPU probe ran the normal step-end callback with one and two native
   learner processes, local storage and a local Ray dispatch adapter. It
   restored exact learner state and the next prompt selection from the
