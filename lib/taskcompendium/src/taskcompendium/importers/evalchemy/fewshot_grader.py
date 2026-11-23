@@ -26,8 +26,8 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCORERS = Path(__file__).parent / "scorers"
 DEPENDENCIES = {
-    "gsm8k_cot": ("math.py", "minerva.py", "amc.py"),
-    "minerva_math": ("math.py", "minerva.py", "amc.py"),
+    "gsm8k_cot": ("math.py", "minerva.py", "amc.py", "relations.py"),
+    "minerva_math": ("math.py", "minerva.py", "amc.py", "relations.py"),
     "bbh_cot": ("choices.py",),
     "harness_generation": ("harness_generation.py", "minerva.py", "amc.py"),
 }
