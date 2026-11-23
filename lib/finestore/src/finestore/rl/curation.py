@@ -510,6 +510,10 @@ class GradingEnvironmentEvidence(CatalogRecord):
     # declared artifact to exist; empty means the census verified them all or
     # predates the verification.
     missing_artifact_counts: dict[str, int] = Field(default_factory=dict)
+    # Every declared environment artifact URI, valued by task count, whether or
+    # not it existed at census time. The build-stage artifact check verifies
+    # each one in-region; empty means the census predates the declared set.
+    declared_artifact_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class DaytonaUnsafeReason(StrEnum):

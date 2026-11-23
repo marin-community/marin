@@ -33,6 +33,7 @@ from experiments.post_training.task_curation.datasets.oracle_admitted_releases i
 from experiments.post_training.task_curation.datasets.oracle_releases import oracle_release_receipts
 from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
 from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
+from experiments.post_training.task_curation.environment_artifacts import verify_declared_environment_artifacts
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource
@@ -249,6 +250,19 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--consumer-output", type=Path)
     args = parser.parse_args()
+    blocking, notes = verify_declared_environment_artifacts(grading_census_receipts())
+    for note in notes:
+        print(f"environment artifact: {note}", file=sys.stderr)
+    if blocking:
+        for finding in blocking:
+            print(
+                f"environment artifact {finding.reason}: {finding.source_id} declares {finding.artifact_uri} "
+                f"({finding.task_count} tasks) and the scripted in-region rebuild failed: {finding.detail}",
+                file=sys.stderr,
+            )
+        raise SystemExit(
+            f"declared environment artifacts are missing after rebuild attempts: {len(blocking)} finding(s)"
+        )
     extras = status_extras()
     payload = json.dumps(extras, indent=2) + "\n"
     if args.consumer_output is not None:

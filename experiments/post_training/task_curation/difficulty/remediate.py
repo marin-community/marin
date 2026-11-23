@@ -4,7 +4,6 @@
 """Concrete repairs reuse the source's original environment and judge identities."""
 
 import json
-import re
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
@@ -12,7 +11,6 @@ from pathlib import Path
 from finestore.rl.curation import QualifiedSourceDeclaration
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, DifficultyGap
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.admission_inventory import inventory_source
 from experiments.post_training.task_curation.difficulty.importer import (
@@ -49,8 +47,7 @@ from experiments.post_training.task_curation.difficulty_samples import (
     prepare_sample,
     write_source_queue,
 )
-from experiments.post_training.task_curation.images.__main__ import declared_environments
-from experiments.post_training.task_curation.images.build import DEFAULT_REPOSITORY, EnvironmentBuild, build_environment
+from experiments.post_training.task_curation.environment_artifacts import rebuild_artifact
 
 STATIC_ADMISSION_CAUSES = frozenset(
     {
@@ -63,37 +60,6 @@ STATIC_ADMISSION_CAUSES = frozenset(
         DifficultyGap.PROVIDER_CONTRACT_INVALID,
     }
 )
-
-
-# Unknown recipes and judge routes require evidence or a ruling. They must not
-# be replaced by an environment or model that merely resembles the original.
-def rebuild_artifact(action: RebuildEnvironmentArtifact) -> dict:
-    path = StoragePath(action.uri)
-    if path.exists():
-        return {"status": "ready", "artifact_uri": str(path), "sha256": file_sha256(path)}
-    match = re.search(r"/images/env-([0-9a-f]{16})/[^/]+/requirements.lock$", action.uri)
-    if match is None:
-        return {
-            "status": REPAIR_BLOCKED,
-            "reason": GapReason.ENVIRONMENT_ARTIFACT_MISSING,
-            "detail": "Original artifact recipe is not registered",
-            "artifact_uri": action.uri,
-        }
-    matches = [
-        (identity, environment)
-        for identity, environment in declared_environments().items()
-        if identity.startswith(match.group(1))
-    ]
-    if len(matches) != 1 or path.parent.exists():
-        return {
-            "status": REPAIR_BLOCKED,
-            "reason": GapReason.ENVIRONMENT_ARTIFACT_MISSING,
-            "detail": "Original environment identity needs a recovered recipe or a new qualified release",
-            "artifact_uri": action.uri,
-        }
-    identity, environment = matches[0]
-    artifact = build_environment(environment, EnvironmentBuild(identity, DEFAULT_REPOSITORY, str(path.parent)))
-    return {"status": "ready", "artifact_uri": artifact.lock_url, "sha256": file_sha256(path)}
 
 
 def build_factory(action: BuildTaskSpecFactory, local: Path) -> dict:

@@ -82,6 +82,7 @@ def census_source(config: GradingCensusInput, output_root: str) -> GradingCensus
     counts: Counter[str] = Counter()
     unassessable: Counter[str] = Counter()
     missing_artifacts: Counter[str] = Counter()
+    declared_artifacts: Counter[str] = Counter()
     digest = hashlib.sha256()
     task_count = 0
     task_evidence = output / "tasks.parquet"
@@ -114,7 +115,10 @@ def census_source(config: GradingCensusInput, output_root: str) -> GradingCensus
                             environments.append(task.grader.environment)
                         for environment in environments:
                             lock = environment.packages_lock if environment is not None else None
-                            if lock and not packages_lock_available(lock):
+                            if not lock:
+                                continue
+                            declared_artifacts[lock] += 1
+                            if not packages_lock_available(lock):
                                 missing_artifacts[lock] += 1
                         assessments.append({"task_id": document["id"], "task_sha256": task_hash, **assessment})
                     writer.write_table(pa.Table.from_pylist(assessments, schema=TASK_SCHEMA))
@@ -128,6 +132,7 @@ def census_source(config: GradingCensusInput, output_root: str) -> GradingCensus
         evidence=GradingEnvironmentEvidence(
             **grading_environment_census(counts),
             missing_artifact_counts=dict(missing_artifacts),
+            declared_artifact_counts=dict(declared_artifacts),
             evidence_url=str(output / "receipt.json"),
         ),
         task_evidence_uri=str(task_evidence),
