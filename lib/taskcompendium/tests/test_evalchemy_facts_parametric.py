@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""FACTS Parametric scoring uses the starter notebook's prompt and the judge's closing Output line."""
+"""FACTS Parametric scoring uses the starter notebook's prompt and the judge's last Output verdict."""
 
 import hashlib
 
@@ -13,7 +13,6 @@ from taskcompendium.importers.evalchemy.scorers.facts_parametric import (
     GRADER_TEMPLATE,
     grade_facts_parametric,
     output_verdict,
-    starter_verdict,
 )
 
 # SHA-256 of the starter notebook's GRADER_TEMPLATE as pinned in NVIDIA-NeMo/Gym#3588.
@@ -84,11 +83,6 @@ def test_non_correct_verdicts_map_to_classification_metrics(reply, metrics):
 )
 def test_output_line_parse(reply, verdict):
     assert output_verdict(reply) == verdict
-
-
-def test_starter_substring_rule_misreads_explanations_that_name_other_labels():
-    reply = "The answer is not a MISTAKE; it matches.\nOutput: [CORRECT]"
-    assert (starter_verdict(reply), output_verdict(reply)) == ("mistake", "correct")
 
 
 def test_reply_without_output_line_is_a_grading_failure():

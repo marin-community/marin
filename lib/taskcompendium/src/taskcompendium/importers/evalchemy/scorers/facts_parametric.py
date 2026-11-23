@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""FACTS Parametric grading: one judge verdict per answer, read from the reply's closing ``Output:`` line.
+"""FACTS Parametric grading: one judge verdict per answer, read from the reply's last ``Output:`` match.
 
 ``GRADER_TEMPLATE`` is the starter notebook's prompt byte for byte
 (kaggle.com/code/yulongt/facts-parametric-benchmark-starter-code, version 10; Apache 2.0), as vendored in
 NVIDIA-NeMo/Gym#3588. The notebook samples three grades from Gemini 2.5 Pro and maps each reply to a label
-by substring search; this scorer asks the run's configured judge once and reads the closing ``Output:``
-line, because the judge's explanation often names other labels.
+by substring search; this scorer asks the run's configured judge once and reads the last ``Output:``
+match, because the judge's explanation often names other labels.
 """
 
 import re
@@ -158,23 +158,11 @@ def grader_prompt(question: str, gold_answer: str, prediction: str) -> str:
 
 
 def output_verdict(judgment: str) -> str | None:
-    """Return the verdict on the reply's last ``Output:`` line, or None when there is none."""
+    """Return the verdict from the reply's last ``Output:`` match, or None if absent."""
     matches = OUTPUT_LINE.findall(judgment)
     if not matches:
         return None
     return VERDICTS[matches[-1].upper().replace(" ", "_")]
-
-
-def starter_verdict(judgment: str) -> str:
-    """The notebook's ``extract_classification`` substring rule, kept for audits."""
-    judgment = judgment.strip()
-    if "INCORRECT" in judgment or "MISTAKE" in judgment:
-        return "mistake"
-    if "CORRECT" in judgment:
-        return "correct"
-    if "NOT_ATTEMPTED" in judgment:
-        return "not_attempted"
-    return "unknown"
 
 
 def grade_facts_parametric(question: str, gold_answer: str, response: str, ask: Ask) -> Reward:
@@ -194,7 +182,6 @@ def grade_facts_parametric(question: str, gold_answer: str, response: str, ask: 
     return scored(
         correct,
         verdict=verdict,
-        starter_verdict=starter_verdict(reply.text),
         judgment=reply.text,
         judge=reply.detail,
         metrics=metrics,
