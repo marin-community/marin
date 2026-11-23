@@ -85,11 +85,11 @@ POLICY_REFERENCE = Micro210PolicyReference(
 CHOICE_POLICY_REFERENCE = Micro210PolicyReference(
     uri=(
         "gs://marin-us-east1/evaluation-policies/micro210/2026.11.23-choice-shuffle/"
-        "327b3aba139822ca10a362eb22c440a30fb7904e4011b4f9de7e11fb9ce87306/policy.json"
+        "d99573b7d8e8801014e01afdcec0d53b7f3e857cf487556045be137392f28e59/policy.json"
     ),
     revision=CHOICE_POLICY_VERSION,
-    sha256="327b3aba139822ca10a362eb22c440a30fb7904e4011b4f9de7e11fb9ce87306",
-    byte_size=122180,
+    sha256="d99573b7d8e8801014e01afdcec0d53b7f3e857cf487556045be137392f28e59",
+    byte_size=122198,
 )
 
 

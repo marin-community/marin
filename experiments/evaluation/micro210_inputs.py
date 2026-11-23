@@ -72,7 +72,7 @@ def truthfulqa_choice_task(task: TaskSpec) -> TaskSpec:
 
 
 def letter_choice_positions(rows: list[dict]) -> dict[str, dict[str, set[str]]]:
-    """Count accepted letters per unique task in every lettered-choice benchmark."""
+    """Return accepted letters per unique task in every lettered-choice benchmark."""
     positions: dict[str, dict[str, set[str]]] = defaultdict(dict)
     seen: set[str] = set()
     for row in rows:

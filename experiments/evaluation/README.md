@@ -283,7 +283,7 @@ unique task. The previous `2026.11.20-together` policy and prepared table remain
 unchanged.
 
 The new policy is content-pinned at
-`gs://marin-us-east1/evaluation-policies/micro210/2026.11.23-choice-shuffle/327b3aba139822ca10a362eb22c440a30fb7904e4011b4f9de7e11fb9ce87306/policy.json`.
+`gs://marin-us-east1/evaluation-policies/micro210/2026.11.23-choice-shuffle/d99573b7d8e8801014e01afdcec0d53b7f3e857cf487556045be137392f28e59/policy.json`.
 Its prepared table has SHA-256
 `0cf6f6de9f9b68273b4954e25710cf83a3df522d01883af2e07ed0f03cdc44f3`
 and 440 rows. The code keeps the older Hugging Face reference as its default
