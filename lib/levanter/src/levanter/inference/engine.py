@@ -32,11 +32,13 @@ from levanter.inference.jit_scheduler import (
 )
 from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.utils import INVALID, is_valid
+from levanter.inference.window_page_map import WindowPageMap
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
+from levanter.models.snowball import SnowballLMHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
@@ -79,6 +81,9 @@ class InferenceEngineConfig:
 
     max_pages: Optional[int] = None
     """Total number of KV pages available. If None, inferred from :attr:`hbm_utilization`."""
+
+    window_cache_max_pages: int | None = None
+    """Optional separate page capacity for Snowball's sliding-window layers."""
 
     compute_dtype: jnp.dtype = jnp.bfloat16
     """KV cache dtype. Default bfloat16 for performance/accuracy balance."""
@@ -268,12 +273,22 @@ class GenState(eqx.Module):
 
     cache: PageCache
     decode_state: DecodeState
+    window_pages: WindowPageMap | None = None
 
     def reset(self):
         return GenState(
             cache=self.cache.reset(),
             decode_state=self.decode_state.reset(),
+            window_pages=None if self.window_pages is None else self.window_pages.reset(),
         )
+
+    def remap_window_pages(
+        self, decode_state: DecodeState, batch: PageBatchInfo
+    ) -> tuple["GenState", PageBatchInfo | None]:
+        if self.window_pages is None:
+            return self, None
+        window_pages, window_batch = self.window_pages.remap(decode_state.sequences, batch)
+        return dataclasses.replace(self, window_pages=window_pages), window_batch
 
     def clone_sequence(
         self,
@@ -443,7 +458,13 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    if isinstance(model, _SelectedRowDecoder):
+    gen_state, window_batch = gen_state.remap_window_pages(decode_state, binfo)
+    if window_batch is not None:
+        assert isinstance(model, SnowballLMHeadModel)
+        logits_at_samples, cache = model.decode_for_sampling(
+            tokens, gen_state.cache, binfo, pos_ids, sample_indices, window_batch=window_batch
+        )
+    elif isinstance(model, _SelectedRowDecoder):
         logits_at_samples, cache = model.decode_for_sampling(tokens, gen_state.cache, binfo, pos_ids, sample_indices)
     else:
         logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
@@ -726,7 +747,12 @@ def _run_generation_loop(
         sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
 
         # Decode logits and sample new tokens
-        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+        gen_state, window_batch = gen_state.remap_window_pages(decode_state, binfo)
+        if window_batch is None:
+            logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+        else:
+            assert isinstance(model, SnowballLMHeadModel)
+            logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids, window_batch=window_batch)
         logits_at_samples = _gather_logits(logits, sample_indices)
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -848,6 +874,7 @@ class InferenceEngine:
         decode_state: DecodeState,
         sampler: Sampler,
         config: InferenceEngineConfig,
+        window_pages: WindowPageMap | None = None,
     ) -> None:
         """
         Args:
@@ -861,7 +888,7 @@ class InferenceEngine:
         self.model = model
         self.tokenizer = tokenizer
         self.sampler = sampler
-        self.gen_state: GenState = GenState(cache=cache, decode_state=decode_state)
+        self.gen_state: GenState = GenState(cache=cache, decode_state=decode_state, window_pages=window_pages)
         self._initial_decode_state = decode_state
         # Impute max_prefill_size if not set
         if config.max_prefill_size is None:
@@ -900,7 +927,24 @@ class InferenceEngine:
         assert config.max_pages is not None
 
         table = PageTable.init(config.max_pages, config.max_seqs, config.page_size, max_pages_per_seq)
-        cache = hax.named_jit(model.initial_cache, axis_resources=axis_resources)(
+        window_pages = None
+        initialize_cache = model.initial_cache
+        window_capacity = config.window_cache_max_pages
+        if window_capacity is not None:
+            if not isinstance(model, SnowballLMHeadModel):
+                raise ValueError("A compact window cache requires a Snowball model")
+            page_size = table.page_size
+            window = model.config.sliding_window
+            prefill_size = config.max_prefill_size or table.max_len_per_seq
+            # Pin one tail per active request and budget all writes during the largest prefill.
+            tail_pages = (window + page_size - 1) // page_size + 1
+            prefill_pages = (prefill_size + page_size - 1) // page_size + config.max_seqs_in_prefill
+            min_pages = config.max_seqs * tail_pages + prefill_pages
+            if not min_pages <= window_capacity < table.num_pages:
+                raise ValueError(f"Compact window cache capacity must be in [{min_pages}, {table.num_pages})")
+            window_pages = WindowPageMap.init(table.num_pages, window_capacity, window)
+            initialize_cache = functools.partial(model.initial_cache, window_cache_pages=window_capacity)
+        cache = hax.named_jit(initialize_cache, axis_resources=axis_resources)(
             table.spec(), dtype=config.compute_dtype
         )
         decode_state = DecodeState.init(
@@ -918,6 +962,7 @@ class InferenceEngine:
             decode_state=decode_state,
             sampler=sampler,
             config=config,
+            window_pages=window_pages,
         )
 
     def reset(self) -> None:
@@ -1125,6 +1170,8 @@ class InferenceEngine:
 
         # validate we don't have any sequences with n_generations exceeding max_seqs
         max_needed = max(int(r.n_generations) for r in requests)
+        if self.gen_state.window_pages is not None and max_needed != 1:
+            raise ValueError("A compact window cache requires one generation per request")
         if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
             raise ValueError(
                 f"Total sequences needed ({max_needed}) exceeds max_seqs ({self.gen_state.decode_state.page_table.max_seqs})."
