@@ -1145,6 +1145,34 @@ measured arm with `iris-cancel-own` if it is still running after publishing its
 window. Compare generated tokens/s per engine and GPU, and request decode rate
 at actual concurrency. Do not infer serving capacity from consumed training tokens.
 
+### Trainer memory sizing and chunked output projection
+
+For a qualified Megatron PPO recipe, set
+`trainer.policy.megatron_config.memory_profile.enabled: true` before launch.
+The check runs on every policy rank before initial weight publication and rollout
+admission. It initializes Adam, then runs forward, backward and optimizer steps
+at each `memory_profile.valid_token_counts` value and at the explicit
+`memory_profile.max_sequence_length` (262,144 for Exp5). Include observed long trajectories, such as
+85,557 valid tokens, as well as the configured maximum. The scheduler fills the
+pipeline's activation slots with native microbatches.
+
+Each rank writes `trainer-sizing/rank-<rank>.json` under the run's export root.
+The receipt includes allocator peaks, duration and an estimate of device headroom
+that includes memory outside the allocator at the interval boundaries. Transient
+allocations outside PyTorch are not measured peaks. An OOM or headroom below
+`minimum_headroom_fraction` fails startup. Model, optimizer, scheduler and RNG
+state are restored before training; sizing updates do not become learning steps.
+
+`output_projection_chunk_size` bounds the vocabulary projection and its backward,
+while `logprob_chunk_size` alone bounds only softmax temporaries. The chunked
+projection uses Megatron's output processor and native weight-gradient
+accumulation. It retains hidden states and recomputes one token chunk in backward,
+returning scalar logprobs and entropy through the existing CP reconstruction.
+This path currently requires TP1 PPO without sequence parallelism, FTPO or top-K
+distillation. Both options are disabled by default. Qualify values, gradients,
+restoration, peak memory and throughput on the intended CUDA geometry before
+enabling them or removing optimizer offload in a launch recipe.
+
 ### OpenResearcher with hosted retrieval
 
 Exp5 binds the same service contract for the OpenResearcher partition of its

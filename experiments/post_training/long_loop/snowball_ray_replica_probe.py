@@ -164,10 +164,28 @@ def driver(args: argparse.Namespace) -> None:
 
 
 def task(args: argparse.Namespace) -> None:
+    run_ray_probe_task(
+        args,
+        compiled_config(args),
+        num_tasks=NUM_TASKS,
+        gpus_per_task=GPUS_PER_TASK,
+        driver_module="experiments.post_training.long_loop.snowball_ray_replica_probe",
+    )
+
+
+def run_ray_probe_task(
+    args: argparse.Namespace,
+    cfg,
+    *,
+    num_tasks: int,
+    gpus_per_task: int,
+    driver_module: str,
+    driver_arguments: tuple[str, ...] = (),
+) -> None:
+    """Run a bounded policy-only diagnostic with the existing production Ray lifecycle."""
     info = get_job_info()
-    if info is None or info.num_tasks != NUM_TASKS or torch.cuda.device_count() != GPUS_PER_TASK:
-        raise ValueError("This control requires sixteen tasks, each owning four GB200 GPUs")
-    cfg = compiled_config(args)
+    if info is None or info.num_tasks != num_tasks or torch.cuda.device_count() != gpus_per_task:
+        raise ValueError(f"This control requires {num_tasks} tasks, each owning {gpus_per_task} GPUs")
     model = cfg.trainer.policy.model
     stage_artifact_model_metadata(model.source_uri, model.source_identity, model.path)
     # CLI diagnostic tasks use the same zero-port resolution as Kubernetes tasks.
@@ -205,7 +223,7 @@ def task(args: argparse.Namespace) -> None:
         address = f"{info.advertise_host}:{ray_port}"
         wait_for_nodes(
             address,
-            NUM_TASKS,
+            num_tasks,
             300,
             rewrite_cb=lambda: write_rendezvous(rendezvous, info.advertise_host, ray_port, epoch),
         )
@@ -215,7 +233,7 @@ def task(args: argparse.Namespace) -> None:
             [
                 sys.executable,
                 "-m",
-                "experiments.post_training.long_loop.snowball_ray_replica_probe",
+                driver_module,
                 "--driver",
                 "--config-uri",
                 args.config_uri,
@@ -223,6 +241,7 @@ def task(args: argparse.Namespace) -> None:
                 args.config_sha256,
                 "--output-prefix",
                 args.output_prefix,
+                *driver_arguments,
             ],
             env=env,
             check=True,
