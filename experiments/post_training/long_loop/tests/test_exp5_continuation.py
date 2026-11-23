@@ -140,6 +140,9 @@ def test_exp5_rl_no_run_binds_its_published_pools_without_an_exp4_dependency(tmp
     launches = [yaml.safe_load(path.read_text()) for path in tmp_path.glob("*/launch.yaml")]
     [launch] = launches
     assert launch["skyrl"]["trainer"]["rollout_buffer"]["consumed_route_quotas"] == {"agentic": 13, "nonagentic": 51}
+    optimizer = launch["skyrl"]["trainer"]["policy"]["megatron_config"]["optimizer_config_kwargs"]
+    assert optimizer["optimizer_cpu_offload"] is True
+    assert optimizer["optimizer_offload_fraction"] == 1.0
     [best] = [entry for entry in launch["skyrl"]["trainer"]["callbacks"] if entry["type"] == "best_checkpoint"]
     assert best["expected_tasks"] == 200
     assert best["minimum_scored_tasks"] == 180

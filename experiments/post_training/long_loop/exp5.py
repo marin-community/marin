@@ -275,6 +275,12 @@ def main(
     harbor["daytona_image_build"] = harbor.pop("daytona_provisioning")
     harbor["eval_daytona_image_build"] = harbor.pop("eval_daytona_provisioning")
     if stage != "sft":
+        # Long agentic trajectories need the H100 memory occupied by Adam's FP32 state.
+        # Native offload preserves complete sequences, accumulation and optimizer settings.
+        resolved["rl"]["config"]["trainer"]["policy"]["megatron_config"]["optimizer_config_kwargs"] = {
+            "optimizer_cpu_offload": True,
+            "optimizer_offload_fraction": 1.0,
+        }
         service = spec.openresearcher_service
         assert service is not None
         pool_manifest = json.loads((StoragePath(pools.dataset["uri"]) / "manifest.json").read_bytes())
