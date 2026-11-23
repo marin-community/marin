@@ -268,8 +268,12 @@ def test_a_question_past_the_checked_places_of_its_first_window_is_located_by_it
     assert at == readings_of[0].stream.find(stream) and question in right
 
 
-def test_a_long_plain_ascii_stretch_maps_offsets_by_counting():
-    text = "intro " + "abc" * 30_000 + " outro"
+@pytest.mark.parametrize("header", ["intro ", "\u00a9 intro ", "\u201cintro\u201d ", "\u201cintro\u201d"])
+def test_a_long_plain_ascii_stretch_maps_offsets_by_counting(header):
+    text = header + "abc" * 30_000 + " outro"
     reading = Reading(text)
     for position in (3, 45_000, 89_999, len(reading.stream) - 1):
         assert reading.text_offset(position) == _full_search(text, position)
+    # The stretch is one chunk of its own, mapped by counting.
+    reading.text_offset(45_000)
+    assert reading._counts

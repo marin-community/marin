@@ -341,9 +341,20 @@ class Reading:
 
     def _index(self) -> None:
         starts, position, safe = [0], CHUNK_CHARS, _safe_pattern()
+
+        def split_before_long_stretch(end: int) -> None:
+            # A long stretch without a safe character follows: start a chunk at the last safe character before
+            # it, so that the stretch is one chunk of its own.
+            if end - starts[-1] > LONG_CHUNK_CHARS:
+                last = max((m.start() for m in safe.finditer(self.text, starts[-1] + 1, position)), default=None)
+                if last is not None:
+                    starts.append(last)
+
         while (match := safe.search(self.text, position)) is not None:
+            split_before_long_stretch(match.start())
             starts.append(match.start())
             position = match.start() + CHUNK_CHARS
+        split_before_long_stretch(len(self.text))
         before = [0]
         for start, end in itertools.pairwise(starts):
             before.append(before[-1] + len(text_stream(self.text[start:end])))
@@ -357,11 +368,12 @@ class Reading:
         start, base = self._starts[chunk], self._before[chunk]
         low, high = start, self._starts[chunk + 1] if chunk + 1 < len(self._starts) else len(self.text)
         if high - start > LONG_CHUNK_CHARS and chunk not in self._counts:
-            piece = self.text[start:high]
-            if piece.isascii() and "\\" not in piece:
-                # Plain ASCII without a backslash: NFKC, lowercasing and LaTeX removal leave it alone, so its
-                # stream is its letters and digits.
-                self._counts[chunk] = np.cumsum(_ALNUM[np.frombuffer(piece.encode("ascii"), np.uint8)])
+            head, rest = self.text[start], self.text[start + 1 : high]
+            if rest.isascii() and "\\" not in rest and "\\" not in unicodedata.normalize("NFKC", head):
+                # A safe character, then plain ASCII without a backslash: NFKC, lowercasing and LaTeX removal
+                # leave the rest alone, so its stream is its letters and digits.
+                counts = np.cumsum(_ALNUM[np.frombuffer(rest.encode("ascii"), np.uint8)])
+                self._counts[chunk] = np.concatenate([[0], counts]) + len(text_stream(head))
         counts = self._counts.get(chunk)
         if counts is not None:
             index = int(np.searchsorted(counts, position - base, side="right"))
