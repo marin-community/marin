@@ -1,36 +1,117 @@
-# Mochi DSpark qualification design
+# Mochi DSpark qualification design and result
 
-Approved design, 2026-11-23. Running Mochi .123/.125 remain untouched.
-Code lands through `~/.local/bin/loop-push`. The 128-GB200 training pair remains on hold.
+## Serving gate result, 2026-11-23
 
-## Approved serving gate: execution status
+**Unqualified: the final autoregressive top-1 mismatch check failed.** The gate
+stopped before any performance cells, as required. There is no measured
+acceptance length, per-request speedup or TPOT at 16/32/48 running per engine.
+No draft binding was wired, no RL job launched, and running .123/.125 were untouched.
 
-The coordinator approved one 16-GB200 EP16/TP1/BF16 gang on cw-us-east-08a at
-INTERACTIVE priority, the existing 521M draft at four proposals, strict
-correctness first with immediate stop on failure, then matched plain/DSpark
-measurements at 16/32/48 running requests per engine.
+| Final independent plain-teacher check | Plain | DSpark4 | Frozen upper bound |
+| --- | ---: | ---: | ---: |
+| Top-1 mismatch | 6/746 = 0.80429% | **8/748 = 1.06952%** | **7/750 = 0.93333%** |
+| Maximum known-token logprob error | 0.259173 | 0.276580 | 0.559715 |
+| Maximum top-1 logprob error | 0.179650 | 0.184409 | 0.261437 |
+| Equal-prompt expert-choice mismatch | 0.025010 | 0.024322 | 0.040781 |
 
-Access was restored after the earlier sandbox failures. In-region CPU staging
-`/benfeuer/mochi-dspark-stage-20261123a` succeeded. The verified-copy completion
-manifest pins the checkpoint from `fb241421/2026.11.22.4`; its weights SHA-256 is
+The 30-case ShortConv sequential oracle passed on all four tasks, covering
+FP32/BF16, ragged verifier rows and rejection/acceptance through all five rows
+for four proposals. Initial and independent plain controls passed. DSpark's
+98 fixed-prefix comparisons passed (maximum logprob error 0.119401, zero top-1
+mismatches); its sampled-distribution check passed. The final teacher check above
+failed only the top-1 mismatch fraction. The full-precision bounds and calibration
+hash were unchanged; there was no retry to obtain a passing sample.
+
+Offline inspection found two byte-identical token prefixes with different top-1
+IDs in the retained plain-teacher responses. Five of the eight DSpark mismatches
+cluster in one original prompt group. This motivates a batch/cache/numerical
+control investigation; it neither identifies the cause nor overrides the failure.
+
+The measured runtime memory budgets were:
+
+| Per GPU/engine at HBM 0.90 | Plain | DSpark4 |
+| --- | ---: | ---: |
+| Model loading allocation, GiB | 86.42 | 87.52 |
+| CUDA graphs, GiB | 1.46 | 3.06 |
+| Available KV cache, GiB | 58.45 | 54.32 |
+| KV token capacity per engine | 687,808 | 587,205 |
+
+DSpark reduced the token capacity by 14.6%. These are startup measurements,
+not acceptance or speed measurements. Compilation and PIECEWISE CUDA graphs
+remained enabled throughout; serving stayed TP1/BF16 with DP16/EP16.
+
+The registered jobs were CPU staging `/benfeuer/mochi-dspark-stage-20261123a`
+(succeeded), serving `/benfeuer/mochi-dspark-gate-20261123a` (setup-only failure
+on an optional `worker_region=None` value), and replacement
+`/benfeuer/mochi-dspark-gate-20261123b` (strict qualification failure, all four
+tasks terminal). The replacement enforced a hard US-EAST-08A scheduling constraint
+and target cluster 08a. Only one 16-GB200 gang was allocated at a time, at
+INTERACTIVE priority, excluding r136, with zero automatic retries. There is no further
+serving or training job running for this gate.
+
+Code landed only through `loop-push`; the measured source was
+`26fa9a19b9f859b07364563b0dac92d6b05b0795`. The runtime was the released `47a8e415`
+wheel with digest-pinned ShortConv/cache Python files from `c83c9865`, in a private
+isolated environment. PR140 remains open; this does not promote a reviewed
+production release. Runtime receipts retain exact dependencies, including
+Torch 2.14.1+cu132, Transformers 5.16.1 and Speculators 0.8.0+marin.1.
+The staged 521M `fb241421` weights SHA-256 is
 `84ba9697317b3e96a9a8416a83f11884c5cc88f8e92228aae414f7123f6178e1`.
-The serving job `/benfeuer/mochi-dspark-gate-20261123a` is registered with the
-coordinator and awaits successful source landing before submission.
 
-The runtime is the released `47a8e415` wheel with the digest-pinned ShortConv
-and cache-spec Python overlay from `c83c9865`. PR140 remains open; this is a
-private experiment runtime and does not promote a reviewed production release.
-The original EAGLE calibration hash and full-precision bounds remain frozen.
-Plain checks will qualify the runtime change before candidate scoring.
+The 29 focused gate/launcher tests passed before the first serving submission;
+27 serving-focused tests passed after the optional-metadata fix. Required
+mechanical lint/type checks passed. The broader affected run reported 2,030
+passes, 74 failures and 18 skips before the untracked-design provenance guard was
+fixed. Two SFT failures reproduced on the clean prototype base; the full broader
+suite was not rerun to green. This is not a claim that all repository tests pass.
 
-The EAGLE streaming and metrics harness now supports prefetched exact-token
-windows. Every scrape must contain all 16 ranks at the requested occupancy;
-missing ranks, underload, preemptions or natural early stopping invalidate a cell.
-The focused suite passes 27 tests. The wider landing run reported 2,030 passes,
-74 failures and 18 skips. The untracked copy of this note triggered provenance
-guards in several launcher tests; this note is now included in the source.
-Remaining wider-suite failures are being isolated before landing.
-No DSpark serving or training job has been submitted at this checkpoint.
+[Machine-readable result](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Fmarin%2Fusers%2Fbenfeuer%2Fmochi-dspark%2F2026.11.23.1%2Fserving-gate-result.json)
+(`s3://marin-us-east-08a/marin/users/benfeuer/mochi-dspark/2026.11.23.1/serving-gate-result.json`; SHA-256
+`a1d591b68b583c9113ae2d73bab8056c6ea7af0febcfd0d3199209203e5e12fc`).
+Raw scores and logs remain under `s3://marin-us-east-08a/marin/users/benfeuer/mochi-dspark/2026.11.23.1/evaluation-b/`; the result links the
+retained mismatch diagnostics. Results and datasets are stored in S3, not committed.
+
+## Next cycle: staged comparison and RL-pair launch plan
+
+No additional compute is authorized by this plan. The `fb241421`/four-proposal gate stopped on final top-1 mismatch (8/748, above the frozen 7/750 fraction); no speed cells ran. Any failed correctness check blocks tuning and training; retain the failed samples and diagnose the runtime without raising the frozen bounds. Production adoption also requires the reviewed runtime and its consumer checks.
+
+### Resolve correctness before tuning
+
+The final plain control passed at 6/746 mismatches. Retained teacher responses vary on two byte-identical prefixes, and five of the eight candidate mismatches cluster in one prompt group. These observations do not identify a cause. Preserve the exact failing prefixes and served/teacher scores. Before any new registered diagnostic GPU job, predeclare matched plain/plain and plain/DSpark batches, cache state, query shapes and rejection-depth coverage. Investigate batch/cache/numerical variation and accepted-state alignment under TP1/BF16 with graphs enabled. Keep the frozen thresholds; do not retry unchanged settings for a lucky pass. Tuning, checkpoint selection and RL remain blocked until this gate passes.
+
+### Match the training request and context mix
+
+The planned performance payload retained temperature 0.7, top-p 1, natural EOS, exact token IDs and routed experts, but omits the training request's `logprobs: 0`. Its six cap-conditioned groups use 8,573–12,733-token contexts and 90-second censored decode windows, rather than complete 98,304-token responses. That protocol would measure isolated decode; this failed gate produced no ratios. The next comparison must request the chosen-token logprobs, retain the same protocol qualification, and freeze a representative prompt mix with canonical prompt hashes checked against both drafter training/model-selection sets. Include a bounded mixture of early and >64k late contexts; do not fill all 48 slots with 100k contexts that cannot fit the measured KV budget.
+
+### Compare checkpoints before expanding the tuning matrix
+
+The [newer #12000 export](https://github.com/marin-community/marin/pull/12000#issuecomment-7113277871) is `s3://marin-us-east-02a/marin/checkpoints/dspark/mochi/e43c1b81/2026.11.22.4/hf` ([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fcheckpoints%2Fdspark%2Fmochi%2Fe43c1b81%2F2026.11.22.4%2Fhf)). Its config SHA-256 is identical to `fb241421`: `737eb5cb3bba8746ba70b723b8d25fb86afc835599d5c97f351c66cc3ac2fe9e`. Both weight files are 1,041,946,938 bytes; the newer source ETag is `6cd5263b085d1b182da94fec502a7ba1-20`. Its producer metadata SHA-256 is `cc1ad36a59aa63f2ee59be6bfc99cfd3b6508d6fd7e1b38efa2165732728898e`. It records 8,040 steps, validation loss 0.600466 and trainer acceptance length 2.72867 at block size 8. These are not measurements at Mochi's rollout concurrency.
+
+After approval, register an 08a CPU staging job using the existing `fsutil verified-copy` path. Verify producer/config hashes and source identity, then require the destination completion manifest and a full streamed weight SHA-256 before serving. Keep weights off the Mac. Compare old and new checkpoints at four proposals on one isolated EP16/16-GB200 INTERACTIVE gang, with the same runtime, target, prompt inventory, seeds and common HBM budget. Run the unchanged strict controls first, then matched plain/old/new cells at 16/32/48. Counterbalance repeats; report complete trial history. Inspect and record vocabulary-map identity in-region; matching config and file size alone do not isolate training-token count from map/data changes. The previous short greedy C8 result does not establish a real-load winner.
+
+For the checkpoint that passes correctness and improves request decode rate, test proposals 2/3/4. Parameterize the existing harness, preserving the sequential ShortConv oracle for each verifier depth. Keep TP1/BF16, prefix-cache path, max sequences and sampler fixed. Start at common HBM 0.90; consider a matched lower-HBM arm only as an explicit separate configuration. Record target/draft/graph memory and actual KV token capacity, and invalidate any cell with missing ranks, underload or preemptions. Current measured capacity is 687,808 tokens/engine plain versus 587,205 with four proposals; the latter gives only about 12,233 tokens per request at 48-way occupancy without sharing. Rank configurations by measured request speed and TPOT, rather than acceptance alone. Budget and register each future gang separately; no extra serving job is launched here.
+
+### Prepare the RL pair for the user's next-day decision
+
+Clone the frozen `.125` Track1 recipe into new immutable plain/DSpark versions and regional output roots. Preserve the adopted Mochi step-400407 target, tokenizer, task pool, TP1/BF16 serving, CP/PP/EP training topology, GS8/batch64, context and 98,304-response cap, staleness, weight-sync cadence, checkpointing and evaluation. Change only the qualified draft binding. Add that binding only after reporting serving acceptance and speed; do not edit or resume .123/.125.
+
+The existing role plan is 48 policy GPUs plus five EP16 rollout engines (80 GPUs): **128 GPUs per arm**. Run the arms serially to keep the maximum allocation at 128; concurrent arms would need 256 and separate approval. The current recipe allows 32 updates with a 10-hour training budget. Propose an explicit 12-hour job cap per arm, including startup/drain, for a maximum 3,072 GPU-hours across the serial pair; the user decides that budget and priority before launch. A shortened run that cannot complete the required matched updates remains unqualified.
+
+Use the existing artifact entry point, not a new submission path:
+
+```bash
+uv run python -m experiments.post_training.long_loop.round_runner \
+  --round <new-immutable-plain-or-dspark-round.yaml> \
+  --source-revision <loop-push-landed-sha> \
+  --validation-output <arm-validation-directory> \
+  --version <matching-new-round-version> --through rl
+```
+
+Before requesting launch approval, render both plans, strictly compose the native SkyRL documents, verify the only treatment difference is the draft, and seal runtime/target/data/draft hashes. The SkyRL runtime must contain the same qualified ShortConv fixes in its own isolated environment; the serving wrapper alone does not establish that. Keep probabilistic drafting and standard rejection sampling. Qualify policy logprobs and routes against the recorded policy version before rollout and after weight sync. Register coordinator and child job IDs before compute. Add `--run` only after the separate approval.
+
+Require at least six completed updates per arm, with update one excluded from steady metrics and two regular checkpoint/evaluation intervals covered, plus matched policy-stamp coverage, improved median update/rollout-group time without a worse group p95, stable fresh-policy mismatch/KL under the plain-control bounds, and no quality or preemption regression. Report startup-inclusive wall time, steady update time, acceptance, request TPOT, group tails, evaluation/checkpoint waits and failures separately. Isolated decode speed does not pass the training gate. At 7 tokens/s, 98,304 tokens in 20 minutes requires about 11.7x speedup; acceptance length alone cannot support that forecast.
+
+## Original approved design
 
 ## Decision and evidence
 
