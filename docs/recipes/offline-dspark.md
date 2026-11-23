@@ -13,11 +13,10 @@ gated norm and output projection to compute the distillation targets.
 
 Taps count completed decoder blocks. The three feature taps feed the drafter.
 The last tap feeds the frozen teacher logits head. Snowball uses three
-full-attention Qwen3 layers and a 3,840-wide FFN. Mochi uses two layers and a
-6,144-wide FFN to limit the per-proposal cost at its wider residual dimension.
-The Mochi draft has approximately 770M parameters excluding the shared teacher
-embedding. Both drafts use a block size of 8, a rank-256 Markov head and a
-confidence head. Training retains the most
+full-attention Qwen3 layers and a 3,840-wide FFN. The default Mochi draft uses
+one Qwen3 layer and a 4,096-wide FFN, with 521M weights excluding the shared
+teacher embedding. Both drafts use a block size of 8, a rank-256 Markov head
+and a confidence head. Training retains the most
 frequent 32,000 supervised token IDs from training, with the corresponding
 frozen teacher head rows. Training runs for the lesser of `max_steps` and
 one packed epoch. Linear decay uses that same step count. The optimizer is
@@ -121,9 +120,9 @@ conversations. Add `--steps 4000` to train for one packed epoch, capped at
 different completed regional mix. Size scratch for the cached tensors at
 48 KiB per input token, plus the trainer's staged weights and checkpoint.
 
-Use `--draft-size one-layer` to train a smaller Mochi draft with one Qwen3
-layer and a 4,096-wide FFN. It uses the same teacher, data, vocabulary, and
-training budget as the two-layer preset and publishes a separate artifact.
+Use `--draft-size two-layer` to reproduce the 766M Mochi variant with two
+Qwen3 layers and a 6,144-wide FFN. It uses the same teacher, data, vocabulary,
+and training budget as the default and publishes a separate artifact.
 
 Serving Mochi drafts requires ShortConv state to survive rejected proposals.
 The promoted wheel needs the upstream fix for that verification path.

@@ -97,7 +97,7 @@ class OfflineDSpark:
     max_anchors: int = 12288
     seed: int = DEFAULT_DRAFT_SEED
     mochi_sample: mochi.Sample = mochi.Sample.ALL
-    mochi_draft_size: mochi.DraftSize = mochi.DraftSize.TWO_LAYERS
+    mochi_draft_size: mochi.DraftSize = mochi.DraftSize.ONE_LAYER
 
     def training_recipe(self) -> DraftRecipe:
         shape, taps = _TARGETS[self.teacher.family]
@@ -226,8 +226,9 @@ def _resolve_recipe(
             max_sequence_length=8192,
             max_anchors=1024,
             mochi_sample=mochi.Sample.SMOKE if data is None and steps is None else mochi.Sample.ALL,
-            mochi_draft_size=mochi.DraftSize.TWO_LAYERS if draft_size is None else draft_size,
         )
+        if draft_size is not None:
+            recipe = replace(recipe, mochi_draft_size=draft_size)
         return recipe, mix
     raise click.UsageError(f"Specify --config or --preset {_MOCHI_AGENTIC_PRESET}")
 
