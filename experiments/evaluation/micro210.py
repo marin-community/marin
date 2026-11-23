@@ -254,6 +254,7 @@ def micro210_step(
     version: str,
     subset: Micro210Subset | None = None,
     serving_profile: ServingProfileName = ServingProfileName.POLICY,
+    model_manifest_filename: str | None = None,
     **overrides,
 ) -> ArtifactStep[SkyRLRun]:
     """Build the canonical evaluation graph; reject all policy override fields."""
@@ -269,6 +270,7 @@ def micro210_step(
         version=version,
         model_binding=model,
         serving_profile=profile,
+        model_manifest_filename=model_manifest_filename,
         subset=subset,
     )
 
@@ -281,9 +283,13 @@ def micro210_artifact_step(
     serving_profile: Micro210ServingProfile | None = None,
     model_binding: Micro210Model | None = None,
     subset: Micro210Subset | None = None,
+    model_manifest_filename: str | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind a future committed model to the same frozen evaluator as a static export."""
-    model_manifest_filename = serving_profile.model_manifest_filename if serving_profile else MODEL_MANIFEST_FILENAME
+    if model_manifest_filename is None:
+        model_manifest_filename = serving_profile.model_manifest_filename if serving_profile else MODEL_MANIFEST_FILENAME
+    if model_manifest_filename not in {MODEL_MANIFEST_FILENAME, "export-manifest.json"}:
+        raise ValueError("Micro210 requires a native HF or SFT export completion manifest")
     fingerprint_model = Micro210Model(
         "s3://unresolved/terminal-export",
         MODEL_IDENTITY_PREFIX + "0" * 64,
@@ -398,6 +404,12 @@ def micro210_artifact_step(
 @click.command(help=__doc__)
 @click.option("--model-uri", required=True)
 @click.option("--model-manifest-sha256", required=True)
+@click.option(
+    "--model-manifest-filename",
+    type=click.Choice([MODEL_MANIFEST_FILENAME, "export-manifest.json"]),
+    default=None,
+    help="Model completion manifest; defaults to the serving profile's format.",
+)
 @click.option("--tokenizer-uri", required=True)
 @click.option("--tokenizer-revision", required=True)
 @click.option("--name", required=True)
@@ -412,6 +424,7 @@ def micro210_artifact_step(
 def main(
     model_uri: str,
     model_manifest_sha256: str,
+    model_manifest_filename: str | None,
     tokenizer_uri: str,
     tokenizer_revision: str,
     name: str,
@@ -427,6 +440,7 @@ def main(
         version=resolve_version(name, None),
         subset=Micro210Subset(tuple(sorted(benchmark)), tuple(sorted(row_index))) if benchmark or row_index else None,
         serving_profile=ServingProfileName(serving_profile),
+        model_manifest_filename=model_manifest_filename,
     )
 
 

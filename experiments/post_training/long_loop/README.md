@@ -965,6 +965,13 @@ used by other Micro210 runs. The policy is `2026.11.20-together`; the tokenizer
 is `marin-community/marin-tokenizer-tools` at
 `3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09`.
 
+For a native RL checkpoint converted by `cloud.iris.export_hf_checkpoint`, also
+pass `--model-manifest-filename .marinskyrl-model-manifest.json` and pin that
+file's SHA-256. This selects the model's completion metadata, without changing
+the frozen evaluation protocol or serving geometry. Omit the option for the
+profile's original SFT `export-manifest.json` format. The Mochi profile excludes
+the faulty `dh1-r136-us-east-08a` NVLink domain.
+
 The standard Micro210 entrypoint and long-loop evaluation stages run the shared
 preflight before allocating GPUs.
 An isolated CPU task in the run's cluster checks policy and prepared-input

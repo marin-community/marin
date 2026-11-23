@@ -182,13 +182,14 @@ def test_micro210_model_rejects_mutable_references(identity, revision):
 
 
 @pytest.mark.parametrize("profile", list(ServingProfileName))
+@pytest.mark.parametrize("manifest_override", [None, ".marinskyrl-model-manifest.json"])
 def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_allocation(
-    tmp_path, monkeypatch, policy_reference, profile
+    tmp_path, monkeypatch, policy_reference, profile, manifest_override
 ):
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     manifest = b'{"files": []}'
-    manifest_filename = (
+    manifest_filename = manifest_override or (
         "export-manifest.json" if profile is ServingProfileName.MOCHI_GB200 else ".marinskyrl-model-manifest.json"
     )
     (model_dir / manifest_filename).write_bytes(manifest)
@@ -220,7 +221,13 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         lambda *args, **kwargs: SimpleNamespace(convert_ids_to_tokens=token_content.__getitem__),
     )
     binding = Micro210Model(str(model_dir), "sha256:" + hashlib.sha256(manifest).hexdigest(), "test/tokenizer", "a" * 40)
-    step = micro210_step(binding, name="test/micro210", version="2026.11.18", serving_profile=profile)
+    step = micro210_step(
+        binding,
+        name="test/micro210",
+        version="2026.11.18",
+        serving_profile=profile,
+        model_manifest_filename=manifest_override,
+    )
     with pytest.raises(ValueError, match="eval_override_storage_mb"):
         micro210_step(binding, name="test/micro210", version="2026.11.18", eval_override_storage_mb=131072)
     output = tmp_path / "result"
