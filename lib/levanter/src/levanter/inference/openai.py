@@ -209,6 +209,7 @@ class InferenceContext:
         self._publication_pending = threading.Event()
         self._model_version = 0
         self._policy_id = config.initial_policy_id
+        self._published_policy_ids = {self._policy_id} if self._policy_id is not None else set()
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
@@ -238,7 +239,7 @@ class InferenceContext:
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
     ) -> int:
-        """Install new weights and return the serving version after resetting the cache."""
+        """Install new weights with empty KV state and return the new serving version."""
         with self._publication_lock:
             self._publication_pending.set()
             try:
@@ -246,7 +247,7 @@ class InferenceContext:
                     if expected_version is not None and expected_version != self._model_version:
                         raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
                     if policy_id is not None and (
-                        not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id == self._policy_id
+                        not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id in self._published_policy_ids
                     ):
                         raise ValueError("A weight update requires a new, nonempty policy ID")
 
@@ -255,15 +256,22 @@ class InferenceContext:
                         hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                     ):
                         model = weight_callback(self.model)
-                        engine = InferenceEngine.from_model_with_config(
-                            model=model,
-                            tokenizer=self.tokenizer,
-                            config=self.config.service,
-                            axis_resources=self.config.trainer.compute_axis_mapping,
-                        )
+                        engine = self.engine
+                        if engine.can_reuse_cache(model):
+                            engine.reset()
+                            engine.model = model
+                        else:
+                            engine = InferenceEngine.from_model_with_config(
+                                model=model,
+                                tokenizer=self.tokenizer,
+                                config=self.config.service,
+                                axis_resources=self.config.trainer.compute_axis_mapping,
+                            )
                     self.model, self.engine = model, engine
                     self._model_version += 1
                     self._policy_id = policy_id
+                    if policy_id is not None:
+                        self._published_policy_ids.add(policy_id)
                     return self._model_version
             finally:
                 self._publication_pending.clear()
