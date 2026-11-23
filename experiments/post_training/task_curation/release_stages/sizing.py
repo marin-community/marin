@@ -19,7 +19,7 @@ class HistoryStagingSizing:
     item_batch_rows: int
 
 
-# Measured on the consumer37/bootstrap/r39 retained-history runs (2026-11-21..23):
+# Measured on the consumer/bootstrap/retained-history runs (2026-11-21..23):
 # 4 clients, 1024-row item batches, over a 325-source prior population.
 _MEASURED_WORKERS = 4
 _MEASURED_ITEM_BATCH_ROWS = 1024
@@ -39,3 +39,94 @@ def history_staging_sizing(total_items: int) -> HistoryStagingSizing:
     scaled = round(_MEASURED_WORKERS * total_items / _MEASURED_POPULATION_ITEMS)
     workers = max(_MIN_WORKERS, min(_MAX_WORKERS, scaled))
     return HistoryStagingSizing(workers=workers, item_batch_rows=_MEASURED_ITEM_BATCH_ROWS)
+
+
+@dataclass(frozen=True)
+class StageResources:
+    """Cluster resources for one stage run; every value derives from the population."""
+
+    cpu: int
+    memory_gb: int
+    disk_gb: int
+    timeout_s: int
+    # Worker parallelism for Zephyr-based stages (embedding, curriculum compose).
+    workers: int = 0
+    worker_cpu: int = 0
+    worker_memory_gb: int = 0
+
+    def as_resources(self) -> dict[str, int]:
+        """The job-level resource dict for the cluster submission."""
+        return {"cpu": self.cpu, "memory_gb": self.memory_gb, "disk_gb": self.disk_gb, "timeout_s": self.timeout_s}
+
+
+# Measured anchors from the admitted-population release runs (2026-11-21..23).
+# Census: one streaming job over 60,581 admitted tasks (16 CPU / 64 GB / 200 GB /
+# 4 h). Embedding: 16 Zephyr workers of 4 CPU / 16 GB under a 64 CPU / 256 GB /
+# 72 h job. Curriculum compose: 8 workers of 4 CPU / 16 GB under a 32 CPU /
+# 128 GB / 72 h job over the full composed population (~4.29 M tasks).
+_ANCHOR_TASKS = 60_581
+_ANCHOR_COMPOSE_TASKS = 4_291_291
+_ANCHOR_EMBED_WORKERS = 16
+_ANCHOR_COMPOSE_WORKERS = 8
+_WORKER_CPU = 4
+_WORKER_MEMORY_GB = 16
+
+
+def _clamp(value: int, low: int, high: int) -> int:
+    return max(low, min(high, value))
+
+
+def census_sizing(total_tasks: int) -> StageResources:
+    """Scale the census job with the measured population's task count.
+
+    The census streams each population once, so core count stays at the measured
+    shape while memory, disk and wall clock scale with the task count.
+    """
+    if total_tasks <= 0:
+        raise ValueError(f"census sizing needs a positive task count, got {total_tasks}")
+    share = total_tasks / _ANCHOR_TASKS
+    return StageResources(
+        cpu=16,
+        memory_gb=_clamp(round(64 * share), 16, 512),
+        disk_gb=_clamp(round(200 * share), 50, 1000),
+        timeout_s=_clamp(round(14_400 * share), 3_600, 43_200),
+    )
+
+
+def embedding_sizing(total_tasks: int) -> StageResources:
+    """Scale the CPU embedding job with the measured population's task count.
+
+    GPU embedding has no measured run yet: when a valid backend parity receipt makes
+    it eligible, the embed stage keeps this worker curve and requests the accelerator
+    through the typed manifest runtime instead of guessing a resource shape here.
+    """
+    if total_tasks <= 0:
+        raise ValueError(f"embedding sizing needs a positive task count, got {total_tasks}")
+    share = total_tasks / _ANCHOR_TASKS
+    workers = _clamp(round(_ANCHOR_EMBED_WORKERS * share), 2, 32)
+    return StageResources(
+        cpu=_clamp(workers * _WORKER_CPU, 8, 64),
+        memory_gb=_clamp(workers * _WORKER_MEMORY_GB, 32, 256),
+        disk_gb=_clamp(round(64 * share), 64, 1000),
+        timeout_s=_clamp(round(259_200 * share), 7_200, 259_200),
+        workers=workers,
+        worker_cpu=_WORKER_CPU,
+        worker_memory_gb=_WORKER_MEMORY_GB,
+    )
+
+
+def curriculum_compose_sizing(composed_tasks: int) -> StageResources:
+    """Scale the curriculum-compose job with the composed population size."""
+    if composed_tasks <= 0:
+        raise ValueError(f"curriculum compose sizing needs a positive task count, got {composed_tasks}")
+    share = composed_tasks / _ANCHOR_COMPOSE_TASKS
+    workers = _clamp(round(_ANCHOR_COMPOSE_WORKERS * share), 2, 32)
+    return StageResources(
+        cpu=_clamp(workers * _WORKER_CPU, 8, 64),
+        memory_gb=_clamp(workers * _WORKER_MEMORY_GB, 32, 256),
+        disk_gb=_clamp(round(64 * share), 64, 1000),
+        timeout_s=_clamp(round(259_200 * share), 7_200, 259_200),
+        workers=workers,
+        worker_cpu=_WORKER_CPU,
+        worker_memory_gb=_WORKER_MEMORY_GB,
+    )
