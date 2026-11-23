@@ -14,7 +14,7 @@ pytestmark = pytest.mark.slow
 RUN_TIMEOUT_SECONDS = 300
 OVERLAP_TIMEOUT_SECONDS = 60
 LEARNER_LOADING = "learner-loading"
-INFERENCE_STARTED = "inference-started"
+INFERENCE_STARTUP_ENTERED = "inference-startup-entered"
 READY = b"r"
 
 
@@ -39,13 +39,16 @@ class _BarrierExp(experiment.TinyTrainingExp):
         return ray.remote(num_gpus=1)(_BarrierWorker), None
 
 
+def _wait_for_overlap_signal(path: Path) -> None:
+    with path.open("rb", buffering=0) as gate:
+        assert select.select([gate], [], [], OVERLAP_TIMEOUT_SECONDS)[0], f"timed out waiting for {path.name}"
+
+
 class _OverlappingWorker(CPUPolicyWorker):
     def init_model(self, *args, **kwargs):
         control = Path(self.cfg.trainer.export_path)
-        with (control / LEARNER_LOADING).open("wb", buffering=0) as ready:
-            ready.write(READY)
-        with (control / INFERENCE_STARTED).open("rb", buffering=0) as gate:
-            assert select.select([gate], [], [], OVERLAP_TIMEOUT_SECONDS)[0], "inference startup stalled"
+        (control / LEARNER_LOADING).write_bytes(READY)
+        _wait_for_overlap_signal(control / INFERENCE_STARTUP_ENTERED)
         super().init_model(*args, **kwargs)
 
 
@@ -55,10 +58,8 @@ class _OverlappingExp(experiment.TinyTrainingExp):
 
     def create_inference_engine_client(self, **kwargs):
         control = Path(self.cfg.trainer.export_path)
-        with (control / LEARNER_LOADING).open("rb", buffering=0) as gate:
-            assert select.select([gate], [], [], OVERLAP_TIMEOUT_SECONDS)[0], "learner did not start model loading"
-        with (control / INFERENCE_STARTED).open("wb", buffering=0) as ready:
-            ready.write(READY)
+        _wait_for_overlap_signal(control / LEARNER_LOADING)
+        (control / INFERENCE_STARTUP_ENTERED).write_bytes(READY)
         return super().create_inference_engine_client(**kwargs)
 
 
@@ -84,11 +85,11 @@ def _run_overlapping_training(root, model):
     control = Path(cfg.trainer.export_path)
     control.mkdir(parents=True, exist_ok=True)
     learner_loading = control / LEARNER_LOADING
-    inference_started = control / INFERENCE_STARTED
+    inference_startup_entered = control / INFERENCE_STARTUP_ENTERED
     os.mkfifo(learner_loading)
-    os.mkfifo(inference_started)
+    os.mkfifo(inference_startup_entered)
     # Keep both FIFOs open so select bounds the rendezvous even if a peer fails.
-    with learner_loading.open("rb+", buffering=0), inference_started.open("rb+", buffering=0):
+    with learner_loading.open("rb+", buffering=0), inference_startup_entered.open("rb+", buffering=0):
         experiment.run_with_exp(cfg, _OverlappingExp)
 
 
