@@ -32,7 +32,6 @@ from verifyit.grade import (
     InvalidTask,
     Reward,
     empty_output_policy,
-    invalid_task,
     numeric_tolerance,
     read_output,
     scored,
@@ -316,6 +315,36 @@ def _additive_constant_match(expected: list, candidate: list) -> bool:
     return False
 
 
+def _positive_symbol_match(expected: list, candidate: list, positive_symbols: tuple[str, ...]) -> bool:
+    """Prove scalar equality after applying only the contract's positive assumptions."""
+    from math_verify.utils import timeout  # noqa: PLC0415
+    from sympy import Expr, Symbol, simplify  # noqa: PLC0415
+    from sympy.matrices.expressions import MatrixExpr  # noqa: PLC0415
+
+    @timeout(_timeout())
+    def equal_under_assumptions(gold, target) -> bool:
+        replacements = {
+            symbol: Symbol(symbol.name, positive=True)
+            for symbol in gold.free_symbols | target.free_symbols
+            if symbol.name in positive_symbols
+        }
+        return simplify(gold.xreplace(replacements) - target.xreplace(replacements)) == 0
+
+    return any(
+        equal_under_assumptions(gold, target)
+        for gold in expected
+        for target in candidate
+        if isinstance(gold, Expr)
+        and isinstance(target, Expr)
+        and not isinstance(gold, MatrixExpr)
+        and not isinstance(target, MatrixExpr)
+        and gold.is_commutative
+        and target.is_commutative
+        and not _is_undefined(gold)
+        and not _is_undefined(target)
+    )
+
+
 def validate_math(spec: MathSpec) -> None:
     """Check the parsing policy; the reference itself is parsed only when grading."""
     empty_output_policy(spec)
@@ -323,6 +352,17 @@ def validate_math(spec: MathSpec) -> None:
         raise InvalidTask("allow_additive_constant must be boolean")
     if not isinstance(spec.profile, MathProfile) or not isinstance(spec.math_type, MathType):
         raise InvalidTask("unknown math parsing profile or math_type")
+    if (
+        not isinstance(spec.positive_symbols, tuple)
+        or any(
+            not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name)
+            for name in spec.positive_symbols
+        )
+        or len(set(spec.positive_symbols)) != len(spec.positive_symbols)
+    ):
+        raise InvalidTask("positive_symbols must contain unique symbol names")
+    if spec.positive_symbols and spec.math_type is not MathType.SCALAR:
+        raise InvalidTask("positive_symbols requires scalar math_type")
 
 
 def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
@@ -363,6 +403,8 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
         raise_on_error=True,
     )
     match = bool(parsed) and _verify(expected, parsed)
+    if not match and spec.positive_symbols:
+        match = _positive_symbol_match(expected, parsed, spec.positive_symbols)
     chosen = None
     if parsed:
         gold_strings = strings_of(expected)
@@ -399,6 +441,8 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
         if not parsed:
             return scored(0.0, reason="missing_parse", expected_parsed=bool(expected), candidate_parsed=bool(parsed))
         match = bool(_verify(expected, parsed))
+        if not match and spec.positive_symbols:
+            match = _positive_symbol_match(expected, parsed, spec.positive_symbols)
         if not match and spec.allow_additive_constant:
             match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
@@ -415,6 +459,8 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
         match = _members_match(expected, parsed)
     else:
         match = _verify(expected[0], parsed[0], allow_set_relation_comp=spec.math_type in SET_TYPES)
+        if not match and spec.positive_symbols:
+            match = _positive_symbol_match(expected[0], parsed[0], spec.positive_symbols)
     if not match and spec.allow_additive_constant and not is_list:
         match = _additive_constant_match(expected[0], parsed[0])
     return scored(float(bool(match)), extracted=candidate, expected=spec.expected)
@@ -441,79 +487,6 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
 def grade_math_text_candidate(spec: MathSpec, text: str) -> Reward:
     """Extract math under the task's parsing profile and grade the result."""
     return grade_math_candidate(spec, math_answer(spec, text))
-
-
-def _numeric_rows(value: object) -> list[list[float]]:
-    if not isinstance(value, (list, tuple)) or not value:
-        raise ValueError("numeric rows must be a nonempty matrix")
-    rows = []
-    for row in value:
-        if not isinstance(row, (list, tuple)) or not row:
-            raise ValueError("numeric rows must have nonempty columns")
-        if any(isinstance(cell, bool) or not isinstance(cell, (int, float)) for cell in row):
-            raise ValueError("matrix cells must be numeric")
-        converted = [float(cell) for cell in row]
-        if not all(math.isfinite(cell) for cell in converted):
-            raise ValueError("matrix cells must be finite")
-        if rows and len(converted) != len(rows[0]):
-            raise ValueError("numeric rows must be rectangular")
-        rows.append(converted)
-    return rows
-
-
-def grade_regression_candidate(expected: object, candidate: object, *, variance_floor: float) -> Reward:
-    """Grade groups of finite prediction matrices by pooled, uniform-output R².
-
-    Group counts and each group shape must match before rows are pooled. Within
-    each group, rows are observations and columns are outputs. A variance at or below
-    the task's explicit floor yields zero because normalized error is undefined.
-    Trusted references are validated before candidate data; no sklearn dependency.
-    """
-    try:
-        if isinstance(variance_floor, bool) or not math.isfinite(variance_floor) or variance_floor < 0:
-            raise ValueError("variance floor must be finite and nonnegative")
-        if not isinstance(expected, (list, tuple)) or not expected:
-            raise ValueError("reference must contain nonempty groups")
-        groups = [_numeric_rows(group) for group in expected]
-        truth = _numeric_rows([row for group in groups for row in group])
-        columns = list(zip(*truth, strict=True))
-        means = [math.fsum(column) / len(column) for column in columns]
-        variances = [
-            math.fsum((x - mean) ** 2 for x in column) / len(column) for column, mean in zip(columns, means, strict=True)
-        ]
-        deviations = [
-            math.fsum(abs(x - mean) for x in column) / len(column) for column, mean in zip(columns, means, strict=True)
-        ]
-    except (ValueError, TypeError, OverflowError) as error:
-        return invalid_task(str(error))
-    try:
-        if not isinstance(candidate, (list, tuple)) or len(candidate) != len(groups):
-            raise ValueError("prediction group count differs from reference")
-        predicted_groups = [_numeric_rows(group) for group in candidate]
-        for reference, prediction in zip(groups, predicted_groups, strict=True):
-            if len(prediction) != len(reference) or len(prediction[0]) != len(reference[0]):
-                raise ValueError("prediction group shape differs from reference")
-        prediction = [row for group in predicted_groups for row in group]
-        if any(variance <= variance_floor for variance in variances):
-            return scored(0, reason="undefined_variance")
-        errors = [
-            [actual - target for actual, target in zip(predicted, column, strict=True)]
-            for predicted, column in zip(zip(*prediction, strict=True), columns, strict=True)
-        ]
-        nmse = math.fsum(
-            math.fsum(x * x for x in error) / len(error) / variance
-            for error, variance in zip(errors, variances, strict=True)
-        ) / len(columns)
-        nmae = math.fsum(
-            math.fsum(abs(x) for x in error) / len(error) / deviation
-            for error, deviation in zip(errors, deviations, strict=True)
-        ) / len(columns)
-        r2 = 1.0 - nmse
-        if not all(math.isfinite(value) for value in (nmse, nmae, r2)):
-            raise ValueError("prediction metrics are nonfinite")
-    except (ValueError, OverflowError, ZeroDivisionError) as error:
-        return scored(0, reason="invalid_predictions", error=str(error))
-    return scored(max(0.0, r2), nmse=nmse, nmae=nmae, r2=r2)
 
 
 def grade_numeric_candidate_float(expected: float, value: float | None, *, tolerance_abs: float) -> Reward:
