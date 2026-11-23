@@ -2145,6 +2145,18 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   replies. Evaluation keeps its four-choice limit. These bounds describe
   admission capacity. H100 throughput and reward require the live run.
 
+  Iris identifies the workspace by the SHA-256 of the uploaded archive.
+  The local controller rehearsal computed that digest from the sealed
+  candidate archive. Repacking a fresh checkout of the same commit and
+  tree produced a different digest. In both historical jobs, the regional
+  controller returned the original bundle ID and clean source provenance
+  while masking the separate Git environment stamp and embedded worker
+  config. The acceptance check binds the candidate archive digest to
+  the registered job and verifies the worker-written resolved config
+  against the plan.
+  [Interrupted native attempt][iris-held-native-matched-preempted] ·
+  [Accepted vLLM attempt][iris-held-vllm-validation-replacement]
+
   Regional telemetry recorded 32 group calls and 128 model waits in the
   first lease. Five group calls finished just after the 1,800-second model
   deadline and reported four projected tokens each. The buffer separately
