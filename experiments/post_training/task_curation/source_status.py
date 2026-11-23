@@ -137,6 +137,22 @@ def pending_rows() -> list[dict[str, Any]]:
     ]
 
 
+CONSUMER_PENDING_CORE_RECEIPTS = ("actor census", "lexical", "grading", "sample", "dedup")
+
+
+def consumer_pending_stage(source_id: str, receipts: dict[str, set[str]]) -> PendingStage:
+    """The stage a consumer-decision-Pending source queues under.
+
+    Every core admission-measurement receipt present means the source awaits
+    configuration and admission only (``ADMISSION_PENDING``); a missing core
+    receipt keeps the source at its consumer check. The oracle and retained
+    registries hold release evidence rather than admission gates: no-oracle
+    sources never register there, admitted or not.
+    """
+    covered = all(source_id in receipts[name] for name in CONSUMER_PENDING_CORE_RECEIPTS)
+    return PendingStage.ADMISSION_PENDING if covered else PendingStage.CONSUMER_CHECK_PENDING
+
+
 def remediation_rows() -> list[dict[str, Any]]:
     """Rows for configured sources queued for lexical remediation work.
 
@@ -234,7 +250,7 @@ def status_extras() -> dict[str, Any]:
         "stages": {
             **{row["id"]: row["stage"] for row in remediation if row["stage"]},
             **{
-                source.info.id: PendingStage.CONSUMER_CHECK_PENDING.value
+                source.info.id: consumer_pending_stage(source.info.id, receipt_registry_keys()).value
                 for source in all_sources().values()
                 if source.approved_consumer_status is SourceStatus.PENDING and not source.exclusion_claims
             },

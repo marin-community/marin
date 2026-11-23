@@ -1,1 +1,10 @@
-{}
+{
+  "FWeindel:validated-tasks/mimo_v1": {
+    "source_id": "FWeindel:validated-tasks/mimo_v1",
+    "runtime_commit": "b937327803bd3656305b070f2b56c5176c7a6c9d",
+    "task_specs_sha256": "68eb433d8678142985976688d4bdbdceb5b9bbf3b4170c752f5dd92c97d880a5",
+    "reason": "CONSUMER_EXECUTION_UNSUPPORTED",
+    "status": "Pending",
+    "user_ruling": "Coordinator ruling 2026-11-23 (r39): MiMo stays Pending and is not admitted in r39; it ships with the six admitted sources. Basis: the frozen-population backend survey receipt s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/backend/receipt.json (sha256 c6c67d44eec1f02c3e881d1dc3a7f3c3a2717ce32cd2e10217175ca358b1b277, git revision 4689abce0ed241fe31b57d585db3308a3f62d365, basis converted_spec_census) measured every production backend unsupported on all 2,509 census tasks: 2,501 daytona-assigned tasks fail with 'Unresolved Docker build context must be built and pinned before execution', 8 tasks require the local backend, and the grader role is absent on all 2,509. The r39 catalog load blocked admission on exactly this finding. The consumer receipt staged beside this decision records the same frozen population (task_specs_sha256 68eb433d...) with the survey as its evidence. Repair plan (backend-repair dispatch, retyped under the r40 stage taxonomy after r39): (1) build and pin the grader Docker build contexts for the 2,501 daytona-assigned tasks; (2) reconcile the 8 local-only tasks with the daytona deployment tier; (3) declare the grader environment. Until the repair lands, the source queues as Admission pending."
+  }
+}
