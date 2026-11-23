@@ -77,7 +77,6 @@ from marin.inference.vllm_backend import (
     RUNAI_STREAMER_LOADER_FLAG,
     VllmBackend,
     _resolved_chat_template,
-    bound_distributed_streamer_buffers,
     vllm_launcher,
 )
 from marin.inference.vllm_release import (
@@ -1142,10 +1141,9 @@ def test_backend_bounds_a_caller_provided_distributed_streamer_config():
     assert filled["concurrency"] == DISTRIBUTED_STREAMER_BOUNDS["concurrency"]
     assert explicit.count(RUNAI_STREAMER_LOADER_FLAG) == 1
 
-
-def test_bound_distributed_streamer_buffers_rejects_malformed_json():
-    with pytest.raises(ValueError, match="not valid JSON"):
-        bound_distributed_streamer_buffers(("--model-loader-extra-config", "{not json"))
+    glued = backend._serve_args(spec, (), ('--model-loader-extra-config={"distributed":true}',))
+    glued_token = next(a for a in glued if a.startswith(RUNAI_STREAMER_LOADER_FLAG + "="))
+    assert json.loads(glued_token.partition("=")[2]) == {"distributed": True, **DISTRIBUTED_STREAMER_BOUNDS}
 
 
 def test_iris_serve_delivers_secret_without_putting_it_in_the_service_config(monkeypatch):
