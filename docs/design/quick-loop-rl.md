@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 4:05 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 7:26 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched frozen comparison is complete. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 67B live swap, real tool-turn replay and full-context fused scoring passed together on one eight-H100 host. The repaired five-host arm completed one exact learner update and restore before GPU preemption. Its 40-H100 replacement matched all 100 baseline prompts before Kueue preempted it during first-batch admission. | Complete two updates and the final 100-task panel on a fresh matched arm. Qualify H100 recovery after scheduler eviction and improve sustained admission before promoting native serving. |
+| Native inventory backend | The 67B live swap, real tool-turn replay and full-context fused scoring passed together on one eight-H100 host. The repaired five-host arm completed one exact learner update and restore before GPU preemption. Its 40-H100 replacement matched all 100 baseline prompts before Kueue preempted it during first-batch admission. The next candidate passed the local launch and evidence checks. | Complete two updates and both 100-task panels on one fresh matched attempt. Qualify H100 recovery after scheduler eviction and improve sustained admission before promoting native serving. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Verify the full native handoff at 67B. The frozen H100 comparison uses its original worker transport. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
