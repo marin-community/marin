@@ -771,6 +771,10 @@ class SnowballBlock(eqx.Module):
     mlp: SnowballMoEMLP
     shared: DenseMLP
 
+    def with_packed_experts(self) -> "SnowballBlock":
+        """Pack the two routed expert input projections for inference."""
+        return eqx.tree_at(lambda block: block.mlp.expert_mlp, self, self.mlp.expert_mlp.with_packed_gate_up())
+
     @staticmethod
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballBlock":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
@@ -991,6 +995,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     transformer: SnowballTransformer
     _config: SnowballConfig = eqx.field(static=True)
     _selected_ep_decode: bool = eqx.field(static=True, default=False)
+
+    def with_packed_experts(self) -> "SnowballLMHeadModel":
+        """Keep routed gate and up weights in the grouped inference layout."""
+        blocks = tuple(block.with_packed_experts() for block in self.transformer.blocks)
+        return eqx.tree_at(lambda model: model.transformer.blocks, self, blocks)
 
     def with_selected_ep_decode(self) -> "SnowballLMHeadModel":
         """Read selected matrix slices for eligible small expert-parallel decode batches."""
@@ -1263,6 +1272,7 @@ def snowball_final_to_state_dict(model: SnowballTransformer, prefix: Optional[st
 
 def snowball_block_to_state_dict(block: SnowballBlock, layer_index: int, prefix: Optional[str] = None) -> StateDict:
     """Export one layer under its global HF layer index."""
+    gate, up = block.mlp.expert_mlp.split_gate_up()
     p = f"model.layers.{layer_index}"
     tensors = {
         f"{p}.input_layernorm.weight": block.rms_attn.weight,
@@ -1278,8 +1288,8 @@ def snowball_block_to_state_dict(block: SnowballBlock, layer_index: int, prefix:
         f"{p}.mlp_gated_norm.up_proj.weight": _T(block.mlp_gated_norm.w_up),
         f"{p}.mlp.router.weight": _T(block.mlp.router),
         f"{p}.mlp.router.bias": block.mlp.router_bias,
-        f"{p}.mlp.experts.gate_proj.weight": _T(block.mlp.expert_mlp.w_gate),
-        f"{p}.mlp.experts.up_proj.weight": _T(block.mlp.expert_mlp.w_up),
+        f"{p}.mlp.experts.gate_proj.weight": _T(gate),
+        f"{p}.mlp.experts.up_proj.weight": _T(up),
         f"{p}.mlp.experts.down_proj.weight": _T(block.mlp.expert_mlp.w_down),
         f"{p}.shared_expert.gate_proj.weight": _T(block.shared.w_gate),
         f"{p}.shared_expert.up_proj.weight": _T(block.shared.w_up),
@@ -1363,21 +1373,16 @@ def snowball_block_from_state_dict(
     )
     m = eqx.tree_at(lambda t: t.mlp.router, m, _reshard_replicated(_T(g(f"{p}.mlp.router.weight"))))
     m = eqx.tree_at(lambda t: t.mlp.router_bias, m, g(f"{p}.mlp.router.bias"))
-    m = eqx.tree_at(
-        lambda t: t.mlp.expert_mlp.w_gate,
-        m,
-        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+    experts = m.mlp.expert_mlp
+    loaded = dataclasses.replace(
+        experts,
+        w_gate=_reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        w_up=_reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        w_down=_reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
     )
-    m = eqx.tree_at(
-        lambda t: t.mlp.expert_mlp.w_up,
-        m,
-        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
-    )
-    m = eqx.tree_at(
-        lambda t: t.mlp.expert_mlp.w_down,
-        m,
-        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
-    )
+    if experts.w_up is None:
+        loaded = loaded.with_packed_gate_up()
+    m = eqx.tree_at(lambda t: t.mlp.expert_mlp, m, loaded)
     m = eqx.tree_at(
         lambda t: t.shared.w_gate,
         m,
