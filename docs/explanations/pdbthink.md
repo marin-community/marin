@@ -77,6 +77,14 @@ explicit run or model output limit is supplied. Output limits, tokenizer revisio
 request options, responses and grades are retained in the native archive.
 A `--limit` run is a smoke test, not a full-panel score.
 
+Long reasoning traces may exceed the launcher's default 30-minute request
+deadline. Set `evaluation_request_timeout` in the model YAML to a sufficient
+number of seconds; it extends the evaluator and inference-transport deadlines
+together. This does not change the token allowance. The archive records the
+deadline, and changing it requires a new run rather than resuming an existing
+archive with different run settings. Report timed-out attempts as incomplete
+coverage and include their GPU time in the cost accounting.
+
 Requests specify `tools: null` and `tool_choice: none`. No tool is executed.
 Tool calls, refusals, malformed answers and output-limit finishes score zero.
 Only final answer content is graded; an unfinished reasoning trace cannot supply

@@ -44,6 +44,7 @@ def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_
         tokenizer_revision="tokenizer-pin",
         serve=ServeConfig(max_model_len=8192),
         generation=GenerationConfig(max_gen_toks=8192),
+        evaluation_request_timeout=21600,
     )
     settings = CuratedSettings(max_tokens=8192, source_limit=2, seed=42, judge=None)
     session = SimpleNamespace(
@@ -52,5 +53,7 @@ def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_
     first = runtime_config(model, settings, session)
     assert first.model.context_window == 4096
     assert first.max_tokens == 4095
+    # Long-context requests must survive both the turn and enclosing attempt deadlines.
+    assert first.limits.attempt_timeout > first.limits.model_turn_timeout >= 21600
     created[0] += 100
     assert runtime_config(model, settings, session) == first

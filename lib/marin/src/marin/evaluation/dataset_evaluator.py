@@ -18,7 +18,6 @@ from openai import OpenAI
 from rigging.timing import Duration
 from rolloutengine.models import RolloutLimits
 
-from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import (
     BACKEND_POLL_SECONDS,
@@ -43,6 +42,8 @@ from marin.evaluation.task_worker import (
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import InferenceBackendState
 from marin.rollouts.evaluation import EvaluationRunConfig, ModelIdentity
+
+VERIFIER_TIMEOUT = 600
 
 
 def runtime_config(
@@ -79,11 +80,11 @@ def runtime_config(
         limits=RolloutLimits(
             max_turns=1,
             max_total_tokens=None,
-            model_turn_timeout=EVALUATION_REQUEST_TIMEOUT_SECONDS,
+            model_turn_timeout=model.evaluation_request_timeout,
             tool_turn_timeout=None,
-            total_turn_timeout=EVALUATION_REQUEST_TIMEOUT_SECONDS,
-            attempt_timeout=2400,
-            verifier_timeout=600,
+            total_turn_timeout=model.evaluation_request_timeout,
+            attempt_timeout=model.evaluation_request_timeout + VERIFIER_TIMEOUT,
+            verifier_timeout=VERIFIER_TIMEOUT,
             cleanup_timeout=60,
         ),
     )

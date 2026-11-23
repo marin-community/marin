@@ -45,7 +45,7 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
 from rigging.timing import retry_with_backoff
 
-from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, EVALUATION_REQUEST_TIMEOUT_SECONDS, env_vars_from_keys
+from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.evaluation.model_config import ModelConfig
@@ -677,13 +677,13 @@ def _inference_configs(batch: EvaluationBatch, runtime_env: Mapping[str, str]) -
                 (
                     float(
                         evaluation.identity.eval_ref.evalchemy.extra_model_args.get(
-                            "timeout", EVALUATION_REQUEST_TIMEOUT_SECONDS
+                            "timeout", batch.model.evaluation_request_timeout
                         )
                     )
                     for evaluation in batch.evaluations
                     if evaluation.identity.eval_ref.evalchemy is not None
                 ),
-                default=EVALUATION_REQUEST_TIMEOUT_SECONDS,
+                default=batch.model.evaluation_request_timeout,
             ),
         )
     }
