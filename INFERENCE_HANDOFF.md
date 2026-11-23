@@ -1,11 +1,12 @@
 # Native learner and inference integration
 
-November 22, 2026, 16:17 PST snapshot. Branch:
+November 22, 2026, 16:45 PST snapshot. Branch:
 [`codex/dlwh-levanter-rl`](https://github.com/marin-community/marin/tree/codex/dlwh-levanter-rl).
 This branch contains the unified policy learner, pipeline backend, native
 Snowball learner, inference integration, and the validation/diagnostic work from
 this effort. The implementation inventory below is against frozen main
-`fda7484bbfe957c89d08b7d58dbaac3396d2f4bc`, inspected at `20a1f40b75`.
+`fda7484bbfe957c89d08b7d58dbaac3396d2f4bc` and includes the cache-ownership repair
+described below. Executed GPU evidence covers its explicitly pinned source.
 
 Inference still runs in SkyRL's vLLM engines. The new work lets the JAX learner
 publish its compute-policy weights into those engines and verifies which policy
@@ -38,6 +39,15 @@ The transfer path is JAX compute view → bounded host payload → Torch sender 
 existing expert-block/NCCL receivers → vLLM installation. It does not yet provide
 a direct JAX-to-vLLM GPU-buffer path. Receiver byte replay verifies installed
 weights; it does not replay the MoE router's expert choices.
+
+Publication stage-transform caches are now owned by each publisher, with a
+64-entry limit per publisher. Previously, a module-global cache retained
+shardings and a JAX backend client after the publisher was released. Fresh-process
+CPU tests reproduce that retention and verify release with the owned cache,
+including abort and multiple-publisher cases. Actual CPU publication checks still
+match the expected weight bytes and reuse cached transforms across versions.
+This repairs a demonstrated ownership gap. Its effect on full-model GPU process
+exit remains unqualified; the failed GPU run below predates this repair.
 
 Implementation:
 [publication plan](lib/marin/src/marin/rl/levanter_publication.py),
@@ -96,21 +106,29 @@ No training/serving parity result is claimed here.
 
 ## Evidence and open gates
 
-The running full-model diagnostic is `2026.11.22.3`, executing
+The latest full-model diagnostic is `2026.11.22.3`, executed from
 `baa10702aec4cfd62e0aebb2cef8c336974172ae`. Its accepted coordinator and GPU
 bundles match all 4,588 frozen source entries. All 670 materialized configuration
 fields match the frozen recipe after the two generated attempt identifiers and
 source-derived staging paths are accounted for.
 
-At the snapshot above, all four native learner processes had initialized the
+All four native learner processes initialized the
 67,078,882,816-parameter model on 32 H100s with data4/expert8. Initial-state
-finiteness candidates and joint passing verdicts were present for every rank.
+and step-one finiteness candidates and joint passing verdicts were present for
+every rank. Model and Adam fingerprints changed after the update, and
+step-1/version-1 checkpoint metadata was committed.
 All eight vLLM receivers reported zero byte mismatches for initial policy version
 0, comparing 19,687,358,464 bytes each. Returned generation carried stamp 1;
 the convention is weight version `v` → returned-token stamp `v + 1`.
 
-This establishes initial publication and returned generation. Updated-policy
-publication, full-model restart/continuation, and the matched 25-update
+The run failed at 16:30 PST during the checkpoint validator's five-second natural
+process-exit check. Cleanup phases, including public backend release and
+distributed shutdown, returned; the learners wrote shutdown acknowledgements and
+entered Python `atexit`. This did not establish successful process exit or fresh
+restoration. All five GPU pods are gone; no accelerator job is active.
+
+This establishes a finite first full-model update, initial publication and
+returned generation. Updated-policy publication, full-model restart/continuation, and the matched 25-update
 Megatron/SkyRL-versus-native-Levanter comparison remain open. Tiny GPU checkpoints
 restore exactly, but a live update and a fresh-process update from the same saved
 state fail strict post-update state/score equality. Identical calls to one pure

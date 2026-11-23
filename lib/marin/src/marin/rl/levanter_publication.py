@@ -78,7 +78,6 @@ def _owner_spans(sharding: NamedSharding, shape: tuple[int, ...], devices: dict[
     return tuple(spans)
 
 
-@lru_cache(maxsize=64)
 def _stage_transform(names: tuple[str, ...], shape: tuple[int, ...], sharding: NamedSharding, dtype: str):
     def materialize(module):
         if isinstance(module, SnowballBlock):
@@ -106,6 +105,8 @@ class SnowballPublication:
     """
 
     def __init__(self, model: SnowballLMHeadModel, mesh: Mesh):
+        # Cache ownership ends with this publisher, not at interpreter finalization.
+        self._stage_transform = lru_cache(maxsize=64)(_stage_transform)
         self.mesh = mesh
         self.devices = dict(enumerate(mesh.devices.flat))
         self.local_devices = {
@@ -251,7 +252,9 @@ class SnowballPublication:
                 names = tuple(f"model.layers.0.{name.split('.', 3)[3]}" for name in names)
                 module = module.blocks[stage.layer]
             with jax.set_mesh(self.mesh):
-                array = _stage_transform(names, stage.shape, stage.sharding, stage.dtype)(module).block_until_ready()
+                array = self._stage_transform(names, stage.shape, stage.sharding, stage.dtype)(
+                    module
+                ).block_until_ready()
             shards = {shard.device: shard.data for shard in array.addressable_shards}
             if len(stage.shape) == 3:
                 sources = sorted(
