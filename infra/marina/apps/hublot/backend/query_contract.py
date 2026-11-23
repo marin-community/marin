@@ -31,6 +31,14 @@ REGULAR_SIGNALS = (
     " OR (name = 'kv_cache_usage_perc'"
     " AND json_get(attributes_json, 'metric_source') = 'vllm'"
     " AND json_get(attributes_json, 'source_temporality') = 'current_snapshot')"
+    " OR (name IN ('request_prefill_time_seconds_sum', 'request_prefill_time_seconds_count')"
+    " AND json_get(attributes_json, 'metric_source') = 'vllm'"
+    " AND json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'"
+    " AND json_get(attributes_json, 'source_kind') = 'histogram')"
+    " OR (name IN ('request_decode_time_seconds_sum', 'request_decode_time_seconds_count')"
+    " AND json_get(attributes_json, 'metric_source') = 'vllm'"
+    " AND json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'"
+    " AND json_get(attributes_json, 'source_kind') = 'histogram')"
     " OR (name = 'training_metric_value'"
     " AND json_get(attributes_json, 'metric') = 'async/quarantined_prompts')"
     " OR (name = 'rollout_waits'"
@@ -147,6 +155,7 @@ ATTRIBUTE_FIELDS = (
     "phase",
     "queue",
     "reason",
+    "source_kind",
     "source_temporality",
     "stat",
     "step",
@@ -166,6 +175,10 @@ BODY_FIELDS = (
 CUMULATIVE_NAMES = (
     "generation_tokens_total",
     "prompt_tokens_total",
+    "request_decode_time_seconds_count",
+    "request_decode_time_seconds_sum",
+    "request_prefill_time_seconds_count",
+    "request_prefill_time_seconds_sum",
 )
 SNAPSHOT_NAMES = (
     "kv_cache_usage_perc",

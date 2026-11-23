@@ -13,7 +13,7 @@ export const nodes = {
     ports: {
       prompts: port('Prompt work', 'left', 24, 'dispatch'),
       lease: port('Lease grant', 'left', 76, 'dispatch'),
-      request: port('Prompt or continuation', 'right', 25, 'workers'),
+      request: port('Model input', 'right', 25, 'workers'),
       output: port('Model output', 'right', 66, 'workers'),
       call: port('Task action', 'top', 18, 'workers'),
       observation: port('Observation / reward', 'top', 40, 'workers'),
@@ -37,7 +37,7 @@ export const nodes = {
   inference: {
     label: 'Inference', category: 'Stage', position: [798, 244], size: [183, 112],
     ports: {
-      request: port('Prompt or continuation', 'left', 32.5),
+      request: port('Model input', 'left', 32.5),
       output: port('Model output', 'left', 86),
       weights: port('Policy weights', 'bottom', 50),
     },
@@ -98,7 +98,7 @@ const edge = (from, to, label, payload, { kind = 'work', lane } = {}) => ({ from
 export const edges = {
   prompts: edge(['source', 'prompts'], ['rollouts', 'prompts'], 'Prompt work', 'Prompt work item'),
   dispatchTask: edge(['dispatch', 'task'], ['workers', 'task'], 'Leased task', 'Leased rollout task'),
-  promptTokens: edge(['rollouts', 'request'], ['inference', 'request'], 'Prompt / continuation', 'Prompt or continuation tokens'),
+  promptTokens: edge(['rollouts', 'request'], ['inference', 'request'], 'Model input', 'Prompt and continuation tokens'),
   generation: edge(['inference', 'output'], ['rollouts', 'output'], 'Model output', 'Generated tokens'),
   toolCall: edge(['rollouts', 'call'], ['environment', 'call'], 'Task action', 'Tool call or task action', { lane: 214 }),
   observation: edge(['environment', 'observation'], ['rollouts', 'observation'], 'Observation / reward', 'Observation and any reward returned by the same task step', { lane: 164 }),
@@ -133,6 +133,9 @@ export function flowGraph(expanded, separateGrading) {
 const metric = (subject, name, label, unit, transform, filter = {}, extra = {}) =>
   ({ subject, name, label, unit, transform, filter, time: 'timestamp_ms', ...extra });
 const vllm = (source_temporality) => ({ metric_source: 'vllm', source_temporality });
+const requestTiming = (phase, label) => metric('inference', 'request_' + phase + '_time_seconds_sum',
+  label, 's', 'cumulativeMean', { ...vllm('cumulative_snapshot'), source_kind: 'histogram' },
+  { countName: 'request_' + phase + '_time_seconds_count' });
 const scalar = (subject, key, label, unit, extra = {}) =>
   metric(subject, 'training_metric_value', label, unit, 'points', { metric: key }, extra);
 const work = (subject, kind, label, unit) =>
@@ -153,6 +156,8 @@ export const signals = {
     { ...vllm('current_snapshot'), reason: 'deferred' }),
   kvCache: metric('inference', 'kv_cache_usage_perc', 'KV cache used', '%', 'engineSnapshots', vllm('current_snapshot'),
     { average: true, factor: 100 }),
+  prefillTime: requestTiming('prefill', 'Mean prefill time'),
+  decodeTime: requestTiming('decode', 'Mean decode time'),
   quarantined: scalar('source', 'async/quarantined_prompts', 'Quarantined prompts', 'prompts'),
   promptItems: metric('prompts', 'rollout_call', 'Recorded prompt starts', 'prompts/s', 'eventRate', {}, { time: 'body_json.started_unix_ms' }),
   promptReleases: metric('buffer', 'rollout_groups', 'Prompt IDs released', 'prompts/s', 'deltaRate',
@@ -219,93 +224,102 @@ export const signals = {
 
 const card = (title, series, help, extra = {}) => ({ title, series, help, ...extra });
 const rejectionCard = (title) => card(title, ['rejected', 'rejectedByReason'],
-  'These counts come from batch admission. Each point is the number of groups rejected while filling that batch. Choose a reason to see its count.',
+  'Each point counts groups the Buffer rejected while filling one batch. Choose a reason to see its count.',
   { rejectionSummary: true, groupLabel: 'Rejection reason' });
 const batchFailures = ['rolloutFailure', 'submissionFailure', 'rolloutInfra'];
 export const cards = {
-  source: card('Task source', ['quarantined'], 'The loader reports how many prompts are quarantined at each step.', {
+  source: card('Task source', ['quarantined'], 'Each point counts prompts the loader is holding back from dispatch.', {
     links: [{ id: 'prompts', label: 'View prompt work' }],
   }),
   rollouts: card('Rollouts', ['activeAttempts', 'attemptTime', 'slotWait', 'promptWait', 'attemptEnds', ...batchFailures],
-    'Active attempts are reconstructed from recorded calls. Each attempt can produce several sampled rollouts. Batch failures count individual rollouts.', {
+    'An attempt runs one group of rollouts. Active counts use start and end times recorded when attempts finish. Batch failures count individual rollouts.', {
       tabs: { 'rollouts/batch': 'Batch failures' },
       links: [{ id: 'dispatch', label: 'View Dispatch' }, { id: 'workers', label: 'View Workers' }],
     }),
   dispatch: card('Dispatch', ['slotWait', 'promptWait', 'slotWaitTime', 'promptWaitTime'],
-    'Dispatch waits for a lease, then an eligible prompt in that lease’s task family. Wait durations arrive when the await ends. Waiting per 10 s estimates when Dispatch was blocked.', {
+    'Dispatch waits for a lease, then for an eligible prompt in that task family. A point appears when a wait ends. Waiting per 10 s estimates how much of each interval Dispatch spent waiting.', {
       promptOccupancySummary: true,
       links: [{ id: 'leases', label: 'View lease grants' }, { id: 'prompts', label: 'View prompt work' }],
     }),
   workers: card('Workers', ['activeAttempts', 'attemptTime', 'modelAwait', 'rolloutsPerGroup', 'modelAwaitCount',
-    'attemptEnds', ...batchFailures], 'An attempt processes one group. A group contains sampled rollouts, each of which can make multiple model calls. Active attempts use intervals reconstructed from completed records. Model waits are summed within each attempt and can overlap.', {
+    'attemptEnds', ...batchFailures], 'An attempt runs one group of rollouts. Active counts use attempts with recorded start and end times. Model wait time adds the waits for calls within each attempt. Those waits can overlap.', {
       cancellationSummary: true,
       tabs: { 'rollouts/batch': 'Batch failures' },
       summaries: { rolloutsPerGroup: 'generated group', modelAwaitCount: 'attempt' },
     }),
-  inference: card('Inference', ['running', 'waiting', 'kvCache'],
-    'Request totals sum the last snapshot per engine in each bin. Fleet KV cache usage averages those engine percentages.', {
-      engines: true, tabs: { '%': 'KV cache' },
-      links: [{ id: 'promptTokens', label: 'View prompt tokens' }, { id: 'generation', label: 'View model output' }],
+  inference: card('Inference', ['running', 'waiting', 'prefillTime', 'decodeTime', 'kvCache'],
+    'Running and waiting count requests inside vLLM. Each 10-second point adds the latest counts from the engines.', {
+      engines: true, tabs: { s: 'Prefill and decode', '%': 'KV cache' },
+      helpByUnit: {
+        s: 'Prefill processes the input. Decode generates new tokens. Each 10-second point estimates the mean time per finished request. Gaps mark intervals with no finishes or missing samples.',
+        '%': 'The KV cache stores attention state. The fleet chart averages the percentage used across engines.',
+      },
+      links: [{ id: 'promptTokens', label: 'View model input' }, { id: 'generation', label: 'View model output' }],
     }),
   environment: card('Task Environment', ['toolTasks', 'callWait', 'environmentQueue', 'environmentExecution', 'environmentResume', 'callFailures'],
-    'A batch point counts rollouts with at least one tool call. Timing samples sum observed waits within each attempt.', {
+    'A batch point counts rollouts that made at least one tool call. Timing points show totals per attempt, including time spent in the queue and running calls.', {
       summaries: { toolTasks: 'batch' }, tabs: { 'rollouts/batch': 'Tool use per batch' },
       missing: 'Some environment timing or failure records are missing in this window.',
     }),
   grading: card('Grading', ['evalGraded', 'evalGrading', 'evalGradingP50', 'evalGradingP95', 'evalGradingFamily', 'gradingOut'],
-    'Eval grades and timing use Marin’s summaries across suites. Training grades come from training-batch summaries.', {
+    'Eval grades count graded rollouts across suites. In Timing, choose a suite to see its mean grading time. Training grades count graded rollouts per batch.', {
     evalSummary: true, groupLabel: 'Eval suite', groupDefault: 'All suites',
     summaries: { evalGraded: 'evaluation', evalGrading: 'evaluation', evalGradingFamily: 'evaluation' },
     tabs: { 'rollouts/batch': 'Training grades' },
   }),
   buffer: card('Buffer', ['queue', 'dwell', 'openLeases'],
-    'Queue depth counts ready groups from any batch. Dwell time is recorded for each departing group with a known commit time.', {
+    'Queue depth counts groups ready for admission. Dwell time measures how long a group stayed in the Buffer, from when it entered to when it left.',
+    {
       links: [{ id: 'admitted', label: 'View admitted groups and policy lag' }],
     }),
   discarded: rejectionCard(nodes.discarded.label),
   rejected: rejectionCard('Rejected groups'),
   trainer: card('Trainer', ['training', 'wait', 'waitTime', 'trainedResponseTokens', 'trainedLossTokens', 'trainedSequences'],
-    'Training and batch-wait durations come from the trainer’s phases. Work counts are recorded after successful optimizer steps and exclude data-parallel padding.', {
+    'The trainer records how long each step spent waiting for a batch and training. Counts come from completed optimizer steps and exclude padding added for data parallelism.', {
       batchWaitZoom: true,
     }),
-  prompts: card('Prompt work', ['promptItems'], 'Starts count attempts with recorded start and end times. The release overlay counts consumed groups that free a prompt ID. Lease family and quarantine rules govern which IDs can be reused.', {
+  prompts: card('Prompt work', ['promptItems'], 'Starts count attempts that later recorded an end. Releases count prompt IDs freed when the Buffer admits their groups. Reuse still depends on the task family and quarantine.', {
     context: ['promptReleases'], tabs: { 'prompts/s': 'Releases and starts' },
     links: [{ id: 'dispatch', label: 'View prompt waits in Dispatch' }],
   }),
-  dispatchTask: card('Leased task', ['dispatched'], 'Starts counted by their recorded start times, for attempts that published an end record.'),
-  promptTokens: card('Prompt / continuation', ['promptTokensPerGpu', 'promptTokens'], 'vLLM counts all prompt tokens, including cache hits. Each 10 s bin sums rates across observed engines with full coverage.', { engines: true }),
-  generation: card('Model output', ['generationPerGpu', 'generation'], 'vLLM counts generated tokens. Gaps mark missing coverage or counter resets.', { engines: true }),
-  toolCall: card('Task action', ['calls'], 'The instrumented environment wrapper counts awaits. That count can be broken down by backend when the record carries a backend label.', {
+  dispatchTask: card('Leased task', ['dispatched'], 'This chart counts attempts at their start times once they record an end.'),
+  promptTokens: card('Model input', ['promptTokens', 'promptTokensPerGpu'],
+    'vLLM counts prompt and continuation tokens it handles, including tokens served from its prefix cache. The default rate adds input across engines in 10-second intervals.',
+    { engines: true, tabs: { 'tokens/s': 'Tokens/s', 'tokens/s/GPU': 'Per GPU' } }),
+  generation: card('Model output', ['generation', 'generationPerGpu'],
+    'vLLM counts new tokens generated during decode. The default rate adds output across engines in 10-second intervals.',
+    { engines: true, tabs: { 'tokens/s': 'Tokens/s', 'tokens/s/GPU': 'Per GPU' } }),
+  toolCall: card('Task action', ['calls'], 'This chart counts calls the worker waited for in the task environment. Choose a task family or backend when those labels are available.', {
     gapLabel: 'No call counts', gap: 'Finelog has no environment await counts in this window. Task Environment reports batch tool use when available.',
     related: { id: 'environment', label: 'See batch tool use' },
   }),
-  observation: card('Observation / reward', ['taskReturns'], 'A task step can return an observation and a reward together.', {
+  observation: card('Observation / reward', ['taskReturns'], 'The task environment returns an observation and may include a reward.', {
     gapLabel: 'No return records',
     gap: 'Finelog has no individual observation or reward returns in this window. The batch summary counts rollouts that used tools.',
     related: { id: 'environment', label: 'See batch tool use' },
   }),
-  gradeSubmit: card('Grading submission', ['gradingIn'], 'This stream carries work sent to a separate grader.', {
+  gradeSubmit: card('Grading submission', ['gradingIn'], 'Workers send rollouts to a separate grader for scoring.', {
     gapLabel: 'No submission counts',
     gap: 'Finelog has no count of submissions sent to the grader. The eval summaries count attempted rollouts and grading outcomes.',
     related: { id: 'grading', label: 'See eval summaries' },
   }),
-  gradeResult: card('Grading outcome', ['gradingResults'], 'A grading result is a score or verdict returned to a rollout worker.', {
+  gradeResult: card('Grading outcome', ['gradingResults'], 'The grader returns a score or verdict to the worker.', {
     gapLabel: 'No result events', gap: 'Finelog has no individual grading returns in this window. Grading reports aggregate eval and training outcomes.',
     related: { id: 'grading', label: 'See grading summaries' },
   }),
   completed: card('Completed groups', ['completed', 'handoffTokens', 'handoffWait'],
-    'The driver records successful handoffs and response tokens when the worker call ends. Buffer write time measures the worker’s await of the writer.'),
+    'Each successful handoff records one group and its response tokens when the attempt ends. Buffer write time measures how long the worker waited to enqueue the group.'),
   admitted: card('Admitted batch', ['batchGroups', 'batchTokens', 'admissions', 'lagMax', 'lagMean'],
-    'Batch volume sums consumed groups and their generated tokens. Policy lag measures the policy age of consumed groups.', {
+    'Each batch point counts the groups and generated tokens sent to the trainer. Policy lag is how many updates old those groups were at admission.', {
       tabs: { 'tokens/batch': 'Tokens per batch' }, batchSummary: true, lagCaption: true,
       links: [{ id: 'trainer', label: 'View batch waits in Trainer' }],
     }),
-  leases: card('Lease grants', ['grants'], 'A lease gives Dispatch permission to launch a rollout.', {
+  leases: card('Lease grants', ['grants'], 'A lease reserves a slot for one group. Dispatch shows how long it waited for a lease.', {
     gapLabel: 'No grant events',
     gap: 'Finelog has no lease grant events in this window. Dispatch records how long it waited for a lease.',
     links: [{ id: 'dispatch', label: 'View lease waits in Dispatch' }, { id: 'prompts', label: 'See prompt releases and starts' }],
   }),
-  weights: card('Weight sync', ['sync'], 'Duration from each recorded weight-sync completion. Click a point for its policy step and reason.', { tabs: { s: 'Sync duration' } }),
+  weights: card('Weight sync', ['sync'], 'Each point shows how long a weight sync took. Select a point to see its policy step and reason when recorded.', { tabs: { s: 'Sync duration' } }),
 };
 
 export const MAX_WINDOW_MINUTES = 60;

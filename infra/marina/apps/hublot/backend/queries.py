@@ -6,12 +6,12 @@
 import re
 from dataclasses import dataclass
 
-from .query_contract import COUNTER_MARGIN_MS, DISPATCH_WAITS, DRIVER_MARKERS, REGULAR_SIGNALS
+from .query_contract import COUNTER_MARGIN_MS, DISPATCH_WAITS, DRIVER_MARKERS, REGULAR_SIGNALS, SPAN_LOOKAHEAD_MS
 
 NAMESPACE = "telemetry_v1.marinskyrl"
 CHOICE_LIMIT = 8
 DRIVER_LIMIT = 64
-PAGE_ROWS = 6_000
+PAGE_ROWS = 24_000
 
 _CLUSTER = "coalesce(nullif(cluster, ''), 'local')"
 _JOB = "coalesce(job_id, '')"
@@ -103,16 +103,23 @@ GROUP BY {_CLUSTER}, execution_uid, {_JOB}
 ORDER BY last_ms DESC LIMIT {CHOICE_LIMIT + 1}"""
 
 
-def telemetry_sql(execution: Execution, page: Window, visible: Window) -> str:
+def telemetry_sql(execution: Execution, visible: Window, *, limit: int, after: tuple[int, int] | None) -> str:
+    start = visible.start - COUNTER_MARGIN_MS
+    end = visible.end + SPAN_LOOKAHEAD_MS
+    cursor = ""
+    if after is not None:
+        start, seq = after
+        cursor = f"AND (timestamp_ms > {start} OR (timestamp_ms = {start} AND seq > {seq}))"
     return f"""
 SELECT cluster, service, run_id, execution_uid, job_id, region, node_name, process_index, seq,
        timestamp_ms, name, value, body_json, attributes_json, resource_attributes_json
 FROM "{NAMESPACE}"
-WHERE timestamp_ms >= {page.start} AND timestamp_ms < {page.end} AND {_SERVICE_FILTER}
+WHERE timestamp_ms >= {start} AND timestamp_ms < {end} AND {_SERVICE_FILTER}
+  {cursor}
   AND ({execution.predicate})
   AND (name IN ('async_phase_window', 'rollout_call', 'weight_sync_completed') OR ({DISPATCH_WAITS})
        OR (timestamp_ms < {visible.end + COUNTER_MARGIN_MS} AND (name = 'rollout_groups' OR ({REGULAR_SIGNALS}))))
-ORDER BY timestamp_ms, seq LIMIT {PAGE_ROWS + 1}"""
+ORDER BY timestamp_ms, seq LIMIT {limit}"""
 
 
 def driver_sql(execution: Execution, search: Window) -> str:

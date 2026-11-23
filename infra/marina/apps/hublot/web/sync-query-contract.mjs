@@ -5,8 +5,9 @@ import { driverLinePatterns, driverPhaseMarkers, driverTimestamp } from './src/p
 
 // Keep the backend's fixed predicates in step with the signals used by the browser.
 const literal = (value) => "'" + value.replaceAll("'", "''") + "'";
-const predicate = ({ name, filter, metricPattern }) => {
-  const terms = ['name = ' + literal(name), ...Object.entries(filter).map(([key, value]) =>
+const predicate = ({ name, countName, filter, metricPattern }) => {
+  const names = countName ? 'name IN (' + [name, countName].map(literal).join(', ') + ')' : 'name = ' + literal(name);
+  const terms = [names, ...Object.entries(filter).map(([key, value]) =>
     'json_get(attributes_json, ' + literal(key) + ') = ' + literal(value))];
   if (metricPattern) terms.push("regexp_like(json_get(attributes_json, 'metric'), " + literal(metricPattern) + ')');
   return '(' + terms.join(' AND ') + ')';
@@ -21,6 +22,8 @@ const markers = driverPhaseMarkers.map(({ caller, message }) => {
 });
 
 const fields = Object.values(signals);
+const counters = fields.filter((s) => s.transform === 'cumulative' || s.transform === 'cumulativeMean')
+  .flatMap(({ name, countName }) => countName ? [name, countName] : [name]);
 const attributes = new Set(['step', 'reason', 'outcome', 'disposition', 'engine', 'engine_index', 'payload_kind', 'tool_backend', 'task_family']);
 const body = new Set(['started_unix_ms', 'finished_unix_ms', 'duration_seconds', 'reason']);
 for (const { filter, dimension, time, value, metricPattern } of fields) {
@@ -60,7 +63,7 @@ DRIVER_LINE_PATTERNS = ${tuple(driverLinePatterns.map((pattern) => pattern.sourc
 DRIVER_TIMESTAMP = ${JSON.stringify(driverTimestamp.source)}
 ATTRIBUTE_FIELDS = ${tuple(attributes)}
 BODY_FIELDS = ${tuple(body)}
-CUMULATIVE_NAMES = ${tuple(fields.filter((s) => s.transform === 'cumulative').map((s) => s.name))}
+CUMULATIVE_NAMES = ${tuple(new Set(counters))}
 SNAPSHOT_NAMES = ${tuple(new Set(fields.filter((s) => s.transform === 'engineSnapshots').map((s) => s.name)))}
 `;
 const path = new URL('../backend/query_contract.py', import.meta.url);

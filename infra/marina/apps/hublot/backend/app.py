@@ -26,13 +26,13 @@ from rigging.credentials import iap_provider_for
 from . import queries
 from .project import driver_facts, run_configuration, telemetry_rows
 from .queries import Execution, Window
-from .query_contract import COUNTER_MARGIN_MS, MAX_WINDOW_MS, MIN_WINDOW_MS, SPAN_LOOKAHEAD_MS
+from .query_contract import MAX_WINDOW_MS, MIN_WINDOW_MS, SPAN_LOOKAHEAD_MS
 
 logger = logging.getLogger(__name__)
 
 MINUTE_MS = 60_000
 LOOKBACK_HOURS = 72
-MAX_WINDOW_ROWS = 36_000
+MAX_WINDOW_ROWS = 108_000
 MAX_PAGE_QUERIES = 24
 MAX_RESPONSE_BYTES = 24 * 1024 * 1024
 # Leave time for Marina to encode the response before Cloud Run's 60-second deadline.
@@ -135,14 +135,20 @@ def _window_too_large() -> RunError:
     return RunError(422, "This window has too many records. Load a shorter window.")
 
 
+def _read_timeout() -> RunError:
+    return RunError(504, "Finelog took too long. Try again or load a shorter window.")
+
+
 def _read_telemetry(read: ReadRows, execution: Execution, visible: Window) -> list[dict[str, Any]]:
-    pending = [Window(visible.start - COUNTER_MARGIN_MS, visible.end + SPAN_LOOKAHEAD_MS)]
+    after: tuple[int, int] | None = None
+    page_size = queries.PAGE_ROWS
     rows: list[dict[str, Any]] = []
     for _ in range(MAX_PAGE_QUERIES):
-        page = pending.pop()
+        remaining = MAX_WINDOW_ROWS - len(rows)
+        # Read one extra row to distinguish a complete result from a full page.
+        limit = min(page_size, remaining) + 1
         try:
-            samples = read(queries.telemetry_sql(execution, page, visible), queries.PAGE_ROWS + 1)
-            overflow = len(samples) > queries.PAGE_ROWS
+            samples = read(queries.telemetry_sql(execution, visible, limit=limit, after=after), limit)
         except StatsError as error:
             cause = error.__cause__
             if not (
@@ -151,22 +157,19 @@ def _read_telemetry(read: ReadRows, execution: Execution, visible: Window) -> li
                 and "message limit" in str(cause)
             ):
                 raise
-            overflow = True
-            samples = []
-        if overflow:
-            if page.end - page.start <= 1:
-                raise _window_too_large()
-            # Split the visible data first when the lower-volume span lookahead is part of this page.
-            data_end = visible.end + COUNTER_MARGIN_MS
-            split_end = data_end if page.start + 1 < data_end < page.end else page.end
-            midpoint = (page.start + split_end) // 2
-            pending.extend((Window(midpoint, page.end), Window(page.start, midpoint)))
-        else:
+            if limit <= 2:
+                raise _window_too_large() from error
+            page_size = (limit - 1) // 2
+            continue
+        if len(samples) > remaining:
+            raise _window_too_large()
+        if len(samples) < limit:
             rows.extend(samples)
-            if len(rows) > MAX_WINDOW_ROWS:
-                raise _window_too_large()
-            if not pending:
-                return rows
+            return rows
+        samples.pop()
+        rows.extend(samples)
+        last = samples[-1]
+        after = (last["timestamp_ms"], last["seq"])
     raise _window_too_large()
 
 
@@ -257,8 +260,16 @@ def create_api(_services: Services) -> FastAPI:
 
                 def read(sql: str, max_rows: int) -> list[dict[str, Any]]:
                     if time.monotonic() + RPC_TIMEOUT > deadline:
-                        raise RunError(504, "Finelog took too long. Try again or load a shorter window.")
-                    return client.query(sql, max_rows=max_rows).to_pylist()
+                        raise _read_timeout()
+                    try:
+                        return client.query(sql, max_rows=max_rows).to_pylist()
+                    except TimeoutError as error:
+                        raise _read_timeout() from error
+                    except StatsError as error:
+                        cause = error.__cause__
+                        if isinstance(cause, ConnectError) and cause.code == Code.DEADLINE_EXCEEDED:
+                            raise _read_timeout() from error
+                        raise
 
                 response = JSONResponse(_load_run(read, run, requested), headers=NO_STORE)
                 if len(response.body) > MAX_RESPONSE_BYTES:

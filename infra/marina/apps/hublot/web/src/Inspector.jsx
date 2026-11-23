@@ -488,9 +488,8 @@ export function InspectorCard({
           <details className="chart-help">
             <summary aria-label={'How to read ' + definition.title}>?</summary>
             <div className="help-popover">
-              <p>{definition.help}</p>
-              {unit === 'tokens/s/GPU' && <p>The combined rate divided by {model.run.inferenceGpus} configured inference GPUs.</p>}
-              <p>The axis shows elapsed time. The chart readout retains UTC. Gaps show missing samples and zero values are drawn at zero.</p>
+              <p>{definition.helpByUnit?.[unit] ?? definition.help}</p>
+              {unit === 'tokens/s/GPU' && <p>Per GPU divides the fleet rate by the configured inference GPU count.</p>}
             </div>
           </details>
           {series.length > 0 && <button type="button" aria-label={'Full screen ' + definition.title} title="Full screen"

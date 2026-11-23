@@ -50,7 +50,20 @@ def api(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
                 "work_completed",
                 json.dumps({"work_kind": "consumed_sample", "step": step}),
             )
-            for step, offset in enumerate((5_000, 20_000, 30_000, 40_000, 55_000), start=1)
+            for step, offset in enumerate((5_000, 20_000, 20_000, 20_000, 55_000), start=1)
+        ]
+        labels = json.dumps(
+            {
+                "engine": "fixture-engine",
+                "metric_source": "vllm",
+                "source_kind": "histogram",
+                "source_temporality": "cumulative_snapshot",
+            }
+        )
+        timing = [
+            Telemetry(START + offset, f"request_prefill_time_seconds_{sample}", labels, value=value)
+            for offset, total, count in ((-5_000, 1.0, 10.0), (5_000, 2.0, 12.0))
+            for sample, value in (("sum", total), ("count", count))
         ]
         wait = Telemetry(
             timestamp_ms=END + 5_000,
@@ -68,6 +81,7 @@ def api(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         table.write(
             [
                 *updates,
+                *timing,
                 wait,
                 replace(wait, job_id=""),
                 replace(updates[0], job_id="", value=99),
@@ -99,6 +113,14 @@ def test_full_window_reads_every_update_for_the_selected_execution(api: TestClie
     updates = [row for row in payload["rows"] if row["name"] == "work_completed"]
     assert [row["attributes_json"]["step"] for row in updates] == [1, 2, 3, 4, 5]
     assert [row["value"] for row in updates] == [1.0] * 5
+    timing = [row for row in payload["rows"] if row["name"].startswith("request_prefill_time_seconds_")]
+    assert [(row["timestamp_ms"], row["value"]) for row in timing] == [
+        (START - 5_000, 1.0),
+        (START - 5_000, 10.0),
+        (START + 5_000, 2.0),
+        (START + 5_000, 12.0),
+    ]
+    assert len({row["engineSeries"] for row in timing}) == 1
     waits = [row for row in payload["rows"] if row["name"] == "async_phase_window"]
     assert [row["body_json"] for row in waits] == [
         {"duration_seconds": 7, "started_unix_ms": END - 2_000, "finished_unix_ms": END + 5_000}
@@ -108,3 +130,11 @@ def test_full_window_reads_every_update_for_the_selected_execution(api: TestClie
     other = api.get("/run", params={"run": choices[""], **window})
     assert other.status_code == 200
     assert [row["value"] for row in other.json()["rows"] if row["name"] == "work_completed"] == [99.0]
+
+
+def test_window_over_the_record_limit_returns_no_partial_run(api: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app, "MAX_WINDOW_ROWS", 4)
+    response = api.get("/run", params={"run": "/fixtures/trainer's-run", "from": START, "to": END})
+    assert response.status_code == 422
+    assert "Load a shorter window" in response.json()["error"]
+    assert "rows" not in response.json()

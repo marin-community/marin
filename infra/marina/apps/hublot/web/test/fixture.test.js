@@ -51,6 +51,30 @@ test('rates use configured GPUs for the fleet view and preserve real zeros and g
   assert.equal(createMeasurements(rows, window).series.generationPerGpu, undefined);
 });
 
+test('inference timing weights engines by completed requests and leaves gaps on resets', () => {
+  const rows = (phase, engine, samples) => samples.flatMap(([timestamp, seconds, requests]) =>
+    [['sum', seconds], ['count', requests]].map(([suffix, value]) => ({
+      ...counter(engine, timestamp, value),
+      name: 'request_' + phase + '_time_seconds_' + suffix,
+      attributes_json: { engine, metric_source: 'vllm', source_kind: 'histogram', source_temporality: 'cumulative_snapshot' },
+    })));
+  const samples = [
+    ...rows('prefill', 'a', [[0, 0, 0], [10_000, 3, 2], [20_000, 3, 2], [30_000, 4, 1], [40_000, 6, 3]]),
+    ...rows('prefill', 'b', [[0, 0, 0], [10_000, 15, 6], [20_000, 15, 6], [30_000, 25, 10], [40_000, 29, 12]]),
+    ...rows('decode', 'a', [[0, 0, 0], [10_000, 14, 2]]),
+  ];
+  const { series } = createMeasurements(samples, window);
+  const round = ({ value }) => value === null ? null : Number(value.toFixed(6));
+  assert.deepEqual(series.prefillTime[0].data.map(round), [2.25, null, null, 1.5, null]);
+  assert.equal(round(series.prefillTime[1].data[0]), 1.5);
+  assert.equal(round(series.decodeTime[0].data[0]), 7);
+
+  const incomplete = samples.filter((row) => row.attributes_json.engine !== 'b' || !row.name.endsWith('_sum'));
+  const { series: partial } = createMeasurements(incomplete, window);
+  assert.equal(partial.prefillTime[0].data.length, 0);
+  assert.equal(round(partial.prefillTime[1].data[0]), 1.5);
+});
+
 test('six recorded seconds in a ten-second bin is 60 percent', () => {
   const waits = [{ start: 4000, end: 9500 }, { start: 7000, end: 10000 }];
   const phases = [...waits, { start: 10000, end: 20000 }];

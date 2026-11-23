@@ -7,19 +7,20 @@ include `run`, `from`, and `to`, with times in UTC epoch milliseconds. If an ID
 matches multiple executions, choose one by cluster and job.
 
 Select a stage or stream to open its inspector. Select a batch wait in the
-Trainer card to focus the shared time range. The Model output card shows
-generated tokens per second per configured inference GPU when that count was
-recorded.
+Trainer card to focus the shared time range. Inference shows request counts,
+KV cache usage, and mean prefill and decode time per finished request when
+those samples are available. Model input and Model output show fleet token
+rates. Select **Per GPU** when the configured inference GPU count is available.
 
 ## Finelog reads
 
 Marina authorizes access to the named app and proxies its read API. The backend
 uses fixed Finelog queries scoped to one resolved execution and a UTC window of
 10 seconds to 60 minutes. It reads counter samples up to 15 seconds outside
-the window and looks 30 minutes ahead for completed spans. If a telemetry query
-reaches the page limit, Hublot splits the time range and combines the complete
-pages before the browser computes measurements. Oversized windows prompt the
-reader for a shorter range.
+the window and looks 30 minutes ahead for completed spans. Finelog pages resume
+after the last timestamp and sequence number. The browser computes measurements
+after all pages arrive. The backend asks for a shorter window when the read
+exceeds the record, response size, or time limit.
 
 The signal definitions in `web/src/contracts.js` drive both the browser charts
 and the server predicates. Run `npm run sync-query-contract` in `web/` after
@@ -45,3 +46,6 @@ runtime and its Finelog access.
 ```sh
 uv run marina release infra/marina/apps/hublot --base-version 0
 ```
+
+After release, sign in at the production `/hublot/` route and open one
+bounded run link to check the service's Finelog read.

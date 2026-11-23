@@ -41,6 +41,8 @@ function bySeries(rows, key) {
   return result;
 }
 
+const counterKey = (row) => row.engineSeries ?? seriesKey(row);
+
 function byTime(a, b) {
   return a.timestamp_ms - b.timestamp_ms || a.seq - b.seq;
 }
@@ -73,7 +75,7 @@ function overlap(a, b) {
 }
 
 export function cumulativeRate(rows, window) {
-  const groups = bySeries(rows.filter((row) => Number.isFinite(row.value)), (row) => row.engineSeries ?? seriesKey(row));
+  const groups = bySeries(rows.filter((row) => Number.isFinite(row.value)), counterKey);
   const target = bins(window);
   if (!groups.size) return target;
   const totals = target.map(() => ({ integral: 0, coverage: 0, first: Infinity, last: -Infinity }));
@@ -95,6 +97,21 @@ export function cumulativeRate(rows, window) {
     const total = totals[i];
     if (total.coverage !== duration * groups.size) return bin;
     return { ...bin, value: total.integral / duration, first: total.first, last: total.last };
+  });
+}
+
+function cumulativeMean(rows, window, countName) {
+  const totals = rows.filter((row) => row.name !== countName && Number.isFinite(row.value));
+  const counts = rows.filter((row) => row.name === countName && Number.isFinite(row.value));
+  const totalSeries = new Set(totals.map(counterKey));
+  const countSeries = new Set(counts.map(counterKey));
+  if (!totalSeries.size || totalSeries.size !== countSeries.size ||
+      [...totalSeries].some((key) => !countSeries.has(key))) return [];
+
+  const requestRates = cumulativeRate(counts, window);
+  return cumulativeRate(totals, window).map((bin, index) => {
+    const rate = requestRates[index].value;
+    return { ...bin, value: rate > 0 && bin.value !== null ? bin.value / rate : null };
   });
 }
 
@@ -204,7 +221,7 @@ function field(row, path) {
 }
 
 function includes(row, signal) {
-  return row.name === signal.name &&
+  return (row.name === signal.name || (signal.countName !== undefined && row.name === signal.countName)) &&
     Object.entries(signal.filter).every(([key, value]) => row.attributes[key] === value) &&
     (!signal.metricPattern || new RegExp(signal.metricPattern).test(row.attributes.metric ?? ''));
 }
@@ -255,18 +272,22 @@ function entriesForSignal(id, s, rows, window, phases) {
     unit: s.unit,
     ...(s.distribution ? { distribution: true } : {}),
     data,
-    kind: s.kind ?? (['cumulative', 'waitTime', 'concurrency'].includes(s.transform) ? 'line' :
+    kind: s.kind ?? (['cumulative', 'cumulativeMean', 'waitTime', 'concurrency'].includes(s.transform) ? 'line' :
       ['eventRate', 'deltaRate'].includes(s.transform) ? 'bar' : 'scatter'),
   });
-  if (s.transform === 'cumulative' || s.transform === 'engineSnapshots') {
-    const transform = s.transform === 'cumulative' ? cumulativeRate : (items, span) => engineSnapshots(items, span, s);
-    add(transform(matching, window));
+  if (['cumulative', 'cumulativeMean', 'engineSnapshots'].includes(s.transform)) {
+    const transform = (items) => {
+      if (s.transform === 'cumulativeMean') return cumulativeMean(items, window, s.countName);
+      if (s.transform === 'cumulative') return cumulativeRate(items, window);
+      return engineSnapshots(items, window, s);
+    };
+    add(transform(matching));
     const engineGroups = bySeries(matching.filter((row) => row.attributes.engine),
       (row) => stableJson([row.attributes.engine, row.attributes.engine_index]));
     for (const [key, engineRows] of [...engineGroups].slice(0, MAX_ENGINES)) {
       const { engine, engine_index } = engineRows[0].attributes;
       const label = 'Engine ' + (engine_index ?? engine.slice(0, 8));
-      add(transform(engineRows, window), label, key);
+      add(transform(engineRows), label, key);
     }
     return entries;
   }
