@@ -67,6 +67,7 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
@@ -1559,7 +1560,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
         targets = next_token_ids(self.Pos.name, example.tokens)
         selected = hax.sum(hax.where(hax.nn.one_hot(targets, self.Vocab, dtype=bool), logits, 0), self.Vocab)
-        normalizers = hax.nn.logsumexp(logits, self.Vocab)
+        normalizers = hax.named(batch_invariant_logsumexp(logits.array), logits.axes[:-1])
         loss = normalizers - selected
         if logsumexp_weight:
             loss = loss + logsumexp_weight * hax.square(normalizers)
