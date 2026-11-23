@@ -811,8 +811,9 @@ and the final-SFT-checkpoint retention rule (R1, enforced again at archive time)
 
 A round can bind a content-pinned RL stage patch with `rl_recipe_patch: {path, sha256}`.
 An adopted RL-only round uses `rl.recipe_patch` with the same `FilePin` fields.
-The runner verifies the bytes, applies the patch to the base recipe, and validates
-the merged `SkyRLRecipe` after curriculum-owned validation settings are resolved. Model, curriculum, SFT and
+The runner verifies the bytes and merges the typed patch before deriving
+curriculum-owned validation settings. The graph builder then validates the
+complete `SkyRLRecipe`. Model, curriculum, SFT and
 canonical Micro210 bindings remain round inputs.
 
 `specs/exp6-rl.yaml` sets a 131,072-token request window, 98,304 total response
@@ -822,8 +823,12 @@ capacity is the request window minus the total response cap. Without an explicit
 trajectory cap, the effective total response cap equals `max_new_tokens_per_turn`.
 Exp6 admits initial prompts up to 32,768 tokens. Pi's compaction reserve keeps
 24,576 tokens free for the next reply within the request window. Its RL
-batch remains 64 prompts times eight samples, with learning rate 1e-6 and gradient
-clip 0.5. Bind this patch from the Exp6 round after its model and data are ready.
+batch remains 64 prompts times eight samples, with gradient clip 0.5. Its MuonH
+optimizer follows Mochi's RL routing: main learning rate 1e-5, Adam fallback
+learning rate 2.307692307692308e-6, and CPU momentum storage. AdamW CPU optimizer
+offload is disabled. Qualify the retained batch with warm optimizer state before
+launching a full run. Bind this patch from the Exp6 round after its model and data
+are ready.
 
 `sft.first_collective_call_timeout` sets XLA's first-call rendezvous termination
 timeout in seconds. It allows cold-start skew between local GPUs without changing

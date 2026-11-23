@@ -11,6 +11,7 @@ publication or training checkpoint is created. Run-owned outputs stay separate.
 import argparse
 import hashlib
 import json
+import math
 import pickle
 import time
 
@@ -84,6 +85,24 @@ def compare_projection(hidden, weight, targets, project, *, temperature, fused):
     return {"passed": True, "tokens": hidden.shape[0], "tolerance": tolerance, "fused_main_gradient": fused, **metrics}
 
 
+def applied_update_metrics(outputs):
+    """Reject skipped or non-finite native updates before publishing qualification."""
+    metrics = []
+    for rank, output in enumerate(outputs):
+        status = output.metadata["train_status"]
+        values = {
+            key: float(status[key]) for key in ("policy_update_steps", "skipped_steps", "policy_loss", "raw_grad_norm")
+        }
+        if not all(math.isfinite(value) for value in values.values()):
+            raise ValueError(f"Non-finite native update on output {rank}: {values}")
+        if values["policy_update_steps"] <= 0 or values["skipped_steps"] != 0:
+            raise ValueError(f"Native optimizer did not apply every update on output {rank}: {values}")
+        metrics.append(values)
+    if not metrics:
+        raise ValueError("Native optimizer returned no update receipts")
+    return metrics
+
+
 def driver(args, worker_type):
     cfg = compiled_config(args)
     initialize_ray(cfg)
@@ -120,7 +139,12 @@ def driver(args, worker_type):
             started = time.monotonic()
             outputs = ray.get(actors.async_run_ray_method("mesh", "ppo_train", batch))
             timings.append(
-                {"warm_optimizer": index > 0, "seconds": time.monotonic() - started, "rank_outputs": len(outputs)}
+                {
+                    "warm_optimizer": index > 0,
+                    "seconds": time.monotonic() - started,
+                    "rank_outputs": len(outputs),
+                    "updates": applied_update_metrics(outputs),
+                }
             )
             io.write_bytes_atomic(
                 prefix_join(args.output_prefix, "matched-batch-timing.json"),

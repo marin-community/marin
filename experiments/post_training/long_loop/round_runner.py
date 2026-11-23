@@ -43,7 +43,8 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from skyrlrecipe import RecipePatch, SkyRLRecipe
+from skyrlrecipe import RecipePatch
+from skyrlrecipe.documents import merge_mappings
 
 from experiments.evaluation.micro210 import Micro210ServingProfile, micro210_artifact_step
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
@@ -507,11 +508,11 @@ def verified_certified_export(model: RoundAdoptedHf) -> None:
 
 
 def patched_rl_recipe(recipe: dict, patch: FilePin | None) -> dict:
-    """Apply a content-pinned stage patch through the typed recipe boundary."""
+    """Merge a content-pinned typed patch before deriving curriculum-owned settings."""
     if patch is None:
         return recipe
     authored = RecipePatch.from_document(read_pin(patch, Path.cwd()))
-    return SkyRLRecipe.from_document(recipe).merge(authored).to_skyrl()
+    return merge_mappings(recipe, authored.to_skyrl())
 
 
 def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactStep:
@@ -544,7 +545,7 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
     job_limit = 2 * 3600 if smoke else 48 * 3600
     if execution.cluster != spec.cluster or execution.job_timeout_seconds != job_limit:
         raise ValueError("Adopted RL requires the round cluster and a 48-hour job limit (two hours for smoke)")
-    recipe = json.loads(json.dumps(rl.recipe))
+    recipe = patched_rl_recipe(json.loads(json.dumps(rl.recipe)), rl.recipe_patch)
     if "eval_drain" not in recipe["trainer"]["rollout_buffer"]:
         raise ValueError("Every adopted RL round must explicitly choose rollout_buffer.eval_drain: wait or abort")
     draft = round_draft(spec)
@@ -619,7 +620,6 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
                 else math.ceil(0.9 * callback["expected_tasks"])
             )
             callback["selection_eligibility"] = rl.selection_eligibility
-    recipe = patched_rl_recipe(recipe, rl.recipe_patch)
     resume = (
         ArtifactStep.adopt(f"{spec.name}/native-input", spec.version, rl.native_checkpoint)
         if rl.native_checkpoint
@@ -850,10 +850,10 @@ def round_plan(
     recipe["trainer"]["callbacks"] = [
         callback for callback in recipe["trainer"]["callbacks"] if callback["type"] != "wall_time_budget"
     ]
+    recipe = patched_rl_recipe(recipe, round_spec.rl_recipe_patch)
     recipe["trainer"]["callbacks"] = curriculum_validation_callbacks(
         recipe["trainer"]["callbacks"], pools.curriculum.validation
     )
-    recipe = patched_rl_recipe(recipe, round_spec.rl_recipe_patch)
     resolved["rl"] = {
         **rl,
         "name": f"{round_spec.slug}-rl",

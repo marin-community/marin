@@ -758,7 +758,16 @@ def test_exp6_pinned_patch_resolves_exact_context_staleness_and_snowball_optimiz
     patch.write_bytes(source.read_bytes())
     pin = FilePin(str(patch), hashlib.sha256(patch.read_bytes()).hexdigest())
     roles = {**local_round.rl.role_plan, "train_batch_size": 64, "policy_mini_batch_size": 64, "n_samples_per_prompt": 8}
-    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe_patch=pin, role_plan=roles))
+    authored = dataclasses.asdict(local_round)
+    authored["rl"].update(recipe_patch=dataclasses.asdict(pin), role_plan=roles)
+    authored["rl"]["recipe"]["trainer"]["policy"]["megatron_config"]["optimizer_config_kwargs"] = {
+        "optimizer_cpu_offload": True,
+        "optimizer_offload_fraction": 1.0,
+        "overlap_cpu_optimizer_d2h_h2d": True,
+    }
+    round_file = tmp_path / "exp6-round.yaml"
+    round_file.write_text(yaml.safe_dump(authored))
+    spec = load_round(round_file)
     terminal = adopted_round_rl(spec)
     context = StepContext.for_run(
         str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
@@ -778,7 +787,34 @@ def test_exp6_pinned_patch_resolves_exact_context_staleness_and_snowball_optimiz
     assert agent["compaction_reserve_tokens"] == 24576
     assert (trainer["train_batch_size"], generator["n_samples_per_prompt"]) == (64, 8)
     assert trainer["policy"]["optimizer_config"]["max_grad_norm"] == 0.5
-    assert trainer["policy"]["optimizer_config"]["lr"] == 1e-6
+    optimizer = trainer["policy"]["optimizer_config"]
+    mochi = yaml.safe_load((source.parents[1] / "rounds/mochi-throughput-train-track1.yaml").read_text())
+    reference = mochi["rl"]["recipe"]["trainer"]["policy"]["optimizer_config"]
+    assert optimizer == {**reference, "max_grad_norm": 0.5, "lr_decay_steps": None}
+    offload = trainer["policy"]["megatron_config"]["optimizer_config_kwargs"]
+    assert not offload["optimizer_cpu_offload"]
+    assert offload["optimizer_offload_fraction"] == 0.0
+    assert not offload["overlap_cpu_optimizer_d2h_h2d"]
     patch.write_text(patch.read_text().replace("max_staleness_steps: 3", "max_staleness_steps: 4"))
     with pytest.raises(ValueError, match="Pinned file changed"):
         adopted_round_rl(spec)
+    adversarial = yaml.safe_load(source.read_text())
+    callbacks = copy.deepcopy(local_round.rl.recipe["trainer"]["callbacks"])
+    for callback in callbacks:
+        if callback["type"] == "best_checkpoint":
+            callback.update(expected_tasks=1, minimum_scored_tasks=1)
+    adversarial["trainer"]["callbacks"] = callbacks
+    patch.write_text(yaml.safe_dump(adversarial))
+    updated = dataclasses.replace(
+        spec,
+        rl=dataclasses.replace(
+            spec.rl, recipe_patch=FilePin(str(patch), hashlib.sha256(patch.read_bytes()).hexdigest())
+        ),
+    )
+    terminal = adopted_round_rl(updated)
+    context = StepContext.for_run(
+        str(tmp_path / "adversarial"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    callbacks = yaml.safe_load(terminal.build_config(context).launch_config_yaml)["skyrl"]["trainer"]["callbacks"]
+    best = next(callback for callback in callbacks if callback["type"] == "best_checkpoint")
+    assert (best["expected_tasks"], best["minimum_scored_tasks"]) == (200, 180)

@@ -14,8 +14,27 @@ trainer:
     max_staleness_steps: 3
   policy:
     optimizer_config:
-      lr: 1.0e-6
+      optimizer: MuonH
+      lr: 1.0e-5
+      adam_betas: [0.9, 0.95]
+      weight_decay: 0.0
       max_grad_norm: 0.5
+      num_warmup_steps: 0
+      scheduler: constant_with_warmup
+      optimizer_kwargs:
+        adam_lr: 2.307692307692308e-6
+        momentum: 0.95
+        nesterov: true
+        backend_steps: 5
+        epsilon: 1.0e-8
+        muon_epsilon: 1.0e-8
+        offload_momentum: true
+        expert_normalization: all_experts
+    megatron_config:
+      optimizer_config_kwargs:
+        optimizer_cpu_offload: false
+        optimizer_offload_fraction: 0.0
+        overlap_cpu_optimizer_d2h_h2d: false
 generator:
   n_samples_per_prompt: 8
 terminal_bench:

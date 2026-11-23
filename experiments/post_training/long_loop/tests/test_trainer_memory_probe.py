@@ -98,7 +98,18 @@ def test_cpu_driver_publishes_complete_receipts_after_training_and_warm_profile(
                 return [{"rank": 0, "pipeline_last": True, "projection": result}]
             if method == "ppo_train":
                 self.step(args[0].inputs.shape[0])
-                return [{"rank": 0}]
+                return [
+                    SimpleNamespace(
+                        metadata={
+                            "train_status": {
+                                "policy_update_steps": 1,
+                                "skipped_steps": 0,
+                                "policy_loss": 0.25,
+                                "raw_grad_norm": 0.5,
+                            }
+                        }
+                    )
+                ]
             assert method == "profile_train_memory" and group == "pass_through"
             before = {name: value.detach().clone() for name, value in self.model.state_dict().items()}
             measurements = []
@@ -153,3 +164,15 @@ def test_cpu_driver_publishes_complete_receipts_after_training_and_warm_profile(
         "shutdown",
     ]
     assert not list(output.rglob("*.tmp"))
+
+
+@pytest.mark.parametrize("change", [{"skipped_steps": 1}, {"raw_grad_norm": float("nan")}])
+def test_driver_rejects_skipped_or_nonfinite_native_updates(change):
+    pytest.importorskip("hydra", reason="Probe admission requires the native SkyRL CPU environment")
+    from types import SimpleNamespace  # noqa: PLC0415 - optional SkyRL CPU test
+
+    from experiments.post_training.long_loop.trainer_memory_probe import applied_update_metrics  # noqa: PLC0415
+
+    status = {"policy_update_steps": 1, "skipped_steps": 0, "policy_loss": 0.25, "raw_grad_norm": 0.5, **change}
+    with pytest.raises(ValueError):
+        applied_update_metrics([SimpleNamespace(metadata={"train_status": status})])
