@@ -122,12 +122,6 @@ class _RecordedEnv(Env):
         self.closed = True
 
 
-CONTAINED_TIMEOUT = 'if command -v timeout >/dev/null 2>&1; then exec timeout -k 5 "$1" sh -c "$2"; fi; exec sh -c "$2"'
-"""Run ``$2`` under an in-container ``timeout`` of ``$1`` where the image has one."""
-BACKSTOP = 30.0
-"""Machine deadline beyond the command timeout: the kill-after grace plus exec and capture latency."""
-
-
 # ShellSim 0.1.39's path error text. It reports ENOENT, not ENOTDIR, for a read below a regular file.
 SIMULATION_ERRNOS = {
     "no such file or directory": errno.ENOENT,
@@ -196,20 +190,11 @@ class ShellboxEnv(_RecordedEnv):
     @override
     async def run(self, cmd: str, *, timeout: float) -> CommandResult:
         started = time.monotonic()
-        # Iris closes the sandbox when a command outlives its machine deadline, so bound the command
-        # inside the container and keep the machine deadline as a backstop.
-        contained = isinstance(self.machine, IrisMachine) and timeout > 0
-        command = (
-            Command(("sh", "-c", CONTAINED_TIMEOUT, "forge-timeout", f"{timeout:g}s", cmd), timeout=timeout + BACKSTOP)
-            if contained
-            else Command(("sh", "-c", cmd), timeout=timeout)
-        )
+        # Every backend Taskforge uses bounds the command and keeps the machine; the model sees timeout's 124.
         async with self._operation():
-            result = await self.machine.run(command)
+            result = await self.machine.run(Command(("sh", "-c", cmd), timeout=timeout))
         elapsed = time.monotonic() - started
-        # GNU timeout exits 124 at the limit, or 137 when its kill-after escalation was needed.
-        killed = contained and result.exit_code == 137 and elapsed >= timeout
-        code = 124 if result.reason == ExitReason.TIMED_OUT or killed else result.exit_code
+        code = 124 if result.reason == ExitReason.TIMED_OUT else result.exit_code
         if code is None:
             raise Hold("environment terminated: command ended without an exit status")
         value = CommandResult(
