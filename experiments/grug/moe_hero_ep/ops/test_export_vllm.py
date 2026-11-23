@@ -117,6 +117,7 @@ def test_native_export_preserves_all_weights_and_config(tmp_path, monkeypatch):
         # Check routed experts independently from the exporter and its bank mapping.
         bank = model.stacked_blocks.stacked.mlp.expert_mlp
         for projection, values in [("gate_proj", bank.w_gate), ("up_proj", bank.w_up), ("down_proj", bank.w_down)]:
+            assert values is not None
             for layer in range(2):
                 expected.pop(f"model.layers.{layer}.mlp.experts.{projection}.weight")
                 for expert in range(4):
