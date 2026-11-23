@@ -18,21 +18,26 @@
     .status-metrics { display:flex; gap:.5rem; flex-wrap:wrap; margin:0 0 .75rem; }
     /* Filter chips need house colors: the UA default measures 5.3:1 in the dark scheme. */
     .status-metrics button { cursor:pointer; background:var(--soft); color:var(--muted); border:0; }
+    /* The pressed filter chip follows the house selected pattern: green text with a
+       green inset boundary (3:1 against the soft background). */
+    .status-metrics button[aria-pressed="true"] { color:var(--green); font-weight:600; box-shadow:inset 0 0 0 1px var(--green); }
+    /* Each typed chip filter gets a small label and its own wrapping row. */
+    .status-filter-row { display:flex; gap:.5rem; align-items:baseline; margin:0 0 .5rem; }
+    .status-filter-row > .metric-label { flex:0 0 auto; }
+    .status-filter-row > .status-metrics { flex:1 1 auto; margin:0; }
     /* The inner .table-scroller owns scrolling (max-height + overflow:auto); a hidden outer
        box only double-clips the open reason panels. */
     .catalog { overflow:visible; }
     /* Fixed layout keeps the Reasons column from starving Source and Last change:
        the reason chips' intrinsic width otherwise claims most of the table. */
     #status-table { table-layout: fixed; }
-    #status-table th:nth-child(1) { width: 30%; }
-    #status-table th:nth-child(2) { width: 15%; }
-    #status-table th:nth-child(3) { width: 35%; }
-    #status-table th:nth-child(4) { width: 14%; }
-    #status-table th:nth-child(5) { width: 12%; }
+    #status-table th:nth-child(1) { width: 22%; }
+    #status-table th:nth-child(2) { width: 13%; }
     #status-table td, #status-table th { overflow-wrap: break-word; }
     .status-reasons details { display:inline-block; margin:0 .25rem .25rem 0; max-width:100%; }
     .status-reasons summary { cursor:pointer; list-style:none; }
     .status-reasons summary::-webkit-details-marker { display:none; }
+    .status-reasons .chip { display:inline-block; margin:0 .25rem .25rem 0; }
     .status-explanation { max-width:100%; padding:.5rem .75rem; margin-top:.25rem; border:1px solid var(--line); border-radius:.5rem; background:var(--surface); font-size:.85rem; }
     .status-explanation p { margin:.15rem 0; overflow-wrap:anywhere; }
     .status-explanation .meaning { font-weight:600; }
@@ -40,18 +45,25 @@
     .status-needs-ruling { margin:.5rem 0 0; }
     /* Fixed layout with a floor: the reason chips define their own wrap, and narrow
        viewports scroll the table instead of crushing Source and Last change. */
-    #status-table { table-layout:fixed; min-width:960px; }
+    #status-table { table-layout:fixed; min-width:1120px; }
     #status-table td { overflow-wrap:anywhere; }
     /* Long reason options make the selects unbreakably wide on phones; give each
        filter its own row so the select tracks the form width, not its option text. */
     @media (max-width: 480px) {
       .filters > label { flex: 1 1 100%; min-width: 0; white-space: normal; }
       .filters select { width: 100%; min-width: 0; max-width: 100%; }
+      .status-filter-row { flex-wrap: wrap; }
     }
   </style>
   <section class="metrics" aria-label="Status totals">
     <div class="status-metrics" id="status-counts" role="group" aria-label="Counts per status"></div>
     <div class="freshness"><span class="metric-label">DATE</span><strong id="metric-date">—</strong></div>
+  </section>
+  <section class="metrics" aria-label="Typed column filters">
+    <div class="status-filter-row"><span class="metric-label">STAGE</span><div class="status-metrics" id="stage-filters" role="group" aria-label="Filter by pending stage"></div></div>
+    <div class="status-filter-row"><span class="metric-label">USE</span><div class="status-metrics" id="use-filters" role="group" aria-label="Filter by use"></div></div>
+    <div class="status-filter-row"><span class="metric-label">METHOD</span><div class="status-metrics" id="method-filters" role="group" aria-label="Filter by method"></div></div>
+    <div class="status-filter-row"><span class="metric-label">FORMAT</span><div class="status-metrics" id="format-filters" role="group" aria-label="Filter by format"></div></div>
   </section>
   <p id="message" class="sync-banner" role="status" aria-live="polite">Loading source status…</p>
   <section class="catalog">
@@ -60,15 +72,15 @@
       <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search sources…" aria-label="Search sources"></label>
     </div>
     <form id="filters" class="filters" role="search">
-      <label>Status<select id="status-filter"><option value="all">All statuses</option><option value="Pending">Pending</option><option value="Available">Available</option><option value="Excluded">Excluded</option><option value="Deprecated">Deprecated</option></select></label>
+      <label>Status<select id="status-filter"><option value="all">All statuses</option></select></label>
       <label>Reason<select id="reason-filter"><option value="all">All reasons</option></select></label>
       <button id="clear-filters" class="text-button" type="button">Reset</button>
     </form>
     <div class="table-scroller" tabindex="0" aria-label="Source status">
-      <table id="status-table" class="source-table"><caption class="sr-only">Every source with status, exclusion reasons and evidence, and last change</caption><colgroup><col style="width:26%"><col style="width:11%"><col style="width:42%"><col style="width:11%"><col style="width:10%"></colgroup><thead><tr><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Reasons</th><th scope="col">Evidence</th><th scope="col">Last change</th></tr></thead><tbody id="rows"></tbody></table>
+      <table id="status-table" class="source-table"><caption class="sr-only">Every source with status, pending stage, use, method, format, exclusion reasons and evidence, and last change</caption><colgroup><col style="width:22%"><col style="width:13%"><col style="width:6%"><col style="width:9%"><col style="width:9%"><col style="width:26%"><col style="width:9%"><col style="width:6%"></colgroup><thead><tr><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Use</th><th scope="col">Method</th><th scope="col">Format</th><th scope="col">Reasons</th><th scope="col">Evidence</th><th scope="col">Last change</th></tr></thead><tbody id="rows"></tbody></table>
       <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search or reset the filters.</p></div>
     </div>
-    <footer class="table-footer"><span id="visible-count"></span><span>Open a reason for what it means and what clears it</span></footer>
+    <footer class="table-footer"><span id="visible-count"></span><span>Open a reason or stage for what it means and what advances it</span></footer>
     <div id="needs-ruling" class="status-needs-ruling" hidden>
       <details><summary>Sources whose exclusion needs a ruling</summary><ul id="needs-ruling-list"></ul></details>
     </div>

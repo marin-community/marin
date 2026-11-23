@@ -4,8 +4,9 @@
 """Project method tags from each dataset variant's own preparation evidence."""
 
 import hashlib
-from typing import Any, Literal, Self
+from typing import Any, Self
 
+from finestore.rl.status_taxonomy import SourceMethod
 from finestore.sft import DatasetVariantInput, SftEvidenceReference, SftPreparationReceipt, SftRecord, Sha256
 from pydantic import Field, model_validator
 
@@ -29,14 +30,14 @@ class ConversionLineage(SftRecord):
 
 class DatasetVariant(SftRecord):
     input: VariantIdentity
-    tags: frozenset[Literal["rl", "sft"]] = frozenset()
+    tags: frozenset[SourceMethod] = frozenset()
     sft_receipt: SftPreparationReceipt | None = None
     sft_receipt_reference: SftEvidenceReference | None = None
     conversion: ConversionLineage | None = None
 
     @model_validator(mode="after")
     def require_own_preparation(self) -> Self:
-        if "sft" in self.tags:
+        if SourceMethod.SFT_VIABLE in self.tags:
             if self.sft_receipt is None or self.sft_receipt_reference is None:
                 raise ValueError("SFT tag requires a completed Datakit preparation receipt")
             self.sft_receipt.require_input(DatasetVariantInput.model_validate(self.input.model_dump()))
@@ -60,7 +61,7 @@ def rl_variant(declaration: dict[str, Any]) -> DatasetVariant:
             revision=census.get("dataset_revision") or declaration.get("dataset_revision"),
             task_specs_sha256=census.get("task_specs_sha256"),
         ),
-        tags=frozenset({"rl"}),
+        tags=frozenset({SourceMethod.RL}),
     )
 
 

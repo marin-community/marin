@@ -26,8 +26,10 @@ from finestore.rl.curation import (
     ModelReference,
     SamplePanelCurrency,
     Verdict,
+    require_typed_status_fields,
     validate_items,
 )
+from finestore.rl.status_taxonomy import PendingStage, SourceStatus
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -522,20 +524,25 @@ def load_catalog(
     )
     verification_pending: dict[str, list[str]] = {}
     sample_pin_stale: dict[str, bool] = {}
-    downgraded: dict[str, str] = {}
+    downgraded: dict[str, tuple[PendingStage, str]] = {}
     backend_rows = {row.source_id: row for row in backend_map.sources}
     for source in sources:
         backend_row = backend_rows[source.id]
         verdicts = {name: fit.support.value for name, fit in backend_row.backends.items()}
         blocker, pending = backend_admission_review(verdicts, source.declaration.status, backend_map.deployment_classes)
         if blocker:
-            if source.declaration.status == "Available" and _grader_network_profile_pending(backend_row, backend_map):
+            if source.declaration.status is SourceStatus.AVAILABLE and _grader_network_profile_pending(
+                backend_row, backend_map
+            ):
                 # r22 ruling: the profile conflict ships as typed Pending —
                 # unadmitted, with the unsupported evidence and the conflict
                 # visible — until a maintained per-source profile binding lands.
-                downgraded[source.id] = "Backend profile pending: grader needs network allow."
+                downgraded[source.id] = (
+                    PendingStage.BACKEND_PROFILE_PENDING,
+                    "Backend profile pending: grader needs network allow.",
+                )
             elif (
-                source.declaration.status == "Available"
+                source.declaration.status is SourceStatus.AVAILABLE
                 and not has_runnable_production_support(verdicts, backend_map.deployment_classes)
                 and _docker_build_preparation_pending(backend_row)
             ):
@@ -543,16 +550,17 @@ def load_catalog(
                 # images are not built yet, so the survey cannot qualify any backend.
                 # Ships as typed Pending until the image-preparation lane pins them.
                 downgraded[source.id] = (
+                    PendingStage.BACKEND_PREPARATION_PENDING,
                     "Backend preparation pending: the grader Docker build context is unresolved on every "
                     "task (the surveyed production backends cannot run unpinned images); the image "
-                    "preparation lane re-admits the source with pinned grader images."
+                    "preparation lane re-admits the source with pinned grader images.",
                 )
             else:
                 raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")
         # Available rows must pass full population admission; every other status
         # publishes as metadata without admission or selectability.
         if (
-            source.declaration.status == "Available"
+            source.declaration.status is SourceStatus.AVAILABLE
             and filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded"
         ):
             require_declaration_admission(source.declaration)
@@ -587,9 +595,10 @@ def load_catalog(
                 verdicts, backend_map.deployment_classes
             ):
                 downgraded[source.id] = (
+                    PendingStage.BACKEND_VERIFICATION_PENDING,
                     "Backend verification pending: "
                     + ", ".join(pending)
-                    + " (new admission waits on the live qualification)."
+                    + " (new admission waits on the live qualification).",
                 )
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
@@ -602,11 +611,16 @@ def load_catalog(
         if source.id not in downgraded:
             continue
         # A typed Pending projection: the registry declaration is untouched and
-        # the load-time copy carries the stage note — VERIFY-pending sources
+        # the load-time copy carries the stage and note — VERIFY-pending sources
         # wait on the live qualification, profile-conflict sources (grader
-        # needs network allow) wait on the maintained profile binding.
-        notes = (source.declaration.notes + " " if source.declaration.notes else "") + downgraded[source.id]
-        downgraded_declaration = source.declaration.model_copy(update={"status": "Pending", "notes": notes})
+        # needs network allow) wait on the maintained profile binding, and
+        # unresolved grader images wait on the image preparation lane.
+        stage, note = downgraded[source.id]
+        notes = (source.declaration.notes + " " if source.declaration.notes else "") + note
+        downgraded_declaration = source.declaration.model_copy(
+            update={"status": SourceStatus.PENDING, "stage": stage, "notes": notes}
+        )
+        require_typed_status_fields(downgraded_declaration)
         sources[index] = source.model_copy(update={"declaration": downgraded_declaration})
         source_declarations[source.id] = downgraded_declaration
     for source in backend_map.sources:

@@ -17,7 +17,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from finestore.rl.status_taxonomy import REASON_EXPLANATIONS, PendingStage, SourceStatus
+from finestore.rl.curation import SourceUse, TaskFormat
+from finestore.rl.status_taxonomy import (
+    REASON_EXPLANATIONS,
+    PendingStage,
+    SourceMethod,
+    SourceStatus,
+)
 
 from experiments.post_training.task_curation.consumer_scope import CONSUMER_RUNTIME_COMMIT
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
@@ -29,8 +35,10 @@ from experiments.post_training.task_curation.datasets.retained_releases import r
 from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
 from experiments.post_training.task_curation.registry import read_registry_json
+from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources
 from experiments.post_training.task_curation.within_source_binding import read_dedup_receipts
+from infra.marina.apps.rl_data_catalog.server.methods import variant_projection
 
 
 @dataclass(frozen=True)
@@ -48,12 +56,30 @@ class StatusRow:
     stage: str | None = None
     dataset_id: str | None = None
     dataset_revision: str | None = None
+    use: SourceUse | None = None
+    """The declared intended use; metadata-only rows carry none."""
+    task_format: TaskFormat | None = None
+    """The declared payload shape; an unconfigured intake source may carry none."""
+    method_tags: tuple[SourceMethod, ...] = ()
+    """The variants' Method values; intake sources show RL only."""
     reasons: tuple[dict[str, Any], ...] = field(default=())
 
     def payload(self) -> dict[str, Any]:
         row = asdict(self)
         row["reasons"] = list(self.reasons)
+        row["method_tags"] = [tag.value for tag in self.method_tags]
         return row
+
+
+def intake_columns(source: RlDataSource) -> dict[str, Any]:
+    """The typed Use, Format and Method values one row renders from its declaration."""
+    return {
+        "use": source.intended_use,
+        "task_format": source.info.task_format,
+        "method_tags": tuple(
+            SourceMethod(tag) for tag in variant_projection({"id": source.info.id}, None)["method_tags"]
+        ),
+    }
 
 
 def receipt_registry_keys() -> dict[str, set[str]]:
@@ -104,6 +130,7 @@ def pending_rows() -> list[dict[str, Any]]:
             upstream_url=source.info.upstream_url,
             notes=source.info.notes,
             stage=pending_stage(source.info.id, receipts).value,
+            **intake_columns(source),
         ).payload()
         for source in PENDING_MEASUREMENT_SOURCES
     ]
@@ -127,6 +154,7 @@ def remediation_rows() -> list[dict[str, Any]]:
             upstream_url=source.info.upstream_url,
             notes=source.info.notes,
             stage=PendingStage.LEXICAL_REMEDIATION_QUEUED.value,
+            **intake_columns(source),
             reasons=[claim.model_dump(mode="json") for claim in source.declaration.exclusion_claims],
         ).payload()
         for source in all_sources().values()
@@ -159,6 +187,20 @@ def reason_explanations() -> dict[str, dict[str, str]]:
     return {reason.value: explanation.model_dump(mode="json") for reason, explanation in REASON_EXPLANATIONS.items()}
 
 
+def require_typed_rows(rows: list[dict[str, Any]]) -> None:
+    """Fail the build when an extras row breaks the typed status contract.
+
+    Every Pending row carries its computed PendingStage and every Excluded row
+    carries at least one typed ExclusionReason; a violation here fails the
+    release build's status-extras generation, not a later page render.
+    """
+    for row in rows:
+        if row["status"] == SourceStatus.PENDING.value and not row["stage"]:
+            raise ValueError(f"Pending source carries no PendingStage: {row['id']}")
+        if row["status"] == SourceStatus.EXCLUDED.value and not row["reasons"]:
+            raise ValueError(f"Excluded source carries no ExclusionReason: {row['id']}")
+
+
 def status_extras() -> dict[str, Any]:
     """The full static extras artifact for the status page.
 
@@ -166,9 +208,13 @@ def status_extras() -> dict[str, Any]:
     including the remediation-queued rows — arrive through the served catalog,
     and the page overlays their stage from ``stages`` so no row is ever
     composed twice. ``remediation_queue`` is the worker-facing copy of the
-    lexical remediation queue with each row's claims.
+    lexical remediation queue with each row's claims. The canonical taxonomy
+    tables the page renders from are served by the ``/api/taxonomy`` endpoint.
     """
     remediation = remediation_rows()
+    pending = pending_rows()
+    metadata = metadata_rows()
+    require_typed_rows([*pending, *remediation, *metadata])
     return {
         "consumer_inputs": {
             source.info.id: {
@@ -183,7 +229,7 @@ def status_extras() -> dict[str, Any]:
             for source in all_sources().values()
             if source.info.consumer_requirements
         },
-        "pending": pending_rows(),
+        "pending": pending,
         "stages": {
             **{row["id"]: row["stage"] for row in remediation if row["stage"]},
             **{
@@ -193,7 +239,7 @@ def status_extras() -> dict[str, Any]:
             },
         },
         "remediation_queue": remediation,
-        "metadata_exclusions": metadata_rows(),
+        "metadata_exclusions": metadata,
         "reason_explanations": reason_explanations(),
     }
 

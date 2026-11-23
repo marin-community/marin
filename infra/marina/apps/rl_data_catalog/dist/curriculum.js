@@ -2,7 +2,9 @@
 const number = new Intl.NumberFormat('en-US');
 const compact = new Intl.NumberFormat('en-US', {notation: 'compact', maximumFractionDigits: 1});
 const percent = value => `${(100 * value).toFixed(1)}%`;
-const useLabels = {train: 'Training', eval: 'Evaluation'};
+// Use labels fill from the served canonical taxonomy (/api/taxonomy) before the
+// first render; the page defines no Use label of its own.
+let useLabels = {};
 const outcomes = {assigned: 'Capability match', subject_only: 'Subject only', out_of_scope: 'Outside cutoff', insufficient_context: 'Insufficient context', skipped: 'Embedding skipped'};
 const state = { data: null, parent: '', subject: '', nodes: new Map(), request: 0, taskRequest: 0, next: '', taskQuery: null, raw: null, level: 0, taskSelection: null, pools: new Map(), breakdowns: new Map()};
 
@@ -404,7 +406,7 @@ async function openDetail(task) {
         status: candidate.similarity >= 1 - state.data.thresholds.capability_distance ? 'Alternative within capability cutoff' : 'Outside capability cutoff'})), alternatives);
       $('detail-matches').append(alternatives);
     }
-    $('detail-use').textContent = `Use: ${useLabels[detail.intended_use] || 'Unknown'}` + (detail.recorded_intended_use !== detail.intended_use ? ` · Historical recorded Use: ${useLabels[detail.recorded_intended_use] || 'Unknown'}` : '');
+    $('detail-use').textContent = `Use: ${useLabels[detail.intended_use] || '—'}` + (detail.recorded_intended_use !== detail.intended_use ? ` · Historical recorded Use: ${useLabels[detail.recorded_intended_use] || '—'}` : '');
     $('detail-provenance').textContent = JSON.stringify({source_id: detail.source_id, task_id: detail.task_id, source_key: detail.source_key, task_hash: detail.task_hash, content_hash: detail.content_hash, intended_use: detail.intended_use, recorded_intended_use: detail.recorded_intended_use, population: detail.population, release_id: state.data.release_id}, null, 2);
   } catch (error) { $('detail-description').textContent = `Task could not be loaded. ${error.message}`; }
 }
@@ -458,7 +460,8 @@ $('reset-view').addEventListener('click', () => {
 });
 window.addEventListener('popstate', () => { readLocation(); loadCoverage(); });
 async function start() {
-  const data = await json('api/curriculum/releases');
+  const [data, taxonomy] = await Promise.all([json('api/curriculum/releases'), json('api/taxonomy')]);
+  useLabels = Object.fromEntries(Object.entries(taxonomy.use).map(([value, entry]) => [value, entry.label]));
   for (const release of data.releases.filter(item => !item.selected)) {
     const option = node('option', 'Previous population (evidence)');
     option.value = release.release_id; $('release').append(option);

@@ -291,6 +291,7 @@ def waived_audit_cli(monkeypatch, tmp_path):
         ),
     )
     monkeypatch.setattr("experiments.post_training.task_curation.sources.configured_sources", lambda: [])
+    monkeypatch.setattr(declaration_audit, "audit_typed_status", lambda: [])
     monkeypatch.setattr(
         declaration_audit,
         "atlas_catalog_selection",
@@ -310,6 +311,85 @@ def test_projection_waivers_cannot_clear_declaration_drift(waived_audit_cli, cap
     with pytest.raises(SystemExit, match="1 mismatches"):
         waived_audit_cli()
     assert "but the canonical layer declares" in capsys.readouterr().out
+
+
+def test_typed_status_audit_reports_each_violation(monkeypatch):
+    """The typed status audit measures the plain-JSON extras rows.
+
+    The registry layer validates through the typed models, so this fixture
+    polices the strings the extras artifact publishes: every status, stage,
+    Use, Format and Method value must come from its enum.
+    """
+    from experiments.post_training.task_curation import declaration_audit as audit_module  # noqa: PLC0415
+
+    extras = {
+        "pending": [
+            {
+                "id": "Test:intake",
+                "status": "Pending",
+                "stage": "Intake queued",
+                "reasons": [],
+                "use": "eval",
+                "task_format": "taskspec",
+                "method_tags": ["RL"],
+            },
+            {
+                "id": "Test:free-stage",
+                "status": "Pending",
+                "stage": "Hand-entered",
+                "reasons": [],
+                "use": "train",
+                "task_format": "taskspec",
+                "method_tags": ["RL"],
+            },
+            {
+                "id": "Test:free-use",
+                "status": "Pending",
+                "stage": "Intake queued",
+                "reasons": [],
+                "use": "unknown",
+                "task_format": "taskspec",
+                "method_tags": ["RL"],
+            },
+        ],
+        "remediation_queue": [],
+        "metadata_exclusions": [
+            {
+                "id": "Test:meta",
+                "status": "Excluded",
+                "stage": None,
+                "reasons": [{"reason": "license-ban"}],
+                "use": None,
+                "task_format": None,
+                "method_tags": [],
+            },
+            {
+                "id": "Test:free-method",
+                "status": "Excluded",
+                "stage": None,
+                "reasons": [{"reason": "license-ban"}],
+                "use": None,
+                "task_format": "taskspec",
+                "method_tags": ["distillation"],
+            },
+            {
+                "id": "Test:free-status",
+                "status": "Not selectable",
+                "stage": None,
+                "reasons": [],
+                "use": None,
+                "task_format": None,
+                "method_tags": [],
+            },
+        ],
+    }
+    monkeypatch.setattr("experiments.post_training.task_curation.source_status.status_extras", lambda: extras)
+    findings = audit_module.audit_typed_status()
+    assert "extras stage 'Hand-entered' is outside PendingStage: Test:free-stage" in findings
+    assert "extras Use 'unknown' is outside SourceUse: Test:free-use" in findings
+    assert "extras Method tag 'distillation' is outside SourceMethod: Test:free-method" in findings
+    assert "extras status 'Not selectable' is outside SourceStatus: Test:free-status" in findings
+    assert len(findings) == 4
 
 
 def test_projection_waivers_cannot_clear_a_served_query_failure(waived_audit_cli, monkeypatch):

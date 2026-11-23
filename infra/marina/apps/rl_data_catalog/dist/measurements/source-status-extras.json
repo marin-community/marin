@@ -1180,10 +1180,15 @@
       "origin": "TerminalWorld",
       "upstream_dataset": "TerminalWorld",
       "upstream_url": "https://huggingface.co/datasets/terminalworld/TerminalWorld/tree/364549435c0fc130eaf0ccfc047a8a698c72643c",
-      "notes": "TRAIN under user decision relayed by coordinator, 2026-11-22: TerminalWorld is not a known benchmark. The Hugging Face split=test config naming does not make it EVAL. Ingest as TRAIN and use standard decontamination to handle any overlap. The upstream config is full and its named split remains test. Verified (200) and sample (20) are exact subsets and are not appended as separate training populations. Native prompts, canary comments, task.toml budgets, environment, tests and original solutions remain unchanged. Use ruling: experiments/post_training/task_curation/datasets/terminalworld/intended-use.json.",
+      "notes": "TRAIN under user decision relayed by coordinator, 2026-11-22: TerminalWorld is not a known benchmark. The Hugging Face split=test config naming does not make it EVAL. Ingest as TRAIN and use standard decontamination to handle any overlap. The upstream config is full and its named split remains test. Verified (200) and sample (20) are exact subsets and are not appended as separate training populations. Native prompts, canary comments, task.toml budgets, environment, tests and original solutions remain unchanged. Manifest comparisons ignore only terminal CR/LF characters; native prompt bytes are retained. Use ruling: experiments/post_training/task_curation/datasets/terminalworld/intended-use.json.",
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": "harbor",
+      "method_tags": [
+        "RL"
+      ],
       "reasons": []
     },
     {
@@ -1198,6 +1203,11 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": "taskspec",
+      "method_tags": [
+        "RL"
+      ],
       "reasons": []
     },
     {
@@ -1212,6 +1222,11 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": "taskspec",
+      "method_tags": [
+        "RL"
+      ],
       "reasons": []
     },
     {
@@ -1226,6 +1241,11 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "eval",
+      "task_format": null,
+      "method_tags": [
+        "RL"
+      ],
       "reasons": []
     },
     {
@@ -1240,6 +1260,11 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": null,
+      "method_tags": [
+        "RL"
+      ],
       "reasons": []
     },
     {
@@ -1254,6 +1279,11 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": "harbor",
+      "method_tags": [
+        "RL"
+      ],
       "reasons": []
     }
   ],
@@ -1278,6 +1308,11 @@
       "stage": "Lexical remediation queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": "taskspec",
+      "method_tags": [
+        "RL"
+      ],
       "reasons": [
         {
           "reason": "lexical-remediation-required",
@@ -1303,6 +1338,11 @@
       "stage": "Lexical remediation queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": "taskspec",
+      "method_tags": [
+        "RL"
+      ],
       "reasons": [
         {
           "reason": "lexical-remediation-required",
@@ -1328,6 +1368,11 @@
       "stage": "Lexical remediation queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": "taskspec",
+      "method_tags": [
+        "RL"
+      ],
       "reasons": [
         {
           "reason": "lexical-remediation-required",
@@ -1353,6 +1398,11 @@
       "stage": "Lexical remediation queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": "taskspec",
+      "method_tags": [
+        "RL"
+      ],
       "reasons": [
         {
           "reason": "lexical-remediation-required",
@@ -1378,6 +1428,11 @@
       "stage": "Lexical remediation queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": "taskspec",
+      "method_tags": [
+        "RL"
+      ],
       "reasons": [
         {
           "reason": "lexical-remediation-required",
@@ -1403,6 +1458,11 @@
       "stage": "Lexical remediation queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "use": "train",
+      "task_format": "taskspec",
+      "method_tags": [
+        "RL"
+      ],
       "reasons": [
         {
           "reason": "lexical-remediation-required",
@@ -1430,6 +1490,9 @@
       "stage": null,
       "dataset_id": "GPUMODE/kernelbot-data",
       "dataset_revision": "4159cf6b2c6bab208be6dda885d6d87631cc16df",
+      "use": null,
+      "task_format": null,
+      "method_tags": [],
       "reasons": [
         {
           "reason": "license-ban",
@@ -1455,6 +1518,9 @@
       "stage": null,
       "dataset_id": "andyzorigin/cybench",
       "dataset_revision": "ca483c6443f17a20ba7d6bac3d274859a1721e51",
+      "use": null,
+      "task_format": null,
+      "method_tags": [],
       "reasons": [
         {
           "reason": "license-ban",
@@ -1480,6 +1546,9 @@
       "stage": null,
       "dataset_id": "princeton-pli/hal-harness",
       "dataset_revision": "16bb03ebc11577fb5ea6dc8bb6c968387085e6aa",
+      "use": null,
+      "task_format": null,
+      "method_tags": [],
       "reasons": [
         {
           "reason": "license-missing",
@@ -1505,6 +1574,9 @@
       "stage": null,
       "dataset_id": "miromind-ai/MiroVerse-v0.1",
       "dataset_revision": "11fbf325f6eda37b34f519d1ba7268f40f469ac6",
+      "use": null,
+      "task_format": null,
+      "method_tags": [],
       "reasons": [
         {
           "reason": "license-ban",
@@ -1530,6 +1602,9 @@
       "stage": null,
       "dataset_id": "Tongyi-MAI/MAI-Gym",
       "dataset_revision": "dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9",
+      "use": null,
+      "task_format": null,
+      "method_tags": [],
       "reasons": [
         {
           "reason": "license-ban",
@@ -1555,6 +1630,9 @@
       "stage": null,
       "dataset_id": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
       "dataset_revision": "no published trajectory pin",
+      "use": null,
+      "task_format": null,
+      "method_tags": [],
       "reasons": [
         {
           "reason": "not-rl-task-data",

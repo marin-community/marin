@@ -467,6 +467,9 @@ def test_status_inventory_matches_source_statuses_without_loading_task_evidence(
         "notes",
         "consumer_findings",
         "data_restriction",
+        "intended_use",
+        "task_format",
+        "method_tags",
         "updated_at",
     )
     assert compact["sources"] == [{key: source.get(key) for key in fields} for source in complete["sources"]]
@@ -1740,25 +1743,6 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
     benchmark_train = next(declaration for _, declaration in cases if declaration.id == "Marin:required")
     historical = benchmark_train.model_dump(mode="json")
     historical.pop("intended_use")
-    cases.append(
-        (
-            "NOT MEASURED",
-            SourceDeclaration.model_validate(
-                {
-                    **historical,
-                    "id": "Marin:historical",
-                    "consumer_receipt": (
-                        consumer_receipt("Marin:historical", benchmark_train.actor_census_input).model_dump(mode="json")
-                    ),
-                    "upstream_dataset": "historical",
-                    "is_benchmark": True,
-                    "license_receipt": fixture_license(
-                        "Marin:historical", historical["dataset_id"], historical["dataset_revision"]
-                    ),
-                }
-            ),
-        )
-    )
     with DataStore.open(root, writer_id="lexical") as store:
         register_catalog(store)
         with store.transaction() as tx:
@@ -1798,8 +1782,51 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
         assert sources["Marin:unmeasured"]["issue_rate"] is None
         assert sources["Marin:eval"]["issue_rate"] == 0.0
         assert sources["Marin:required"]["intended_use"] == "train"
-        assert sources["Marin:historical"]["intended_use"] == "unknown"
-        assert client.get("/source", params={"source_id": "Marin:historical"}).json()["intended_use"] == "unknown"
+
+    # A declaration without a Use no longer serves as free text: the loader
+    # refuses it at admission, so no row can reach the page without a typed
+    # SourceUse value.
+    root = str(tmp_path / "lexical-historical")
+    with DataStore.open(root, writer_id="lexical-historical") as store:
+        register_catalog(store)
+        with store.transaction() as tx:
+            tx.table(INVENTORY).add(
+                SnapshotSource(
+                    snapshot_id="lexical-historical",
+                    id="Marin:historical",
+                    declaration=SourceDeclaration.model_validate(
+                        {
+                            **historical,
+                            "id": "Marin:historical",
+                            "consumer_receipt": (
+                                consumer_receipt("Marin:historical", benchmark_train.actor_census_input).model_dump(
+                                    mode="json"
+                                )
+                            ),
+                            "upstream_dataset": "historical",
+                            "is_benchmark": True,
+                            "license_receipt": fixture_license(
+                                "Marin:historical", historical["dataset_id"], historical["dataset_revision"]
+                            ),
+                        }
+                    ),
+                    assessment_key=None,
+                    latest_attempt_key=None,
+                    latest_attempt_status="skipped",
+                    reason=None,
+                    curation=None,
+                ).model_dump(mode="json")
+            )
+            tx.table(SNAPSHOTS).add(
+                CatalogSnapshot(
+                    snapshot_id="lexical-historical", created_at="2026-11-13T00:00:00Z", source_count=1
+                ).model_dump()
+            )
+            tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="lexical-historical").model_dump())
+    # No previously-available seeding: the row is a new Available admission and the
+    # declaration-license gate must reject it before any grandfathering applies.
+    with pytest.raises(ValueError, match="Admission requires an explicit intended_use"):
+        load_catalog(CurationCatalog(root), catalog_query)
 
 
 def test_loaded_assemblies_keep_inflight_and_uncertain_results_provisional(catalog_database, catalog_query, tmp_path):
@@ -3801,6 +3828,11 @@ def test_new_verify_source_materializes_as_pending_with_marker(catalog_database,
     assert row["status"] == "Pending"
     assert "Backend verification pending" in row["notes"]
     assert row["backend_verification_pending"] == ["daytona", "iris", "local"]
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        served = next(
+            source for source in client.get("/source-statuses").json()["sources"] if source["id"] == "Marin:newverify"
+        )
+        assert served["stage"] == "Backend verification pending"
 
 
 def test_admitted_source_stays_available_when_every_production_backend_is_verify(
@@ -3907,6 +3939,11 @@ def test_grader_profile_conflict_ships_as_typed_pending(catalog_database, catalo
     assert "Backend profile pending: grader needs network allow." in row["notes"]
     # no VERIFY cells here: the marker stays unset; the typed stage note is the visibility
     assert row["backend_verification_pending"] is None
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        served = next(
+            source for source in client.get("/source-statuses").json()["sources"] if source["id"] == "Marin:orshape"
+        )
+        assert served["stage"] == "Backend profile pending"
 
 
 def test_all_unsupported_without_a_profile_conflict_still_blocks(catalog_database, catalog_query, tmp_path):
@@ -3958,6 +3995,11 @@ def test_docker_build_preparation_gate_ships_as_typed_pending(catalog_database, 
     served = _source_load_row(catalog_query, result["load_id"], "Marin:buildgate")
     assert served["status"] == "Pending"
     assert "Backend preparation pending: the grader Docker build context is unresolved" in served["notes"]
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        served_row = next(
+            source for source in client.get("/source-statuses").json()["sources"] if source["id"] == "Marin:buildgate"
+        )
+        assert served_row["stage"] == "Backend preparation pending"
 
 
 def test_docker_build_gate_with_other_validation_errors_still_blocks(catalog_database, catalog_query, tmp_path):
@@ -4466,8 +4508,8 @@ def test_dataset_method_variants_survive_catalog_and_api_projection(tmp_path, ca
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         inventory = client.get("/sources", params={"projection": "table"}).json()["sources"]
         source = next(source for source in inventory if source["id"] == row["id"])
-        assert source["method_tags"] == ["rl", "sft"]
+        assert source["method_tags"] == ["RL", "SFT-viable"]
         assert "method_variants" not in source
         evidence = client.get("/source", params={"source_id": row["id"]}).json()
-        assert evidence["method_tags"] == ["rl", "sft"]
+        assert evidence["method_tags"] == ["RL", "SFT-viable"]
         assert evidence["method_variants"] == variants

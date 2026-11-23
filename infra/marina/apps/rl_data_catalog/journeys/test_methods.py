@@ -21,23 +21,23 @@ def test_method_filter_and_variant_receipt_evidence(journey: Journey, theme: str
         response = route.fetch()
         payload = response.json()
         row = next(row for row in payload["sources"] if row["id"] == "Marin:clean")
-        row["method_tags"] = ["rl", "sft"]
+        row["method_tags"] = ["RL", "SFT-viable"]
         route.fulfill(response=response, json=payload)
 
     def evidence(route):
         response = route.fetch()
         payload = response.json()
         payload["method_variants"].append(child)
-        payload["method_tags"] = ["rl", "sft"]
+        payload["method_tags"] = ["RL", "SFT-viable"]
         route.fulfill(response=response, json=payload)
 
     page.route("**/api/sources?projection=table", inventory)
     page.route("**/api/source?*", evidence)
     page.goto(f"{journey.origin}/{APP_ROOT}/")
     page.locator("#show-everything").click()
-    page.locator("#method").select_option("sft")
+    page.locator("#method").select_option("SFT-viable")
     expect(page.locator("#rows > tr")).to_have_count(1)
-    expect(page.locator(".method-cell")).to_have_text("RL / SFT")
+    expect(page.locator(".method-cell")).to_have_text("RL / SFT-viable")
     headers = page.locator("#headers th").all_text_contents()
     assert headers.index("Use") + 1 == headers.index("Method")
     page.locator('#rows a[href^="source.html"]').click()

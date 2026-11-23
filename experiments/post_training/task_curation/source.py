@@ -52,6 +52,7 @@ from finestore.rl.status_taxonomy import (
     ExclusionEvidence,
     ExclusionEvidenceKind,
     ExclusionReason,
+    PendingStage,
     SourceStatus,
 )
 from marin.execution.lazy import ArtifactStep
@@ -625,6 +626,21 @@ class RlDataSource[ConfigT: CatalogConfig]:
         return SourceStatus.AVAILABLE
 
     @property
+    def stage(self) -> PendingStage | None:
+        """The evidence-computed intake stage of a Pending declaration.
+
+        A Pending source with claims queues for lexical remediation; a Pending
+        source without claims waits on its consumer admission decision. Any
+        other status carries no stage. Load-time backend downgrades assign the
+        backend stages on top of this value.
+        """
+        if self.status is not SourceStatus.PENDING:
+            return None
+        if self.exclusion_claims:
+            return PendingStage.LEXICAL_REMEDIATION_QUEUED
+        return PendingStage.CONSUMER_CHECK_PENDING
+
+    @property
     def consumer_findings(self) -> tuple[ConsumerReason, ...]:
         return consumer_blockers(
             self.info.consumer_receipt,
@@ -742,6 +758,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             data_restriction=info.data_restriction,
             kind="Generator" if "generator" in tags else "Dataset",
             status=self.status,
+            stage=self.stage,
             exclusion_claims=list(self.exclusion_claims),
             pipeline=invocation,
             license_receipt=info.license_receipt,

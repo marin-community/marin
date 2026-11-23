@@ -1,15 +1,51 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 
-// The source-status page shows data only: statuses, reason labels and evidence
-// links. Reason explanations render only when a label is clicked open; policy
-// prose lives in the guide.
-const STATUS_COUNTS = ['Pending', 'Available', 'Excluded', 'Deprecated'];
+// The source-status page shows data only: statuses, stages, reason labels and
+// evidence links, plus the typed Use, Method and Format columns. Every label
+// and explanation renders from the canonical taxonomy (/api/taxonomy); reason
+// explanations render only when a label is clicked open; policy prose lives in
+// the guide.
+const state = {
+  rows: [],
+  taxonomy: {},
+  search: '',
+  status: 'all',
+  reason: 'all',
+  stage: 'all',
+  use: 'all',
+  method: 'all',
+  format: 'all',
+};
 
-const state = { rows: [], explanations: {}, search: '', status: 'all', reason: 'all' };
+// Chip filter groups: filter key -> the taxonomy table and the row field it reads.
+const CHIP_FILTERS = [
+  ['stage', 'stage', 'stage'],
+  ['use', 'use', 'use'],
+  ['method', 'method', 'method_tags'],
+  ['format', 'format', 'task_format'],
+];
 
-function label(reason) {
-  const entry = state.explanations[reason];
-  return entry ? entry.label : reason;
+function entry(kind, value) {
+  return (state.taxonomy[kind] || {})[value] || null;
+}
+
+function label(kind, value) {
+  if (value === undefined || value === null) return '—';
+  return entry(kind, value)?.label ?? value;
+}
+
+function chipRow(value, kind) {
+  const holder = node('div', undefined, 'status-chips');
+  const details = node('details');
+  const summary = node('summary', label(kind, value), 'chip');
+  summary.title = 'Open this for what it means and what advances it';
+  const body = node('div', undefined, 'status-explanation');
+  const item = entry(kind, value) || {};
+  body.append(node('p', item.meaning || '', 'meaning'));
+  if (item.clears) body.append(node('p', `Advanced by: ${item.clears}`));
+  details.append(summary, body);
+  holder.append(details);
+  return holder;
 }
 
 function reasonCell(claim) {
@@ -17,13 +53,13 @@ function reasonCell(claim) {
   // auto table layout explode (1724px reason column, 50px source column).
   const holder = node('div', undefined, 'status-reasons');
   const details = node('details');
-  const summary = node('summary', label(claim.reason), 'chip');
+  const summary = node('summary', label('reason', claim.reason), 'chip');
   summary.title = 'Open this reason for what it means and what clears it';
   const body = node('div', undefined, 'status-explanation');
-  const entry = state.explanations[claim.reason] || {};
+  const item = entry('reason', claim.reason) || {};
   body.append(
-    node('p', entry.meaning || '', 'meaning'),
-    node('p', entry.clears ? `Cleared by: ${entry.clears}` : '')
+    node('p', item.meaning || '', 'meaning'),
+    node('p', item.clears ? `Cleared by: ${item.clears}` : '')
   );
   if (claim.evidence) {
     const evidence = node('p');
@@ -47,11 +83,28 @@ function evidenceCell(claims) {
     return cell;
   }
   for (const [uri, reason] of links) {
-    const link = node('a', label(reason));
+    const link = node('a', label('reason', reason));
     link.href = uri;
     link.rel = 'noopener';
     cell.append(link);
   }
+  return cell;
+}
+
+function columnCell(value, kind) {
+  const cell = node('td');
+  if (value === undefined || value === null || (Array.isArray(value) && !value.length)) {
+    cell.append(node('span', '—'));
+    return cell;
+  }
+  const values = Array.isArray(value) ? value : [value];
+  const holder = node('div', undefined, 'status-reasons');
+  for (const item of values) {
+    const chip = node('span', label(kind, item), 'chip');
+    chip.title = entry(kind, item)?.meaning || '';
+    holder.append(chip);
+  }
+  cell.append(holder);
   return cell;
 }
 
@@ -70,14 +123,16 @@ function row(item) {
   }
   tr.append(source);
   const status = node('td');
-  status.append(node('span', item.status, 'chip'));
+  const statusChip = node('span', label('status', item.status), 'chip');
+  statusChip.title = entry('status', item.status)?.meaning || '';
+  status.append(statusChip);
   if (item.consumer_findings?.length) {
     const flag = node('span', 'Consumer advisory', 'chip');
     flag.title = item.consumer_findings.join(', ');
     status.append(flag);
   }
-  if (item.stage) status.append(node('div', item.stage, 'status-stage'));
-  tr.append(status);
+  if (item.stage) status.append(chipRow(item.stage, 'stage'));
+  tr.append(status, columnCell(item.use, 'use'), columnCell(item.method_tags, 'method'), columnCell(item.task_format, 'format'));
   const claims = item.reasons || [];
   const reasons = node('td');
   if (claims.length) {
@@ -92,6 +147,12 @@ function row(item) {
 function matches(item) {
   if (state.status !== 'all' && item.status !== state.status) return false;
   if (state.reason !== 'all' && !(item.reasons || []).some(claim => claim.reason === state.reason)) return false;
+  for (const [key, , field] of CHIP_FILTERS) {
+    if (state[key] === 'all') continue;
+    const value = item[field];
+    const values = Array.isArray(value) ? value : [value];
+    if (!values.includes(state[key])) return false;
+  }
   if (state.search) {
     const haystack = `${item.id} ${item.display_name || ''} ${item.name || ''}`.toLowerCase();
     if (!haystack.includes(state.search)) return false;
@@ -105,15 +166,48 @@ function render() {
   body.replaceChildren(...rows.map(row));
   $('empty').hidden = rows.length > 0;
   $('visible-count').textContent = `${rows.length} of ${state.rows.length} sources`;
+  for (const [key] of CHIP_FILTERS) renderChips(key);
+}
+
+// "all" participates as an explicit chip so every group shows its full value set.
+function renderChips(key) {
+  const [, kind, field] = CHIP_FILTERS.find(([name]) => name === key);
+  const holder = $(`${key}-filters`);
+  if (!holder) return;
+  const values = [...new Set(state.rows.flatMap(item => {
+    const value = item[field];
+    return Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+  }))].filter(value => entry(kind, value));
+  const selected = state[key];
+  holder.replaceChildren();
+  for (const value of ['all', ...values.sort()]) {
+    const item = value === 'all' ? null : value;
+    const count = item === null
+      ? state.rows.length
+      : state.rows.filter(row => {
+          const raw = row[field];
+          const values = Array.isArray(raw) ? raw : raw === undefined || raw === null ? [] : [raw];
+          return values.includes(item);
+        }).length;
+    const button = node('button', `${item === null ? 'All' : label(kind, item)} ${count}`, 'chip');
+    button.type = 'button';
+    button.setAttribute('aria-pressed', String(selected === value));
+    button.addEventListener('click', () => {
+      state[key] = state[key] === value ? 'all' : value;
+      render();
+    });
+    holder.append(button);
+  }
 }
 
 function counts() {
   const holder = $('status-counts');
   holder.replaceChildren();
-  for (const status of STATUS_COUNTS) {
+  for (const status of Object.keys(state.taxonomy.status || {})) {
     const count = state.rows.filter(item => item.status === status).length;
-    const button = node('button', `${status} ${count}`, 'chip');
+    const button = node('button', `${label('status', status)} ${count}`, 'chip');
     button.type = 'button';
+    button.setAttribute('aria-pressed', String(state.status === status));
     button.addEventListener('click', () => {
       $('status-filter').value = state.status = state.status === status ? 'all' : status;
       render();
@@ -136,14 +230,21 @@ function needsRuling(rows) {
 }
 
 async function load() {
-  const [catalog, extras] = await Promise.all([
+  const [catalog, extras, taxonomy] = await Promise.all([
     json('api/source-statuses'),
     json('measurements/source-status-extras.json'),
+    json('api/taxonomy'),
   ]);
-  state.explanations = extras.reason_explanations || {};
+  state.taxonomy = taxonomy;
   const reasonFilter = $('reason-filter');
-  for (const [value, entry] of Object.entries(state.explanations)) {
-    reasonFilter.append(new Option(entry.label, value));
+  reasonFilter.replaceChildren(new Option('All reasons', 'all'));
+  for (const [value, item] of Object.entries(taxonomy.reason || {})) {
+    reasonFilter.append(new Option(item.label, value));
+  }
+  const statusFilter = $('status-filter');
+  statusFilter.replaceChildren(new Option('All statuses', 'all'));
+  for (const [value, item] of Object.entries(taxonomy.status || {})) {
+    statusFilter.append(new Option(item.label, value));
   }
   const stages = extras.stages || {};
   const main = (catalog.sources || []).map(declaration => ({
@@ -152,6 +253,9 @@ async function load() {
     name: declaration.name,
     status: declaration.status,
     stage: stages[declaration.id] || declaration.stage || null,
+    use: declaration.intended_use,
+    task_format: declaration.task_format,
+    method_tags: declaration.method_tags || [],
     reasons: declaration.exclusion_claims || [],
     notes: declaration.notes,
     consumer_findings: declaration.consumer_findings,
@@ -214,6 +318,7 @@ window.addEventListener('DOMContentLoaded', () => {
     state.search = '';
     state.status = 'all';
     state.reason = 'all';
+    for (const [key] of CHIP_FILTERS) state[key] = 'all';
     $('search').value = '';
     $('status-filter').value = 'all';
     $('reason-filter').value = 'all';

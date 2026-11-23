@@ -15,6 +15,7 @@ from finestore.rl.curation import (
     QualityResultFinalization,
     SourceDeclaration,
     SourceQualityResult,
+    SourceUse,
     Verdict,
 )
 
@@ -217,6 +218,14 @@ def issue_rate(declaration: dict[str, Any], review: dict[str, Any] | None) -> fl
     return measured.issue_rate if measured is not None else None
 
 
-def intended_use(declaration: dict[str, Any]) -> str:
-    """Expose the converter's explicit policy; historical absence stays unknown."""
-    return declaration.get("intended_use") or "unknown"
+def intended_use(declaration: dict[str, Any]) -> SourceUse:
+    """Return the converter's explicit Use policy, refusing any other value.
+
+    The catalog writer resolves Use from the registered converter and the load
+    refuses a declaration without one, so a missing or free-string value here
+    is a serving bug, never a display fallback.
+    """
+    value = declaration.get("intended_use")
+    if value is None:
+        raise ValueError(f"Declaration carries no intended_use: {declaration.get('id')}")
+    return SourceUse(value)

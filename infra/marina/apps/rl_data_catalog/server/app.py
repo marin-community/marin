@@ -10,6 +10,14 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, Confidence, Defect, ReferenceStatus, Verdict
+from finestore.rl.status_taxonomy import (
+    FORMAT_EXPLANATIONS,
+    METHOD_EXPLANATIONS,
+    REASON_EXPLANATIONS,
+    STAGE_EXPLANATIONS,
+    STATUS_EXPLANATIONS,
+    USE_EXPLANATIONS,
+)
 from marina.applets import AppletServices
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -453,6 +461,23 @@ def create_api(services: AppletServices) -> FastAPI:
             labels = [{**row, "id": canonical_source_id(row["id"])} for row in rows]
         return {"sources": labels, "snapshot_id": metadata["snapshot_id"]}
 
+    @api.get("/taxonomy")
+    def taxonomy() -> dict[str, Any]:
+        """Serve the canonical status, stage, reason and Use/Method/Format tables.
+
+        Every page renders its status, stage, reason and column labels and
+        explanations from these tables; the frontend defines no label of its
+        own.
+        """
+        return {
+            "status": {status.value: item.model_dump(mode="json") for status, item in STATUS_EXPLANATIONS.items()},
+            "stage": {stage.value: item.model_dump(mode="json") for stage, item in STAGE_EXPLANATIONS.items()},
+            "reason": {reason.value: item.model_dump(mode="json") for reason, item in REASON_EXPLANATIONS.items()},
+            "use": {value: item.model_dump(mode="json") for value, item in USE_EXPLANATIONS.items()},
+            "method": {method.value: item.model_dump(mode="json") for method, item in METHOD_EXPLANATIONS.items()},
+            "format": {value: item.model_dump(mode="json") for value, item in FORMAT_EXPLANATIONS.items()},
+        }
+
     @api.get("/source-statuses")
     def source_statuses() -> dict[str, Any]:
         """Serve status-page fields without loading review, backend or difficulty evidence."""
@@ -461,13 +486,14 @@ def create_api(services: AppletServices) -> FastAPI:
             rows = connection.execute(
                 text(
                     """
-                    SELECT id,jsonb_build_object(
+                    SELECT id,method_variants,jsonb_build_object(
                         'id',id,'display_name',declaration->'display_name','name',declaration->'name',
                         'status',declaration->'status','stage',declaration->'stage',
                         'exclusion_claims',declaration->'exclusion_claims','notes',declaration->'notes',
                         'dataset_id',declaration->'dataset_id','license_receipt',declaration->'license_receipt',
                         'within_source_dedup',declaration->'within_source_dedup',
                         'actor_census_input',declaration->'actor_census_input',
+                        'intended_use',declaration->'intended_use','task_format',declaration->'task_format',
                         'consumer_receipt',declaration->'consumer_receipt',
                         'consumer_decision',declaration->'consumer_decision',
                         'consumer_findings',declaration->'consumer_findings',
@@ -488,6 +514,7 @@ def create_api(services: AppletServices) -> FastAPI:
                     declaration = withheld_declaration_projection(declaration)
                 else:
                     declaration = restriction_projection(declaration)
+                method_tags = variant_projection(declaration, record.get("method_variants"))["method_tags"]
                 sources.append(
                     {
                         key: declaration.get(key)
@@ -500,9 +527,15 @@ def create_api(services: AppletServices) -> FastAPI:
                             "exclusion_claims",
                             "notes",
                             "consumer_findings",
+                            "intended_use",
+                            "task_format",
                         )
                     }
-                    | {"data_restriction": declaration.get("data_restriction"), "updated_at": metadata["loaded_at"]}
+                    | {
+                        "data_restriction": declaration.get("data_restriction"),
+                        "method_tags": method_tags,
+                        "updated_at": metadata["loaded_at"],
+                    }
                 )
         return {"sources": sources, "snapshot_id": metadata["snapshot_id"], "synced_at": metadata["loaded_at"]}
 

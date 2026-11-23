@@ -10,11 +10,18 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from finestore.rl.curation import OversightEvidence, OversightLevel
+from finestore.rl.curation import OversightEvidence, OversightLevel, SourceUse, TaskFormat, require_typed_status_fields
 from finestore.rl.difficulty import DIFFICULTY_GAPS
 from finestore.rl.status_taxonomy import (
+    FORMAT_EXPLANATIONS,
+    METHOD_EXPLANATIONS,
     REASON_EXPLANATIONS,
+    STAGE_EXPLANATIONS,
+    STATUS_EXPLANATIONS,
+    USE_EXPLANATIONS,
     ExclusionReason,
+    PendingStage,
+    SourceMethod,
     SourceStatus,
 )
 
@@ -279,12 +286,42 @@ def test_admission_blocker_strings_stay_mapped():
         lexical_blocker_reason("an unmapped lexical failure")
 
 
-def test_every_reason_has_one_canonical_explanation():
-    assert set(REASON_EXPLANATIONS) == set(ExclusionReason)
-    for explanation in REASON_EXPLANATIONS.values():
+@pytest.mark.parametrize(
+    ("table", "members"),
+    [
+        (REASON_EXPLANATIONS, set(ExclusionReason)),
+        (STATUS_EXPLANATIONS, set(SourceStatus)),
+        (STAGE_EXPLANATIONS, set(PendingStage)),
+    ],
+)
+def test_every_state_has_one_canonical_explanation(table, members):
+    assert set(table) == members
+    for explanation in table.values():
         assert explanation.label.strip()
         assert explanation.meaning.strip()
         assert explanation.clears.strip()
+
+
+def test_column_explanations_cover_the_column_enums():
+    """The Use, Method and Format label tables cover exactly their enum values."""
+    assert set(USE_EXPLANATIONS) == {use.value for use in SourceUse}
+    assert set(METHOD_EXPLANATIONS) == set(SourceMethod)
+    assert set(FORMAT_EXPLANATIONS) == {item.value for item in TaskFormat}
+    for table in (USE_EXPLANATIONS, FORMAT_EXPLANATIONS):
+        for item in table.values():
+            assert item.label.strip()
+            assert item.meaning.strip()
+    for item in METHOD_EXPLANATIONS.values():
+        assert item.label.strip()
+        assert item.meaning.strip()
+
+
+def test_method_tag_aliases_validate_as_enum_members():
+    """The stored legacy tags rl and sft validate as the canonical Method values."""
+    assert SourceMethod("rl") is SourceMethod.RL
+    assert SourceMethod("sft") is SourceMethod.SFT_VIABLE
+    with pytest.raises(ValueError):
+        SourceMethod("distillation")
 
 
 def test_oversight_missing_explanation_carries_the_quick_receipt_path():
@@ -361,6 +398,80 @@ def test_pending_stage_derivation():
     assert source_status.pending_stage("a", receipts) is source_status.PendingStage.ADMISSION_PENDING
     assert source_status.pending_stage("b", receipts) is source_status.PendingStage.MEASUREMENTS_PENDING
     assert source_status.pending_stage("c", receipts) is source_status.PendingStage.INTAKE_QUEUED
+
+
+def _admitted_source(tmp_path):
+    from experiments.post_training.task_curation.tests.admission_fixtures import (  # noqa: PLC0415
+        with_admission_census,
+    )
+    from experiments.post_training.task_curation.tests.numbers_pipeline import number_source  # noqa: PLC0415
+
+    source = number_source(tmp_path / "input")
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            oversight=OversightEvidence(
+                level=OversightLevel.SAMPLE,
+                campaign="fixture",
+                verification="Fixture ingestion and grader controls executed.",
+            ),
+        ),
+    )
+    return with_admission_census(source)
+
+
+def test_pending_declaration_without_stage_fails_the_build(tmp_path):
+    """Regression: a Pending source without a PendingStage fails the build.
+
+    The loader's typed Pending downgrade copies declarations with
+    ``model_copy`` and re-checks them explicitly; the same check guards the
+    model itself, so no Pending declaration without a stage can stage, load or
+    land.
+    """
+    source = _admitted_source(tmp_path)
+    assert source.status is SourceStatus.AVAILABLE
+    copy = source.declaration.model_copy(update={"status": SourceStatus.PENDING, "stage": None})
+    with pytest.raises(ValueError, match="carries no PendingStage"):
+        require_typed_status_fields(copy)
+    # The load-time downgrade assigns the stage from the backend evidence.
+    staged = copy.model_copy(update={"stage": PendingStage.BACKEND_VERIFICATION_PENDING})
+    require_typed_status_fields(staged)
+    with pytest.raises(ValueError, match="Only a Pending source carries a PendingStage"):
+        require_typed_status_fields(staged.model_copy(update={"status": SourceStatus.AVAILABLE}))
+
+
+def test_excluded_declaration_without_claim_fails_the_build(tmp_path):
+    source = _admitted_source(tmp_path)
+    copy = source.declaration.model_copy(update={"status": SourceStatus.EXCLUDED, "exclusion_claims": []})
+    with pytest.raises(ValueError, match="carries no ExclusionReason"):
+        require_typed_status_fields(copy)
+
+
+def test_pending_extras_row_without_stage_fails_the_build():
+    with pytest.raises(ValueError, match="carries no PendingStage"):
+        source_status.require_typed_rows([{"id": "Fixture:x", "status": "Pending", "stage": None, "reasons": []}])
+    with pytest.raises(ValueError, match="carries no ExclusionReason"):
+        source_status.require_typed_rows([{"id": "Fixture:y", "status": "Excluded", "stage": None, "reasons": []}])
+    source_status.require_typed_rows(
+        [
+            {"id": "Fixture:ok", "status": "Pending", "stage": "Intake queued", "reasons": []},
+            {"id": "Fixture:excluded", "status": "Excluded", "stage": None, "reasons": [{"reason": "license-ban"}]},
+        ]
+    )
+
+
+@pytest.mark.data_integration
+def test_pending_rows_carry_typed_columns():
+    uses = {use.value for use in SourceUse}
+    methods = {method.value for method in SourceMethod}
+    stages = {stage.value for stage in PendingStage}
+    formats = {item.value for item in TaskFormat}
+    for row in source_status.pending_rows():
+        assert row["use"] in uses, f"Pending row Use outside SourceUse: {row['id']}"
+        assert row["task_format"] in formats, f"Pending row Format outside TaskFormat: {row['id']}"
+        assert row["method_tags"] and set(row["method_tags"]) <= methods, row["id"]
+        assert row["stage"] in stages, f"Pending row stage outside PendingStage: {row['id']}"
 
 
 def test_status_enum_semantics(tmp_path, monkeypatch):

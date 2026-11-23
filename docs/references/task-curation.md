@@ -1101,13 +1101,29 @@ against; they never download, convert, host or mirror data, and they publish
 through the static status artifact rather than the catalog.
 
 The Atlas status page (`status.html`) lists every source — catalog rows, the
-pending intake queue and the metadata exclusions — with columns for source,
-status, reason labels, evidence links and last-change receipt, filters by
-status and reason, counts per status, and the needs-ruling list. Reason
-explanations render only when a label is clicked open; the page shows data, not
-policy prose. The main table's default view hides Excluded and Pending rows
-alongside QUICK-quality and BAD-result ones; a Status-filter click brings
-either group back, and Show everything clears every filter.
+pending intake queue and the metadata exclusions — with typed Status, Use,
+Method and Format columns, the pending stage under each Pending row's status,
+reason labels, evidence links and the last-change receipt. Every label and
+explanation renders from the canonical tables in
+`lib/finestore/src/finestore/rl/status_taxonomy.py` (`STATUS_EXPLANATIONS`,
+`STAGE_EXPLANATIONS`, `REASON_EXPLANATIONS`, and the Use, Method and Format
+tables); the page defines no label of its own and shows no free-text status.
+Status counts render as chips, and stage, Use, Method and Format filter as
+chip rows; reason explanations render only when a label is clicked open; the
+page shows data, not policy prose. The main table's default view hides Excluded
+and Pending rows alongside QUICK-quality and BAD-result ones; a Status-filter
+click brings either group back, and Show everything clears every filter.
+
+A Pending source always carries a `PendingStage` computed from pipeline
+evidence — which measurement receipts exist, the consumer decision, or the
+load-time backend survey verdict (backend verification, profile or
+preparation pending). An Excluded source always carries at least one typed
+`ExclusionReason`. This is a scripted contract, not an agent convention: the
+declaration model refuses a Pending declaration without a stage or an Excluded
+one without a reason, the catalog loader refuses to stage one, the
+status-extras build refuses to publish one, and the declaration audit fails
+the landing; every Use, Method, Format and Status value outside its enum
+(`SourceUse`, `SourceMethod`, `TaskFormat`, `SourceStatus`) fails the same way.
 
 ## Pipeline overview
 
@@ -5213,11 +5229,15 @@ new output version; raw Trial artifacts remain unchanged.
 
 ## Method tags and dataset variants
 
-Store method tags on pinned dataset variants. The Atlas Method column shows the
-union over a source's variants; Evidence lists each variant and its receipt.
-The RL ingestion path creates an RL environment variant. Candidates enter that
-path first. A source without a completed Datakit SFT receipt shows RL only.
-Do not infer SFT qualification from mix membership.
+Store method tags on pinned dataset variants. Every tag is a `SourceMethod`
+value from `lib/finestore/src/finestore/rl/status_taxonomy.py`: `RL` for the RL
+ingestion environment variant, and `SFT-viable` (ruling 70) for a completed
+Datakit preparation receipt. The stored legacy tags `rl` and `sft` validate as
+those members and never re-enter new records; any other tag is refused. The
+Atlas Method column shows the union over a source's variants; Evidence lists
+each variant and its receipt. The RL ingestion path creates an RL environment
+variant. Candidates enter that path first. A source without a completed Datakit
+SFT receipt shows RL only. Do not infer SFT qualification from mix membership.
 
 An SFT tag requires a successful final Datakit registration receipt matching the
 variant's source, variant ID, repository revision and content digest. Verify the

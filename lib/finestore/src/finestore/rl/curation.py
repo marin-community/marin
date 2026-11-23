@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
 from finestore.rl.licenses import LicenseReceipt
-from finestore.rl.status_taxonomy import DataRestriction, ExclusionClaim
+from finestore.rl.status_taxonomy import DataRestriction, ExclusionClaim, PendingStage, SourceStatus
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
@@ -1031,7 +1031,7 @@ class SourceDeclaration(CatalogRecord):
     turns: str
     is_benchmark: bool
     kind: str
-    status: str
+    status: SourceStatus
     pipeline: PipelineReference | None
     independent_qc: IndependentQC | None = None
     # Non-agentic sources never provision Daytona sandboxes; an agentic source stays
@@ -1089,7 +1089,11 @@ class QualifiedSourceDeclaration(SourceDeclaration):
     can never lose its tag because its authoring record requires it.
     """
     kind: str
-    status: str
+    status: SourceStatus
+    stage: PendingStage | None = None
+    """The evidence-computed intake stage of a Pending source; every other
+    status carries none. The catalog writer computes it from pipeline evidence
+    and the loader refuses a Pending declaration without one."""
     pipeline: PipelineReference | None
     license_receipt: LicenseReceipt | None = None
     independent_qc: IndependentQC | None = None
@@ -1160,6 +1164,11 @@ class QualifiedSourceDeclaration(SourceDeclaration):
     quality_result_waiver: ContentEvidenceReference | None = None
     exclusion_claims: list[ExclusionClaim] = Field(default_factory=list)
     """Typed exclusion reasons with evidence; an Excluded source carries at least one."""
+
+    @model_validator(mode="after")
+    def _typed_status_fields(self) -> "QualifiedSourceDeclaration":
+        require_typed_status_fields(self)
+        return self
 
     @model_validator(mode="after")
     def _canonical_identity(self) -> "QualifiedSourceDeclaration":
@@ -1361,6 +1370,23 @@ class SnapshotSource(CatalogRecord):
             name: item for name, item in value["declaration"].items() if not (item is None and name in qualified_only)
         }
         return {**value, "declaration": declaration}
+
+
+def require_typed_status_fields(declaration: QualifiedSourceDeclaration) -> None:
+    """Refuse free-text status drift on a catalog declaration.
+
+    A Pending source carries its computed PendingStage, an Excluded source
+    carries a typed ExclusionReason, and no other status carries a stage. The
+    declaration model validates this on construction; callers that mutate a
+    declaration through ``model_copy`` (which skips validators) re-check it
+    explicitly.
+    """
+    if declaration.status is SourceStatus.PENDING and declaration.stage is None:
+        raise ValueError(f"Pending source carries no PendingStage: {declaration.id}")
+    if declaration.status is not SourceStatus.PENDING and declaration.stage is not None:
+        raise ValueError(f"Only a Pending source carries a PendingStage: {declaration.id}")
+    if declaration.status is SourceStatus.EXCLUDED and not declaration.exclusion_claims:
+        raise ValueError(f"Excluded source carries no ExclusionReason: {declaration.id}")
 
 
 class CatalogSnapshot(CatalogRecord):

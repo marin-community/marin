@@ -2,8 +2,10 @@
 const number = new Intl.NumberFormat('en-US');
 const resultLabels = {GOOD: 'Good', SOME_ISSUES: 'Some issues', BAD: 'Bad', UNKNOWN: 'Unknown', none: 'Not assessed'};
 const resultClasses = {GOOD: 'good', SOME_ISSUES: 'some_issues', BAD: 'bad', UNKNOWN: 'unknown', none: 'unassessed'};
-const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Unknown'};
-const formatLabels = {harbor: 'Harbor', taskspec: 'TaskSpec', marinskyrl: 'MarinSkyRL'};
+let useLabels = {};
+let formatLabels = {};
+// Both maps fill from the served canonical taxonomy (/api/taxonomy) before the
+// first render; the frontend defines no Use or Format label of its own.
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [
   ['display_name', 'Source'], ['examples', 'Examples'], ['filtration', 'Filtration'], ['use', 'Use'], ['method', 'Method'], ['format', 'Format'], ['quality', 'Quality'], ['result', 'Result'],
@@ -17,9 +19,9 @@ function resultKey(row) { return row.result || 'none'; }
 function value(row, key) {
   if (key === 'examples') return row.filtration.example_count;
   if (key === 'filtration') return row.filtration.state;
-  if (key === 'use') return row.intended_use || 'unknown';
-  if (key === 'method') return (row.method_tags || ['rl']).join(' / ').toUpperCase();
-  if (key === 'format') return row.task_format ? formatLabels[row.task_format] || row.task_format : '—';
+  if (key === 'use') return row.intended_use;
+  if (key === 'method') return (row.method_tags || ['RL']).join(' / ');
+  if (key === 'format') return row.task_format ? formatLabels[row.task_format] ?? null : '—';
   if (key === 'quality') return qualityOrder[row.quality];
   if (key === 'result') return resultKey(row);
   if (key === 'contamination') return row.contamination_status;
@@ -176,7 +178,7 @@ function sourceRow(row, others, canonical) {
     const examples = node('td', row.filtration.example_count == null ? (row.filtration.state === 'pending_oracle' ? 'Pending oracle filtration' : 'Pending') : number.format(row.filtration.example_count), 'num');
     examples.title = row.filtration.reason;
     const filtration = node('td', undefined, 'filtration-cell'); filtration.append(filtrationChip(row.filtration));
-    const use = node('td', useLabels[value(row, 'use')], 'use-cell');
+    const use = node('td', useLabels[value(row, 'use')] ?? '—', 'use-cell');
     const method = node('td', value(row, 'method'), 'method-cell');
     const format = node('td', value(row, 'format'), 'format-cell');
     const quality = node('td'); quality.append(qualityChip(row.quality, row.id, '', row.quality_explanation));
@@ -226,7 +228,7 @@ function details(row) {
     ['Content review', row.quality_review_status],
     ['Consumer advisory', row.consumer_findings?.join(', ')],
     ['Consumer user ruling', row.consumer_decision?.user_ruling],
-    ...filtrationRows(row), ['Use', useLabels[value(row, 'use')]], ['Method', value(row, 'method')], ['Format', value(row, 'format')],
+    ...filtrationRows(row), ['Use', useLabels[value(row, 'use')] ?? '—'], ['Method', value(row, 'method')], ['Format', value(row, 'format')],
     ['Coverage basis', row.coverage?.basis], ['Coverage gap', row.coverage?.unavailable_reason],
     ['Sampled grader qualification', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)],
     ['Daytona', daytonaLabel(row.daytona)], ['Daytona evidence', row.daytona.reason || row.daytona.basis],
@@ -311,7 +313,13 @@ function metrics(displayed, rows) {
   }).join(' · ') || 'All tasks shown.';
 }
 async function load() {
-  const [data, inventory] = await Promise.all([json('api/sources?projection=table'), json('measurements/oracle-inventory.json')]);
+  const [data, inventory, taxonomy] = await Promise.all([
+    json('api/sources?projection=table'),
+    json('measurements/oracle-inventory.json'),
+    json('api/taxonomy'),
+  ]);
+  useLabels = Object.fromEntries(Object.entries(taxonomy.use).map(([value, entry]) => [value, entry.label]));
+  formatLabels = Object.fromEntries(Object.entries(taxonomy.format).map(([value, entry]) => [value, entry.label]));
   state.sources = data.sources.map(source => ({...source, oracle_inventory: boundOracleInventory(source, inventory)}));
   state.syncedAt = data.synced_at;
   state.daytonaLimit = data.daytona_snapshot_limit;

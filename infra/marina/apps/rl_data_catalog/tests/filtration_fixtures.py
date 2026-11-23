@@ -33,6 +33,24 @@ def filtered_declaration(retained: int) -> SourceDeclaration:
         "exclusion_counts": {"unpinned_environment": 3} if retained == 0 else {"oracle_failed": 2},
         "validation": {"uri": "s3://test/validation.json", "sha256": "d" * 64},
     }
+    # A filtered-to-zero population is Excluded and must carry the typed reason
+    # the admission path emits for it; no claim-free Excluded row can stage.
+    claims = (
+        [
+            {
+                "reason": "oracle-filtration-retained-zero",
+                "evidence": {
+                    "kind": "receipt",
+                    "message": "oracle filtration retained no tasks: unpinned_environment",
+                    "uri": "s3://test/validation.json",
+                    "sha256": "d" * 64,
+                    "expected": None,
+                },
+            }
+        ]
+        if retained == 0
+        else []
+    )
     return SourceDeclaration.model_validate(
         {
             **original.model_dump(mode="json"),
@@ -49,7 +67,11 @@ def filtered_declaration(retained: int) -> SourceDeclaration:
             "task_count": retained,
             "within_source_dedup": deduplication_evidence(dataset, revision, "1", retained).model_dump(mode="json"),
             "lexical_contamination": None,
-            "status": "Excluded",
+            # A filtered-to-zero population is Excluded and carries the typed
+            # zero-filtration claim; a positive retained population stays
+            # Available until its admission evidence binds.
+            "status": "Excluded" if retained == 0 else "Available",
+            "exclusion_claims": claims,
             "oracle_filtration": evidence,
         }
     )

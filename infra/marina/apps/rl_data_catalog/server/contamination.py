@@ -6,7 +6,7 @@
 from enum import StrEnum
 from typing import Any
 
-from finestore.rl.curation import DeconReceiptStatus, LexicalContaminationEvidence
+from finestore.rl.curation import DeconReceiptStatus, LexicalContaminationEvidence, SourceUse
 
 from .quality import intended_use
 
@@ -32,7 +32,7 @@ def contamination(declaration: dict[str, Any]) -> Contamination:
         if measured.admission_blocker(*current_pin) is None:
             return Contamination.NO_ISSUES
         return Contamination.NOT_MEASURED
-    if intended_use(declaration) == "eval":
+    if intended_use(declaration) is SourceUse.EVAL:
         return Contamination.MEASURED_EVAL
     receipt = measured.receipt
     if (
@@ -44,6 +44,4 @@ def contamination(declaration: dict[str, Any]) -> Contamination:
         and receipt.release.format == "taskcompendium"
     ):
         return Contamination.REMEDIATED
-    if intended_use(declaration) == "unknown":
-        return Contamination.NOT_MEASURED
     return Contamination.REMEDIATION_REQUIRED

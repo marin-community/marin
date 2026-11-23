@@ -1,12 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Atlas source-status taxonomy: statuses, exclusion reasons and their evidence.
+"""The Atlas source-status taxonomy: statuses, stages, exclusion reasons and column values.
 
-This module is the single source of truth for every source status and exclusion
-reason. The catalog writer attaches typed claims to declarations, the Atlas
-status page renders them, and the guide and docs render the same explanation
-metadata from here. Nothing else may define status or reason labels.
+This module is the single source of truth for every source status, pending
+stage, exclusion reason and Use/Method/Format column value, with the canonical
+labels and explanations each renders from. The catalog writer attaches typed
+claims to declarations, the Atlas status page renders them, and the guide and
+docs render the same explanation metadata from here. Nothing else may define
+status, stage, reason or column-value labels.
 """
 
 from enum import StrEnum
@@ -28,6 +30,28 @@ class SourceStatus(StrEnum):
     DEPRECATED = "Deprecated"
 
 
+class SourceMethod(StrEnum):
+    """Typed value of the Atlas Method column (ruling 70).
+
+    A source's Method is the union of its dataset variants' preparation
+    evidence: ``RL`` for the RL ingestion environment variant every source
+    carries, and ``SFT-viable`` for a completed Datakit preparation receipt.
+    The stored legacy tags ``rl`` and ``sft`` validate as these members and
+    never re-enter new records. An unknown tag is refused.
+    """
+
+    RL = "RL"
+    SFT_VIABLE = "SFT-viable"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "SourceMethod | None":
+        if value == "rl":
+            return cls.RL
+        if value == "sft":
+            return cls.SFT_VIABLE
+        return None
+
+
 class DataRestriction(StrEnum):
     """Typed restriction tier of a source population.
 
@@ -47,11 +71,19 @@ class DataRestriction(StrEnum):
 
 
 class PendingStage(StrEnum):
-    """Intake stage of a queued source that is not configured for the catalog yet."""
+    """Intake stage of a queued source that is not configured for the catalog yet.
+
+    Every Pending source carries exactly one stage, computed from pipeline
+    evidence (which admission receipts and backend qualifications exist), never
+    hand-entered text. ``STAGE_EXPLANATIONS`` holds each stage's canonical
+    label, meaning and advancing evidence.
+    """
 
     INTAKE_QUEUED = "Intake queued"
+    """No measurement receipt covers the source at all yet."""
+
     CONSUMER_CHECK_PENDING = "Consumer check pending"
-    """No catalog measurement receipt is recorded for the source yet."""
+    """The source's consumer admission decision has not approved it yet."""
 
     MEASUREMENTS_PENDING = "Measurements pending"
     """Some catalog measurement receipts exist; the rest are outstanding."""
@@ -63,6 +95,19 @@ class PendingStage(StrEnum):
     LEXICAL_REMEDIATION_QUEUED = "Lexical remediation queued"
     """The source waits for a remediation agent to produce the clean or
     remediated private-release receipt its training use requires."""
+
+    BACKEND_VERIFICATION_PENDING = "Backend verification pending"
+    """A new admission awaits the live backend qualification: no production
+    backend admits it and VERIFY is its only positive production outcome."""
+
+    BACKEND_PROFILE_PENDING = "Backend profile pending"
+    """The grader needs network while the surveyed grader profile denies it;
+    a maintained per-source profile binding re-admits the source (r22 ruling)."""
+
+    BACKEND_PREPARATION_PENDING = "Backend preparation pending"
+    """The grader Docker build context is unresolved on every task, so no
+    surveyed production backend can run the population; the image preparation
+    lane re-admits the source with pinned grader images."""
 
 
 class ExclusionEvidenceKind(StrEnum):
@@ -274,6 +319,126 @@ REASON_EXPLANATIONS: dict[ExclusionReason, ReasonExplanation] = {
         label="Invalid reference",
         meaning="The population references an expected target that does not exist in its frozen sample.",
         clears="A faithfully repaired private remediation version whose references resolve.",
+    ),
+}
+
+
+STATUS_EXPLANATIONS: dict[SourceStatus, ReasonExplanation] = {
+    SourceStatus.PENDING: ReasonExplanation(
+        label="Pending",
+        meaning="The source is not selectable yet; it waits on the intake stage shown beside it.",
+        clears="The stage's own advancing evidence, recorded at the current pin.",
+    ),
+    SourceStatus.AVAILABLE: ReasonExplanation(
+        label="Available",
+        meaning="Every admission claim is cleared at the current pin; selection may admit the source.",
+        clears="Nothing; the status holds while its receipts stay valid at the pin.",
+    ),
+    SourceStatus.EXCLUDED: ReasonExplanation(
+        label="Excluded",
+        meaning="A typed exclusion reason rules the source out of selection.",
+        clears="The reason's own clearing evidence, recorded at the current pin.",
+    ),
+    SourceStatus.DEPRECATED: ReasonExplanation(
+        label="Deprecated",
+        meaning="Trainable but no longer supported or recommended; selection uses it only when explicitly asked.",
+        clears="Nothing; deprecation is a recommendation, not an exclusion.",
+    ),
+}
+
+
+STAGE_EXPLANATIONS: dict[PendingStage, ReasonExplanation] = {
+    PendingStage.INTAKE_QUEUED: ReasonExplanation(
+        label="Intake queued",
+        meaning="The source is registered for intake and no standard measurement receipt covers it yet.",
+        clears="The first standard measurement receipt (actor census, lexical, grading, sample, "
+        "oracle or retained) recorded at the current pin.",
+    ),
+    PendingStage.CONSUMER_CHECK_PENDING: ReasonExplanation(
+        label="Consumer check pending",
+        meaning="The source's consumer admission decision has not approved it yet.",
+        clears="A recorded consumer decision approving the source at the runtime commit.",
+    ),
+    PendingStage.MEASUREMENTS_PENDING: ReasonExplanation(
+        label="Measurements pending",
+        meaning="Some standard measurement receipts exist; the rest are outstanding.",
+        clears="Every remaining standard measurement receipt at the current pin.",
+    ),
+    PendingStage.ADMISSION_PENDING: ReasonExplanation(
+        label="Admission pending",
+        meaning="Every standard measurement receipt exists; the source awaits configuration and admission.",
+        clears="Configuration and admission into the catalog at the current pin.",
+    ),
+    PendingStage.LEXICAL_REMEDIATION_QUEUED: ReasonExplanation(
+        label="Lexical remediation queued",
+        meaning="Training use waits on a remediation agent's clean or remediated private-release receipt.",
+        clears="The remediated private-release decontamination receipt bound to the current pin.",
+    ),
+    PendingStage.BACKEND_VERIFICATION_PENDING: ReasonExplanation(
+        label="Backend verification pending",
+        meaning="No production backend admits the new source and VERIFY is its only positive production outcome.",
+        clears="A live backend qualification admitting at least one production backend at the current pin.",
+    ),
+    PendingStage.BACKEND_PROFILE_PENDING: ReasonExplanation(
+        label="Backend profile pending",
+        meaning="The grader needs network while the surveyed grader profile denies it.",
+        clears="A maintained per-source profile binding that allows the grader's network use (r22 ruling).",
+    ),
+    PendingStage.BACKEND_PREPARATION_PENDING: ReasonExplanation(
+        label="Backend preparation pending",
+        meaning="The grader Docker build context is unresolved on every task, so no surveyed "
+        "production backend can run the population.",
+        clears="The image preparation lane pinning the grader images and re-admitting the source.",
+    ),
+}
+
+
+class ValueExplanation(BaseModel):
+    """The canonical compact explanation of one Use, Method or Format value."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    """Short display label used by the Atlas tables and filter chips."""
+
+    meaning: str
+    """One line: what the value asserts about the source."""
+
+
+USE_EXPLANATIONS: dict[str, ValueExplanation] = {
+    "train": ValueExplanation(
+        label="Training",
+        meaning="The registered converter's policy admits the population for training use.",
+    ),
+    "eval": ValueExplanation(
+        label="Evaluation",
+        meaning="The registered converter's policy admits the population for evaluation use only.",
+    ),
+}
+
+METHOD_EXPLANATIONS: dict[SourceMethod, ValueExplanation] = {
+    SourceMethod.RL: ValueExplanation(
+        label="RL",
+        meaning="The RL ingestion path created the source's RL environment variant.",
+    ),
+    SourceMethod.SFT_VIABLE: ValueExplanation(
+        label="SFT-viable",
+        meaning="A completed Datakit preparation receipt qualifies the source's variant for SFT (ruling 70).",
+    ),
+}
+
+FORMAT_EXPLANATIONS: dict[str, ValueExplanation] = {
+    "harbor": ValueExplanation(
+        label="Harbor",
+        meaning="The served payload rows are Harbor task package rows.",
+    ),
+    "taskspec": ValueExplanation(
+        label="TaskSpec",
+        meaning="The served payload rows are TaskSpec rows with no task package.",
+    ),
+    "marinskyrl": ValueExplanation(
+        label="MarinSkyRL",
+        meaning="The served payload rows are MarinSkyRL blend records.",
     ),
 }
 

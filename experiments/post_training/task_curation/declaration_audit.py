@@ -397,6 +397,47 @@ def audit_declarations(
     return DeclarationAudit(findings, notes, frozenset(drift_sources))
 
 
+def audit_typed_status() -> list[str]:
+    """Audit the typed status contract over the plain-JSON extras rows.
+
+    The registry layer's declarations validate through the typed models —
+    ``SourceStatus``/``SourceUse``/``TaskFormat`` typing plus the declaration
+    conformance validator refuse a Pending source without a stage, an Excluded
+    source without a reason, or any value outside its enum before the audit
+    could see them. The extras artifact is plain JSON with no model, so the
+    audit measures its rows here.
+    """
+    from finestore.rl.curation import SourceUse, TaskFormat  # noqa: PLC0415
+    from finestore.rl.status_taxonomy import (  # noqa: PLC0415
+        PendingStage,
+        SourceMethod,
+        SourceStatus,
+    )
+
+    from experiments.post_training.task_curation.source_status import status_extras  # noqa: PLC0415
+
+    extras = status_extras()
+    statuses = {status.value for status in SourceStatus}
+    stages = {stage.value for stage in PendingStage}
+    uses = {use.value for use in SourceUse}
+    formats = {item.value for item in TaskFormat}
+    methods = {method.value for method in SourceMethod}
+    findings: list[str] = []
+    for row in [*extras["pending"], *extras["remediation_queue"], *extras["metadata_exclusions"]]:
+        if row["status"] not in statuses:
+            findings.append(f"extras status {row['status']!r} is outside SourceStatus: {row['id']}")
+        if row.get("stage") and row["stage"] not in stages:
+            findings.append(f"extras stage {row['stage']!r} is outside PendingStage: {row['id']}")
+        if row.get("use") is not None and row["use"] not in uses:
+            findings.append(f"extras Use {row['use']!r} is outside SourceUse: {row['id']}")
+        if row.get("task_format") is not None and row["task_format"] not in formats:
+            findings.append(f"extras Format {row['task_format']!r} is outside TaskFormat: {row['id']}")
+        for tag in row.get("method_tags") or []:
+            if tag not in methods:
+                findings.append(f"extras Method tag {tag!r} is outside SourceMethod: {row['id']}")
+    return findings
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -420,6 +461,14 @@ def main() -> None:
         configured_ids=frozenset(source.info.id for source in configured_sources()),
     )
     findings, notes = declarations.findings, declarations.notes
+
+    # The typed status contract is a landing gate, not a page-render nicety: a
+    # Pending source carries its computed PendingStage, an Excluded source
+    # carries a typed ExclusionReason, and every served Use, Method, Format and
+    # Status value comes from its enum. The registry declarations validate
+    # structurally; the extras rows are plain JSON and can drift silently, so
+    # the audit measures both.
+    findings.extend(audit_typed_status())
 
     # The serving projections (the Atlas grader and curriculum-area columns) must also bind
     # every current pin: a derived-contract census receipt and a curriculum alignment at the
