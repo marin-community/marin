@@ -1097,6 +1097,57 @@ def test_missing_runtime_keeps_exact_gate_and_blocks_environment_endpoint(fake_j
     assert fake_judge.prompts == []
 
 
+def _answers_spec() -> JudgeSpec:
+    return JudgeSpec(
+        rubric="answers",
+        question="Find (a) the period and (b) the energy.",
+        references=("label (a): T = 2\\pi\\sqrt{l/g}", "label (b): E = 3 \\text{ J}"),
+        prompt_template="[question]: {question}\n[response]: {candidate}\n[reference_answers]:\n{references}",
+        exact_gate=False,
+    )
+
+
+def _verdicts(*correct: str, confidence: str = "80") -> str:
+    answers = [{"index": i, "label": "x", "extracted_final_answer": "y", "correct": c} for i, c in enumerate(correct)]
+    return json.dumps({"answers": answers, "confidence": confidence})
+
+
+@pytest.mark.parametrize(
+    ("reply", "reward", "partial", "status"),
+    [
+        (_verdicts("yes", "yes"), 1.0, 1.0, Status.SCORED),
+        (_verdicts("yes", "no"), 0.0, 0.5, Status.SCORED),
+        ("```json\n" + _verdicts("YES", "yes", confidence="90%") + "\n```", 1.0, 1.0, Status.SCORED),
+        (_verdicts("yes", "yes", confidence="Infinity"), 1.0, 1.0, Status.SCORED),
+        (_verdicts("yes"), 0.0, None, Status.INFRA_ERROR),
+        (_verdicts("yes", "maybe"), 0.0, None, Status.INFRA_ERROR),
+        ("Both answers are correct.", 0.0, None, Status.INFRA_ERROR),
+    ],
+)
+def test_answers_judge_scores_strictly_with_one_verdict_per_reference(
+    tmp_path, fake_judge, reply, reward, partial, status
+):
+    fake_judge.replies = [reply]
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(_answers_spec()))
+    result = run(spec_path, _workspace(tmp_path, "Answers:\n(a) T = 2\\pi\\sqrt{l/g}\n(b) 3 J"))
+    assert (result.status, result.reward) == (status, reward)
+    if status is Status.SCORED:
+        assert result.detail["partial_credit"] == partial
+        assert [answer["correct"] for answer in result.detail["answers"]] == [True, partial == 1.0]
+    assert "temperature" not in fake_judge.requests[0]
+    assert fake_judge.requests[0]["messages"] == [
+        {
+            "role": "user",
+            "content": (
+                "[question]: Find (a) the period and (b) the energy.\n"
+                "[response]: Answers:\n(a) T = 2\\pi\\sqrt{l/g}\n(b) 3 J\n"
+                "[reference_answers]:\n0. label (a): T = 2\\pi\\sqrt{l/g}\n1. label (b): E = 3 \\text{ J}"
+            ),
+        }
+    ]
+
+
 ARENA_LABELS = {"A>>B": 1.0, "A>B": 1.0, "A=B": 0.5, "B>A": 0.0, "B>>A": 0.0}
 
 
