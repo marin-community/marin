@@ -50,7 +50,21 @@ class QualifyingWorker(MegatronPolicyWorkerBase):
             output_projection_chunk_size=self.cfg.trainer.policy.megatron_config.output_projection_chunk_size,
         )
         self.model.router_replay = replay
-        return {"rank": self._rank, "gpu_uuid": str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid)}
+        groups = [
+            {
+                "route": group.get("optimizer"),
+                "lr": float(group["lr"]),
+                "parameters": len(group["params"]),
+                "elements": sum(parameter.numel() for parameter in group["params"]),
+                "dtypes": sorted({str(parameter.dtype) for parameter in group["params"]}),
+            }
+            for group in self.optimizer.param_groups
+        ]
+        return {
+            "rank": self._rank,
+            "gpu_uuid": str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid),
+            "optimizer_groups": groups,
+        }
 
     def qualify_real_batch(self, batch):
         self.forward(batch)
