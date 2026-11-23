@@ -30,7 +30,7 @@ from fray.iris_backend import convert_resources
 from fray.types import ResourceConfig
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
-from iris.cluster.types import EnvironmentSpec, Entrypoint
+from iris.cluster.types import EnvironmentSpec, Entrypoint, is_job_finished
 from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
 
@@ -110,8 +110,11 @@ def wait_for_endpoint(client: IrisClient, timeout: Duration = _ENDPOINT_READY_TI
     """
     deadline = time.monotonic() + timeout.to_seconds()
     while time.monotonic() < deadline:
-        if coordinator is not None and is_job_finished(coordinator.status().state):
-            raise RuntimeError(f"coordinator {coordinator.job_id} finished before registering the endpoint")
+        if coordinator is not None:
+            # Accept a JobHandle (has .status()) or an already-fetched JobStatus.
+            state = coordinator.status().state if callable(getattr(coordinator, "status", None)) else coordinator.state
+            if is_job_finished(state):
+                raise RuntimeError(f"coordinator finished before registering the endpoint")
         if client.list_endpoint_instances(pool.ENDPOINT_NAME):
             return client.resolve_endpoint(pool.ENDPOINT_NAME)
         time.sleep(_ENDPOINT_POLL_SECONDS)
@@ -158,7 +161,13 @@ def main() -> None:
     with connect_controller(cluster_name=pool.CLUSTER) as endpoint_info:
         with IrisClient.remote(endpoint_info.url, workspace=workspace, credentials=endpoint_info.credentials) as client:
             if args.attach_only:
-                base_url = wait_for_endpoint(client)
+                live = client.active_job_names_for_prefix(f"/{pool.JOB_PREFIX}-")
+                coordinator_status = next(
+                    (client.job_status(job_id) for job_id in live if "-watch-" not in str(job_id)
+                     and "-stage-" not in str(job_id)),
+                    None,
+                )
+                base_url = wait_for_endpoint(client, coordinator=coordinator_status)
                 click.echo(f"READY — endpoint: {base_url}")
                 return
 
