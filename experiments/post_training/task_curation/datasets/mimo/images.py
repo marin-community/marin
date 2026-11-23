@@ -149,11 +149,11 @@ def task_tag(task_id: str) -> str:
 
 def registry_readback(package: str, tag: str, authfile: Path | None) -> str:
     """Resolve a pushed tag to its manifest digest by reading it back."""
-    command = [SKOPEO, "--insecure-policy"]
+    command = [SKOPEO, "--insecure-policy", "inspect", "--raw", f"docker://{package}:{tag}"]
+    environment = None
     if authfile is not None:
-        command += ["--authfile", str(authfile)]
-    command += ["inspect", "--raw", f"docker://{package}:{tag}"]
-    output = run(command)
+        environment = {**os.environ, "REGISTRY_AUTH_FILE": str(authfile)}
+    output = run(command, env=environment)
     digest = hashlib.sha256(output.encode()).hexdigest()
     return f"sha256:{digest}"
 
