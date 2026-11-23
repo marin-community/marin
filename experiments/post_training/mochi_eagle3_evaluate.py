@@ -314,8 +314,14 @@ async def benchmark(environment: VllmEnvironment, spec: dict, arm: dict) -> None
                     },
                 )
                 logger.info("Measured %s: occupancy=%s valid=%s", name, observed, load["valid"])
-                if not load["valid"] or not achieved or load["summary"]["request_decode_tokens_per_second"] is None:
-                    raise ValueError(f"Invalid load or unachieved occupancy; retain {name} and stop")
+                if (
+                    not load["valid"]
+                    or len(engine_medians) != geometry.data_parallel_size
+                    or load["summary"]["request_decode_tokens_per_second"] is None
+                ):
+                    raise ValueError(f"Invalid load or missing engine metrics; retain {name} and stop")
+                if not achieved:
+                    logger.warning("Occupancy unachieved for %s; exclude this cell from speed qualification", name)
 
 
 async def qualify_arm(environment: VllmEnvironment, spec: dict, arm: dict) -> None:
