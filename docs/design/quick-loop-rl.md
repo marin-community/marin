@@ -2289,9 +2289,28 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   two prompts and installed the same step-2 policy after the update. All
   16 paired binary replays matched after normalizing request IDs. The new
   attempt appended its checkpoint to the original step-1 lineage. This
-  rehearsal stopped after a completed checkpoint commit. A separate
-  offline rehearsal replayed the archived CPU checkpoints through stock
-  retention. It reproduced the archived step-2 index bytes and joined the
+  rehearsal stopped after a completed checkpoint commit. Its fixture
+  supplied the sampling seeds.
+
+  A separate native candidate stores a draw index with each selected
+  prompt. Checkpointed prompts keep their index when regenerated, and
+  fresh selections take the next index. The worker combines the trainer
+  seed, draw index, installed policy digest and model-call ordinal, then
+  gives each repetition a distinct seed. The binary replay records the
+  key actually used by serving. Prompt selection pauses during the
+  buffer snapshot so the saved cursor and counter cover the same draws.
+
+  With one prompt group in flight at a time, the stock CPU trainer
+  reproduced all 16 paired replays and the terminal learner and serving
+  state after a fresh-process restore. Each group still sampled four
+  choices. A concurrent two-group rehearsal also reproduced its 16
+  replay pairs and the restored step-1 state. Its step-2 learner hashes
+  differed. The learner's input row order remains unknown. The sealed
+  H100 comparison uses its original sampler. Concurrent step-2
+  equivalence and H100 qualification of the candidate remain open.
+
+  A separate offline rehearsal replayed the archived CPU checkpoints
+  through stock retention. It reproduced the archived step-2 index bytes and joined the
   retained index to the same generation and four object metadata records.
   Capture the original step-1 index, the two-entry index after step 2,
   and the terminal retention index in order during the H100 run. The
