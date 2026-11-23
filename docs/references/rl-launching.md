@@ -157,7 +157,7 @@ TP=PP=1 and DP=EP. SkyRL packs the replica on one host and gives each DP rank a
 separate compiler cache directory. It keeps vLLM's non-AOT compilation path
 and CUDA graph capture active.
 
-Use a directory reserved for compatible starts of this rollout and keep its
+Reserve the directory for sequential starts of one compatible rollout and keep its
 absolute path stable. The files include executable code and can refer to other
 files by absolute path. Use a fresh directory to rebuild a damaged cache.
 

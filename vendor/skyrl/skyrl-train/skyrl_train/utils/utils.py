@@ -24,6 +24,7 @@ from skyrl_train.env_vars import (
     DEBUG_ARTIFACT_DIR_ENV,
     DEBUG_MODE_ENV,
     VLLM_BATCH_INVARIANT_ENV,
+    VLLM_DISABLE_COMPILE_CACHE_ENV,
 )
 from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.process_diagnostics import initialize_process_diagnostics
@@ -414,7 +415,7 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
 
         # Keep the non-AOT path by default. Local rollout actors may opt in to
         # rank-local disk caching with AOT explicitly held off.
-        env_vars["VLLM_DISABLE_COMPILE_CACHE"] = "1"
+        env_vars[VLLM_DISABLE_COMPILE_CACHE_ENV] = "1"
 
         if not os.environ.get("VLLM_USE_V1", False):
             logger.info(
