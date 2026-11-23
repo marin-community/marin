@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 12:28 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 12:40 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -891,9 +891,20 @@ seconds. Source SHA-256 took 39.0 seconds and recorded broadcast synchronization
 8.3 seconds. The time in per-payload requests outside the learner's `next`
 method was 25.6 seconds. The learner's method accounted for 29.0 seconds,
 including export staging, device-to-host copies and payload serialization.
-These are nested host timers. Measure the same phases after training updates
-and use the result to choose a batching, hashing or staging change. Keep
-versioned byte verification on the receiver.
+The held arm's second publication took 109.7 seconds. The original warm
+records on all four hosts put the two SHA-256 passes at a median 39.0 seconds,
+the RPC outside the learner method at 27.3 seconds, the learner method at
+19.5 seconds, spool I/O at 10.9 seconds and broadcast synchronization at
+2.8 seconds. The frozen and maintained arms used different hosts and rank
+placements, so their publication difference combines transport and runtime
+effects.
+
+A bounded hash pipeline overlaps both SHA-256 passes with the existing
+sender loop and waits for every digest before acknowledging the version.
+The prototype kept the broadcast order and passed three two-version CPU
+Gloo cases, including source-spool and installed-receiver corruption. Measure
+the hash wait on H100 before adopting it and keep exact byte verification
+on the receiver. [Original timing audit and prototype][held-publication-overlap]
 
 Across the 23 warm updates from step 2 through 24, median step time was
 450.4 seconds for Levanter and 150.1 seconds for Megatron. They processed
@@ -2045,16 +2056,34 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   preflight. The candidate awaits H100 validation.
   [Verified per-update checkpoint plan][held-native-recovery-plan]
 
+  A local launch fixture rendered the recovery candidate both through the
+  coordinator and as a root GPU job on the regional controller. Both
+  use the original artifact fingerprint and the same five-host BATCH
+  allocation. The regional root relies on the managed H100 pool. Its
+  request omits the inherited region selector that blocked an earlier
+  direct submission. The fixture reattached to the exact terminal
+  attempt after interruption and wrote the typed result under the
+  existing artifact lease. A root GPU job removes the CPU coordinator
+  from the GPU group's lifecycle. Live native dispatch and recovery
+  on this route remain open.
+  [Regional root request and terminal fixture][held-native-recovery-root]
+
   A CPU probe ran the normal step-end callback with one and two native
   learner processes, local storage and a local Ray dispatch adapter. It
   restored exact learner state and the next prompt selection from the
   committed index. The next update matched the uninterrupted reference,
   including its model fingerprint and serving digest. An interrupted
   sidecar write left the previous index intact. The candidate also passed
-  17 focused CPU tests. The full H100 ordinary save still has a 30-minute
-  worker barrier. A restart can repeat the pilot's deliberate validation
-  round trip on the next update because that flag lives in the process.
-  [CPU recovery source and test results][held-native-recovery-cpu]
+  17 focused CPU tests. A separate candidate raises the ordinary
+  TensorStore barrier from 30 to 45 minutes for the pilot's 60-minute
+  worker command budget. Its authored workload and per-update checkpoint
+  cadence match the initial recovery candidate. Six exact-source CPU
+  cases passed, including injected commit failures that left completion
+  metadata absent. The H100 save still needs regional validation. A
+  restart can repeat the pilot's deliberate validation round trip on the
+  next update because that flag lives in the process.
+  [CPU recovery source and test results][held-native-recovery-cpu] ·
+  [Scoped checkpoint deadline proof][held-native-recovery-deadline]
 
   Wait for the ordinary native index to commit a checkpoint generation
   before counting an update as recoverable. The policy can already be
@@ -2082,8 +2111,13 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   requests serially. The captured native logs combine queueing with model
   execution. On one eight-H100 host, profile an identical captured prompt
   group cold and warm, then repeat with a bounded queue. Time enqueue to
-  dispatch, record realized batch size, and measure prefill, decode, replay
-  serialization and grading to locate the admission bottleneck.
+  dispatch, record realized batch size, and measure prefill, decode and
+  replay serialization. The serve-only fixture uses four matched short
+  evaluation prompts at the 512-token training response cap. An exact
+  two-CPU test reconciled all 16 typed frames and showed that the first
+  repeat compiled another prefill executable. Measure grading and tool
+  overhead separately on the full rollout.
+  [Scoped serving diagnostic and CPU proof][held-native-admission-probe]
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
@@ -2173,9 +2207,8 @@ arms. [Prior timing comparison][timing]
 
 - Agree on fixed-panel reward and update time or cost margins for the
   maintained Levanter/vLLM build. Use the frozen pair as the baseline.
-  Prioritize publication on the maintained H100 path. Measure export,
-  host staging and receiver replay on the original four learner hosts
-  before choosing which copy or synchronization to remove. Change the
+  Evaluate bounded source hashing on the maintained H100 path and track
+  hash wait, receiver replay and total publication time. Change the
   learner default once the maintained build meets the margins and passes
   H100 recovery and weight publication.
 - Keep native serving opt-in until the fixed-checkpoint shape gate and the
@@ -2262,6 +2295,10 @@ arms. [Prior timing comparison][timing]
 [held-native-interrupted-result]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-afb17423cacb%2Fverified-interrupted-held-native.json
 [held-native-recovery-plan]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fverified-recovery-plan.json
 [held-native-recovery-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fordinary-checkpoint-cpu-proof.tar.zst
+[held-native-recovery-root]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fparentless-regional-launch-proof.tar.zst
+[held-native-recovery-deadline]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fordinary-checkpoint-deadline-proof.tar.zst
+[held-native-admission-probe]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Foffline-native-admission-probe.tar.zst
+[held-publication-overlap]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fverified-publication-overlap-proof.tar.zst
 [iris-native-emission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122p
 [native-passing-diagnostic-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122p%2Findependently-verified-passing-diagnostic.json
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
