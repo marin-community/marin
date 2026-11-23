@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.micro210_inputs import CHOICE_SEED_NAMESPACE, shuffle_micro210_inputs
 from experiments.evaluation.micro210_policy import CHOICE_POLICY_VERSION, POLICY_REFERENCE
@@ -34,7 +35,7 @@ def build_choice_policy(source_rollouts: Path, source_environment: Path, source_
     prepared = output / "rollouts.parquet"
     counts = shuffle_micro210_inputs(str(source_rollouts), str(prepared))
     digest = sha256(prepared)
-    location = f"{PREPARED_ROOT}/{CHOICE_POLICY_VERSION}/{digest}"
+    location = str(StoragePath(PREPARED_ROOT) / CHOICE_POLICY_VERSION / digest)
     rows = pq.read_table(prepared, columns=["task_id", "task_spec", "task_rollout_spec", "repetition_index"]).to_pylist()
     environment = json.loads(source_environment.read_bytes())
     environment["data_uri"] = location
@@ -57,7 +58,7 @@ def build_choice_policy(source_rollouts: Path, source_environment: Path, source_
         prepared_rollouts_sha256=digest,
         task_environment_sha256=sha256(environment_path),
         choice_order={
-            "seed_derivation": "first 63 bits of SHA-256(namespace + task_id), big-endian",
+            "seed_derivation": "low 63 bits of first eight SHA-256 bytes of namespace + task_id, big-endian",
             "seed_namespace": CHOICE_SEED_NAMESPACE,
             "permuted_benchmarks": ["truthfulqa"],
             "accepted_letter_counts": counts,

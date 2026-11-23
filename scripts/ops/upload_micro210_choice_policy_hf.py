@@ -10,6 +10,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import requests
 from huggingface_hub import HfApi, create_repo
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.micro210_policy import (
     CHOICE_POLICY_REFERENCE,
@@ -61,7 +62,7 @@ def main() -> None:
     policy = json.loads(raw)
     if policy["policy_version"] != CHOICE_POLICY_REFERENCE.revision:
         raise ValueError("Staged policy version differs from its pin")
-    prepared_uri = policy["prepared_inputs_uri"] + "/rollouts.parquet"
+    prepared_uri = str(StoragePath(policy["prepared_inputs_uri"]) / "rollouts.parquet")
     prepared = read_and_verify(prepared_uri, policy["prepared_rollouts_sha256"])
     with tempfile.TemporaryDirectory() as temporary:
         prepared_path = Path(temporary) / "rollouts.parquet"
