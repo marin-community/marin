@@ -28,18 +28,20 @@ def test_exited_follower_observes_coordinated_shutdown(monkeypatch, shutdown):
     try:
         with subprocess.Popen([sys.executable, "-c", "pass"]) as process:
             assert process.wait(timeout=10) == 0
+            exited = RuntimeError(f"vLLM process exited unexpectedly with code {process.returncode}")
 
             def check_alive():
                 if shutdown == "during-check":
                     client.request_shutdown()
                 if process.poll() is not None:
-                    raise RuntimeError(f"vLLM process exited unexpectedly with code {process.returncode}")
+                    raise exited
 
             if shutdown == "requested":
                 client.request_shutdown()
             if shutdown == "not-requested":
-                with pytest.raises(RuntimeError, match="exited unexpectedly with code 0"):
+                with pytest.raises(RuntimeError) as stopped:
                     iris_vllm.wait_for_iris_vllm_shutdown(launch, check_alive)
+                assert stopped.value is exited
                 assert not client.followers_stopped((1,))
             else:
                 iris_vllm.wait_for_iris_vllm_shutdown(launch, check_alive)
