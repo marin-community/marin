@@ -164,12 +164,13 @@ def proof_judge_spec(problem: str, solution: str, guidelines: str) -> JudgeSpec:
         label_scores={f"<points>{points} out of 7</points>": points / 7 for points in PROOF_POINTS},
         label_scan="lines",
         # GLM-5.3-Flash reasons for up to ~85K tokens on IMO-ProofBench proofs, some past 450 s, and
-        # can reason without end at temperature 0.
+        # can reason without end at temperature 0. Together returns quick 503s under load, so most
+        # attempts cost seconds of the budget.
         sampling=JudgeSampling.PROVIDER_DEFAULT,
         max_completion_tokens=131072,
         completion_policy=JudgeCompletionPolicy.CONTENT,
         request_timeout=900,
-        transport_attempts=2,
+        transport_attempts=6,
         transport_budget=1200,
     )
 
