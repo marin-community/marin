@@ -169,12 +169,6 @@ def _regenerate_generated_label(old_rows: dict[int, dict], packages_lock: str) -
     """
     if get_job_info() is None:
         raise RuntimeError("Regenerate the Reasoning Gym label inside the regional Iris CPU job")
-    # The known exclusions leave the label by policy before regeneration: their entries fail the
-    # fresh-dataset comparison nondeterministically across runs (observed on a regional Linux job),
-    # so their grader cannot re-derive them and keeping them would make the stamp nondeterministic.
-    for excluded in KNOWN_GENERATED_EXCLUSIONS:
-        old_rows.pop(excluded, None)
-    adopted_indices = sorted(old_rows)
     wheel = StoragePath(GENERATOR_URL)
     rejections: list[dict] = []
     regenerated: dict[int, str] = {}

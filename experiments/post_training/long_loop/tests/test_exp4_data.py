@@ -8,8 +8,10 @@ import pytest
 from taskcompendium.models import Source
 
 from experiments.post_training.long_loop.exp4_data import (
+    EXCLUDED_GENERATED_FAMILIES,
     EXPECTED_COMPOSITION,
     FIVE_FAMILY_COUNTS,
+    GENERATED_POOL_ROWS,
     NEMOTRON_IF_RECIPE_VERSION,
     TIME_INTERVALS_ROWS,
     _cycle_index,
@@ -33,8 +35,6 @@ def test_expected_composition_names_every_pool_label_at_the_adopted_counts():
 
 
 def test_the_excluded_generated_family_is_codeio_at_its_adopted_count():
-    from experiments.post_training.long_loop.exp4_data import EXCLUDED_GENERATED_FAMILIES, GENERATED_POOL_ROWS
-
     assert EXCLUDED_GENERATED_FAMILIES == {"codeio": 191}
     assert GENERATED_POOL_ROWS == 20_609
 
