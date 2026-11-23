@@ -89,6 +89,8 @@ constructor temporarily clears process-wide `os.environ`; resolving a connection
 inside another trial thread can therefore report missing `api_key` and `target`
 even when the job received both. Keep URL and target in ordinary job environment
 variables and the DATA key in the named secret bundle.
+The inventory-admission CLI's `--api-key-env` selects that same named secret;
+it reads the mounted file first and then the same environment variable.
 
 Report presence and successful access only; never print key values. Do not copy
 private secret files into launch records or source control. The legacy

@@ -12,6 +12,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import TypedDict
 
+from rigging.secrets import get_secret
+
 from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
 from shellbox.backends.daytona.usage import (
     DEFAULT_HEADROOM,
@@ -109,10 +111,10 @@ async def _run(arguments: argparse.Namespace) -> None:
     profile = _profile(arguments)
     reports: dict[str, AccountReport | SkippedAccount] = {}
     for account, key_env in _selected_accounts(arguments).items():
-        api_key = os.environ.get(key_env)
+        api_key = get_secret(key_env)
         if not api_key:
             if not arguments.all:
-                raise SystemExit(f"Missing Daytona credential environment variable: {key_env}")
+                raise SystemExit(f"Missing Daytona credential: {key_env}")
             reports[account] = {"skipped": f"missing {key_env}"}
             if not arguments.json:
                 print(f"{account}: skipped (missing {key_env})")
@@ -137,7 +139,9 @@ def _parser() -> argparse.ArgumentParser:
         description="Read sandbox inventory and size organization headroom from owner-provided quota limits.",
     )
     account = parser.add_mutually_exclusive_group(required=True)
-    account.add_argument("--api-key-env", help="Environment variable holding the selected account's API key.")
+    account.add_argument(
+        "--api-key-env", help="Named secret or environment variable for the selected account's API key."
+    )
     account.add_argument(
         "--all", action="store_true", help="Read eval, rl and data using their dedicated key variables."
     )

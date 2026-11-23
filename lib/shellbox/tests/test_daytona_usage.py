@@ -16,6 +16,7 @@ pytest.importorskip("daytona")
 
 from daytona import AsyncDaytona, DaytonaConfig
 from daytona_api_client_async import SandboxDesiredState, SandboxState
+from rigging.secrets import SECRETS_DIR_ENV
 from shellbox.backends.daytona import usage_cli
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.usage import (
@@ -52,6 +53,11 @@ class FlakyInventoryClient:
 
 
 LIMITS = OrganizationLimits(100, 100, 100, SandboxProfile(4, 8, 10))
+
+
+@pytest.fixture(autouse=True)
+def isolated_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv(SECRETS_DIR_ENV, str(tmp_path / "secrets"))
 
 
 def sandbox(
@@ -268,15 +274,36 @@ def test_usage_cli_all_applies_each_org_quota_and_hides_credentials(monkeypatch,
 @pytest.mark.parametrize(
     ("key_env", "options"), [("SELECTED_DAYTONA_KEY", ["--limits", "data"]), ("DAYTONA_DATA_API_KEY", [])]
 )
-def test_usage_cli_selects_inferred_or_explicit_account_limits(monkeypatch, capsys, key_env, options):
-    monkeypatch.setenv(key_env, "secret")
-    monkeypatch.setattr(DaytonaConnection, "client_factory", lambda self: lambda: InventoryClient([sandbox("one")]))
+@pytest.mark.parametrize("credential_source", ["environment", "file", "file-over-environment"])
+def test_usage_cli_selects_inferred_or_explicit_account_limits(
+    tmp_path, monkeypatch, capsys, key_env, options, credential_source
+):
+    monkeypatch.setenv(SECRETS_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(key_env, raising=False)
+    if credential_source == "environment":
+        monkeypatch.setenv(key_env, "selected-secret")
+    else:
+        (tmp_path / key_env).write_text("selected-secret")
+        if credential_source == "file-over-environment":
+            monkeypatch.setenv(key_env, "stale-environment-secret")
+    clients = {"selected-secret": InventoryClient([sandbox("one")])}
+    monkeypatch.setattr(DaytonaConnection, "client_factory", lambda self: lambda: clients[self.api_key])
     monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--api-key-env", key_env, *options, "--json"])
     usage_cli.main()
     report = json.loads(capsys.readouterr().out)
     assert report["account"] == "data"
     assert report["resources"]["cpu"]["quota"] == 2000
     assert report["resources"]["cpu"]["used"] == 2
+
+
+def test_usage_cli_refuses_other_accounts_when_the_selected_secret_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv(SECRETS_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv("DAYTONA_DATA_API_KEY", raising=False)
+    monkeypatch.setenv("DAYTONA_API_KEY", "other-account")
+    (tmp_path / "DAYTONA_RL_API_KEY").write_text("rl-account")
+    monkeypatch.setattr(sys, "argv", ["shellbox-daytona-usage", "--api-key-env", "DAYTONA_DATA_API_KEY", "--json"])
+    with pytest.raises(SystemExit, match="Missing Daytona credential: DAYTONA_DATA_API_KEY"):
+        usage_cli.main()
 
 
 def test_usage_cli_missing_keys_are_explicit_in_all_account_report(monkeypatch, capsys):
