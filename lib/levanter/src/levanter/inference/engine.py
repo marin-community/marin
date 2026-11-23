@@ -1097,6 +1097,24 @@ class InferenceEngine:
             ),
         )
 
+    def _validate_generation_requests(self, requests: Sequence[Request]) -> None:
+        if len({request.request_id for request in requests}) != len(requests):
+            raise ValueError("Request IDs must be unique within a generation batch")
+        max_prefill = self.config.max_prefill_size or self.model.Pos.size
+        if any(not 0 < len(request.prompt_tokens) <= max_prefill for request in requests):
+            raise ValueError("Prompts must be nonempty and fit within max_prefill_size")
+        if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
+            raise ValueError("Prompts must leave room for generation within max_seq_len")
+        if any(request.n_generations < 1 for request in requests):
+            raise ValueError("Every request must ask for at least one generation")
+
+        max_needed = max(int(r.n_generations) for r in requests)
+        if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
+            raise ValueError(
+                f"Total sequences needed ({max_needed}) exceeds max_seqs ({self.gen_state.decode_state.page_table.max_seqs})."
+                "Decompose your request into smaller batches or increase max_seqs when building the service."
+            )
+
     def generate(self, requests: Sequence[Request], step_callback=None) -> GenerationResult:
         """Generate tokens for a batch of Requests.
 
@@ -1109,23 +1127,7 @@ class InferenceEngine:
         """
         if not requests:
             return GenerationResult(tokens=[], logprobs=[], total_generated=0)
-        if len({request.request_id for request in requests}) != len(requests):
-            raise ValueError("Request IDs must be unique within a generation batch")
-        max_prefill = self.config.max_prefill_size or self.model.Pos.size
-        if any(not 0 < len(request.prompt_tokens) <= max_prefill for request in requests):
-            raise ValueError("Prompts must be nonempty and fit within max_prefill_size")
-        if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
-            raise ValueError("Prompts must leave room for generation within max_seq_len")
-        if any(request.n_generations < 1 for request in requests):
-            raise ValueError("Every request must ask for at least one generation")
-
-        # validate we don't have any sequences with n_generations exceeding max_seqs
-        max_needed = max(int(r.n_generations) for r in requests)
-        if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
-            raise ValueError(
-                f"Total sequences needed ({max_needed}) exceeds max_seqs ({self.gen_state.decode_state.page_table.max_seqs})."
-                "Decompose your request into smaller batches or increase max_seqs when building the service."
-            )
+        self._validate_generation_requests(requests)
 
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
