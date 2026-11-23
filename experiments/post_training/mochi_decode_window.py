@@ -220,15 +220,22 @@ async def steady_decode_window(
             rows = [request_window(trace, started, ended) for trace in traces]
             server = summarize_metrics(samples, config.gpu_count)
             engine_samples: dict[tuple, list[float]] = {}
+            occupancy_samples = []
             for sample in samples:
+                occupancy = {}
                 for row in sample["series"]:
                     if row["name"] == "vllm:num_requests_running":
-                        engine_samples.setdefault(tuple(sorted(row["labels"].items())), []).append(row["value"])
+                        labels = tuple(sorted(row["labels"].items()))
+                        engine_samples.setdefault(labels, []).append(row["value"])
+                        occupancy[labels] = row["value"]
+                occupancy_samples.append(occupancy)
             engine_medians = [
                 {"labels": dict(labels), "median": median(values)} for labels, values in engine_samples.items()
             ]
-            achieved = len(engine_medians) == config.data_parallel_size and all(
-                row["median"] == config.running_per_engine for row in engine_medians
+            achieved = len(engine_samples) == config.data_parallel_size and all(
+                occupancy.keys() == engine_samples.keys()
+                and all(count == config.running_per_engine for count in occupancy.values())
+                for occupancy in occupancy_samples
             )
             acceptance = counters["speculative_decoding"]
             proposals_measured = not speculative or (acceptance is not None and acceptance["drafts"] > 0)

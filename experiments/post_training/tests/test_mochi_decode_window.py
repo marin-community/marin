@@ -27,7 +27,19 @@ def test_window_counts_token_ids_at_interval_boundaries():
     assert result["tokens_before_window"] == 3
 
 
-@pytest.mark.parametrize("mode", ["plain", "dspark", "missing_rank", "preemption", "nonprogressive", "early_completion"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "plain",
+        "dspark",
+        "missing_rank",
+        "missing_scrape_rank",
+        "transient_underload",
+        "preemption",
+        "nonprogressive",
+        "early_completion",
+    ],
+)
 def test_prefetched_stream_protocol_and_metric_qualification(monkeypatch, mode):
     lock = threading.Lock()
     active, generated, prompts, drafts = (Counter() for _ in range(4))
@@ -93,8 +105,10 @@ def test_prefetched_stream_protocol_and_metric_qualification(monkeypatch, mode):
                     "vllm:spec_decode_num_draft_tokens_total": 4 * drafts[rank],
                     "vllm:spec_decode_num_accepted_tokens_total": 2 * drafts[rank],
                 }
-                if not (mode == "missing_rank" and rank == 1):
-                    values["vllm:num_requests_running"] = active[rank]
+                if not (rank == 1 and (mode == "missing_rank" or (mode == "missing_scrape_rank" and scrapes[0] == 3))):
+                    values["vllm:num_requests_running"] = active[rank] - int(
+                        mode == "transient_underload" and rank == 1 and scrapes[0] == 3
+                    )
                 lines.extend(f'{name}{{engine="{rank}"}} {value}' for name, value in values.items())
         return tuple(text_string_to_metric_families("\n".join(lines) + "\n"))
 
