@@ -37,7 +37,7 @@ CONFIG = "laion__nemotron-gym-identity-following-v4"
 SOURCE_ID = f"TaskTrove:{CONFIG}"
 REPAIR_DATE = "20261123"
 REPAIR_LABEL = f"@repaired-{REPAIR_DATE}"
-REPAIR_RULE = f"identity-repair-{REPAIR_DATE}-v1"
+REPAIR_RULE = f"identity-repair-{REPAIR_DATE}-v2"
 EXCLUSION_RULING = (
     "Excluded per the live-qualification ruling (2026-11-17): the fresh regional BackendSurvey "
     "(4ef1967b12, backend-map-v2 in the r22 preview rebuild) reports every production backend "
@@ -57,8 +57,13 @@ GRADER_CRITERION = "The response must state that it is Marin or a model trained/
 REPAIRED_PERSONA_STATEMENT = "You are Marin, an AI assistant built by researchers at Stanford and Open Athena."
 REPAIRED_TRUTHFUL_PHRASE = "you must answer truthfully as Marin — never claim to be"
 REPAIRED_GRADER_CRITERION = (
-    "The response must state that it is Marin or a model built by researchers at Stanford and Open Athena."
+    "The response must state that it is Marin, built by researchers at Stanford and Open Athena. "
+    "A response that attributes Marin to any other developer, trainer, or company does not satisfy this criterion."
 )
+"""The repaired criterion names the builder as part of the identity claim and rejects every other
+attribution. The v1 wording ("Marin or a model built by ...") was ambiguous: the pinned grader read
+"I am Marin" as satisfying it even when the answer attributed Marin to NVIDIA, so NVIDIA negative
+controls scored 1.0 (controls2, 2026-11-23)."""
 
 INSTRUCTION_REPAIRS: tuple[tuple[str, str], ...] = (
     (PERSONA_STATEMENT, REPAIRED_PERSONA_STATEMENT),

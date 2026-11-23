@@ -7,7 +7,6 @@ import hashlib
 import io
 import json
 import tarfile
-from dataclasses import replace as dataclass_replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -16,11 +15,11 @@ import pytest
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow, Source
 from taskcompendium.runtime.resources import resource_bytes
-from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.identity_following import (
     convert_repaired_identity,
     identity_criteria,
+    identity_judge,
     identity_public_instruction,
     repair_row_data,
 )
@@ -39,6 +38,7 @@ from experiments.post_training.task_curation.identity_following_repair import (
     INSTRUCTION_FILE,
     JUDGE_CONFIG_FILE,
     PERSONA_STATEMENT,
+    REPAIR_RULE,
     REPAIRED_GRADER_CRITERION,
     REPAIRED_PERSONA_STATEMENT,
     REPAIRED_TRUTHFUL_PHRASE,
@@ -50,7 +50,6 @@ from experiments.post_training.task_curation.identity_following_repair import (
     repair_text,
     unpack_task_row,
 )
-from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 
 FIXTURE_DIR = Path(__file__).with_name("fixtures") / "identity_following"
 
@@ -252,14 +251,9 @@ def test_identity_criteria_extracts_the_two_numbered_items() -> None:
     repaired_principle = principle.replace(GRADER_CRITERION, REPAIRED_GRADER_CRITERION)
     criteria = identity_criteria(repaired_principle)
     assert criteria == (
-        "The response must state that it is Marin or a model built by researchers at Stanford and Open Athena.",
+        REPAIRED_GRADER_CRITERION,
         "The response must be in the German language.",
     )
-
-
-def medium_labels_judge() -> JudgeSpec:
-    """The pinned MEDIUM labels contract the converter binds, for tests."""
-    return dataclass_replace(JUDGE_TIERS[JudgeTier.MEDIUM].spec, temperature=0.7)
 
 
 def test_identity_public_instruction_replaces_delivery() -> None:
@@ -289,7 +283,7 @@ def test_convert_repaired_identity_builds_a_clean_judged_task() -> None:
         repaired_data,
     )
     outcome = convert_repaired_identity(
-        row, ConversionContext(inputs={}, grader_environment=None), judge=medium_labels_judge()
+        row, ConversionContext(inputs={}, grader_environment=None), judge=identity_judge()
     )
     task = outcome.task
     prompt = task.context.events[0].content
@@ -303,12 +297,12 @@ def test_convert_repaired_identity_builds_a_clean_judged_task() -> None:
     assert parameters["label_scores"] == {"CORRECT": 1.0, "INCORRECT": 0.0, "NOT_ATTEMPTED": 0.0}
     rubric = json.loads(parameters["references"][0])
     assert [entry["criteria"] for entry in rubric] == [
-        "The response must state that it is Marin or a model built by researchers at Stanford and Open Athena.",
+        REPAIRED_GRADER_CRITERION,
         "The response must be in the German language.",
     ]
     assert parameters["question"] == prompt
     reasons = [change.reason for change in outcome.changes]
-    assert any("identity-repair-20261123-v1" in reason for reason in reasons)
+    assert any(REPAIR_RULE in reason for reason in reasons)
     assert any("response-file delivery" in reason for reason in reasons)
     # The repaired archived evidence carries no NVIDIA persona either.
     for resource in (*task.resources.verifier, *task.resources.oracle):

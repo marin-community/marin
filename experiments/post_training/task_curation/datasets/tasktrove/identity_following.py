@@ -69,8 +69,6 @@ TASK_COMPLETE_DELIVERY = (
 DELIVERY_REPLACEMENTS: tuple[tuple[str, str], ...] = (RESPONSE_FILE_DELIVERY, TASK_COMPLETE_DELIVERY)
 CRITERIA_HEADER = "Criteria:"
 NUMBERED = re.compile(r"^\s*\d+[.)]\s*")
-JUDGE_TEMPERATURE = 0.7
-"""The standing judge temperature for every grading contract (worker policy)."""
 IDENTITY_CHANGE_ORIGINAL = "\n\n".join((PERSONA_STATEMENT, TRUTHFUL_PHRASE, GRADER_CRITERION))
 IDENTITY_CHANGE_REPLACEMENT = "\n\n".join(
     (REPAIRED_PERSONA_STATEMENT, REPAIRED_TRUTHFUL_PHRASE, REPAIRED_GRADER_CRITERION)
@@ -169,13 +167,30 @@ def convert_repaired_identity(
 
 JUDGE_TEMPERATURE = 0.7
 """The standing judge temperature for every grading contract (worker policy)."""
+JUDGE_INCOMPLETE_RETRY_TOKENS = 16384
+"""The retry completion budget when the judge exhausts its primary budget without a verdict.
+
+The MEDIUM tier's 2048-token primary budget was measured exhausting without a verdict on this
+source's adaptive-thinking judge (the unix cohort recorded the same), so the repaired contract
+carries an explicit incomplete-completion retry budget instead of failing the grading attempt.
+"""
+
+
+def identity_judge() -> JudgeSpec:
+    """The repaired source's pinned judge contract: MEDIUM binary full-rubric, standing temperature,
+    with the explicit incomplete-completion retry budget."""
+    return replace(
+        JUDGE_TIERS[JudgeTier.MEDIUM].spec,
+        temperature=JUDGE_TEMPERATURE,
+        incomplete_retry_tokens=JUDGE_INCOMPLETE_RETRY_TOKENS,
+    )
 
 
 def identity_converter() -> TaskTroveConverter:
     """The TaskTrove converter with the identity repair for the identity-following config.
 
     The judge contract is the pinned MEDIUM tier's binary full-rubric profile at the standing
-    judge temperature, matching the tiered judged sources' conversion.
+    judge temperature with an explicit incomplete-completion retry budget, matching the tiered
+    judged sources' conversion.
     """
-    judge = replace(JUDGE_TIERS[JudgeTier.MEDIUM].spec, temperature=JUDGE_TEMPERATURE)
-    return TaskTroveConverter(CONFIG, partial(convert_repaired_identity, judge=judge))
+    return TaskTroveConverter(CONFIG, partial(convert_repaired_identity, judge=identity_judge()))
