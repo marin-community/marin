@@ -2245,9 +2245,9 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
 
   The accepted vLLM control's archived pod placement joins to four
   learner hosts on one leafgroup and its serving host on another leafgroup
-  in the same superpod. All five current Node objects and their recorded
-  provider topology label updates predate the run. This is a retrospective
-  join of the original pod placement to current labels. The earlier
+  in the same superpod. All five current Node objects and the provider's
+  managed-field entries for those labels predate the run. The join uses
+  original pod placement and current label values. The earlier
   native attempt's live capture places all five of its hosts on one
   leafgroup in the same superpod. Record the learner and serving domains
   separately on the sealed run when interpreting update and publication
