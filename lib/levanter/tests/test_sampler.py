@@ -3,6 +3,7 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import haliax as hax
@@ -45,3 +46,16 @@ def test_sampler_top_p_does_not_overshoot_exact_threshold():
 
     assert jnp.isfinite(masked_logits.array[0])
     assert jnp.isneginf(masked_logits.array[1:]).all()
+
+
+def test_top_p_one_preserves_full_distribution_in_a_mixed_batch():
+    batch, vocab = hax.Axis("batch", 2), hax.Axis("vocab", 4)
+    scores = jnp.array([0.0, -10.0, -12.0, -13.0])
+    logits = hax.named(jnp.broadcast_to(scores, (batch.size, vocab.size)), (batch, vocab))
+    top_ps = hax.named(jnp.array([1.0, 0.5]), batch)
+
+    tokens, logprobs = jax.jit(Sampler(vocab))(logits, 1.0, top_ps=top_ps, key=jax.random.key(0))
+
+    np.testing.assert_allclose(logprobs.array[0], jax.nn.log_softmax(scores)[tokens.array[0]], rtol=1e-6, atol=1e-7)
+    assert int(tokens.array[1]) == 0
+    assert float(logprobs.array[1]) == 0.0

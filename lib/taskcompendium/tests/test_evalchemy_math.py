@@ -3,15 +3,21 @@
 
 """Source symbolic comparison remains bounded in grading workers."""
 
+import ast
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import PurePosixPath
 
 import pytest
 from verifyit.grade import GradingInfraError
 
+from taskcompendium.importers.evalchemy.grader import DEPENDENCIES, scorer_files
 from taskcompendium.importers.evalchemy.scorers import minerva
 from taskcompendium.importers.evalchemy.scorers.harness_generation import grade_harness_generation_candidate
 from taskcompendium.importers.evalchemy.scorers.main import score
+from taskcompendium.importers.evalchemy.scorers.math import grade_boxed_math
 from taskcompendium.importers.evalchemy.scorers.minerva import is_equiv
+from taskcompendium.importers.evalchemy.scorers.olympiad import grade_olympiad
+from taskcompendium.runtime.resources import resource_bytes
 
 
 def test_harness_math_symbolic_fallback_grades_correctly_in_a_worker_thread():
@@ -50,6 +56,26 @@ def test_gsm8k_flexible_grader_preserves_complete_final_box(response, reference,
     assert verdict.reward == expected
 
 
+@pytest.mark.parametrize(
+    ("response", "reference", "question", "expected"),
+    [
+        ("#### 18.", "18", "How many apples?", 1),
+        ("#### 0.25", "25", "What percentage of the watermelon does each adult get?", 1),
+        ("#### 0.7", "70", "What is the school's overall pass rate?", 1),
+        ("#### 0.5", "1", "How many apples?", 0),
+        ("#### 9.1", "9", "How many apples?", 0),
+    ],
+)
+def test_gsm8k_strict_match_uses_the_flexible_equivalence_rules(response, reference, question, expected):
+    verdict = score(
+        "harness_generation",
+        {"profile": "gsm8k", "references": ((reference,),), "question": question},
+        response,
+    )
+    metrics = verdict.detail["metrics"]
+    assert (metrics["exact_match,strict-match"], metrics["exact_match,flexible-extract"]) == (expected, expected)
+
+
 @pytest.mark.parametrize("threaded", [False, True])
 def test_minerva_symbolic_timeout_is_a_nonmatch(threaded):
     if threaded:
@@ -83,3 +109,47 @@ def test_minerva_worker_crash_remains_an_infrastructure_failure(tmp_path, monkey
     with ThreadPoolExecutor(max_workers=1) as workers:
         with pytest.raises(GradingInfraError):
             workers.submit(is_equiv, r"\sqrt{4}", "2").result(timeout=45)
+
+
+# The reference of OlympiadBench id 1122: a relation without free symbols.
+RELATION = r"I_{e}(0)=\gamma I_{i}(0)"
+GRADERS = {
+    "olympiad": lambda reference, response: grade_olympiad((reference,), response),
+    "boxed_math": grade_boxed_math,
+}
+
+
+@pytest.mark.parametrize(
+    ("reference", "candidate", "correct"),
+    [
+        # Equations that solve to no value, and other relations without free symbols, do not match.
+        (RELATION, "x = x", False),
+        (RELATION, "x = x + 1", False),
+        (RELATION, r"I_{i}(0) = I_{e}(0)", False),
+        ("3 = 4", "1 = 2", False),
+        # The reference's own relation matches, either way round.
+        (RELATION, r"I_{e}(0)=\gamma I_{i}(0)", True),
+        (RELATION, r"\gamma I_{i}(0) = I_{e}(0)", True),
+        # Other references still go through math-verify.
+        ("x=1", "x = 1", True),
+        ("42", "42", True),
+        ("0.5", r"\frac{1}{2}", True),
+    ],
+)
+@pytest.mark.parametrize("grade", GRADERS.values(), ids=GRADERS.keys())
+def test_symbol_free_relation_reference_matches_only_its_own_relations(grade, reference, candidate, correct):
+    assert grade(reference, rf"The answer is \boxed{{{candidate}}}.").reward == float(correct)
+
+
+@pytest.mark.parametrize("scorer", sorted(DEPENDENCIES))
+def test_scorer_package_ships_every_module_its_files_import(scorer):
+    # main.py imports each scorer's module only when that scorer runs, so it is not checked here.
+    shipped = {resource.path.removeprefix("source_grader/"): resource for resource in scorer_files(scorer)}
+    for path, resource in shipped.items():
+        if not path.endswith(".py") or path == "main.py":
+            continue
+        package = PurePosixPath(path).parent
+        for node in ast.walk(ast.parse(resource_bytes(resource))):
+            if isinstance(node, ast.ImportFrom) and node.level == 1:
+                for name in [node.module] if node.module else [alias.name for alias in node.names]:
+                    assert str(package / (name.replace(".", "/") + ".py")) in shipped, f"{path} imports {name}"
