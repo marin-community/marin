@@ -96,10 +96,14 @@ The nested runtime uses the checkout's RolloutEngine for task execution and mode
 Harbor tasks use Shellbox. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
 See [task rollouts](task-rollouts.md) for task execution and backend limits.
 
-The launcher runs `uv run --isolated --project vendor/skyrl --frozen --no-group dev
-marinskyrl` in a child process. SkyRL has its own lock and is excluded from Marin's
-workspace. The child discards the parent's Python environment selection. SkyRL
-installs Marin libraries and Harbor from editable paths in the checkout.
+The launcher runs SkyRL's frozen CPU environment in a child process through
+the vendored uv version. Both uv selections prefer a compatible system interpreter
+over cached managed builds, matching Iris task setup. SkyRL has its own lock and
+is excluded from Marin's workspace. The child discards the parent's Python
+environment selection. The Linux worker-construction preflight opens and closes
+a pidfd before building Shellbox machines and records its interpreter and base
+prefix in the validation receipt. SkyRL installs Marin libraries and Harbor from
+editable paths in the checkout.
 Marin calls SkyRL through the executable.
 
 Iris submits the Marin repository through its standard workspace bundle.

@@ -33,6 +33,9 @@ from skyrl_train.trajectory_runners.harbor.configuration import HarborConfigBuil
 
 async def validate_rollout_worker(launch) -> dict:
     """Build and close the production worker without starting inference engines."""
+    if sys.platform == "linux":
+        descriptor = os.pidfd_open(os.getpid())
+        os.close(descriptor)
     config = launch.skyrl
     prepared = prepare_policy_tokenizer(
         argparse.Namespace(
@@ -148,6 +151,9 @@ def main(source: Path, destination: Path, model_config: Path | None = None, *, b
                 "runtime_entrypoint": config.runtime.entrypoint,
                 "role_geometry": role_geometry,
                 "python": sys.version,
+                "python_executable": sys.executable,
+                "python_base_prefix": sys.base_prefix,
+                "platform": sys.platform,
                 "skyrl_lock_sha256": hashlib.sha256((project / "uv.lock").read_bytes()).hexdigest(),
                 "initializer_config_sha256": (
                     hashlib.sha256(model_config.read_bytes()).hexdigest() if model_config is not None else None

@@ -76,7 +76,8 @@ def regional_preflight(document: str, readable_uris: tuple[str, ...]) -> None:
         with StoragePath(uri).open("rb") as stream:
             stream.read(1)
     with tempfile.TemporaryDirectory(prefix="long-loop-regional-preflight-") as directory:
-        validate_launch(document, Path(directory), build_worker=True)
+        receipt = validate_launch(document, Path(directory), build_worker=True)
+    logger.info("Regional evaluation CPU preflight passed: %s", json.dumps(receipt, sort_keys=True))
 
 
 def validate_before_allocation(
