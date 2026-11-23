@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 2:15 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 2:30 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched frozen comparison is complete. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 67B live swap, real tool-turn replay and full-context fused scoring passed together on one eight-H100 host. The repaired five-host arm matched all 100 baseline prompt token sequences and completed one exact learner update and restore. GPU preemption interrupted its second rollout. | Complete the two-update matched run with per-update recovery checkpoints. Qualify H100 recovery after scheduler eviction and improve sustained admission before promoting native serving. |
+| Native inventory backend | The 67B live swap, real tool-turn replay and full-context fused scoring passed together on one eight-H100 host. The repaired five-host arm matched all 100 baseline prompt token sequences and completed one exact learner update and restore before GPU preemption. Its per-update-checkpoint replacement is running on 40 H100s. | Verify both updates and the final 100-task panel on the replacement. Qualify H100 recovery after scheduler eviction and improve sustained admission before promoting native serving. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Verify the full native handoff at 67B. The frozen H100 comparison uses its original worker transport. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -2053,7 +2053,8 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   plan. The official artifact main rendered a clean candidate whose only
   authored configuration differences are its run and job IDs and a checkpoint
   every update. The regional Iris and storage namespaces were empty at
-  preflight. The candidate awaits H100 validation.
+  preflight. The pinned `442f21b` candidate started on 40 H100s on
+  November 23 at 10:24 UTC.
   [Verified per-update checkpoint plan][held-native-recovery-plan]
 
   The staged regional root launcher uses the same artifact fingerprint
@@ -2064,9 +2065,15 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   lease after an interrupted result write. The finalizer captures the
   original step-2 checkpoint marker before retention prunes step 1.
   Removing the CPU coordinator from the GPU group's lifecycle reduces
-  one source of eviction. Live admission on this route remains open.
+  one source of eviction. Kueue treats its H100 leafgroup as a placement
+  preference. The scheduler placed all five original tasks on the same
+  InfiniBand leafgroup. All 40 ranks passed the InfiniBand GDRDMA and
+  PyNCCL gate. The first-attempt manifest pins all five task identities
+  for checkpoint and panel verification.
   [Regional request fixture][held-native-recovery-root] ·
-  [Exact first-attempt launcher][held-native-direct-operator]
+  [Exact first-attempt launcher][held-native-direct-operator] ·
+  [Running native matched arm][iris-held-native-matched-current] ·
+  [Verified 40-rank startup][held-native-matched-current-startup]
 
   A CPU probe ran the normal step-end callback with one and two native
   learner processes, local storage and a local Ray dispatch adapter. It
@@ -2357,6 +2364,8 @@ arms. [Prior timing comparison][timing]
 [held-native-recovery-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fordinary-checkpoint-cpu-proof.tar.zst
 [held-native-recovery-root]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fparentless-regional-launch-proof.tar.zst
 [held-native-direct-operator]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-first-attempt-7de5313.tar.gz
+[iris-held-native-matched-current]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-7de5313-in-424011b4-2026.11.23.2-a7416ff4d7c8
+[held-native-matched-current-startup]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-matched-a7416ff4d7c8-startup-proof.tar.zst
 [held-native-continuation]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-direct-same-artifact-rehearsal.tar.zst
 [held-native-step-one-operator]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-same-run-latest-7de5313.tar.gz
 [held-native-pair-acceptance]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-held-pair-acceptance-proof.tar.zst
