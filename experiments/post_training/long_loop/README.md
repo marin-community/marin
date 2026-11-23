@@ -1284,8 +1284,13 @@ step. Keep checkpoint and evaluation cadence aligned when using best selection.
 Evaluation failures propagate through the admission or sync fence before further
 batch consumption or weight updates. Native timings retain `eval` at the evaluated
 step and `eval_sync_wait` at the next learner step's fence.
-The prepared `.124` round changes only `.123`'s version and `eval_drain` to
-`priority`; its baseline evaluation remains synchronous.
+The `.124` priority trial failed at batch admission before the fence was added.
+The prepared `.125` round retains `.123`'s `abort` drain until the H100 comparison
+qualifies priority mode. It uses 64 prompt groups with eight samples each, a
+64-group policy minibatch, gradient clipping at 0.5, and learning rate 1e-6 for
+both MuonH and its Adam parameter groups. The curriculum derives 22 agentic and
+42 nonagentic groups. Staleness stays at three steps and the response/window
+budgets stay at 98,304/131,072 tokens. Preparation does not authorize a launch.
 
 For the bounded control-flow regression, `priority_drain_debug` uses the existing
 regional Qwen3-0.6B checkpoint on two H100s (one policy GPU and one serving GPU)

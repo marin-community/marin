@@ -196,6 +196,40 @@ def test_mochi_96k_round_aligns_overlong_window_with_response_cap(local_round, t
     }
 
 
+@pytest.mark.parametrize("profile", ["throughput-train-track1"])
+def test_mochi_normalized_round_resolves_batch_optimizer_and_route_capacity(local_round, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    terminal = adopted_round_rl(local_round)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    validate_launch(terminal.build_config(context).launch_config_yaml, tmp_path / "composed", model_config=b"{}")
+    config = yaml.safe_load((tmp_path / "composed" / "compiled.yaml").read_text())["skyrl"]
+    trainer, generator = config["trainer"], config["generator"]
+    assert trainer["train_batch_size"] == trainer["policy_mini_batch_size"] == 64
+    assert generator["n_samples_per_prompt"] == 8
+    optimizer = trainer["policy"]["optimizer_config"]
+    assert optimizer["lr"] == optimizer["optimizer_kwargs"]["adam_lr"] == 1e-6
+    assert optimizer["max_grad_norm"] == 0.5
+    buffer = trainer["rollout_buffer"]
+    assert buffer["max_staleness_steps"] == 3
+    assert buffer["consumed_route_quotas"] == {"agentic": 22, "nonagentic": 42}
+    assert buffer["max_in_flight"] >= 4 * trainer["train_batch_size"]
+    two_batches = 2 * trainer["train_batch_size"] * generator["n_samples_per_prompt"]
+    slots = (
+        generator["num_inference_engines"] * generator["inference_engine_data_parallel_size"] * generator["max_num_seqs"]
+    )
+    assert two_batches == 1024 <= slots
+    assert 2 * buffer["consumed_route_quotas"]["agentic"] * generator["n_samples_per_prompt"] <= (
+        config["terminal_bench_config"]["harbor"]["n_concurrent_trials"]
+    )
+    wall_budget = next(callback for callback in trainer["callbacks"] if callback["type"] == "wall_time_budget")
+    assert wall_budget["groups_per_step"] == 64
+    assert generator["max_input_length"] == 32768
+    assert generator["sampling_params"]["max_generate_length"] == 98304
+    assert generator["eval_sampling_params"]["max_generate_length"] == 98304
+
+
 def _write_schema1_model(tmp_path: Path, checkpoint_step: int) -> tuple[Path, dict[str, str]]:
     """A Snowball-style handoff export: schema-1 config and a direct step manifest."""
     model = tmp_path / "model-schema1"

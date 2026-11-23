@@ -13,7 +13,7 @@ adopted_model:
   tokenizer_uri: marin-community/marin-tokenizer-tools
   tokenizer_revision: 3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
 name: long-loop/mochi-throughput-train-track1
-version: 2026.11.23.124
+version: 2026.11.23.125
 slug: mochi-throughput-train-track1
 rl:
   role_plan:
@@ -25,8 +25,8 @@ rl:
     inference_engine_pipeline_parallel_size: 1
     inference_engine_data_parallel_size: 16
     inference_engine_expert_parallel_size: 16
-    train_batch_size: 32
-    policy_mini_batch_size: 32
+    train_batch_size: 64
+    policy_mini_batch_size: 64
     micro_train_batch_size_per_gpu: 1
     n_samples_per_prompt: 8
     reference_num_nodes: null
@@ -73,16 +73,16 @@ rl:
       policy:
         optimizer_config:
           optimizer: MuonH
-          lr: 1.0e-05
+          lr: 1.0e-06
           adam_betas:
           - 0.9
           - 0.95
           weight_decay: 0.0
-          max_grad_norm: 0.0
+          max_grad_norm: 0.5
           num_warmup_steps: 0
           scheduler: constant_with_warmup
           optimizer_kwargs:
-            adam_lr: 2.307692307692308e-06
+            adam_lr: 1.0e-06
             momentum: 0.95
             nesterov: true
             backend_steps: 5
@@ -112,7 +112,7 @@ rl:
         group_admission:
           stall_timeout: 18000
       rollout_buffer:
-        eval_drain: priority
+        eval_drain: abort
         source_routes:
           long-loop-smartie-swesmith: agentic
           PRIME-RL/Eurus-2-RL-Data: nonagentic
@@ -146,7 +146,7 @@ rl:
       - type: wall_time_budget
         seconds: 36000
         drain_margin: 1800
-        groups_per_step: 32
+        groups_per_step: 64
       - type: inference_stats
         poll_interval_seconds: 5.0
         log_every_steps: 1
