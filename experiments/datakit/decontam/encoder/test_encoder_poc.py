@@ -287,5 +287,5 @@ def test_a_passage_or_its_question_alone_is_not_a_copy_of_an_item_with_a_passage
     rows = pd.DataFrame(list(generic_pairs(items, ["host text " * 80], random.Random(0))))
     label = rows.groupby("kind")["label_q"].max()
     assert label["copy"] == 1 and label["question_only"] == 0 and label["passage_only"] == 0
-    assert label["passage_other_question"] == 0
+    assert label["passage_other_question"] == 0 and label["item_without_passage"] == 0
     assert rows.loc[rows["kind"] == "copy", "right"].str.contains("Ann has three red apples").all()

@@ -174,6 +174,8 @@ def generic_pairs(items: list[dict[str, Any]], hosts: list[str], rng: random.Ran
             yield _row(item, placed((passage + "\n\n" if passage else "") + truncated(item, rng)), "truncated", 1, 0)
         if passage:
             yield _row(item, placed(passage), "passage_only", 0, 0)
+            # The question and its choices without the passage, laid out as a copy would be.
+            yield _row(item, placed(layout({**item, "passage": ""}, rng).text), "item_without_passage", 0, 0)
             siblings = [items[i] for i in by_passage[passage] if items[i]["question"] != item["question"]]
             if siblings:
                 # The same passage with another question of the test holds another item, not this one.

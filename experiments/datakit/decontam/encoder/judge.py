@@ -29,7 +29,8 @@ RUBRIC = Path(__file__).with_name("RUBRIC.md")
 LABELS = ("COPY", "EDITED", "VARIANT", "GENERIC", "UNRELATED", "UNSURE")
 ANSWERS = ("YES", "NO", "NA")
 ATTEMPTS = 3
-MAX_TOKENS = 4096
+# GLM can spend a 4,096-token reply on reasoning and give no label (6.5% of replies at 4,096).
+MAX_TOKENS = 12288
 _OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 INSTRUCTIONS = (
     "You are an independent judge for a labeling task. Follow the rubric below exactly. Read the task "
