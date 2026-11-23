@@ -40,6 +40,7 @@ from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import ContextBudget, RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 from skyrlrecipe.locality import RoleTopologyMode
 
+from experiments.post_training.long_loop.execution_policy import rl_training_callbacks
 from experiments.post_training.long_loop.openresearcher_service import (
     OpenResearcherService,
     retrieval_launch,
@@ -52,7 +53,6 @@ from experiments.post_training.long_loop.openresearcher_service import (
 RECIPE_PATH = Path(__file__).with_name("nvl72-rl.yaml")
 DEFAULT_MAX_NEW_TOKENS = 16384
 SMOKE_BATCH_GROUPS = 2
-SMOKE_BUDGET_SECONDS = 3600
 SEED = 20261020
 COORDINATOR_QUEUE_ALLOWANCE_HOURS = 48
 SNOWBALL_INFINIBAND_PORTS = "=ibp0:1,ibp1:1,ibp2:1,ibp3:1"
@@ -325,17 +325,21 @@ def build_run(
         "checkpoint": {"save_steps": checkpoint_interval},
         "evaluation": {"eval_steps": eval_interval},
         "best_checkpoint": {"evaluation_interval": eval_interval},
-        "wall_time_budget": {"groups_per_step": groups},
     }
     callbacks = []
     for callback in recipe.trainer.callbacks:
         if smoke and callback.type in ("evaluation", "best_checkpoint"):
             continue
-        if smoke and callback.type == "wall_time_budget":
-            callback = callback.replace(seconds=SMOKE_BUDGET_SECONDS)
         if smoke and callback.type == "checkpoint":
             callback = callback.replace(save_interval_seconds=None)
         callbacks.append(callback.replace(**callback_updates.get(callback.type, {})))
+    budgeted_callbacks = sections.Trainer.model_validate(
+        {
+            "callbacks": tuple(
+                rl_training_callbacks([callback.to_skyrl() for callback in callbacks], groups_per_step=groups)
+            )
+        }
+    ).callbacks
     recipe = recipe.merge(
         RecipePatch(
             context_budget=context,
@@ -363,7 +367,7 @@ def build_run(
                 max_steps=max_steps,
                 eval_interval=-1 if smoke else eval_interval,
                 ckpt_interval=checkpoint_interval,
-                callbacks=tuple(callbacks),
+                callbacks=budgeted_callbacks,
                 rollout_buffer=(
                     # A curriculum derives the window's consumed quotas at the spec; a smoke
                     # parity diagnostic has no curriculum and shrinks the equal split.

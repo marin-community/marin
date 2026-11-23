@@ -22,13 +22,11 @@ sft:
   epoch_capacity:
     path: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp5/long-loop-exp5/round5/sft/2026.11.21.113/analysis/source-exposure-20261122/epoch-capacity.json
     sha256: 07446b189a19bec28c01328579fcd5a65c8d68c5dc878315d9f43825618a5093
-  task_timeout_seconds: 72000
   stage_guard:
     h100_hour_limit: 5120
     poll_interval: 30
     stall_retries: 2
   training_budget:
-    duration: 20h
     finalization_reserve: 40m
     update_reserve: 10m
   batch_size: 256

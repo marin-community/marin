@@ -17,7 +17,11 @@ from rigging.timing import Duration
 
 from experiments.post_training.long_loop import spec_pipeline
 from experiments.post_training.long_loop.__main__ import validate_graph
-from experiments.post_training.long_loop.execution_policy import COORDINATOR_TIMEOUT_SECONDS, STAGE_TIMEOUT_SECONDS
+from experiments.post_training.long_loop.execution_policy import (
+    COORDINATOR_TIMEOUT_SECONDS,
+    RL_TRAINING_BUDGET,
+    STAGE_TIMEOUT_SECONDS,
+)
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.run_spec import FilePin, read_pin, resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
@@ -90,6 +94,7 @@ def test_emitted_rl_settings_come_from_the_pinned_spec(tmp_path, monkeypatch, co
             assert emitted["trainer"]["max_ckpts_to_keep"] == resolved[stage]["retained"]
         source = yaml.safe_load(yaml.safe_dump(resolved[stage]["config"]))
         if stage == "rl" and resolved[stage].get("wall_clock_budget") is not None:
+            assert resolved[stage]["wall_clock_budget"] == RL_TRAINING_BUDGET
             source["trainer"]["callbacks"].append(
                 {
                     "type": "wall_time_budget",

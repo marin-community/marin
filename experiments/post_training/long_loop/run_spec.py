@@ -15,7 +15,11 @@ import yaml
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.long_loop.execution_policy import bind_stage_timeouts, experimental_controls
+from experiments.post_training.long_loop.execution_policy import (
+    RL_TRAINING_BUDGET,
+    bind_stage_timeouts,
+    experimental_controls,
+)
 from experiments.post_training.long_loop.stage_config import validate_stage_config
 
 
@@ -120,6 +124,9 @@ def resolve_spec(
         sft_manifest["data"][field] = read_pin(draccus.decode(FilePin, pin), directory)
     for name in ("sft", "rl", "evaluation", "endpoint", "archive", "initializer", "tokenizer", "execution"):
         result[name] = read_pin(getattr(spec, name), directory)
+    if "wall_clock_budget" in result["rl"] and result["rl"]["wall_clock_budget"] != RL_TRAINING_BUDGET:
+        raise ValueError("Long-loop RL wall_clock_budget differs from the canonical training budget")
+    result["rl"]["wall_clock_budget"] = dict(RL_TRAINING_BUDGET)
     sft_recipe = result["sft"]
     tracker = sft_recipe if sft_recipe.get("format") == "sft_spec" else sft_recipe["trainer"]["trainer"]["tracker"]
     entity_key, project_key = (

@@ -24,6 +24,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop.__main__ import validate_graph
+from experiments.post_training.long_loop.execution_policy import rl_training_callbacks
 from experiments.post_training.long_loop.exp3_production import OUTPUT_PREFIX, TEMPORARY_PREFIX
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision
 from experiments.post_training.long_loop.rl import configured_rl_step
@@ -43,8 +44,9 @@ def restart_recipe(reference: dict) -> dict:
     for callback in trainer["callbacks"]:
         if callback["type"] == "checkpoint":
             callback.update(save_steps=-1, save_interval_seconds=7200, save_on_train_end=True)
-    trainer["callbacks"].append(
-        {"type": "wall_time_budget", "seconds": 43200, "drain_margin": 1800, "groups_per_step": 64}
+    trainer["callbacks"] = rl_training_callbacks(
+        [callback for callback in trainer["callbacks"] if callback["type"] != "wall_time_budget"],
+        groups_per_step=trainer["train_batch_size"],
     )
     trainer["rollout_buffer"]["source_routes"] = copy.deepcopy(
         reference["launch"]["config"]["skyrl"]["trainer"]["rollout_buffer"]["source_routes"]

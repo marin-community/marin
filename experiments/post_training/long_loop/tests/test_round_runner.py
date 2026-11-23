@@ -14,6 +14,7 @@ import io
 import json
 import math
 import tarfile
+from datetime import timedelta
 from pathlib import Path
 
 import draccus
@@ -30,6 +31,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop import __main__ as loop_main
 from experiments.post_training.long_loop import exp4, round_runner
+from experiments.post_training.long_loop.execution_policy import SFT_TRAINING_DURATION
 from experiments.post_training.long_loop.exp3_recipe import SftLrSchedule, whole_run_lr_receipt
 from experiments.post_training.long_loop.round_runner import (
     DATA_RELEASES,
@@ -274,6 +276,31 @@ def test_round_yaml_diff_is_exactly_identity_and_multiplier():
     assert set(differences) == YAML_DIFF_PATHS
     assert exp4_round.sft.special_token_lr_multiplier == math.sqrt(32)
     assert exp5_round.sft.special_token_lr_multiplier == 1.0
+
+
+@pytest.mark.parametrize(
+    "round_path",
+    [
+        path
+        for path in sorted(ROUND_DIR.glob("*.yaml"))
+        if yaml.safe_load(path.read_text()).get("sft", {}).get("training_budget") is not None
+    ],
+    ids=lambda path: path.stem,
+)
+def test_clocked_sft_rounds_use_the_canonical_training_duration(round_path):
+    spec = load_round(round_path)
+    assert isinstance(spec, RoundSpec)
+    assert spec.sft.training_budget.duration == SFT_TRAINING_DURATION
+    assert spec.sft.task_timeout_seconds == SFT_TRAINING_DURATION.total_seconds()
+
+
+def test_sft_round_refuses_a_different_training_duration(tmp_path):
+    document = yaml.safe_load((ROUND_DIR / "exp5-setup.yaml").read_text())
+    document["sft"]["training_budget"]["duration"] = draccus.encode(SFT_TRAINING_DURATION + timedelta(hours=1))
+    source = tmp_path / "different-sft-clock.yaml"
+    source.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match=r"SFT duration.*canonical training budget"):
+        load_round(source)
 
 
 def test_round_schema_rejects_unknown_and_mistyped_fields(tmp_path):

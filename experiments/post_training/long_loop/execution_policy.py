@@ -4,14 +4,33 @@
 """Controlled execution envelope for comparable long-loop experiments."""
 
 from datetime import timedelta
+from types import MappingProxyType
 
 DEFAULT_TASK_TIMEOUT_SECONDS = 3 * 24 * 60 * 60
 SFT_CHECKPOINT_INTERVAL = timedelta(hours=2)
+SFT_TRAINING_DURATION = timedelta(hours=20)
+RL_TRAINING_BUDGET = MappingProxyType({"seconds": 43200, "drain_margin": 1800})
+
+
+def rl_training_callbacks(callbacks: list[dict], *, groups_per_step: int) -> list[dict]:
+    """Bind the shared RL clock and reject conflicting recipe declarations."""
+    for callback in callbacks:
+        if callback["type"] == "wall_time_budget":
+            for field, expected in RL_TRAINING_BUDGET.items():
+                if callback[field] != expected:
+                    raise ValueError(
+                        f"Long-loop RL {field}={callback[field]} differs from the canonical budget {expected}"
+                    )
+    return [
+        *(callback for callback in callbacks if callback["type"] != "wall_time_budget"),
+        {"type": "wall_time_budget", **RL_TRAINING_BUDGET, "groups_per_step": groups_per_step},
+    ]
+
 
 # Final evaluation is deliberately outside the 36-hour training/finalization envelope.
 STAGE_TIMEOUT_SECONDS = {
     "inputs": 1800,
-    "sft": 20 * 3600,
+    "sft": int(SFT_TRAINING_DURATION.total_seconds()),
     "export": 3600,
     "rl": 12 * 3600,
     "eval_inputs": 1800,

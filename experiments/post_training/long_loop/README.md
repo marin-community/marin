@@ -554,22 +554,27 @@ durable warning; when an eligible validation exists, the best-by-validation
 checkpoint is required and its absence fails closed.
 
 
-Stage deadlines follow the controlled envelope described below. RL has no
-wall-time callback unless its pinned stage document explicitly supplies:
+New Snowball and Mochi RL rounds share `RL_TRAINING_BUDGET` in
+`execution_policy.py`: 43,200 seconds of learning and a 1,800-second drain
+margin. Change that constant to change both models' budget. Round YAML files
+do not repeat the values; the builders bind the clock and reject conflicting
+learning or drain settings before allocation. Smoke runs retain their step
+and outer-job caps and resolve the same training clock.
 
-```yaml
-wall_clock_budget:
-  seconds: 36000
-  drain_margin: 1800
-```
-
-That optional clock starts at the first optimizer completion. It stops at a
-completed-step boundary after the budget expires; it does not subtract startup,
-a drain reserve or a minimum number of steps from training. An in-flight step
-may finish before finalization. The launcher rejects a task/coordinator timeout
-that does not exceed budget plus drain margin. Overrides remain explicit in
+The clock starts at the first optimizer completion and stops at a completed-step
+boundary after the budget expires. Startup time and the drain margin do not
+reduce the learning clock; no minimum-update requirement extends it. An in-flight
+step may finish before finalization. In full production rounds, the task and
+coordinator timeouts must each exceed the learning budget plus drain margin.
+Outer deadlines remain explicit in
 `rl.execution.job_timeout_seconds`, `evaluation.execution.job_timeout_seconds`,
 `execution.coordinator`, or `execution.task_timeouts` for SFT/export/eval-inputs/archive.
+Frozen recovery plans and native resume accounting retain their recorded
+budget; the lost-time deadline-extension rule is unchanged. Updating the
+source constant does not change a running job.
+Time-limited SFT rounds read the 20-hour `SFT_TRAINING_DURATION` from the same
+module. Their YAML keeps finalization and update reserves but does not repeat
+the duration. The shared SFT builder and the SFT stage deadline use that constant.
 
 Future RL validation runs every two optimizer steps. Checkpoint selection uses
 five complete validation observations at that cadence, with missing observations
@@ -1012,8 +1017,8 @@ Current evaluations use the versioned Together API judge policy.
 
 `exp3_rl_restart` adopts the sealed `.51` SFT export and data inputs without
 rerunning SFT. Supply the hash-pinned predecessor plan and launch document as one
-reference JSON object. The fresh lineage removes forced Socket transport, keeps
-the 12-hour learning budget, saves native checkpoints every two hours and at
+reference JSON object. The fresh lineage removes forced Socket transport, uses
+the canonical RL learning budget, saves native checkpoints every two hours and at
 finalization, and labels a final-native HF fallback when no native best exists.
 Evaluation sandbox storage is 128 GiB; training sandbox resources are unchanged.
 
@@ -1057,7 +1062,7 @@ uv run python -m experiments.post_training.long_loop.round_runner \
   --validation-output /tmp/mochi-round-validation
 ```
 
-The command validates without submitting. Normal runs use a 10-hour learning
+The command validates without submitting. Normal runs use the canonical 12-hour learning
 clock that starts after the first optimizer update and starts again after process
 recovery. The separate GPU-job limit is 48 hours. `rl.max_steps` is an absolute
 optimizer-step target. Set `rl.native_checkpoint` to adopt native model, optimizer

@@ -21,6 +21,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
 from experiments.post_training.long_loop.__main__ import validate_graph
+from experiments.post_training.long_loop.execution_policy import RL_TRAINING_BUDGET
 from experiments.post_training.long_loop.exp3_production import (
     GEOMETRY,
     INITIALIZER_RECEIPT,
@@ -190,7 +191,7 @@ def exp4_plan(release: DataRelease, source_revision: str, version: str, curricul
         **rl,
         "name": "mochi-exp4-rl",
         "config": recipe,
-        "wall_clock_budget": {"seconds": 43200, "drain_margin": 1800},
+        "wall_clock_budget": dict(RL_TRAINING_BUDGET),
     }
     resolved["name"] = "long-loop-exp4/round4"
     resolved["storage"]["output_prefix"] = OUTPUT_PREFIX

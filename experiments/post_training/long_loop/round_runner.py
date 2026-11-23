@@ -23,6 +23,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from functools import partial
 from pathlib import Path
 from types import UnionType
@@ -51,7 +52,13 @@ from experiments.evaluation.micro210_policy import Micro210Model, micro210_evalu
 from experiments.post_training.long_loop.__main__ import validate_graph
 from experiments.post_training.long_loop.adopted_sft import pinned_json
 from experiments.post_training.long_loop.archive import PERMANENT_TMP_SEGMENT
-from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS, STAGE_TIMEOUT_SECONDS
+from experiments.post_training.long_loop.execution_policy import (
+    DEFAULT_TASK_TIMEOUT_SECONDS,
+    RL_TRAINING_BUDGET,
+    SFT_TRAINING_DURATION,
+    STAGE_TIMEOUT_SECONDS,
+    rl_training_callbacks,
+)
 from experiments.post_training.long_loop.exp3_production import (
     INITIALIZER_RECEIPT,
     INITIALIZER_SHA256,
@@ -102,7 +109,6 @@ from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 MICRO210_PLACEHOLDER_URI = "s3://unresolved/terminal"
 MICRO210_PLACEHOLDER_SHA = "sha256:" + "0" * 64
 MICRO210_OUTPUT_PLACEHOLDER = "<resolved-at-build>"
-RL_WALL_CLOCK_BUDGET = {"seconds": 43200, "drain_margin": 1800}
 EVALUATION_EXPECTED_ROLLOUTS = 440
 NCCL_BUFFSIZE = "4194304"
 
@@ -393,6 +399,12 @@ def load_round(path: Path) -> RoundSpec | AdoptedHfRound | AdoptedRlRound | Reco
     document = yaml.safe_load(path.read_text())
     if not isinstance(document, dict):
         raise ValueError(f"{path} must contain a mapping")
+    if "sft" in document and document["sft"].get("training_budget") is not None:
+        budget = document["sft"]["training_budget"]
+        if "duration" in budget and draccus.decode(timedelta, budget["duration"]) != SFT_TRAINING_DURATION:
+            raise ValueError("Long-loop SFT duration differs from the canonical training budget")
+        budget["duration"] = draccus.encode(SFT_TRAINING_DURATION)
+        document["sft"].setdefault("task_timeout_seconds", int(SFT_TRAINING_DURATION.total_seconds()))
     target = (
         RecoveryRound
         if "resolved_plan" in document
@@ -405,6 +417,18 @@ def load_round(path: Path) -> RoundSpec | AdoptedHfRound | AdoptedRlRound | Reco
     spec = _decode_strict(document, target, str(path))
     if spec.schema != 1:
         raise ValueError(f"{path} has unsupported schema {spec.schema}")
+    if isinstance(spec, AdoptedRlRound):
+        trainer = spec.rl.recipe["trainer"]
+        recipe = {
+            **spec.rl.recipe,
+            "trainer": {
+                **trainer,
+                "callbacks": rl_training_callbacks(
+                    trainer.get("callbacks", []), groups_per_step=spec.rl.role_plan["train_batch_size"]
+                ),
+            },
+        }
+        spec = dataclasses.replace(spec, rl=dataclasses.replace(spec.rl, recipe=recipe))
     return spec
 
 
@@ -858,7 +882,7 @@ def round_plan(
         **rl,
         "name": f"{round_spec.slug}-rl",
         "config": recipe,
-        "wall_clock_budget": dict(RL_WALL_CLOCK_BUDGET),
+        "wall_clock_budget": dict(RL_TRAINING_BUDGET),
     }
     resolved["name"] = round_spec.name
     resolved["storage"]["output_prefix"] = round_spec.storage.output_prefix

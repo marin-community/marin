@@ -16,6 +16,7 @@ from marin.experiment.cli import graph_handles
 from marin.rl.curriculum import PoolRow, consumed_route_quotas, validation_payload
 
 from experiments.post_training.long_loop.archive import assert_best_rl_checkpoint
+from experiments.post_training.long_loop.execution_policy import RL_TRAINING_BUDGET
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.openresearcher_service import OpenResearcherService, run_with_retrieval
 from experiments.post_training.long_loop.round_runner import (
@@ -55,6 +56,9 @@ def _pools_rows() -> dict[str, tuple[PoolRow, ...]]:
 
 
 ROUND_DIR = Path(__file__).parents[1] / "rounds"
+RL_ROUNDS = [
+    path for path in sorted(ROUND_DIR.glob("*.yaml")) if "recipe" in yaml.safe_load(path.read_text()).get("rl", {})
+]
 
 
 @pytest.fixture
@@ -120,6 +124,48 @@ def local_round(round_inputs, profile):
     )
 
 
+@pytest.mark.parametrize("profile", ["one-rack"])
+@pytest.mark.parametrize("round_path", RL_ROUNDS, ids=lambda path: path.stem)
+def test_every_authored_rl_round_resolves_the_canonical_training_clock(local_round, tmp_path, round_path):
+    authored = yaml.safe_load(round_path.read_text())["rl"]
+    authored["recipe"]["trainer"]["rollout_buffer"]["source_routes"] = dict(SOURCE_ROUTES)
+    spec = dataclasses.replace(
+        local_round,
+        cluster=authored["execution"]["cluster"],
+        rl=dataclasses.replace(
+            local_round.rl,
+            recipe=authored["recipe"],
+            role_plan=authored["role_plan"],
+            megatron=authored["megatron"],
+            execution=authored["execution"],
+            gpu_variant=authored.get("gpu_variant", "GB200"),
+        ),
+    )
+    terminal = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    launch = yaml.safe_load(terminal.build_config(context).launch_config_yaml)
+    budgets = [
+        callback for callback in launch["skyrl"]["trainer"]["callbacks"] if callback["type"] == "wall_time_budget"
+    ]
+    assert len(budgets) == 1
+    assert {key: budgets[0][key] for key in RL_TRAINING_BUDGET} == RL_TRAINING_BUDGET
+    assert budgets[0]["groups_per_step"] == spec.rl.role_plan["train_batch_size"]
+
+
+@pytest.mark.parametrize("profile", ["one-rack"])
+@pytest.mark.parametrize("field", ["seconds", "drain_margin"])
+def test_round_refuses_training_clock_drift_before_allocation(local_round, tmp_path, field):
+    document = dataclasses.asdict(local_round)
+    budget = next(cb for cb in document["rl"]["recipe"]["trainer"]["callbacks"] if cb["type"] == "wall_time_budget")
+    budget[field] += 1
+    source = tmp_path / "changed-budget.yaml"
+    source.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match=f"RL {field}=.*canonical budget"):
+        load_round(source)
+
+
 @pytest.mark.parametrize("profile,gpus", [("one-rack", 60), ("three-rack", 192)])
 @pytest.mark.parametrize("resume", [False, True])
 def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
@@ -142,7 +188,7 @@ def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
     assert launch["iris"]["timeout"] == 48 * 3600
     callbacks = {cb["type"]: cb for cb in launch["skyrl"]["trainer"]["callbacks"]}
     assert callbacks["checkpoint"]["save_steps"] == 2
-    assert callbacks["wall_time_budget"]["seconds"] == 36000
+    assert {key: callbacks["wall_time_budget"][key] for key in RL_TRAINING_BUDGET} == RL_TRAINING_BUDGET
     assert callbacks["best_checkpoint"]["expected_tasks"] == 200
     assert callbacks["best_checkpoint"]["minimum_scored_tasks"] == 180
     assert callbacks["best_checkpoint"]["selection_eligibility"] == "covered"

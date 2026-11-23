@@ -142,10 +142,6 @@ rl:
         initial_model_uri: model-input
         ema_window: 5
         evaluation_interval: 2
-      - type: wall_time_budget
-        seconds: 36000
-        drain_margin: 1800
-        groups_per_step: 32
       ckpt_interval: 2
       update_epochs_per_batch: 1
       use_sample_packing: true

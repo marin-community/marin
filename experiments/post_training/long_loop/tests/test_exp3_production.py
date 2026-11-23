@@ -19,6 +19,7 @@ from levanter.trainer import TrainerConfig
 from marin.execution.lazy import StepContext
 
 from experiments.post_training.long_loop import exp3_production
+from experiments.post_training.long_loop.execution_policy import SFT_TRAINING_DURATION
 from experiments.post_training.long_loop.exp3_production import GEOMETRY, production_sft_recipe, read_data_release
 from experiments.post_training.long_loop.exp3_recipe import SftLrSchedule, exp3_sft_spec, whole_run_lr_receipt
 from experiments.post_training.long_loop.round_runner import load_round
@@ -128,8 +129,8 @@ def test_full_recipe_survives_the_native_worker_boundary_without_smoke_geometry(
     else:
         assert ici["expert"] == 8 and dcn["context"] == 32
     assert request.resources.device.count * request.resources.replicas == 256
-    assert request.timeout.to_seconds() == 72000
-    assert config.trainer.training_budget.duration == timedelta(hours=20)
+    assert request.timeout.to_seconds() == SFT_TRAINING_DURATION.total_seconds()
+    assert config.trainer.training_budget.duration == SFT_TRAINING_DURATION
     assert config.trainer.checkpointer.keep_last_temporary_checkpoints == 3
     assert config.trainer.mp == jmp.get_policy(precision)
     assert config.optimizer_num_train_steps == (schedule_horizon or 4750)

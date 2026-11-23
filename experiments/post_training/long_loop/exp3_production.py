@@ -36,7 +36,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.__main__ import validate_graph
-from experiments.post_training.long_loop.execution_policy import SFT_CHECKPOINT_INTERVAL
+from experiments.post_training.long_loop.execution_policy import SFT_CHECKPOINT_INTERVAL, SFT_TRAINING_DURATION
 from experiments.post_training.long_loop.exp3_recipe import TOKEN_IDS, verified_initializer_model
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.run_spec import resolve_spec
@@ -99,7 +99,6 @@ class ReleaseGeometry:
 
 
 GEOMETRY = ReleaseGeometry(746, 256, 262144, 0, 256, 128)
-SFT_DURATION = timedelta(hours=20)
 SFT_H100_HOUR_LIMIT = 5120
 
 
@@ -205,7 +204,7 @@ def production_sft_recipe(release: DataRelease, *, initial_eval_inputs: str) -> 
             process_timeout=timedelta(minutes=30),
             startup_grace_period=timedelta(0),
         ),
-        training_budget=TrainingBudgetConfig(SFT_DURATION, timedelta(minutes=40), timedelta(minutes=10)),
+        training_budget=TrainingBudgetConfig(SFT_TRAINING_DURATION, timedelta(minutes=40), timedelta(minutes=10)),
     )
     reference_data = draccus.decode(
         LmDataConfig, json.loads((StoragePath(initial_eval_inputs) / "c4-data.json").read_text())
@@ -263,7 +262,7 @@ def production_sft_recipe(release: DataRelease, *, initial_eval_inputs: str) -> 
         "batch_size": GEOMETRY.global_batch,
         "per_device_parallelism": 1,
         "stop_after_steps": GEOMETRY.updates,
-        "task_timeout_seconds": int(SFT_DURATION.total_seconds()),
+        "task_timeout_seconds": int(SFT_TRAINING_DURATION.total_seconds()),
         "target_positions": GEOMETRY.updates * GEOMETRY.global_batch * GEOMETRY.sequence_length,
         "xla_flags": ["--xla_gpu_shard_autotuning=false"],
         "wandb_entity": "marin-community",
@@ -374,7 +373,7 @@ def production_plan(
             acknowledge_experimental_controls=True,
             experimental_controls_reason=(
                 "Restore the standing 3-day outer RL dispatch timeout as an operational control; "
-                "Exp1 learning 43200s and drain 1800s remain unchanged. "
+                "RL learning and drain use the canonical long-loop training budget. "
                 "SFT 20h/746 and all data controls remain unchanged."
             ),
         )
