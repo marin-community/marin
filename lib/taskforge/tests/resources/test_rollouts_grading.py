@@ -311,21 +311,33 @@ async def test_solver_command_timeout_on_iris_continues_on_the_same_machine_besi
     assert not events
 
 
+QUEUED_COMMAND_TIMEOUT = 2.0
+"""The control replay's command timeout: each copy runs in well under it, even on a loaded runner."""
+QUEUED_BACKOFF = 1.1
+"""Seconds the client sleeps after each refused admission; the second ends after the command timeout."""
+
+
 # Pilot 2026-11-21 (d09): a control replay's first `cp` waited on the controller past its 30 s timeout, which closed the
 # sandbox; the second `cp` raised "Machine is closed" and restarted the stage.
 async def test_control_grade_on_iris_survives_a_first_copy_queued_past_its_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.2, maximum=0.2))
+    # Without jitter and since a sleep never ends early, the first copy's third refusal comes after its timeout, even
+    # under a retry budget clipped to it, while each copy has the whole timeout once it runs. The timeout was 0.1 s;
+    # this test failed under load on a laptop, never on CI, with no failure text kept, and the suspected cause, a copy
+    # outliving 0.1 s itself, was never reproduced.
+    assert 2 * QUEUED_BACKOFF > QUEUED_COMMAND_TIMEOUT
+    backoff = ExponentialBackoff(initial=QUEUED_BACKOFF, maximum=QUEUED_BACKOFF, jitter=0.0)
+    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", backoff)
     monkeypatch.setitem(SITES, "first-copy", lambda script: "forge-candidates/0 " in script and "4> /tmp/" in script)
-    factory = LocalIrisFactory(tmp_path, [("first-copy", Fault.ADMISSION_REFUSED, False)] * 2)
-    grader = GradingResource(rollout_engine({"iris": factory}, command_timeout=0.1), "config")
+    factory = LocalIrisFactory(tmp_path, [("first-copy", Fault.ADMISSION_REFUSED, False)] * 3)
+    grader = GradingResource(rollout_engine({"iris": factory}, command_timeout=QUEUED_COMMAND_TIMEOUT), "config")
     candidate = Candidate("12", (inline_resource("a.txt", b"first"), inline_resource("b.txt", b"second")))
     events: list[Event[None]] = []
     result = await grade(GradeCandidate(iris_spec(), candidate), grader, notify=events.append)
     assert (result.status, result.reward) == (Outcome.GRADED, 1)
     (root,), (controller,) = factory.created, factory.controllers
     assert [(root / "workspace" / name).read_bytes() for name in ("a.txt", "b.txt")] == [b"first", b"second"]
-    # Both refusals hit the first copy, which was admitted on its third send.
-    assert (controller.faults, controller.sent("first-copy")) == ([], 3)
+    # Every refusal hit the first copy, which was admitted on its fourth send.
+    assert (controller.faults, controller.sent("first-copy")) == ([], 4)
     assert not events
