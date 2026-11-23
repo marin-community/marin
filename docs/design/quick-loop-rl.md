@@ -1908,8 +1908,8 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   and coordinator both succeeded. The independent audit verified the
   exact original attempts, both fixed panels and the committed step-2
   checkpoint. The post-restore update took 183.8 seconds including
-  109.7 seconds of publication. Its lease-to-admission rate was 0.305
-  seconds per group across all 32 groups.
+  109.7 seconds of publication. The lease-to-admission window averaged
+  0.305 seconds per group across all 32 groups.
   [Fresh held vLLM child][iris-held-vllm-retry]
   [Validation-deadline vLLM coordinator][iris-held-vllm-validation-timeout]
   · [Automatic GPU replacement][iris-held-vllm-validation-replacement] ·
