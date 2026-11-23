@@ -175,11 +175,27 @@ def test_math_unparsable_expected_is_an_invalid_task(tmp_path, expected):
         (r"\{x \mid 2 < x < 3\}", MathType.SET),
         (r"32 \text{ white}, 16 \text{ black}", MathType.SCALAR),
         (r"[1, 67.\overline{3}]", MathType.LIST),
+        (r"x = \frac\pi 2 = 2", MathType.EQUATION),
+        (r"1$ + $2", MathType.SCALAR),
+        (r"[1, x = \frac\pi 2 = 2]", MathType.LIST),
+        (r"[1, 1$ + $2]", MathType.LIST),
     ],
 )
 def test_math_partial_reference_is_invalid_before_scoring(expected, math_type):
     with pytest.raises(InvalidTask, match="cannot parse expected"):
         grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "32")
+
+
+def test_math_symbolic_reference_preserves_unit_like_candidate_factor():
+    spec = MathSpec(expected="2 s")
+    assert grade_math.grade_math_candidate(spec, "2 s").reward == 1.0
+    assert grade_math.grade_math_candidate(spec, "2").reward == 0.0
+
+
+def test_math_list_uses_each_references_unit_policy_for_candidates():
+    spec = MathSpec(expected=r"[2 s, 5 \text{ m}]", math_type=MathType.LIST)
+    assert grade_math.grade_math_candidate(spec, "[2 s, 5]").reward == 1.0
+    assert grade_math.grade_math_candidate(spec, "[2, 5]").reward == 0.0
 
 
 def test_math_grades_from_a_worker_thread(tmp_path):

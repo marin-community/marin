@@ -89,7 +89,10 @@ def test_unusable_rows_are_rejected_with_the_defect_named(converted, kind, reaso
     assert (converted.kind, converted.reason) == (kind, reason)
 
 
-@pytest.mark.parametrize("answer", [r"67.\overline{3}", r"32 \text{ white}, 16 \text{ black}"])
+@pytest.mark.parametrize(
+    "answer",
+    [r"67.\overline{3}", r"32 \text{ white}, 16 \text{ black}", r"x = \frac\pi 2 = 2", r"1$ + $2"],
+)
 def test_math_partial_reference_is_rejected_during_conversion(answer):
     converted = math_answer_task(ROW, prompt="Solve.", answer=answer)
     assert isinstance(converted, ImportRejection)
