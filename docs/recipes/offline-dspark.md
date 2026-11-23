@@ -113,7 +113,7 @@ uv run iris --cluster=marin job run --no-wait \
   -- python -m experiments.post_training.dspark_sft --preset mochi-agentic --stage train
 ```
 
-The default smoke trains three updates on 12 training and four validation
+The default smoke trains three updates on 12 training and up to four validation
 conversations. Add `--steps 4000` to train for one packed epoch, capped at
 4,000 optimizer steps, over the complete frozen mix. The epoch uses an
 8,192-token sequence and up to 1,024 anchors. Use `--data` to provide a

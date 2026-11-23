@@ -74,6 +74,7 @@ def _write_mix(*, output: str, sources: tuple[tuple[str, str, int], ...], max_sh
 
 
 def _source_inputs(rows_per_shard: tuple[int, ...]) -> tuple[tuple[str, ArtifactStep, int], ...]:
+    """Bind each source name, normalized artifact and per-shard row limit."""
     return tuple(
         (
             source.name,
