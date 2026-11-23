@@ -21,7 +21,6 @@ POLICY_DIGEST = "8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e
 POLICY_VERSION = "2026.11.20"
 POLICY_REVISION = f"{POLICY_VERSION}-together"
 POLICY_COMMIT = "fa38e3eacc25137c9febe898119f08d65cc5ce88"
-CHOICE_POLICY_VERSION = "2026.11.23-choice-shuffle"
 
 # The prepared table re-hosts benchmark items that must not be public, so it lives in a
 # private repository that CoreWeave tasks read with the standard HF_TOKEN.
@@ -80,17 +79,11 @@ POLICY_REFERENCE = Micro210PolicyReference(
     byte_size=121292,
 )
 
-# Staged in regional storage; the default stays on the HF pin until the new
-# policy and private prepared table have immutable HF commit revisions.
-CHOICE_POLICY_REFERENCE = Micro210PolicyReference(
-    uri=(
-        "gs://marin-us-east1/evaluation-policies/micro210/2026.11.23-choice-shuffle/"
-        "d99573b7d8e8801014e01afdcec0d53b7f3e857cf487556045be137392f28e59/policy.json"
-    ),
-    revision=CHOICE_POLICY_VERSION,
-    sha256="d99573b7d8e8801014e01afdcec0d53b7f3e857cf487556045be137392f28e59",
-    byte_size=122198,
-)
+# The staged-in-regional-storage new version is re-added with its content digest after
+# the prepared table build; the default stays on the HF pin until the new policy and
+# private prepared table have immutable HF commit revisions.
+SPEC_POLICY_VERSION = "2026.11.23"
+SPEC_POLICY_REVISION = f"{SPEC_POLICY_VERSION}-together"
 
 
 # The prepared table re-hosts benchmark items that must not be public, so it lives in a

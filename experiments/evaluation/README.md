@@ -272,28 +272,36 @@ To read a past run's policy, pass the `policy_reference` from its
 `canonical-evaluation.json` to `read_micro210_policy` in the policy module.
 Mini840 keeps its existing judge policy.
 
-### Micro210 choice-order revision
+### Micro210 spec-complete revision (2026.11.23-together)
 
-The staged `2026.11.23-choice-shuffle` policy derives a 63-bit seed from the
-policy version and each stable task ID. It records that seed and the source-index
-permutation in each TruthfulQA task's `labels`, then moves the displayed choices,
-verifier labels, likelihood requests, and target index together. The build
-rejects any lettered-choice benchmark for which one letter is accepted on every
-unique task. The previous `2026.11.20-together` policy and prepared table remain
-unchanged.
+The `2026.11.23-together` version rebuilds the frozen `2026.11.20-together` table so every
+script-graded row's TaskSpec is self-contained: the row embeds a vendored grading library
+(`grader_lib/`) extracted from the hash-pinned `runtime-v4` evalchemy wheel, a standalone
+`grade.py` driver that imports only that library, and a verifier package spec with the
+ambient evalchemy and lm_eval wheels removed. Harbor-trial rows already carry their whole
+task package inline. Grading changes shipped in this version:
 
-The new policy is content-pinned at
-`gs://marin-us-east1/evaluation-policies/micro210/2026.11.23-choice-shuffle/d99573b7d8e8801014e01afdcec0d53b7f3e857cf487556045be137392f28e59/policy.json`.
-Its prepared table has SHA-256
-`0cf6f6de9f9b68273b4954e25710cf83a3df522d01883af2e07ed0f03cdc44f3`
-and 440 rows. The code keeps the older Hugging Face reference as its default
-until the new policy and private prepared table receive immutable Hugging Face
-commit pins.
+- TruthfulQA choices are permuted with a recorded per-task seed (the seed namespace is
+  inherited from the staged `2026.11.23-choice-shuffle` build), moving the prompt,
+  verifier labels, likelihood requests, and target index together; the build rejects any
+  lettered-choice benchmark for which one letter is accepted on every unique task.
+- CRUXEval rows grade with main's canonical implementation (#11922/#11928): assertion
+  extraction splits at the first `==` (tuple-safe), decoded turn markers are stripped,
+  and the candidate runs in a forked child instead of the wheel's spawn harness.
+- IFBench rows grade with the vendored checker plus the Kyiv correction (#11926).
+- MBPP+ rows carry a row-data patch (#12159): the embedded test program's `is_floats`
+  recognizes complex numbers and nested numeric structures and the assertion compares
+  them with a structure-aware 1e-6 tolerance, so the `polar_rect` canonical solution
+  passes on Linux (where `abs(complex)` uses libm `hypot`, 1 ULP away from the values the
+  expected data was generated with). Flat-float verdicts are unchanged.
+- Harbor task packages drop the unused `pi-mcp-adapter@7.0.0` pin (#12122): the Pi agent
+  loads the image-provided `pi-mcp-extension` and no Micro210 task configures MCP servers.
 
-Only `truthfulqa` scores change under this revision. On the 10 selected tasks,
-the shipped grader scores constant `A` at 10/10 under the old table and 3/10
-under the new table; the best constant letter now scores 5/10. GPQA-Diamond
-already has four distinct correct letters and MMLU-Pro has six, so their prompts,
-grader keys, and scores are unchanged. All other Micro210 rows are also unchanged.
-Model scores on TruthfulQA must be rerun under the new policy; old model scores
-cannot be converted from the constant-answer check.
+Each row records grader provenance in `labels.micro210_grader_provenance` (source wheel
+digests, patches, and the removed ambient packages), and the policy's `grader_embed`
+block carries the same identities. A spec-only build gate grades every row's oracle
+reference and a NoP answer using only the row's TaskSpec contents in an isolated
+container (`scripts/ops/verify_micro210_spec_gate.py`); the policy is only emitted with a
+green gate receipt (`scripts/ops/build_micro210_spec_policy.py`). Task selection and the
+judge are unchanged. Only TruthfulQA, CRUXEval, IFBench, MBPP+ `polar_rect`, and
+BixBench (graded through #12097) can move under this revision.

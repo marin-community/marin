@@ -57,6 +57,9 @@ EXCLUDE_PATTERNS = [
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/assets/crux_*.txt",
     # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
     "experiments/post_training/task_curation/datasets/*/scorers/**",
+    # The embedded Micro210 grader library is vendored from the pinned runtime-v4 wheel;
+    # bundled NLTK tokenizer data is binary.
+    "experiments/evaluation/micro210_grader/**",
     ".git/**",
     ".github/**",
     "tests/snapshots/**",

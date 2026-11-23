@@ -20,10 +20,12 @@ from taskcompendium.models import TaskResource, TaskSpec
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.evaluation.judge_config import JudgeConfig
-from experiments.evaluation.micro210_policy import CHOICE_POLICY_VERSION
 
 RESOURCE_DIRECTORY = Path(__file__).parent
-CHOICE_SEED_NAMESPACE = f"micro210:{CHOICE_POLICY_VERSION}:"
+# The TruthfulQA permutation seeds are inherited verbatim from the staged
+# ``2026.11.23-choice-shuffle`` build (#12060): the recorded per-task permutations and
+# their validation carry over, and the namespace stays pinned in the new policy.
+CHOICE_SEED_NAMESPACE = "micro210:2026.11.23-choice-shuffle:"
 EXPECTED_CHOICE_BENCHMARKS = {"truthfulqa", "gpqa-diamond", "mmlu-pro"}
 
 
@@ -106,25 +108,6 @@ def reject_fixed_choice_positions(rows: list[dict]) -> dict[str, dict[str, int]]
             letter: sum(letter in accepted for accepted in tasks.values())
             for letter in sorted(set.union(*tasks.values()))
         }
-    return counts
-
-
-def shuffle_micro210_inputs(source: str, destination: str) -> dict[str, dict[str, int]]:
-    """Derive a new prepared table while preserving the frozen task selection."""
-    table = pq.read_table(source)
-    rows = []
-    for row in table.to_pylist():
-        if row["benchmark"] != "truthfulqa":
-            rows.append(row)
-            continue
-        rollout = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
-        task = truthfulqa_choice_task(rollout.task)
-        rollout = rollout.model_copy(update={"task": task})
-        rows.append({**row, "task_spec": task.model_dump_json(), "task_rollout_spec": rollout.model_dump_json()})
-    counts = reject_fixed_choice_positions(rows)
-    if missing := EXPECTED_CHOICE_BENCHMARKS - counts.keys():
-        raise ValueError(f"Micro210 choice audit missed benchmark(s): {sorted(missing)}")
-    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), destination)
     return counts
 
 
