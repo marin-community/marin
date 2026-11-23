@@ -105,6 +105,8 @@ requirement. See the source Jupiter runbook below for that workflow.
 The `/tokenize` route counts oversized histories so native context managers can
 compact them. Generation requests still enforce the protocol input budget;
 token counting alone never dispatches a model request.
+The native agent's proactive summary reserve is the protocol context window
+minus its input budget, so compaction starts at the input boundary.
 
 Difficulty's declared native judges use a 30-second upstream HTTP timeout and
 up to six attempts. A stalled read can retry before the native grader's

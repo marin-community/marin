@@ -427,6 +427,10 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                            api_base=configuration.agent.kwargs["api_base"],
                            model_info=configuration.agent.kwargs["model_info"])
             assert llm.get_model_context_limit() == 65536
+            assert (
+                llm.get_model_context_limit() - (config.settings.input_tokens + 1)
+                < configuration.agent.kwargs["proactive_summarization_threshold"]
+            )
             assert completion_budget_from_count(prompt_tokens=40000, context_window=llm.get_model_context_limit(),
                                                 max_output_tokens=llm.get_model_output_limit()) == 16384
         failed = infrastructure_first and not physical_attempts
