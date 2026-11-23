@@ -81,10 +81,21 @@ def _sample_prompt_tokens(rng: random.Random) -> int:
     return _PROMPT_TOKEN_PCTS[-1][1]
 
 
-def _request_body(rng: random.Random, cache_salt: str, reasoning_effort: str) -> dict:
+def _request_body(rng: random.Random, cache_salt: str, reasoning_effort: str, request_index: int) -> dict:
     prompt_tokens = _sample_prompt_tokens(rng)
     filler_tokens = max(64, prompt_tokens - _SYSTEM_PROMPT_TOKENS)
-    filler = ("tool trace line with json payloads and shell commands " * 512)[: int(filler_tokens * _CHARS_PER_TOKEN)]
+    # Production payloads are unique per row while the system/harness prefix repeats:
+    # keep a shared head and pepper a nonce through the tail so prefix caching sees
+    # realistic hit rates.
+    unit = "tool trace line with json payloads and shell commands "
+    needed_chars = int(filler_tokens * _CHARS_PER_TOKEN)
+    lines = []
+    produced = 0
+    while produced < needed_chars:
+        chunk = f"row-{request_index}-{rng.randrange(1 << 40):010x} " + unit
+        lines.append(chunk)
+        produced += len(chunk)
+    filler = "".join(lines)[:needed_chars]
     return {
         "model": pool.SERVED_MODEL_NAME,
         "cache_salt": cache_salt,
@@ -186,11 +197,13 @@ async def run_load(base_url: str, concurrency: int, duration_seconds: float, rea
     limits = httpx.Limits(max_connections=concurrency + 8, max_keepalive_connections=concurrency + 8)
     stop_at = time.monotonic() + duration_seconds
     in_flight: set[asyncio.Task] = set()
+    request_index = 0
 
     async with httpx.AsyncClient(limits=limits) as client:
         while time.monotonic() < stop_at or in_flight:
             while len(in_flight) < concurrency and time.monotonic() < stop_at:
-                body = _request_body(rng, cache_salt, reasoning_effort)
+                body = _request_body(rng, cache_salt, reasoning_effort, request_index)
+                request_index += 1
                 task = asyncio.create_task(_one_request(client, base_url, body, time.monotonic(), stats))
                 in_flight.add(task)
             if not in_flight:
