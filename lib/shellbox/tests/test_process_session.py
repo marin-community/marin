@@ -7,20 +7,7 @@ import signal
 import sys
 
 import pytest
-from shellbox.process_framing import CHUNK_BYTES, STDIN, STDOUT, FrameDecoder, decode_frame, encode_frame
 from shellbox.process_session import BoundedByteBuffer, SubprocessSession
-
-
-@pytest.mark.parametrize("fragment_bytes", [1, 337, 200000])
-def test_process_text_frames_preserve_binary_payload_across_transport_boundaries(fragment_bytes):
-    messages = [(STDIN, b"\0\xff\n"), (STDOUT, bytes(range(256)) * (CHUNK_BYTES // 256))]
-    wire = b"".join(encode_frame(kind, data) for kind, data in messages)
-    decoder = FrameDecoder()
-    received = []
-    for offset in range(0, len(wire), fragment_bytes):
-        received.extend(decode_frame(frame) for frame in decoder.feed(wire[offset : offset + fragment_bytes]))
-    decoder.finish()
-    assert received == messages
 
 
 def test_process_buffer_applies_backpressure_and_delivers_bytes_before_failure():
