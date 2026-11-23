@@ -519,8 +519,16 @@ def _prefill_kernel(
     gen_state, window_batch = gen_state.remap_window_pages(decode_state, binfo)
     route_buffer = _capture_buffer(model, tokens.size) if capture_routes else None
     logits_at_samples, cache, routes = _decode_for_sampling(
-        model, gen_state.cache, binfo, tokens, pos_ids, slot_ids, sample_indices, route_buffer,
-        window_batch=window_batch, prefill=True,
+        model,
+        gen_state.cache,
+        binfo,
+        tokens,
+        pos_ids,
+        slot_ids,
+        sample_indices,
+        route_buffer,
+        window_batch=window_batch,
+        prefill=True,
     )
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -804,7 +812,14 @@ def _run_generation_loop(
         # Decode logits and sample new tokens
         gen_state, window_batch = gen_state.remap_window_pages(decode_state, binfo)
         logits_at_samples, cache, routes = _decode_for_sampling(
-            model, gen_state.cache, binfo, tokens, pos_ids, slot_ids, sample_indices, outputs.routes,
+            model,
+            gen_state.cache,
+            binfo,
+            tokens,
+            pos_ids,
+            slot_ids,
+            sample_indices,
+            outputs.routes,
             window_batch=window_batch,
         )
         outputs = dataclasses.replace(outputs, routes=routes)

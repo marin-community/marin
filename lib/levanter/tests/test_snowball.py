@@ -1338,16 +1338,20 @@ def test_snowball_paged_routes_replay_into_learner():
     np.testing.assert_allclose(logits.array[:5], replayed.array[:5], atol=2e-5, rtol=2e-5)
 
 
-def test_snowball_engine_capture_preserves_samples_and_predictor_routes():
+@pytest.mark.parametrize("compact_window", [False, True])
+def test_snowball_engine_capture_preserves_samples_and_predictor_routes(compact_window):
     cfg = _tiny_config(num_layers=2)
     with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(21))
+        if compact_window:
+            model = model.with_split_decode_cache()
         engine = InferenceEngine.from_model_with_config(
             model,
             tokenizer=None,
             config=InferenceEngineConfig(
                 max_seq_len=16,
-                max_pages=16,
+                max_pages=32,
+                window_cache_max_pages=22 if compact_window else None,
                 max_rounds=2,
                 page_size=2,
                 compute_dtype=jnp.float32,
@@ -1359,7 +1363,7 @@ def test_snowball_engine_capture_preserves_samples_and_predictor_routes():
         )
         prompt = [2, 7, 4, 9, 6]
         params = replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(len(prompt) + 4))
-        requests = [Request(prompt, request_id=10, decode_params=params, n_generations=2)]
+        requests = [Request(prompt, request_id=10, decode_params=params, n_generations=1 if compact_window else 2)]
         plain = engine.generate(requests)
         captured = engine.generate(requests, capture_routes=True)
         assert captured.expert_routes is not None

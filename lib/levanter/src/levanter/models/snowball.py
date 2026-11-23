@@ -1262,7 +1262,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     ) -> tuple[NamedArray, StackedKvPageCache | ListCache[KvPageCache]]:
         """Return only sampled logits, preserving all valid rows in the updated KV cache."""
         result = self._decode_paged(
-            input_ids, kv_cache, batch_info, pos_ids, window_batch=window_batch, sample_indices=sample_indices, prefill=True
+            input_ids,
+            kv_cache,
+            batch_info,
+            pos_ids,
+            window_batch=window_batch,
+            sample_indices=sample_indices,
+            prefill=True,
         )
         return result.logits, result.cache
 
@@ -1279,8 +1285,14 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     ) -> SnowballPagedResult:
         """Return query-row expert IDs independently of the vocabulary projection rows."""
         return self._decode_paged(
-            input_ids, kv_cache, batch_info, pos_ids, sample_indices=sample_indices,
-            window_batch=window_batch, prefill=prefill, capture_routes=True,
+            input_ids,
+            kv_cache,
+            batch_info,
+            pos_ids,
+            sample_indices=sample_indices,
+            window_batch=window_batch,
+            prefill=prefill,
+            capture_routes=True,
         )
 
     def _decode_paged(
@@ -1297,8 +1309,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     ) -> SnowballPagedResult:
         unroll = window_batch is not None or (self._unroll_decode and not prefill)
         hidden, caches, routes = self._decode_hidden(
-            input_ids, kv_cache, batch_info, pos_ids, unroll=unroll,
-            window_batch=window_batch, capture_routes=capture_routes,
+            input_ids,
+            kv_cache,
+            batch_info,
+            pos_ids,
+            unroll=unroll,
+            window_batch=window_batch,
+            capture_routes=capture_routes,
         )
         if sample_indices is None:
             logits = jnp.einsum(
