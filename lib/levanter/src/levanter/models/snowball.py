@@ -61,7 +61,7 @@ from levanter.grug.sharding import (
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
-from levanter.layers.kv_cache import KvPageCache, ListCache
+from levanter.layers.kv_cache import KvPageCache, ListCache, StackedKvPageCache
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
@@ -140,6 +140,8 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 
 _GATED_NORM_RANK = 128
 # June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
+_CACHE_LAYER_AXIS = "layer"
+_STACKED_CACHE_SHARDING = P(None, None, None, "model", None)
 _LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
@@ -647,7 +649,7 @@ class SnowballDecodeRoutes(eqx.Module):
 
 class SnowballPagedResult(NamedTuple):
     logits: NamedArray
-    cache: ListCache[KvPageCache]
+    cache: StackedKvPageCache | ListCache[KvPageCache]
     routes: SnowballDecodeRoutes | None
 
 
@@ -877,34 +879,35 @@ class SnowballBlock(eqx.Module):
         cache: KvPageCache,
         batch_info: PageBatchInfo,
         pos_ids: Array,
-        use_long: Bool[Array, ""],
+        use_long: bool | Bool[Array, ""],
         token_valid: Array,
         *,
         return_routes: bool = False,
     ) -> tuple[MoeForwardOutput, KvPageCache]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        attn_out, cache = jax.lax.cond(
-            use_long,
-            lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="long"),
-            lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="short"),
-            operand=None,
-        )
+
+        def attend(long_context: bool):
+            return self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="long" if long_context else "short")
+
+        if isinstance(use_long, bool):
+            attn_out, cache = attend(use_long)
+        else:
+            attn_out, cache = jax.lax.cond(use_long, lambda: attend(True), lambda: attend(False))
         return self._after_attention(x, attn_out, return_routes, token_valid), cache
+
+
+def _is_long_attention_layer(index, num_layers: int):
+    return ((index + 1) % _LONG_ATTENTION_INTERVAL == 0) | (index == num_layers - 1)
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
     """Bool[num_layers], True where a layer runs full-causal attention instead of the sliding window."""
-    idx = jnp.arange(num_layers)
-    return ((idx % _LONG_ATTENTION_INTERVAL) == _LONG_ATTENTION_INTERVAL - 1) | (idx == num_layers - 1)
+    return _is_long_attention_layer(jnp.arange(num_layers), num_layers)
 
 
 def num_long_attention_layers(num_layers: int) -> int:
     """Number of layers that run full-causal attention, counted without JAX for FLOP estimates."""
-    return sum(
-        1
-        for i in range(num_layers)
-        if i % _LONG_ATTENTION_INTERVAL == _LONG_ATTENTION_INTERVAL - 1 or i == num_layers - 1
-    )
+    return sum(_is_long_attention_layer(i, num_layers) for i in range(num_layers))
 
 
 class SnowballTransformer(eqx.Module):
@@ -1020,6 +1023,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
     transformer: SnowballTransformer
     _config: SnowballConfig = eqx.field(static=True)
+    _unroll_decode: bool = eqx.field(static=True, default=False)
+    _split_decode_cache: bool = eqx.field(static=True, default=False)
+
+    def with_unrolled_decode(self) -> "SnowballLMHeadModel":
+        """Return a model that unrolls its layer loop during token decode."""
+        return dataclasses.replace(self, _unroll_decode=True)
+
+    def with_split_decode_cache(self) -> "SnowballLMHeadModel":
+        """Keep one KV buffer per layer for unrolled token decode."""
+        return dataclasses.replace(self, _unroll_decode=True, _split_decode_cache=True)
 
     @property
     def config(self) -> SnowballConfig:
@@ -1188,89 +1201,105 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         op = _resize_axis(self.transformer.output_proj, 1, new_size, self._config.initializer_std, key)
         new_cfg = dataclasses.replace(self._config, vocab_size=new_size)
         new_tf = eqx.tree_at(lambda t: (t.token_embed, t.output_proj, t.config), self.transformer, (te, op, new_cfg))
-        return SnowballLMHeadModel(new_tf, new_cfg)
+        return dataclasses.replace(self, transformer=new_tf, _config=new_cfg)
 
-    def initial_cache(self, spec: PageTableSpec, *, dtype: jnp.dtype) -> ListCache[KvPageCache]:
+    def initial_cache(
+        self, spec: PageTableSpec, *, dtype: jnp.dtype, window_cache_pages: int | None = None
+    ) -> StackedKvPageCache | ListCache[KvPageCache]:
         """Allocate paged KV state on a serving mesh with context parallelism disabled."""
         if _context_axis() is not None:
             raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
         kv_heads, head_size = Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim)
-        caches = []
-        for _ in self.transformer.blocks:
-            cache = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype)
-            # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
-            pages = reshard(cache.kv_pages.array, P(None, None, "model", None))
-            caches.append(KvPageCache(hax.named(pages, cache.kv_pages.axes)))
-        return ListCache(tuple(caches))
+        num_layers = len(self.transformer.blocks)
+        if window_cache_pages is not None:
+            if not self._split_decode_cache or num_long_attention_layers(num_layers) == num_layers:
+                raise ValueError("A compact window cache requires split decode and sliding-window layers")
+            window_spec = dataclasses.replace(spec, num_pages=window_cache_pages)
+            layer_sharding = P(*_STACKED_CACHE_SHARDING[1:])
+            layers = []
+            for index in range(num_layers):
+                layer_spec = spec if _is_long_attention_layer(index, num_layers) else window_spec
+                pages = KvPageCache.init(layer_spec, kv_heads, head_size, dtype=dtype).kv_pages
+                layers.append(KvPageCache(hax.named(reshard(pages.array, layer_sharding), pages.axes)))
+            return ListCache(tuple(layers))
+        layer = Axis(_CACHE_LAYER_AXIS, num_layers)
+        pages = KvPageCache.init(spec, kv_heads, head_size, dtype=dtype).kv_pages
+        stacked = pages.broadcast_axis(layer).rearrange((layer, ...))
+        # Interleaved K/V heads stay adjacent within each tensor-parallel shard.
+        stacked = hax.named(reshard(stacked.array, _STACKED_CACHE_SHARDING), stacked.axes)
+        cache = StackedKvPageCache(stacked)
+        return _split_layer_cache(cache) if self._split_decode_cache else cache
 
     @named_call
     def decode(
         self,
         input_ids: NamedArray,
-        kv_cache: ListCache[KvPageCache],
+        kv_cache: StackedKvPageCache | ListCache[KvPageCache],
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
-    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        *,
+        window_batch: PageBatchInfo | None = None,
+    ) -> tuple[NamedArray, StackedKvPageCache | ListCache[KvPageCache]]:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
         Tokens occupy a flat position axis, with a valid prefix described by batch_info.
         Expert assignments are independent of other requests and padding.
         """
-        logits, caches, _ = self._decode(input_ids, kv_cache, batch_info, pos_ids, capture_routes=False)
-        return logits, caches
+        result = self._decode_paged(input_ids, kv_cache, batch_info, pos_ids, window_batch=window_batch)
+        return result.logits, result.cache
+
+    @named_call
+    def decode_for_sampling(
+        self,
+        input_ids: NamedArray,
+        kv_cache: StackedKvPageCache | ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        sample_indices: NamedArray,
+        *,
+        window_batch: PageBatchInfo | None = None,
+    ) -> tuple[NamedArray, StackedKvPageCache | ListCache[KvPageCache]]:
+        """Return only sampled logits, preserving all valid rows in the updated KV cache."""
+        result = self._decode_paged(
+            input_ids, kv_cache, batch_info, pos_ids, window_batch=window_batch, sample_indices=sample_indices, prefill=True
+        )
+        return result.logits, result.cache
 
     def decode_with_routes(
         self,
         input_ids: NamedArray,
-        kv_cache: ListCache[KvPageCache],
+        kv_cache: StackedKvPageCache | ListCache[KvPageCache],
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
         sample_indices: NamedArray | None = None,
+        window_batch: PageBatchInfo | None = None,
+        prefill: bool = False,
     ) -> SnowballPagedResult:
-        """Return logits, updated cache, and the selected expert IDs for every query row.
-
-        The optional sample_indices limits only the vocabulary projection.
-        """
-        return self._decode(
-            input_ids, kv_cache, batch_info, pos_ids, capture_routes=True, sample_indices=sample_indices
+        """Return query-row expert IDs independently of the vocabulary projection rows."""
+        return self._decode_paged(
+            input_ids, kv_cache, batch_info, pos_ids, sample_indices=sample_indices,
+            window_batch=window_batch, prefill=prefill, capture_routes=True,
         )
 
-    def _decode(
+    def _decode_paged(
         self,
         input_ids: NamedArray,
-        kv_cache: ListCache[KvPageCache],
+        kv_cache: StackedKvPageCache | ListCache[KvPageCache],
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
-        capture_routes: bool,
         sample_indices: NamedArray | None = None,
+        window_batch: PageBatchInfo | None = None,
+        prefill: bool = False,
+        capture_routes: bool = False,
     ) -> SnowballPagedResult:
-        if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
-            raise ValueError("Snowball decode requires matching flat token and position arrays")
-        if len(kv_cache) != len(self.transformer.blocks):
-            raise ValueError("Snowball decode requires one KV cache per transformer layer")
-        tokens = reshard(input_ids.array[:, None], P(_BATCH_AXES, None))
-        hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())
-        hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
-        token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
-        stacked = self._stacked_inference_blocks()
-        cache_pages = jnp.stack([cache.kv_pages.array for cache in kv_cache])
-        cache_axes = kv_cache[0].kv_pages.axes
-        long_schedule = long_attention_layer_mask(len(kv_cache))
-
-        def layer_step(x, layer_data):
-            block, pages, use_long = layer_data
-            cache = KvPageCache(hax.named(pages, cache_axes))
-            result, cache = block.decode(
-                x, cache, batch_info, pos_ids.array, use_long, token_valid, return_routes=capture_routes
-            )
-            routes = None if result.routes is None else result.routes[:, 0]
-            return result.output, (cache.kv_pages.array, routes)
-
-        hidden, (cache_pages, expert_ids) = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
-        hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
+        unroll = window_batch is not None or (self._unroll_decode and not prefill)
+        hidden, caches, routes = self._decode_hidden(
+            input_ids, kv_cache, batch_info, pos_ids, unroll=unroll,
+            window_batch=window_batch, capture_routes=capture_routes,
+        )
         if sample_indices is None:
             logits = jnp.einsum(
                 "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
@@ -1280,21 +1309,96 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             sampled = hidden[:, 0].at[sample_indices.array].get(out_sharding=P())
             logits = jnp.einsum("pd,dv->pv", sampled, self.transformer.output_proj, out_sharding=P())
             output = hax.named(logits, (*sample_indices.axes, self.Vocab))
-        caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
-        routes = SnowballDecodeRoutes(expert_ids, token_valid) if expert_ids is not None else None
         return SnowballPagedResult(output, caches, routes)
 
-    def _stacked_inference_blocks(self) -> SnowballBlock:
-        stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)
+    def _decode_hidden(
+        self,
+        input_ids: NamedArray,
+        kv_cache: StackedKvPageCache | ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        unroll: bool,
+        window_batch: PageBatchInfo | None,
+        capture_routes: bool,
+    ) -> tuple[Array, StackedKvPageCache | ListCache[KvPageCache], SnowballDecodeRoutes | None]:
+        if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
+            raise ValueError("Snowball decode requires matching flat token and position arrays")
+        num_layers = len(self.transformer.blocks)
+        cache_layers = (
+            len(kv_cache) if isinstance(kv_cache, ListCache) else kv_cache.kv_pages.axis_size(_CACHE_LAYER_AXIS)
+        )
+        if cache_layers != num_layers:
+            raise ValueError("Snowball decode requires one KV cache per transformer layer")
+        tokens = reshard(input_ids.array[:, None], P(_BATCH_AXES, None))
+        hidden = self.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())
+        hidden = self.transformer.embed_gated_norm(self.transformer.embed_norm(hidden))
+        token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
+        if isinstance(kv_cache, ListCache) and unroll:
+            layers = []
+            routes_by_layer = []
+            for layer_index, (block, cache) in enumerate(zip(self.transformer.blocks, kv_cache, strict=True)):
+                use_long = _is_long_attention_layer(layer_index, num_layers)
+                layer_batch = window_batch if window_batch is not None and not use_long else batch_info
+                result, cache = self._inference_block(block).decode(
+                    hidden, cache, layer_batch, pos_ids.array, use_long, token_valid, return_routes=capture_routes
+                )
+                hidden = result.output
+                layers.append(cache)
+                if result.routes is not None:
+                    routes_by_layer.append(result.routes[:, 0])
+            hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
+            routes = SnowballDecodeRoutes(jnp.stack(routes_by_layer), token_valid) if capture_routes else None
+            return hidden, ListCache(tuple(layers)), routes
+
+        split_cache = isinstance(kv_cache, ListCache)
+        stacked_cache = _stack_layer_cache(kv_cache) if isinstance(kv_cache, ListCache) else kv_cache
+        cache_axes = stacked_cache.kv_pages.axes[1:]
+
+        def layer_step(carry, layer_data):
+            x, pages = carry
+            layer, block, use_long = layer_data
+            layer_pages = jax.lax.dynamic_index_in_dim(pages, layer, keepdims=False)
+            cache = KvPageCache(hax.named(layer_pages, cache_axes))
+            result, cache = block.decode(
+                x, cache, batch_info, pos_ids.array, use_long, token_valid, return_routes=capture_routes
+            )
+            pages = jax.lax.dynamic_update_index_in_dim(pages, cache.kv_pages.array, layer, axis=0)
+            routes = None if result.routes is None else result.routes[:, 0]
+            return (result.output, pages), routes
+
+        initial = (hidden, stacked_cache.kv_pages.array)
+        if unroll:
+            state = initial
+            routes_by_layer = []
+            for layer_index, block in enumerate(self.transformer.blocks):
+                use_long = _is_long_attention_layer(layer_index, num_layers)
+                state, routes = layer_step(state, (layer_index, self._inference_block(block), use_long))
+                if routes is not None:
+                    routes_by_layer.append(routes)
+            hidden, cache_pages = state
+            expert_ids = jnp.stack(routes_by_layer) if capture_routes else None
+        else:
+            stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)
+            layer_data = (
+                jnp.arange(num_layers),
+                self._inference_block(stacked),
+                long_attention_layer_mask(num_layers),
+            )
+            (hidden, cache_pages), expert_ids = jax.lax.scan(layer_step, initial, layer_data)
+        hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
+        caches = StackedKvPageCache(hax.named(cache_pages, stacked_cache.kv_pages.axes))
+        routes = SnowballDecodeRoutes(expert_ids, token_valid) if expert_ids is not None else None
+        return hidden, _split_layer_cache(caches) if split_cache else caches, routes
+
+    def _inference_block(self, block: SnowballBlock) -> SnowballBlock:
         expert_size = _mesh_axis_size(_current_mesh(), "expert")
         if expert_size <= 1:
-            return stacked
+            return block
         # A receiver can get every sender's assignments. Reserve that worst-case
         # capacity so expert dispatch cannot drop tokens at serving time.
-        experts = dataclasses.replace(
-            stacked.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
-        )
-        return eqx.tree_at(lambda block: block.mlp.expert_mlp, stacked, experts)
+        experts = dataclasses.replace(block.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size))
+        return eqx.tree_at(lambda block: block.mlp.expert_mlp, block, experts)
 
     # --- state dict (bidirectional HF serialization) ---
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
@@ -1302,7 +1406,24 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
     def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "SnowballLMHeadModel":
         new_tf = snowball_from_state_dict(self.transformer, state_dict, prefix=prefix)
-        return SnowballLMHeadModel(new_tf, self._config)
+        return dataclasses.replace(self, transformer=new_tf)
+
+
+def _split_layer_cache(cache: StackedKvPageCache) -> ListCache[KvPageCache]:
+    pages = cache.kv_pages
+    layer_sharding = P(*_STACKED_CACHE_SHARDING[1:])
+    return ListCache(
+        tuple(
+            KvPageCache(hax.named(reshard(layer, layer_sharding), pages.axes[1:]))
+            for layer in jnp.unstack(pages.array, axis=0)
+        )
+    )
+
+
+def _stack_layer_cache(caches: ListCache[KvPageCache]) -> StackedKvPageCache:
+    layer = Axis(_CACHE_LAYER_AXIS, len(caches))
+    pages = hax.stack(layer, [cache.kv_pages for cache in caches])
+    return StackedKvPageCache(hax.named(reshard(pages.array, _STACKED_CACHE_SHARDING), pages.axes))
 
 
 def _resize_axis(arr: jax.Array, axis: int, new_size: int, std: float, key) -> jax.Array:
