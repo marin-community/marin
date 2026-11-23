@@ -147,3 +147,98 @@ def test_generate_admits_waiting_requests_with_reused_pages():
 
     assert result.tokens == [[3] * length for length in output_lengths]
     assert result.total_generated == sum(output_lengths)
+
+
+def test_continuous_generation_finishes_a_new_short_request_while_the_first_is_active():
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=DummyModel(vocab_size=10),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=4,
+                page_size=4,
+                max_rounds=1,
+                max_seqs=2,
+                max_seqs_in_prefill=1,
+                max_queued_tokens=4,
+                max_prefill_size=4,
+            ),
+        )
+        params = SeqDecodingParams.default()
+        long_request = Request([1, 2, 4], 10, replace(params, max_num_tokens=jnp.asarray(8)), n_generations=1)
+        short_request = Request([3, 2, 1], 11, replace(params, max_num_tokens=jnp.asarray(4)), n_generations=1)
+        incoming = [short_request]
+        completed = {}
+        updates = []
+
+        def poll(free_slots):
+            if not incoming:
+                return []
+            assert free_slots == 1
+            assert updates and 10 not in completed
+            return [incoming.pop()]
+
+        def record_tokens(request_id, choice, tokens):
+            assert request_id not in completed
+            updates.append((request_id, choice, tokens))
+
+        engine.generate_continuously(
+            [long_request], poll_requests=poll, on_complete=completed.__setitem__, on_tokens=record_tokens
+        )
+
+    assert updates[0] == (10, 0, [3])
+    for request_id, result in completed.items():
+        assert [
+            token for rid, choice, tokens in updates if (rid, choice) == (request_id, 0) for token in tokens
+        ] == result.tokens[0]
+    assert list(completed) == [11, 10]
+    assert completed[11].tokens == [[3]]
+    assert completed[10].tokens == [[3] * 5]
+
+
+def test_decode_buckets_preserve_generations_and_bound_kernel_token_shapes(monkeypatch):
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    prefill_sizes = []
+    decode_sizes = []
+    run_prefill = engine_module._run_prefill
+    run_decode = engine_module._run_generation_loop
+
+    def record_prefill(state, model, sampler, work, *args):
+        prefill_sizes.append((work.queue.queued_tokens.size, work.prompt_tokens.axis_size("seq")))
+        return run_prefill(state, model, sampler, work, *args)
+
+    def record_decode(state, model, sampler, capacity, *args):
+        decode_sizes.append(capacity)
+        return run_decode(state, model, sampler, capacity, *args)
+
+    monkeypatch.setattr(engine_module, "_run_prefill", record_prefill)
+    monkeypatch.setattr(engine_module, "_run_generation_loop", record_decode)
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=DummyModel(vocab_size=10),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=8,
+                page_size=4,
+                max_seqs=4,
+                max_queued_tokens=8,
+                max_prefill_size=8,
+                prefill_bucket_sizes=(2, 4, 6),
+                decode_bucket_sizes=(1, 2),
+                max_seqs_in_prefill=2,
+                max_rounds=1,
+            ),
+        )
+        params = SeqDecodingParams.default()
+        requests = [
+            Request([1, 2], 0, replace(params, max_num_tokens=jnp.asarray(5)), n_generations=1),
+            Request([2, 1], 1, replace(params, max_num_tokens=jnp.asarray(3)), n_generations=1),
+        ]
+        result = engine.generate(requests)
+
+    assert result.tokens == [[3, 3, 3], [3]]
+    assert prefill_sizes == [(4, 2)]
+    assert decode_sizes == [1, 1]

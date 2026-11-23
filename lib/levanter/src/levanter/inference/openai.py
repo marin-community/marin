@@ -10,6 +10,7 @@ drop-in replacements for OpenAI models.
 """
 
 import asyncio
+import base64
 import collections
 import collections.abc
 import logging
@@ -56,6 +57,7 @@ from levanter.inference.binary import (
     encode_frame,
 )
 from levanter.inference.engine import (
+    GenerationResult,
     GeneratedExpertRoutes,
     InferenceEngine,
     InferenceEngineConfig,
@@ -74,7 +76,7 @@ from levanter.inference.openai_protocol import (
 )
 from levanter.inference.utils import INVALID
 from levanter.models.lm_model import LmHeadModel
-from levanter.tokenizers import MarinTokenizer
+from levanter.tokenizers import HfMarinTokenizer, MarinTokenizer
 from levanter.trainer import TrainerConfig
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_NAME = "levanter"
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
+_EVENT_STREAM = "text/event-stream"
+_CHAT_CHUNK = "chat.completion.chunk"
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
 
 
@@ -126,6 +130,7 @@ class InferenceRequest:
     echo_logprobs_top_k: int | None = None
     return_route_captures: bool = False
     expected_policy_id: str | None = None
+    on_tokens: collections.abc.Callable[[int, list[int]], None] | None = None
 
 
 @dataclass
@@ -204,8 +209,11 @@ class InferenceContext:
         self.batch_queue: queue.Queue[InferenceBatch] = queue.Queue()
         self.shutdown_event = threading.Event()
         self.model_lock = threading.Lock()
+        self._publication_lock = threading.Lock()
+        self._publication_pending = threading.Event()
         self._model_version = 0
         self._policy_id = config.initial_policy_id
+        self._published_policy_ids = {self._policy_id} if self._policy_id is not None else set()
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
@@ -235,30 +243,42 @@ class InferenceContext:
     def reload(
         self, weight_callback: WeightSource, *, expected_version: int | None = None, policy_id: str | None = None
     ) -> int:
-        """Install new weights and return the serving version after resetting the cache."""
-        with self.model_lock:
-            if expected_version is not None and expected_version != self._model_version:
-                raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
-            if policy_id is not None and (
-                not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id == self._policy_id
-            ):
-                raise ValueError("A weight update requires a new, nonempty policy ID")
+        """Install new weights with empty KV state and return the new serving version."""
+        with self._publication_lock:
+            self._publication_pending.set()
+            try:
+                with self.model_lock:
+                    if expected_version is not None and expected_version != self._model_version:
+                        raise ValueError(f"Expected model version {expected_version}, serving {self._model_version}")
+                    if policy_id is not None and (
+                        not 0 < len(policy_id) <= MAX_POLICY_ID_LENGTH or policy_id in self._published_policy_ids
+                    ):
+                        raise ValueError("A weight update requires a new, nonempty policy ID")
 
-            with (
-                hax.partitioning.set_mesh(self.mesh),
-                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-            ):
-                model = weight_callback(self.model)
-                engine = InferenceEngine.from_model_with_config(
-                    model=model,
-                    tokenizer=self.tokenizer,
-                    config=self.config.service,
-                    axis_resources=self.config.trainer.compute_axis_mapping,
-                )
-            self.model, self.engine = model, engine
-            self._model_version += 1
-            self._policy_id = policy_id
-            return self._model_version
+                    with (
+                        hax.partitioning.set_mesh(self.mesh),
+                        hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+                    ):
+                        model = weight_callback(self.model)
+                        engine = self.engine
+                        if engine.can_reuse_cache(model):
+                            engine.reset()
+                            engine.model = model
+                        else:
+                            engine = InferenceEngine.from_model_with_config(
+                                model=model,
+                                tokenizer=self.tokenizer,
+                                config=self.config.service,
+                                axis_resources=self.config.trainer.compute_axis_mapping,
+                            )
+                    self.model, self.engine = model, engine
+                    self._model_version += 1
+                    self._policy_id = policy_id
+                    if policy_id is not None:
+                        self._published_policy_ids.add(policy_id)
+                    return self._model_version
+            finally:
+                self._publication_pending.clear()
 
     def submit_request(
         self,
@@ -274,6 +294,7 @@ class InferenceContext:
         *,
         return_route_captures: bool = False,
         expected_policy_id: str | None = None,
+        on_tokens: collections.abc.Callable[[int, list[int]], None] | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -293,6 +314,7 @@ class InferenceContext:
             echo_logprobs_top_k=echo_logprobs_top_k,
             return_route_captures=return_route_captures,
             expected_policy_id=expected_policy_id,
+            on_tokens=on_tokens,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -349,146 +371,175 @@ class InferenceContext:
 
         logger.info("Inference thread shutting down")
 
-    def _batch_processing_loop(self):
-        """Batch processing loop running in background thread - waits for batches and executes them"""
-        logger.info("Batch processing thread started")
+    def _batch_processing_loop(self) -> None:
+        waiting: collections.deque[InferenceRequest] = collections.deque()
+
+        def poll(capacity: int, capture_routes: bool) -> InferenceBatch:
+            if not waiting:
+                try:
+                    waiting.extend(self.batch_queue.get_nowait())
+                except queue.Empty:
+                    return InferenceBatch()
+            admitted = InferenceBatch()
+            while waiting and capacity >= waiting[0].n_generations:
+                if waiting[0].return_route_captures and not capture_routes:
+                    break
+                request = waiting.popleft()
+                admitted.append(request)
+                capacity -= request.n_generations
+            return admitted
 
         while not self.shutdown_event.is_set():
+            if waiting:
+                batch = InferenceBatch(waiting)
+                waiting.clear()
+            else:
+                try:
+                    batch = self.batch_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
             try:
-                batch = self.batch_queue.get(timeout=1)
+                # A waiting publication gets a chance to acquire the model lock
+                # before the next generation window starts.
+                with self._publication_lock:
+                    pass
                 with (
                     self.model_lock,
                     hax.partitioning.set_mesh(self.mesh),
                     hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                 ):
-                    batch = self._filter_policy_requests(batch)
-                    if batch:
-                        self._execute_batch(batch)
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Error executing batch: {e}", exc_info=True)
-                # Set exceptions on all futures in the batch
-                for req in batch:
-                    try:
-                        req.future.get_loop().call_soon_threadsafe(req.future.set_exception, e)
-                    except Exception:
-                        pass
-
-        logger.info("Batch processing thread shutting down")
+                    self._execute_batch(batch, poll)
+            except Exception as exc:
+                logger.exception("Inference window failed")
+                for request in batch:
+                    self._fail_request(request, exc)
 
     def _filter_policy_requests(self, requests: InferenceBatch) -> InferenceBatch:
         admitted = InferenceBatch()
-        for req in requests:
-            if req.expected_policy_id is not None and req.expected_policy_id != self._policy_id:
-                error = PolicyMismatchError("The requested policy is no longer active")
-                req.future.get_loop().call_soon_threadsafe(req.future.set_exception, error)
+        for request in requests:
+            if request.future.cancelled():
+                continue
+            if request.expected_policy_id is not None and request.expected_policy_id != self._policy_id:
+                self._fail_request(request, PolicyMismatchError("The requested policy is no longer active"))
             else:
-                admitted.append(req)
+                admitted.append(request)
         return admitted
 
-    def _execute_batch(self, requests: InferenceBatch):
-        """Execute a batch of inference requests"""
-        service_requests = []
+    @staticmethod
+    def _fail_request(request: InferenceRequest, error: Exception) -> None:
+        def fail() -> None:
+            if not request.future.done():
+                request.future.set_exception(error)
 
+        request.future.get_loop().call_soon_threadsafe(fail)
+
+    @staticmethod
+    def _engine_request(request: InferenceRequest, request_id: int) -> Request:
+        stop_ids = None
+        if request.stop_tokens:
+            width = max(map(len, request.stop_tokens))
+            padded = [seq + [INVALID] * (width - len(seq)) for seq in request.stop_tokens]
+            stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
+        seed = request.seed
+        if seed is None:
+            seed = np.random.default_rng().integers(np.iinfo(np.uint32).max, endpoint=True, dtype=np.uint32)
+        params = SeqDecodingParams(
+            max_num_tokens=jnp.asarray(len(request.prompt_tokens) + request.max_tokens, dtype=jnp.int32),
+            stop_tokens=stop_ids,
+            temperature=jnp.asarray(request.temperature, dtype=jnp.float32),
+            top_p=jnp.asarray(1.0 if request.top_p is None else request.top_p, dtype=jnp.float32),
+            key=jrandom.PRNGKey(seed),
+        )
+        return Request(request.prompt_tokens, request_id, params, request.n_generations)
+
+    def _execute_batch(
+        self, requests: InferenceBatch, poll: collections.abc.Callable[[int, bool], InferenceBatch]
+    ) -> None:
         if not self.engine:
             raise RuntimeError("Inference engine is not initialized.")
-
-        for i, req in enumerate(requests):
-            # Create stop tokens if specified
-            stop_ids = None
-            if req.stop_tokens:
-                width = max(map(len, req.stop_tokens))
-                padded = [seq + [INVALID] * (width - len(seq)) for seq in req.stop_tokens]
-                stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
-
-            # dumb fallback seed if none provided
-            if req.seed is None:
-                req.seed = np.random.default_rng().integers(0, 2**32 - 1)
-
-            seq_params = SeqDecodingParams(
-                max_num_tokens=jnp.array(len(req.prompt_tokens) + req.max_tokens, dtype=jnp.int32),
-                stop_tokens=stop_ids,
-                temperature=jnp.array(req.temperature, dtype=jnp.float32),
-                top_p=jnp.array(1.0 if req.top_p is None else req.top_p, dtype=jnp.float32),
-                key=jrandom.PRNGKey(req.seed if req.seed is not None else i),
-            )
-
-            service_req = Request(
-                prompt_tokens=req.prompt_tokens,
-                request_id=i,  # Use batch index as service request id
-                decode_params=seq_params,
-                n_generations=req.n_generations,
-            )
-            service_requests.append(service_req)
-
-        # Generate responses
-        start_time = time.time()
         capture_routes = any(request.return_route_captures for request in requests)
-        result = self.engine.generate(service_requests, capture_routes=capture_routes)
-        duration = time.time() - start_time
-        logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
+        outstanding: dict[int, InferenceRequest] = {}
+        next_id = 0
 
-        # Return results to futures
-        output_idx = 0
-        for req in requests:
+        def admit(batch: InferenceBatch) -> list[Request]:
+            nonlocal next_id
+            admitted = []
+            for request in self._filter_policy_requests(batch):
+                try:
+                    engine_request = self._engine_request(request, next_id)
+                except Exception as exc:
+                    self._fail_request(request, exc)
+                    continue
+                outstanding[next_id] = request
+                admitted.append(engine_request)
+                next_id += 1
+            return admitted
+
+        def receive(capacity: int) -> list[Request]:
+            if self._publication_pending.is_set() or self.shutdown_event.is_set():
+                return []
+            return admit(poll(capacity, capture_routes))
+
+        def complete(request_id: int, result: GenerationResult) -> None:
+            request = outstanding.pop(request_id)
+            if request.future.cancelled():
+                return
             try:
-                req_outputs = []
-                for _ in range(req.n_generations):
-                    if output_idx < len(result.tokens):
-                        generated_tokens = result.tokens[output_idx]
-                        text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+                self._complete_request(request, result)
+            except Exception as exc:
+                self._fail_request(request, exc)
 
-                        result_logprobs = result.logprobs[output_idx] if result.logprobs is not None else None
-                        echo_token_ids = None
-                        echo_logprobs = None
-                        if req.echo_logprobs_top_k is not None:
-                            echo_token_ids = req.prompt_tokens + generated_tokens
-                            echo_logprobs = self.engine.score_token_logprobs(
-                                echo_token_ids,
-                                req.echo_logprobs_top_k,
-                            )
+        def stream_tokens(request_id: int, choice: int, tokens: list[int]) -> None:
+            request = outstanding[request_id]
+            if request.on_tokens is not None and not request.future.cancelled():
+                request.on_tokens(choice, tokens)
 
-                        req_outputs.append(
-                            InferenceResponse(
-                                text=text,
-                                tokens=result.tokens[output_idx],
-                                logprobs=result_logprobs,
-                                prompt_tokens=len(req.prompt_tokens),
-                                completion_tokens=len(generated_tokens),
-                                request_id=req.request_id,
-                                model_version=self._model_version,
-                                policy_id=self._policy_id,
-                                echo_token_ids=echo_token_ids,
-                                echo_logprobs=echo_logprobs,
-                                expert_routes=(
-                                    result.expert_routes[output_idx]
-                                    if req.return_route_captures and result.expert_routes is not None
-                                    else None
-                                ),
-                            )
-                        )
-                        output_idx += 1
-                    else:
-                        logger.error(f"Missing output for request {req.request_id}")
-                        req_outputs.append(
-                            InferenceResponse(
-                                text="<error while generating>",
-                                tokens=[],
-                                logprobs=None,
-                                prompt_tokens=0,
-                                completion_tokens=0,
-                                request_id=req.request_id,
-                                model_version=self._model_version,
-                                policy_id=self._policy_id,
-                            )
-                        )
+        try:
+            initial = admit(requests)
+            self.engine.generate_continuously(
+                initial,
+                on_complete=complete,
+                poll_requests=receive,
+                on_tokens=stream_tokens,
+                capture_routes=capture_routes,
+            )
+        except Exception as exc:
+            for request in outstanding.values():
+                self._fail_request(request, exc)
+            raise
 
-                # Set the future result
-                req.future.get_loop().call_soon_threadsafe(req.future.set_result, req_outputs)
-            except Exception as e:
-                logger.error(f"Error processing result for {req.request_id}: {e}")
-                req.future.get_loop().call_soon_threadsafe(req.future.set_exception, e)
+    def _complete_request(self, request: InferenceRequest, result: GenerationResult) -> None:
+        outputs = []
+        for index, tokens in enumerate(result.tokens):
+            echo_token_ids = echo_logprobs = None
+            if request.echo_logprobs_top_k is not None:
+                echo_token_ids = request.prompt_tokens + tokens
+                echo_logprobs = self.engine.score_token_logprobs(echo_token_ids, request.echo_logprobs_top_k)
+            outputs.append(
+                InferenceResponse(
+                    request_id=request.request_id,
+                    text=self.tokenizer.decode(tokens, skip_special_tokens=True),
+                    tokens=tokens,
+                    prompt_tokens=len(request.prompt_tokens),
+                    completion_tokens=len(tokens),
+                    logprobs=result.logprobs[index] if result.logprobs is not None else None,
+                    model_version=self._model_version,
+                    policy_id=self._policy_id,
+                    echo_token_ids=echo_token_ids,
+                    echo_logprobs=echo_logprobs,
+                    expert_routes=(
+                        result.expert_routes[index]
+                        if request.return_route_captures and result.expert_routes is not None
+                        else None
+                    ),
+                )
+            )
+
+        def finish() -> None:
+            if not request.future.done():
+                request.future.set_result(outputs)
+
+        request.future.get_loop().call_soon_threadsafe(finish)
 
 
 def _health_check() -> dict:
@@ -496,38 +547,68 @@ def _health_check() -> dict:
     return {"status": "healthy", "service": "levanter-inference"}
 
 
+def _chat_completion_id() -> str:
+    return f"chatcmpl-{uuid.uuid4().hex[:8]}"
+
+
 def _sse_event(payload: str) -> str:
     return f"data: {payload}\n\n"
 
 
-def _chat_completion_events(completion: ChatCompletion) -> collections.abc.Iterator[str]:
-    """Render a finished chat completion as an OpenAI server-sent-event stream.
-
-    The engine returns each generation whole, so a choice is delivered as one content chunk
-    followed by a chunk carrying its finish reason: the events are well-formed but not
-    incremental, and a client sees the whole completion in the first delta it receives.
-    """
+def _chat_completion_events(
+    completion: ChatCompletion,
+    *,
+    emitted_text: dict[int, str] | None = None,
+    include_usage: bool = False,
+    route_frame: str | None = None,
+) -> collections.abc.Iterator[str]:
+    """Finish each choice and optionally deliver final token usage."""
+    final_choice = completion.choices[-1].index
     for choice in completion.choices:
         logprobs = (
             ChunkChoiceLogprobs(content=choice.logprobs.content, refusal=choice.logprobs.refusal)
             if choice.logprobs is not None
             else None
         )
-        content = ChatCompletionChunkChoice(
-            index=choice.index,
-            delta=ChoiceDelta(role="assistant", content=choice.message.content),
-            logprobs=logprobs,
+        prefix = emitted_text.get(choice.index, "") if emitted_text is not None else ""
+        text = choice.message.content or ""
+        if not text.startswith(prefix):
+            raise ValueError("Incremental decoding differs from the final completion")
+        remainder = text[len(prefix) :]
+        chunks = []
+        if not prefix or remainder:
+            chunks.append(
+                ChatCompletionChunkChoice(
+                    index=choice.index,
+                    delta=ChoiceDelta(role=None if prefix else "assistant", content=remainder),
+                    logprobs=logprobs,
+                )
+            )
+        chunks.append(
+            ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta(), finish_reason=choice.finish_reason)
         )
-        finish = ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta(), finish_reason=choice.finish_reason)
-        for chunk_choice in (content, finish):
+        for chunk_choice in chunks:
             chunk = ChatCompletionChunk(
                 id=completion.id,
-                object="chat.completion.chunk",
+                object=_CHAT_CHUNK,
                 created=completion.created,
                 model=completion.model,
                 choices=[chunk_choice],
             )
-            yield _sse_event(chunk.model_dump_json())
+            payload = chunk.model_dump_json()
+            if route_frame is not None and choice.index == final_choice and chunk_choice.finish_reason is not None:
+                payload = payload[:-1] + ',"levanter_route_frame":"' + route_frame + '"}'
+            yield _sse_event(payload)
+    if include_usage:
+        usage = ChatCompletionChunk(
+            id=completion.id,
+            object=_CHAT_CHUNK,
+            created=completion.created,
+            model=completion.model,
+            choices=[],
+            usage=completion.usage,
+        )
+        yield _sse_event(usage.model_dump_json())
     yield _sse_event("[DONE]")
 
 
@@ -782,92 +863,202 @@ async def _fetch_tokens(ctx: InferenceContext, request: TokensRequest) -> Tokens
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletionRequest) -> ChatCompletion:
-    """Create a chat completion using OpenAI API format."""
-    try:
-        # Convert Pydantic models to dicts for tokenizer
-        prompt_tokens = _compute_tokens(
-            request.messages,
-            ctx.tokenizer,
-            request.tools,
-            request.chat_template_kwargs,
-        )
+def _submit_chat_completion(
+    ctx: InferenceContext,
+    request: ChatCompletionRequest,
+    on_tokens: collections.abc.Callable[[int, list[int]], None] | None = None,
+) -> tuple[list[int], asyncio.Future[list[InferenceResponse]]]:
+    prompt_tokens = _compute_tokens(request.messages, ctx.tokenizer, request.tools, request.chat_template_kwargs)
+    future = asyncio.get_running_loop().create_future()
+    ctx.submit_request(
+        prompt_tokens=prompt_tokens,
+        max_tokens=request.max_tokens,
+        temperature=request.temperature,
+        top_p=request.top_p,
+        stop_tokens=_encode_stop_tokens(request.stop, ctx.tokenizer),
+        seed=request.seed,
+        future=future,
+        n_generations=request.n or 1,
+        on_tokens=on_tokens,
+        return_route_captures=request.return_route_captures,
+        expected_policy_id=request.expected_policy_id,
+    )
+    return prompt_tokens, future
 
-        stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
 
-        # Create future and submit request
-        future: asyncio.Future = asyncio.Future()
-        ctx.submit_request(
-            prompt_tokens=prompt_tokens,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            stop_tokens=stop_tokens,
-            seed=request.seed,
-            future=future,
-            n_generations=request.n or 1,
-        )
+def _format_chat_completion(
+    ctx: InferenceContext,
+    request: ChatCompletionRequest,
+    prompt_tokens: list[int],
+    results: list[InferenceResponse],
+    *,
+    completion_id: str,
+    created: int,
+) -> ChatCompletion:
+    # Format response
+    choices = []
+    total_completion_tokens = 0
 
-        # Wait for result
-        results: List[InferenceResponse] = await future
+    for i, generation in enumerate(results):
+        # Format logprobs if available
+        logprobs = None
+        if request.logprobs:
+            generated_tokens = generation.tokens
 
-        # Format response
-        choices = []
-        total_completion_tokens = 0
-
-        for i, generation in enumerate(results):
-            # Format logprobs if available
-            logprobs = None
-            if request.logprobs:
-                generated_tokens = generation.tokens
-
-                # Create content logprobs in OpenAI format
-                content_logprobs = []
-                assert generation.logprobs is not None, "Logprobs requested but missing in generation result"
-                for token_id, lp in zip(generated_tokens, generation.logprobs, strict=True):
-                    # Use convert_ids_to_tokens to preserve BPE format (e.g., Ġ for spaces)
-                    # This allows the client to round-trip: convert_tokens_to_ids(token_str) == token_id
-                    token_str = ctx.tokenizer.convert_ids_to_tokens(token_id)
-                    content_logprobs.append(
-                        ChatCompletionTokenLogprob(
-                            token=token_str,
-                            logprob=float(lp),
-                            bytes=list(token_str.encode("utf-8")),
-                            top_logprobs=[],
-                        )
+            # Create content logprobs in OpenAI format
+            content_logprobs = []
+            assert generation.logprobs is not None, "Logprobs requested but missing in generation result"
+            for token_id, lp in zip(generated_tokens, generation.logprobs, strict=True):
+                # Use convert_ids_to_tokens to preserve BPE format (e.g., Ġ for spaces)
+                # This allows the client to round-trip: convert_tokens_to_ids(token_str) == token_id
+                token_str = ctx.tokenizer.convert_ids_to_tokens(token_id)
+                content_logprobs.append(
+                    ChatCompletionTokenLogprob(
+                        token=token_str,
+                        logprob=float(lp),
+                        bytes=list(token_str.encode("utf-8")),
+                        top_logprobs=[],
                     )
-
-                logprobs = ChoiceLogprobs(content=content_logprobs)
-
-            choices.append(
-                ChatCompletionChoice(
-                    index=i,
-                    message=ChatCompletionMessage(role="assistant", content=generation.text),
-                    finish_reason="stop",
-                    logprobs=logprobs,
                 )
+
+            logprobs = ChoiceLogprobs(content=content_logprobs)
+
+        choices.append(
+            ChatCompletionChoice(
+                index=i,
+                message=ChatCompletionMessage(role="assistant", content=generation.text),
+                finish_reason="stop",
+                logprobs=logprobs,
             )
-            total_completion_tokens += generation.completion_tokens
-
-        response = ChatCompletion(
-            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-            object="chat.completion",
-            created=int(time.time()),
-            model=request.model,
-            choices=choices,
-            usage=CompletionUsage(
-                prompt_tokens=len(prompt_tokens),
-                completion_tokens=total_completion_tokens,
-                total_tokens=len(prompt_tokens) + total_completion_tokens,
-            ),
         )
-        return response
+        total_completion_tokens += generation.completion_tokens
 
+    response = ChatCompletion(
+        id=completion_id,
+        object="chat.completion",
+        created=created,
+        model=request.model,
+        choices=choices,
+        usage=CompletionUsage(
+            prompt_tokens=len(prompt_tokens),
+            completion_tokens=total_completion_tokens,
+            total_tokens=len(prompt_tokens) + total_completion_tokens,
+        ),
+    )
+    return response
+
+
+async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletionRequest) -> ChatCompletion:
+    try:
+        prompt, future = _submit_chat_completion(ctx, request)
+        return _format_chat_completion(
+            ctx,
+            request,
+            prompt,
+            await future,
+            completion_id=_chat_completion_id(),
+            created=int(time.time()),
+        )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error in chat completion: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except PolicyMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Error in chat completion")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+async def _stream_chat_completion(
+    ctx: InferenceContext, request: ChatCompletionRequest, tokenizer: HfMarinTokenizer, *, include_usage: bool
+) -> StreamingResponse:
+    loop = asyncio.get_running_loop()
+    updates: asyncio.Queue[tuple[int, list[int]] | None] = asyncio.Queue()
+    closed = threading.Event()
+
+    def on_tokens(choice: int, tokens: list[int]) -> None:
+        if not closed.is_set():
+            loop.call_soon_threadsafe(updates.put_nowait, (choice, tokens))
+
+    def on_done(future: asyncio.Future[list[InferenceResponse]]) -> None:
+        if not future.cancelled():
+            future.exception()
+        if not closed.is_set():
+            updates.put_nowait(None)
+
+    prompt, future = _submit_chat_completion(ctx, request, on_tokens)
+    future.add_done_callback(on_done)
+    header = ChatCompletionChunk(
+        id=_chat_completion_id(),
+        object=_CHAT_CHUNK,
+        created=int(time.time()),
+        model=request.model,
+        choices=[],
+    )
+    try:
+        first = await updates.get()
+        if first is None:
+            future.result()
+    except asyncio.CancelledError:
+        closed.set()
+        future.cancel()
+        raise
+    except PolicyMismatchError as exc:
+        closed.set()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        closed.set()
+        logger.exception("Error before chat streaming started")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def events() -> collections.abc.AsyncIterator[str]:
+        decoders: dict[int, collections.abc.Callable[[list[int]], str | None]] = {}
+        emitted: dict[int, list[str]] = {}
+        update = first
+        try:
+            while update is not None:
+                choice, tokens = update
+                if choice not in decoders:
+                    decoders[choice] = tokenizer.streaming_decoder()
+                text = decoders[choice](tokens)
+                if text:
+                    pieces = emitted.setdefault(choice, [])
+                    delta = ChoiceDelta(role=None if pieces else "assistant", content=text)
+                    pieces.append(text)
+                    chunk = header.model_copy(
+                        update={"choices": [ChatCompletionChunkChoice(index=choice, delta=delta)]}
+                    )
+                    yield _sse_event(chunk.model_dump_json())
+                update = await updates.get()
+            results = future.result()
+            completion = _format_chat_completion(
+                ctx, request, prompt, results, completion_id=header.id, created=header.created
+            )
+            frame = None
+            if request.return_route_captures:
+                frame = await asyncio.to_thread(
+                    _encode_chat_route_frame, prompt, results, LogprobMode(ctx.config.service.logprob_mode)
+                )
+            yield_events = _chat_completion_events(
+                completion,
+                emitted_text={choice: "".join(pieces) for choice, pieces in emitted.items()},
+                include_usage=include_usage,
+                route_frame=frame,
+            )
+            for event in yield_events:
+                yield event
+        except Exception:
+            logger.exception("Error during chat streaming")
+            yield _sse_event('{"error":{"message":"Chat generation failed","type":"server_error"}}')
+        finally:
+            closed.set()
+            future.cancel()
+
+    return StreamingResponse(events(), media_type=_EVENT_STREAM)
+
+
+def _encode_chat_route_frame(prompt: list[int], results: list[InferenceResponse], score_mode: LogprobMode) -> str:
+    frame = _encode_binary_outputs(np.asarray(prompt, dtype=np.int32), results, score_mode)
+    return base64.b64encode(frame).decode("ascii")
 
 
 async def _read_generate_request(request: HttpRequest) -> tuple[np.ndarray, GenerateOptions]:
@@ -1044,17 +1235,31 @@ class InferenceServer:
         # untouched; `response_model` still describes the non-streaming body.
         @app.post("/v1/chat/completions", response_model=ChatCompletion)
         async def create_chat_completion(request: ChatCompletionRequest):
+            include_usage = (request.stream_options or {}).get("include_usage") is True
+            tokenizer = inference_context.tokenizer
+            if request.return_route_captures and (
+                not request.stream
+                or request.logprobs
+                or not isinstance(tokenizer, HfMarinTokenizer)
+                or not inference_context.engine.supports_route_capture
+            ):
+                raise HTTPException(status_code=400, detail="Route frames require native Snowball streaming")
+            if request.stream and not request.logprobs and isinstance(tokenizer, HfMarinTokenizer):
+                return await _stream_chat_completion(
+                    inference_context, request, tokenizer, include_usage=include_usage
+                )
             completion = await _create_chat_completion(inference_context, request)
             if not request.stream:
                 return completion
-            return StreamingResponse(_chat_completion_events(completion), media_type="text/event-stream")
+            events = _chat_completion_events(completion, include_usage=include_usage)
+            return StreamingResponse(events, media_type=_EVENT_STREAM)
 
         @app.post("/v1/completions", response_model=Completion)
         async def create_completion(request: CompletionRequest):
             completion = await _create_completion(inference_context, request)
             if not request.stream:
                 return completion
-            return StreamingResponse(_completion_events(completion), media_type="text/event-stream")
+            return StreamingResponse(_completion_events(completion), media_type=_EVENT_STREAM)
 
         @app.post("/v1/tokens", response_model=TokensResponse)
         async def fetch_tokens(request: TokensRequest) -> TokensResponse:

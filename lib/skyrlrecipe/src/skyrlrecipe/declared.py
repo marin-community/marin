@@ -13,16 +13,6 @@ from pydantic import AfterValidator, Field, PlainSerializer, PositiveInt
 from .model import FrozenMap, NumberMap, OpenMap, Section, SectionMap, thaw, unset_field
 from .sampling import EvalSamplingParams
 
-DEFAULT_RETRY_EXCLUSIONS = frozenset(
-    {
-        "AgentTimeoutError",
-        "VerifierTimeoutError",
-        "RewardFileNotFoundError",
-        "RewardFileEmptyError",
-        "VerifierOutputParseError",
-    }
-)
-
 
 class TeacherModel(Section):
     path: str

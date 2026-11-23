@@ -39,16 +39,19 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint
+from levanter.compat.hf_checkpoints import RepoRef
 from levanter.field_dtype_overrides import with_field_dtype_overrides
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.grug.attention._paged import _tpu_v3_available
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.snowball_loading import load_snowball_serving_model
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
@@ -299,6 +302,29 @@ def test_snowball_export_preserves_banked_weights_and_overwrites_existing_output
         assert (tmp_path / filename).read_bytes() == original
 
 
+def test_snowball_layerwise_serving_load_preserves_sharded_snapshot(tmp_path):
+    cfg = _tiny_config(num_layers=2)
+    converter = cfg.hf_checkpoint_converter()
+    with use_cpu_devices(2), jax.set_mesh(compact_grug_mesh(expert_axis_size=2)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(17))
+        converter.save_pretrained(
+            model,
+            str(tmp_path),
+            save_tokenizer=False,
+            save_reference_code=False,
+            max_shard_size=4096,
+            dtype=jnp.bfloat16,
+        )
+        loaded = load_snowball_serving_model(
+            converter, RepoRef(str(tmp_path)), cfg, dtype=jnp.bfloat16, axis_mapping={}
+        )
+        expected, actual = list(jax.tree.leaves(model)), list(jax.tree.leaves(loaded))
+        for original, restored in zip(expected, actual, strict=True):
+            np.testing.assert_array_equal(np.asarray(original.astype(jnp.bfloat16)), np.asarray(restored))
+        for original, restored in zip(model.transformer.blocks, loaded.transformer.blocks, strict=True):
+            assert original.mlp.expert_mlp.w_gate.sharding == restored.mlp.expert_mlp.w_gate.sharding
+
+
 def test_snowball_requires_explicit_mesh_axes():
     # Snowball reshards with out_sharding= over named specs, which only lower under an explicit
     # mesh; the marin-serve backend reads this to set TrainerConfig.use_explicit_mesh_axes.
@@ -495,21 +521,45 @@ def test_snowball_fp32_activations_cover_every_sigmoid():
     assert router and all("scan" in path and "cond" not in path and "shard_map" not in path for path, _ in router)
 
 
-@pytest.mark.parametrize("model_axis_size,expert_axis_size", [(1, 1), (2, 1), (1, 2)])
-@pytest.mark.parametrize("n_generations", [1, 2])
-def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size, n_generations):
+@pytest.mark.parametrize(
+    "model_axis_size,expert_axis_size,decode_mode,n_generations,packed_experts,selected_decode",
+    [
+        (1, 1, "scan", 1, False, False),
+        (1, 1, "scan", 2, False, False),
+        (2, 1, "unroll", 1, False, False),
+        (1, 2, "split_cache", 1, False, False),
+        (1, 2, "compact_window", 1, True, True),
+    ],
+)
+def test_snowball_paged_generation_matches_full_forward(
+    model_axis_size, expert_axis_size, decode_mode, n_generations, packed_experts, selected_decode
+):
     cfg = _tiny_config(num_layers=2, sliding_window=3)
     with use_cpu_devices(model_axis_size * expert_axis_size):
         mesh = compact_grug_mesh(model_axis_size=model_axis_size, expert_axis_size=expert_axis_size)
         with jax.set_mesh(mesh):
             model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(17))
+            if packed_experts:
+                state = model.to_state_dict()
+                model = model.with_packed_experts().from_state_dict(state)
+                assert all(block.mlp.expert_mlp.w_up is None for block in model.transformer.blocks)
+                for name, value in model.to_state_dict().items():
+                    np.testing.assert_array_equal(value, state[name])
+            if selected_decode:
+                model = model.with_selected_ep_decode()
+            if decode_mode == "unroll":
+                model = model.with_unrolled_decode()
+            elif decode_mode in ("split_cache", "compact_window"):
+                model = model.with_split_decode_cache()
             engine = InferenceEngine.from_model_with_config(
                 model,
                 tokenizer=None,
                 config=InferenceEngineConfig(
                     max_seq_len=16,
-                    max_pages=16,
+                    max_pages=32,
+                    window_cache_max_pages=22 if decode_mode == "compact_window" else None,
                     max_rounds=2,
+                    max_tokens_per_round=expert_axis_size if selected_decode else None,
                     page_size=2,
                     compute_dtype=jnp.float32,
                     max_seqs=4,
@@ -532,6 +582,10 @@ def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_
                 )
                 for i, prompt in enumerate(prompts)
             ]
+            if decode_mode == "compact_window":
+                layers = engine.gen_state.cache
+                assert layers[0].kv_pages.array.shape[0] == 22
+                assert layers[1].kv_pages.array.shape[0] == 32
             result = engine.generate(requests)
             assert result.logprobs is not None
             for prompt, generated, scores in zip(
@@ -1326,16 +1380,22 @@ def test_snowball_paged_routes_replay_into_learner():
     np.testing.assert_allclose(logits.array[:5], replayed.array[:5], atol=2e-5, rtol=2e-5)
 
 
-def test_snowball_engine_capture_preserves_samples_and_predictor_routes():
+@pytest.mark.parametrize("compact_window, retain_prompts", [(False, False), (True, False), (True, True)])
+def test_snowball_engine_capture_preserves_samples_and_predictor_routes(compact_window, retain_prompts, monkeypatch):
     cfg = _tiny_config(num_layers=2)
     with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(21))
+        if compact_window:
+            model = model.with_split_decode_cache()
         engine = InferenceEngine.from_model_with_config(
             model,
             tokenizer=None,
             config=InferenceEngineConfig(
                 max_seq_len=16,
-                max_pages=16,
+                max_pages=32,
+                window_cache_max_pages=22 if compact_window else None,
+                max_retained_prompts=2 if retain_prompts else 0,
+                prefill_bucket_sizes=(2, 6),
                 max_rounds=2,
                 page_size=2,
                 compute_dtype=jnp.float32,
@@ -1347,10 +1407,29 @@ def test_snowball_engine_capture_preserves_samples_and_predictor_routes():
         )
         prompt = [2, 7, 4, 9, 6]
         params = replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(len(prompt) + 4))
-        requests = [Request(prompt, request_id=10, decode_params=params, n_generations=2)]
+        requests = [Request(prompt, request_id=10, decode_params=params, n_generations=1 if compact_window else 2)]
         plain = engine.generate(requests)
         captured = engine.generate(requests, capture_routes=True)
         assert captured.expert_routes is not None
+        if retain_prompts:
+            submitted = []
+            prefill = engine._prefill_prompts
+
+            def record_prefill(*args):
+                work = prefill(*args)
+                if work is not None:
+                    submitted.append(int(work.queue.num_queued_tokens))
+                return work
+
+            monkeypatch.setattr(engine, "_prefill_prompts", record_prefill)
+            warm = engine.generate(requests, capture_routes=True)
+            assert submitted == [1]
+            assert warm.tokens == captured.tokens
+            np.testing.assert_allclose(warm.logprobs, captured.logprobs, atol=1e-5, rtol=0)
+            assert warm.expert_routes is not None
+            np.testing.assert_array_equal(warm.expert_routes[0].expert_ids, captured.expert_routes[0].expert_ids)
+            np.testing.assert_array_equal(warm.expert_routes[0].valid, captured.expert_routes[0].valid)
+
         assert captured.tokens == plain.tokens
         np.testing.assert_allclose(captured.logprobs, plain.logprobs, atol=1e-5, rtol=0)
         for generated, scores, routes in zip(captured.tokens, captured.logprobs, captured.expert_routes, strict=True):
@@ -1362,3 +1441,62 @@ def test_snowball_engine_capture_preserves_samples_and_predictor_routes():
             )
             np.testing.assert_array_equal(routes.valid, [True] * (len(prompt) + len(generated) - 1) + [False])
             np.testing.assert_allclose(scores, -loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0)
+
+
+@pytest.mark.tpu
+@pytest.mark.skipif(not _tpu_v3_available(), reason="BF16 RPA v3 requires v5p or v6e")
+@pytest.mark.parametrize("shard_kv_on_experts", [False, True])
+def test_snowball_bf16_tpu_paged_generation_matches_reference(shard_kv_on_experts):
+    devices = jax.device_count()
+    model_shards = 1 if shard_kv_on_experts else devices
+    expert_shards = devices if shard_kv_on_experts else 1
+    kv_heads = max(1, expert_shards - 1) if shard_kv_on_experts else devices
+    cfg = _tiny_config(
+        num_layers=2,
+        max_seq_len=256,
+        sliding_window=8,
+        num_heads=4 * kv_heads,
+        num_kv_heads=kv_heads,
+        head_dim=128,
+    )
+    with jax.set_mesh(compact_grug_mesh(model_axis_size=model_shards, expert_axis_size=expert_shards)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(17))
+        model = jmp.get_policy("p=bf16,c=bf16").cast_to_compute(model)
+        config = InferenceEngineConfig(
+            max_seq_len=256,
+            max_pages=48,
+            max_rounds=2,
+            page_size=128,
+            compute_dtype=jnp.bfloat16,
+            max_seqs=max(4, expert_shards),
+            max_queued_tokens=max(8, 2 * expert_shards),
+            max_seqs_in_prefill=max(4, expert_shards),
+            max_prefill_size=256,
+        )
+        rng = np.random.default_rng(32)
+        prompts = [rng.integers(2, cfg.vocab_size, size=length).tolist() for length in (137, 41)]
+        requests = [
+            Request(
+                prompt,
+                request_id=i,
+                decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(len(prompt) + 4)),
+                n_generations=1,
+            )
+            for i, prompt in enumerate(prompts)
+        ]
+        expected = InferenceEngine.from_model_with_config(
+            model.with_paged_attention("reference"), tokenizer=None, config=config
+        ).generate(requests)
+        fast_model = model.with_paged_attention("tpu_v3")
+        if shard_kv_on_experts:
+            fast_model = fast_model.with_expert_sharded_kv()
+        fast_model = fast_model.with_split_decode_cache()
+        config = replace(config, window_cache_max_pages=max(4, expert_shards) * 2 + 2 + max(4, expert_shards))
+        engine = InferenceEngine.from_model_with_config(fast_model, tokenizer=None, config=config)
+        actual = engine.generate(requests, capture_routes=True)
+        assert actual.expert_routes is not None
+        for prompt, generated, routes in zip(prompts, actual.tokens, actual.expert_routes, strict=True):
+            np.testing.assert_array_equal(routes.valid, [True] * (len(prompt) + len(generated) - 1) + [False])
+    assert actual.tokens == expected.tokens
+    assert actual.total_generated == 8
+    np.testing.assert_allclose(actual.logprobs, expected.logprobs, atol=2e-2, rtol=0)
