@@ -603,19 +603,22 @@ def run_nop_trial(
             check=True,
         )
     results = sorted((attempt / "jobs").glob("**/result.json"))
-    if len(results) != 1:
+    # Harbor persists one canonical trial result beside the per-attempt copies; the
+    # canonical one is the one outside an attempts/ directory.
+    canonical = [path for path in results if "attempts" not in path.parts] or results
+    if len(canonical) != 1:
         raise ValueError(f"Expected exactly one persisted production NoP trial for {packet.name}: {results}")
-    document = json.loads(results[0].read_text())
+    document = json.loads(canonical[0].read_text())
     rewards = (document.get("verifier_result") or {}).get("rewards")
     exception = document.get("exception_info")
-    reward_file = results[0].parent / "verifier" / "reward.json"
+    reward_file = canonical[0].parent / "verifier" / "reward.json"
     if rewards is None and reward_file.is_file():
         rewards = json.loads(reward_file.read_text())
     receipt = {
         "task_id": (
             json.loads((package / "task.toml").read_text()).get("metadata", {}).get("tasktrove_source") or package.name
         ),
-        "result": str(results[0]),
+        "result": str(canonical[0]),
         "rewards": rewards,
         "exception_type": exception.get("exception_type") if exception else None,
         "no_delivery_reward": bool(rewards) and all(value == 0.0 for value in rewards.values()),
@@ -655,57 +658,75 @@ def run_calibration_source(
     (work / "census.json").write_text(json.dumps(census, indent=2, sort_keys=True) + "\n")
     output = StoragePath(output_root)
     (output / "census.json").write_text(json.dumps(census, indent=2, sort_keys=True) + "\n")
-    pack = pack_calibration(source_id, release_parquet, panel_local, work, sample_size=sample_size)
-    (output / "pack-summary.json").write_text((work / "pack-summary.json").read_text())
 
-    calibration_dir = work / "calibration"
-    try:
-        calibrate_cohort(
-            Path(pack["cohort"]),
-            Path(pack["task_map"]),
-            calibration_dir,
-            environment,
-            environment_kwargs,
-            concurrency,
-            calibration_solutions=Path(pack["calibration_solutions"]),
+    def sealed_summary(name: str) -> dict | None:
+        """A stage's sealed artifact from the output root, or None when absent or empty."""
+        path = output / name
+        try:
+            text = path.read_text()
+        except FileNotFoundError:
+            return None
+        return json.loads(text) if text.strip() else None
+
+    calibration_summary = sealed_summary("calibration-summary.json")
+    if calibration_summary is None:
+        pack = pack_calibration(source_id, release_parquet, panel_local, work, sample_size=sample_size)
+        (output / "pack-summary.json").write_text((work / "pack-summary.json").read_text())
+        calibration_dir = work / "calibration"
+        try:
+            calibrate_cohort(
+                Path(pack["cohort"]),
+                Path(pack["task_map"]),
+                calibration_dir,
+                environment,
+                environment_kwargs,
+                concurrency,
+                calibration_solutions=Path(pack["calibration_solutions"]),
+            )
+        except Exception:
+            # Preserve the failing attempt's evidence before the scratch disappears: the
+            # harbor log, the recorded result and a fresh inspection of the package.
+            logger.exception("Calibration failed for %s; uploading attempt evidence", source_id)
+            evidence = StoragePath(output_root) / "failure-evidence"
+            evidence.mkdirs(exist_ok=True)
+            for attempt_dir in sorted((calibration_dir).glob("*/attempt-*")):
+                name = f"{attempt_dir.parent.name}-{attempt_dir.name}"
+                for member in ("harbor.log", "trial.json", "sandbox-lifecycle.jsonl"):
+                    if (attempt_dir / member).exists():
+                        (evidence / f"{name}-{member}").write_bytes((attempt_dir / member).read_bytes())
+                for result in sorted(attempt_dir.glob("jobs/**/result.json")):
+                    (evidence / f"{name}-result.json").write_bytes(result.read_bytes())
+            raise
+        calibrated_map = json.loads((calibration_dir / "task-map.json").read_text())
+        measured_storage_mb, per_task = measured_calibration_storage(calibrated_map)
+        calibration_summary = {
+            "source_id": source_id,
+            "sample_size": len(calibrated_map),
+            "measured_storage_mb": measured_storage_mb,
+            "per_task_storage_mb": per_task,
+            "pass_rate": calibration_pass_rate(calibrated_map),
+            "environment": environment,
+            "calibration_map": str(calibration_dir / "task-map.json"),
+            "dispatch_reference": DISPATCH_REFERENCE,
+        }
+        (work / "calibration-summary.json").write_text(json.dumps(calibration_summary, indent=2, sort_keys=True) + "\n")
+        (output / "calibration-summary.json").write_text(
+            json.dumps(calibration_summary, indent=2, sort_keys=True) + "\n"
         )
-    except Exception:
-        # Preserve the failing attempt's evidence before the scratch disappears: the
-        # harbor log, the recorded result and a fresh inspection of the package.
-        logger.exception("Calibration failed for %s; uploading attempt evidence", source_id)
-        evidence = StoragePath(output_root) / "failure-evidence"
-        evidence.mkdirs(exist_ok=True)
-        for attempt_dir in sorted((calibration_dir).glob("*/attempt-*")):
-            name = f"{attempt_dir.parent.name}-{attempt_dir.name}"
-            for member in ("harbor.log", "trial.json", "sandbox-lifecycle.jsonl"):
-                if (attempt_dir / member).exists():
-                    (evidence / f"{name}-{member}").write_bytes((attempt_dir / member).read_bytes())
-            for result in sorted(attempt_dir.glob("jobs/**/result.json")):
-                (evidence / f"{name}-result.json").write_bytes(result.read_bytes())
-        raise
-    calibrated_map = json.loads((calibration_dir / "task-map.json").read_text())
-    measured_storage_mb, per_task = measured_calibration_storage(calibrated_map)
-    calibration_summary = {
-        "source_id": source_id,
-        "sample_size": len(calibrated_map),
-        "measured_storage_mb": measured_storage_mb,
-        "per_task_storage_mb": per_task,
-        "pass_rate": calibration_pass_rate(calibrated_map),
-        "environment": environment,
-        "calibration_map": str(calibration_dir / "task-map.json"),
-        "dispatch_reference": DISPATCH_REFERENCE,
-    }
-    (work / "calibration-summary.json").write_text(json.dumps(calibration_summary, indent=2, sort_keys=True) + "\n")
-    (output / "calibration-summary.json").write_text(json.dumps(calibration_summary, indent=2, sort_keys=True) + "\n")
+    measured_storage_mb = calibration_summary["measured_storage_mb"]
 
-    revision_dir = work / "revision"
-    revision = build_revision(source_id, release_parquet, measured_storage_mb, revision_dir)
-    (output / "revision-summary.json").write_text((revision_dir / "revision-summary.json").read_text())
-    (output / "revision-ledger.json").write_text((revision_dir / "revision-ledger.json").read_text())
-    revision_target = output / "revision" / "tasks.parquet"
-    revision_target.parent.mkdirs(exist_ok=True)
-    with (revision_dir / "tasks.parquet").open("rb") as stream:
-        revision_target.write_bytes(stream.read())
+    revision_summary = sealed_summary("revision-summary.json")
+    if revision_summary is None:
+        revision_dir = work / "revision"
+        revision = build_revision(source_id, release_parquet, measured_storage_mb, revision_dir)
+        (output / "revision-summary.json").write_text((revision_dir / "revision-summary.json").read_text())
+        (output / "revision-ledger.json").write_text((revision_dir / "revision-ledger.json").read_text())
+        revision_target = output / "revision" / "tasks.parquet"
+        revision_target.parent.mkdirs(exist_ok=True)
+        with (revision_dir / "tasks.parquet").open("rb") as stream:
+            revision_target.write_bytes(stream.read())
+    else:
+        revision = revision_summary
 
     nop_dir = work / "nop-packets"
     packets = build_nop_packets(release_parquet, panel_local, measured_storage_mb, nop_dir)
