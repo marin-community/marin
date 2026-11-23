@@ -215,6 +215,8 @@ The group needs no route to a model server or cloud storage. The listener requir
 Python 3.8 or newer in its member image. It supports bounded nonstreaming GET and POST
 requests, with no caller headers forwarded to the host handler. Request IDs allow
 concurrent calls; responses remain whole messages, without SSE or token streaming.
+Each listener permits 64 active connections and a 64-connection listen queue.
+Request and response bodies remain limited to 4 MiB.
 There is no per-request exec or guest control endpoint.
 Host-side Pydantic models validate and encode the wire messages, including
 base64 bodies. The guest listener uses only the Python standard library.

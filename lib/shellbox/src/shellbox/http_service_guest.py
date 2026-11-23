@@ -11,7 +11,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_BODY = 4 * 1024 * 1024
-MAX_PENDING = 16
+MAX_PENDING = 64
 MAX_PATH = 4096
 REQUEST_TIMEOUT = 600
 WIRE_LIMIT = MAX_BODY * 2 + 16384
@@ -25,6 +25,7 @@ class Pending:
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+    request_queue_size = MAX_PENDING
 
     def __init__(self, port):
         self.pending = {}

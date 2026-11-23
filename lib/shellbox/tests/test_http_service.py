@@ -520,3 +520,55 @@ def test_denied_container_relay_limits_host_authority_and_reclaims_listener(tmp_
 
     with socket.create_server(("127.0.0.1", 0)) as listener:
         asyncio.run(check(listener.getsockname()[1]))
+
+
+def test_http_capability_returns_every_response_in_a_native_grader_burst():
+    async def check():
+        request_count = 32
+        all_dispatched, release = asyncio.Event(), asyncio.Event()
+        dispatched = 0
+
+        async def handler(request):
+            nonlocal dispatched
+            dispatched += 1
+            if dispatched == request_count:
+                all_dispatched.set()
+            await release.wait()
+            return HttpResponse(200, request.body)
+
+        async def response(reader):
+            header = await reader.readuntil(b"\r\n\r\n")
+            lines = header.decode().split("\r\n")
+            status = int(lines[0].split()[1])
+            fields = dict(line.split(": ", 1) for line in lines[1:] if line)
+            body = await reader.readexactly(int(fields["Content-Length"]))
+            return status, json.loads(body)
+
+        port = available_port()
+        async with (
+            asyncio.TaskGroup() as service_tasks,
+            serve_http(ProcessMachine(), handler, task_group=service_tasks, port=port),
+        ):
+            connections = await asyncio.gather(
+                *(asyncio.open_connection("127.0.0.1", port) for _ in range(request_count))
+            )
+            try:
+                for number, (_, writer) in enumerate(connections):
+                    body = json.dumps({"number": number}).encode()
+                    header = (
+                        "POST /score HTTP/1.1\r\nHost: localhost\r\n"
+                        f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+                    )
+                    writer.write(header.encode() + body)
+                await asyncio.gather(*(writer.drain() for _, writer in connections))
+                await asyncio.wait_for(all_dispatched.wait(), 10)
+                release.set()
+                received = await asyncio.gather(*(response(reader) for reader, _ in connections))
+                assert received == [(200, {"number": number}) for number in range(request_count)]
+            finally:
+                release.set()
+                for _, writer in connections:
+                    writer.close()
+                await asyncio.gather(*(writer.wait_closed() for _, writer in connections), return_exceptions=True)
+
+    asyncio.run(check())
