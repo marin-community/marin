@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.difficulty_trials import (
     task_guest_environment,
     task_required_provider_secrets,
     trial_environment_options,
+    trial_persistent_environment,
     worker_host_capabilities,
 )
 from experiments.post_training.task_curation.images.build import (
@@ -268,9 +269,13 @@ def test_prepared_judge_takes_precedence_over_the_declared_one(declared_judge_bu
     assert attempt_judge_model(task) == "zai-org/GLM-5.3"
 
 
-def test_task_guest_environment_projects_the_declared_judge_relay(declared_judge_bundle, monkeypatch):
-    monkeypatch.setattr(difficulty_trials, "require_secret", lambda name: "resolved-" + name.lower())
-    resolved = resolve_provider_secrets(("TOGETHER_API_KEY",))
+def test_declared_judge_persistent_environment_reaches_the_sandbox(declared_judge_bundle):
+    """The declared judge's base-URL override rides the environment config's persistent env.
+
+    Harbor resolves only declared templates from the guest environment, so the
+    projection must flow through EnvironmentConfig.env (persistent_env) to reach
+    the verifier's LiteLLM client - and the sandbox guard must accept it.
+    """
     task = PreparedTask(
         task_id="task",
         runtime_sha256="a" * 64,
@@ -280,14 +285,22 @@ def test_task_guest_environment_projects_the_declared_judge_relay(declared_judge
         reason=None,
         judge_model=None,
     )
-    granted = task_guest_environment(task, resolved)
-    assert granted == {
-        "TOGETHER_API_KEY": "EMPTY",
-        "TOGETHER_AI_API_BASE": "http://127.0.0.1:8787/v1",
-    }
-    # The sandbox guard must accept the projected guest environment, and the
-    # resolved credential's value must never appear in it.
-    validate_task_environment(granted, protected_values=frozenset({resolved["TOGETHER_API_KEY"]}))
+    persistent = trial_persistent_environment(task)
+    assert persistent == {"TOGETHER_AI_API_BASE": "http://127.0.0.1:8787/v1"}
+    validate_task_environment(persistent, protected_values=frozenset({"resolved-together_api_key"}))
+
+
+def test_plain_task_carries_no_persistent_environment():
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=None,
+        workload="native",
+        backend="local",
+        reason=None,
+        judge_model=None,
+    )
+    assert trial_persistent_environment(task) == {}
 
 
 def test_source_has_judge_traffic_includes_declared_judges(declared_judge_bundle):

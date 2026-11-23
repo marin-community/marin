@@ -130,12 +130,22 @@ def task_guest_environment(task: PreparedTask, provider_secrets: Mapping[str, st
             f"Task {task.task_id} requires provider credentials the wave did not resolve: {sorted(missing)}"
         )
     granted = model_guest_credentials({name: provider_secrets[name] for name in sorted(required)})
-    if task_declared_judge_model(task) is not None:
-        # The declared verifier judge calls Together through LiteLLM, which reads
-        # its base URL from this variable; point it at Harbor's in-guest relay so
-        # the judge's calls authenticate host-side and the credential stays there.
-        granted[TOGETHER_AI_API_BASE_ENV] = f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1"
     return granted
+
+
+def trial_persistent_environment(task: PreparedTask) -> dict[str, str]:
+    """The persistent sandbox environment one attempt's TrialConfig carries.
+
+    Harbor resolves only declared templates from the guest environment, so a
+    declared judge's base-URL override cannot reach the sandbox that way: the
+    verifier's LiteLLM Together client reads TOGETHER_AI_API_BASE from the
+    sandbox environment, and this value points it at Harbor's in-guest relay so
+    the judge's calls authenticate host-side. A task without a declared judge
+    carries no persistent environment.
+    """
+    if task_declared_judge_model(task) is None:
+        return {}
+    return {TOGETHER_AI_API_BASE_ENV: f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1"}
 
 
 def task_spec_actor_image(task: PreparedTask) -> str | None:
@@ -725,7 +735,7 @@ def run_task(
                 model_alias=f"openai/{config.api_model}",
                 kwargs=kwargs,
             ),
-            environment=EnvironmentConfig(type=task.backend, kwargs=options),
+            environment=EnvironmentConfig(type=task.backend, kwargs=options, env=trial_persistent_environment(task)),
             environment_build_timeout_multiplier=(
                 LOCAL_IMAGE_START_ALLOWANCE_SEC / HARBOR_DEFAULT_BUILD_TIMEOUT_SEC if task.backend == "local" else None
             ),
