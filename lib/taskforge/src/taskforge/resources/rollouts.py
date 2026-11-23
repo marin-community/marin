@@ -29,6 +29,7 @@ from taskforge.effects.issues import (
     DecisionModelUnavailable,
     Hold,
     OutputBudgetExhausted,
+    RequestRejected,
     Restart,
     Transient,
     describe_exception,
@@ -60,10 +61,6 @@ class SolverGeneration(Event[Rollout]):
     @property
     def slot(self) -> SolverRollout:
         return SolverRollout(self.spec, self.trial, self.attempt)
-
-
-class RequestRejected(Hold):
-    """The model server refused this slot's request; a retry would be refused again."""
 
 
 SLOT_LOCAL: tuple[type[Hold], ...] = (RequestRejected,)

@@ -452,7 +452,7 @@ async def test_an_injected_provider_cannot_report_the_internal_refusal_marker() 
 
 
 def raw(reason: str) -> Segment:
-    """A segment from a provider that reports its finish reason as the wire string, not the annotated member."""
+    """A segment whose finish reason is a wire string."""
     return replace(segment("12"), finish_reason=cast(FinishReason, reason))
 
 

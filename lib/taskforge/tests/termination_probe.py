@@ -12,8 +12,10 @@ A child's tokens:
 - ``block``: the author's four calls resolve, then both validation trials print ``BLOCKED <pid>`` and wait forever.
 - ``held``: the author's first call is refused (``Hold``); ``deferred``: the decision model is unavailable instead.
 - ``lost-ack``: once a terminal head is written, the writer prints ``COMMITTED`` and never returns.
-- ``flood``: once logging is set up, it signals the FIFO ``flooding`` beside its work dir, then writes without end to
-  stdout and stderr.
+- ``flood``: once logging is set up, it fills stderr, then writes to stdout without end, each write larger than any
+  pipe: its stdout's first byte comes from inside a write that cannot complete. Nothing reaches stdout before.
+- ``uninterrupted``: with ``flood``, the main thread blocks SIGTERM first, so the signal never interrupts its write and
+  never reaches the Python handler: what a signal landing just before the write would do.
 - ``resume``: runs to the end on healthy resources.
 - ``exit<N>``: exits N at once, without the driver.
 
@@ -23,8 +25,10 @@ prints ``REAPED <code>`` and waits for a line on stdin before it reaches the dri
 """
 
 import asyncio
+import contextlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -84,7 +88,7 @@ def bundle(tokens: set[str]) -> Resources:
     return built
 
 
-def seams(patch: pytest.MonkeyPatch, tokens: set[str], work: Path) -> None:
+def seams(patch: pytest.MonkeyPatch, tokens: set[str]) -> None:
     """The child's own seams: a lost acknowledgement and a flood of output."""
     swap, configure = checkpoint.CheckpointSink._swap, driver.configure_logging
 
@@ -96,12 +100,17 @@ def seams(patch: pytest.MonkeyPatch, tokens: set[str], work: Path) -> None:
 
     def flooding() -> None:
         configure()
-        if "flood" in tokens:
-            with open(work.parent / "flooding", "w") as fifo:
-                fifo.write("x")
+        if "flood" not in tokens:
+            return
+        if "uninterrupted" in tokens:
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        os.set_blocking(2, False)
+        with contextlib.suppress(BlockingIOError):
             while True:
-                os.write(1, b"x" * 2**20)
-                os.write(2, b"x" * 2**20)
+                os.write(2, b"x" * 2**16)
+        os.set_blocking(2, True)
+        while True:
+            os.write(1, b"x" * 2**24)  # no pipe holds 16 MiB
 
     patch.setattr(checkpoint.CheckpointSink, "_swap", committing)
     patch.setattr(driver, "configure_logging", flooding)
@@ -170,7 +179,7 @@ def main(scenario: str, argv: list[str]) -> None:
     patch.setattr(driver, "runtime", runtime)
     # Only the claim and the final publication write the head, so that a kill never meets a head write in progress.
     patch.setattr(checkpoint, "CHECKPOINT_EVENTS", 10**6)
-    seams(patch, tokens, Path(argv[argv.index("--work-dir") + 1]))
+    seams(patch, tokens)
     if argv[0] == "run":
         parent(patch, scenario)
     sys.argv = ["driver", *argv]
