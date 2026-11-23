@@ -22,7 +22,7 @@ import click
 import pytest
 import requests
 from click.testing import CliRunner
-from fray.types import ANY_REGION, ResourceConfig, create_environment
+from fray.types import ANY_REGION, ResourceConfig, SecretBehavior, create_environment
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName
@@ -34,9 +34,11 @@ from marin.inference.backend import ModelSpec
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    BrokerConfig,
     IrisConfig,
     LevanterEngineConfig,
     ObjectStoreLoadMode,
+    RemoteInferenceConfig,
     ResolvedModelLocator,
     ServedModelConfig,
     ServingGeometry,
@@ -54,7 +56,15 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.iris import IrisServiceConfig, _resolved_engine, _resolved_model, _staged_model, run_iris_service
+from marin.inference.iris import (
+    IrisServiceConfig,
+    _child_resources,
+    _resolved_engine,
+    _resolved_model,
+    _staged_model,
+    _submit_broker_workers,
+    run_iris_service,
+)
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -818,6 +828,51 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
 
     assert "accelerator" not in registered_metadata
     assert float(registered_metadata["proxy_timeout_seconds"]) == 43_200
+
+
+def test_broker_worker_children_do_not_pin_a_federation_target(monkeypatch):
+    """A coordinator running inside its placement submits children that stay there.
+
+    ``target_cluster`` is a federation directive for hub-submitted roots; a child
+    request that pins a cluster is rejected as an invalid federation directive,
+    which failed real serving launches on hub-federated clusters.
+    """
+    submitted = []
+
+    def submit(request):
+        submitted.append(request)
+        return SimpleNamespace(job_id=request.name)
+
+    monkeypatch.setattr("marin.inference.iris.current_client", lambda: SimpleNamespace(submit=submit))
+    config = RemoteInferenceConfig(
+        model=ServedModelConfig(weights="org/model", tensor_parallel_size=4),
+        engine=VllmEngineConfig(),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_gpu("GB200", count=4, target_cluster="cw-us-east-08a"),
+            worker_environment=create_environment(docker_image="test", secret_behavior=SecretBehavior.ISOLATE),
+        ),
+        instances=2,
+        broker=BrokerConfig(),
+    )
+    _submit_broker_workers("runid", config, config.broker, request_provider=SimpleNamespace())
+
+    assert len(submitted) == config.instances
+    unpinned = ResourceConfig.with_gpu("GB200", count=4)
+    for request in submitted:
+        assert request.resources.target_cluster is None
+        assert request.resources.device == unpinned.device
+        assert request.resources.cpu == unpinned.cpu
+        assert request.priority == config.iris.priority
+
+
+def test_child_resources_only_drop_the_cluster_pin():
+    """The pin is the only field the helper touches."""
+    resources = ResourceConfig.with_gpu("GB200", count=4, cpu=16.0, ram="256g", target_cluster="cw-us-east-08a")
+    child = _child_resources(resources)
+    assert child.target_cluster is None
+    assert dataclasses.replace(child, target_cluster="cw-us-east-08a") == resources
+    unpinned = dataclasses.replace(resources, target_cluster=None)
+    assert _child_resources(unpinned) is unpinned
 
 
 @pytest.mark.parametrize("task_index", [0, 1])

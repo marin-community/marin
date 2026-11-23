@@ -22,7 +22,16 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fray.client import JobHandle
 from fray.current_client import current_client
-from fray.types import ActorConfig, Entrypoint, EnvironmentConfig, JobRequest, JobStatus, TpuConfig, create_environment
+from fray.types import (
+    ActorConfig,
+    Entrypoint,
+    EnvironmentConfig,
+    JobRequest,
+    JobStatus,
+    ResourceConfig,
+    TpuConfig,
+    create_environment,
+)
 from iris.client.client import iris_ctx
 from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
@@ -804,6 +813,20 @@ def remote_inference(config: RemoteInferenceConfig) -> Iterator[RemoteInferenceS
         yield session
 
 
+def _child_resources(resources: ResourceConfig) -> ResourceConfig:
+    """Resources for a job submitted from inside another job.
+
+    ``target_cluster`` is a federation directive for hub-submitted roots: it routes
+    the whole job tree to that peer, and the tree then runs there. Children are
+    submitted by a job already running in its final placement, so their requests
+    must not pin a cluster — a pin on a non-hub submitter is rejected as an
+    invalid federation directive.
+    """
+    if resources.target_cluster is None:
+        return resources
+    return replace(resources, target_cluster=None)
+
+
 @contextlib.contextmanager
 def _start_direct_inference(
     config: RemoteInferenceConfig,
@@ -826,7 +849,7 @@ def _start_direct_inference(
             name=f"inference-{run_id}",
             entrypoint=Entrypoint.from_callable(run_iris_service, args=(service,)),
             ports=ports,
-            resources=iris.worker_resources,
+            resources=_child_resources(iris.worker_resources),
             environment=_child_worker_environment(iris.worker_environment),
             max_retries_failure=iris.max_retries_failure,
             max_retries_preemption=iris.max_retries_preemption,
@@ -967,7 +990,7 @@ def _submit_broker_workers(
                         _run_broker_worker,
                         args=(worker_id, config.model, config.engine, iris, broker, request_provider),
                     ),
-                    resources=iris.worker_resources,
+                    resources=_child_resources(iris.worker_resources),
                     environment=_child_worker_environment(iris.worker_environment),
                     max_retries_failure=broker.max_retries_failure,
                     max_retries_preemption=broker.max_retries_preemption,
