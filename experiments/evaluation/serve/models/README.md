@@ -206,7 +206,8 @@ Single-task serving also supports local weight staging.
 ### Native Snowball on v5p
 
 Select the 64K Snowball profile on a single v5p-8. Set the number of
-concurrent generation slots explicitly for the workload.
+concurrent generation slots explicitly for the workload. The profile runs up to
+four decode rounds per scheduler step.
 
 ```bash
 uv run marin-serve iris open-athena/Marin-Snowball-67B-A2B-v0.1 \

@@ -28,7 +28,7 @@ def require_agentx_devices() -> None:
         raise ValueError(f"Native Snowball AgentX requires one v5p-8, got {devices}")
 
 
-def agentx_engine_config(concurrency: int, *, max_rounds: int = 6) -> InferenceEngineConfig:
+def agentx_engine_config(concurrency: int, *, max_rounds: int = 4) -> InferenceEngineConfig:
     """Build the paged generation configuration used by the v5p AgentX replay."""
     if not 1 <= concurrency <= AGENTX_MAX_CONCURRENCY:
         raise ValueError(f"AgentX supports 1 to {AGENTX_MAX_CONCURRENCY} concurrent sequences")
