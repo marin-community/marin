@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from enum import StrEnum
 from typing import Literal, Optional, cast, overload
 
 import jax
@@ -120,6 +121,11 @@ def maybe_fused_next_token_loss(
     )
 
 
+class CrossEntropyNormalization(StrEnum):
+    DEFAULT = "default"
+    BATCH_INVARIANT = "batch_invariant"
+
+
 def next_token_loss(
     Pos: hax.AxisSelector,
     Vocab: hax.AxisSelector,
@@ -130,7 +136,7 @@ def next_token_loss(
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
     *,
-    normalization: Literal["default", "batch_invariant"] = "default",
+    normalization: CrossEntropyNormalization = CrossEntropyNormalization.DEFAULT,
 ):
     """
     Compute the next token loss with optional logsumexp penalty.
@@ -144,7 +150,7 @@ def next_token_loss(
         reduction: reduction function or None to disable reduction
         reduction_axis: axis to apply reduction. None means all axes
         logsumexp_weight: weight for the logsumexp penalty
-        normalization: Use fixed-row FP32 reduction for policy replay.
+        normalization: BATCH_INVARIANT keeps each row's reduction order independent of the batch.
     Returns:
         NamedArray: computed loss
     """
@@ -176,17 +182,17 @@ def cross_entropy_and_logsumexp_penalty(
     reduction_axis: Optional[hax.AxisSelection] = None,
     weight: Optional[NamedArray] = None,
     logsumexp_weight=0.0,
-    normalization: Literal["default", "batch_invariant"] = "default",
+    normalization: CrossEntropyNormalization = CrossEntropyNormalization.DEFAULT,
 ) -> NamedArray:
     """A loss function that combines cross entropy loss with a logsumexp penalty."""
 
-    if normalization == "batch_invariant":
+    if normalization == CrossEntropyNormalization.BATCH_INVARIANT:
         vocab = pred_y.resolve_axis(Vocab)
         axis = pred_y.axes.index(vocab)
         normalizers = batch_invariant_logsumexp(jnp.moveaxis(pred_y.array, axis, -1))
         log_normalizers = hax.named(normalizers, tuple(a for a in pred_y.axes if a != vocab))
         loss = hax.dot(target_y, log_normalizers - pred_y.astype(jnp.float32), axis=vocab)
-    elif normalization == "default":
+    elif normalization == CrossEntropyNormalization.DEFAULT:
         loss, log_normalizers = cross_entropy_loss_and_log_normalizers(pred_y, Vocab, target_y)
     else:
         raise ValueError(f"Unknown cross entropy normalization: {normalization}")

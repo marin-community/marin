@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 
 import haliax as hax
-from levanter.layers.sampler import Sampler
-from levanter.models.loss import next_token_loss
+from levanter.layers.sampler import LogprobMode, Sampler
+from levanter.models.loss import CrossEntropyNormalization, next_token_loss
 
 
 def test_sampler_top_p_keeps_only_the_nucleus_head():
@@ -70,9 +70,11 @@ def test_policy_scores_match_unwarped_next_token_loss():
     )
     kwargs = dict(top_ps=0.2, key=jax.random.PRNGKey(23))
     behavior_tokens, behavior_scores = Sampler(vocab)(logits, 0.5, **kwargs)
-    policy_tokens, policy_scores = Sampler(vocab, logprob_mode="policy")(logits, 0.5, **kwargs)
+    policy_tokens, policy_scores = Sampler(vocab, logprob_mode=LogprobMode.POLICY)(logits, 0.5, **kwargs)
     tokens = hax.named(jnp.array([0, policy_tokens.array[0], policy_tokens.array[1]]), position)
-    losses = next_token_loss(position, vocab, logits, tokens, reduction=None, normalization="batch_invariant")
+    losses = next_token_loss(
+        position, vocab, logits, tokens, reduction=None, normalization=CrossEntropyNormalization.BATCH_INVARIANT
+    )
 
     np.testing.assert_array_equal(policy_tokens.array, behavior_tokens.array)
     np.testing.assert_array_equal(behavior_scores.array[:2], jnp.zeros(2))

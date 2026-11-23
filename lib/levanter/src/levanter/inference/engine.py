@@ -83,7 +83,7 @@ class InferenceEngineConfig:
     compute_dtype: jnp.dtype = jnp.bfloat16
     """KV cache dtype. Default bfloat16 for performance/accuracy balance."""
 
-    logprob_mode: LogprobMode = "behavior"
+    logprob_mode: LogprobMode = LogprobMode.BEHAVIOR
     """Distribution used to score generated tokens."""
 
     max_queued_tokens: int = 512

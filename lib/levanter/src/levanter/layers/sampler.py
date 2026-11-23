@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal
+from enum import StrEnum
 
 import equinox as eqx
 import jax
@@ -14,7 +14,10 @@ from levanter.kernels.logsumexp import batch_invariant_logsumexp
 
 __all__ = ["Sampler", "LogprobMode"]
 
-LogprobMode = Literal["behavior", "policy"]
+
+class LogprobMode(StrEnum):
+    BEHAVIOR = "behavior"
+    POLICY = "policy"
 
 
 class Sampler(eqx.Module):
@@ -35,11 +38,9 @@ class Sampler(eqx.Module):
     Vocab: AxisSelector = eqx.field(static=True)
     logprob_mode: LogprobMode = eqx.field(static=True)
 
-    def __init__(self, Vocab: hax.AxisSelector = "vocab", *, logprob_mode: LogprobMode = "behavior"):
-        if logprob_mode not in ("behavior", "policy"):
-            raise ValueError(f"Unknown logprob mode: {logprob_mode}")
+    def __init__(self, Vocab: hax.AxisSelector = "vocab", *, logprob_mode: LogprobMode = LogprobMode.BEHAVIOR):
         self.Vocab = Vocab
-        self.logprob_mode = logprob_mode
+        self.logprob_mode = LogprobMode(logprob_mode)
 
     def __call__(
         self,
@@ -89,7 +90,7 @@ class Sampler(eqx.Module):
         # Where temperature == 0, fall back to greedy choice
         tokens = hax.where(temperatures == 0, greedy, samples)
 
-        score_logits = logits_f32 if self.logprob_mode == "policy" else sampling_logits
+        score_logits = logits_f32 if self.logprob_mode == LogprobMode.POLICY else sampling_logits
         vocab_axis = score_logits.resolve_axis(self.Vocab)
         vocab_axis_index = score_logits.axes.index(vocab_axis)
         score_logits_array = jnp.moveaxis(score_logits.array, vocab_axis_index, -1)
@@ -98,7 +99,7 @@ class Sampler(eqx.Module):
             jnp.expand_dims(tokens.array.astype(jnp.int32), axis=-1),
             axis=-1,
         ).squeeze(-1)
-        if self.logprob_mode == "policy":
+        if self.logprob_mode == LogprobMode.POLICY:
             log_z = batch_invariant_logsumexp(score_logits_array)
         else:
             log_z = jax.nn.logsumexp(score_logits_array, axis=-1)
