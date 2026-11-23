@@ -41,6 +41,7 @@ from marinskyrl.runtime_options import (
     EvaluationRunner,
     WeightSyncTransport,
     inference_engines_required,
+    reference_model_required,
     static_preference_pairs_requested,
 )
 from marinskyrl.resource_locator import RolloutModelLoading
@@ -654,27 +655,43 @@ class BasePPOExp:
 
         tokenizer = self.tokenizer
         from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime  # noqa: PLC0415
+        from skyrl_train.trainer import RayPPOTrainer  # noqa: PLC0415
 
         prepared_distillation = prepare_distillation_runtime(self.cfg, tokenizer)
-        inference_engine_client = self.create_inference_engine_client()
-
-        trajectory_runner: TrajectoryRunner = self.get_trajectory_runner(self.cfg, tokenizer, inference_engine_client)
-
-        trainer = self.get_trainer(
-            cfg=self.cfg,
-            tracker=tracker,
-            tokenizer=tokenizer,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-            inference_engine_client=inference_engine_client,
-            trajectory_runner=trajectory_runner,
-            colocate_pg=self.colocate_pg,
-        )
-
-        # Pass the policy placement group reserved before inference startup.
-        logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
+        placement = self.cfg.trainer.placement
+        startup = None
+        trainer = None
         try:
-            trainer.build_models(PolicyWorker, RefWorker, policy_pg=self.policy_pg)
+            # A separate, unreserved reference group could compete with vLLM for GPUs.
+            if (
+                self.policy_pg is not None
+                and not placement.colocate_all
+                and (placement.colocate_policy_ref or not reference_model_required(self.cfg.trainer.algorithm))
+                and self.cfg.generator.run_engines_locally
+                and inference_engines_required(self.cfg)
+            ):
+                logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
+                startup = RayPPOTrainer.start_learner_models(
+                    self.cfg, PolicyWorker, RefWorker, policy_pg=self.policy_pg, prompt_count=len(self.train_dataset)
+                )
+
+            inference_engine_client = self.create_inference_engine_client()
+            trajectory_runner = self.get_trajectory_runner(self.cfg, tokenizer, inference_engine_client)
+            trainer = self.get_trainer(
+                cfg=self.cfg,
+                tracker=tracker,
+                tokenizer=tokenizer,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                inference_engine_client=inference_engine_client,
+                trajectory_runner=trajectory_runner,
+                colocate_pg=self.colocate_pg,
+            )
+            if startup is None:
+                logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
+                trainer.build_models(PolicyWorker, RefWorker, policy_pg=self.policy_pg)
+            else:
+                trainer.finish_learner_startup(startup)
             logger.info(
                 "Policy workers ready: strategy={} count={}",
                 self.cfg.trainer.strategy,
@@ -684,7 +701,10 @@ class BasePPOExp:
             if distillation_runtime is not None:
                 trainer.configure_distillation(distillation_runtime)
         except BaseException:
-            asyncio.run(trainer.shutdown())
+            if trainer is not None:
+                asyncio.run(trainer.shutdown())
+            elif startup is not None:
+                startup.stop()
             raise
         return trainer
 
