@@ -26,8 +26,6 @@ from transformers import PreTrainedTokenizerBase
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
-    SNOWBALL_AGENTX_EXPERT_SHARDS,
-    SNOWBALL_AGENTX_PROFILE,
     LevanterEngineConfig,
 )
 from marin.inference.dashboard_server import BackgroundServer, bind_serving_socket, serve_app_background
@@ -119,23 +117,20 @@ class LevanterBackend:
     name: str = "levanter"
 
     @property
-    def _uses_native_agentx_profile(self) -> bool:
-        return self.config.profile == SNOWBALL_AGENTX_PROFILE
-
-    @property
     def _expert_parallel_size(self) -> int:
-        return SNOWBALL_AGENTX_EXPERT_SHARDS if self._uses_native_agentx_profile else self.config.expert_parallel_size
+        geometry = self.config.snowball_agentx_geometry
+        return geometry.expert_shards if geometry is not None else self.config.expert_parallel_size
 
     def _resolved_spec(self, spec: ModelSpec) -> ModelSpec:
-        if self._uses_native_agentx_profile:
-            require_agentx_devices()
-            if spec.num_chips not in (None, SNOWBALL_AGENTX_EXPERT_SHARDS) or spec.tensor_parallel_size not in (None, 1):
-                raise ValueError("Native Snowball AgentX uses four expert shards and one tensor shard")
+        if (geometry := self.config.snowball_agentx_geometry) is not None:
+            require_agentx_devices(geometry)
+            if spec.num_chips not in (None, geometry.expert_shards) or spec.tensor_parallel_size not in (None, 1):
+                raise ValueError(
+                    f"{self.config.profile} uses {geometry.expert_shards} expert shards and one tensor shard"
+                )
             if spec.dtype != "bfloat16" or spec.max_model_len not in (None, AGENTX_CONTEXT):
                 raise ValueError("Native Snowball AgentX uses BF16 weights and a 65536-token context")
-            return replace(
-                spec, num_chips=SNOWBALL_AGENTX_EXPERT_SHARDS, tensor_parallel_size=1, max_model_len=AGENTX_CONTEXT
-            )
+            return replace(spec, num_chips=geometry.expert_shards, tensor_parallel_size=1, max_model_len=AGENTX_CONTEXT)
         num_chips = spec.num_chips or jax.device_count()
         tensor_parallel_size = spec.tensor_parallel_size
         expert_parallel_size = self._expert_parallel_size
@@ -201,7 +196,7 @@ class LevanterBackend:
         )
 
         with trainer.use_device_mesh():
-            if self._uses_native_agentx_profile:
+            if self.config.snowball_agentx_geometry is not None:
                 if not isinstance(model_config, SnowballConfig):
                     raise ValueError("Native Snowball AgentX requires a Snowball checkpoint")
                 model = load_agentx_model(converter, checkpoint_ref, model_config, trainer.parameter_axis_mapping)
@@ -262,10 +257,10 @@ class LevanterBackend:
                     compute_dtype=jnp.dtype(loaded.compute_dtype),
                 ),
             )
-            if self._uses_native_agentx_profile:
+            if (geometry := self.config.snowball_agentx_geometry) is not None:
                 server_config = dataclasses.replace(
                     server_config,
-                    service=agentx_engine_config(self.config.max_seqs),
+                    service=agentx_engine_config(geometry, self.config.max_seqs),
                     batch_timeout=AGENTX_BATCH_TIMEOUT,
                     initial_policy_id=str(checkpoint_ref),
                 )

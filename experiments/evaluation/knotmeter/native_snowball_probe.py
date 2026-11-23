@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the frozen 64K AgentX replay against native Snowball on one v5p-8."""
+"""Run the frozen 64K AgentX replay against native Snowball on one TPU slice."""
 
 import argparse
 import dataclasses
@@ -35,7 +35,7 @@ from levanter.models.snowball import SnowballConfig
 from levanter.tokenizers import load_tokenizer
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.inference.config import SNOWBALL_AGENTX_EXPERT_SHARDS
+from marin.inference.config import SNOWBALL_AGENTX_PROFILES
 from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
 from marin.inference.snowball_agentx import (
     AGENTX_BATCH_TIMEOUT,
@@ -127,15 +127,13 @@ def main() -> None:
     parser.add_argument("--weights", required=True)
     parser.add_argument("--workload", required=True)
     parser.add_argument("--concurrency", type=int, default=128)
+    parser.add_argument("--profile", choices=tuple(SNOWBALL_AGENTX_PROFILES), default="snowball_agentx_v5p")
     parser.add_argument("--max-rounds", type=int, default=None)
     parser.add_argument("--capture-routes", action="store_true")
     args = parser.parse_args()
-    require_agentx_devices()
-    config = (
-        agentx_engine_config(args.concurrency)
-        if args.max_rounds is None
-        else agentx_engine_config(args.concurrency, max_rounds=args.max_rounds)
-    )
+    geometry = SNOWBALL_AGENTX_PROFILES[args.profile]
+    require_agentx_devices(geometry)
+    config = agentx_engine_config(geometry, args.concurrency, max_rounds=args.max_rounds)
     logging.basicConfig(level=logging.INFO)
     series = load_series()
     if series["max_context"] != AGENTX_CONTEXT:
@@ -145,9 +143,7 @@ def main() -> None:
     receipt = read_record(args.workload)
     trainer = TrainerConfig(
         mp=jmp.get_policy("p=bf16,c=bf16"),
-        mesh=MeshConfig(
-            axes={"replica": 1, "data": 1, "model": 1, "expert": SNOWBALL_AGENTX_EXPERT_SHARDS, "context": 1}
-        ),
+        mesh=MeshConfig(axes={"replica": 1, "data": 1, "model": 1, "expert": geometry.expert_shards, "context": 1}),
         use_explicit_mesh_axes=True,
     )
     server_config = InferenceServerConfig(
@@ -188,6 +184,7 @@ def main() -> None:
                     command.extend(("--extra-inputs", json.dumps({"return_route_captures": True})))
                 evidence = {
                     "backend": "levanter",
+                    "agentx_profile": args.profile,
                     "series": series,
                     "weights": args.weights,
                     "workload_uri": args.workload,
