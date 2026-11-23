@@ -37,6 +37,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -616,7 +617,8 @@ def run_nop_trial(
         rewards = json.loads(reward_file.read_text())
     receipt = {
         "task_id": (
-            json.loads((package / "task.toml").read_text()).get("metadata", {}).get("tasktrove_source") or package.name
+            tomllib.loads((package / "task.toml").read_text()).get("metadata", {}).get("tasktrove_source")
+            or package.name
         ),
         "result": str(canonical[0]),
         "rewards": rewards,
