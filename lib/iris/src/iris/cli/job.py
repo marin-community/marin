@@ -23,7 +23,7 @@ import yaml
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
-from rigging.secrets import SecretBehavior, resolve_secret_spec
+from rigging.secrets import SecretBehavior, looks_like_credential, resolve_secret_spec
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
@@ -143,6 +143,12 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
             if "=" in item[0]:
                 raise ValueError(
                     f"Key cannot contain '=': {item[0]}\nYou probably meant to do '-e {' '.join(item[0].split('='))}'"
+                )
+            if looks_like_credential(item[0]):
+                raise ValueError(
+                    f"{item[0]} looks like a credential: its value would be captured into job command "
+                    "lines and artifact provenance. Deliver it with '--secret "
+                    f"{item[0]} env:{item[0]}' (or a file: source) instead of -e."
                 )
             env_vars[item[0]] = item[1] if len(item) == 2 else ""
 

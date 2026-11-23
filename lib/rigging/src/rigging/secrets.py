@@ -31,6 +31,13 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+CREDENTIAL_KEY_PATTERN = re.compile(r"(?i).*(_token|_secret|_password|_api_?key|_credential)$")
+"""Environment-variable names whose values are credentials, never plain configuration.
+
+Values of these keys must reach jobs through secret delivery (``--secret KEY env:KEY`` or a
+``file:`` source), not through plain environment variables, whose values land in job command
+lines and artifact provenance."""
+
 logger = logging.getLogger(__name__)
 
 ENV_SCHEME = "env:"
@@ -236,6 +243,11 @@ def _fetch(ref: str) -> str | None:
         "not a secret reference (expected env: / file: / gcp-secret://); "
         "a bare literal secret is not permitted in config"
     )
+
+
+def looks_like_credential(name: str) -> bool:
+    """Whether the environment-variable name carries a credential value rather than configuration."""
+    return bool(CREDENTIAL_KEY_PATTERN.match(name))
 
 
 def _scheme_of(ref: str) -> str:

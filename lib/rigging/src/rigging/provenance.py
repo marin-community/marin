@@ -26,9 +26,12 @@ import re
 import subprocess
 import sys
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+from rigging.secrets import looks_like_credential
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +82,35 @@ class Provenance:
     git_remote: str | None = None
     created_at: str = ""
     command_line: tuple[str, ...] = ()
+
+    @staticmethod
+    def _redact_credentials(argv: Sequence[str]) -> tuple[str, ...]:
+        """Replace values of credential-named flags with redaction markers.
+
+        ``-e KEY VALUE`` pairs whose key names a credential (tokens, secrets, passwords, API keys)
+        carry values that must not reach artifact provenance: jobs deliver credentials through the
+        secret mechanism, never plain environment variables. The key stays legible; only the value
+        is redacted.
+        """
+        redacted: list[str] = []
+        expect_key = False
+        expect_value = False
+        for part in argv:
+            if expect_key:
+                # The flag's key: keep it legible; redact the value only when it names a credential.
+                redacted.append(part)
+                expect_key, expect_value = False, looks_like_credential(part)
+                continue
+            if expect_value:
+                redacted.append("[REDACTED:credential]")
+                expect_value = False
+                continue
+            redacted.append(part)
+            for flag in ("-e", "--env-vars"):
+                if part == flag:
+                    expect_key = True
+                    break
+        return tuple(redacted)
 
     @classmethod
     def from_git(cls, repo_dir: Path | None = None) -> "Provenance":
@@ -134,7 +166,7 @@ class Provenance:
             built_by=_getuser(),
             git_remote=g("remote", "get-url", "origin") or None,
             created_at=datetime.now().isoformat(),
-            command_line=tuple(sys.argv),
+            command_line=cls._redact_credentials(sys.argv),
         )
 
     @classmethod

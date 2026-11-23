@@ -252,8 +252,10 @@ def prepare_pool(
                     stamped.append((row["teacher_route"], row["task_spec"]))
             elif index == 2:
                 upstream = 0
-                for line in local.read_text().splitlines():
-                    if not line.strip():
+                # Byte-level line splitting: the Nemotron text embeds Unicode separators that
+                # str.splitlines would treat as line breaks inside JSON strings.
+                for raw_line in local.read_bytes().split(b"\n"):
+                    if not raw_line.strip():
                         continue
                     upstream += 1
                     source = Source(
@@ -262,7 +264,7 @@ def prepare_pool(
                         row=f"RL/instruction_following/instruction_following.jsonl:{upstream - 1}",
                         importer_revision=NEMOTRON_IF_RECIPE_VERSION,
                     )
-                    raw = RawRow(id=row_identity("nemotron_if", source), source=source, data=json.loads(line))
+                    raw = RawRow(id=row_identity("nemotron_if", source), source=source, data=json.loads(raw_line))
                     task = convert_nemotron_if(
                         raw,
                         ConversionContext(
