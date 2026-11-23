@@ -117,6 +117,13 @@ def read_composition_inputs(inputs: CurriculumComposeInputs) -> dict:
 
 def compose_plan(document: dict, expected_fresh_task_count: int) -> ComposePlan:
     """Verify every read-side assertion for one additions-mode composition."""
+    rebound = document.get("rebound")
+    if rebound:
+        raise ValueError(
+            f"the composition manifest declares a rebound of {rebound.get('source_id')!r}, but the maintained"
+            " additions-mode compose cannot rebind a source (the projection pass is not wired in);"
+            " resolve the rebound before composing"
+        )
     old = AlignmentRelease.model_validate(read_reference(document["old_release"]))
     old_coverage = CurriculumCoverage.model_validate(read_reference(document["old_coverage"]))
     fresh = AlignmentRelease.model_validate(read_reference(document["fresh_release"]))
@@ -454,6 +461,7 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
         "confidence": {"uri": confidence.uri, "sha256": confidence.sha256},
         "source_count": len(plan.sources),
         "catalog_source_count": len(plan.inventory),
+        "inventory_count": len(plan.inventory),
         "task_count": release.task_count,
         "fresh_sources": list(plan.targets),
         "retained_source_count": len(old_sources),
@@ -462,6 +470,16 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
         "statistics_exact_union": True,
         "confidence_vectors_exact_union": True,
         "samples_recomputed_from_full_assignments": True,
+        # Load-facing handoff keys (curriculum_load.verify_handoff): each flag is earned
+        # by the checks above this seal — the retained readback verified every assignment
+        # value byte for byte, the statistics/confidence unions are exact, and the
+        # additions-mode compose never rewrites task ids or public inputs.
+        "all_retained_assignment_values_verified": all(row["all_retained_values_verified"] for row in retained_files),
+        "all_statistics_and_confidence_values_unchanged": True,
+        "all_task_ids_unchanged": True,
+        "all_public_inputs_unchanged": True,
+        "rebound_source": "",
+        "rebound_tasks": 0,
         "confidence_validated_rows": validated,
         "sample_task_count": coverage.sample_task_count,
         "model_calls": 0,

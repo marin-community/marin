@@ -562,6 +562,7 @@ def _release_check_inputs(
         "phase": phase,
         "output_root": str(tmp_path / "release" / name),
         "service_url": "https://fixture.example",
+        "applet_id": "12345678-1234-5678-1234-567812345678",
         "expected_source_count": 2,
         "production_version": 41,
     }
@@ -605,7 +606,11 @@ def test_release_check_preflight_write_delegates_and_seals(tmp_path):
     assert receipt_path == str(tmp_path / "release" / "release-check" / "checker" / "preflight.json")
     stage_receipt = json.loads((tmp_path / "release" / "release-check" / "release-check-preflight.json").read_text())
     assert stage_receipt["kind"] == f"atlas-{RELEASE_ID}-release-check"
-    assert stage_receipt["phase"] == "preflight" and stage_receipt["checker_passed"] is True
+    assert stage_receipt["phase"] == "preflight" and stage_receipt["passed"] is True
+    assert stage_receipt["target"] == {
+        "id": "12345678-1234-5678-1234-567812345678",
+        "service_url": "https://fixture.example",
+    }
     assert proof["receipt"]["sha256"] == hashlib.sha256(Path(proof["receipt"]["uri"]).read_bytes()).hexdigest()
     assert _last_alert_kind(tmp_path) == release_check.alerts.KIND_FINISH
 
@@ -670,7 +675,8 @@ def test_release_check_hosted_delegates_with_baseline_and_seals(tmp_path):
     assert "--dist" not in argv
     assert receipt_path.endswith("checker/hosted.json")
     stage_receipt = json.loads((tmp_path / "release" / "release-check" / "release-check-hosted.json").read_text())
-    assert stage_receipt["phase"] == "hosted" and stage_receipt["checker_passed"] is True
+    assert stage_receipt["phase"] == "hosted" and stage_receipt["passed"] is True
+    assert stage_receipt["target"]["id"] == "12345678-1234-5678-1234-567812345678"
 
 
 def test_release_check_postpublish_plans_full_sweep(tmp_path):

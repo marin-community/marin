@@ -10,43 +10,19 @@ import pytest
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.release_stages.graph import (
-    ReleasePlan,
     load_plan,
+    plan_fingerprint,
     plan_ref,
     stage_output_root,
     write_plan,
 )
-
-
-def _plan(**overrides) -> ReleasePlan:
-    defaults = dict(
-        release_id="testrelease",
-        source_revision="a" * 40,
-        release_root="s3://bucket/atlas/preview-release/testrelease",
-        catalog_root="s3://bucket/catalog/production",
-        prior={
-            "release_id": "priorrelease",
-            "load_id": "b" * 32,
-            "snapshot_uri": "s3://bucket/snapshots/prior",
-            "snapshot_sha256": "c" * 64,
-            "catalog_uri": "s3://bucket/catalog/prior",
-        },
-        targets=("Marin:fixture",),
-        expected_source_count=2,
-        expected_browse_source_count=2,
-        expected_contract_count=1,
-        expected_contract_tasks=10,
-        expected_selected_panels=3,
-        region_prefix="s3://bucket-region/",
-    )
-    defaults.update(overrides)
-    return ReleasePlan(**defaults)
+from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 
 
 def test_plan_validates_shape():
-    _plan().validate_shape()
+    fixture_plan().validate_shape()
     with pytest.raises(ValueError, match="32-hex"):
-        _plan(
+        fixture_plan(
             prior={
                 "release_id": "x",
                 "load_id": "short",
@@ -56,26 +32,48 @@ def test_plan_validates_shape():
             }
         ).validate_shape()
     with pytest.raises(ValueError, match="region_prefix"):
-        _plan(region_prefix="s3://bucket-region").validate_shape()
+        fixture_plan(region_prefix="s3://bucket-region").validate_shape()
     with pytest.raises(ValueError, match="kind"):
-        _plan(kind="other").validate_shape()
+        fixture_plan(kind="other").validate_shape()
+    with pytest.raises(ValueError, match="artifact_version"):
+        fixture_plan(artifact_version="v1").validate_shape()
+    with pytest.raises(ValueError, match="populations"):
+        fixture_plan(populations={}).validate_shape()
+    with pytest.raises(ValueError, match="scan region"):
+        fixture_plan(scan_regions={"alpha": "s3://bucket-region/alpha"}).validate_shape()
+    with pytest.raises(ValueError, match="rebound"):
+        fixture_plan(rebound_source="Marin:fixture", rebound_tasks=0).validate_shape()
+    with pytest.raises(ValueError, match="production_version"):
+        fixture_plan(
+            service={**fixture_plan().service.model_dump(mode="json"), "production_version": 0}
+        ).validate_shape()
+    with pytest.raises(ValueError, match="measured dependency"):
+        fixture_plan(measured={**fixture_plan().measured.model_dump(mode="json"), "sha256": ""}).validate_shape()
 
 
 def test_write_plan_seals_write_once(tmp_path):
     root = str(tmp_path / "release")
-    first = write_plan(_plan(), root)
+    first = write_plan(fixture_plan(), root)
     assert first["uri"].endswith("release-plan.json")
     stored = json.loads(StoragePath(first["uri"]).read_text())
     assert stored["release_id"] == "testrelease" and stored["prior"]["load_id"] == "b" * 32
+    assert stored["pins"]["prior_declarations"]["uri"].endswith("prior/declarations.json")
     loaded = load_plan(Path(first["uri"]))
     assert loaded.targets == ("Marin:fixture",)
+    assert loaded.service.preview_base_version == 30
     # Byte-identical rerun is idempotent; a changed plan refuses.
-    assert write_plan(_plan(), root)["sha256"] == first["sha256"]
+    assert write_plan(fixture_plan(), root)["sha256"] == first["sha256"]
     with pytest.raises(ValueError, match="different content"):
-        write_plan(_plan(expected_source_count=3), root)
+        write_plan(fixture_plan(expected_source_count=3), root)
 
 
 def test_stage_paths_derive_from_the_plan():
-    plan = _plan()
+    plan = fixture_plan()
     assert stage_output_root(plan, "census").endswith("testrelease/census")
     assert plan_ref(plan.release_root, "census/receipt.json")["uri"].endswith("census/receipt.json")
+
+
+def test_plan_fingerprint_is_stable_and_content_bound():
+    plan = fixture_plan()
+    assert plan_fingerprint(plan) == plan_fingerprint(fixture_plan())
+    assert plan_fingerprint(plan) != plan_fingerprint(fixture_plan(expected_source_count=3))

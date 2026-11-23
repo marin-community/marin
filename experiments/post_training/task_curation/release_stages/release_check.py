@@ -51,6 +51,7 @@ class ReleaseCheckInputs:
     phase: str
     output_root: str
     service_url: str
+    applet_id: str
     expected_source_count: int
     production_version: int
     package: ArtifactRef | None = None
@@ -62,7 +63,7 @@ class ReleaseCheckInputs:
 
     def validate(self) -> None:
         """Refuse malformed inputs before any verification runs."""
-        for name in ("release_id", "source_revision", "output_root", "service_url"):
+        for name in ("release_id", "source_revision", "output_root", "service_url", "applet_id"):
             if not getattr(self, name):
                 raise ValueError(f"{name} is required")
         if self.phase not in RELEASE_CHECK_PHASES:
@@ -253,7 +254,10 @@ def run_release_check(
             return proof
         (checker if checker is not None else subprocess_checker)(repo_root, argv, receipt_path)
         checker_document = verify_checker_receipt(receipt_path, inputs)
-        proof["checker_passed"] = checker_document.get("passed") is True
+        proof["passed"] = checker_document.get("passed") is True
+        # The marina-release contract reads the maintained receipt vocabulary: the
+        # boolean outcome field and the applet the check targets.
+        proof["target"] = {"id": inputs.applet_id, "service_url": inputs.service_url}
         proof["completed_at"] = datetime.now(tz=UTC).isoformat(timespec="seconds")
         receipt = seal(f"{inputs.output_root}/{STAGE_RECEIPT_PATTERN.format(phase=inputs.phase)}", proof)
         proof["receipt"] = {"uri": receipt.uri, "sha256": receipt.sha256}
