@@ -292,3 +292,11 @@ def test_a_shared_tie_keys_each_item_off_the_question_stem_that_other_items_shar
     shared = keys_table(windows, counts, tie=rarest_key.tie_values(windows, rarest_key.Tie.SHARED))
     assert all(key in stem_windows for key in earliest)
     assert not any(key in stem_windows for key in shared.column("key1_hash").to_pylist())
+
+
+def test_two_key_streams_of_one_item_count_as_one_holder_of_a_shared_window():
+    streams = [text_stream("Henry made two stops during his sixty mile bike trip")] * 2
+    hashes, owners, offsets = rarest_key.candidate_windows(streams)
+    ids = np.array(["gsm8k-0", "gsm8k-0"], dtype=object)
+    windows = Windows(hashes, owners, offsets, ids, np.array([KeyStream.QUESTION, KeyStream.UNLETTERED], dtype=object))
+    assert set(rarest_key.tie_values(windows, rarest_key.Tie.SHARED).tolist()) == {1}

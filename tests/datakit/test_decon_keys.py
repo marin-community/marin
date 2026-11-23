@@ -304,3 +304,9 @@ def test_keys_from_outside_the_eval_template_find_a_copy_without_the_template():
     key = keys_table(windows, np.zeros(len(hashes), dtype=np.int64)).column("key1_hash").to_pylist()[0]
     record = "Solve this problem: Henry made two stops during his 60-mile bike trip. Show your work."
     assert key in set(window_hashes(text_stream(record)).tolist())
+
+
+def test_a_bound_narrower_than_a_window_is_rejected():
+    stream = text_stream("Henry made two stops during his sixty mile bike trip.")
+    with pytest.raises(ValueError):
+        candidate_windows([stream], bounds=[(5, 10)])

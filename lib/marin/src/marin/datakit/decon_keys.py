@@ -194,6 +194,8 @@ def candidate_windows(
         if len(stream) < width:
             continue
         low, high = bounds[number] if bounds is not None else (0, len(stream))
+        if not (0 <= low and high - low >= width and high <= len(stream)):
+            raise ValueError(f"bound {(low, high)} of a {len(stream)}-character stream must hold a window")
         last = high - width - low
         starts = (
             sorted({low + round(k * last / (WINDOWS_PER_ITEM - 1)) for k in range(WINDOWS_PER_ITEM)}) if last else [low]

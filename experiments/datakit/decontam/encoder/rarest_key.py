@@ -124,19 +124,14 @@ class Tie(StrEnum):
     """How ``choose`` orders equally rare windows before the earliest offset."""
 
     EARLIEST = "earliest"
-    MIDDLE = "middle"  # nearest the middle of the stream
     SHARED = "shared"  # held by the fewest other items (shared prompt text such as a common question stem)
 
 
 def tie_values(windows: Windows, tie: Tie) -> np.ndarray | None:
     """One ``keys_table`` tie value per candidate window."""
-    hashes, owners, offsets, ids, _ = windows
+    hashes, owners, _, ids, _ = windows
     if tie == Tie.EARLIEST:
         return None
-    if tie == Tie.MIDDLE:
-        last = np.zeros(int(owners.max()) + 1, dtype=np.int64)
-        np.maximum.at(last, owners, offsets.astype(np.int64))
-        return np.abs(2 * offsets.astype(np.int64) - last[owners])
     _, item_numbers = np.unique(ids, return_inverse=True)
     items = item_numbers[owners].astype(np.int64)
     pairs = np.unique(np.stack([hashes.view(np.int64), items], axis=1), axis=0)
