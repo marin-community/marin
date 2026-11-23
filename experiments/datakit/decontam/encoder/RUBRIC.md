@@ -16,8 +16,9 @@ signs, names, conditions, and what is asked.
 - `EDITED`: the same question (it asks the same thing and has the same answer), but the wording is not
   identical: a word dropped or replaced, a typo, a sentence reordered, harmless text inserted, or the
   question is cut off but most of it is there and nothing contradicts it.
-- `VARIANT`: a different problem made from the same template or source: a number, operator, name,
-  condition, or the asked quantity is changed, or a constraint is added, so the answer can differ.
+- `VARIANT`: a different problem made from the same template or source: a number, operator, name or
+  condition in the question, or the asked quantity, is changed, or a constraint is added, so the answer
+  can differ. Changed choices alone do not make a variant (see below).
 - `GENERIC`: the shared text is only a generic phrase, an instruction, boilerplate, or a common
   definition or code idiom ("Which of the following statements is true?", a license header), and the
   excerpt does not hold this particular item.
@@ -63,10 +64,11 @@ The eval answer is given in `eval_answer`.
 - The document can be a data dump (JSON): a question and its choices stored as fields of one row count
   as shown together.
 - The eval question can be in any language; judge it in that language.
-- Label `VARIANT` when a number, symbol, name, condition, or the content of an eval choice is changed
-  or removed, or a requirement is added.
-- When the document has the eval question and every eval choice unchanged and only adds more options
-  after them, label `EDITED` and start the note with "extra options".
+- Label `VARIANT` when a number, symbol, name or condition of the question is changed, or a requirement
+  is added.
+- When the document has the eval question unchanged (or with the small edits of `EDITED`) but its
+  choices are changed, removed, added or replaced, the question is copied: label `EDITED` and start the
+  note with "choices changed". This does not apply to a short generic stem (next rules).
 - A question that is the same except for typesetting is `COPY`.
 - For a short generic stem, the item is the stem together with its choices: label `COPY` only when the
   document shows this stem with these choices as one question; label `GENERIC` when the stem words and
