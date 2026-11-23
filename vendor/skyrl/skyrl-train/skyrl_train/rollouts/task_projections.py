@@ -42,7 +42,7 @@ from skyrl_train.trajectory_runners.types import (
     TrajectoryBatch,
     TaskRequestBatch,
 )
-from skyrl_train.utils.harbor_errors import (
+from skyrl_train.task_error_handling import (
     DEFAULT_ERROR_HANDLING_CONFIG,
     ErrorHandlingConfig,
     classify_exception_type,

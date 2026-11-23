@@ -226,7 +226,7 @@ def read_journal(destination: str) -> Journal | None:
         head = HEAD_JSON.validate_json(current.data)
         if head.status.terminal is not None and head.workpiece is None:
             raise ValueError(f"terminal {head.status.terminal} names no workpiece")
-    except (ValueError, AttributeError) as error:  # Not JSON, not an object, or not a head of this format.
+    except (ValueError, AttributeError) as error:
         raise CorruptJournal(f"{destination}/{HEAD} is no format-{JOURNAL_FORMAT} head: {error}") from error
     return Journal(destination, head, current.version)
 

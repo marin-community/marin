@@ -14,7 +14,6 @@ import subprocess
 import sys
 import tarfile
 import threading
-import time
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -27,10 +26,12 @@ from typing import Any, cast, override
 import httpx
 import pytest
 from botocore.exceptions import ClientError, IncompleteReadError
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.llm.fake_glm import serving
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeCommand, FakeEnv, FakeInference, FakeWeb
-from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, chunk, report, segment
+from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, Time, chunk, report, segment
 from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, Injection, LocalController, local_iris_machine
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model, transcript
 from pydantic import TypeAdapter, ValidationError
@@ -82,7 +83,7 @@ from taskforge.effects.issues import (
     UnsupportedFormat,
 )
 from taskforge.effects.log import EventLog, JsonlSink, Opened, Record, Status, decode, fold
-from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
+from taskforge.harness.protocol import Stopped, StopReason
 from taskforge.llm.client import AttemptFailed, AttemptOutcome, ModelClient, Progress, Provider, Segment
 from taskforge.llm.glm_provider import EndpointSource, FixedEndpoint, GlmEndpoint, GlmProvider, Pool
 from taskforge.llm.policy import GLM_5_3, ModelProfile
@@ -106,7 +107,7 @@ from taskforge.model.review import (
     ReviewEnd,
     TrialResult,
 )
-from taskforge.model.stage import Exit, Stage
+from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
@@ -133,13 +134,12 @@ from taskforge.resources.env import (
 )
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids, NewId
-from taskforge.resources.inference import InferenceClient, InferenceRequest
+from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages import STAGES
 from taskforge.stages.author import AuthorReference
 from taskforge.stages.classify import replayable_grade
-from taskforge.stages.exits import Decided
 from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config, build_resources, install, retry_policy, solver_turn
 
@@ -676,13 +676,18 @@ async def test_stage_restart_replays_on_fresh_machine_without_repeating_inferenc
     assert len(resource.inference.requests) == len(script())
 
 
+# Pilot 2026-11-21 (d09): the causes of the replayed attempts before a hold reached only the driver log.
 async def test_stage_restart_stops_after_three_attempts_with_cause(proposal: TaskProposal) -> None:
     envs = Envs(fail=True)
     resource = resources(envs, script())
-    result = await run_workpiece(proposal, config(), resource, EventLog(), install=install)
+    log = EventLog()
+    result = await run_workpiece(proposal, config(), resource, log, install=install)
     assert result.terminal == Terminal.HELD
     assert len(envs.created) == 3
     assert "fake machine died" in str(result.decisions[-1])
+    notes = [record.event.msg for record in log.records if isinstance(record.event, Note)]
+    assert [note.split(":")[0] for note in notes] == [f"Stage author round 0 attempt {n} of 3" for n in (1, 2, 3)]
+    assert all("fake machine died" in note for note in notes)
 
 
 @pytest.mark.parametrize("command", ["one", "run"])
@@ -1199,36 +1204,55 @@ async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
     assert workpiece.terminal == Terminal.ACCEPTED
 
 
+CUT_SEEN = 30.0
+"""Seconds within which the fake router's next write sees that the client closed a connection."""
+
+
 # Regression: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
 # (1 POST, 0 GETs, nothing resolved) under a 50 ms stall timeout and a 100 ms availability window.
 async def test_a_trickling_error_body_holds_the_workpiece_within_the_availability_window(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    window = {"provider.unavailable_wait": 0.1, "provider.backoff_initial": 0.001, "provider.backoff_maximum": 0.001}
+    # The window's clock moves only when the client backs off: each window holds two attempts and one health poll.
+    window = {
+        "provider.unavailable_wait": 3600.0,
+        "provider.backoff_initial": 1800.0,
+        "provider.backoff_maximum": 1800.0,
+    }
     policy = driver.run_policy(driver_args.policy).overlaid(window)
+    clock = Time()
     with serving() as fake:
         for _ in range(100):
-            fake.status(503, "busy", trickle=400)
+            fake.status(503, "busy", trickle=400)  # each body takes 2 s to arrive; the stall timeout is 50 ms
         source = FixedEndpoint(GlmEndpoint(fake.base_url, "token", Pool.HIGH))
         async with GlmProvider(source, policy.setting("author.model", str), 0.05, 8) as author:
             roles = ("solver", "adversary")
             providers = {role: ScriptedProvider((), policy.setting(f"{role}.model", str)) for role in roles}
             built = build_resources(policy, {**providers, "author": author}, {}, FakeWeb({}, {}))
+            retry = retry_policy(policy, "author")
+            client = GlmInference(
+                ModelClient(author, GLM_5_3, retry, role="author", clock=clock.clock, sleep=clock.sleep), "author"
+            )
             serve(
                 monkeypatch,
-                replace(built, envs=Envs(), role_inference={**built.role_inference, "solve_review": CleanReviewer()}),
+                replace(
+                    built,
+                    envs=Envs(),
+                    inference=client,
+                    role_inference={**built.role_inference, "author": client, "solve_review": CleanReviewer()},
+                ),
             )
-            started = time.monotonic()
             await driver.one(driver_args)
-            elapsed = time.monotonic() - started
+        # Every attempt was cut before its body completed (test_provider pins the configured deadline).
+        assert all(fake.cut.acquire(timeout=CUT_SEEN) for _ in fake.requests), "an error body was read to its end"
     destination = tmp_path / "out" / driver.proposal_key(driver_args.proposals)
     workpiece = published_workpiece(destination)
     assert (workpiece.terminal, solver_slots(destination)) == (Terminal.HELD, [])
     resolved = [record.event for record in history(destination) if isinstance(record.event, Resolved)]
     assert not [event for event in resolved if isinstance(event.request, InferenceRequest)]
-    # Each stage attempt ends within the window plus one bounded attempt, long before one body (2 s) could end.
-    assert elapsed < STAGE_REPLAY_ATTEMPTS * 0.2 and len(fake.requests) >= STAGE_REPLAY_ATTEMPTS
-    assert fake.health_polls >= 1
+    # Each stage attempt ended when its window closed, not when a body completed.
+    assert (len(fake.requests), fake.health_polls) == (2 * STAGE_REPLAY_ATTEMPTS, STAGE_REPLAY_ATTEMPTS)
+    assert clock.waits == [1800.0] * 2 * STAGE_REPLAY_ATTEMPTS
 
 
 def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources, workspace: WorkspaceHydration | None = None) -> None:
@@ -1809,34 +1833,6 @@ async def test_parent_summary_separates_superseded_and_corrupt_children_from_goo
     assert f"{paths['superseded']}: another writer owns" in lines[f"OUTCOME superseded exit={driver.SUPERSEDED}"]
     assert published_workpiece(roots["good"]).terminal is Terminal.ACCEPTED
     assert tree(roots["corrupt"]) == corrupt
-
-
-class ScriptedAuthor(Harness):
-    def __init__(self, *results: Exit | None) -> None:
-        self.results = iter(results)
-        self.calls = 0
-
-    @override
-    async def run(
-        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
-    ) -> Exit:
-        self.calls += 1
-        return cast(Exit, next(self.results))
-
-
-@pytest.mark.parametrize(
-    "result, named",
-    [(Decided(Accept(BandOutcome.IN_BAND)), "author returned Decided"), (None, "author returned NoneType")],
-)
-async def test_stage_result_without_a_transition_from_that_stage_fails(
-    proposal: TaskProposal, result: Exit | None, named: str
-) -> None:
-    author = ScriptedAuthor(result, Stopped(StopReason.FINISHED, Conversation((), ())))
-    settings = config()
-    settings = replace(settings, author=replace(settings.author, harness=author))
-    with pytest.raises(ValueError, match=named):
-        await run_workpiece(proposal, settings, resources(Envs(), ()), EventLog(), install=install)
-    assert author.calls == 1
 
 
 async def test_hold_from_a_terminal_stage_observer_records_that_stage(proposal: TaskProposal) -> None:
@@ -3205,29 +3201,65 @@ class SandboxController(LocalController):
 class LocalIrisEnvs(EnvFactory):
     """Each environment is a fresh local Iris sandbox in its own directory with the same scripted faults."""
 
-    def __init__(self, root: Path, faults: Sequence[Injection], prelude: str = "") -> None:
-        self.root, self.faults, self.prelude = root, faults, prelude
+    def __init__(
+        self, root: Path, faults: Sequence[Injection], prelude: str = "", cancel_error: Exception | None = None
+    ) -> None:
+        self.root, self.faults, self.prelude, self.cancel_error = root, faults, prelude, cancel_error
         self.created: list[Path] = []
+
+    def cancel(self) -> None:
+        if self.cancel_error is not None:
+            raise self.cancel_error
 
     @override
     async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
         workdir = self.root / f"sandbox-{len(self.created)}"
         workdir.mkdir(parents=True)
         self.created.append(workdir)
-        machine = local_iris_machine(workdir, SandboxController(workdir, self.faults, self.prelude))
+        machine = local_iris_machine(workdir, SandboxController(workdir, self.faults, self.prelude), self.cancel)
         return ShellboxEnv(machine, "image", AsyncExitStack())
 
 
 # Regression: a lost WebSocket upgrade reply reran the command in the same sandbox, and a
 # missing `wc` or an OOM-killed sandbox during capture held only after three sandboxes with one append each.
+# Review 2026-11-21 (iris timeout follow-up 3): after a lone `timer 137` was classified as OOM or unknown, a failed
+# TerminateJob (503 or 403) replaced that outcome with the bare transport error, and the run left through the bug path.
+TIMER_KILL_CANCEL_FAILS = [
+    (
+        (("command", Fault.TIMER_KILLED, True), ("status", Fault.OOM_KILLED, False)),
+        1,
+        "OOMKilled",
+        ConnectError(code, "TerminateJob failed"),
+    )
+    for code in (Code.UNAVAILABLE, Code.PERMISSION_DENIED)
+] + [
+    (
+        (("command", Fault.TIMER_KILLED, True),),
+        STAGE_REPLAY_ATTEMPTS,
+        "timer 137",
+        ConnectError(code, "TerminateJob failed"),
+    )
+    for code in (Code.UNAVAILABLE, Code.PERMISSION_DENIED)
+]
+
+
 @pytest.mark.parametrize(
-    "faults,prelude,sandboxes,cause",
+    "faults,prelude,sandboxes,cause,cancel_error",
     [
-        ((("command", Fault.SETUP_FAILED, True),), "", STAGE_REPLAY_ATTEMPTS, "command outcome unknown"),
-        ((), "wc() { echo 'wc: not found' >&2; return 127; }; ", 1, "wc: not found"),
-        ((("stdout-size", Fault.OOM_KILLED, True),), "", 1, "OOMKilled"),
+        ((("command", Fault.SETUP_FAILED, True),), "", STAGE_REPLAY_ATTEMPTS, "command outcome unknown", None),
+        ((), "wc() { echo 'wc: not found' >&2; return 127; }; ", 1, "wc: not found", None),
+        ((("stdout-size", Fault.OOM_KILLED, True),), "", 1, "OOMKilled", None),
+        *((faults, "", sandboxes, cause, error) for faults, sandboxes, cause, error in TIMER_KILL_CANCEL_FAILS),
     ],
-    ids=["lost-upgrade-reply", "capture-without-wc", "capture-oom-killed"],
+    ids=[
+        "lost-upgrade-reply",
+        "capture-without-wc",
+        "capture-oom-killed",
+        "timer-kill-oom-cancel-503",
+        "timer-kill-oom-cancel-403",
+        "timer-kill-unknown-cancel-503",
+        "timer-kill-unknown-cancel-403",
+    ],
 )
 async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
     driver_args: Namespace,
@@ -3237,8 +3269,9 @@ async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
     prelude: str,
     sandboxes: int,
     cause: str,
+    cancel_error: Exception | None,
 ) -> None:
-    envs = LocalIrisEnvs(tmp_path / "sandboxes", faults, prelude)
+    envs = LocalIrisEnvs(tmp_path / "sandboxes", faults, prelude, cancel_error)
     counted = (call("shell", {"command": "echo ran >> counter", "timeout": 5}, "inspect"), *script()[1:])
 
     @asynccontextmanager

@@ -26,6 +26,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCORERS = Path(__file__).parent / "scorers"
 DEPENDENCIES = {
+    "genomeqa": ("genomeqa.py",),
     "gsm8k_cot": ("math.py", "minerva.py", "amc.py", "relations.py"),
     "minerva_math": ("math.py", "minerva.py", "amc.py", "relations.py"),
     "bbh_cot": ("choices.py",),
@@ -51,7 +52,7 @@ DEPENDENCIES = {
 @cache
 def scorer_files(scorer: str) -> tuple[TaskResource, ...]:
     paths = ["__init__.py", "main.py", "lm-evaluation-harness-MIT.txt", *DEPENDENCIES[scorer]]
-    if scorer in {"ifeval", "ifbench"}:
+    if scorer == "ifbench":
         paths.extend(
             str(path.relative_to(SCORERS))
             for path in sorted((SCORERS / scorer).rglob("*"))

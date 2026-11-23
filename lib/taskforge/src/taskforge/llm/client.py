@@ -216,7 +216,7 @@ class Progress:
             self.first_token = now
         if self.remaining is None or now - self.first_token < self.remaining:
             return True
-        # A finishing chunk ends the stream: its finish reason, an abort included, decides the attempt, not the bound.
+        # A finishing chunk, including abort, decides the attempt before the generation bound.
         if any(choice.get("finish_reason") for choice in chunk.get("choices") or ()):
             return True
         if self.past_bound is None:

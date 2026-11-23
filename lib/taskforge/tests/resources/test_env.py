@@ -1,12 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import errno
 import os
 import re
-import shutil
-import subprocess
 import tarfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -28,7 +25,6 @@ from lib.taskforge.tests.resources.iris_fakes import (
 from rigging.timing import ExponentialBackoff
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.iris import machine as iris_backend
-from shellbox.backends.iris.machine import IrisMachine
 from shellbox.machine import (
     Command,
     CommandOutcomeUnknown,
@@ -165,7 +161,6 @@ async def test_environment_writes_binary_files_and_runs_commands_under_its_defin
     result = await run_command(RunCommand(COMMAND, 5), original, notify=Notes())
     assert (result.exit_code, result.stdout, result.stderr) == (7, "hello", "err")
     assert await original.read(OUTPUT) == b"changed"
-    # Position in the owner's history, not a chain of effects, identifies what a replay reconstructs.
     assert original.fingerprint() == initial
     await original.close()
     with pytest.raises(Restart):
@@ -330,40 +325,17 @@ async def test_read_ranges_flow_through_executor(create_env: Callable[[], Awaita
     assert await read_file(ReadFile(OUTPUT, limit=0), env, notify=Notes()) == b""
 
 
-class TimedIrisMachine(IrisMachine):
-    """An Iris machine whose wrapped command ends with ``exit_code`` after ``elapsed`` seconds."""
-
-    def __init__(self, exit_code: int, elapsed: float) -> None:
-        self.exit_code, self.elapsed = exit_code, elapsed
-        self.commands: list[Command] = []
-
-    @override
-    async def run(self, command: Command) -> Result:
-        self.commands.append(command)
-        await asyncio.sleep(self.elapsed)
-        return Result(self.exit_code, b"partial", b"", False, False, ExitReason.EXITED)
-
-
-@pytest.mark.parametrize("exit_code,elapsed,reported", [(124, 0.2, 124), (137, 0.2, 124), (137, 0, 137), (7, 0, 7)])
-async def test_iris_command_is_bounded_inside_the_container(exit_code: int, elapsed: float, reported: int) -> None:
-    machine = TimedIrisMachine(exit_code, elapsed)
-    env = ShellboxEnv(machine, "image", AsyncExitStack())
-    result = await env.run(COMMAND, timeout=0.1)
-    assert (result.exit_code, result.stdout) == (reported, "partial")
-    (command,) = machine.commands
-    assert command.argv == ("sh", "-c", env_module.CONTAINED_TIMEOUT, "forge-timeout", "0.1s", COMMAND)
-    assert command.timeout == 0.1 + env_module.BACKSTOP
-
-
-@pytest.mark.parametrize(
-    "script,timeout,code,stdout", [('printf "a  b"; exit 3', "5s", 3, b"a  b"), ("sleep 5", "0.2s", 124, b"")]
-)
-def test_contained_timeout_preserves_the_command(script: str, timeout: str, code: int, stdout: bytes) -> None:
-    if code == 124 and shutil.which("timeout") is None:
-        pytest.skip("this host has no timeout command")
-    argv = ["sh", "-c", env_module.CONTAINED_TIMEOUT, "forge-timeout", timeout, script]
-    result = subprocess.run(argv, capture_output=True, timeout=10)
-    assert (result.returncode, result.stdout) == (code, stdout)
+# Pilot 2026-11-21 (d09): the author's shell timed out repeatedly on Iris; each timeout must leave the same sandbox,
+# with the files earlier commands wrote, and show the model timeout's 124 with the output it printed so far.
+async def test_iris_command_timeout_keeps_the_sandbox_and_its_files(tmp_path: Path) -> None:
+    controller = LocalController()
+    env = _iris_env(tmp_path, controller)
+    note = tmp_path / "tmp" / "note.json"
+    await env.run(f"mkdir -p {note.parent} && printf kept > {note}", timeout=5)
+    slow = await env.run("printf partial; sleep 30", timeout=0.3)
+    assert (slow.exit_code, slow.stdout) == (124, "partial")
+    after = await env.run(f"cat {note}", timeout=5)
+    assert (after.exit_code, after.stdout) == (0, "kept")
 
 
 @pytest.mark.parametrize("code", [errno.ENOTDIR, errno.EACCES, errno.ENOENT, errno.ELOOP])
