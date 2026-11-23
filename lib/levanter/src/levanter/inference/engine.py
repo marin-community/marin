@@ -422,6 +422,7 @@ class PrefillWork(eqx.Module):
     prompt_lengths: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
     seq_params: SeqDecodingParams
     cached_pages: NamedArray | None = None
+    prompt_rows: NamedArray | None = None
 
 
 def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
@@ -643,9 +644,10 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenStat
                 decode_state = dataclasses.replace(
                     decode_state, page_table=dataclasses.replace(table, page_ref_counts=refs)
                 )
+            prompt_row = i if work.prompt_rows is None else work.prompt_rows.array[i]
             decode_state = decode_state.assign_seq(
                 local_slot_id=slot,
-                tokens=work.prompt_tokens["seq", i],
+                tokens=work.prompt_tokens["seq", prompt_row],
                 seq_len=work.prompt_lengths.array[i].astype(jnp.int32),
                 kv_pages=pages,
                 page_indices=pages,
@@ -1307,7 +1309,8 @@ class InferenceEngine:
 
         work_slot_ids = np.full((max_slots,), INVALID, dtype=np.int32)
         clone_targets = np.full((max_slots,), INVALID, dtype=np.int32)
-        prompt_tokens = np.full((max_slots, max_seq_len), INVALID, dtype=np.int32)
+        prompt_rows = np.full((max_slots,), INVALID, dtype=np.int32)
+        prompt_tokens = np.full((min(max_slots, max_seqs_in_prefill), max_seq_len), INVALID, dtype=np.int32)
         prompt_lengths = np.zeros((max_slots,), dtype=np.int32)
 
         prefix_pages = None
@@ -1395,7 +1398,8 @@ class InferenceEngine:
             work_slot_ids[prefill_idx] = slot_id
             clone_targets[prefill_idx] = INVALID
             prompt_lengths[prefill_idx] = len(seq_tokens)
-            prompt_tokens[prefill_idx, : len(seq_tokens)] = this_tokens
+            prompt_rows[prefill_idx] = num_primary
+            prompt_tokens[num_primary, : len(seq_tokens)] = this_tokens
 
             max_num_tokens[prefill_idx] = min(int(seq_params.max_num_tokens), self.config.max_seq_len)
             temperatures[prefill_idx] = np.asarray(seq_params.temperature, dtype=np.float32).item()
@@ -1469,6 +1473,7 @@ class InferenceEngine:
             clone_targets=hax.named(jnp.asarray(clone_targets, dtype=jnp.int32), axis="seq"),
             prompt_tokens=hax.named(jnp.asarray(prompt_tokens, dtype=jnp.int32), axis=("seq", "position")),
             prompt_lengths=hax.named(jnp.asarray(prompt_lengths, dtype=jnp.int32), axis="seq"),
+            prompt_rows=hax.named(jnp.asarray(prompt_rows), axis="seq"),
             cached_pages=None if prefix_pages is None else hax.named(jnp.asarray(prefix_pages), ("seq", "page")),
             seq_params=SeqDecodingParams(
                 max_num_tokens=jnp.asarray(max_num_tokens, dtype=jnp.int32),
