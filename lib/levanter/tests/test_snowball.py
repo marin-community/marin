@@ -510,6 +510,7 @@ def test_snowball_paged_generation_matches_full_forward(
             if packed_experts:
                 state = model.to_state_dict()
                 model = model.with_packed_experts().from_state_dict(state)
+                assert all(block.mlp.expert_mlp.w_up is None for block in model.transformer.blocks)
                 for name, value in model.to_state_dict().items():
                     np.testing.assert_array_equal(value, state[name])
             if selected_decode:

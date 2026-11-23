@@ -425,14 +425,17 @@ class MoEExpertMlp(eqx.Module):
         """Store both projections in the layout consumed by grouped experts."""
         if self.w_up is None:
             return self
-        return replace(self, w_gate=jnp.concatenate((self.w_gate, self.w_up), axis=-1), w_up=None)
+        return replace(self, w_gate=self._gate_up(), w_up=None)
 
     def split_gate_up(self) -> tuple[jax.Array, jax.Array]:
-        """Read the separate projections used by selected decode and HF checkpoints."""
+        """Return the separate gate and up weights, in that order."""
         if self.w_up is not None:
             return self.w_gate, self.w_up
         gate, up = jnp.split(self.w_gate, 2, axis=-1)
         return gate, up
+
+    def _gate_up(self) -> jax.Array:
+        return self.w_gate if self.w_up is None else jnp.concatenate((self.w_gate, self.w_up), axis=-1)
 
     @named_call
     def __call__(
@@ -445,7 +448,7 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
-        w_gate_up = self.w_gate if self.w_up is None else jnp.concatenate((self.w_gate, self.w_up), axis=-1)
+        w_gate_up = self._gate_up()
         return moe_mlp(
             x,
             selected_experts,
