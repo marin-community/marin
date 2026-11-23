@@ -327,4 +327,4 @@ rl:
   max_steps: 32
   selection_eligibility: covered
   pools:
-    uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pools/2026.11.22.1
+    uri: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4/long-loop-exp4/rl-pools/2026.11.22.2
