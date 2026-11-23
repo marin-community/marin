@@ -13,6 +13,7 @@ from haliax import NamedArray
 from haliax.core import flatten_all_axes_but
 from haliax.nn import cross_entropy_loss_and_log_normalizers
 from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_map
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
@@ -128,6 +129,8 @@ def next_token_loss(
     reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
+    *,
+    normalization: Literal["default", "batch_invariant"] = "default",
 ):
     """
     Compute the next token loss with optional logsumexp penalty.
@@ -141,7 +144,7 @@ def next_token_loss(
         reduction: reduction function or None to disable reduction
         reduction_axis: axis to apply reduction. None means all axes
         logsumexp_weight: weight for the logsumexp penalty
-        logit_soft_cap: optional soft cap for logits
+        normalization: Use fixed-row FP32 reduction for policy replay.
     Returns:
         NamedArray: computed loss
     """
@@ -160,6 +163,7 @@ def next_token_loss(
         reduction_axis=reduction_axis,
         weight=loss_weight,
         logsumexp_weight=logsumexp_weight,
+        normalization=normalization,
     )
 
 
@@ -172,10 +176,20 @@ def cross_entropy_and_logsumexp_penalty(
     reduction_axis: Optional[hax.AxisSelection] = None,
     weight: Optional[NamedArray] = None,
     logsumexp_weight=0.0,
+    normalization: Literal["default", "batch_invariant"] = "default",
 ) -> NamedArray:
     """A loss function that combines cross entropy loss with a logsumexp penalty."""
 
-    loss, log_normalizers = cross_entropy_loss_and_log_normalizers(pred_y, Vocab, target_y)
+    if normalization == "batch_invariant":
+        vocab = pred_y.resolve_axis(Vocab)
+        axis = pred_y.axes.index(vocab)
+        normalizers = batch_invariant_logsumexp(jnp.moveaxis(pred_y.array, axis, -1))
+        log_normalizers = hax.named(normalizers, tuple(a for a in pred_y.axes if a != vocab))
+        loss = hax.dot(target_y, log_normalizers - pred_y.astype(jnp.float32), axis=vocab)
+    elif normalization == "default":
+        loss, log_normalizers = cross_entropy_loss_and_log_normalizers(pred_y, Vocab, target_y)
+    else:
+        raise ValueError(f"Unknown cross entropy normalization: {normalization}")
 
     if logsumexp_weight is not None and logsumexp_weight != 0.0:
         loss = loss + logsumexp_weight * (log_normalizers**2)
