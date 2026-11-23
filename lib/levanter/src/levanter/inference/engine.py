@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Optional, Protocol, Sequence, runtime_checkable
 
 import equinox as eqx
 import haliax as hax
@@ -30,14 +30,13 @@ from levanter.inference.jit_scheduler import (
     TokenQueue,
     _DecodeOutputs,
 )
-from levanter.inference.page_table import PageTable
+from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.utils import INVALID, is_valid
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.snowball import SnowballLMHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
@@ -406,6 +405,18 @@ def _gather_logits(logits: NamedArray, indices: NamedArray) -> NamedArray:
     return hax.named(values, (*indices.axes, *logits.axes[1:]))
 
 
+@runtime_checkable
+class _SelectedRowDecoder(Protocol):
+    def decode_for_sampling(
+        self,
+        input_ids: NamedArray,
+        kv_cache: PageCache,
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        sample_indices: NamedArray,
+    ) -> tuple[NamedArray, PageCache]: ...
+
+
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
@@ -432,7 +443,7 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    if isinstance(model, SnowballLMHeadModel):
+    if isinstance(model, _SelectedRowDecoder):
         logits_at_samples, cache = model.decode_for_sampling(tokens, gen_state.cache, binfo, pos_ids, sample_indices)
     else:
         logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)

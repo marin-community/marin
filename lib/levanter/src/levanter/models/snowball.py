@@ -1154,7 +1154,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         pos_ids: NamedArray,
         sample_indices: NamedArray,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
-        """Prefill every token's KV state and project only the sampler's hidden rows."""
+        """Return logits in sample_indices order and update KV state for valid tokens."""
         hidden, caches = self._decode_hidden(input_ids, kv_cache, batch_info, pos_ids)
         sampled = hidden[:, 0].at[sample_indices.array].get(out_sharding=P())
         logits = jnp.einsum("pd,dv->pv", sampled, self.transformer.output_proj, out_sharding=P())
