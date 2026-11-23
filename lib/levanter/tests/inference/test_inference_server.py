@@ -299,28 +299,32 @@ def test_continuous_poll_reads_separate_ready_http_batches(monkeypatch, inferenc
     enqueued = threading.Event()
     resume = threading.Event()
     timeout = 25
-    admissions = []
+    first_tokens_per_round = []
     put = ctx.batch_queue.put
-    execute = ctx._execute_batch
+    generate = ctx.engine.generate_continuously
 
     def put_and_signal(batch):
         put(batch)
         enqueued.set()
 
-    def observe_execute(initial, poll):
+    def observe_generation(requests, *, on_tokens, **kwargs):
         entered.set()
         assert resume.wait(timeout=timeout)
+        started_requests = set()
 
-        def observe_poll(capacity, capture_routes):
-            admitted = poll(capacity, capture_routes)
-            if admitted:
-                admissions.append(len(admitted))
-            return admitted
+        def record_tokens(request_id, choice, tokens):
+            started_requests.add(request_id)
+            on_tokens(request_id, choice, tokens)
 
-        execute(initial, observe_poll)
+        generate(
+            requests,
+            on_tokens=record_tokens,
+            step_callback=lambda _step: first_tokens_per_round.append(len(started_requests)),
+            **kwargs,
+        )
 
     monkeypatch.setattr(ctx.batch_queue, "put", put_and_signal)
-    monkeypatch.setattr(ctx, "_execute_batch", observe_execute)
+    monkeypatch.setattr(ctx.engine, "generate_continuously", observe_generation)
     try:
         with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=4) as executor:
 
@@ -332,6 +336,7 @@ def test_continuous_poll_reads_separate_ready_http_batches(monkeypatch, inferenc
                         "model": TEST_MODEL_NAME,
                         "messages": [{"role": "user", "content": "Hello"}],
                         "max_tokens": 5,
+                        "stream": True,
                         "seed": 483,
                     },
                 )
@@ -347,8 +352,11 @@ def test_continuous_poll_reads_separate_ready_http_batches(monkeypatch, inferenc
             finally:
                 resume.set()
 
-            assert all(response.result(timeout=timeout).status_code == 200 for response in responses)
-            assert admissions == [3]
+            for response in responses:
+                result = response.result(timeout=timeout)
+                assert result.status_code == 200
+                assert "data: [DONE]" in result.text
+            assert first_tokens_per_round[:2] == [1, 4]
     finally:
         server.shutdown()
 

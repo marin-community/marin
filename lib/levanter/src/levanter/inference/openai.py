@@ -377,6 +377,7 @@ class InferenceContext:
         reserve_pages = self.config.service.max_retained_prompts > 0
 
         def poll(capacity: int, capture_routes: bool) -> InferenceBatch:
+            """Take ready requests in order, leaving a blocked head in the pending queue."""
             admitted = InferenceBatch()
             while capacity > 0:
                 if not waiting:
