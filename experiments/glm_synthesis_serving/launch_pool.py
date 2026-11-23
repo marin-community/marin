@@ -34,7 +34,7 @@ from iris.cluster.types import EnvironmentSpec, Entrypoint
 from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
 
-from experiments.glm_synthesis_serving import pool, pool_watchdog, stage_weights
+from experiments.glm_synthesis_serving import pool, pool_watchdog, serve_pool, stage_weights
 
 logger = logging.getLogger(__name__)
 
