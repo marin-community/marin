@@ -17,7 +17,7 @@ ASSISTANT_PREFIX_OPTIONS = {"extra_body": {"continue_final_message": True, "add_
 
 def bracket_tokenizer(chat_template: str) -> PreTrainedTokenizerFast:
     """Spell each character as a token, except that a closing bracket and a following newline merge."""
-    vocabulary = {"[UNK]": 0, "x": 1, "[": 2, "1": 3, "]": 4, "\n": 5, "]\n": 6}
+    vocabulary = {"[UNK]": 0, "x": 1, "[": 2, "1": 3, "]": 4, "\n": 5, "]\n": 6, "f": 7, "o": 8}
     backend = Tokenizer(models.BPE(vocabulary, [("]", "\n")], unk_token="[UNK]"))
     return PreTrainedTokenizerFast(
         tokenizer_object=backend,
@@ -63,6 +63,18 @@ def test_whitespace_only_assistant_prefix_follows_the_header(chat_template, head
     token_ids = assistant_prefix_token_ids(tokenizer, messages, ASSISTANT_PREFIX_OPTIONS)
 
     assert token_ids == tokenizer.encode(user_turn + header + prefix, add_special_tokens=False)
+
+
+@pytest.mark.parametrize("prefix", ["foox\n", "xx\n"], ids=["ends-in-marker", "only-markers"])
+@pytest.mark.parametrize("chat_template", [TRIMMING_TEMPLATE, KEEPING_TEMPLATE], ids=["trimming", "keeping"])
+def test_assistant_prefix_keeps_its_own_marker_characters(monkeypatch, chat_template, prefix):
+    # The user message holds the marker too, before the prefix.
+    monkeypatch.setattr("skyrl_train.inference_engines.chat_template.PREFIX_END_MARKER", "x")
+    tokenizer = bracket_tokenizer(chat_template)
+
+    token_ids = assistant_prefix_token_ids(tokenizer, conversation(prefix), ASSISTANT_PREFIX_OPTIONS)
+
+    assert token_ids == tokenizer.encode("<|user|>x<|end|><|assistant|>" + prefix, add_special_tokens=False)
 
 
 @pytest.mark.parametrize(
