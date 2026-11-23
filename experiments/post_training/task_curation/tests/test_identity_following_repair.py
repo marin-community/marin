@@ -56,7 +56,11 @@ FIXTURE_DIR = Path(__file__).with_name("fixtures") / "identity_following"
 
 
 def fixture_files() -> dict[str, bytes]:
-    """The real first archive row, split into its files."""
+    """The real first archive row, split into its files.
+
+    Three files carry one added trailing newline to satisfy the repo's end-of-file check; the
+    published repair hashes come from the real archives at build time, never from these fixtures.
+    """
     return {
         "environment/Dockerfile": (FIXTURE_DIR / "environment__Dockerfile").read_bytes(),
         INSTRUCTION_FILE: (FIXTURE_DIR / INSTRUCTION_FILE).read_bytes(),
@@ -302,7 +306,7 @@ def test_convert_repaired_identity_builds_a_clean_judged_task() -> None:
         "The response must state that it is Marin or a model built by researchers at Stanford and Open Athena.",
         "The response must be in the German language.",
     ]
-    assert parameters["question"] == prompt.strip()
+    assert parameters["question"] == prompt
     reasons = [change.reason for change in outcome.changes]
     assert any("identity-repair-20261123-v1" in reason for reason in reasons)
     assert any("response-file delivery" in reason for reason in reasons)
