@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -223,6 +224,33 @@ def test_models_endpoint_reports_the_configured_model(test_client):
     assert payload["object"] == "list"
     assert [model["id"] for model in payload["data"]] == [server.config.model_name]
     assert payload["data"][0]["max_model_len"] == server.inference_context.engine.config.max_seq_len
+
+
+def test_chat_stream_matches_complete_text_for_each_choice(test_client):
+    client, _ = test_client
+    payload = {
+        "model": TEST_MODEL_NAME,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "max_tokens": 5,
+        "seed": 483,
+        "n": 2,
+    }
+    complete = client.post("/v1/chat/completions", json=payload)
+    assert complete.status_code == 200, complete.text
+    streamed = client.post(
+        "/v1/chat/completions", json={**payload, "stream": True, "stream_options": {"include_usage": True}}
+    )
+    assert streamed.status_code == 200, streamed.text
+    events = [line.removeprefix("data: ") for line in streamed.text.splitlines() if line.startswith("data: ")]
+    assert events[-1] == "[DONE]"
+    chunks = [json.loads(event) for event in events[:-1]]
+    assert chunks[-1]["choices"] == []
+    assert chunks[-1]["usage"] == complete.json()["usage"]
+    for expected in complete.json()["choices"]:
+        deltas = [row for chunk in chunks for row in chunk["choices"] if row["index"] == expected["index"]]
+        assert "".join(row["delta"].get("content") or "" for row in deltas) == expected["message"]["content"]
+        assert deltas[0]["delta"]["role"] == "assistant"
+        assert deltas[-1]["finish_reason"] == expected["finish_reason"]
 
 
 def test_chat_completion_without_a_chat_template_is_rejected(test_client, monkeypatch, local_gpt2_tokenizer):
