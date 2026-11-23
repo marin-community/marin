@@ -31,7 +31,7 @@ class PageCache(eqx.Module):
 
 
 _PAGE_AXIS = "page"
-_SEQUENTIAL_UPDATE_TOKEN_LIMIT = 8
+_SEQUENTIAL_UPDATE_MAX_CAPACITY = 8
 
 
 class _InterleavedKvPageCache(PageCache):
@@ -172,7 +172,7 @@ def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
         update_spec = cache_sharding.spec.update(partitions=(None, *cache_sharding.spec[2:]))
         kv_ev = jax.reshard(kv_ev, cache_sharding.update(spec=update_spec))
 
-    if t_pages.shape[0] <= _SEQUENTIAL_UPDATE_TOKEN_LIMIT:
+    if t_pages.shape[0] <= _SEQUENTIAL_UPDATE_MAX_CAPACITY:
         # Small decode updates avoid a whole-cache layout conversion on TPU.
         def update_token(i, cache):
             update = kv_ev[i][None, None, :, :]
@@ -186,6 +186,7 @@ def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
     pages = jnp.where(active, t_pages, invalid_page)
     slots = jnp.where(active, t_slots, 0)
     # The sequential path gives repeated destinations their last update.
-    last_write = jnp.full(kv_pages.shape[:2], -1, dtype=jnp.int32).at[pages, slots].max(rows, mode="drop")
-    keep = active & (last_write.at[pages, slots].get(mode="fill", fill_value=-1) == rows)
+    no_write = -1
+    last_write = jnp.full(kv_pages.shape[:2], no_write, dtype=jnp.int32).at[pages, slots].max(rows, mode="drop")
+    keep = active & (last_write.at[pages, slots].get(mode="fill", fill_value=no_write) == rows)
     return kv_pages.at[jnp.where(keep, pages, invalid_page), slots].set(kv_ev, mode="drop")
