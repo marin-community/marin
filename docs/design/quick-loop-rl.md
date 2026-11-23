@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 4:08 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 4:23 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -1812,6 +1812,13 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   The job ended before accepting update 1 or publishing policy 1.
   The retry plan allows up to 60 minutes for the learner command, retains
   the independent TensorStore commit deadline and requires exact restore.
+  The official artifact main verified both new `2026.11.22.2` plans
+  against their previous launch settings. The new vLLM child started on
+  all five eight-H100 hosts and all 40 ranks passed the interconnect gate.
+  Serving rank zero streamed its 15.6 GiB share of the regional HF export
+  in 92.0 seconds. The native five-host retry awaits the single-host
+  qualification.
+  [Fresh held vLLM child][iris-held-vllm-retry]
 
   The native coordinator lost its first slot before the GPU group was
   admitted and its second during regional initializer streaming. Its
@@ -1875,6 +1882,16 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   to newly sampled tokens. Measure the 100 pinned prompts and check
   assistant-prefix replay on one eight-H100 host before retrying the
   five-host native pilot.
+  The first calibration stopped before opening the snapshot. The regional
+  Kubernetes pod omitted the worker-region field that the standalone
+  Iris worker supplies. The original pod and node records confirm eight
+  H100s on a managed host in the intended region. The revised guard checks
+  the original task identity, the inherited regional storage prefix and
+  the visible accelerator inventory. The calibration times the serving
+  worker on the 100 exact prompt token sequences and leaves grading and
+  Ray overhead to the full held run.
+  [Original calibration][iris-native-serving-eval-first] ·
+  [Revised calibration][iris-native-serving-eval-retry]
 
   Both plans use a 24,576-token serving limit and a 16,896-token request
   limit. Native uses the cache geometry from the 67B live-swap run. Use the same learner, selection and fixed panel to
@@ -1981,6 +1998,9 @@ arms. [Prior timing comparison][timing]
 [held-capacity-source-proof]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.22.1%2Fheld-capacity-source-delta-comparator.tar.zst
 [native-head-first-archive]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Ftmp%2Fttl%3D7d%2Firis%2Ftask-outputs%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused%2F0%2F709a5c5cf7fb819e%2Foutputs.tar.zst
 [iris-held-vllm-direct-corrected]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-38f335b-in-424011b4-2026.11.22.1-acd9904b74c0
+[iris-held-vllm-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-52324ce-in-424011b4-2026.11.22.2-coordinator-3c9d26e6%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-vllm-pilot-52324ce-in-424011b4-2026.11.22.2-a08d6abd1b30
+[iris-native-serving-eval-first]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-serving-67b-eval-20261123a
+[iris-native-serving-eval-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-serving-67b-eval-20261123b
 [iris-native-head-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122l%2Fnative-native-fused-20261122l-tool-fused
 [iris-native-head-comparison]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122k%2Fnative-native-fused-20261122k-tool-fused
 [iris-held-native-repaired]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-rl-levanter-inventory-native-pilot-ac90c03-in-424011b4-2026.11.22.1-coordinator-f7d86071
