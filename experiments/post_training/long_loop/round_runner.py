@@ -97,6 +97,13 @@ NCCL_BUFFSIZE = "4194304"
 
 
 @dataclass(frozen=True)
+class RoundPools:
+    artifacts: dict[str, ArtifactStep]
+    curriculum: RlCurriculum
+    dataset: dict
+
+
+@dataclass(frozen=True)
 class RoundStorage:
     output_prefix: str
     temporary_prefix: str
@@ -357,16 +364,16 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
             raise ValueError(f"Recovery input completion changed: {label}")
         adopted[label] = ArtifactStep.adopt(f"{spec.name}/{suffix}", spec.version, pin["uri"], config=pin)
     binding = POOLS["exp4-regional"]
-    pools, curriculum, datasets = exp4_round_pools(binding.prefix, binding.version)
+    pools = exp4_round_pools(binding.prefix, binding.version)
     pinned = plan["datasets"]["pools"]
-    if pinned["uri"] != datasets["uri"] or pinned["composition"] != datasets["composition"]:
+    if pinned["uri"] != pools.dataset["uri"] or pinned["composition"] != pools.dataset["composition"]:
         raise ValueError("Recovery data differs from the pinned plan's pools")
     return plan, build_spec_graph(
         plan,
         spec.version,
         through=through,
-        data_artifacts=pools,
-        curriculum=curriculum,
+        data_artifacts=pools.artifacts,
+        curriculum=pools.curriculum,
         completed_sft=CompletedSft(adopted["sft"], adopted["handoff"]),
     )
 
@@ -580,9 +587,10 @@ def round_sft_spec(round_spec: RoundSpec, name: str, version: str, recipe: dict)
     return spec
 
 
-def round_plan(round_spec: RoundSpec, release, source_revision: str, version: str, *, initial_eval_inputs: str) -> dict:
+def round_plan(
+    round_spec: RoundSpec, release, source_revision: str, version: str, *, initial_eval_inputs: str, pools: RoundPools
+) -> dict:
     """Derive the round's resolved plan: the shared template plus the round's fields."""
-    pools_binding = POOLS[round_spec.pools]
     resolved = production_plan(release, source_revision, baseline_files(), initial_eval_inputs=initial_eval_inputs)
     sft = resolved["sft"]
     sft["batch_size"] = round_spec.sft.batch_size
@@ -689,14 +697,13 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
         "name": f"users/benfeuer/checkpoints/{round_spec.slug}-micro210",
         "expected_rollouts": EVALUATION_EXPECTED_ROLLOUTS,
     }
-    _pools, curriculum, pool_datasets = exp4_round_pools(pools_binding.prefix, pools_binding.version)
     resolved["datasets"] = {
         **{key: value for key, value in resolved["datasets"].items() if key not in ("agentic", "nonagentic", "heldout")},
-        "pools": pool_datasets,
+        "pools": pools.dataset,
     }
     resolved["archive"]["hf_upload"]["repo_prefix"] = round_spec.archive.hf_upload_repo_prefix
     resolved["archive"]["evaldash"]["run_prefix"] = round_spec.archive.evaldash_run_prefix
-    resolved["curriculum"] = {**dataclasses.asdict(curriculum), "identity": curriculum.identity}
+    resolved["curriculum"] = {**dataclasses.asdict(pools.curriculum), "identity": pools.curriculum.identity}
     resolved["resolved_sha256"] = hashlib.sha256(
         json.dumps(
             {key: value for key, value in resolved.items() if key != "resolved_sha256"},
@@ -706,7 +713,7 @@ def round_plan(round_spec: RoundSpec, release, source_revision: str, version: st
     return resolved
 
 
-def exp4_round_pools(prefix: str, version: str) -> tuple[dict[str, ArtifactStep], RlCurriculum, dict]:
+def exp4_round_pools(prefix: str, version: str) -> RoundPools:
     """The regional Exp4 pools bound for a round: the adopted artifact, its fixed curriculum, and its dataset record.
 
     The pool step drew the curriculum's holdout and recorded the split and the
@@ -745,18 +752,7 @@ def exp4_round_pools(prefix: str, version: str) -> tuple[dict[str, ArtifactStep]
         "composition": manifest["composition"],
         "routes": manifest["routes"],
     }
-    return pools, curriculum, datasets
-
-
-def resolve_round_pools(round_spec: RoundSpec, resolved: dict) -> tuple[dict[str, ArtifactStep], RlCurriculum]:
-    """Verify the bound regional pools, adopt them as graph artifacts, and return the fixed curriculum."""
-    binding = POOLS[round_spec.pools]
-    pools, curriculum, datasets = exp4_round_pools(binding.prefix, binding.version)
-    resolved["datasets"] = {
-        **{key: value for key, value in resolved["datasets"].items() if key not in ("agentic", "nonagentic", "heldout")},
-        "pools": datasets,
-    }
-    return pools, curriculum
+    return RoundPools(pools, curriculum, datasets)
 
 
 def require_permanent_round_storage(round_spec: RoundSpec | AdoptedHfRound | AdoptedRlRound | RecoveryRound) -> None:
@@ -863,12 +859,15 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
         binding.record, binding.record_sha256, require_ready=click.get_current_context().params["do_run"]
     )
     version = resolve_version(round_spec.slug, round_spec.version)
-    resolved = round_plan(round_spec, release, source_revision, version, initial_eval_inputs=REFERENCE_INPUTS)
+    pool_binding = POOLS[round_spec.pools]
+    pools = exp4_round_pools(pool_binding.prefix, pool_binding.version)
+    resolved = round_plan(
+        round_spec, release, source_revision, version, initial_eval_inputs=REFERENCE_INPUTS, pools=pools
+    )
     resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
     os.environ.update(
         MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
     )
-    pools, curriculum = resolve_round_pools(round_spec, resolved)
     require_archive_binds_final_sft_checkpoint(resolved)
     resolved["resolved_sha256"] = hashlib.sha256(
         json.dumps(
@@ -880,8 +879,8 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
         resolved,
         version,
         through=through,
-        data_artifacts=pools,
-        curriculum=curriculum,
+        data_artifacts=pools.artifacts,
+        curriculum=pools.curriculum,
         sft_release=handle,
         sft_step_builder=partial(native_sft_step, spec_builder=partial(round_sft_spec, round_spec)),
     )

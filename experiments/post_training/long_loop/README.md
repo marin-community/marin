@@ -139,6 +139,8 @@ The curriculum owns a 200-prompt holdout removed from its training pools. At a
 64-group batch, its mixture derives 13 agentic and 51 nonagentic groups.
 Validation requires at least 180 scored prompts for best-checkpoint selection.
 The launch verifies the pool producer and file hashes before using those pools.
+The resolved plan and the graph bind the same pool artifact and curriculum.
+The best-checkpoint threshold derives from that curriculum's holdout size.
 
 ```bash
 uv run python -m experiments.post_training.long_loop.exp5 \

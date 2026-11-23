@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
@@ -288,6 +289,12 @@ def build_spec_graph(
     if declared_sources and declared_sources != set(routes):
         raise ValueError("The pool manifest's teacher routes differ from the recipe's declared source routes")
     rl_config["trainer"]["rollout_buffer"]["source_routes"] = rollout_source_routes(routes)
+    if curriculum is not None:
+        for callback in rl_config["trainer"].get("callbacks", []):
+            if callback["type"] == "best_checkpoint":
+                callback["expected_tasks"] = curriculum.validation.size
+                callback["minimum_scored_tasks"] = math.ceil(0.9 * curriculum.validation.size)
+                callback["selection_eligibility"] = "covered"
     rl_execution = stage_execution(rl["execution"], coordinator)
     budget = rl.get("wall_clock_budget")
     callbacks = rl_config["trainer"].get("callbacks", [])

@@ -21,7 +21,7 @@ import draccus
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
-from marin.rl.curriculum import RlCurriculum, consumed_route_quotas
+from marin.rl.curriculum import consumed_route_quotas
 from marin.rl.skyrl import SkyRLRolePlan
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -40,6 +40,7 @@ from experiments.post_training.long_loop.recipe_bundle import require_clean_revi
 from experiments.post_training.long_loop.round_runner import (
     DATA_RELEASES,
     INITIALIZERS,
+    RoundPools,
     RoundSpec,
     load_round,
     require_archive_binds_final_sft_checkpoint,
@@ -130,7 +131,7 @@ def certified_sft_inputs(pin: FilePin, *, name: str, version: str) -> CompletedS
     )
 
 
-def exp5_round_pools(resolved: dict) -> tuple[dict[str, ArtifactStep], RlCurriculum]:
+def exp5_round_pools() -> RoundPools:
     """Adopt the published Exp5 pools, verify them against the producer, and return the fixed curriculum."""
     producer = pool_steps(EXP5_POOLS_VERSION, grader_environment=environment_artifact(GRADER_PACKAGES))["pools"]
     path = producer.path(OUTPUT_PREFIX)
@@ -160,17 +161,14 @@ def exp5_round_pools(resolved: dict) -> tuple[dict[str, ArtifactStep], RlCurricu
             },
         )
     }
-    resolved["datasets"] = {
-        **{key: value for key, value in resolved["datasets"].items() if key not in ("agentic", "nonagentic", "heldout")},
-        "pools": {
-            "uri": path,
-            "rows": manifest["rows"],
-            "files": pins,
-            "composition": manifest["composition"],
-            "routes": manifest["routes"],
-        },
+    dataset = {
+        "uri": path,
+        "rows": manifest["rows"],
+        "files": pins,
+        "composition": manifest["composition"],
+        "routes": manifest["routes"],
     }
-    return pools, curriculum
+    return RoundPools(pools, curriculum, dataset)
 
 
 @click.command(help=__doc__)
@@ -212,12 +210,15 @@ def main(
         pin.read()
     binding = DATA_RELEASES[spec.data_release]
     release, handle = release_artifact(binding.record, binding.record_sha256, require_ready=False)
+    pools = exp5_round_pools()
+    curriculum = pools.curriculum
     resolved = round_plan(
-        replace(spec, pools="exp4-regional"),
+        spec,
         release,
         source_revision,
         spec.version,
         initial_eval_inputs=INITIAL_EVAL_INPUTS,
+        pools=pools,
     )
     resolved["runtime_source"] = runtime_source_manifest(workspace, source_revision)
     resolved["sft"]["special_token_lr_multiplier"] = spec.sft.special_token_lr_multiplier
@@ -271,7 +272,6 @@ def main(
     harbor["daytona_image_build"] = harbor.pop("daytona_provisioning")
     harbor["eval_daytona_image_build"] = harbor.pop("eval_daytona_provisioning")
     os.environ.update(MARIN_PREFIX=spec.storage.output_prefix, MARIN_TEMP_PREFIX=spec.storage.temporary_prefix)
-    pools, curriculum = exp5_round_pools(resolved)
     resolved["curriculum"] = {**asdict(curriculum), "identity": curriculum.identity}
     buffer = resolved["rl"]["config"]["trainer"]["rollout_buffer"]
     roles = draccus.decode(SkyRLRolePlan, resolved["rl"]["role_plan"])
@@ -289,6 +289,7 @@ def main(
         else None
     )
     if completed is not None:
+        resolved["exp5_admission"].update(launch_ready=True, launch_hold=None)
         resolved["continuation"] = {
             "sft_completion": {"path": completed_sft_record, "sha256": completed_sft_sha256},
             "model_relative_path": completed.model_relative_path,
@@ -302,7 +303,7 @@ def main(
         resolved,
         spec.version,
         through=stage,
-        data_artifacts=pools if stage != "sft" else None,
+        data_artifacts=pools.artifacts if stage != "sft" else None,
         curriculum=curriculum,
         completed_sft=completed,
         sft_release=handle,
@@ -324,8 +325,12 @@ def main(
             indent=2,
         )
     )
-    initializer = INITIALIZERS[spec.initializer]
-    model = verified_initializer_model(initializer.receipt, initializer.receipt_sha256)
+    if completed is not None:
+        assert completed.handoff.adopt_source is not None
+        model = prefix_join(completed.handoff.adopt_source, completed.model_relative_path)
+    else:
+        initializer = INITIALIZERS[spec.initializer]
+        model = verified_initializer_model(initializer.receipt, initializer.receipt_sha256)
     validate_graph(
         terminal,
         validation_output,
