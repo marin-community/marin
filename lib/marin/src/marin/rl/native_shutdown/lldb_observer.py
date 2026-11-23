@@ -11,7 +11,7 @@ from pathlib import Path
 import lldb  # pyrefly: ignore[missing-import]  # supplied by the LLDB interpreter
 from stack_safety import identity  # pyrefly: ignore[missing-import]  # standalone sibling asset
 
-LIMIT = 128 * 1024
+LIMIT = 1024 * 1024
 
 
 def atomic_json(path, value):
