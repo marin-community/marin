@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 8:23 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 8:36 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2183,6 +2183,27 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   returns `NOT_FOUND`.
   [Interrupted native attempt][iris-held-native-matched-preempted] ·
   [Accepted vLLM attempt][iris-held-vllm-validation-replacement]
+
+  The sealed request reserves 1,800 GiB of RAM and 2 TiB of ephemeral
+  storage per host. Iris parses the authored size strings as binary
+  units. Forwarded Finelog rows matched all 15 original task pods across
+  the held vLLM control and two native attempts. The largest learner
+  working-set sample was 323 GiB for the native attempt interrupted
+  before its first update. The earlier one-update native arm reached
+  559 GiB in the optimizer window, 593 GiB during the validation save,
+  and 600 GiB during fresh restore. The completed two-update vLLM arm
+  reached 608 GiB on a learner. These are minute-resolution samples of
+  task-container working set. Measure the combined native source through
+  ordinary per-update checkpointing and final evaluation before sizing
+  a smaller memory limit.
+  [Verified first-update restore][held-native-step1-restore] ·
+  [Accepted vLLM attempt][iris-held-vllm-validation-replacement]
+
+  The 16:36 UTC scheduling snapshot found six idle eight-H100 hosts in
+  one leafgroup that met the CPU, RDMA, and disk requirements. Across any
+  five, the highest uniform available RAM was 3.8 GiB per host. This
+  snapshot offered no fit for the sealed request or for the sampled
+  working sets.
 
   Regional telemetry recorded 32 group calls and 128 model waits in the
   first lease. Five group calls finished just after the 1,800-second model
