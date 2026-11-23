@@ -268,41 +268,6 @@ def grade_collection_subset(
     return scored(reward, overlap=overlap, reference_count=reference_count, candidate_count=candidate_count)
 
 
-def grade_collection_precision_interval(
-    reference: Sequence[str] | Set[str],
-    candidate: Sequence[str] | Set[str],
-    *,
-    minimum_percent: float,
-    maximum_percent: float,
-    multiplicity: Literal["set", "multiset"],
-    empty_reference: Literal["zero", "invalid"],
-) -> Reward:
-    """Accept prepared-item precision within inclusive percentage bounds.
-
-    Empty or malformed candidates always score zero, including intervals containing
-    zero. A valid nonempty disjoint candidate has zero precision and can be accepted.
-    """
-    bounds = (minimum_percent, maximum_percent)
-    if (
-        any(type(bound) not in (int, float) or not -math.inf < bound < math.inf for bound in bounds)
-        or minimum_percent > maximum_percent
-    ):
-        raise InvalidTask("precision interval requires finite ordered bounds")
-    counts = _collection_overlap(reference, candidate, multiplicity, empty_reference)
-    if isinstance(counts, Reward):
-        return counts
-    if not counts.candidate_count:
-        return scored(0.0, reason="empty_output")
-    precision_percent = counts.overlap / counts.candidate_count * 100
-    return scored(
-        float(minimum_percent <= precision_percent <= maximum_percent),
-        precision_percent=precision_percent,
-        overlap=counts.overlap,
-        reference_count=counts.reference_count,
-        candidate_count=counts.candidate_count,
-    )
-
-
 def grade(spec: ExactSpec, tests_dir: Path, workspace: Path) -> Reward:
     validate_exact(spec)
 

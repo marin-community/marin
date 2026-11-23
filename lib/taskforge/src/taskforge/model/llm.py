@@ -15,7 +15,7 @@ class FinishReason(StrEnum):
     LENGTH = "length"
     TOOL_CALLS = "tool_calls"
     ABORT = "abort"
-    """vLLM aborted the request, for example while draining a worker; the model client retries it."""
+    """vLLM aborted the request, for example while draining a worker; GlmProvider reports an outage."""
     CONTEXT_EXCEEDED = "context_exceeded"
     """Never served: the agent harness's record of a provider refusing a full context window (``content`` holds its
     reason). A provider reporting it is refused as any unknown finish reason is (``served``)."""
