@@ -421,6 +421,7 @@ class PrefillWork(eqx.Module):
     prompt_tokens: ht.i32[NamedArray, "seq position"]  # type: ignore[name-defined]
     prompt_lengths: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
     seq_params: SeqDecodingParams
+    has_clones: bool = eqx.field(static=True)
     cached_pages: NamedArray | None = None
     prompt_rows: NamedArray | None = None
 
@@ -561,7 +562,9 @@ def _prefill_kernel(
     queue: TokenQueue,
     binfo: PageBatchInfo,
     max_seqs_in_prefill: int,  # static
-    capture_routes: bool = False,
+    capture_routes: bool,
+    *,
+    has_clones: bool,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
@@ -632,7 +635,7 @@ def _prefill_kernel(
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
-    if decode_state.clone_sources is not None:
+    if has_clones:
         gen_state, outputs = _handle_clones(
             gen_state,
             logits_at_samples,
@@ -667,7 +670,6 @@ def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
 
 def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenState, PageBatchInfo]:
     num_new = work.new_num_seqs.astype(jnp.int32)
-    max_slots = work.new_slot_ids.array.shape[0]
 
     def primary(i: int, state: GenState) -> GenState:
         slot = work.new_slot_ids.array[i]
@@ -693,7 +695,7 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenStat
             )
             return dataclasses.replace(gs, decode_state=decode_state)
 
-        is_primary = (i < num_new) & is_valid(slot) & ~is_valid(work.clone_targets.array[i])
+        is_primary = is_valid(slot) & ~is_valid(work.clone_targets.array[i])
         return jax.lax.cond(is_primary, assign, lambda gs: gs, state)
 
     def clone(i: int, state: GenState) -> GenState:
@@ -704,16 +706,18 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenStat
             cloned, _ = gs.clone_sequence(parent, child_local_id=slot, seq_params=_seq_params_from_work(work, i))
             return cloned
 
-        is_clone = (i < num_new) & is_valid(slot) & is_valid(parent)
+        is_clone = is_valid(slot) & is_valid(parent)
         return jax.lax.cond(is_clone, assign, lambda gs: gs, state)
 
-    gen_state = jax.lax.fori_loop(0, max_slots, primary, gen_state)
+    gen_state = jax.lax.fori_loop(0, num_new, primary, gen_state)
     # Full prefix pages must exist before cloning, so parent prefill fills the shared pages.
     decode_state, binfo = gen_state.decode_state.allocate_for_seq(
         token_slot_ids=work.queue.queued_slot_ids, token_pos_ids=work.queue.queued_pos_ids
     )
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
-    return jax.lax.fori_loop(0, max_slots, clone, gen_state), binfo
+    if work.has_clones:
+        gen_state = jax.lax.fori_loop(0, num_new, clone, gen_state)
+    return gen_state, binfo
 
 
 @functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill", "capture_routes"))
@@ -726,7 +730,9 @@ def _run_prefill(
     capture_routes: bool = False,
 ) -> tuple[GenState, _DecodeOutputs]:
     gen_state, binfo = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, binfo, max_seqs_in_prefill, capture_routes)
+    return _prefill_kernel(
+        gen_state, model, sampler, work.queue, binfo, max_seqs_in_prefill, capture_routes, has_clones=work.has_clones
+    )
 
 
 def _handle_clones(
@@ -1382,6 +1388,8 @@ class InferenceEngine:
         max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
         max_seq_len = decode_state.tokens.axis_size("position")
         max_slots = decode_state.max_seqs
+        if self.gen_state.window_pages is not None:
+            max_slots = min(max_slots, max_seqs_in_prefill)
 
         queue_tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
         queue_slot_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
@@ -1549,6 +1557,7 @@ class InferenceEngine:
         return PrefillWork(
             queue=prefill_queue,
             new_num_seqs=jnp.array(total_new, dtype=jnp.int32),
+            has_clones=total_new > num_primary,
             new_slot_ids=hax.named(jnp.asarray(work_slot_ids, dtype=jnp.int32), axis="seq"),
             clone_targets=hax.named(jnp.asarray(clone_targets, dtype=jnp.int32), axis="seq"),
             prompt_tokens=hax.named(jnp.asarray(prompt_tokens, dtype=jnp.int32), axis=("seq", "position")),
@@ -1768,6 +1777,7 @@ class InferenceEngine:
             return PrefillWork(
                 queue=prefill_queue,
                 new_num_seqs=jnp.array(0, dtype=jnp.int32),
+                has_clones=False,
                 new_slot_ids=hax.zeros({"seq": max_slots}, dtype=jnp.int32),
                 clone_targets=hax.zeros({"seq": max_slots}, dtype=jnp.int32),
                 prompt_tokens=hax.zeros({"seq": max_slots, "position": max_len}, dtype=jnp.int32),
