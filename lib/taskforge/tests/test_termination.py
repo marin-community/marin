@@ -72,6 +72,12 @@ def roots(directory: Path, sources: list[Path]) -> list[Path]:
     return [directory / "out" / driver.proposal_key(str(source)) for source in sources]
 
 
+def interruptible() -> None:
+    """Give the driver SIGINT at its default disposition, as from a terminal. A shell without job control starts a
+    background command, and so pytest and every process it spawns, with SIGINT ignored, which Python leaves in place."""
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
 class Probe:
     """A driver process whose stdout lines arrive on a queue, so that every wait on it has a hard timeout."""
 
@@ -85,6 +91,7 @@ class Probe:
                 stdout=subprocess.PIPE,
                 stderr=stderr,
                 text=True,
+                preexec_fn=interruptible,
             )
         self.lines: queue.Queue[str | None] = queue.Queue()
         self.seen: list[str] = []
