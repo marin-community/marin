@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import haliax as hax
+import httpx
 import jax
 import jax.numpy as jnp
 import jmp
@@ -59,10 +60,38 @@ def _warmup(server: InferenceServer, capture_routes: bool) -> None:
             result = ctx.engine.generate([_request(prompt, 0, 1)], capture_routes=capture_routes)
             if result.total_generated != 1:
                 raise RuntimeError(f"Expected one token after a {length}-token AgentX probe prompt")
+            logger.info("Warmed native prefill with %d prompt tokens", length)
         for lower in config.decode_bucket_sizes:
             requests = [_request([filler], i, 2) for i in range(lower + 1)]
             ctx.engine.generate(requests, capture_routes=capture_routes)
         ctx.engine.reset()
+
+
+def _check_chat_stream(server_url: str, model: str, capture_routes: bool) -> None:
+    request = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Reply with one short greeting."}],
+        "max_tokens": 2,
+        "temperature": 0,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "return_route_captures": capture_routes,
+    }
+    completed = False
+    route_frame = False
+    with httpx.stream("POST", f"{server_url}/v1/chat/completions", json=request, timeout=180.0) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:]
+            if payload == "[DONE]":
+                completed = True
+                break
+            route_frame |= "levanter_route_frame" in json.loads(payload)
+    if not completed or (capture_routes and not route_frame):
+        raise RuntimeError("Native chat preflight did not complete its requested stream")
+    logger.info("Native chat stream completed with route capture %s", capture_routes)
 
 
 def main() -> None:
@@ -143,6 +172,7 @@ def main() -> None:
                 }
                 (output / "probe.json").write_text(json.dumps(evidence, indent=2))
                 with serve_app_background(server.app, sock, name="snowball-native-agentx"):
+                    _check_chat_stream(server_url, series["model"], args.capture_routes)
                     run_logged(
                         command,
                         workload_environment(bundle, series),
