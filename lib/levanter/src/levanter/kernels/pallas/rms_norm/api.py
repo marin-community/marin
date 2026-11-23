@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from functools import partial
 import math
+from types import MappingProxyType
 from typing import Literal, TypeAlias
 
 import jax
@@ -15,11 +15,12 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 from jax.sharding import NamedSharding
 
+from levanter.kernels.pallas.autotune_utils import sharding_of
+
 from .pallas_tpu import batch_invariant_rms_norm_pallas_tpu
 from .reference import MAX_FLATTENED_ROWS, SUPPORTED_HIDDEN_DIMS, batch_invariant_rms_norm_reference
 
 Implementation: TypeAlias = Literal["reference", "pallas_tpu"]
-ArrayImpl = Callable[..., jax.Array]
 
 
 def _reference_impl(x: jax.Array, weight: jax.Array, *, eps: float) -> jax.Array:
@@ -30,14 +31,7 @@ def _pallas_tpu_impl(x: jax.Array, weight: jax.Array, *, eps: float) -> jax.Arra
     return batch_invariant_rms_norm_pallas_tpu(x, weight, eps=eps)
 
 
-IMPLEMENTATIONS: dict[str, ArrayImpl] = {
-    "reference": _reference_impl,
-    "pallas_tpu": _pallas_tpu_impl,
-}
-
-
-def _sharding(value: jax.Array):
-    return jax.typeof(value).sharding if isinstance(value, jax.core.Tracer) else value.sharding
+IMPLEMENTATIONS = MappingProxyType({"reference": _reference_impl, "pallas_tpu": _pallas_tpu_impl})
 
 
 def _reshard_to_nonempty_named_mesh(value: jax.Array, target_sharding) -> jax.Array:
@@ -84,7 +78,7 @@ def batch_invariant_rms_norm(
     """Opt-in weighted RMSNorm with row arithmetic independent of surrounding batch.
 
     The TPU implementation is local to each visible chip and supports only a
-    replicated weight and row-sharded activation. No implicit all-gather occurs.
+    replicated weight. Activations must be row-sharded on a multi-device mesh.
     """
     return _forward(x, weight, eps=eps, implementation=implementation)
 
@@ -97,7 +91,7 @@ def _batch_invariant_rms_norm_fwd(x, weight, eps, implementation):
 def _batch_invariant_rms_norm_bwd(eps, implementation, residual, dy):
     del implementation
     x, weight = residual
-    x_sharding = _sharding(x)
+    x_sharding = sharding_of(x)
     dy_aligned = _reshard_to_nonempty_named_mesh(dy, x_sharding)
 
     def reference(value, scale):

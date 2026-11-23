@@ -15,6 +15,7 @@ from jax.experimental.pallas import tpu as pltpu
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from levanter.kernels.pallas.autotune_utils import sharding_of
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
 from .reference import MAX_FLATTENED_ROWS, SUPPORTED_HIDDEN_DIMS, _sum_hidden_tiles
@@ -29,7 +30,6 @@ class PallasRmsNormUnsupportedError(NotImplementedError):
 # full extent or be divisible by 128. Both fixed 128-sized tiles satisfy these
 # rules; padding keeps the per-row arithmetic unchanged for every local count.
 _ROW_BLOCK_SIZE = 128
-_HIDDEN_TILE_SIZE = 128
 
 
 def _validate_tpu_inputs(x: jax.Array, weight: jax.Array) -> None:
@@ -55,8 +55,8 @@ def _rms_norm_cost_reference(x: jax.Array, weight: jax.Array, *, eps: float) -> 
     x32 = x.astype(jnp.float32)
     weight32 = weight.astype(jnp.float32)
     tile_sums = _sum_hidden_tiles(x32)
-    variance = tile_sums[..., None] / x32.shape[-1]
-    return (x32 * jax.lax.rsqrt(variance + eps) * weight32).astype(x.dtype)
+    mean_square = tile_sums[..., None] / x32.shape[-1]
+    return (x32 * jax.lax.rsqrt(mean_square + eps) * weight32).astype(x.dtype)
 
 
 def _cost_estimate(x: jax.Array, weight: jax.Array, *, eps: float, out_shape) -> pl.CostEstimate | None:
@@ -71,8 +71,8 @@ def _rms_norm_kernel(x_ref, weight_ref, out_ref, *, eps: float):
     x32 = x_ref[...].astype(jnp.float32)
     weight32 = weight_ref[...].astype(jnp.float32)
     tile_sums = _sum_hidden_tiles(x32)
-    variance = tile_sums[..., None] / x32.shape[1]
-    normalized = x32 * jax.lax.rsqrt(variance + eps)
+    mean_square = tile_sums[..., None] / x32.shape[1]
+    normalized = x32 * jax.lax.rsqrt(mean_square + eps)
     out_ref[...] = (normalized * weight32).astype(out_ref.dtype)
 
 
@@ -97,12 +97,6 @@ def _local_pallas(x: Float[Array, "M D"], weight: Float[Array, "D"], *, eps: flo
         cost_estimate=_cost_estimate(padded_x, weight, eps=eps, out_shape=out_shape),
     )(padded_x, weight)
     return padded_output[:rows]
-
-
-def _array_sharding(value: jax.Array) -> jax.sharding.Sharding:
-    if isinstance(value, jax.core.Tracer):
-        return jax.typeof(value).sharding
-    return value.sharding
 
 
 def _normalize_partition_spec(spec: jax.sharding.PartitionSpec, rank: int) -> jax.sharding.PartitionSpec:
@@ -144,11 +138,9 @@ def _sharded_local_pallas(x: Float[Array, "M D"], weight: Float[Array, "D"], *, 
 
     Both arguments must carry explicit NamedSharding. A one-device named mesh
     may be replicated after JAX tracing; a multi-device mesh must shard rows.
-    There is no SingleDeviceSharding fallback because it is not stable under
-    compiled dispatch.
     """
-    x_sharding = _array_sharding(x)
-    weight_sharding = _array_sharding(weight)
+    x_sharding = sharding_of(x)
+    weight_sharding = sharding_of(weight)
     if not isinstance(x_sharding, jax.sharding.NamedSharding) or not isinstance(
         weight_sharding, jax.sharding.NamedSharding
     ):

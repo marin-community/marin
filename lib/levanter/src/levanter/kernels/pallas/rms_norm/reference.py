@@ -16,7 +16,7 @@ _ROW_TILE_SIZE = MAX_FLATTENED_ROWS
 
 
 def _sum_hidden_tiles(x32: jax.Array) -> jax.Array:
-    """Sum fixed-width hidden tiles without changing the row layout."""
+    """Sum squares in fixed-width hidden tiles without changing the row layout."""
     tile_sums = jnp.zeros(x32.shape[:-1], dtype=jnp.float32)
     for start in range(0, x32.shape[-1], _HIDDEN_TILE_SIZE):
         tile = x32[..., start : start + _HIDDEN_TILE_SIZE]
@@ -45,6 +45,6 @@ def batch_invariant_rms_norm_reference(
     padded_x = jnp.pad(flat_x, ((0, _ROW_TILE_SIZE - rows), (0, 0)))
     weight32 = weight.astype(jnp.float32)
     tile_sums = _sum_hidden_tiles(padded_x)
-    variance = tile_sums[..., None] / padded_x.shape[-1]
-    normalized = padded_x * jax.lax.rsqrt(variance + eps)
+    mean_square = tile_sums[..., None] / padded_x.shape[-1]
+    normalized = padded_x * jax.lax.rsqrt(mean_square + eps)
     return (normalized * weight32).astype(input_dtype)[:rows].reshape(x.shape)

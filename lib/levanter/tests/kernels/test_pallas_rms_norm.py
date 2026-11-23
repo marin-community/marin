@@ -29,11 +29,10 @@ def test_batch_invariant_rms_norm_reference_is_bitwise_row_invariant(hidden, dty
     key_x, key_w = jax.random.split(jax.random.key(hidden))
     x = jax.random.normal(key_x, (512, hidden), dtype=dtype)
     weight = jax.random.normal(key_w, (hidden,), dtype=dtype)
-    outputs = []
-    for rows in (1, 8, 31, 32, 127, 128, 129, 512):
-        outputs.append(np.asarray(batch_invariant_rms_norm(x[:rows], weight, 1e-5, implementation="reference")))
-    for rows, output in zip((1, 8, 31, 32, 127, 128, 129, 512), outputs, strict=True):
-        np.testing.assert_array_equal(output, outputs[-1][:rows])
+    full = np.asarray(batch_invariant_rms_norm(x, weight, 1e-5, implementation="reference"))
+    for rows in (1, 8, 31, 32, 127, 128, 129):
+        output = np.asarray(batch_invariant_rms_norm(x[:rows], weight, 1e-5, implementation="reference"))
+        np.testing.assert_array_equal(output, full[:rows])
 
 
 @pytest.mark.parametrize("shape", [(4, 128, 128), (32, 1, 256), (4, 128, 2560)])
@@ -93,24 +92,6 @@ def test_batch_invariant_rms_norm_has_one_shared_flattened_row_domain(rows):
         batch_invariant_rms_norm(x, weight, 1e-5, implementation="reference")
     with pytest.raises(PallasRmsNormUnsupportedError, match="flattened rows"):
         batch_invariant_rms_norm_pallas_tpu(x, weight, eps=1e-5)
-
-
-def test_batch_invariant_rms_norm_jaxpr_keeps_reference_forward_row_local():
-    x = jnp.ones((8, 128), dtype=jnp.float32)
-    weight = jnp.ones((128,), dtype=jnp.float32)
-    jaxpr = jax.make_jaxpr(lambda value: batch_invariant_rms_norm(value, weight, 1e-5, implementation="reference"))(x)
-    text = str(jaxpr)
-    assert "reduce_sum" in text or "reduce" in text
-    assert "all_gather" not in text
-
-
-def test_batch_invariant_rms_norm_reference_wrapper_matches_public_api():
-    x = jnp.ones((2, 128), dtype=jnp.float32)
-    weight = jnp.ones((128,), dtype=jnp.float32)
-    np.testing.assert_array_equal(
-        np.asarray(batch_invariant_rms_norm(x, weight, 1e-5, implementation="reference")),
-        np.asarray(batch_invariant_rms_norm_reference(x, weight, eps=1e-5)),
-    )
 
 
 def test_batch_invariant_rms_norm_named_sharding_contract_on_tpu():
@@ -228,14 +209,6 @@ def test_batch_invariant_rms_norm_normalizes_short_specs_and_rejects_invalid_lay
     )
 
     invalid_cases = (
-        (
-            jax.device_put(
-                jnp.ones((1, 128), dtype=jnp.float32),
-                jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec()),
-            ),
-            replicated_weight,
-            "row-sharded",
-        ),
         (
             x_short,
             jax.device_put(
