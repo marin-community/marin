@@ -1279,6 +1279,7 @@ def test_snowball_fixed_projection_scores_and_differentiates():
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(77))
         loss_weight = LmExample.causal_loss_mask(inputs.resolve_axis("position")).broadcast_to(inputs.axes)
         example = LmExample(tokens=inputs, loss_weight=loss_weight.astype(jnp.float32))
+
         def score(m):
             hidden = m.activations(inputs, example.attn_mask)
             return m.project_logits(hidden), m._loss_from_activations(example, hidden, reduction=None)

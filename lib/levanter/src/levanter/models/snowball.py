@@ -65,7 +65,7 @@ from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
-from levanter.models.loss import next_token_loss
+from levanter.models.loss import next_token_ids, next_token_loss_weight
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -1202,21 +1202,14 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             logits = logits.astype(loss_type)
         if logit_soft_cap is not None:
             logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
-        # Keep the one-hot target contraction in the same FP32 precision as the scores.
-        with jax.default_matmul_precision("highest"):
-            return (
-                next_token_loss(
-                    self.Pos,
-                    self.Vocab,
-                    logits,
-                    example.tokens,
-                    loss_weight=example.loss_weight,
-                    reduction=reduction,
-                    reduction_axis=reduction_axis,
-                    logsumexp_weight=logsumexp_weight,
-                )
-                + aux_loss
-            )
+        targets = next_token_ids(self.Pos, example.tokens)
+        selected = hax.sum(hax.where(hax.nn.one_hot(targets, self.Vocab, dtype=bool), logits, 0), self.Vocab)
+        normalizers = hax.nn.logsumexp(logits, self.Vocab)
+        loss = normalizers - selected
+        if logsumexp_weight:
+            loss = loss + logsumexp_weight * hax.square(normalizers)
+        weights = next_token_loss_weight(logits.resolve_axis(self.Pos.name), example.loss_weight)
+        return hax.nn.loss.reduce_loss(loss, reduction, reduction_axis, weight=weights) + aux_loss
 
     def get_lm_head(self) -> NamedArray:
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))
