@@ -1600,6 +1600,17 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         logits = _fixed_projection(activations.array, self.transformer.output_proj)
         return hax.named(logits, (*activations.axes[:-1], self.Vocab))
 
+    def fixed_policy_logprobs(self, activations: NamedArray, targets: NamedArray) -> NamedArray:
+        """Score target IDs with the fixed projection and policy normalization."""
+        logits = self.project_logits(activations).astype(jnp.float32)
+        selected, normalizers = self._fixed_target_logits(logits, targets)
+        return selected - normalizers
+
+    def _fixed_target_logits(self, logits: NamedArray, targets: NamedArray) -> tuple[NamedArray, NamedArray]:
+        selected = hax.sum(hax.where(hax.nn.one_hot(targets, self.Vocab, dtype=bool), logits, 0), self.Vocab)
+        normalizers = hax.named(batch_invariant_logsumexp(logits.array), logits.axes[:-1])
+        return selected, normalizers
+
     def _loss_from_activations(
         self,
         example: LmExample,
@@ -1629,8 +1640,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if logit_soft_cap is not None:
             logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
         targets = next_token_ids(self.Pos.name, example.tokens)
-        selected = hax.sum(hax.where(hax.nn.one_hot(targets, self.Vocab, dtype=bool), logits, 0), self.Vocab)
-        normalizers = hax.named(batch_invariant_logsumexp(logits.array), logits.axes[:-1])
+        selected, normalizers = self._fixed_target_logits(logits, targets)
         loss = normalizers - selected
         if logsumexp_weight:
             loss = loss + logsumexp_weight * hax.square(normalizers)

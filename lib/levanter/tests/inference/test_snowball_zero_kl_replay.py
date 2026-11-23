@@ -10,12 +10,24 @@ import numpy as np
 import pytest
 
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.inference.binary import (
+    EXPERT_IDS,
+    EXPERT_VALID,
+    LOGPROB_MODE,
+    POLICY_ID,
+    POLICY_LOGPROBS,
+    PROMPT_TOKEN_IDS,
+    TOKEN_IDS,
+    choice_tensor_key,
+    encode_frame,
+)
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
-from levanter.kernels.logsumexp import batch_invariant_logsumexp
-from levanter.layers.attention import AttentionMask
+from levanter.inference.policy_replay import BinaryRolloutChoice, prepare_binary_policy_batch
 from levanter.layers.sampler import LogprobMode
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.policy import ClippedPolicyConfig
+from levanter.policy_model import PolicyBatch, policy_model_loss, response_logprobs
 
 
 @pytest.mark.tpu
@@ -76,30 +88,66 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores():
         )
         result = engine.generate(requests, capture_routes=True)
         assert result.logprobs is not None and result.expert_routes is not None
+        snapshot = "frozen-snapshot"
         tokens = np.zeros((4, 256), dtype=np.int32)
-        valid = np.zeros_like(tokens, dtype=np.bool_)
-        experts = np.zeros((cfg.num_layers, 4, 256, cfg.num_experts_per_token), dtype=np.int32)
-        for row, (prompt, generated, capture) in enumerate(
-            zip(prompts, result.tokens, result.expert_routes, strict=True)
+        attended = np.zeros_like(tokens)
+        response = np.zeros((4, 255), dtype=bool)
+        rollouts = []
+        for row, (prompt, generated, capture, served) in enumerate(
+            zip(prompts, result.tokens, result.expert_routes, result.logprobs, strict=True)
         ):
             assert len(generated) == n_generated
             full = prompt + generated
             tokens[row, : len(full)] = full
-            valid[row, : len(full)] = capture.valid
-            experts[:, row, : len(full)] = capture.expert_ids
-        tokens = hax.named(jnp.asarray(tokens), ("batch", "position"))
-        routes = model.prepare_route_replay(experts, hax.named(jnp.asarray(valid), tokens.axes))
+            attended[row, : len(full)] = 1
+            response[row, len(prompt) - 1 : len(full) - 1] = True
+            fields = {
+                PROMPT_TOKEN_IDS: np.asarray(prompt, np.int32),
+                TOKEN_IDS: np.asarray(generated, np.int32),
+                POLICY_LOGPROBS: np.asarray(served, np.float32),
+                EXPERT_IDS: capture.expert_ids,
+                EXPERT_VALID: capture.valid,
+            }
+            frame = encode_frame(
+                {"choices": [{POLICY_ID: snapshot}], LOGPROB_MODE: LogprobMode.POLICY},
+                {choice_tensor_key(0, name): tensor for name, tensor in fields.items()},
+            )
+            rollouts.append(BinaryRolloutChoice(frame, 0))
+
+        def named(values, axis):
+            return hax.named(jnp.asarray(values), ("batch", axis))
+
+        mask = named(response, "response")
+        weights = mask.astype(jnp.float32)
+        batch = PolicyBatch(
+            tokens=named(tokens, "position"),
+            attention_mask=named(attended, "position"),
+            position_ids=named(np.broadcast_to(np.arange(256, dtype=np.int32), tokens.shape), "position"),
+            response_mask=mask,
+            advantages=weights,
+            policy_weights=weights,
+            kl_weights=weights,
+            old_logprobs=hax.zeros(mask.axes),
+            reference_logprobs=None,
+        )
+        batch = prepare_binary_policy_batch(model, batch, rollouts, policy_id=snapshot)
+        batch = dataclasses.replace(batch, reference_logprobs=batch.old_logprobs)
+        scores = jax.jit(response_logprobs)(model, batch).array
 
         @jax.jit
-        def replay_scores(current, tokens, routes):
-            hidden, _, _ = current._activations(tokens, False, AttentionMask.causal(), route_replay=routes)
-            logits = current.project_logits(hidden).array.astype(jnp.float32)
-            return logits - batch_invariant_logsumexp(logits)[..., None]
+        def objective(model, batch):
+            return policy_model_loss(
+                model,
+                batch,
+                key=None,
+                config=ClippedPolicyConfig(0.2, 0.2, 0.1),
+                accumulation_steps=1,
+                block_size=1024,
+            )
 
-        scores = np.asarray(replay_scores(model, tokens, routes))
+        _, metrics = objective(model, batch)
+        assert metrics["policy_kl"].value() == 0.0
+        assert metrics["log_ratio_abs_max"].value() == 0.0
 
-    for row, (prompt, generated, served) in enumerate(zip(prompts, result.tokens, result.logprobs, strict=True)):
-        positions = np.arange(len(prompt) - 1, len(prompt) + len(generated) - 1)
-        np.testing.assert_array_equal(
-            scores[row, positions, generated].view(np.uint32), np.asarray(served, np.float32).view(np.uint32)
-        )
+    expected = np.asarray(result.logprobs, dtype=np.float32).reshape(-1)
+    np.testing.assert_array_equal(np.asarray(scores)[response].view(np.uint32), expected.view(np.uint32))

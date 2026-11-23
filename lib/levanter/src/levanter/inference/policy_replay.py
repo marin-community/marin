@@ -51,6 +51,12 @@ def prepare_binary_policy_batch(
     attended = np.asarray(batch.attention_mask.rearrange((batch_axis, position)).array)
     if np.any((attended != 0) & (attended != 1)):
         raise ValueError("Binary rollout replay requires a binary attention mask")
+    if model.config.replay_precision == "zero_kl":
+        position_ids = np.asarray(batch.position_ids.rearrange((batch_axis, position)).array)
+        sequence_positions = np.arange(position.size)
+        prefix = sequence_positions < attended.sum(axis=1, keepdims=True)
+        if not np.array_equal(attended, prefix) or np.any(prefix & (position_ids != sequence_positions)):
+            raise ValueError("Snowball zero-KL replay requires right padding and positions starting from zero")
     response_mask = np.asarray(batch.response_mask.rearrange((batch_axis, response)).array).astype(bool)
     response_start = position.size - response.size
     expert_ids = np.zeros((*tokens.shape, model.config.num_layers, model.config.num_experts_per_token), dtype=np.int32)
