@@ -305,10 +305,11 @@ class Reading:
     whitespace, digits, punctuation other than the backslash, and the letters of most scripts other than
     ASCII letters): no LaTeX command or NFKC composition crosses one. So the reading keeps the exact stream
     length before each chunk start (the first safe character after ``CHUNK_CHARS`` characters) and searches
-    one chunk; a long chunk of plain ASCII text is mapped by counting its letters and digits. A record costs
-    one pass unless it holds a stretch of more than ``CHUNK_CHARS`` characters without a safe character that
-    is not plain ASCII (for example LaTeX commands or combining marks with nothing between them); a hit there
-    costs a search of that stretch.
+    one chunk; a long chunk of plain ASCII text is mapped by counting its letters and digits.
+
+    Limit: the cost is not linear for every record. In a stretch of length L > ``LONG_CHUNK_CHARS`` with no
+    safe character whose body is not plain ASCII without a backslash (fullwidth letters, combining marks, or
+    LaTeX commands with nothing between them), H lookups cost O(H * L * log L).
     """
 
     def __init__(self, text: str, width: int = WINDOW) -> None:

@@ -219,3 +219,7 @@ a copy.
 - **GPQA choice order is random.** lm-eval shuffles GPQA choices without a seed, so the question text,
   which shows the choices, changes between builds of the item table.
 - **Records over 5,000,000 characters are not read;** each shard's stats list their ids.
+- **Cutting an excerpt is linear per record except in one rare case:** a stretch of more than 16,384
+  characters with no whitespace, digit, punctuation or non-Latin letter whose body is not plain ASCII
+  (fullwidth letters, combining marks, or LaTeX commands with nothing between them). There, H hits cost
+  O(H * L * log L) for a stretch of length L (`marin.datakit.decon_keys.Reading`).

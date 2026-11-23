@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import time
 
 import numpy as np
 import pyarrow as pa
@@ -274,6 +275,12 @@ def test_a_long_plain_ascii_stretch_maps_offsets_by_counting(header):
     reading = Reading(text)
     for position in (3, 45_000, 89_999, len(reading.stream) - 1):
         assert reading.text_offset(position) == _full_search(text, position)
-    # The stretch is one chunk of its own, mapped by counting.
-    reading.text_offset(45_000)
-    assert reading._counts
+
+
+def test_offset_lookups_in_a_long_stretch_without_spaces_after_a_header_take_one_pass():
+    reading = Reading("\u00a9 intro " + "abc" * 300_000 + " outro")
+    # A search of the stretch per lookup takes about a second; one pass for all 500 lookups takes about 0.1 s.
+    deadline = time.monotonic() + 5
+    for position in range(0, len(reading.stream), len(reading.stream) // 500):
+        reading.text_offset(position)
+        assert time.monotonic() < deadline, "offset lookups search the whole stretch"
