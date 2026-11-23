@@ -25,7 +25,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
 from experiments.datakit.decontam.encoder.labels import TRAINING_COLUMNS
-from experiments.datakit.decontam.encoder.tables import item_passages, read_frame, write_frame
+from experiments.datakit.decontam.encoder.tables import ItemText, item_texts, read_frame, write_frame
 
 _SPACE = re.compile(r"\s+")
 TARGET_PRECISION = 0.95
@@ -82,22 +82,20 @@ def pair_left(question: str, choices: list[str], answer: str, passage: str, righ
     return left + "\n" + "\n".join(hints)
 
 
-def with_pair_text(frame: pd.DataFrame, passages: dict[str, str]) -> pd.DataFrame:
+def with_pair_text(frame: pd.DataFrame, items: dict[str, ItemText]) -> pd.DataFrame:
     """*frame* with `right` normalized and cut to ``RIGHT_CHARS``, and `left` built by ``pair_left``
-    with each item's passage from *passages* (see ``item_passages``)."""
+    from the texts of each pair's item in *items* (see ``item_texts``)."""
     frame = frame.copy()
     frame["right"] = frame["right"].map(text_normalize).str.slice(0, RIGHT_CHARS)
     frame["left"] = [
-        pair_left(question, list(choices), answer, passages.get(item, ""), right)
-        for question, choices, answer, item, right in zip(
-            frame["question"], frame["choices"], frame["answer"], frame["item"], frame["right"], strict=True
-        )
+        pair_left(items[item].question, items[item].choices, items[item].answer, items[item].passage, right)
+        for item, right in zip(frame["item"], frame["right"], strict=True)
     ]
     return frame
 
 
 def load(
-    data: str, synthetic_name: str, extra: list[str], passages: dict[str, str]
+    data: str, synthetic_name: str, extra: list[str], items: dict[str, ItemText]
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     judged = read_frame(prefix_join(data, JUDGED_PAIRS))
     judged["source"], judged["kind"], judged["eval"] = "judged", judged["judges"], ""
@@ -107,7 +105,7 @@ def load(
     for path in extra:
         # More labeled pairs, for example judged stage-1 candidates, with the same columns.
         frames.append(read_frame(path)[TRAINING_COLUMNS])
-    frame = with_pair_text(pd.concat(frames, ignore_index=True), passages)
+    frame = with_pair_text(pd.concat(frames, ignore_index=True), items)
     # The threshold comes from judge-labeled stage-1 candidates, not synthetic, silver, or older pairs.
     real = frame["source"].str.startswith("set")
     real_train = sorted(frame.loc[(frame.split == "train") & real, "item"].unique())
@@ -220,7 +218,7 @@ def main() -> None:
     parser.add_argument("--data", required=True, help="directory with judged_pairs_v2.parquet and the synthetic pairs")
     parser.add_argument("--synthetic", required=True, help="file name in --data of the generic synthetic pairs")
     parser.add_argument("--extra", action="append", default=[], help="parquet of more labeled pairs")
-    parser.add_argument("--items", required=True, help="the item table directory (items/*.parquet), for passages")
+    parser.add_argument("--items", required=True, help="the item table directory (items/*.parquet), for item texts")
     parser.add_argument("--seed", type=int, default=0, help="seed of the training order and the output layer")
     parser.add_argument("--tag", required=True)
     parser.add_argument("--output", required=True)
@@ -231,7 +229,7 @@ def main() -> None:
     if device == "cuda":
         # The cuDNN attention backend builds no plan for these padded bf16 batches; the others do.
         torch.backends.cuda.enable_cudnn_sdp(False)
-    train, dev, test = load(args.data, args.synthetic, args.extra, item_passages(args.items))
+    train, dev, test = load(args.data, args.synthetic, args.extra, item_texts(args.items))
     print("train", len(train), "dev", len(dev), "test", len(test), "device", device, flush=True)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=len(OUTPUTS)).to(device)

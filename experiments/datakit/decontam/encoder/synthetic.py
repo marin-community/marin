@@ -30,7 +30,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.encoder.labels import SILVER_OVERLAP, word_overlap
-from experiments.datakit.decontam.encoder.tables import item_passages, parquet_files, read_frame, write_frame
+from experiments.datakit.decontam.encoder.tables import ItemText, item_texts, parquet_files, read_frame, write_frame
 
 logger = logging.getLogger(__name__)
 EVALS_PER_FAMILY = 6
@@ -197,15 +197,12 @@ def generic_pairs(items: list[dict[str, Any]], hosts: list[str], rng: random.Ran
             yield _row(item, placed(""), "none", 0, 0)
 
 
-def context_pairs(candidates: pd.DataFrame, passages: dict[str, str], rng: random.Random) -> Iterator[dict[str, Any]]:
+def context_pairs(candidates: pd.DataFrame, texts: dict[str, ItemText], rng: random.Random) -> Iterator[dict[str, Any]]:
     items = [
-        {"id": i, "eval": e, "question": q, "choices": list(c), "answer": a or "", "passage": passages.get(i, "")}
-        for i, e, q, c, a in zip(
+        {"id": i, "eval": e, **texts[i]._asdict()}
+        for i, e in zip(
             candidates["item"],
             candidates["eval"],
-            candidates["question"],
-            candidates["choices"],
-            candidates["answer"],
             strict=True,
         )
     ]
@@ -267,7 +264,7 @@ def main() -> None:
         candidates = read_frame(args.candidates)
         candidates = candidates[~candidates["item"].isin(excluded)]
         sample = candidates.sample(min(args.size, len(candidates)), random_state=args.seed)
-        rows = list(context_pairs(sample, item_passages(args.items), rng))
+        rows = list(context_pairs(sample, item_texts(args.items), rng))
     frame = pd.DataFrame(rows)
     evals = sorted(frame["eval"].unique())
     held_out = set(random.Random(args.seed).sample(evals, len(evals) // 5)) if args.mode == "generic" else set()

@@ -4,6 +4,7 @@
 """Parquet tables on object storage or local disk, read and written whole, and shard file names."""
 
 import io
+from typing import NamedTuple
 
 import pandas as pd
 import pyarrow as pa
@@ -34,13 +35,26 @@ def parquet_files(prefix: str, pattern: str = "*.parquet") -> list[str]:
     return sorted(str(path) for path in StoragePath(prefix_join(prefix, pattern)).glob())
 
 
-def item_passages(items_root: str) -> dict[str, str]:
-    """The passage of every item of the item table that has one, by item id."""
-    passages: dict[str, str] = {}
+class ItemText(NamedTuple):
+    """The texts of one eval item that the stage-2 model reads; `passage` is "" when it has none."""
+
+    question: str
+    choices: list[str]
+    answer: str
+    passage: str
+
+
+def item_texts(items_root: str) -> dict[str, ItemText]:
+    """The texts of every item of the item table, by item id. Pairs and labels store an item id; the
+    model reads the item's texts from the table, so a table fix reaches every stored pair."""
+    texts: dict[str, ItemText] = {}
     for path in parquet_files(items_root):
-        table = read_frame(path, ["id", "passage"])
-        passages.update({i: p for i, p in zip(table["id"], table["passage"], strict=True) if p})
-    return passages
+        table = read_frame(path, ["id", "question", "choices", "answer", "passage"])
+        for i, q, c, a, p in zip(
+            table["id"], table["question"], table["choices"], table["answer"], table["passage"], strict=True
+        ):
+            texts[i] = ItemText(q, list(c), a or "", p or "")
+    return texts
 
 
 # Path segment under which the normalized pretraining shards live.
