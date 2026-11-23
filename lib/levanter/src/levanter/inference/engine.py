@@ -30,7 +30,7 @@ from levanter.inference.jit_scheduler import (
     TokenQueue,
     _DecodeOutputs,
 )
-from levanter.inference.page_table import PageTable
+from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.utils import INVALID, is_valid
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
@@ -410,6 +410,7 @@ def _prefill_kernel(
     model: LmHeadModel,
     sampler: Sampler,
     queue: TokenQueue,
+    binfo: PageBatchInfo,
     max_seqs_in_prefill: int,  # static
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
@@ -418,7 +419,7 @@ def _prefill_kernel(
     pos_ids = queue.queued_pos_ids
     slot_ids = queue.queued_slot_ids
 
-    decode_state, binfo = gen_state.decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+    decode_state = gen_state.decode_state
 
     seq_lens = decode_state.seq_lens
 
@@ -504,7 +505,7 @@ def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
     return hax.tree_util.tree_map(select, work.seq_params)
 
 
-def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
+def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenState, PageBatchInfo]:
     num_new = work.new_num_seqs.astype(jnp.int32)
     max_slots = work.new_slot_ids.array.shape[0]
 
@@ -539,11 +540,11 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
 
     gen_state = jax.lax.fori_loop(0, max_slots, primary, gen_state)
     # Full prefix pages must exist before cloning, so parent prefill fills the shared pages.
-    decode_state, _ = gen_state.decode_state.allocate_for_seq(
+    decode_state, binfo = gen_state.decode_state.allocate_for_seq(
         token_slot_ids=work.queue.queued_slot_ids, token_pos_ids=work.queue.queued_pos_ids
     )
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
-    return jax.lax.fori_loop(0, max_slots, clone, gen_state)
+    return jax.lax.fori_loop(0, max_slots, clone, gen_state), binfo
 
 
 @functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
@@ -554,8 +555,8 @@ def _run_prefill(
     work: PrefillWork,
     max_seqs_in_prefill: int,
 ) -> tuple[GenState, _DecodeOutputs]:
-    gen_state = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+    gen_state, binfo = _apply_prefill_work(gen_state, work)
+    return _prefill_kernel(gen_state, model, sampler, work.queue, binfo, max_seqs_in_prefill)
 
 
 def _handle_clones(
