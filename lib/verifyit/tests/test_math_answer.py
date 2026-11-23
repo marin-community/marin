@@ -234,6 +234,8 @@ def test_math_terminal_unit_power_stays_parseable():
     "reference, candidate, math_type",
     [
         (r"\mathrm{x}+1", r"\mathrm{x}+1", MathType.SCALAR),
+        (r"2\mathrm{x}+1", r"2\mathrm{x}+1", MathType.SCALAR),
+        (r"\frac{1}{2}\mathrm{x}+1", r"\frac{1}{2}\mathrm{x}+1", MathType.SCALAR),
         (r"\frac{\mathrm{x}}{2}", r"\frac{\mathrm{x}}{2}", MathType.SCALAR),
         (r"[1, \frac{\mathrm{x}}{2}]", r"[1, \frac{\mathrm{x}}{2}]", MathType.LIST),
     ],

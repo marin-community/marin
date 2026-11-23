@@ -116,9 +116,12 @@ def _parse_reference(text: str) -> tuple[list, bool]:
         group_contents = value[text_group.end() : text_group.end() + first_close - 1]
         if value[text_group.end() + first_close :].strip() not in ("", "^2"):
             prefix = value[: text_group.start()].rstrip()
-            if not re.fullmatch(r"[^\s~]+", group_contents) or (prefix and prefix[-1] not in "([{=+-*/^"):
+            upright_symbol = text_group.group() == r"\mathrm{" and len(group_contents) == 1 and group_contents.isalpha()
+            if not re.fullmatch(r"[^\s~]+", group_contents) or (
+                prefix and prefix[-1] not in "([{=+-*/^" and not upright_symbol
+            ):
                 return [], strip_units
-            # A text symbol at the start of a term is part of the expression.
+            # A text symbol starting a term or a single upright variable is part of the expression.
             symbolic_text_group = True
             strip_units = False
         if text_group.start() == 0 and len(group_contents.split()) > 4:
