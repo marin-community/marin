@@ -14,7 +14,9 @@ from safetensors.numpy import load, save
 
 MEDIA_TYPE = "application/vnd.levanter.generate.v1"
 GENERATE_PATH = "/v1/levanter/generate"
+PROMPT_TOKEN_IDS = "prompt_token_ids"
 _MAGIC = b"LEVANTER-GENERATE\x01"
+_HEADER_LENGTH = struct.Struct(">I")
 _MAX_METADATA_BYTES = 64 * 1024
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
 
@@ -36,16 +38,16 @@ def encode_frame(metadata: dict, tensors: dict[str, np.ndarray]) -> bytes:
     header = json.dumps(metadata, separators=(",", ":"), allow_nan=False).encode("utf-8")
     if len(header) > _MAX_METADATA_BYTES:
         raise ValueError("Binary frame metadata exceeds its size limit")
-    return _MAGIC + struct.pack(">I", len(header)) + header + save(tensors)
+    return _MAGIC + _HEADER_LENGTH.pack(len(header)) + header + save(tensors)
 
 
 def decode_frame(frame: bytes) -> tuple[dict, dict[str, np.ndarray]]:
     """Read a versioned frame and validate the metadata and tensor boundaries."""
     prefix = len(_MAGIC)
-    if not frame.startswith(_MAGIC) or len(frame) < prefix + 4:
+    if not frame.startswith(_MAGIC) or len(frame) < prefix + _HEADER_LENGTH.size:
         raise ValueError("Invalid or unsupported generation frame")
-    (header_size,) = struct.unpack_from(">I", frame, prefix)
-    start = prefix + 4
+    (header_size,) = _HEADER_LENGTH.unpack_from(frame, prefix)
+    start = prefix + _HEADER_LENGTH.size
     stop = start + header_size
     if not 0 < header_size <= _MAX_METADATA_BYTES or stop >= len(frame):
         raise ValueError("Invalid generation frame lengths")
@@ -72,9 +74,9 @@ async def read_generate_request(request: Request) -> tuple[np.ndarray, GenerateO
     try:
         metadata, tensors = decode_frame(bytes(body))
         options = GenerateOptions.model_validate(metadata)
-        if tensors.keys() != {"prompt_token_ids"}:
+        if tensors.keys() != {PROMPT_TOKEN_IDS}:
             raise ValueError("Generation requires exactly one prompt_token_ids tensor")
-        prompt = tensors["prompt_token_ids"]
+        prompt = tensors[PROMPT_TOKEN_IDS]
         if prompt.ndim != 1 or prompt.dtype != np.int32 or prompt.size == 0:
             raise ValueError("prompt_token_ids must be a nonempty one-dimensional int32 tensor")
     except ValueError as exc:

@@ -37,7 +37,14 @@ from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoic
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
-from levanter.inference.binary import GENERATE_PATH, MEDIA_TYPE, encode_frame, read_generate_request
+from levanter.inference.binary import (
+    GENERATE_PATH,
+    MEDIA_TYPE,
+    PROMPT_TOKEN_IDS,
+    GenerateOptions,
+    encode_frame,
+    read_generate_request,
+)
 from levanter.inference.engine import (
     InferenceEngine,
     InferenceEngineConfig,
@@ -143,17 +150,13 @@ def _fetch_all_from_queue(q: queue.Queue, timeout: float) -> List:
     return items
 
 
-def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinTokenizer) -> Optional[List[int]]:
-    """Tokenize the OpenAI-style ``stop`` field into a flat list of token ids, or None if unset."""
+def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinTokenizer) -> List[List[int]] | None:
+    """Tokenize each stop string as a separate sequence."""
     if not stop:
         return None
     stop_list = [stop] if isinstance(stop, str) else stop
-    stop_tokens: List[int] = []
-    for s in stop_list:
-        stop_ids = tokenizer.encode(s, add_special_tokens=False)
-        if stop_ids:
-            stop_tokens.extend(stop_ids)
-    return stop_tokens
+    sequences = [tokenizer.encode(text, add_special_tokens=False) for text in stop_list]
+    return [seq for seq in sequences if seq] or None
 
 
 class InferenceContext:
@@ -227,13 +230,11 @@ class InferenceContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
-        stop_tokens: Optional[List[int]],
+        stop_tokens: List[List[int]] | None,
         seed: int | None,
         future: asyncio.Future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
-        *,
-        stop_token_sequences: List[List[int]] | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -246,9 +247,7 @@ class InferenceContext:
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
-            stop_tokens=(
-                stop_token_sequences if stop_token_sequences is not None else ([stop_tokens] if stop_tokens else None)
-            ),
+            stop_tokens=stop_tokens,
             seed=seed,
             future=future,
             n_generations=n_generations,
@@ -808,8 +807,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
-    prompt, options = await read_generate_request(request)
+def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
     config = ctx.engine.config
     max_prefill_size = config.max_prefill_size or config.max_seq_len
     if prompt.size + options.max_tokens > config.max_seq_len or prompt.size > max_prefill_size:
@@ -827,24 +825,27 @@ async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Respo
     ):
         raise HTTPException(status_code=400, detail="Stop tokens exceed the configured capacity or vocabulary")
 
+
+async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Response:
+    prompt, options = await read_generate_request(request)
+    _validate_binary_options(ctx, prompt, options)
     future = asyncio.get_running_loop().create_future()
     ctx.submit_request(
         prompt.tolist(),
         options.max_tokens,
         options.temperature,
         options.top_p,
-        None,
+        options.stop_tokens,
         options.seed,
         future,
         n_generations=options.n,
-        stop_token_sequences=stops,
     )
     try:
         outputs = await future
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    tensors = {"prompt_token_ids": prompt}
+    tensors = {PROMPT_TOKEN_IDS: prompt}
     choices = []
     for choice, output in enumerate(outputs):
         choices.append({"completion_tokens": output.completion_tokens})
