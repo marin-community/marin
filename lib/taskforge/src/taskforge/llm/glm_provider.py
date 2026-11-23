@@ -49,7 +49,7 @@ ERROR_BODY_LIMIT = 2000
 CONNECT_TIMEOUT = 10.0
 WRITE_TIMEOUT = 30.0
 POOL_TIMEOUT = 30.0
-"""Seconds a request waits for a free connection in the local pool; longer is local admission, not the model."""
+"""Seconds a request waits for a free local connection before reporting an admission failure."""
 RESOLVE_TIMEOUT = 30.0
 """Seconds a request waits for the endpoint lookup in flight before failing as unavailable; the lookup keeps running."""
 KEEPALIVE_EXPIRY = 30.0
