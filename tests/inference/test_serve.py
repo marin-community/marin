@@ -26,7 +26,7 @@ from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
 from marin.inference import iris_vllm
@@ -1123,6 +1123,16 @@ def test_iris_serve_no_preemptible_requires_reserved_capacity(monkeypatch, flags
     assert bool(preemptible) is requires_reserved
     if requires_reserved:
         assert [value.value for value in preemptible[0].values] == ["false"]
+
+
+@pytest.mark.parametrize(
+    ("flags", "band"), [([], "PRIORITY_BAND_INHERIT"), (["--priority", "production"], "PRIORITY_BAND_PRODUCTION")]
+)
+def test_iris_serve_priority_sets_job_band(monkeypatch, flags, band):
+    result, client, _services, _mint = _invoke_iris_serve(monkeypatch, *flags)
+
+    assert result.exit_code == 0, result.output
+    assert client.submit.call_args.kwargs["priority_band"] == job_pb2.PriorityBand.Value(band)
 
 
 def test_iris_serve_model_preparation_disables_xet(monkeypatch):

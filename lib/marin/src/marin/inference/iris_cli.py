@@ -57,6 +57,8 @@ from iris.cluster.types import (
     EnvironmentSpec,
     is_job_finished,
 )
+from iris.rpc import job_pb2
+from iris.rpc.proto_display import priority_band_value
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.secrets import resolve_secret_spec
@@ -455,6 +457,12 @@ def _wait_and_report_endpoint(
 @click.option("--disk", default="100g")
 @click.option("--max-retries-preemption", type=int, default=10)
 @click.option(
+    "--priority",
+    type=click.Choice(["production", "interactive", "batch"]),
+    default=None,
+    help="Iris priority band for the serve job (default: inherit, normally interactive). production needs admin rights.",
+)
+@click.option(
     "--preemptible/--no-preemptible",
     default=True,
     help="Direct mode only: --no-preemptible requires non-preemptible capacity (on marin, the reserved v4 pool).",
@@ -548,6 +556,7 @@ def main(
     disk: str,
     max_retries_preemption: int,
     preemptible: bool,
+    priority: str | None,
     instances: int,
     broker: bool,
     vllm_args: tuple[str, ...],
@@ -769,6 +778,7 @@ def main(
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
                 task_image=None if brokered else task_image,
+                priority_band=job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority),
             )
             proxy_url = client.resolve_endpoint(endpoint)
             click.echo("")
