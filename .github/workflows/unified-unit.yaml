@@ -181,8 +181,9 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/cluster-occupancy-apps"
           ln -s "$GITHUB_WORKSPACE/infra/marina/apps/cluster_occupancy" "$RUNNER_TEMP/cluster-occupancy-apps/cluster_occupancy"
-          # The journey conftest imports the shared fixture module by repo path.
-          PYTHONPATH="$GITHUB_WORKSPACE" uv run --package marin-marina --no-default-groups marina journey cluster_occupancy \
+          # The journey conftest imports the shared fixture module by repo path,
+          # and its embedded hub needs the finelog native server from the test group.
+          PYTHONPATH="$GITHUB_WORKSPACE" uv run --package marin-marina marina journey cluster_occupancy \
             --apps-dir "$RUNNER_TEMP/cluster-occupancy-apps" --shots /tmp/cluster-occupancy-journey
       - name: Retain browser evidence
         if: always()
