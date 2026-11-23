@@ -496,7 +496,8 @@ def test_snowball_fp32_activations_cover_every_sigmoid():
 
 
 @pytest.mark.parametrize("model_axis_size,expert_axis_size", [(1, 1), (2, 1), (1, 2)])
-def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size):
+@pytest.mark.parametrize("n_generations", [1, 2])
+def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size, n_generations):
     cfg = _tiny_config(num_layers=2, sliding_window=3)
     with use_cpu_devices(model_axis_size * expert_axis_size):
         mesh = compact_grug_mesh(model_axis_size=model_axis_size, expert_axis_size=expert_axis_size)
@@ -527,13 +528,18 @@ def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_
                         SeqDecodingParams.default(),
                         max_num_tokens=jnp.asarray(len(prompt) + num_new_tokens, dtype=jnp.int32),
                     ),
-                    n_generations=1,
+                    n_generations=n_generations,
                 )
                 for i, prompt in enumerate(prompts)
             ]
             result = engine.generate(requests)
             assert result.logprobs is not None
-            for prompt, generated, scores in zip(prompts, result.tokens, result.logprobs, strict=True):
+            for prompt, generated, scores in zip(
+                [prompt for prompt in prompts for _ in range(n_generations)],
+                result.tokens,
+                result.logprobs,
+                strict=True,
+            ):
                 assert len(generated) == num_new_tokens
                 full_tokens = prompt + generated
                 # The teacher-forced forward uses one copy per batch shard.
