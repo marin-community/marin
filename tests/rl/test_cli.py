@@ -120,9 +120,9 @@ def test_coordinator_request_requires_a_skyrl_step() -> None:
         )
 
 
-@pytest.mark.parametrize("missing_name", [None, "JUDGE_KEY", "EVAL_KEY"])
+@pytest.mark.parametrize("missing_names", [(), ("JUDGE_KEY",), ("EVAL_KEY",), ("JUDGE_KEY", "EVAL_KEY")])
 def test_rl_launch_requires_and_forwards_credentials_before_submission(
-    monkeypatch: pytest.MonkeyPatch, missing_name: str | None
+    monkeypatch: pytest.MonkeyPatch, missing_names: tuple[str, ...]
 ) -> None:
     client = MagicMock(spec=IrisClient)
     client.submit.return_value.job_id = JobName.from_wire("/atqamar/submitted-coordinator")
@@ -140,8 +140,8 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("HF_TOKEN", "test-hf-token")
     monkeypatch.setenv("WANDB_API_KEY", "test-wandb-key")
-    if missing_name is not None:
-        monkeypatch.delenv(missing_name)
+    for name in missing_names:
+        monkeypatch.delenv(name)
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
 
     @click.command()
@@ -156,10 +156,10 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
 
     result = CliRunner().invoke(main, ["--version", "2026.10.07", "--run"])
 
-    if missing_name is not None:
+    if missing_names:
         assert result.exit_code != 0
-        assert isinstance(result.exception, KeyError)
-        assert result.exception.args == (missing_name,)
+        assert "missing required RL environment variables: " + ", ".join(sorted(missing_names)) in result.output
+        assert all(value not in result.output for value in expected_env.values())
         client.submit.assert_not_called()
         return
 
