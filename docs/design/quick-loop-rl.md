@@ -2172,6 +2172,13 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   The blocked arm happened to dispatch eight choices in each training
   exchange. This fixture establishes correctness for the combined changes.
 
+  A separate reference-mode CPU run exercised `RayPPOTrainer.train()` and
+  the real Levanter learner subprocess through a local placement adapter.
+  The trainer admitted two four-choice groups at each step, applied both
+  optimizer updates, installed versions 0 through 2, and committed the
+  ordinary native checkpoint index through step 2. This covers the
+  trainer and checkpoint callbacks on the combined source.
+
   A fresh-start diagnostic can skip the initial evaluation callback and
   keep the final panel. The callback ran for 26m55s in the interrupted
   attempt. The production worker composer reproduced the archived
