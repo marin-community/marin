@@ -65,6 +65,11 @@ When a box is present, its entire content must be a numeric literal, optionally 
 Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
 `2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
 
+Scalar `MathSpec` contracts may set `positive_symbols = ["a_1", "a_2"]` when the public problem
+explicitly states those symbols are positive. If ordinary comparison fails, the grader checks
+whether the parsed scalar expressions simplify to exactly the same value under those assumptions.
+The default is an empty list, so unrestricted variables keep their usual comparison.
+
 Numeric `expected` is a required literal string; `tolerance_abs` and `tolerance_rel`
 are required finite nonnegative floats. For example, `expected = "1/2"`, `tolerance_abs = 0.0`,
 `tolerance_rel = 0.0` accepts both `1/2` and `0.5` without losing integer or decimal precision.

@@ -6,6 +6,7 @@ from typing import Any
 
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
+from verifyit.adapters.open_instruct_ifeval import compute_score as instruction_score
 from verifyit.modes.grade_mcq import grade_mcq_candidate
 from verifyit.spec import McqSpec
 
@@ -14,7 +15,7 @@ from skyrl_gym.envs.aime.verifier import AIMERewardPolicy, AIMEVerifier
 from skyrl_gym.envs.cat_count.reward import TARGET_WORD, cat_count_score
 from skyrl_gym.envs.sequence.reward import sequence_score
 from skyrl_gym.envs.gsm8k.utils import compute_score as gsm8k_score
-from skyrl_gym.envs.ifeval.utils import compute_score as instruction_score
+from skyrl_gym.envs.instruction_verifyit import grade_standalone_instructions
 from skyrl_gym.envs.mcq.utils import extract_mcq_answer
 from skyrl_gym.envs.nupa.answers import parse_ground_truth
 from skyrl_gym.envs.nupa.verifier import NUPAVerifier
@@ -114,12 +115,16 @@ def grade_mcq(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
 
 def grade_ifeval(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
     use_verifyit = bool(config.get("verifyit_enabled", False))
-    result = instruction_score(turn.text, ground_truth(extras), verifyit_enabled=use_verifyit)
+    result = (
+        grade_standalone_instructions(turn.text, ground_truth(extras))
+        if use_verifyit
+        else instruction_score(turn.text, ground_truth(extras))
+    )
     reward = result["score"]
     metrics = {key: value for key, value in result.items() if key != "score"}
     verification = (
         VerificationResult.error("Instruction verifier failed", diagnostics=metrics)
-        if use_verifyit and result.get("error_type")
+        if result.get("error_type")
         else VerificationResult.verified(reward, passed=result["acc"] if use_verifyit else None, diagnostics=metrics)
     )
     return TaskTransition(done=True, reward=reward, grade=grade_result(verification), metrics=metrics)

@@ -11,12 +11,12 @@ import re
 import threading
 
 from math_verify import parse, verify
-from sympy.core.relational import Relational
 from verifyit.adapters.completion import END_OF_TURN, final_text
 from verifyit.grade import Reward, invalid_task, scored
 
 from .amc import last_boxed_answer
 from .minerva import is_equiv, normalize_final_answer
+from .relations import same_relations, symbol_free_relation
 
 CHAT_REQUEST_STOPS = END_OF_TURN[:4]
 
@@ -53,11 +53,6 @@ def grade_minerva_completion(document: dict, response: str) -> Reward:
     return scored(metrics["exact_match,none"], metrics=metrics, extracted=answer)
 
 
-def _symbol_free_relation(parsed: list) -> bool:
-    values = [value for value in parsed if not isinstance(value, str)]
-    return bool(values) and all(isinstance(value, Relational) and not value.free_symbols for value in values)
-
-
 def final_boxed_answer(response: str) -> str:
     """Extract the source's last box in final content before a task boundary."""
     response = final_text(response)
@@ -77,8 +72,10 @@ def grade_boxed_math(expected: str, response: str) -> Reward:
     reference = parse(r"\boxed{" + expected + "}", parsing_timeout=timeout)
     prediction = parse(r"\boxed{" + candidate + "}", parsing_timeout=timeout)
     if reference and prediction:
-        relations = _symbol_free_relation(reference) and _symbol_free_relation(prediction)
-        match = not relations and bool(verify(gold=reference, target=prediction, timeout_seconds=timeout))
+        if symbol_free_relation(reference):
+            match = same_relations(prediction, reference)
+        else:
+            match = bool(verify(gold=reference, target=prediction, timeout_seconds=timeout))
     else:
         match = is_equiv(normalize_final_answer(candidate), normalize_final_answer(expected))
     return scored(float(match), extracted=candidate, expected=expected)
