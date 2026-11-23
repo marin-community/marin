@@ -1038,6 +1038,25 @@ def test_iris_serve_proxy_timeout_covers_broker_worker_and_lease(monkeypatch):
     assert broker.request_lease_timeout_seconds == 3420
 
 
+def test_iris_serve_passes_tokenizer_to_the_served_model(monkeypatch):
+    """Object-store checkpoints carry no tokenizer files; the served model must accept a
+    separate tokenizer source so the backend resolves the tool chat template and vllm serve
+    receives --tokenizer/--tokenizer-revision instead of failing on the weights path."""
+    result, _client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--tokenizer",
+        "marin-community/marin-tokenizer-tools",
+        "--tokenizer-revision",
+        "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    model = services[0].model
+    assert model.tokenizer == "marin-community/marin-tokenizer-tools"
+    assert model.tokenizer_revision == "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09"
+
+
 def test_iris_serve_delivers_secret_without_putting_it_in_the_service_config(monkeypatch):
     monkeypatch.setenv("TEST_PARALLEL_KEY", "parallel-key")
 
