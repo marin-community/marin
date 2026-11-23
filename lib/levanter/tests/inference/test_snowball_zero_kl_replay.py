@@ -102,7 +102,6 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores():
             attended[row, : len(full)] = 1
             response[row, len(prompt) - 1 : len(full) - 1] = True
             fields = {
-                PROMPT_TOKEN_IDS: np.asarray(prompt, np.int32),
                 TOKEN_IDS: np.asarray(generated, np.int32),
                 POLICY_LOGPROBS: np.asarray(served, np.float32),
                 EXPERT_IDS: capture.expert_ids,
@@ -110,7 +109,8 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores():
             }
             frame = encode_frame(
                 {"choices": [{POLICY_ID: snapshot}], LOGPROB_MODE: LogprobMode.POLICY},
-                {choice_tensor_key(0, name): tensor for name, tensor in fields.items()},
+                {PROMPT_TOKEN_IDS: np.asarray(prompt, np.int32)}
+                | {choice_tensor_key(0, name): tensor for name, tensor in fields.items()},
             )
             rollouts.append(BinaryRolloutChoice(frame, 0))
 
