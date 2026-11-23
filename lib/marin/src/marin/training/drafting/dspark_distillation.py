@@ -43,6 +43,7 @@ SPECULATORS_REVISION = "77eaa2390cab54ff7e5315345137394ee44b7a98"
 VLLM_SOURCE_COMMIT = "47a8e415bff17b9376f02d9b92edcc67e962eaee"
 _TEACHER_PORT = 18000
 HF_DRAFT_SUBDIRECTORY = "hf"
+DEFAULT_DRAFT_SEED = 42
 _EPOCHS = 1
 _MARKOV_HEAD = "vanilla"
 _LOSS_IMPLEMENTATION = "eager"
@@ -50,6 +51,9 @@ _D2T_FILE = "d2t.npy"
 _T2D_FILE = "t2d.npy"
 _D2T_TENSOR = "d2t"
 _SPECULATOR_TYPE = "dspark"
+_SAMPLE_FROM_ANCHOR = True
+_ENABLE_CONFIDENCE_HEAD = True
+_CONFIDENCE_HEAD_WITH_MARKOV = True
 _PREPARE_TRAINER_INPUTS = """
 import json
 import sys
@@ -105,7 +109,7 @@ class DraftRecipe:
     block_size: int = 8
     markov_rank: int = 256
     learning_rate: float = 3e-4
-    seed: int = 42
+    seed: int = DEFAULT_DRAFT_SEED
 
     def __post_init__(self) -> None:
         if not self.feature_taps or tuple(sorted(set(self.feature_taps))) != self.feature_taps:
@@ -156,6 +160,7 @@ def _worker_gpu_devices() -> str:
 
 
 def _install_speculators(scratch: Path, env: dict[str, str]) -> str:
+    """Install pinned Speculators and return the isolated Python executable."""
     source = scratch / "speculators"
     trainer_env = scratch / "trainer-env"
     subprocess.run(["git", "init", "--quiet", str(source)], env=env, check=True)
@@ -194,7 +199,7 @@ def require_supported_vllm_release() -> None:
 
 
 def require_qualified_teacher(recipe: DraftRecipe) -> None:
-    """Require GPU qualification before training from a ShortConv teacher."""
+    """Reject ShortConv teachers until their GPU training and serving paths are qualified."""
     if recipe.data.shape.sconv:
         raise ValueError("ShortConv DSpark training requires GPU qualification of extraction and serving")
 
@@ -223,14 +228,14 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
         "speculators_model_type": _SPECULATOR_TYPE,
         "layer_type": DRAFT_LAYER_TYPE,
         "block_size": recipe.block_size,
-        "sample_from_anchor": True,
+        "sample_from_anchor": _SAMPLE_FROM_ANCHOR,
         "aux_hidden_state_layer_ids": list(recipe.feature_taps),
         "mask_token_id": recipe.data.mask_token_id,
         "draft_vocab_size": recipe.draft_vocab_size,
         "markov_rank": recipe.markov_rank,
         "markov_head_type": _MARKOV_HEAD,
-        "enable_confidence_head": True,
-        "confidence_head_with_markov": True,
+        "enable_confidence_head": _ENABLE_CONFIDENCE_HEAD,
+        "confidence_head_with_markov": _CONFIDENCE_HEAD_WITH_MARKOV,
     }
     for name, value in required.items():
         if config.get(name) != value:
@@ -398,13 +403,13 @@ def _write_config_and_build_command(
             "max_steps": steps,
             "gradient_checkpointing": True,
         },
-        "dflash": {"block_size": recipe.block_size, "sample_from_anchor": True},
+        "dflash": {"block_size": recipe.block_size, "sample_from_anchor": _SAMPLE_FROM_ANCHOR},
         _SPECULATOR_TYPE: {
             "draft_layer_type": DRAFT_LAYER_TYPE,
             "markov_rank": recipe.markov_rank,
             "markov_head_type": _MARKOV_HEAD,
-            "enable_confidence_head": True,
-            "confidence_head_with_markov": True,
+            "enable_confidence_head": _ENABLE_CONFIDENCE_HEAD,
+            "confidence_head_with_markov": _CONFIDENCE_HEAD_WITH_MARKOV,
             "confidence_head_alpha": 1.0,
         },
     }

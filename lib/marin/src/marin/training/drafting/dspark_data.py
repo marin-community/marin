@@ -15,7 +15,7 @@ from typing import cast
 
 import datasets
 import pyarrow.parquet as pq
-from levanter.compat.hf_checkpoints import SAFE_TENSORS_INDEX_NAME
+from levanter.compat.hf_checkpoints import SAFE_TENSORS_INDEX_NAME, SAFE_TENSORS_MODEL
 from levanter.data.text.formats import ChatProcessor
 from levanter.models.snowball import GRUG_MOE_ARCHITECTURE, GRUG_MOE_MODEL_TYPE
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
@@ -30,7 +30,6 @@ ARROW_DATASET_DIR = "dataset"
 DRAFT_CONFIG_FILE = "draft_config.json"
 DRAFT_LAYER_TYPE = "qwen3"
 TOKEN_FREQUENCIES_FILE = "token_frequencies.json"
-_SAFETENSORS_FILE = "model.safetensors"
 SPLITS_FILE = "splits.json"
 _MAX_SAFETENSORS_HEADER = 100_000_000
 EMBEDDING = "model.embed_tokens.weight"
@@ -97,8 +96,8 @@ def tensor_files(root: Path) -> dict[str, str]:
     index = root / SAFE_TENSORS_INDEX_NAME
     if index.is_file():
         return _weight_map(index)
-    with safe_open(root / _SAFETENSORS_FILE, framework="np") as weights:
-        return dict.fromkeys(weights.keys(), _SAFETENSORS_FILE)
+    with safe_open(root / SAFE_TENSORS_MODEL, framework="np") as weights:
+        return dict.fromkeys(weights.keys(), SAFE_TENSORS_MODEL)
 
 
 def _tensor_header(path: StoragePath) -> dict:
@@ -116,7 +115,7 @@ def _check_teacher_tensors(root: StoragePath, shape: GrugShape) -> None:
         weights = _weight_map(index)
         headers = {}
     else:
-        name = _SAFETENSORS_FILE
+        name = SAFE_TENSORS_MODEL
         headers = {name: _tensor_header(root / name)}
         weights = dict.fromkeys(headers[name].keys() - {"__metadata__"}, name)
     for shard in set(weights.values()):
@@ -145,7 +144,7 @@ def _check_teacher_tensors(root: StoragePath, shape: GrugShape) -> None:
             raise ValueError(f"Unexpected shape for teacher tensor {name}, expected {expected}")
 
 
-def _draft_decoder(target: dict, config: DraftDataConfig) -> dict[str, str | int | float | bool | None]:
+def _draft_decoder_config(target: dict, config: DraftDataConfig) -> dict[str, str | int | float | bool | None]:
     if (
         target["model_type"] != GRUG_MOE_MODEL_TYPE
         or target["architectures"] != [GRUG_MOE_ARCHITECTURE]
@@ -181,7 +180,7 @@ def _draft_decoder(target: dict, config: DraftDataConfig) -> dict[str, str | int
 def _teacher_inputs(
     root: StoragePath, config: DraftDataConfig
 ) -> tuple[dict[str, str | int | float | bool | None], MarinTokenizer]:
-    decoder = _draft_decoder(json.loads((root / CONFIG_NAME).read_text()), config)
+    decoder = _draft_decoder_config(json.loads((root / CONFIG_NAME).read_text()), config)
     _check_teacher_tensors(root, config.shape)
     tokenizer = load_tokenizer(str(root))
     if not tokenizer.chat_template or tokenizer.vocab_size > config.shape.vocab_size:

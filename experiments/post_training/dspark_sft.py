@@ -24,6 +24,7 @@ from marin.training.drafting.dspark_data import (
     prepare_data,
 )
 from marin.training.drafting.dspark_distillation import (
+    DEFAULT_DRAFT_SEED,
     HF_DRAFT_SUBDIRECTORY,
     DraftRecipe,
     DSparkExport,
@@ -77,7 +78,7 @@ class OfflineDSpark:
     trainer_ranks: int
     max_sequence_length: int = 32768
     max_anchors: int = 12288
-    seed: int = 42
+    seed: int = DEFAULT_DRAFT_SEED
 
     def training_recipe(self) -> DraftRecipe:
         shape, taps = _TARGETS[self.teacher.family]
