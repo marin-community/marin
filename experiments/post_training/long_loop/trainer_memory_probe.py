@@ -23,6 +23,7 @@ from cloud.iris.launch_config import load_launch_config
 from omegaconf import open_dict
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
+from skyrl_train.config.validation import validate_megatron_config
 from skyrl_train.projected_softmax import projected_token_statistics
 from skyrl_train.stable_softmax import token_entropy, token_logprobs
 from skyrl_train.utils.utils import initialize_ray
@@ -174,6 +175,7 @@ def compiled_config(args):
             "valid_token_counts": [85557],
             "minimum_headroom_fraction": 0.1,
         }
+    validate_megatron_config(cfg)
     return cfg
 
 
