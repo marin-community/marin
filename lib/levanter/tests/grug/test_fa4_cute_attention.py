@@ -1,8 +1,13 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import itertools
+import json
 import math
+from dataclasses import asdict
+from importlib import metadata
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
@@ -23,7 +28,7 @@ from levanter.grug.attention import (
     reference_attention,
 )
 from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds, fa4_cute_segment_bounds
-from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM
+from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM, flash4_cute_kernel_config
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.devices import use_test_devices
 
@@ -550,7 +555,7 @@ def test_real_gpu_fa4_cute_sm100_attention_matches_reference():
     )
 
 
-@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (2, 2, 64), (4, 1, 128)])
+@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (2, 2, 64), (4, 1, 128), (2, 2, 128)])
 def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_segments(q_heads, kv_heads, head_dim):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
@@ -601,6 +606,109 @@ _SEQUENCE_SHARDED_CASES = [("gpu_fa4_cute", *layout) for layout in _SEQUENCE_SHA
     for q_heads, kv_heads, head_dim in _SEQUENCE_SHARDED_LAYOUTS
     if head_dim == SM100_HEAD_DIM and q_heads // kv_heads in SM100_GQA_RATIOS
 ]
+
+
+@pytest.mark.timeout(180)
+def test_real_gpu_fa4_cute_d64_backward_stays_finite_after_nan_cotangent(record_property):
+    # Captured finite residuals reproduce post-NaN dQ corruption with the D64/MHA
+    # fallback. Keep saved OUT/LSE: regenerating them would change the reproducer.
+    fixtures = Path(__file__).with_name("fixtures")
+    packet_path = fixtures / "fa4_d64_backward_history.npz"
+    metadata_path = fixtures / "fa4_d64_backward_history.json"
+    record = json.loads(metadata_path.read_text())["record"]
+    packet_sha256 = hashlib.sha256(packet_path.read_bytes()).hexdigest()
+    assert packet_sha256 == record["sha256"]
+    names = ("q", "k", "v", "out", "dout", "lse", "bounds", "valid", "q_offset")
+    host = {}
+    with np.load(packet_path, allow_pickle=False) as packet:
+        for name in (*names, "dq", "dk", "dv"):
+            raw = packet[name]
+            assert list(raw.shape) == record["stats"][name]["shape"]
+            assert hashlib.sha256(raw.tobytes()).hexdigest() == record["stats"][name]["sha256"]
+            if record["dtypes"][name] == "bfloat16":
+                assert raw.dtype == np.uint16
+                raw = raw.view(jnp.bfloat16)
+            else:
+                assert str(raw.dtype) == record["dtypes"][name]
+            assert np.isfinite(raw.astype(np.float32)).all()
+            host[name] = raw.copy()
+    record_property("fixture_packet_sha256", packet_sha256)
+    record_property("fixture_metadata_sha256", hashlib.sha256(metadata_path.read_bytes()).hexdigest())
+    if jax.default_backend() != "gpu":
+        pytest.skip("The saved D64 backward regression requires an H100 GPU.")
+    device = jax.local_devices()[0]
+    if "H100" not in device.device_kind:
+        pytest.skip("The saved D64 backward regression uses the pinned Hopper schedule.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    record_property("backend", jax.default_backend())
+    record_property("device_kind", device.device_kind)
+    for package in ("jax", "jaxlib", "numpy", "flash-attn-4", "nvidia-cutlass-dsl"):
+        record_property(package, metadata.version(package))
+    kernel_path = Path(fa4_cute_backend.__file__).with_name("_fa4_cute_segmented_bwd.py")
+    record_property("segmented_backward_source_sha256", hashlib.sha256(kernel_path.read_bytes()).hexdigest())
+
+    with jax.default_device(device):
+        values = {name: jax.device_put(host[name], device) for name in names}
+        finite_args = tuple(values[name] for name in names)
+        poison_args = (*finite_args[:4], jnp.full_like(values["dout"], jnp.nan), *finite_args[5:])
+        jax.block_until_ready((finite_args, poison_args))
+        config = flash4_cute_kernel_config(
+            host["q"].shape[-1], arch=record["metadata"]["kernel_config"]["backward_arch"]
+        )
+        scale = record["metadata"]["softmax_scale"]
+        record_property("q_shape", json.dumps(list(values["q"].shape)))
+        record_property("q_dtype", str(values["q"].dtype))
+        record_property("kernel_config", json.dumps(asdict(config), sort_keys=True))
+        record_property("softmax_scale", scale)
+
+        def backward(q, k, v, out, dout, lse, bounds, valid, q_offset):
+            return fa4_cute_backend.segmented_flash_attention_backward(
+                q, k, v, out, dout, lse, bounds, valid, softmax_scale=scale, kernel_config=config, q_offset=q_offset
+            )
+
+        compiled = jax.jit(backward).lower(*finite_args).compile()
+        outputs = []
+        host_outputs = []
+        compiled_ids = []
+        labels = ("F1", "F2", "N", "F3", "F4")
+        # Keep every device output alive and reuse the exact finite argument
+        # objects. No donation, forward or reference work interrupts the history.
+        for args in (finite_args, finite_args, poison_args, finite_args, finite_args):
+            compiled_ids.append(id(compiled))
+            gradients = compiled(*args)
+            jax.block_until_ready(gradients)
+            outputs.append(gradients)
+            host_outputs.append(tuple(np.asarray(array) for array in gradients))
+        record_property("sequence_compiled_object_ids", json.dumps(compiled_ids))
+        for name in names:
+            assert np.asarray(values[name]).tobytes() == host[name].tobytes(), f"{name}: backward input modified"
+        record_property("finite_inputs_pure", True)
+
+        # Compute the independent dense VJP only after all five actual backward
+        # calls, so reference allocations cannot disturb the reproducing history.
+        mask = AttentionMask.causal().with_fa4_bounds(values["bounds"], values["valid"])
+        _, pullback = jax.vjp(
+            lambda q, k, v: reference_attention(q, k, v, mask, logits_dtype=jnp.float32), *finite_args[:3]
+        )
+        reference = tuple(np.asarray(array).astype(np.float32) for array in pullback(values["dout"]))
+        for label, gradients in zip(labels, host_outputs, strict=True):
+            if label == "N":
+                continue  # Deliberate NaN cotangent is diagnostic, not a finite-input oracle.
+            for name, actual, expected, first in zip(
+                ("dq", "dk", "dv"), gradients, reference, host_outputs[0], strict=True
+            ):
+                finite = bool(np.isfinite(actual.astype(np.float32)).all())
+                if not finite:
+                    record_property("first_nonfinite_gradient", f"{label}/{name}")
+                assert finite, f"{label}/{name}: nonfinite backward gradient"
+                difference = np.abs(actual.astype(np.float32) - expected)
+                record_property(f"{label}_{name}_reference_max_abs", float(difference.max()))
+                record_property(f"{label}_{name}_reference_mean_abs", float(difference.mean()))
+                np.testing.assert_allclose(actual.astype(np.float32), expected, atol=7e-2, rtol=7e-2)
+                assert actual.tobytes() == first.tobytes(), f"{label}/{name}: backward gradient bits changed"
+                assert actual.tobytes() == host[name].tobytes(), f"{label}/{name}: differs from saved healthy F1"
 
 
 @pytest.mark.parametrize(("implementation", "q_heads", "kv_heads", "head_dim"), _SEQUENCE_SHARDED_CASES)

@@ -1,0 +1,247 @@
+{
+  "source_head": "d3fecc6bf743e25ae26f42bac8df8b5602d3242b",
+  "archive_sha256": "1b9da4e63b963e80fbf55f8d919382d0c219d771792858dacf952c0f5cb31720",
+  "archive_path": "backward-captures/backward-027.npz",
+  "record": {
+    "ordinal": 27,
+    "file": "backward-027.npz",
+    "sha256": "ccadfa89bc57bdba7891fa26e6e391fc7be8fde5f53edc012ce78c7407150a13",
+    "bytes": 16492,
+    "file_bytes": 19406,
+    "dtypes": {
+      "q": "bfloat16",
+      "k": "bfloat16",
+      "v": "bfloat16",
+      "out": "bfloat16",
+      "dout": "bfloat16",
+      "lse": "float32",
+      "bounds": "int32",
+      "valid": "bool",
+      "q_offset": "int32",
+      "dq": "bfloat16",
+      "dk": "bfloat16",
+      "dv": "bfloat16"
+    },
+    "qkv_sha256": "c5e50b5c5306fa9402136156a1e9d31ab0dcc29cb0c55654a70b966f1a3e8545",
+    "all_backward_inputs_sha256": "adef6a04db05cb0df58d270ce8bd6359ba575e8b913de04d9e4c414041fa3dc7",
+    "stats": {
+      "q": {
+        "shape": [
+          1,
+          8,
+          2,
+          64
+        ],
+        "dtype": "bfloat16",
+        "sha256": "4f36d37df90da8b8222ae70397894a86fe34642759d30eb0d26a4eacb585737e",
+        "elements": 1024,
+        "finite": 1024,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 5.28125
+      },
+      "k": {
+        "shape": [
+          1,
+          8,
+          2,
+          64
+        ],
+        "dtype": "bfloat16",
+        "sha256": "2724f6549af84f7351630dd84c3851e288e6545e6106fa54177c9bb737a63538",
+        "elements": 1024,
+        "finite": 1024,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 2.90625
+      },
+      "v": {
+        "shape": [
+          1,
+          8,
+          2,
+          64
+        ],
+        "dtype": "bfloat16",
+        "sha256": "0d1c8b97a3048843957a5307d68d7dc8fa4de84ff21ce8ffdea218f71dde8bc9",
+        "elements": 1024,
+        "finite": 1024,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 0.181640625
+      },
+      "out": {
+        "shape": [
+          1,
+          8,
+          2,
+          64
+        ],
+        "dtype": "bfloat16",
+        "sha256": "9fb3b5a505ccc893e7f4f1ad500c9d64062c001a060cbcb0eee5934fb947014d",
+        "elements": 1024,
+        "finite": 1024,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 0.1376953125
+      },
+      "dout": {
+        "shape": [
+          1,
+          8,
+          2,
+          64
+        ],
+        "dtype": "bfloat16",
+        "sha256": "335e152fe8eefeeee4c86bda1ca199bbeb372deda8d11ab9fea45182d7b9b045",
+        "elements": 1024,
+        "finite": 1024,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 0.0001010894775390625
+      },
+      "lse": {
+        "shape": [
+          1,
+          2,
+          8
+        ],
+        "dtype": "float32",
+        "sha256": "edc30f35f5a17de06c1be1bdd3b79f080514fc83db4d19e6efa36c85cb181da7",
+        "elements": 16,
+        "finite": 16,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 3.387465238571167
+      },
+      "bounds": {
+        "shape": [
+          1,
+          8
+        ],
+        "dtype": "int32",
+        "sha256": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+        "elements": 8,
+        "finite": 8,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 0.0
+      },
+      "valid": {
+        "shape": [
+          1,
+          8
+        ],
+        "dtype": "bool",
+        "sha256": "04abc8821a06e5a30937967d11ad10221cb5ac3b5273e434f1284ee87129a061",
+        "elements": 8,
+        "finite": 8,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 1.0
+      },
+      "q_offset": {
+        "shape": [
+          1
+        ],
+        "dtype": "int32",
+        "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+        "elements": 1,
+        "finite": 1,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 0.0
+      },
+      "dq": {
+        "shape": [
+          1,
+          8,
+          2,
+          64
+        ],
+        "dtype": "bfloat16",
+        "sha256": "a1119a910ce2eae31f0a6bcf788240579c2c8bd2a6b057933474dca32a74d8d3",
+        "elements": 1024,
+        "finite": 1024,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 1.4603137969970703e-06
+      },
+      "dk": {
+        "shape": [
+          1,
+          8,
+          2,
+          64
+        ],
+        "dtype": "bfloat16",
+        "sha256": "3e3541d34ec12f4e6f68fac79b28000d5896bad3b767a2a990a6d4665f57f99f",
+        "elements": 1024,
+        "finite": 1024,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 1.6987323760986328e-06
+      },
+      "dv": {
+        "shape": [
+          1,
+          8,
+          2,
+          64
+        ],
+        "dtype": "bfloat16",
+        "sha256": "bddfb3642531caacc54b21009db146357f957bd840f9c86125611faf41552b37",
+        "elements": 1024,
+        "finite": 1024,
+        "nan": 0,
+        "inf": 0,
+        "finite_abs_max": 3.6716461181640625e-05
+      }
+    },
+    "metadata": {
+      "softmax_scale": 0.125,
+      "kernel_config": {
+        "forward_tile": [
+          128,
+          128
+        ],
+        "backward_tile": [
+          64,
+          64
+        ],
+        "num_threads": 128,
+        "backward_arch": 90,
+        "sm90_backward": {
+          "tile": [
+            128,
+            128
+          ],
+          "num_threads": 384,
+          "num_stages_q": 2,
+          "num_stages_do": 2,
+          "num_stages_pds": 2,
+          "sdp_swap_ab": true,
+          "dkv_swap_ab": false,
+          "dq_swap_ab": false,
+          "atom_layout_m_sdp": 1,
+          "atom_layout_n_dkv": 2,
+          "atom_layout_m_dq": 2,
+          "num_warp_groups": 2,
+          "dq_single_wg": false
+        },
+        "sm100_backward": null,
+        "sm100_forward": null
+      },
+      "dispatch_branch_from_original_conditions": "segmented_fallback",
+      "dispatch_evidence": "D64/ratio1 cannot enter native SM90 or SM100 branches",
+      "kernel_trace_instrumentation": false
+    },
+    "pid": 793,
+    "callback_thread_id": 125632147089088,
+    "device_id": null,
+    "layer_id": null,
+    "temporal_microbatch_id": null,
+    "pairing": "All residuals and gradients in this record come from ONE original backward invocation"
+  },
+  "scope": "Single ALL9finite originallyfinite packet27; input only, no model/checkpoint/source installation"
+}
