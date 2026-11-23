@@ -317,6 +317,22 @@ def _reference_attention(
 
 
 def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap):
+    kv_pages_per_block = min(_TPU_KV_PAGES_PER_BLOCK, page_indices.shape[1])
+    if sliding_window is not None:
+        # Drop whole tiles only so the surviving softmax accumulation order stays fixed.
+        page_size = kv_pages.shape[1]
+        block_tokens = page_size * kv_pages_per_block
+        window_pages = (sliding_window + q.shape[0] + block_tokens + page_size - 3) // page_size
+        if window_pages < page_indices.shape[1] and window_pages * kv_lens.shape[0] < kv_pages.shape[0]:
+            query_lengths = jnp.maximum(jnp.diff(cu_q_lens), 0)
+            first_keys = jnp.maximum(kv_lens - query_lengths - sliding_window + 1, 0)
+            first_pages = first_keys // block_tokens * kv_pages_per_block
+            page_offsets = first_pages[:, None] + jnp.arange(window_pages)
+            physical_pages = jnp.take_along_axis(page_indices, page_offsets, axis=1, mode="clip")
+            kv_pages = kv_pages[jnp.maximum(physical_pages, 0).reshape(-1)]
+            page_indices = jnp.arange(physical_pages.size, dtype=jnp.int32).reshape(physical_pages.shape)
+            kv_lens = kv_lens - first_pages * page_size
+
     # Keep both scores and softmax weights in FP32, including the AV contraction.
     with jax.default_matmul_precision("highest"):
         # The upstream long-context tiles can exceed scoped VMEM with FP32 KV.
@@ -331,7 +347,7 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
             sliding_window=sliding_window,
             soft_cap=soft_cap,
             num_queries_per_block=min(_TPU_QUERIES_PER_BLOCK, q.shape[0]),
-            num_kv_pages_per_block=min(_TPU_KV_PAGES_PER_BLOCK, page_indices.shape[1]),
+            num_kv_pages_per_block=kv_pages_per_block,
         )
     valid = _query_metadata(q, kv_lens, cu_q_lens, num_seqs).valid
     return jnp.where(valid[:, None, None, None], output.astype(q.dtype), 0)
