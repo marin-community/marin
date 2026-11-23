@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from cloud.iris.launch_config import load_launch_config
@@ -198,7 +199,8 @@ def main(
         if not engine.get("enable_auto_tool_choice") or not engine.get("tool_call_parser"):
             raise ValueError("Installed-agent tool requests require automatic tool choice and a tool parser")
     worker = asyncio.run(validate_rollout_worker(config)) if build_worker else None
-    vocabulary = validate_policy_vocabulary(config) if check_vocabulary else None
+    with redirect_stdout(sys.stderr):
+        vocabulary = validate_policy_vocabulary(config) if check_vocabulary else None
     compiled = OmegaConf.to_yaml(config, resolve=True)
     destination.write_text(compiled)
     print(

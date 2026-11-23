@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import fsspec
 import numpy as np
 from omegaconf import OmegaConf
 import pytest
@@ -11,8 +12,9 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast
 
-from cloud.iris import task_runtime
-from experiments.post_training.long_loop.validate_launch import validate_policy_vocabulary
+from cloud.iris import hf_model_cache, task_runtime
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
+from experiments.post_training.long_loop.validate_launch import main, validate_policy_vocabulary
 
 
 def write_tokenizer(path: Path, *, reversed_ids: bool = False) -> None:
@@ -59,3 +61,30 @@ def test_cpu_preflight_loads_fast_metadata_and_rejects_missing_or_mismatched_voc
     assert receipt["model_only_binding"]["tokenizer_source"] == str(tokenizer)
     assert (Path(receipt["checkpoint_metadata"]) / "tokenizer.json").is_file()
     assert not (model / "tokenizer.json").exists()
+
+
+def test_native_preflight_keeps_metadata_logs_out_of_json_receipt(tmp_path, monkeypatch, capsys):
+    model = tmp_path / "model"
+    model.mkdir()
+    config_path = model / "config.json"
+    config_path.write_text('{"model_type":"llama","vocab_size":3}')
+    (model / "model.safetensors").write_bytes(save({"weight": np.arange(4, dtype=np.float32)}))
+    tokenizer = tmp_path / "tokenizer"
+    write_tokenizer(tokenizer)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    document = raw_launch_config()
+    document["runtime"]["entrypoint"] = "skyrl_train.entrypoints.taskcompendium"
+    document["skyrl"]["entrypoint"] = "taskcompendium"
+    document["skyrl"]["terminal_bench"] = {"harbor": {"n_concurrent_trials": 1}}
+    document["inputs"]["model"].update(
+        uri="s3://test/policy", identity="model@v1", tokenizer_uri=str(tokenizer), tokenizer_revision="a" * 40
+    )
+    monkeypatch.setattr(hf_model_cache, "fs_and_path", lambda _uri: (fsspec.filesystem("file"), str(model)))
+    source = tmp_path / "launch.yaml"
+    OmegaConf.save(OmegaConf.create(document), source)
+    main(source, tmp_path / "compiled.yaml", config_path, check_vocabulary=True)
+    captured = capsys.readouterr()
+    receipt = json.loads(captured.out)
+    assert receipt["vocabulary_check"]["tokenizer_size"] == 3
+    assert "[task-runtime]" in captured.err
