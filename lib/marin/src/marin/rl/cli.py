@@ -156,11 +156,14 @@ def _coordinator_request(
     env_vars: Mapping[str, str],
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
+    required_names = {name for execution in executions for name in execution.required_env_vars}
+    missing_names = sorted(name for name in required_names if not env_vars.get(name))
+    if missing_names:
+        raise ValueError("Missing required environment variables for RL coordinator: " + ", ".join(missing_names))
     selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
+    selected_env.update({name: env_vars[name] for name in sorted(required_names)})
     secret_sources = {}
     for execution in executions:
-        for name in execution.required_env_vars:
-            selected_env[name] = env_vars[name]
         for name, source in execution.coordinator_secret_sources:
             if name in secret_sources and secret_sources[name] != source:
                 raise ValueError(f"RL coordinator has conflicting sources for secret {name!r}")
