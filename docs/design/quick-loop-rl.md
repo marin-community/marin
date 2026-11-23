@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 2:07 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 2:15 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2161,6 +2161,24 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   [Successful H100 attempt][iris-held-native-admission-retry] ·
   [Verified H100 profile archive][held-native-admission-h100]
 
+  The worker derives its four-request limit from the wire request count,
+  worst-case replay frame size and full-context KV reservation. Its eight
+  logical slots share 768 pages of 128 tokens. Eight requests using the
+  short probe prompts and a 512-token response cap need 40 pages. Eight
+  full 24,576-token contexts need 1,536 pages. Use the prompt lengths and
+  response caps to bound the combined KV pages and binary reply. Split
+  prefill into packs within its token budget. On two CPU devices, the small
+  model filled all eight slots over two prefills and returned the same
+  sampled tokens, selected experts and sampling logprobs as two batches of
+  four. The production wire still enforces four requests. The CPU test raised that
+  count locally to check byte limits and confirmed that eight full-context
+  frames exceed the envelope. Decode already packs eight positions. Compare
+  one warmed batch of eight active requests with the measured 116.4 seconds
+  for two warmed batches of four on H100. Pin the short inputs and seeds and
+  check replay, occupancy and peak memory. The matched learner run uses the
+  pinned four-request configuration.
+  [Eight-slot CPU replay and wire checks][held-native-eight-slot-cpu]
+
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
   scores to the same typed frames from one original attempt. The first
@@ -2348,6 +2366,7 @@ arms. [Prior timing comparison][timing]
 [held-native-admission-dtype]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-admission-dtype-repair-proof.tar.zst
 [iris-held-native-admission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-admission-67b-h100-20261123b
 [held-native-admission-h100]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-admission-h100-profile-proof.tar.zst
+[held-native-eight-slot-cpu]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-eight-slot-cpu-proof.tar.zst
 [held-publication-overlap]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fverified-publication-overlap-proof.tar.zst
 [iris-native-emission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122p
 [native-passing-diagnostic-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122p%2Findependently-verified-passing-diagnostic.json
