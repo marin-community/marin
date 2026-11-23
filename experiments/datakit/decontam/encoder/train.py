@@ -34,7 +34,7 @@ OUTPUTS = ("label_q", "label_qa")
 # One in this many train items of the real label sets goes to the dev split.
 DEV_EVERY = 4
 # Judged pairs of the earlier block-rule candidates, in --data.
-JUDGED_PAIRS = "judged_pairs_v2.parquet"
+JUDGED_PAIRS = "judged_pairs_v3.parquet"
 
 
 def text_normalize(text: str) -> str:
