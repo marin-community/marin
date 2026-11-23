@@ -292,7 +292,7 @@ def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> 
     try:
         with client:
             completion = _label_completion(
-                spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens, 0.0
+                spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens
             )
     except GradingInfraError as error:
         raise GradingInfraError(str(error), model=model, **error.detail) from error
@@ -494,7 +494,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     messages = _judge_messages(spec, {"question": spec.question, "reference": reference, "candidate": candidate})
     labels = _case_normalized(spec, spec.label_scores)
     label_metrics = _case_normalized(spec, spec.label_metrics)
-    answer, detail = _judged_answer(spec, client, model, messages, temperature=_temperature(spec))
+    answer, detail = _judged_answer(spec, client, model, messages)
     if spec.label_scan == "whole":
         final = answer
         observed = {answer}
@@ -525,18 +525,13 @@ def _judged_answer(
     client: openai.OpenAI,
     model: str,
     messages: list[ChatCompletionMessageParam],
-    *,
-    temperature: float | None,
 ) -> tuple[str, dict[str, Any]]:
-    """The judge's final answer, case-normalized, after retrying incomplete replies with larger budgets.
-
-    ``temperature=None`` leaves sampling to the judge's defaults.
-    """
+    """The judge's final answer, case-normalized, after retrying incomplete replies with larger budgets."""
     budgets = _completion_budgets(spec)
     for index, budget in enumerate(budgets):
-        completion = _label_completion(spec, client, model, messages, budget, temperature)
+        completion = _label_completion(spec, client, model, messages, budget)
         request: dict[str, Any] = {"model": model, "messages": messages, "max_completion_tokens": budget}
-        if temperature is not None:
+        if (temperature := _temperature(spec)) is not None:
             request["temperature"] = temperature
         detail: dict[str, Any] = {
             "model": model,
@@ -568,7 +563,7 @@ def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: open
     weight = 0.0
     for candidate_position, answer_a, answer_b in (("B", baseline, candidate), ("A", candidate, baseline)):
         messages = _judge_messages(spec, {"question": spec.question, "answer_a": answer_a, "answer_b": answer_b})
-        answer, detail = _judged_answer(spec, client, model, messages, temperature=_temperature(spec))
+        answer, detail = _judged_answer(spec, client, model, messages)
         verdict = _pairwise_verdict(answer, spec.verdict_patterns)
         if verdict is None or verdict not in labels:
             raise GradingInfraError("judge returned no recognized pairwise verdict", verdict=verdict, **detail)
@@ -601,7 +596,7 @@ def _judge_answers(
 ) -> Reward:
     listed = "\n".join(f"{index}. {reference}" for index, reference in enumerate(references))
     messages = _judge_messages(spec, {"question": spec.question, "references": listed, "candidate": candidate})
-    reply, detail = _judged_answer(spec, client, model, messages, temperature=None)
+    reply, detail = _judged_answer(spec, client, model, messages)
     verdicts = _answer_verdicts(reply, len(references))
     if verdicts is None:
         raise GradingInfraError("judge returned malformed per-answer verdicts", **detail)
@@ -658,11 +653,11 @@ def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
 
 
 def _label_completion(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int, temperature: float | None
+    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int
 ) -> _LabelCompletion:
     if spec.api == "chat_completions":
         options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-        if temperature is not None:
+        if (temperature := _temperature(spec)) is not None:
             options["temperature"] = temperature
         request = {"model": model, "messages": messages, "max_completion_tokens": budget, **options}
         response, attempts = _judge_transport(

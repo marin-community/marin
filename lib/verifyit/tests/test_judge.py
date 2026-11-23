@@ -1123,6 +1123,7 @@ def _answers_spec() -> JudgeSpec:
         references=("label (a): T = 2\\pi\\sqrt{l/g}", "label (b): E = 3 \\text{ J}"),
         prompt_template="[question]: {question}\n[response]: {candidate}\n[reference_answers]:\n{references}",
         exact_gate=False,
+        sampling=JudgeSampling.PROVIDER_DEFAULT,
     )
 
 
