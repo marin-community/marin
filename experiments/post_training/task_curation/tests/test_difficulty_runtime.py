@@ -156,14 +156,17 @@ print(json.dumps([connection.api_key, connection.api_url, connection.target]))
     assert (tmp_path / "framework-secrets" / "DAYTONA_DATA_API_KEY").stat().st_mode & 0o777 == 0o600
 
 
-@pytest.mark.parametrize("with_judge", [False, True])
-def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, difficulty_source, with_judge):
+@pytest.mark.parametrize("pooled_snowball", [False, True])
+@pytest.mark.parametrize("judge_model", [None, difficulty_runtime.GLM_MODEL, "Qwen/Qwen3.5-9B"])
+def test_campaign_qualifies_only_required_judge_routes(
+    tmp_path, monkeypatch, difficulty_source, judge_model, pooled_snowball
+):
+    candidate_solver = Solver.SNOWBALL if pooled_snowball else Solver.SMALL
+    with_judge = judge_model is not None
     task = TaskSpec.model_validate(json.loads(prebuilt_task("selected-task")["lowered_task_spec"])["task"])
     if with_judge:
         task = task.model_copy(
-            update={
-                "grader": verifyit_package(JudgeSpec(model=difficulty_runtime.GLM_MODEL, references=("answer",))).grader
-            }
+            update={"grader": verifyit_package(JudgeSpec(model=judge_model, references=("answer",))).grader}
         )
     source = difficulty_source(task)
     source_path = tmp_path / "sources.json"
@@ -171,7 +174,7 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
     template = tmp_path / "template.jinja"
     template.write_text("Fixture chat template")
     digest = hashlib.sha256(template.read_bytes()).hexdigest()
-    for solver in (Solver.SMALL, Solver.HOSTED):
+    for solver in (candidate_solver, Solver.HOSTED):
         monkeypatch.setitem(
             difficulty_runtime.PINS, solver, replace(difficulty_runtime.PINS[solver], template_sha256=digest)
         )
@@ -191,6 +194,12 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
 
     def probe(solver, endpoint, api_model, api_key, settings):
         probes.append(solver)
+        return {"tools_thinking_probe": {"completion": {"system_fingerprint": "fixture-pin"}}}
+
+    declared_probes = []
+
+    def declared_probe(endpoint, api_model, api_key, temperature):
+        declared_probes.append(api_model)
         return {"tools_thinking_probe": {"completion": {"system_fingerprint": "fixture-pin"}}}
 
     def secret(name):
@@ -216,7 +225,7 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
                 workload="task_spec",
                 backend="local",
                 reason=None,
-                judge_model=difficulty_runtime.GLM_MODEL if with_judge else None,
+                judge_model=judge_model,
             )
         ],
     )
@@ -225,11 +234,26 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
     monkeypatch.setattr(difficulty_runtime, "prepare_source", lambda source, root: prepared)
     monkeypatch.setattr(difficulty_runtime, "solver_endpoint", endpoint)
     monkeypatch.setattr(difficulty_runtime, "probe_endpoint", probe)
+    monkeypatch.setattr(difficulty_runtime, "probe_declared_judge_endpoint", declared_probe)
     monkeypatch.setattr(difficulty_runtime, "require_secret", secret)
     monkeypatch.setattr(difficulty_runtime, "run_trial_worker", launch)
+    if pooled_snowball:
+        monkeypatch.setattr(difficulty_runtime, "solver_pool_record", lambda solver, registry: {"effective_serving": {}})
+        monkeypatch.setattr(
+            difficulty_runtime,
+            "solver_pool_connection",
+            lambda record: difficulty_runtime.OpenAIEndpoint(
+                base_url="https://solver.fixture/v1", model="fixture-snowball"
+            ),
+        )
     manifest = tmp_path / "action.json"
     manifest.write_text(
-        json.dumps({"sources": [{"source_id": source.sample.source_id, "tasks": [[task.id, "a" * 64, 1]]}]})
+        json.dumps(
+            {
+                "sources": [{"source_id": source.sample.source_id, "tasks": [[task.id, "a" * 64, 1]]}],
+                "vllm_release_tag": difficulty_runtime.VLLM_GPU_RELEASE.release_tag,
+            }
+        )
     )
     output = tmp_path / "output"
     monkeypatch.setattr(
@@ -237,7 +261,8 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
         [
             "difficulty_runtime",
             "--solver",
-            "small",
+            candidate_solver.value,
+            *(["--solver-pool", "s3://fixtures/pool"] if pooled_snowball else []),
             "--sources",
             str(source_path),
             "--sources-sha256",
@@ -259,8 +284,11 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
         ],
     )
     difficulty_runtime.main()
-    assert probes == ([Solver.SMALL, Solver.HOSTED] if with_judge else [Solver.SMALL])
-    assert set(downloads) == {difficulty_runtime.SOLVER_MODELS[solver] for solver in probes}
+    declared = judge_model in difficulty_runtime.DECLARED_JUDGE_PINS
+    assert declared_probes == ([judge_model] if declared else [])
+    assert probes == ([candidate_solver, Solver.HOSTED] if with_judge and not declared else [candidate_solver])
+    expected_solvers = {candidate_solver, Solver.HOSTED} if with_judge else {candidate_solver}
+    assert set(downloads) == {difficulty_runtime.SOLVER_MODELS[solver] for solver in expected_solvers}
     assert secrets == ([difficulty_runtime.TOGETHER_API_KEY_ENV] if with_judge else [])
     (config,) = launches
     serving = json.loads((output / "serving.json").read_text())

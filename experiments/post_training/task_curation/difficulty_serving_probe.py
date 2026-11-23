@@ -16,6 +16,7 @@ from rolloutengine.chat import chat_template_messages
 from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
+from experiments.post_training.task_curation.difficulty_config import DECLARED_JUDGE_PINS
 from experiments.post_training.task_curation.difficulty_protocol import PINS
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 from experiments.post_training.task_curation.harmony_probe import harmony_prompt_tokens
@@ -74,6 +75,25 @@ def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str, 
             model_identity=SOLVER_MODELS[solver],
             model_revision=pin.revision,
             chat_template_kwargs=request.get("chat_template_kwargs", {}),
+        ),
+    )
+
+
+def probe_declared_judge_endpoint(endpoint: str, api_model: str, api_key: str, temperature: float) -> dict:
+    """Verify a declared judge's text request with its pinned tokenizer."""
+    pin = DECLARED_JUDGE_PINS[api_model]
+    request = {
+        "model": api_model,
+        "messages": PROBE_MESSAGES,
+        "max_tokens": 512,
+        "temperature": temperature,
+    }
+    return probe_serving_endpoint(
+        endpoint,
+        api_key,
+        request,
+        expected_prompt_tokens=hf_prompt_tokens(
+            request, model_identity=api_model, model_revision=pin.revision, chat_template_kwargs={}
         ),
     )
 

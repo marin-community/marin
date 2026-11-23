@@ -56,6 +56,7 @@ from experiments.post_training.task_curation.difficulty_provider import Provider
 from experiments.post_training.task_curation.difficulty_samples import load_queue_sources
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 from experiments.post_training.task_curation.difficulty_serving_probe import (
+    probe_declared_judge_endpoint,
     probe_endpoint,
     probe_judge_endpoint,
 )
@@ -463,7 +464,8 @@ def main() -> None:
     sources = load_queue_sources(args.sources, args.sources_sha256, tuple(args.source_id or ()))
     pin = PINS[args.solver]
     action = json.loads(StoragePath(args.action_manifest).read_text())
-    if args.solver == Solver.SNOWBALL and action["vllm_release_tag"] != solver_vllm_release(args.solver).release_tag:
+    release = VLLM_GPU_RELEASE if args.solver_pool is not None else solver_vllm_release(args.solver)
+    if args.solver == Solver.SNOWBALL and action["vllm_release_tag"] != release.release_tag:
         raise ValueError("Snowball action does not bind its established vLLM GPU release")
     args.local_root.mkdir(parents=True)
     options = worker_limits(args.local_root)
@@ -572,7 +574,12 @@ def main() -> None:
             judge_metadata = None
             if has_judge:
                 if judge_tier is None:
-                    if args.solver == Solver.HOSTED and shared_judge_model is None and pool is None:
+                    declared_pin = None if shared_judge_model is None else DECLARED_JUDGE_PINS.get(shared_judge_model)
+                    if declared_pin is not None:
+                        judge_probe = probe_declared_judge_endpoint(
+                            judge_endpoint, judge_api_model, judge_api_key, PROTOCOLS[PROTOCOL_ID].temperature
+                        )
+                    elif args.solver == Solver.HOSTED and shared_judge_model is None and pool is None:
                         judge_probe = probe
                     else:
                         judge_probe = probe_with_transient_retries(
@@ -582,7 +589,6 @@ def main() -> None:
                             judge_api_key,
                             sampling_settings(Solver.HOSTED, []),
                         )
-                    declared_pin = None if shared_judge_model is None else DECLARED_JUDGE_PINS.get(shared_judge_model)
                     if declared_pin is not None:
                         judge_metadata = {
                             "model": judge_api_model,
