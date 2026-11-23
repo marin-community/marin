@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Judge transport using the same admission, retry and checkpoint lifecycle."""
 
 from __future__ import annotations
@@ -11,11 +8,12 @@ from dataclasses import dataclass, field
 
 from aiohttp import ClientSession
 
-from eval.completion_response import CompletionContentPolicy, CompletionText, completion_response_from_chat_choice
 from eval.contracts.eval_spec import ModelRequest
 from eval.execution.backend import retryable_transport, transport_retry_delay
 from eval.graders.answer_equivalence import JudgeConfig, JudgeLabel, JudgeProtocol
 from eval.runtime.pool import RetryPolicy, retry
+from eval.completion_response import CompletionContentPolicy, CompletionText, completion_response_from_chat_choice
+
 
 POLICY_TOKEN_BUDGETS = (128, 512, 2048)
 POLICY_JUDGE_CONCURRENCY = 16
@@ -28,9 +26,7 @@ class JudgeBackend:
     config: JudgeConfig
     session: ClientSession
     _policy_slots: asyncio.Semaphore = field(
-        default_factory=lambda: asyncio.Semaphore(POLICY_JUDGE_CONCURRENCY),
-        init=False,
-        repr=False,
+        default_factory=lambda: asyncio.Semaphore(POLICY_JUDGE_CONCURRENCY), init=False, repr=False,
     )
 
     async def execute(self, request: ModelRequest) -> str:

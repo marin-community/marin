@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import re
 import textwrap
 
@@ -71,7 +68,7 @@ def extract_generation_code(example: str, lang_code: str, verbose: bool = False)
     try:
         code_block: str = re.findall(f"```{lang.lower()}\n(.*?)```", output, re.DOTALL | re.IGNORECASE)[0]
         if verbose:
-            print(f">>> Task: {task_id}\n{code_block}")
+            print(">>> Task: {}\n{}".format(task_id, code_block))
 
         # Remove main
         if setting.get("main", None) and setting["main"] in code_block:
@@ -110,7 +107,9 @@ def extract_generation_code(example: str, lang_code: str, verbose: bool = False)
         example["generation"] = generation
 
     except Exception as ex:
-        print(f"Failed to extract code block with error `{ex}`:\n>>> Task: {task_id}\n>>> Output:\n{output}")
+        print(
+            "Failed to extract code block with error `{}`:\n>>> Task: {}\n>>> Output:\n{}".format(ex, task_id, output)
+        )
         if lang_code.lower() == "python":
             example["generation"] = _python_generation(question, output)
         else:

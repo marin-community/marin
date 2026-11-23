@@ -1,12 +1,9 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Deterministic answer equivalence and shared judge configuration."""
 
 import os
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Sequence
 from urllib.parse import urlsplit
 
 from math_verify import parse, verify

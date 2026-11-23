@@ -1,12 +1,8 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Normalize OpenAI-compatible chat completion choices before scoring."""
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Mapping
 
 from eval.contracts.failures import FailureCategory
 

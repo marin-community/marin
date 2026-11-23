@@ -1,18 +1,12 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Execute normalized model requests against local or HTTP model backends."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from aiohttp import ClientConnectionError, ClientPayloadError, ClientResponseError
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
-from aiohttp import ClientConnectionError, ClientPayloadError, ClientResponseError
-
 RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
-
-
 def retryable_transport(error: Exception) -> bool:
     if isinstance(error, ClientResponseError):
         return error.status in RETRYABLE_STATUSES
@@ -31,6 +25,6 @@ def transport_retry_delay(error: Exception) -> float:
     except ValueError:
         try:
             when = parsedate_to_datetime(value)
-            return max(0.0, (when - datetime.now(UTC)).total_seconds())
+            return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
         except (TypeError, ValueError):
             return 0.0

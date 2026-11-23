@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """The portable, typed Evalchemy evaluation contract.
 
 This package deliberately owns only evaluation intent.  Serving, credentials,
@@ -11,9 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -53,7 +49,7 @@ class EvaluationConfig(BaseModel):
     max_tokens: int | None = None
 
     @model_validator(mode="after")
-    def task_options_match_tasks(self) -> EvaluationConfig:
+    def task_options_match_tasks(self) -> "EvaluationConfig":
         unknown = sorted(set(self.task_options).difference(self.tasks))
         if unknown:
             raise ValueError(f"task_options refer to task(s) not selected in tasks: {unknown}")

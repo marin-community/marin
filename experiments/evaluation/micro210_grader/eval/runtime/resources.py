@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Resource isolation for ordinary functions, independent of their callers."""
 
 from __future__ import annotations
@@ -81,8 +78,7 @@ class Resources:
         if mode in (ExecutionMode.PROCESS_ISOLATED, ExecutionMode.SANDBOXED):
             if self.processes is None:
                 self.processes = ProcessPoolExecutor(
-                    max_workers=self.workers,
-                    mp_context=multiprocessing.get_context("spawn"),
+                    max_workers=self.workers, mp_context=multiprocessing.get_context("spawn"),
                     initializer=initialize_grader_worker,
                 )
             return await asyncio.get_running_loop().run_in_executor(self.processes, function, *args)

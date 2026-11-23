@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """NUPA-Loose answer extraction and representation-sensitive text metrics.
 
 Numeric comparison follows Number Cookbook's text evaluator. Permissive final
@@ -11,8 +8,8 @@ protocol differences. This implementation does not copy GPL-licensed source.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Iterable
 
 INTEGER = "Integer"
 FLOAT = "Float"

@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Extract short answers from chat completions with one shared policy.
 
 Tasks use :func:`short_answer_filter` for their score and retain
@@ -11,16 +8,22 @@ and lets it improve without each benchmark growing a bespoke parser.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from enum import Enum
+import re
 
 from eval.generation_stops import truncate_at_stop
 
 INVALID_SHORT_ANSWER = "[invalid]"
-_ANSWER_MARKER = re.compile(r"(?im)^[ \t]*(?:(?:final)[ \t]+)?(?:answer|a)[ \t]*:[ \t]*(?P<answer>\S[^\r\n]*)")
-_EXPLICIT_ANSWER = re.compile(r"(?im)\b(?:the[ \t]+)?(?:final[ \t]+)?answer[ \t]+is[ \t]+(?P<answer>\S[^\r\n]*)")
-_LEADING_ANSWER_MARKER = re.compile(r"(?i)^(?:(?:final)[ \t]+)?(?:answer|a)[ \t]*:[ \t]*")
+_ANSWER_MARKER = re.compile(
+    r"(?im)^[ \t]*(?:(?:final)[ \t]+)?(?:answer|a)[ \t]*:[ \t]*(?P<answer>\S[^\r\n]*)"
+)
+_EXPLICIT_ANSWER = re.compile(
+    r"(?im)\b(?:the[ \t]+)?(?:final[ \t]+)?answer[ \t]+is[ \t]+(?P<answer>\S[^\r\n]*)"
+)
+_LEADING_ANSWER_MARKER = re.compile(
+    r"(?i)^(?:(?:final)[ \t]+)?(?:answer|a)[ \t]*:[ \t]*"
+)
 _BARE_ANSWER_MAX_CHARS = 256
 
 
@@ -71,7 +74,11 @@ def _last_bare_line(response: str) -> str | None:
     if not lines:
         return None
     answer = lines[-1]
-    if len(answer) > _BARE_ANSWER_MAX_CHARS or answer.startswith("<") or _LEADING_ANSWER_MARKER.fullmatch(answer):
+    if (
+        len(answer) > _BARE_ANSWER_MAX_CHARS
+        or answer.startswith("<")
+        or _LEADING_ANSWER_MARKER.fullmatch(answer)
+    ):
         return None
     return answer
 
@@ -88,10 +95,12 @@ def extract_short_answer(response: object) -> ShortAnswerExtraction:
 
     response = truncate_at_stop(response)
     candidates = [
-        (match.start(), match["answer"], ShortAnswerFormat.CONTRACT) for match in _ANSWER_MARKER.finditer(response)
+        (match.start(), match["answer"], ShortAnswerFormat.CONTRACT)
+        for match in _ANSWER_MARKER.finditer(response)
     ]
     candidates.extend(
-        (match.start(), match["answer"], ShortAnswerFormat.EXPLICIT) for match in _EXPLICIT_ANSWER.finditer(response)
+        (match.start(), match["answer"], ShortAnswerFormat.EXPLICIT)
+        for match in _EXPLICIT_ANSWER.finditer(response)
     )
     if candidates:
         _, answer, answer_format = max(candidates, key=lambda candidate: candidate[0])
@@ -112,10 +121,16 @@ def extract_marked_short_answer(response: object) -> str:
 def marked_short_answer_filter(resps: list[list[str]], docs: list[dict]) -> list[list[str]]:
     """Extract contracted answers for the strict prompt-format metric."""
     del docs
-    return [[extract_marked_short_answer(response) for response in responses] for responses in resps]
+    return [
+        [extract_marked_short_answer(response) for response in responses]
+        for responses in resps
+    ]
 
 
 def short_answer_filter(resps: list[list[str]], docs: list[dict]) -> list[list[str]]:
     """Extract short answers for the primary NQ-Open and TriviaQA metric."""
     del docs
-    return [[extract_short_answer(response).answer for response in responses] for responses in resps]
+    return [
+        [extract_short_answer(response).answer for response in responses]
+        for responses in resps
+    ]

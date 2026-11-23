@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Single-program adapters to the existing language-specific test protocols."""
 
 import importlib
@@ -48,10 +45,7 @@ def program_suite(spec, responses):
         sample = importlib.import_module(module).extract_generation_code(sample, lang_code=language)
     task_id = problem["task_id"]
     sample["test_code"] = evaluation.process_humaneval_test(
-        sample,
-        {task_id: problem},
-        is_mbpp=reference.get("mbpp", False),
-        language=language,
+        sample, {task_id: problem}, is_mbpp=reference.get("mbpp", False), language=language,
     )
     with tempfile.TemporaryDirectory(prefix="evalchemy-program-") as directory:
         args = (task_id, sample, language, reference["timeout"], directory, 0)

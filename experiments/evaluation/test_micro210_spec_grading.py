@@ -3,16 +3,13 @@
 
 """Unit tests for the self-contained Micro210 grading transforms."""
 
-import base64
 import hashlib
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
 from shellbox.machine import CommandSemantics, PackageSpec
 from taskcompendium.models import (
-    AnswerFormat,
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
@@ -28,17 +25,16 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from experiments.evaluation.micro210_inputs import choice_seed
 from experiments.evaluation.micro210_spec_grading import (
     HARBOR_PI_ADAPTER_PATCH,
-    MBPP_ASSERTION_PATCHED,
     MBPP_ASSERTION_ORIGINAL,
+    MBPP_ASSERTION_PATCHED,
     MBPP_FLOAT_TOLERANCE_ORIGINAL,
-    MBPP_FLOAT_TOLERANCE_PATCH,
     MBPP_FLOAT_TOLERANCE_PATCHED,
     PROVENANCE_LABEL,
     SPEC_GRADE_DRIVER,
     GraderLibrary,
     driver_sha256,
-    dropped_packages,
     drop_unused_pi_adapter_pin,
+    dropped_packages,
     embed_spec_grader,
     tolerant_mbpp_float_comparison,
 )
@@ -257,7 +253,7 @@ def test_tolerant_mbpp_float_comparison_fails_closed_without_the_guard(task):
 
 def test_mbpp_patched_is_floats_recognizes_complex_and_nested_numerics():
     namespace: dict = {"np": np}
-    exec(MBPP_FLOAT_TOLERANCE_PATCHED, namespace)  # noqa: S102 - the embedded grader text under test
+    exec(MBPP_FLOAT_TOLERANCE_PATCHED, namespace)
     is_floats = namespace["is_floats"]
     assert is_floats(((42.326324330254145, -2.359036256570777), complex(-2, 2.4492935982947064e-16)))
     assert is_floats([1.0, 2.5])
@@ -269,7 +265,7 @@ def test_mbpp_patched_is_floats_recognizes_complex_and_nested_numerics():
 def test_mbpp_patched_assertion_tolerates_one_float_ulp():
     namespace: dict = {"np": np}
     # The embedded test program defines both helpers together.
-    exec(f"{MBPP_FLOAT_TOLERANCE_PATCHED}\n\n{MBPP_ASSERTION_PATCHED}", namespace)  # noqa: S102 - grader text under test
+    exec(f"{MBPP_FLOAT_TOLERANCE_PATCHED}\n\n{MBPP_ASSERTION_PATCHED}", namespace)
     computed = ((42.326324330254145, -2.359036256570777), complex(-2, 2.4492935982947064e-16))
     expected = ((42.32632433025415, -2.359036256570777), complex(-2, 2.4492935982947064e-16))
     namespace["assertion"](computed, expected, 0)

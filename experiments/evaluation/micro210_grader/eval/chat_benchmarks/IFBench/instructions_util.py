@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # Copyright 2025 Allen Institute for AI.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +16,7 @@
 
 import functools
 import random
+import re
 
 import nltk
 
@@ -1550,7 +1548,6 @@ WORD_LIST = [
     "apartment",
 ]  # pylint: disable=line-too-long
 
-
 def download_nltk_resources():
     """Verify the bundled tokenizers and stopwords; the vendored grader never downloads."""
     for resource in ("tokenizers/punkt", "tokenizers/punkt_tab", "corpora/stopwords"):
@@ -1580,7 +1577,7 @@ def count_words(text):
     return num_words
 
 
-@functools.cache
+@functools.lru_cache(maxsize=None)
 def _get_sentence_tokenizer():
     return nltk.data.load("nltk:tokenizers/punkt/english.pickle")
 
@@ -1588,12 +1585,11 @@ def _get_sentence_tokenizer():
 def count_stopwords(text):
     """Counts the number of stopwords."""
     """Counts the number of stopwords."""
-    stopwords = nltk.corpus.stopwords.words("english")
+    stopwords = nltk.corpus.stopwords.words('english')
     tokenizer = nltk.tokenize.RegexpTokenizer(r"\w+")
     tokens = tokenizer.tokenize(text)
     num_stopwords = len([t for t in tokens if t.lower() in stopwords])
     return num_stopwords
-
 
 def generate_keywords(num_keywords):
     """Randomly generates a few keywords."""

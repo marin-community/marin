@@ -1,28 +1,21 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Reusable item graders selected by sources through GraderSpec."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import replace
 from importlib import import_module
+from dataclasses import replace
+import re
 from typing import Any
 
-from eval.chat_benchmarks.GPQADiamond.testing_utils import get_multiple_choice_answer
 from eval.contracts.eval_spec import EvalSpec, Grade, GraderSpec, JudgePlan
 from eval.graders.answer_equivalence import math_answers_equivalent
-from eval.graders.answer_extraction import (
-    AnswerExtractionError,
-    extract_boxed_answer,
-    extract_final_boxed_answer,
-    extraction_failure,
-)
-from eval.graders.judged import equivalence_judge
-from eval.graders.mmlu import extract_answer as extract_mmlu_answer
-from eval.graders.mmlu import grade_response as grade_mmlu_response
+from eval.graders.answer_extraction import extract_final_boxed_answer
+from eval.graders.mmlu import extract_answer as extract_mmlu_answer, grade_response as grade_mmlu_response
+from eval.chat_benchmarks.GPQADiamond.testing_utils import get_multiple_choice_answer
+from eval.graders.answer_extraction import AnswerExtractionError, extract_boxed_answer, extraction_failure
 
+from eval.graders.judged import equivalence_judge
 
 def _reference_option(spec: EvalSpec, name: str, default: str) -> str:
     return str(spec.grader.reference.get(name, default))
@@ -56,7 +49,6 @@ def boxed_math(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     correct = _math_correct(answer, spec.target, _reference_option(spec, "comparator", "math_answers_equivalent"))
     return Grade({"accuracy": float(correct)}, filtered_resps=[answer])
 
-
 def letter_choice(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     extractor = get_multiple_choice_answer
     if _reference_option(spec, "extractor", "gpqa") == "hle":
@@ -65,29 +57,20 @@ def letter_choice(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     answer = extractor(str(responses[-1]))
     return Grade({"accuracy": float(answer == spec.target)}, filtered_resps=[answer])
 
-
 def mmlu_choice(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     answer = extract_mmlu_answer(responses[-1])
     example = {"answer": spec.target, "model_answer": answer}
     grade_mmlu_response(example)
     return Grade(example["sample_metrics"], filtered_resps=[answer])
 
-
 def nupa(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     scorer = import_module("eval.chat_benchmarks.NUPA-Loose.scorer")
     answer_format = spec.grader.reference["format"]
     score = scorer.score_prediction(str(responses[-1]), spec.target, answer_format)
-    return Grade(
-        {
-            "exact_match": score.exact_match,
-            "digit_match": score.digit_match,
-            "dlength": score.dlength,
-            "format_valid_rate": score.format_valid,
-            "no_answer_rate": score.no_answer,
-        },
-        filtered_resps=[score.extracted_answer],
-    )
-
+    return Grade({
+        "exact_match": score.exact_match, "digit_match": score.digit_match, "dlength": score.dlength,
+        "format_valid_rate": score.format_valid, "no_answer_rate": score.no_answer,
+    }, filtered_resps=[score.extracted_answer])
 
 def math_equivalence(spec: EvalSpec, responses: Sequence[Any]) -> Grade | JudgePlan:
     try:

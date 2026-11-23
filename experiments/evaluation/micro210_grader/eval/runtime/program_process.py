@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Own and reap the process groups used by canonical program checkers."""
 
 import os
@@ -8,8 +5,9 @@ import resource
 import signal
 import subprocess
 from multiprocessing.process import BaseProcess
+from typing import Optional
 
-_PROGRAM_SESSION_ID: int | None = None
+_PROGRAM_SESSION_ID: Optional[int] = None
 PROGRAM_MEMORY_BYTES = 30 * 1024**3
 
 

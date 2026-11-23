@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Per-prompt instruction checks with explicit instruction-count weights."""
 
 from collections import defaultdict
@@ -18,10 +15,7 @@ def instruction_following(spec, responses):
     checker = import_module(package)
     doc = spec.doc
     example = checker.InputExample(
-        key=doc["key"],
-        instruction_id_list=doc["instruction_id_list"],
-        prompt=doc["prompt"],
-        kwargs=doc["kwargs"],
+        key=doc["key"], instruction_id_list=doc["instruction_id_list"], prompt=doc["prompt"], kwargs=doc["kwargs"],
     )
     metrics, weights, audit = {}, {}, {}
     for mode in ("strict", "loose"):

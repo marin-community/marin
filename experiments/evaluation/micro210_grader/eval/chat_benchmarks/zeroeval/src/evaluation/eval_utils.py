@@ -1,9 +1,5 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import json
 import re
-
 
 def extract_values_from_json(json_string, keys=["reasoning", "answer"], allow_no_quotes=False):
     extracted_values = {}

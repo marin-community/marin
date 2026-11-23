@@ -1,16 +1,14 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import gzip
-import os
 import pickle
-
+import json
 from tqdm import tqdm
+from typing import Union, Optional
+import os
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
-def load_data(split: str, task: str, language: str, settings: str | list | None, length: str | None = None):
+def load_data(split: str, task: str, language: str, settings: Optional[Union[str, list]], length: Optional[str] = None):
     """
     Load data from the specified task and language.
 
@@ -86,7 +84,7 @@ def load_data(split: str, task: str, language: str, settings: str | list | None,
     if split == "train":
         data = {}
 
-        for setting in tqdm(settings, desc="Loading data"):
+        for setting in tqdm(settings, desc=f"Loading data"):
             with gzip.open(f"{ROOT}/train/{task}/{language}/{setting}.pkl.gz", "rb") as f:
                 data[setting] = pickle.load(f)
 
@@ -94,12 +92,12 @@ def load_data(split: str, task: str, language: str, settings: str | list | None,
                 if task == "retrieval":
                     # retrieval has easy and hard for each split
                     data[setting] = {
-                        "easy": (
-                            data[setting]["train"]["easy"] + data[setting]["dev"]["easy"] + data[setting]["test"]["easy"]
-                        ),
-                        "hard": (
-                            data[setting]["train"]["hard"] + data[setting]["dev"]["hard"] + data[setting]["test"]["hard"]
-                        ),
+                        "easy": data[setting]["train"]["easy"]
+                        + data[setting]["dev"]["easy"]
+                        + data[setting]["test"]["easy"],
+                        "hard": data[setting]["train"]["hard"]
+                        + data[setting]["dev"]["hard"]
+                        + data[setting]["test"]["hard"],
                     }
                 elif task == "completion":
                     data[setting] = data[setting]["train"] + data[setting]["dev"] + data[setting]["test"]
@@ -107,7 +105,7 @@ def load_data(split: str, task: str, language: str, settings: str | list | None,
     elif split == "test":
         data = {}
 
-        for setting in tqdm(settings, desc="Loading data"):
+        for setting in tqdm(settings, desc=f"Loading data"):
             if length not in ["2k", "8k"] and task != "completion":
                 with gzip.open(f"{ROOT}/test/{task}/{language}/{setting}.gz", "rb") as f:
                     data[setting] = pickle.load(f)
@@ -121,7 +119,7 @@ def load_data(split: str, task: str, language: str, settings: str | list | None,
         return [data[setting] for setting in settings]
 
 
-def construct_trainable_data(data: list, language: str | None = None):
+def construct_trainable_data(data: list, language: Optional[str] = None):
     """
     construct the data that can be used for training
 
@@ -165,7 +163,7 @@ def construct_trainable_data(data: list, language: str | None = None):
 
 
 # crop lines given a threshold and tokenized code
-def crop_code_lines(code: str | list, threshold: int):
+def crop_code_lines(code: Union[str, list], threshold: int):
     """
     Crop the code to the last threshold lines.
 

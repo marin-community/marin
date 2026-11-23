@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Self-contained grader for the lm-eval-harness ``minerva_math`` task.
 
 Ports the ``exact_match`` metric of ``lm_eval/tasks/minerva_math/utils.py`` at

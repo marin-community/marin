@@ -1,5 +1,6 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
+from typing import Dict, List
+
+
 
 # string normalization from https://github.com/EleutherAI/lm-evaluation-harness/blob/master/lm_eval/tasks/hendrycks_math.py
 def is_equiv(str1, str2, verbose=False):
@@ -103,7 +104,7 @@ def fix_a_slash_b(string):
     try:
         a = int(a)
         b = int(b)
-        assert string == f"{a}/{b}"
+        assert string == "{}/{}".format(a, b)
         new_string = "\\frac{" + str(a) + "}{" + str(b) + "}"
         return new_string
     except AssertionError:

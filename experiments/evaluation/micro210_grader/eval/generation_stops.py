@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Shared stop policies for generation and scoring."""
 
 from collections.abc import Sequence
@@ -39,13 +36,13 @@ HUMANEVAL_STOP_SEQUENCES: list[str] = [  # noqa: ml-module-globals
     "\n```",
     *END_OF_TURN_SEQUENCES,
 ]
-
-
 def _is_token_sentinel(stop: str) -> bool:
     return stop in TOKEN_SENTINEL_SEQUENCES
 
 
-def bounded_request_stops(stops: Sequence[str], max_stops: int = OPENAI_COMPLETIONS_MAX_STOP_SEQUENCES) -> list[str]:
+def bounded_request_stops(
+    stops: Sequence[str], max_stops: int = OPENAI_COMPLETIONS_MAX_STOP_SEQUENCES
+) -> list[str]:
     """Bound request stops while retaining task-semantic boundaries.
 
     OpenAI-compatible APIs accept at most four stop sequences. Tokenizer
@@ -60,7 +57,9 @@ def bounded_request_stops(stops: Sequence[str], max_stops: int = OPENAI_COMPLETI
     return (semantic + token_sentinels)[:max_stops]
 
 
-def chat_request_stops(stops: Sequence[str], max_stops: int = OPENAI_COMPLETIONS_MAX_STOP_SEQUENCES) -> list[str]:
+def chat_request_stops(
+    stops: Sequence[str], max_stops: int = OPENAI_COMPLETIONS_MAX_STOP_SEQUENCES
+) -> list[str]:
     """Choose chat-route request stops: tokenizer sentinels only.
 
     Chat-completions endpoints end the turn at EOS, and servers apply stop
@@ -76,7 +75,9 @@ def chat_request_stops(stops: Sequence[str], max_stops: int = OPENAI_COMPLETIONS
 
 # The scorer still applies the complete set after generation, including the
 # omitted ``print``, code-fence, and chat turn boundaries.
-HUMANEVAL_REQUEST_STOP_SEQUENCES: list[str] = bounded_request_stops(HUMANEVAL_STOP_SEQUENCES)  # noqa: ml-module-globals
+HUMANEVAL_REQUEST_STOP_SEQUENCES: list[str] = bounded_request_stops(  # noqa: ml-module-globals
+    HUMANEVAL_STOP_SEQUENCES
+)
 
 
 def truncate_at_stop(text: str, stops: Sequence[str] = END_OF_TURN_SEQUENCES) -> str:

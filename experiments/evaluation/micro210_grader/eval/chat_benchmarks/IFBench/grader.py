@@ -1,9 +1,7 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Per-prompt strict and loose instruction checks."""
 
 import dataclasses
+from typing import Dict, List, Optional, Union
 
 from .instructions_registry import INSTRUCTION_DICT
 
@@ -13,20 +11,20 @@ class InputExample:
     """One IFBench prompt plus its verifiable constraints."""
 
     key: int
-    instruction_id_list: list[str]
+    instruction_id_list: List[str]
     prompt: str
-    kwargs: list[dict[str, str | int | None]]
+    kwargs: List[Dict[str, Optional[Union[str, int]]]]
 
 
 @dataclasses.dataclass
 class OutputExample:
     """Per-prompt evaluation outcome."""
 
-    instruction_id_list: list[str]
+    instruction_id_list: List[str]
     prompt: str
     response: str
     follow_all_instructions: bool
-    follow_instruction_list: list[bool]
+    follow_instruction_list: List[bool]
 
 
 def _build_instruction(instruction_id, kwargs_for_instruction, prompt):

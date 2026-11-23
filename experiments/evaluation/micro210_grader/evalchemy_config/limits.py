@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """One resolved evaluation-limit contract for every Evalchemy execution path.
 
 ``lm-eval`` calls its limits ``max_length`` (model/context window) and
@@ -17,9 +14,8 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 MAX_OUTPUT_ALIASES = ("max_tokens", "max_new_tokens", "max_gen_toks")
 MODEL_LENGTH_ALIASES = ("max_length", "max_model_len")
@@ -90,7 +86,7 @@ def ensure_context_window(
         raise ContextWindowExceededError(context_length=context_length, required_tokens=required_tokens)
 
 
-def parse_key_value_args(value: str | Mapping[str, Any] | None) -> dict[str, Any]:
+def parse_key_value_args(value: Optional[str | Mapping[str, Any]]) -> dict[str, Any]:
     """Parse lm-eval's comma-separated ``key=value`` notation without coercion."""
     if value is None:
         return {}
@@ -235,7 +231,7 @@ def _as_positive_int(value: Any, source: str) -> int:
     return parsed
 
 
-def resolve_limit(name: str, values: Iterable[tuple[str, Any]]) -> int | None:
+def resolve_limit(name: str, values: Iterable[tuple[str, Any]]) -> Optional[int]:
     seen: list[tuple[str, int]] = []
     for source, value in values:
         if value is not None:
@@ -253,8 +249,8 @@ def resolve_limit(name: str, values: Iterable[tuple[str, Any]]) -> int | None:
 class EvaluationLimits:
     """Resolved model-context and model-output limits for one evaluation run."""
 
-    max_length: int | None = None
-    max_tokens: int | None = None
+    max_length: Optional[int] = None
+    max_tokens: Optional[int] = None
 
     def apply(self, args: Any) -> None:
         """Materialize this contract in the representations each adapter consumes.

@@ -1,14 +1,12 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """The item protocol between evaluation sources, graders, and execution."""
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from enum import StrEnum
+import json
+from dataclasses import asdict
 from typing import Any, Literal
 
 

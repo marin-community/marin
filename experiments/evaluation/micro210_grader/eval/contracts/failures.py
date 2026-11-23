@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Benchmark-independent evaluation failure taxonomy and classification."""
 
 from __future__ import annotations

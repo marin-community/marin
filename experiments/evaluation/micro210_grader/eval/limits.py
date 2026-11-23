@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Compatibility import path for Evalchemy's portable limit contract."""
 
 from evalchemy_config.limits import (
@@ -21,13 +18,13 @@ from evalchemy_config.limits import (
 )
 
 __all__ = [
-    "DEFAULT_CONTEXT_SAFETY_TOKENS",
     "ContextWindowExceededError",
+    "DEFAULT_CONTEXT_SAFETY_TOKENS",
     "EvaluationLimits",
     "MissingContextLengthError",
     "encoded_token_count",
-    "endpoint_prompt_token_count",
     "ensure_context_window",
+    "endpoint_prompt_token_count",
     "format_key_value_args",
     "message_content_token_count",
     "parse_key_value_args",

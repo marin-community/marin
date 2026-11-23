@@ -1,14 +1,11 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """A bounded worker pool with deterministic lookahead and request retries."""
 
 from __future__ import annotations
 
 import asyncio
+from asyncio import sleep
 import logging
 import random
-from asyncio import sleep
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass
@@ -124,13 +121,7 @@ class ExecutionPool:
                     count += 1
                     now = monotonic()
                     if now - last_report >= 10:
-                        logger.info(
-                            "Pool progress: completed=%d failed=%d pending=%d rate=%.2f items/s",
-                            count,
-                            failures,
-                            len(pending),
-                            count / max(now - started, 1e-9),
-                        )
+                        logger.info("Pool progress: completed=%d failed=%d pending=%d rate=%.2f items/s", count, failures, len(pending), count / max(now - started, 1e-9))
                         last_report = now
                     yield completed
         finally:
@@ -142,10 +133,4 @@ class ExecutionPool:
                 # SerialIO joins an active read before cancellation escapes, so
                 # source/checkpoint owners can close safely after this iterator.
                 admission.close()
-            logger.info(
-                "Pool finished: completed=%d failed=%d elapsed=%.1fs rate=%.2f items/s",
-                count,
-                failures,
-                monotonic() - started,
-                count / max(monotonic() - started, 1e-9),
-            )
+            logger.info("Pool finished: completed=%d failed=%d elapsed=%.1fs rate=%.2f items/s", count, failures, monotonic() - started, count / max(monotonic() - started, 1e-9))

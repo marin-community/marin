@@ -1,10 +1,6 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Extract Python code from model responses."""
 
 from .syncheck import syntax_check
-
 
 def code_extract(text: str) -> str:
     """

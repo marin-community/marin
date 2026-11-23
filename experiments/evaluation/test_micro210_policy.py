@@ -38,6 +38,7 @@ from experiments.evaluation.micro210_policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
     Micro210Model,
+    Micro210Route,
     micro210_evaluation,
     read_micro210_policy,
     runtime_policy_config,
@@ -138,6 +139,9 @@ def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch,
             Micro210Model("s3://test/model", "sha256:" + "a" * 64, "test/tokenizer", "a" * 40),
             run_id="test",
             output_uri="s3://test/output",
+            route=Micro210Route.from_policy_execution(
+                json.loads(StoragePath(policy_reference.uri).read_text())["evaluation"]["execution"]
+            ),
         )
 
 
@@ -190,8 +194,70 @@ def test_micro210_model_rejects_mutable_references(identity, revision):
         Micro210Model("s3://test/latest", identity, "test/tokenizer", revision)
 
 
+<<<<<<< HEAD
 @pytest.mark.parametrize("profile", list(ServingProfileName))
 @pytest.mark.parametrize("manifest_override", [None, ".marinskyrl-model-manifest.json"])
+=======
+def test_route_rebinding_keeps_the_policy_hash_and_protocol_frozen(tmp_path, monkeypatch, policy_reference):
+    """A per-model route changes where the run executes and nothing about the protocol."""
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
+    model = Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
+    step = micro210_step(model, name="fixture/route", version="2026.11.23.1")
+    policy_route = Micro210Route.from_policy_execution(read_micro210_policy(POLICY_REFERENCE)["evaluation"]["execution"])
+    rerouted = micro210_step(
+        model,
+        name="fixture/route",
+        version="2026.11.23.1",
+        route=replace(
+            policy_route,
+            cluster_config="lib/iris/config/cw-us-east-08a.yaml",
+            target_cluster="cw-us-east-08a",
+        ),
+    )
+    # The route lives in the binding; both steps read the same frozen policy bytes.
+
+    def build(step):
+        return step.build_config(
+            StepContext.for_run(
+                str(tmp_path / "output"),
+                str(tmp_path),
+                runtime_args=step.runtime_args,
+                deps=step.deps,
+            )
+        )
+
+    canonical, rerouted_run = build(step), build(rerouted)
+    base, moved = (yaml.safe_load(run.skyrl.launch_config_yaml) for run in (canonical, rerouted_run))
+    # The random attempt id is not protocol; every other non-route field must match.
+    assert {key: base[key] for key in base if key not in ("iris", "run")} == {
+        key: moved[key] for key in moved if key not in ("iris", "run")
+    }
+    assert {key: value for key, value in base["run"].items() if key != "attempt_id"} == {
+        key: value for key, value in moved["run"].items() if key != "attempt_id"
+    }
+    assert moved["iris"]["target_cluster"] == "cw-us-east-08a"
+    assert moved["iris"]["cluster_config"].endswith("cw-us-east-08a.yaml")
+    # The record carries the binding's route and the same frozen protocol hash.
+    assert canonical.evaluation.route.target_cluster == "test"
+    assert rerouted_run.evaluation.route.target_cluster == "cw-us-east-08a"
+    assert rerouted_run.evaluation.record().canonical_spec_sha256 == canonical.evaluation.record().canonical_spec_sha256
+
+
+def test_route_rejects_untyped_values():
+    with pytest.raises(ValueError, match="yaml config path"):
+        Micro210Route("lib/iris/config/cw-rno2a", "lib/iris/config/cw-rno2a.yaml", "cw-rno2a", 4)
+    with pytest.raises(ValueError, match="target_cluster"):
+        Micro210Route("lib/iris/config/marin.yaml", "lib/iris/config/cw-rno2a.yaml", "", 4)
+    with pytest.raises(ValueError, match="container_profile"):
+        Micro210Route("lib/iris/config/marin.yaml", "lib/iris/config/cw-rno2a.yaml", "cw-rno2a", -1)
+
+
+def test_default_policy_references_pin_immutable_hugging_face_revisions():
+    for reference in (LEGACY_POLICY_REFERENCE, POLICY_REFERENCE):
+        assert re.fullmatch(r"hf://datasets/open-athena/micro210-policy@[0-9a-f]{40}/policy.json", reference.uri)
+
+
+>>>>>>> 5aaf8ba75b ([eval] Bind the Micro210 execution route to the model, not the protocol)
 def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_allocation(
     tmp_path, monkeypatch, policy_reference, profile, manifest_override
 ):

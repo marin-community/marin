@@ -30,9 +30,10 @@
     },
     "execution": {
       "cluster": "test",
-      "cluster_config": "test.yaml",
-      "target_cluster": null,
-      "parent_cluster_config": null,
+      "cluster_config": "lib/iris/config/test.yaml",
+      "target_cluster": "test",
+      "parent_cluster_config": "lib/iris/config/marin.yaml",
+      "container_profile": 0,
       "cpu": 1,
       "memory": "1GB",
       "disk": "1GB",
@@ -90,7 +91,6 @@
           "agent": {
             "kwargs": {
               "compaction_reserve_tokens": 16384,
-              "mcp_adapter_version": "7.0.0",
               "model_info": {
                 "max_input_tokens": 65536,
                 "max_output_tokens": 16384

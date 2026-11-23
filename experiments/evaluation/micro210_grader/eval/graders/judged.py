@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Prompt construction and response parsing for named judge protocols."""
 
 import ast
@@ -13,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from eval.contracts.eval_spec import EvalSpec, Grade, GraderSpec, JudgePlan, ModelRequest, RequestKind
-from eval.contracts.failures import FailureCategory, MalformedJudgeResponse
 from eval.graders.answer_equivalence import JUDGE_PROMPT, JudgeLabel
 from eval.graders.simpleqa import SIMPLEQA_GRADER_TEMPLATE, _parse_simpleqa_judgment
+from eval.contracts.failures import FailureCategory, MalformedJudgeResponse
 
 
 @lru_cache
@@ -51,33 +48,18 @@ def wildbench(spec: EvalSpec, responses: Sequence[Any]) -> Grade | JudgePlan:
     )
     if not output.strip():
         return wildbench_score_with_reference(parser.reference, '{"score": "1"}')
-    return JudgePlan(
-        (
-            ModelRequest(
-                RequestKind.GENERATE,
-                prompt,
-                {"temperature": 0, "max_gen_toks": 4096, "response_format": {"type": "json_object"}},
-            ),
-        ),
-        parser,
-        GraderSpec("judge_failed"),
-    )
+    return JudgePlan((ModelRequest(RequestKind.GENERATE, prompt, {"temperature": 0, "max_gen_toks": 4096,
+                                                               "response_format": {"type": "json_object"}}),), parser,
+                     GraderSpec("judge_failed"))
 
 
 def wildbench_score_with_reference(reference: dict[str, Any], raw: str) -> Grade:
     score = float(json.loads(raw)["score"])
     if not 1 <= score <= 10:
         raise ValueError("WildBench judge rating must be between 1 and 10")
-    return Grade(
-        {
-            "score": score,
-            "adjusted_score": (score - 5) * 2,
-            "avg_output_length": reference["output_length"],
-            "judge_failed": 0.0,
-        },
-        {"judge_raw": raw},
-        {"avg_output_length": float(not reference["truncated"] and reference["output_length"] > 0)},
-    )
+    return Grade({"score": score, "adjusted_score": (score - 5) * 2, "avg_output_length": reference["output_length"],
+                  "judge_failed": 0.0},
+                 {"judge_raw": raw}, {"avg_output_length": float(not reference["truncated"] and reference["output_length"] > 0)})
 
 
 def wildbench_score(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
@@ -86,8 +68,7 @@ def wildbench_score(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
 
 def mixeval(spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
     from eval.chat_benchmarks.MixEval.mix_eval.prompts.judge_prompts import (
-        gpt_judge_for_closeended_freeform,
-        gpt_judge_for_closeended_multiplechoice,
+        gpt_judge_for_closeended_freeform, gpt_judge_for_closeended_multiplechoice,
     )
 
     doc = spec.doc
@@ -98,17 +79,11 @@ def mixeval(spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
     else:
         choices = "\n".join(f"{chr(65 + index)}. {option}" for index, option in enumerate(doc["options"]))
         prompt = gpt_judge_for_closeended_multiplechoice(doc["prompt"], choices, str(responses[-1]))
-    reference = {
-        "kind": kind,
-        "target": doc["target"],
-        "num_options": len(doc["options"]) if kind == "multichoice" else 0,
-    }
-    return JudgePlan(
-        (ModelRequest(RequestKind.GENERATE, prompt, {"max_gen_toks": 999}),),
-        GraderSpec("mixeval_score", reference),
-        max_attempts=10,
-        on_exhausted=GraderSpec("mixeval_fallback", reference),
-    )
+    reference = {"kind": kind, "target": doc["target"],
+                 "num_options": len(doc["options"]) if kind == "multichoice" else 0}
+    return JudgePlan((ModelRequest(RequestKind.GENERATE, prompt, {"max_gen_toks": 999}),),
+                     GraderSpec("mixeval_score", reference), max_attempts=10,
+                     on_exhausted=GraderSpec("mixeval_fallback", reference))
 
 
 def mixeval_score(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
@@ -140,22 +115,14 @@ def mixeval_fallback(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
         score = float(choice == chr(65 + reference["target"][0]))
     else:
         score = round(rng.random(), 1)
-    return Grade(
-        {"accuracy": score},
-        {
-            "judge_raw": str(responses[-1]),
-            "judge_fallback": "malformed_response_exhaustion",
-            "judge_fallback_rng": "stable_item_v1",
-        },
-    )
+    return Grade({"accuracy": score}, {"judge_raw": str(responses[-1]),
+                 "judge_fallback": "malformed_response_exhaustion", "judge_fallback_rng": "stable_item_v1"})
 
 
 def simpleqa(spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
 
     prompt = SIMPLEQA_GRADER_TEMPLATE.format(
-        question=spec.doc["question"],
-        target=spec.target,
-        predicted_answer=str(responses[-1]),
+        question=spec.doc["question"], target=spec.target, predicted_answer=str(responses[-1]),
     )
     return JudgePlan(
         (ModelRequest(RequestKind.GENERATE, prompt, {"temperature": 0, "max_gen_toks": 2048}),),
@@ -163,20 +130,12 @@ def simpleqa(spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
         GraderSpec("judge_failed"),
     )
 
-
 def simpleqa_label(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
 
     label = _parse_simpleqa_judgment(str(responses[-1])).label.value
-    return Grade(
-        {
-            "accuracy": float(label == "correct"),
-            "incorrect": float(label == "incorrect"),
-            "not_attempted": float(label == "not_attempted"),
-            "judge_failed": 0.0,
-        },
-        {"judge_label": label, "judge_raw": str(responses[-1])},
-    )
-
+    return Grade({"accuracy": float(label == "correct"), "incorrect": float(label == "incorrect"),
+                  "not_attempted": float(label == "not_attempted"), "judge_failed": 0.0},
+                 {"judge_label": label, "judge_raw": str(responses[-1])})
 
 def equivalence_judge(spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
     prompt = JUDGE_PROMPT.format(
@@ -189,7 +148,6 @@ def equivalence_judge(spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
         GraderSpec("equivalence_label", {"answer": str(responses[-1])}),
         GraderSpec("judge_failed"),
     )
-
 
 def equivalence_label(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     raw = str(responses[-1])
@@ -215,12 +173,8 @@ def judge_failed(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     metrics = {"judge_failed": 1.0}
     if "accuracy" in spec.grader.reference:
         metrics["accuracy"] = spec.grader.reference["accuracy"]
-    return Grade(
-        metrics,
-        {
-            "judge_label": None,
-            "judge_raw": None,
-            "failure_category": FailureCategory.GRADER_INFRASTRUCTURE.value,
-            "judge_error": spec.grader.reference["judge_error"],
-        },
-    )
+    return Grade(metrics, {
+        "judge_label": None, "judge_raw": None,
+        "failure_category": FailureCategory.GRADER_INFRASTRUCTURE.value,
+        "judge_error": spec.grader.reference["judge_error"],
+    })

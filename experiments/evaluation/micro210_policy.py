@@ -109,6 +109,42 @@ class Micro210Model:
 
 
 @dataclass(frozen=True)
+class Micro210Route:
+    """The per-model execution route: where and on what accelerator class the evaluation runs.
+
+    The route belongs to the model binding, not the protocol: a 67B Snowball model runs on
+    H100 clusters and Mochi needs GB200, so each binding carries the route its model's
+    first evaluation used. Every protocol field in the policy — sampling, timeouts, judge,
+    task selection, per-task resources, and the priority class — stays frozen; the
+    launcher accepts no other execution override.
+    """
+
+    parent_cluster_config: str
+    cluster_config: str
+    target_cluster: str
+    container_profile: int
+
+    def __post_init__(self) -> None:
+        for path in (self.parent_cluster_config, self.cluster_config):
+            if not path.endswith(".yaml"):
+                raise ValueError(f"Route cluster config must be a yaml config path: {path!r}")
+        if not self.target_cluster:
+            raise ValueError("Route target_cluster is required")
+        if self.container_profile < 0:
+            raise ValueError(f"Route container_profile must not be negative: {self.container_profile}")
+
+    @classmethod
+    def from_policy_execution(cls, execution: dict) -> "Micro210Route":
+        """The policy's own route, used when a binding does not carry an explicit one."""
+        return cls(
+            parent_cluster_config=execution["parent_cluster_config"],
+            cluster_config=execution["cluster_config"],
+            target_cluster=execution["target_cluster"],
+            container_profile=int(execution["container_profile"]),
+        )
+
+
+@dataclass(frozen=True)
 class Micro210Record:
     """Serializable identity of the model, protocol and evaluation outputs."""
 
@@ -117,6 +153,7 @@ class Micro210Record:
     run_id: str
     output_uri: str
     policy_reference: Micro210PolicyReference
+    route: Micro210Route
 
 
 @dataclass(frozen=True)
@@ -126,20 +163,31 @@ class Micro210Evaluation:
     model: Micro210Model
     run_id: str
     output_uri: str
+    route: Micro210Route
 
     def policy(self) -> dict:
         return read_micro210_policy(POLICY_REFERENCE)
 
     def record(self) -> Micro210Record:
         self.policy()
-        return Micro210Record(POLICY_REFERENCE.sha256, self.model, self.run_id, self.output_uri, POLICY_REFERENCE)
+        return Micro210Record(
+            POLICY_REFERENCE.sha256, self.model, self.run_id, self.output_uri, POLICY_REFERENCE, self.route
+        )
 
 
+<<<<<<< HEAD
 def micro210_evaluation(model: Micro210Model, *, run_id: str, output_uri: str, **overrides) -> Micro210Evaluation:
     """Verify the frozen policy and bind the model and run identity."""
     if overrides:
         raise ValueError(f"Canonical Micro210 refuses override field: {next(iter(overrides))}")
     request = Micro210Evaluation(model, run_id, output_uri)
+=======
+def micro210_evaluation(
+    model: Micro210Model, *, run_id: str, output_uri: str, route: Micro210Route
+) -> Micro210Evaluation:
+    """Verify the frozen policy and bind the model, run identity and execution route."""
+    request = Micro210Evaluation(model, run_id, output_uri, route)
+>>>>>>> 5aaf8ba75b ([eval] Bind the Micro210 execution route to the model, not the protocol)
     request.policy()
     return request
 

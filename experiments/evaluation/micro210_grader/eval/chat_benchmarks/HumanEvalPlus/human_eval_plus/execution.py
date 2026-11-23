@@ -1,16 +1,17 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import contextlib
 import faulthandler
+import gzip
 import io
+import json
 import multiprocessing
+from eval.runtime.program_process import run_program_process, start_program_session
 import os
 import platform
 import random
 import signal
 import subprocess
 import tempfile
+import traceback
 from typing import *
 
 # The evalplus test harness imports numpy inside the sandbox. numpy's first import assigns
@@ -18,8 +19,6 @@ from typing import *
 # the test runs. check_correctness executes in a spawned worker that imports only this module,
 # so numpy has to enter sys.modules here, before the sandbox forks.
 import numpy  # noqa: F401
-
-from eval.runtime.program_process import run_program_process, start_program_session
 
 java_exec = ""
 node_exec = ""
@@ -75,8 +74,8 @@ def check_correctness(
                         result.append("passed")
                 except TimeoutException:
                     result.append("timed out")
-                except AssertionError:
-                    result.append("failed: AssertionError")
+                except AssertionError as e:
+                    result.append(f"failed: AssertionError")
                 except BaseException as e:
                     result.append(f"failed: {e}")
                 # print(sample["test_code"])
@@ -99,7 +98,7 @@ def check_correctness(
                 os.makedirs(tmp_dir)
             origin_path = os.getcwd()
             os.chdir(tmp_dir)
-            open("main_test.go", "w").write(sample["test_code"])
+            open(f"main_test.go", "w").write(sample["test_code"])
             try:
                 exec_result = None
                 with time_limit(timeout):
@@ -148,7 +147,7 @@ def check_correctness(
                 os.makedirs(tmp_dir)
             origin_path = os.getcwd()
             os.chdir(tmp_dir)
-            open("test.js", "w").write(sample["test_code"])
+            open(f"test.js", "w").write(sample["test_code"])
             try:
                 exec_result = None
                 with time_limit(timeout):
@@ -188,7 +187,7 @@ def check_correctness(
                 os.makedirs(tmp_dir)
 
             os.chdir(tmp_dir)
-            open("test.cpp", "w").write(sample["test_code"])
+            open(f"test.cpp", "w").write(sample["test_code"])
             if "162" in task_id:
                 compilation_result = subprocess.run(
                     ["/usr/bin/g++", "-std=c++17", "test.cpp", "-lcrypto", "-lssl"],
@@ -252,7 +251,7 @@ def check_correctness(
                 os.makedirs(tmp_dir)
 
             os.chdir(tmp_dir)
-            open("test.php", "w").write(sample["test_code"])
+            open(f"test.php", "w").write(sample["test_code"])
             try:
                 exec_result = None
                 with time_limit(timeout):
@@ -291,7 +290,7 @@ def check_correctness(
                 os.makedirs(tmp_dir)
 
             os.chdir(tmp_dir)
-            open("test.sh", "w").write(sample["test_code"])
+            open(f"test.sh", "w").write(sample["test_code"])
             try:
                 exec_result = None
                 with time_limit(timeout):
@@ -331,7 +330,7 @@ def check_correctness(
 
             os.chdir(tmp_dir)
             env = {"PATH": f"{node_exec}:" + subprocess.os.environ["PATH"]}
-            open("test.ts", "w").write(sample["test_code"])
+            open(f"test.ts", "w").write(sample["test_code"])
             cmd = f"{tsc_exec}tsc test.ts --target ES2015 --lib ES2015,DOM"
             compilation_result = subprocess.run(cmd, timeout=timeout, capture_output=True, env=env, shell=True)
             if compilation_result.returncode != 0:
@@ -412,7 +411,7 @@ def check_correctness(
             if not os.path.exists(tmp_dir):
                 os.makedirs(tmp_dir)
             os.chdir(tmp_dir)
-            open("Program.cs", "w").write(sample["test_code"])
+            open(f"Program.cs", "w").write(sample["test_code"])
             cmd = f"{cs_exec}mcs -d:DEBUG Program.cs"
             compilation_result = subprocess.run(cmd, shell=True, capture_output=True)
             if compilation_result.returncode != 0:
@@ -508,10 +507,10 @@ def check_correctness(
                 if returned_val_execution == 0:
                     result.append("passed")
                 else:
-                    result.append("failed: execution error")
+                    result.append(f"failed: execution error")
 
             else:
-                result.append("failed: compilation error")
+                result.append(f"failed: compilation error")
 
         elif "java" in language_type.lower():
             assert tmp_dir is not None, "Java should be evaluated in a temporary dir."
@@ -536,7 +535,7 @@ def check_correctness(
                     compilation_result = subprocess.run(cmd, timeout=60, capture_output=True, shell=True)
                     compile_returncode = compilation_result.returncode
                     break
-                except subprocess.TimeoutExpired:
+                except subprocess.TimeoutExpired as e:
                     continue
             if compile_returncode != 0:
                 res = "failed: compilation error"
@@ -561,7 +560,7 @@ def check_correctness(
                             res = "failed: wrong answer"
                         else:
                             res = f"failed: {exec_result.stderr.decode()}"
-                except subprocess.TimeoutExpired:
+                except subprocess.TimeoutExpired as e:
                     res = "time out"
                 except BaseException as e:
                     res = f"failed: {e}"
@@ -651,13 +650,13 @@ class WriteOnlyStringIO(io.StringIO):
     """StringIO that throws an exception when it's read from"""
 
     def read(self, *args, **kwargs):
-        raise OSError
+        raise IOError
 
     def readline(self, *args, **kwargs):
-        raise OSError
+        raise IOError
 
     def readlines(self, *args, **kwargs):
-        raise OSError
+        raise IOError
 
     def readable(self, *args, **kwargs):
         """Returns True if the IO object can be read."""

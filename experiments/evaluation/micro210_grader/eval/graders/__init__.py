@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Reusable deterministic and model-based graders.
 
 The benchmark-parity modules expose ``grade(problem, solution, reference_answer)``.

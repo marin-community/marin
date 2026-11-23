@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Per-sample metric values every scored benchmark reports and persists.
 
 A benchmark's grader is the only code that knows whether one sample was right.

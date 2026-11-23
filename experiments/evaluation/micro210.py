@@ -41,6 +41,7 @@ from transformers import AutoTokenizer
 
 from experiments.evaluation.judge_config import JudgeConfig
 from experiments.evaluation.micro210_policy import (
+    Micro210Route,
     MODEL_IDENTITY_PREFIX,
     PREPARED_COMMIT,
     PREPARED_REPO,
@@ -58,7 +59,7 @@ from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 
 # Relocation needs a new adoption identity even though the prepared bytes are unchanged.
-PREPARED_INPUTS_VERSION = "2026.11.20.2"
+PREPARED_INPUTS_VERSION = "2026.11.23.1"
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 JUDGE_API_KEY = "JUDGE_API_KEY"
@@ -278,6 +279,7 @@ def micro210_step(
         serving_profile=profile,
         model_manifest_filename=model_manifest_filename,
         subset=subset,
+        route=overrides.get("route"),
     )
 
 
@@ -290,6 +292,7 @@ def micro210_artifact_step(
     model_binding: Micro210Model | None = None,
     subset: Micro210Subset | None = None,
     model_manifest_filename: str | None = None,
+    route: Micro210Route | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind a future committed model to the same frozen evaluator as a static export."""
     if model_manifest_filename is None:
@@ -323,8 +326,18 @@ def micro210_artifact_step(
             output=OUT,
         )
     roles = draccus.decode(SkyRLRolePlan, policy["role_plan"])
+    # The route is the binding's execution choice; every other protocol field stays frozen.
+    resolved_route = route or Micro210Route.from_policy_execution(policy["execution"])
     execution = IrisSkyRLExecution(
-        **{**policy["execution"], "required_env_vars": tuple(policy["execution"]["required_env_vars"])},
+        **{
+            **policy["execution"],
+            "cluster": resolved_route.target_cluster,
+            "parent_cluster_config": resolved_route.parent_cluster_config,
+            "cluster_config": resolved_route.cluster_config,
+            "target_cluster": resolved_route.target_cluster,
+            "container_profile": resolved_route.container_profile,
+            "required_env_vars": tuple(policy["execution"]["required_env_vars"]),
+        },
         coordinator_timeout_hours=policy["execution"]["job_timeout_seconds"] // 3600 + 1,
     )
     config = runtime_policy_config(frozen).config

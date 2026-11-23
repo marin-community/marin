@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Construct executable test programs for a single dataset example."""
 
 IMPORT_HELPER = {

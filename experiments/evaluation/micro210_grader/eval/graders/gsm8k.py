@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Self-contained grader for the lm-eval-harness ``gsm8k`` task.
 
 Ports the filter chains and ``exact_match`` metric of
