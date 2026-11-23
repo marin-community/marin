@@ -135,6 +135,9 @@ def _install_speculators(scratch: Path, env: dict[str, str]) -> str:
 
 @contextmanager
 def _teacher_server(command: list[str], env: dict[str, str], port: int) -> Iterator[None]:
+    # FlashInfer's cold-start Ninja builds otherwise size their worker pool
+    # from the node's CPUs, which can exhaust the Iris task's memory limit.
+    env = {"MAX_JOBS": "2", **env}
     with subprocess.Popen(command, env=env, start_new_session=True) as server:
         try:
             deadline = time.monotonic() + 1800
