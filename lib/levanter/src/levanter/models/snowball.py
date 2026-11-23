@@ -1202,7 +1202,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             logits = logits.astype(loss_type)
         if logit_soft_cap is not None:
             logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
-        targets = next_token_ids(self.Pos, example.tokens)
+        targets = next_token_ids(self.Pos.name, example.tokens)
         selected = hax.sum(hax.where(hax.nn.one_hot(targets, self.Vocab, dtype=bool), logits, 0), self.Vocab)
         normalizers = hax.nn.logsumexp(logits, self.Vocab)
         loss = normalizers - selected
