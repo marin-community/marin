@@ -36,11 +36,25 @@ answers, and a comparative ("a is lexicographically less than b") defines an ord
 _FLOAT_TOLERANCE = re.compile(
     r"absolute or relative|relative or absolute|relative error|absolute error"
     r"|error (does not|must not|should not|doesn't) exceed"
-    r"|within (an? )?(error|tolerance)|accurate to within|considered correct if",
+    r"|within (an? )?(error|tolerance)|accurate to within",
     re.IGNORECASE,
 )
 """A clause accepting any answer within a numeric tolerance, worded with or without the word "error"."""
-_INTERACTIVE = re.compile(r"\binteractive problem\b", re.IGNORECASE)
+_CORRECT_IF = re.compile(r"\bconsidered correct if\b", re.IGNORECASE)
+_CORRECT_IF_WINDOW = 200
+"""How far past "considered correct if" its condition is read; some conditions continue in a list."""
+_NUMERIC_TOLERANCE = re.compile(
+    r"10\s*\^\s*\{?\s*-|\b10\s*(<=)?-(<=)?\s*\d|\de\s*-\s*\d|\b0\.\d"
+    r"|decimal (places|digits)|digits after the decimal point|\bepsilon\b|[εϵ]",
+    re.IGNORECASE,
+)
+"""A tolerance in a condition: a negative power of ten (also as scraped superscripts), a decimal fraction, a number
+of decimal places, or an epsilon."""
+_REPLY_SUBJECT = re.compile(r"\b(answers?|outputs?|solutions?|submission)\b[^.\n]{0,25}$", re.IGNORECASE)
+"""A reply as the subject that ends just before "considered correct if", as in "Your answer will be"."""
+_INTERACTIVE = re.compile(r"(?P<negation>(\bnot|n't)\s+(an?\s+)?|\bnon-?\s*)?\binteractive problem\b", re.IGNORECASE)
+"""An interactive-problem notice, or its negation ("This is NOT an interactive problem", "the usual, non-interactive
+problem")."""
 _FUNCTION_TEMPLATE = re.compile(
     r"you (don'?t|do not) (need|have) to (read|take) (any )?input|no need to read input"
     r"|complete the (given )?(function|method|class)",
@@ -97,14 +111,44 @@ def code_case_mode(cases: Mapping[str, Any] | list[Any]) -> CodeTestMode:
     return modes.pop()
 
 
+class _Correctness(StrEnum):
+    """What a "considered correct if" clause makes the grader check."""
+
+    TOLERANCE = "tolerance"
+    CONDITION = "condition"
+
+
+def _correctness(statement: str) -> _Correctness | None:
+    """What the statement's "considered correct if" clauses make the grader check, a tolerance first, or None.
+
+    A condition with a numeric tolerance accepts nearby numbers. A condition on the reply without one is tested by a
+    checker ("Your answer will be considered correct if you output any suitable m"). A clause that defines a term
+    ("A bracket sequence is considered correct if") says nothing about grading.
+    """
+    result = None
+    for clause in _CORRECT_IF.finditer(statement):
+        if _NUMERIC_TOLERANCE.search(statement, clause.end(), clause.end() + _CORRECT_IF_WINDOW):
+            return _Correctness.TOLERANCE
+        if _REPLY_SUBJECT.search(statement, 0, clause.start()):
+            result = _Correctness.CONDITION
+    return result
+
+
+def _is_interactive(statement: str) -> bool:
+    return any(notice["negation"] is None for notice in _INTERACTIVE.finditer(statement))
+
+
 def ungradable_statement(statement: str, mode: CodeTestMode) -> ImportRejection | None:
     """Reject a statement whose replies comparison with one stored output cannot grade, else return None."""
     any_valid = _ANY_VALID_OUTPUT.search(statement)
+    correctness = _correctness(statement)
     if any_valid and not _ONE_ANSWER_CHOSEN.search(statement, any_valid.end(), any_valid.end() + 120):
         reason = "any_valid_output"
-    elif _FLOAT_TOLERANCE.search(statement):
+    elif _FLOAT_TOLERANCE.search(statement) or correctness == _Correctness.TOLERANCE:
         reason = "float_tolerance"
-    elif _INTERACTIVE.search(statement):
+    elif correctness == _Correctness.CONDITION:
+        reason = "any_valid_output"
+    elif _is_interactive(statement):
         reason = "interactive_problem"
     elif mode == CodeTestMode.STDIN and _FUNCTION_TEMPLATE.search(statement) and not _INPUT_FORMAT.search(statement):
         reason = "function_template_with_example_tests"

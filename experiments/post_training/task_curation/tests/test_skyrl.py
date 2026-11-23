@@ -324,7 +324,16 @@ def eurus2_stdin_row(statement: str) -> dict:
             "any_valid_output",
         ),
         ("Print the distance. It is considered correct if its absolute error is below 1e-6.", "float_tolerance"),
+        ("Your answer is considered correct if |a - b| <= 10^{-6}, where b is the jury's answer.", "float_tolerance"),
+        (
+            "Your answer will be considered correct if you output any suitable m such that 1 <= m <= 1000.",
+            "any_valid_output",
+        ),
         ("This is an interactive problem. Query the judge.", "interactive_problem"),
+        (
+            "This is an interactive problem. Unlike a non-interactive problem, flush after each query.",
+            "interactive_problem",
+        ),
         ("You don't need to read input. Complete the function sum2().", "function_template_with_example_tests"),
     ],
 )
@@ -340,6 +349,9 @@ def test_eurus2_row_that_one_stored_output_cannot_check_is_rejected(statement, r
         "Read two integers and print their sum. Do not print any extra spaces.",
         "If the answer is not unique, print the lexicographically smallest one.",
         "Complete the function add in the editor below.\n\nInput Format\n\nTwo integers.",
+        "This is NOT an interactive problem. Read both integers and print their sum.",
+        "Solve it as you would solve the usual, non-interactive problem: read the whole input, then print the sum.",
+        "A bracket sequence is considered correct if inserting '1' and '+' makes it an expression. Print YES or NO.",
     ],
 )
 def test_eurus2_row_with_one_right_output_stays(statement):
