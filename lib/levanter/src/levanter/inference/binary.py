@@ -18,6 +18,7 @@ PROMPT_TOKEN_IDS = "prompt_token_ids"
 TOKEN_IDS = "token_ids"
 EXPERT_IDS = "expert_ids"
 EXPERT_VALID = "expert_valid"
+MAX_POLICY_ID_LENGTH = 256
 _MAGIC = b"LEVANTER-GENERATE\x01"
 _HEADER_LENGTH = struct.Struct(">I")
 _MAX_METADATA_BYTES = 64 * 1024
@@ -35,6 +36,7 @@ class GenerateOptions(BaseModel):
     stop_tokens: list[list[StrictInt]] | None = None
     n: StrictInt = Field(default=1, ge=1)
     return_route_captures: bool = False
+    expected_policy_id: str | None = Field(default=None, min_length=1, max_length=MAX_POLICY_ID_LENGTH)
 
 
 def encode_frame(metadata: dict, tensors: dict[str, np.ndarray]) -> bytes:

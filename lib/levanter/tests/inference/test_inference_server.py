@@ -629,7 +629,7 @@ def test_binary_generation_returns_exact_token_ids_and_scores(test_client):
     metadata, tensors = decode_frame(response.content)
 
     np.testing.assert_array_equal(tensors["prompt_token_ids"], prompt)
-    assert metadata["choices"] == [{"completion_tokens": 2}]
+    assert metadata["choices"][0]["completion_tokens"] == 2
     assert tensors["choice.0.token_ids"].shape == (2,)
     assert tensors["choice.0.token_ids"].dtype == np.int32
     assert tensors["choice.0.behavior_logprobs"].shape == (2,)
@@ -638,6 +638,49 @@ def test_binary_generation_returns_exact_token_ids_and_scores(test_client):
     wrong_dtype = encode_frame({"max_tokens": 2}, {"prompt_token_ids": prompt.astype(np.float32)})
     response = client.post(GENERATE_PATH, content=wrong_dtype, headers={"content-type": MEDIA_TYPE})
     assert response.status_code == 400
+
+
+def test_binary_generation_fences_rollouts_by_installed_policy(inference_server_config, generated_model_and_tokenizer):
+    model, tokenizer = generated_model_and_tokenizer
+    server = InferenceServer.create(inference_server_config, model, tokenizer)
+    try:
+        with TestClient(server.app) as client:
+            _assert_binary_policy_fence(client, server)
+    finally:
+        server.shutdown()
+
+
+def _assert_binary_policy_fence(client, server):
+    prompt = np.array([18, 7, 3], dtype=np.int32)
+
+    def generate(policy):
+        return client.post(
+            GENERATE_PATH,
+            content=encode_frame(
+                {"max_tokens": 2, "temperature": 0, "expected_policy_id": policy}, {"prompt_token_ids": prompt}
+            ),
+            headers={"content-type": MEDIA_TYPE},
+        )
+
+    assert server.reload(lambda model: model, expected_version=0, policy_id="policy-a") == 1
+    first_metadata, first_tensors = decode_frame(generate("policy-a").content)
+    assert first_metadata["choices"][0] == {"completion_tokens": 2, "model_version": 1, "policy_id": "policy-a"}
+
+    def fail_load(model):
+        raise RuntimeError("invalid replacement")
+
+    with pytest.raises(RuntimeError, match="invalid replacement"):
+        server.reload(fail_load, expected_version=1, policy_id="policy-b")
+    still_first, still_first_tensors = decode_frame(generate("policy-a").content)
+    assert still_first == first_metadata
+    np.testing.assert_array_equal(still_first_tensors["choice.0.token_ids"], first_tensors["choice.0.token_ids"])
+
+    assert server.reload(lambda model: model, expected_version=1, policy_id="policy-b") == 2
+    with pytest.raises(ValueError):
+        server.reload(lambda model: model, expected_version=1, policy_id="policy-c")
+    assert generate("policy-a").status_code == 409
+    second_metadata, _ = decode_frame(generate("policy-b").content)
+    assert second_metadata["choices"][0] == {"completion_tokens": 2, "model_version": 2, "policy_id": "policy-b"}
 
 
 def test_binary_snowball_generation_replays_exact_expert_routes(local_gpt2_tokenizer):
