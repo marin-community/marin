@@ -16,13 +16,16 @@ from harbor.utils.env import validate_task_environment
 from experiments.post_training.task_curation import difficulty_trials
 from experiments.post_training.task_curation.datasets.environments import LEAN_GRADER_PACKAGES
 from experiments.post_training.task_curation.difficulty.importer import receipt_row
+from experiments.post_training.task_curation.difficulty.ledger_worker import source_has_judge_traffic
 from experiments.post_training.task_curation.difficulty.state import GapReason
-from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
-from experiments.post_training.task_curation.difficulty_trials import (
+from experiments.post_training.task_curation.difficulty_prepared import (
+    PreparedTask,
     attempt_judge_model,
+    task_declared_judge_model,
+)
+from experiments.post_training.task_curation.difficulty_trials import (
     grader_infrastructure_reason,
     resolve_provider_secrets,
-    task_declared_judge_model,
     task_guest_environment,
     task_required_provider_secrets,
     trial_environment_options,
@@ -285,6 +288,31 @@ def test_task_guest_environment_projects_the_declared_judge_relay(declared_judge
     # The sandbox guard must accept the projected guest environment, and the
     # resolved credential's value must never appear in it.
     validate_task_environment(granted, protected_values=frozenset({resolved["TOGETHER_API_KEY"]}))
+
+
+def test_source_has_judge_traffic_includes_declared_judges(declared_judge_bundle):
+    declared = PreparedTask(
+        task_id="declared",
+        runtime_sha256="a" * 64,
+        path=str(declared_judge_bundle),
+        workload="native",
+        backend="daytona",
+        reason=None,
+        judge_model=None,
+    )
+    plain = PreparedTask(
+        task_id="plain",
+        runtime_sha256="a" * 64,
+        path=None,
+        workload="native",
+        backend="local",
+        reason=None,
+        judge_model=None,
+    )
+    prepared_judge = plain.model_copy(update={"judge_model": "zai-org/GLM-5.3"})
+    assert source_has_judge_traffic([declared]) is True
+    assert source_has_judge_traffic([plain]) is False
+    assert source_has_judge_traffic([prepared_judge]) is True
 
 
 def _fake_storage_path(payloads: dict[str, str]):

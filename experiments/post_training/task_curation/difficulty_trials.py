@@ -57,15 +57,17 @@ from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFI
 from experiments.post_training.task_curation.datasets.environments import BUILDABLE_ENVIRONMENTS
 from experiments.post_training.task_curation.difficulty.launch import DATA_ADMISSION_COMMAND
 from experiments.post_training.task_curation.difficulty_config import (
-    DECLARED_JUDGE_ENV_VAR,
-    DECLARED_JUDGE_PROVIDER_PREFIX,
     TASK_PROVIDER_SECRETS,
     TOGETHER_AI_API_BASE_ENV,
     CandidateRun,
 )
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
-from experiments.post_training.task_curation.difficulty_prepared import PreparedTask, grader_requires_multi_uid
-from experiments.post_training.task_curation.difficulty_protocol import DECLARED_JUDGE_PINS
+from experiments.post_training.task_curation.difficulty_prepared import (
+    PreparedTask,
+    attempt_judge_model,
+    grader_requires_multi_uid,
+    task_declared_judge_model,
+)
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 from experiments.post_training.task_curation.environment import Environment
 
@@ -107,34 +109,6 @@ def resolve_provider_secrets(required: Iterable[str]) -> dict[str, str]:
     if unknown:
         raise ValueError(f"Task bundles require provider credentials this lane cannot grant: {sorted(unknown)}")
     return {name: require_secret(name) for name in sorted(required)}
-
-
-def task_declared_judge_model(task: PreparedTask) -> str | None:
-    """The grader model a frozen native bundle declares for its own verifier, if any.
-
-    REWARDKIT_JUDGE names the judge in LiteLLM provider form; only qualified
-    declared judges are served, so an unqualified declaration fails closed
-    instead of being silently re-judged by the shared route's model.
-    """
-    if task.path is None or task.workload != "native":
-        return None
-    declared = dict(Task(task_dir=Path(task.path)).config.verifier.env).get(DECLARED_JUDGE_ENV_VAR)
-    if declared is None:
-        return None
-    if not declared.startswith(DECLARED_JUDGE_PROVIDER_PREFIX):
-        raise ValueError(
-            f"Task {task.task_id} declares judge {declared!r} outside the "
-            f"{DECLARED_JUDGE_PROVIDER_PREFIX} route this lane serves"
-        )
-    model = declared.removeprefix(DECLARED_JUDGE_PROVIDER_PREFIX)
-    if model not in DECLARED_JUDGE_PINS:
-        raise ValueError(f"Task {task.task_id} declares judge {model!r} this lane has not qualified")
-    return model
-
-
-def attempt_judge_model(task: PreparedTask) -> str | None:
-    """The judge model one attempt's grading uses: the prepared judge or the bundle's declared one."""
-    return task.judge_model or task_declared_judge_model(task)
 
 
 def task_guest_environment(task: PreparedTask, provider_secrets: Mapping[str, str]) -> dict[str, str]:

@@ -33,6 +33,7 @@ from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.difficulty.launch import JOB_TIMEOUT
 from experiments.post_training.task_curation.difficulty_config import (
     DATA_ACCOUNT,
+    DECLARED_JUDGE_PINS,
     TASK_PROVIDER_SECRETS,
     TOGETHER_API_KEY_ENV,
     CandidateRun,
@@ -40,8 +41,8 @@ from experiments.post_training.task_curation.difficulty_config import (
 )
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import PreparedSource, prepare_source
+from experiments.post_training.task_curation.difficulty_prepared import attempt_judge_model
 from experiments.post_training.task_curation.difficulty_protocol import (
-    DECLARED_JUDGE_PINS,
     PINS,
     TARGET_CLUSTER,
     serving_model,
@@ -54,7 +55,6 @@ from experiments.post_training.task_curation.difficulty_serving_probe import (
     probe_endpoint,
     probe_judge_endpoint,
 )
-from experiments.post_training.task_curation.difficulty_trials import attempt_judge_model
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, LocalJudgeEndpoint
 
 TOGETHER_BASE_URL = "https://api.together.xyz/v1"

@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from dataclasses import replace
@@ -33,7 +33,11 @@ from experiments.post_training.task_curation.difficulty.selection import selecte
 from experiments.post_training.task_curation.difficulty.state import Gap, GapReason, LedgerRow, Outcome
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
-from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
+from experiments.post_training.task_curation.difficulty_prepared import (
+    PreparedSource,
+    PreparedTask,
+    attempt_judge_model,
+)
 from experiments.post_training.task_curation.difficulty_relay import budget_relay
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 from experiments.post_training.task_curation.difficulty_trials import (
@@ -51,6 +55,11 @@ from experiments.post_training.task_curation.difficulty_trials import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def source_has_judge_traffic(tasks: Iterable[PreparedTask]) -> bool:
+    """Whether this source's tasks route judge traffic: a prepared or a declared judge."""
+    return any(attempt_judge_model(task) is not None and task.reason is None for task in tasks)
 
 
 def record_attempt(
@@ -285,7 +294,7 @@ def main() -> None:
                 output / source_key / "model-requests.tar.gz",
             )
             judge_traffic = None
-            if judge is not None and any(task.judge_model is not None and task.reason is None for task in tasks):
+            if judge is not None and source_has_judge_traffic(tasks):
                 judge_traffic = archive_model_traffic(
                     judge_root / "model-requests",
                     tasks,
