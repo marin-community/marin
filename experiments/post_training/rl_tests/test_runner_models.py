@@ -27,7 +27,12 @@ from experiments.post_training import rl, rl_compose, rl_gate
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_measurements import read_run_inputs
 from experiments.post_training.rl_presets import BatchMix
-from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, fake_s3, write_published_artifact
+from experiments.post_training.rl_tests.fixtures import (
+    SELECTION_IDENTITY,
+    fake_s3,
+    printed_status,
+    write_published_artifact,
+)
 from experiments.post_training.snowball_rl import SNOWBALL
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -554,7 +559,13 @@ def test_mochi_agentic_plan_collects_attempts_with_exports_disabled(selection, t
     monkeypatch.setattr(rl_compose, "marin_temp_bucket", lambda *_args, **_kwargs: str(scratch))
     result = plan(MOCHI, "train-medium-agentic")
     assert result.exit_code == 0, (result.output, result.exception)
-    assert "rl-data/task-health/attempts/" in result.output
-    assert f"  root: {scratch}\n" in result.output
-    assert "  source: preset's 3-day storage\n" in result.output
-    assert "coordinator time limit exceeds storage lifetime" in result.output
+    # The plan prints the YAML status, then the lowered steps, then every artifact's name@version.
+    status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+    resolved = result.stdout.partition("\nResolved versions:\n")[2].split()
+    (run,) = status["runs"]
+    assert status["output"]["root"] == str(scratch)
+    assert f"rl-data/task-health/attempts/by-run/{run['name']}@{run['version']}" in resolved
+    experiment = rl.build_experiment(MOCHI.by_name["train-medium-agentic"], table=MOCHI, tasks=selection)
+    (step,) = experiment.runs
+    document = yaml.safe_load(materialized_config(step, str(scratch)).launch_config_yaml)
+    assert document["run"]["export_hf"] is False
