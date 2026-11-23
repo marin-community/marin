@@ -264,6 +264,8 @@ def convert_nemotron_structured_outputs(task: TaskFiles) -> ConvertedTask | Reje
     nested_files = {f"tests/{FORMAT_DIR}/{path.removeprefix('tests/')}": value for path, value in data_files.items()}
     content_spec = JudgeSpec(
         rubric="labels",
+        transport_attempts=1,
+        parse_attempts=1,
         exact_gate=False,
         references=(instruction,),
         system_prompt=CONTENT_SYSTEM,
