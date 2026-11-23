@@ -473,9 +473,12 @@ def main() -> None:
     has_daytona = any(task.backend == "daytona" and task.reason is None for source in prepared for task in source.tasks)
     daytona_api_key = None
     if has_daytona:
-        if action["daytona_account"] not in (None, DATA_ACCOUNT):
+        # A LOCAL-planned action omits daytona_account entirely; preparation may have routed
+        # its tasks up to Daytona after planning.
+        routed_account = action.get("daytona_account")
+        if routed_account not in (None, DATA_ACCOUNT):
             raise ValueError("Difficulty Daytona attempts require the DATA account")
-        if action["daytona_account"] is None:
+        if routed_account is None:
             # Preparation routed these tasks up to Daytona after the action was planned on the
             # LOCAL tier (the grader drops privileges to a fixed uid); they consume the DATA
             # account like any Daytona attempt.
