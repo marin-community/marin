@@ -699,6 +699,8 @@ def _label_completion(
     spec: JudgeSpec, client: _Client, model: str, messages: list, budget: int, temperature: float | None
 ) -> _LabelCompletion:
     if not isinstance(client, openai.OpenAI):
+        if temperature != 0.0:  # a JudgeRequest is one greedy sample, so another temperature would be dropped
+            raise InvalidTask(f"a judge callback samples at temperature 0; the {spec.rubric} rubric needs {temperature}")
         reply = client(_request(spec, model, messages, budget))
         finish = reply.finish_reason
         if spec.api == "responses":
