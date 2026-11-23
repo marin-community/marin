@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 7:43 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 7:51 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2215,7 +2215,15 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   retention. It reproduced the archived step-2 index bytes and joined the
   retained index to the same generation and four object metadata records.
   Capture the original step-1 index, the two-entry index after step 2,
-  and the terminal retention index in order during the H100 run.
+  and the terminal retention index in order during the H100 run. The
+  regional collector checks an object's ETag before and after a
+  bounded conditional GET. It reads only the index and policy metadata
+  bodies and takes HEAD records for the four checkpoint objects. Its
+  offline tests passed all three captures through the custody verifier
+  and exercised the routed S3 client's conditional requests. Capture
+  the two-entry index before invoking the direct-root terminal
+  attachment, which calls stock retention. This ordering preserves the
+  original commit even when the last save completes after evaluation.
 
   A fresh-start diagnostic can skip the initial evaluation callback and
   keep the final panel. The callback ran for 26m55s in the interrupted
