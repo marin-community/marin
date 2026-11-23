@@ -98,6 +98,18 @@ OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify
 its private secrets file. That is a launcher-specific setting, not an Iris
 requirement. See the source Jupiter runbook below for that workflow.
 
+## Difficulty native judge timeouts
+
+Difficulty's declared native judges use a 30-second upstream HTTP timeout and
+up to six attempts. A stalled read can retry before the native grader's
+300-second client deadline; solver and tier-judge requests retain 600 seconds.
+Provider admission waits are recorded separately.
+In `judge-requests.tar.gz`, inspect
+`*/*/upstream-attempts/*/transport-error.json` and `*/*/provider-waits/*.json`
+before changing limits.
+Timeout receipts identify the transport error without inventing an upstream
+HTTP status. Retries repeat only model requests, not source commands.
+
 ## Native Harbor network evidence
 
 For a native shared-machine task with `source-runtime.json`, Daytona records

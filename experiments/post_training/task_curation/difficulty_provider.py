@@ -19,16 +19,19 @@ from verifyit.grade import transient_model_auth
 LOGGER = logging.getLogger(__name__)
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 ADMISSION_POLL_SECONDS = 1.0
+MODEL_REQUEST_TIMEOUT = 600
+DECLARED_JUDGE_REQUEST_TIMEOUT = 30
 
 
 @dataclass(frozen=True)
 class ProviderLimits:
     max_in_flight: int
     attempts: int
+    request_timeout: float
 
     def __post_init__(self):
-        if self.max_in_flight < 1 or self.attempts < 1:
-            raise ValueError("Provider capacity and attempts must be positive")
+        if self.max_in_flight < 1 or self.attempts < 1 or self.request_timeout <= 0:
+            raise ValueError("Provider capacity, attempts and request timeout must be positive")
 
 
 class ProviderUnavailable(Exception):
@@ -92,7 +95,7 @@ class ProviderGate:
     def response(
         self, client: httpx.Client, endpoint: str, body: dict, root: Path, request_alive: Callable[[], bool]
     ) -> httpx.Response:
-        """Retry only rejected provider requests, retaining every upstream reply."""
+        """Retry transient model requests, retaining upstream replies and timeout evidence."""
         backoff = ExponentialBackoff(initial=1, maximum=32, factor=2, jitter=0.25)
         with self.admission(root, request_alive):
             for number in range(self.limits.attempts):
@@ -105,34 +108,40 @@ class ProviderGate:
                     raise ProviderUnavailable("The waiting client disconnected")
                 attempt = root / "upstream-attempts" / f"{number:02d}"
                 attempt.mkdir(parents=True, exist_ok=False)
-                response = client.post(endpoint.rstrip("/") + "/chat/completions", json=body)
-                (attempt / "response.body").write_bytes(response.content)
-                (attempt / "status.json").write_text(json.dumps({"status": response.status_code}))
-                if response.status_code not in RETRYABLE_STATUS and not transient_model_auth(
-                    response.status_code, response.content
-                ):
-                    return response
+                try:
+                    response = client.post(endpoint.rstrip("/") + "/chat/completions", json=body)
+                except httpx.TimeoutException as error:
+                    reason = type(error).__name__
+                    (attempt / "transport-error.json").write_text(json.dumps({"error_identity": reason}))
+                    if number + 1 == self.limits.attempts:
+                        raise
+                    status = None
+                else:
+                    status = response.status_code
+                    (attempt / "response.body").write_bytes(response.content)
+                    (attempt / "status.json").write_text(json.dumps({"status": status}))
+                    auth_wait = transient_model_auth(status, response.content)
+                    if status not in RETRYABLE_STATUS and not auth_wait:
+                        return response
+                    reason = "transient_model_auth" if auth_wait else None
                 delay = backoff.next_interval() if number + 1 < self.limits.attempts else 0
                 wait = root / "provider-waits" / f"{number:02d}.json"
                 wait.parent.mkdir(exist_ok=True)
                 wait.write_text(
                     json.dumps(
                         {
-                            "status": response.status_code,
+                            "status": status,
                             "backoff_seconds": delay,
                             "kind": "provider_wait",
-                            "reason": (
-                                "transient_model_auth"
-                                if transient_model_auth(response.status_code, response.content)
-                                else None
-                            ),
+                            "reason": reason,
                             "task_attempt": False,
                         }
                     )
                 )
                 LOGGER.warning(
-                    "Provider wait status=%d delay=%.3f active_cap=%d",
-                    response.status_code,
+                    "Provider wait status=%s reason=%s delay=%.3f active_cap=%d",
+                    status,
+                    reason,
                     delay,
                     self.limits.max_in_flight,
                 )

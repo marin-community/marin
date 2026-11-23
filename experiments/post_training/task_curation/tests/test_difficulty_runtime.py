@@ -293,9 +293,11 @@ def test_campaign_qualifies_only_required_judge_routes(
     (config,) = launches
     serving = json.loads((output / "serving.json").read_text())
     if with_judge:
+        assert config.judge.provider_limits.request_timeout == (30 if declared else 600)
         assert serving["judge_provider_limits"] == {
             "max_in_flight": config.judge.provider_limits.max_in_flight,
             "attempts": config.judge.provider_limits.attempts,
+            "request_timeout": config.judge.provider_limits.request_timeout,
         }
         assert serving["judge"]["revision"] == config.judge.identity.revision
     else:

@@ -61,7 +61,9 @@ def budget_relay(
     numbers = Counter()
     provider = ProviderGate(provider_limits)
     lock = Lock()
-    with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=REQUEST_TIMEOUT) as upstream:
+    with httpx.Client(
+        headers={"Authorization": f"Bearer {api_key}"}, timeout=provider_limits.request_timeout
+    ) as upstream:
 
         class Handler(BaseHTTPRequestHandler):
             def request_alive(self):

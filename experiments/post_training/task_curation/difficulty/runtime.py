@@ -54,7 +54,11 @@ from experiments.post_training.task_curation.difficulty_protocol import (
     serving_model,
     solver_vllm_release,
 )
-from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
+from experiments.post_training.task_curation.difficulty_provider import (
+    DECLARED_JUDGE_REQUEST_TIMEOUT,
+    MODEL_REQUEST_TIMEOUT,
+    ProviderLimits,
+)
 from experiments.post_training.task_curation.difficulty_samples import load_queue_sources
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 from experiments.post_training.task_curation.difficulty_serving_probe import (
@@ -529,8 +533,13 @@ def run_batch(args: argparse.Namespace) -> None:
     provider_limits = ProviderLimits(
         max_in_flight=4 if args.solver == Solver.HOSTED and args.solver_pool is None else args.workers,
         attempts=6 if args.solver == Solver.HOSTED else 1,
+        request_timeout=MODEL_REQUEST_TIMEOUT,
     )
-    judge_limits = ProviderLimits(max_in_flight=min(8, args.workers), attempts=6) if has_judge else None
+    judge_limits = (
+        ProviderLimits(max_in_flight=min(8, args.workers), attempts=6, request_timeout=MODEL_REQUEST_TIMEOUT)
+        if has_judge
+        else None
+    )
     has_daytona = any(task.backend == "daytona" and task.reason is None for source in prepared for task in source.tasks)
     daytona_api_key = None
     if has_daytona:
@@ -579,6 +588,8 @@ def run_batch(args: argparse.Namespace) -> None:
             else probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
         )
         judge_tier, shared_judge_model = batch_judge_route(prepared)
+        if judge_limits is not None and shared_judge_model in DECLARED_JUDGE_PINS:
+            judge_limits = replace(judge_limits, request_timeout=DECLARED_JUDGE_REQUEST_TIMEOUT)
         judge_route = (
             judge_serving(judge_tier, priority_band_value(args.priority), shared_judge_model)
             if has_judge
