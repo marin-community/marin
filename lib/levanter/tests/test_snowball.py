@@ -1500,3 +1500,37 @@ def test_snowball_bf16_tpu_paged_generation_matches_reference(shard_kv_on_expert
     assert actual.tokens == expected.tokens
     assert actual.total_generated == 8
     np.testing.assert_allclose(actual.logprobs, expected.logprobs, atol=2e-2, rtol=0)
+
+
+@pytest.mark.tpu
+@pytest.mark.timeout(240)
+def test_snowball_64k_compact_kv_allocates_expert_sharded_layers_on_v5p():
+    if jax.device_count() != 4 or jax.devices()[0].device_kind != "TPU v5":
+        pytest.skip("The 64K cache geometry requires one v5p-8")
+    cfg = _tiny_config(
+        num_layers=26, num_heads=20, num_kv_heads=5, head_dim=128, max_seq_len=65536, sliding_window=2048
+    )
+    mesh = compact_grug_mesh(expert_axis_size=4)
+    with jax.set_mesh(mesh):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(52))
+        model = model.with_split_decode_cache().with_expert_sharded_kv()
+        engine = InferenceEngine.from_model_with_config(
+            model,
+            tokenizer=None,
+            axis_resources={"batch": "expert"},
+            config=InferenceEngineConfig(
+                max_seq_len=65536,
+                max_pages=49152,
+                max_seqs=128,
+                window_cache_max_pages=5120,
+                max_seqs_in_prefill=4,
+                max_tokens_per_round=32,
+                max_queued_tokens=128,
+                page_size=128,
+            ),
+        )
+        buffers = jax.tree.leaves(engine.gen_state.cache)
+        jax.block_until_ready(buffers)
+    assert len(buffers) == 26
+    assert {buffer.shape[0] for buffer in buffers} == {49152, 5120}
+    assert all(buffer.addressable_data(0).shape[2] == 4 for buffer in buffers)
