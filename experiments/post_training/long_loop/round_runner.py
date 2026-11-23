@@ -71,6 +71,7 @@ from experiments.post_training.long_loop.exp4 import (
 )
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_steps
 from experiments.post_training.long_loop.nvl72 import MochiProfile, build_run, validate_model_geometry
+from experiments.post_training.long_loop.openresearcher_service import OpenResearcherService
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.rl import curriculum_validation_callbacks
@@ -155,6 +156,7 @@ class RoundSpec:
     evaluation: str
     initializer: str
     sft: RoundSft
+    openresearcher_service: OpenResearcherService | None = None
 
 
 @dataclass(frozen=True)

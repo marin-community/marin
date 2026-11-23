@@ -143,3 +143,10 @@ def test_exp5_rl_no_run_binds_its_published_pools_without_an_exp4_dependency(tmp
     [best] = [entry for entry in launch["skyrl"]["trainer"]["callbacks"] if entry["type"] == "best_checkpoint"]
     assert best["expected_tasks"] == 200
     assert best["minimum_scored_tasks"] == 180
+    sessions = launch["skyrl"]["environment"]["task_sessions"]
+    machines = sessions["task_spec"]["task_machine_by_dataset"]
+    assert set(machines) == {"OpenResearcher/OpenResearcher-Dataset"}
+    assert machines["OpenResearcher/OpenResearcher-Dataset"]["backend"] == "daytona"
+    assert machines["OpenResearcher/OpenResearcher-Dataset"]["network"] == "deny"
+    assert sessions["task_spec"]["session"]["max_turns"] == 128
+    assert resolved["rl"]["openresearcher_service"]["index_uri"].startswith("s3://marin-rno2a/")

@@ -33,7 +33,6 @@ from iris.cli.connect import connect_controller, rpc_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
 from iris.cluster.types import JobName, is_job_finished
-from iris.resources.state import TERMINAL_JOB_STATES
 from iris.rpc import controller_pb2, job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
@@ -1039,14 +1038,7 @@ def run_skyrl(
                 f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
             )
         response = LaunchResult.model_validate_json(completed.stdout)
-        any_terminal = yaml.safe_load(config.launch_config_yaml)["run"].get("finalization") == "any_terminal"
-        finalized_terminal = (
-            any_terminal
-            and response.iris_job_state in TERMINAL_JOB_STATES
-            and response.finalization in {"completed", "skipped_no_checkpoint"}
-            and response.finalization_failure is None
-        )
-        if (completed.returncode != 0 or response.state != "succeeded") and not finalized_terminal:
+        if completed.returncode != 0 or response.state != "succeeded":
             failure = response.failure or f"launcher exited {completed.returncode}"
             if response.finalization_failure:
                 failure += f"; finalization failed: {response.finalization_failure}"
@@ -1058,7 +1050,7 @@ def run_skyrl(
             selection = _declared_config_value(
                 _parsed_config(config.launch_config_yaml), "skyrl.trainer.hf_export_checkpoint"
             )
-            if not (finalized_terminal and response.finalization == "skipped_no_checkpoint") and selection != "best":
+            if selection != "best":
                 raise ValueError("successful MarinSkyRL response requires a model when export_hf is enabled")
         result = SkyRLRun(
             path=config.output.terminal_manifest_uri,

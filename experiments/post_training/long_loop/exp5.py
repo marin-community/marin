@@ -35,6 +35,7 @@ from experiments.post_training.long_loop.exp3_recipe import (
 )
 from experiments.post_training.long_loop.exp4 import release_artifact
 from experiments.post_training.long_loop.exp5_data import OUTPUT_PREFIX, ROUTES, pool_steps
+from experiments.post_training.long_loop.openresearcher_service import service_recipe
 from experiments.post_training.long_loop.optimizer_admission import optimizer_group_receipt
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.round_runner import (
@@ -211,6 +212,8 @@ def main(
     binding = DATA_RELEASES[spec.data_release]
     release, handle = release_artifact(binding.record, binding.record_sha256, require_ready=False)
     pools = exp5_round_pools()
+    if stage != "sft" and spec.openresearcher_service is None:
+        raise ValueError("Exp5 RL requires its qualified OpenResearcher service binding")
     curriculum = pools.curriculum
     resolved = round_plan(
         spec,
@@ -271,6 +274,19 @@ def main(
     harbor = resolved["rl"]["config"]["terminal_bench"]["harbor"]
     harbor["daytona_image_build"] = harbor.pop("daytona_provisioning")
     harbor["eval_daytona_image_build"] = harbor.pop("eval_daytona_provisioning")
+    if stage != "sft":
+        service = spec.openresearcher_service
+        assert service is not None
+        pool_manifest = json.loads((StoragePath(pools.dataset["uri"]) / "manifest.json").read_bytes())
+        admission = pool_manifest["openresearcher"]
+        for field in ("dataset_id", "dataset_revision", "parquet_sha256"):
+            if admission[field] != getattr(service, field):
+                raise ValueError(f"OpenResearcher service {field} differs from the published pools")
+        # Adopt only the actor-machine contract; preserve the existing turn limits,
+        # judge model and all other sources' verifier resources.
+        machines = service_recipe().to_skyrl()["environment"]["task_sessions"]["task_spec"]["task_machine_by_dataset"]
+        resolved["rl"]["config"]["environment"]["task_sessions"]["task_spec"]["task_machine_by_dataset"] = machines
+        resolved["rl"]["openresearcher_service"] = asdict(service)
     os.environ.update(MARIN_PREFIX=spec.storage.output_prefix, MARIN_TEMP_PREFIX=spec.storage.temporary_prefix)
     resolved["curriculum"] = {**asdict(curriculum), "identity": curriculum.identity}
     buffer = resolved["rl"]["config"]["trainer"]["rollout_buffer"]
@@ -306,6 +322,7 @@ def main(
         data_artifacts=pools.artifacts if stage != "sft" else None,
         curriculum=curriculum,
         completed_sft=completed,
+        openresearcher_service=spec.openresearcher_service if stage != "sft" else None,
         sft_release=handle,
         sft_step_builder=partial(native_sft_step, spec_builder=partial(round_sft_spec, spec)),
     )

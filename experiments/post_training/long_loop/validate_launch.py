@@ -12,6 +12,7 @@ import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 
+import pyarrow.parquet as pq
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS, RLEntrypoint
 from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_role_plan
@@ -23,8 +24,10 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import get_secret
+from rolloutengine.models import TaskRolloutSpec
 from skyrl_train import objective  # noqa: F401 - populate the runtime policy-loss registry
 from skyrl_train.config.driver_validation import validate_cfg, validate_generator_cfg
+from skyrl_train.dataset.tasks import TASK_ROLLOUT_COLUMN, TASK_SPEC_COLUMN, canonical_task_spec
 from skyrl_train.models.grug_context_parallel import grug_cp_communication, validate_cp_attention
 from skyrl_train.models.grug_moe import GrugMoeConfig, grug_long_layer_flags
 from skyrl_train.rollouts.agent_runtime import InstalledAgentSettings
@@ -32,6 +35,7 @@ from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec
 from skyrl_train.rollouts.workers import WorkerShard
 from skyrl_train.tokenizer import tokenizer_from_config, tokenizer_vocabulary_fingerprint, validate_checkpoint_vocabulary
 from skyrl_train.trajectory_runners.harbor.configuration import HarborConfigBuilder
+from taskcompendium.models import TaskSpec
 
 
 def validate_policy_vocabulary(launch) -> dict:
@@ -85,7 +89,56 @@ def validate_policy_vocabulary(launch) -> dict:
     }
 
 
-async def validate_rollout_worker(launch) -> dict:
+def validate_source_tasks(launch, worker) -> list[dict]:
+    """Check one task per training input and per validation source without allocating machines."""
+    receipts = []
+    for phase, inputs in (("train", launch.inputs.train_data), ("eval", launch.inputs.validation_data)):
+        seen = set()
+        for data in inputs:
+            uri = prefix_join(str(data.uri), str(data.relative_path))
+            fs, key = filesystem_for(uri)
+            with fs.open(key, "rb") as stream:
+                parquet = pq.ParquetFile(stream)
+                if parquet.metadata.num_rows == 0:
+                    raise ValueError(f"No task to admit from {uri}")
+                column = TASK_SPEC_COLUMN if TASK_SPEC_COLUMN in parquet.schema.names else TASK_ROLLOUT_COLUMN
+                for batch in parquet.iter_batches(batch_size=1, columns=[column]):
+                    row = batch.to_pylist()[0]
+                    lowered = (
+                        canonical_task_spec(
+                            TaskSpec.model_validate_json(row[column]), launch.skyrl.environment.task_sessions.task_spec
+                        )
+                        if column == TASK_SPEC_COLUMN
+                        else TaskRolloutSpec.model_validate_json(row[column])
+                    )
+                    source = lowered.task.source.dataset
+                    if source not in seen:
+                        prepared = worker.prepare_task(lowered, phase=phase, session_id=f"preflight-{len(receipts)}")
+                        receipts.append(
+                            {
+                                "phase": phase,
+                                "source": source,
+                                "task_id": lowered.task.id,
+                                "uri": uri,
+                                "task_machine": (
+                                    None
+                                    if prepared.spec.task_machine is None
+                                    else prepared.spec.task_machine.model_dump(mode="json")
+                                ),
+                                "verifier_machine": (
+                                    None
+                                    if prepared.spec.verifier_machine is None
+                                    else prepared.spec.verifier_machine.model_dump(mode="json")
+                                ),
+                            }
+                        )
+                        seen.add(source)
+                    if phase == "train":
+                        break
+    return receipts
+
+
+async def validate_rollout_worker(launch, *, check_task_inputs: bool = False) -> dict:
     """Build and close the production worker without starting inference engines."""
     if sys.platform == "linux":
         descriptor = os.pidfd_open(os.getpid())
@@ -120,6 +173,7 @@ async def validate_rollout_worker(launch) -> dict:
             "installed_agent": worker.installed_agents is not None,
             "judge_base_url": None if worker.judge_connection is None else worker.judge_connection.base_url,
             "inference_engines": 0,
+            "source_tasks": validate_source_tasks(launch, worker) if check_task_inputs else [],
         }
     finally:
         await worker.shutdown()
@@ -132,6 +186,7 @@ def main(
     *,
     build_worker: bool = False,
     check_vocabulary: bool = False,
+    check_task_inputs: bool = False,
 ) -> None:
     project = Path(__file__).resolve().parents[3] / "vendor/skyrl"
     config = load_launch_config(source)
@@ -198,7 +253,11 @@ def main(
         engine = config.skyrl.generator.engine_init_kwargs
         if not engine.get("enable_auto_tool_choice") or not engine.get("tool_call_parser"):
             raise ValueError("Installed-agent tool requests require automatic tool choice and a tool parser")
-    worker = asyncio.run(validate_rollout_worker(config)) if build_worker else None
+    worker = (
+        asyncio.run(validate_rollout_worker(config, check_task_inputs=check_task_inputs))
+        if build_worker or check_task_inputs
+        else None
+    )
     with redirect_stdout(sys.stderr):
         vocabulary = validate_policy_vocabulary(config) if check_vocabulary else None
     compiled = OmegaConf.to_yaml(config, resolve=True)
@@ -234,6 +293,7 @@ if __name__ == "__main__":
     parser.add_argument("model_config", type=Path, nargs="?")
     parser.add_argument("--build-worker", action="store_true")
     parser.add_argument("--check-vocabulary", action="store_true")
+    parser.add_argument("--check-task-inputs", action="store_true")
     args = parser.parse_args()
     main(
         args.source,
@@ -241,4 +301,5 @@ if __name__ == "__main__":
         args.model_config,
         build_worker=args.build_worker,
         check_vocabulary=args.check_vocabulary,
+        check_task_inputs=args.check_task_inputs,
     )

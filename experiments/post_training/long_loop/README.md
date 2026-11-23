@@ -381,12 +381,12 @@ EOS tokens. RL then reads the copy in place; there is no export stage. Use
 The loop sets `run.finalization: any_terminal`: once the RL child is terminal,
 the launcher exports the trainer-format checkpoint selected by validation-reward
 EMA after a completed save. This applies if RL failed, was cancelled, or was
-terminated after a stall. The evaluation, report and archive graph follows a
-successful export for every terminal outcome. Terminal status and failure details remain unchanged in the training
-record, archive provenance and timing report. If no native best checkpoint was
-committed, `finalization.json` records the skip, and downstream stages write
-`finalization-skipped.json` before dispatching any evaluation or archive work.
-Export failures still propagate; they are not treated as a missing checkpoint.
+terminated after a stall. Finalization does not convert a failed or killed RL
+child into a successful graph: the coordinator fails after native finalization,
+including when no checkpoint exists. Committed checkpoint/export files and the
+native failure receipt remain available for a separate recovery. The ordinary
+evaluation, report and archive graph runs after successful training and export.
+Export failures also propagate; they are not treated as a missing checkpoint.
 This continuation requires the parent coordinator to remain alive; cancelling
 the coordinator itself cannot run its remaining graph.
 
@@ -1113,6 +1113,16 @@ window. Compare generated tokens/s per engine and GPU, and request decode rate
 at actual concurrency. Do not infer serving capacity from consumed training tokens.
 
 ### OpenResearcher with hosted retrieval
+
+Exp5 binds the same service contract for the OpenResearcher partition of its
+eleven-source pools. Its round YAML declares the qualified source and a regional
+index URI. Only that source gains the network-denied Daytona actor; other
+sources, turn limits, judge settings and verifier resources remain unchanged.
+The run-owned service is ready before RL GPU allocation. A regional CPU
+preflight lowers one task per training input and one per validation source,
+then checks the actual machine factories and harnesses without provisioning
+sandboxes or starting inference. Its receipt records source, task ID, phase and
+machine bindings. An unsupported binding fails the parent before GPU allocation.
 
 The full-index OpenResearcher admission pin runs on LOCAL/Iris. Daytona RL uses
 `open-athena/openresearcher-openresearcher-dataset-service-20261121-v1` at

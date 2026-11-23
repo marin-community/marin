@@ -7,6 +7,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 
 import draccus
 from fray.types import DeviceConfig, GpuConfig, ResourceConfig
@@ -27,6 +28,12 @@ from experiments.post_training.long_loop.archive_stage import archive_graph_run
 from experiments.post_training.long_loop.evaluation import TerminalPolicy
 from experiments.post_training.long_loop.execution_policy import COORDINATOR_TIMEOUT_SECONDS, STAGE_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.finalization import after_checkpoint, record_finalization
+from experiments.post_training.long_loop.openresearcher_service import (
+    OpenResearcherService,
+    retrieval_launch,
+    run_with_retrieval,
+    service_execution,
+)
 from experiments.post_training.long_loop.rl import configured_rl_step, curriculum_validation_callbacks
 from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
@@ -96,6 +103,7 @@ def build_spec_graph(
     curriculum: RlCurriculum | None = None,
     sft_release: ArtifactStep | None = None,
     completed_sft: CompletedSft | None = None,
+    openresearcher_service: OpenResearcherService | None = None,
     sft_step_builder: Callable[[str, str, dict], ArtifactStep] = native_sft_step,
 ) -> ArtifactStep:
     blockers = stage_blockers(resolved, through)
@@ -293,6 +301,8 @@ def build_spec_graph(
             rl_config["trainer"].get("callbacks", []), curriculum.validation
         )
     rl_execution = stage_execution(rl["execution"], coordinator)
+    if openresearcher_service is not None:
+        rl_execution = service_execution(rl_execution)
     budget = rl.get("wall_clock_budget")
     callbacks = rl_config["trainer"].get("callbacks", [])
     if any(callback["type"] == "wall_time_budget" for callback in callbacks):
@@ -347,6 +357,18 @@ def build_spec_graph(
         retained=rl["retained"],
         seed=rl["seed"],
     )
+    if openresearcher_service is not None:
+        relative_path = "OpenResearcher:OpenResearcher-Dataset/train.parquet"
+        learned = replace(
+            learned,
+            run=partial(
+                run_with_retrieval,
+                launch=retrieval_launch(openresearcher_service, rl_execution),
+                parquet_relative_path=relative_path,
+                parquet_sha256=pool_manifest["files"][relative_path],
+            ),
+        )
+        learned = replace(learned, expected_fingerprint=learned.fingerprint())
     learned = timed(replace(learned, deps=(*learned.deps, *((endpoint,) if endpoint is not None else ()))))
     if through == "rl":
         return learned

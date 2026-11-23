@@ -17,7 +17,7 @@ from experiments.post_training.long_loop.graph import execute_local_graph
 
 @pytest.mark.parametrize("state", ["failed", "killed"])
 @pytest.mark.parametrize("checkpoint", [True, False])
-def test_terminal_rl_queues_same_finalization_graph_or_records_no_checkpoint(tmp_path, monkeypatch, state, checkpoint):
+def test_failed_rl_stays_failed_after_native_finalization(tmp_path, monkeypatch, state, checkpoint):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     records = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", records.append)
@@ -64,20 +64,12 @@ def test_terminal_rl_queues_same_finalization_graph_or_records_no_checkpoint(tmp
     previous = finalized
     for name in ("evaluation", "report", "archive"):
         previous = after_checkpoint(apply(name, dispatch, version="2026.11.13", output=OUT, previous=previous), trained)
-    execute_local_graph(previous)
+    with pytest.raises(RuntimeError, match=r"step.*failed"):
+        execute_local_graph(previous)
 
     assert records[0].status == "failed"
-    manifest = json.loads((tmp_path / "finalize/2026.11.13/finalization.json").read_text())
-    assert manifest["rl_terminal"]["iris_job_state"] == state
-    assert manifest["rl_terminal"]["failure"] == result["failure"]
-    if checkpoint:
-        assert dispatched == ["evaluation", "report", "archive"]
-        assert manifest["selected_step"] == 16
-    else:
-        assert not dispatched
-        skipped = json.loads((tmp_path / "archive/2026.11.13/finalization-skipped.json").read_text())
-        assert skipped["reason"] == "no_committed_best_checkpoint"
-        assert skipped["rl_terminal"]["iris_job_state"] == state
+    assert not dispatched
+    assert json.loads(Path(output.terminal_manifest_uri).read_text())["result"] == result
 
 
 def test_failed_export_does_not_look_like_no_checkpoint(tmp_path, monkeypatch):

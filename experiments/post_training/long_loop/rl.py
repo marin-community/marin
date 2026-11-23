@@ -5,6 +5,7 @@
 
 import math
 from dataclasses import replace
+from functools import partial
 
 import yaml
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -21,12 +22,20 @@ from marin.rl.skyrl import (
     SkyRLRunConfig,
     SkyRLSpec,
     SkyRLTopology,
+    run_skyrl,
     skyrl_step,
 )
 from rigging.filesystem.storage_path import prefix_join
 from skyrlrecipe import RLEntrypoint
 
+from experiments.post_training.long_loop.launch_validation import validate_before_allocation
 from experiments.post_training.long_loop.stage_config import validate_stage_config
+
+
+def run_checked_rl(config: SkyRLRunConfig, *, env_vars: dict[str, str]) -> SkyRLRun:
+    """Admit real source machines in a regional CPU task before allocating RL GPUs."""
+    validate_before_allocation(config.launch_config_yaml, secrets=env_vars, check_task_inputs=True)
+    return run_skyrl(config, env_vars=env_vars)
 
 
 def curriculum_validation_callbacks(callbacks: list[dict], validation: CurriculumValidation) -> list[dict]:
@@ -121,5 +130,5 @@ def configured_rl_step(
             installed["output_path"] = prefix_join(traces, "installed-agent")
         return replace(launch, launch_config_yaml=yaml.safe_dump(document, sort_keys=False))
 
-    configured = replace(step, build_config=bind_runtime)
+    configured = replace(step, run=partial(run_checked_rl, env_vars={}), build_config=bind_runtime)
     return replace(configured, expected_fingerprint=configured.fingerprint())

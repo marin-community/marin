@@ -5,6 +5,7 @@
 
 import hashlib
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import yaml
 from fray.types import ResourceConfig, create_environment
@@ -14,7 +15,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
 from marin.rl.retrieval_service import RetrievalServiceConfig, RetrievalServiceLaunch, retrieval_service
-from marin.rl.skyrl import ArtifactDataSource, IrisSkyRLExecution, SkyRLRun, SkyRLRunConfig, run_skyrl
+from marin.rl.skyrl import ArtifactDataSource, IrisSkyRLExecution, SkyRLRun, SkyRLRunConfig
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import require_regional_coreweave_bucket
 from rigging.filesystem.storage_path import StoragePath
@@ -24,6 +25,7 @@ from skyrlrecipe import RecipePatch
 from taskcompendium.openresearcher import OpenResearcherState
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
+from experiments.post_training.long_loop.rl import run_checked_rl
 
 JUDGE_SECRET = "OPENRESEARCHER_JUDGE_KEY"
 
@@ -120,7 +122,7 @@ def service_recipe() -> RecipePatch:
 
 
 def retrieval_launch(source: OpenResearcherService, execution: IrisSkyRLExecution) -> RetrievalServiceLaunch:
-    cluster = load_config(execution.cluster_config)
+    cluster = load_config(Path(__file__).resolve().parents[3] / "lib/iris/config" / f"{execution.cluster}.yaml")
     if cluster.platform.coreweave is None:
         raise ValueError("The retrieval service requires a CoreWeave run region")
     region = cluster.platform.coreweave.region
@@ -147,10 +149,19 @@ def retrieval_launch(source: OpenResearcherService, execution: IrisSkyRLExecutio
     )
 
 
-def run_with_retrieval(config: SkyRLRunConfig, *, launch: RetrievalServiceLaunch, parquet_sha256: str) -> SkyRLRun:
+def run_with_retrieval(
+    config: SkyRLRunConfig,
+    *,
+    launch: RetrievalServiceLaunch,
+    parquet_sha256: str,
+    parquet_relative_path: str,
+) -> SkyRLRun:
     """Inject a ready attempt-owned endpoint and keep its child alive through RL cleanup."""
     document = yaml.safe_load(config.launch_config_yaml)
-    (source,) = document["inputs"]["train_data"]
+    sources = [item for item in document["inputs"]["train_data"] if item["relative_path"] == parquet_relative_path]
+    if len(sources) != 1:
+        raise ValueError(f"Expected exactly one OpenResearcher input at {parquet_relative_path!r}")
+    source = sources[0]
     fs, path = filesystem_for(str(StoragePath(source["uri"]) / source["relative_path"]))
     with fs.open(path, "rb") as stream:
         observed = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -162,7 +173,7 @@ def run_with_retrieval(config: SkyRLRunConfig, *, launch: RetrievalServiceLaunch
     )
     with retrieval_service(launch) as endpoint:
         document["skyrl"]["environment"]["task_sessions"]["retrieval_service"] = endpoint
-        return run_skyrl(
+        return run_checked_rl(
             replace(config, launch_config_yaml=yaml.safe_dump(document, sort_keys=False)),
             env_vars={"TOGETHER_API_KEY": require_secret(JUDGE_SECRET)},
         )

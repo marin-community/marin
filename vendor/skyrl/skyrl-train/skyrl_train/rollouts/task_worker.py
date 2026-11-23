@@ -421,6 +421,13 @@ async def admission_slot(gate: str, slots: asyncio.Semaphore | None) -> AsyncIte
         yield
 
 
+@dataclass(frozen=True)
+class PreparedTask:
+    spec: TaskRolloutSpec
+    harbor: HarborTaskSettings | None
+    engine: RolloutEngine
+
+
 class TaskRolloutWorker:
     """Run canonical task rollouts and submit complete groups to the buffer."""
 
@@ -554,6 +561,22 @@ class TaskRolloutWorker:
             harnesses[SKYRL_AGENT_HARNESS] = AgentHarness(agent)
         return lowered, harnesses
 
+    def prepare_task(self, lowered: TaskRolloutSpec, *, phase: str, session_id: str) -> PreparedTask:
+        """Check the actual runtime machine and harness before any task allocation."""
+        harbor = self.harbor if "harbor" in lowered.task.tags else None
+        if harbor is not None:
+            lowered = harbor.configured_spec(lowered, phase=phase)
+        lowered, harnesses = self._configured_task_and_harnesses(lowered, harbor, session_id, phase)
+        factories = self.factories if phase == "train" else self.factories | self.eval_factories
+        engine = RolloutEngine(factories, harnesses)
+        try:
+            engine.check(lowered)
+        except (ValueError, NotImplementedError) as error:
+            raise ValueError(
+                f"Invalid rollout task {lowered.task.source.dataset}/{lowered.task.id}: {error}"
+            ) from error
+        return PreparedTask(lowered, harbor, engine)
+
     async def generate(self, request: TaskRequestBatch, *, batch_id: int = 0) -> list[TrainingRollout]:
         with self._active_request():
             return await self._generate(request, batch_id=batch_id)
@@ -563,28 +586,19 @@ class TaskRolloutWorker:
         group_graders = [row.group_grader for row in request.rows]
         metadata = request.batch_metadata
         phase = "train" if metadata is None else metadata.training_phase
-        harbor_settings = [self.harbor if "harbor" in item.task.tags else None for item in lowered_tasks]
-        policies = [self.error_handling if harbor is None else harbor.error_handling for harbor in harbor_settings]
-        lowered_tasks = [
-            item if harbor is None else harbor.configured_spec(item, phase=phase)
-            for item, harbor in zip(lowered_tasks, harbor_settings, strict=True)
-        ]
         trajectory_ids = request.trajectory_ids
         session_ids = [
             trajectory_ids[index].to_string() if trajectory_ids is not None else uuid4().hex
             for index in range(len(lowered_tasks))
         ]
-        selected_harnesses: list[Mapping[str, Harness]] = []
-        for index, lowered in enumerate(lowered_tasks):
-            lowered, harnesses = self._configured_task_and_harnesses(
-                lowered, harbor_settings[index], session_ids[index], phase
-            )
-            lowered_tasks[index] = lowered
-            selected_harnesses.append(harnesses)
-        factories = self.factories if phase == "train" else self.factories | self.eval_factories
-        engines = [RolloutEngine(factories, harnesses) for harnesses in selected_harnesses]
-        for engine, lowered in zip(engines, lowered_tasks, strict=True):
-            engine.check(lowered)
+        prepared = [
+            self.prepare_task(item, phase=phase, session_id=session_ids[index])
+            for index, item in enumerate(lowered_tasks)
+        ]
+        lowered_tasks = [item.spec for item in prepared]
+        harbor_settings = [item.harbor for item in prepared]
+        policies = [self.error_handling if harbor is None else harbor.error_handling for harbor in harbor_settings]
+        engines = [item.engine for item in prepared]
         tasks = [item.task for item in lowered_tasks]
         sampling = get_sampling_params_for_backend(
             self.trajectory_runner_cfg.backend, self.trajectory_runner_cfg.sampling_params

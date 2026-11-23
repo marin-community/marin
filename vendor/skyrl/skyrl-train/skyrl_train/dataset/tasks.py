@@ -215,10 +215,8 @@ def _source_task_prompt(row: dict, index: int, *, source_name: str, environment_
     return {**session_parameters(lowered.task).extras, **task_prompt(lowered)}
 
 
-def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mapping[str, dict]) -> dict:
-    """Bind runtime settings when a canonical TaskSpec enters the trainer."""
-    task = TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
-    config = environment_configs["task_spec"]
+def canonical_task_spec(task: TaskSpec, config: Mapping[str, Any]) -> TaskRolloutSpec:
+    """Bind the configured harness and machines to a canonical task without allocating them."""
     final_event = task.context.events[-1]
     # Only the assistant-prefix harness keeps an unfinished assistant message last.
     continues_assistant = isinstance(final_event, TextMessage) and final_event.role == "assistant"
@@ -252,7 +250,13 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
             config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
         )
         verifier = MachineRuntimeSpec.model_validate(machine)
-    lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
+    return rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
+
+
+def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mapping[str, dict]) -> dict:
+    """Bind runtime settings when a canonical TaskSpec enters the trainer."""
+    task = TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
+    lowered = canonical_task_spec(task, environment_configs["task_spec"])
     prepared = _stored_prompt(lowered)
     if "teacher_route" in row:
         prepared["teacher_route"] = row["teacher_route"]

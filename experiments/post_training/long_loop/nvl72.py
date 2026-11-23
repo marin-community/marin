@@ -415,7 +415,12 @@ def build_run(
         launch = retrieval_launch(openresearcher_service, execution or profile.execution)
         return replace(
             step,
-            run=partial(run_with_retrieval, launch=launch, parquet_sha256=openresearcher_service.parquet_sha256),
+            run=partial(
+                run_with_retrieval,
+                launch=launch,
+                parquet_sha256=openresearcher_service.parquet_sha256,
+                parquet_relative_path="train.parquet",
+            ),
         )
     if data_sha256 is None:
         return step

@@ -1,5 +1,5 @@
 # Exp5 SFT release. V7 already contains the sealed science repairs.
-# OpenResearcher's 5% share remains reserved; downstream RL is held.
+# RL uses the qualified OpenResearcher thin actor and a run-owned regional service.
 schema: 1
 name: long-loop-exp5/round5
 version: "2026.11.21.113"
@@ -15,6 +15,11 @@ data_release: v7-option-g
 pools: exp5-prepared
 evaluation: frozen-micro210
 initializer: exp3-staged
+openresearcher_service:
+  dataset_id: open-athena/openresearcher-openresearcher-dataset-service-20261121-v1
+  dataset_revision: 0c4f39584d7f0121e97f6ad4f4761749add56fef
+  parquet_sha256: 346e892a7052d1f93ee31ae208100adccee06ff1918344efe2974fabc331226c
+  index_uri: s3://marin-rno2a/marin/rl-data/openresearcher/bm25-index/2026.11.15.1
 sft:
   stopping:
     type: steps

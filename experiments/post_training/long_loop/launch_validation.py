@@ -37,6 +37,7 @@ def validate_launch(
     model_config: bytes | None = None,
     build_worker: bool = False,
     check_vocabulary: bool = False,
+    check_task_inputs: bool = False,
 ) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     source = directory / "launch.yaml"
@@ -59,6 +60,8 @@ def validate_launch(
         command.append("--build-worker")
     if check_vocabulary:
         command.append("--check-vocabulary")
+    if check_task_inputs:
+        command.append("--check-task-inputs")
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)
@@ -72,7 +75,7 @@ def validate_launch(
     return receipt
 
 
-def regional_preflight(document: str, readable_uris: tuple[str, ...]) -> None:
+def regional_preflight(document: str, readable_uris: tuple[str, ...], check_task_inputs: bool = False) -> None:
     """Read evaluation dependencies and construct its worker in an isolated CPU task."""
     launch = yaml.safe_load(document)
     inputs = launch["inputs"]
@@ -83,14 +86,18 @@ def regional_preflight(document: str, readable_uris: tuple[str, ...]) -> None:
         with StoragePath(uri).open("rb") as stream:
             stream.read(1)
     with tempfile.TemporaryDirectory(prefix="long-loop-regional-preflight-") as directory:
-        receipt = validate_launch(document, Path(directory), build_worker=True)
+        receipt = validate_launch(document, Path(directory), build_worker=True, check_task_inputs=check_task_inputs)
     logger.info("Regional evaluation CPU preflight passed: %s", json.dumps(receipt, sort_keys=True))
 
 
 def validate_before_allocation(
-    document: str, *, readable_uris: tuple[str, ...] = (), secrets: dict[str, str] | None = None
+    document: str,
+    *,
+    readable_uris: tuple[str, ...] = (),
+    secrets: dict[str, str] | None = None,
+    check_task_inputs: bool = False,
 ) -> dict:
-    """Gate every long-loop evaluation on regional CPU admission before GPU allocation."""
+    """Gate long-loop workers on regional CPU admission before GPU allocation."""
     with tempfile.TemporaryDirectory(prefix="long-loop-validation-") as directory:
         validation = validate_launch(document, Path(directory))
     launch = yaml.safe_load(document)
@@ -107,7 +114,7 @@ def validate_before_allocation(
     nested = get_job_info() is not None
     request = JobRequest(
         name=f"long-loop-eval-preflight-{uuid4().hex[:8]}",
-        entrypoint=Entrypoint.from_callable(regional_preflight, args=(document, readable_uris)),
+        entrypoint=Entrypoint.from_callable(regional_preflight, args=(document, readable_uris, check_task_inputs)),
         resources=ResourceConfig.with_cpu(
             cpu=4,
             ram="16GB",
