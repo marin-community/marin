@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 1:35 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 1:50 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2097,8 +2097,12 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   the same policy digest before training resumes. The local artifact
   rehearsal retained the failed root's attempt record, assigned a fresh
   root ID under the same artifact, linked it to the first committed
-  checkpoint and finalized the second generation.
-  [Same-artifact continuation rehearsal][held-native-continuation]
+  checkpoint and finalized the second generation. The staged recovery
+  command pins the five predecessor tasks and the committed index's ETag,
+  submits one successor under the same artifact, and verifies that step 2
+  descends from the pinned checkpoint. It passed 14 offline tests.
+  [Same-artifact continuation rehearsal][held-native-continuation] ·
+  [Step-1 recovery command and tests][held-native-step-one-operator]
 
   Prefer an uninterrupted allocation to measure native update two at
   steady state. If the comparison spans attempts, report requeue, restore,
@@ -2110,9 +2114,20 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   committed step 2 runs the final evaluation without another optimizer update.
   The paired audit replayed the accepted vLLM receipt byte for byte and
   independently verified all four learner logs from the interrupted native
-  update. It can pair the two native panels across a step-1 recovery while
-  holding each update and its elapsed time to its original attempt.
+  update. The audit binds the two training updates and their elapsed
+  times to the original attempts, including when the final evaluation
+  runs on a separate attempt.
   [Matched-pair acceptance checker and proof][held-native-pair-acceptance]
+
+  A CPU rehearsal interrupted final evaluation after step 2 had committed.
+  A fresh learner restored identical state, and fresh serving installed
+  the same policy-2 digest and reproduced the interrupted sample. The
+  evaluator completed the two-prompt fixture without opening a training
+  lease or running an optimizer update. Its terminal receipt retained the
+  original checkpoint index, ETag and owner. The audit checks that
+  lineage before accepting a recovered 100-task panel. Regional H100
+  recovery and the full native match remain unverified.
+  [Final evaluation recovery proof][held-native-final-panel-recovery]
 
   The first training batch contained no tool calls in either arm. The
   native arm returned fewer tokens and took about 204 times longer to
@@ -2124,9 +2139,14 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   replay serialization. The serve-only fixture uses four matched short
   evaluation prompts at the 512-token training response cap. An exact
   two-CPU test reconciled all 16 typed frames and showed that the first
-  repeat compiled another prefill executable. Measure grading and tool
-  overhead separately on the full rollout.
-  [Scoped serving diagnostic and CPU proof][held-native-admission-probe]
+  repeat compiled another prefill executable. The initial H100 attempt
+  stopped during policy installation because the snapshot fixture lacked its
+  compute dtype. The retry uses the verified BF16 metadata and is queued
+  for an eight-H100 host. Measure grading and tool overhead separately on
+  the full rollout.
+  [Scoped serving diagnostic and CPU proof][held-native-admission-probe] ·
+  [Fixture repair proof][held-native-admission-dtype] ·
+  [Regional H100 retry][iris-held-native-admission-retry]
 
   A separate eight-H100 diagnostic keeps the existing PPO
   thresholds. It binds the serving head observations and ordinary fused
@@ -2307,9 +2327,13 @@ arms. [Prior timing comparison][timing]
 [held-native-recovery-root]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fparentless-regional-launch-proof.tar.zst
 [held-native-direct-operator]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-first-attempt-7de5313.tar.gz
 [held-native-continuation]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-direct-same-artifact-rehearsal.tar.zst
+[held-native-step-one-operator]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-same-run-latest-7de5313.tar.gz
 [held-native-pair-acceptance]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-held-pair-acceptance-proof.tar.zst
+[held-native-final-panel-recovery]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-final-panel-recovery-proof.tar.zst
 [held-native-recovery-deadline]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fordinary-checkpoint-deadline-proof.tar.zst
 [held-native-admission-probe]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Foffline-native-admission-probe.tar.zst
+[held-native-admission-dtype]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fnative-admission-dtype-repair-proof.tar.zst
+[iris-held-native-admission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fsnowball-native-admission-67b-h100-20261123b
 [held-publication-overlap]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fheld-native-resumable%2Fverified-publication-overlap-proof.tar.zst
 [iris-native-emission-retry]: https://iris-cw-us-east-02a.oa.dev/#/job/%2Fdlwh%2Fnative-regional-native-fused-20261122p
 [native-passing-diagnostic-evidence]: https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fusers%2Fdlwh%2Fquick-loop-rl%2Fevidence%2F2026.11.23.1%2Fnative-fused-20261122p%2Findependently-verified-passing-diagnostic.json
