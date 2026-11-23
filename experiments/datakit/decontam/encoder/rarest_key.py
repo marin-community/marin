@@ -114,7 +114,7 @@ def make_count(output: str, width: int):
     return count
 
 
-def choose(output: str, width: int = WINDOW) -> None:
+def choose(output: str, width: int = WINDOW, middle: bool = False) -> None:
     """Sum the reference counts of every candidate window and write each item's keys (``keys_table``)."""
     windows = load_windows(output)
     parts_hashes, parts_counts = [], []
@@ -126,7 +126,7 @@ def choose(output: str, width: int = WINDOW) -> None:
     totals = np.bincount(inverse, weights=np.concatenate(parts_counts)).astype(np.int64)
     slot = np.minimum(np.searchsorted(seen, windows.hashes), len(seen) - 1)
     window_counts = np.where(seen[slot] == windows.hashes, totals[slot], 0)
-    table = keys_table(windows, window_counts, width)
+    table = keys_table(windows, window_counts, width, middle)
     write_table(table, prefix_join(output, "keys.parquet"))
     counts = np.array([c for c in table.column("key1_count").to_pylist() if c >= 0])
     firsts = np.array([c for c in table.column("first_count").to_pylist() if c >= 0])
@@ -242,12 +242,15 @@ def main() -> None:
         help="shards.json files of other stage-1 runs whose shards are not drawn; copy their keys.parquet to --output",
     )
     parser.add_argument("--measure-per-source", type=int, default=1, help="measure shards drawn per source")
+    parser.add_argument(
+        "--middle", action="store_true", help="choose: break ties by the window nearest the stream middle"
+    )
     args = parser.parse_args()
     if args.step == "prepare":
         prepare(args.items, args.output, args.width)
         return
     if args.step == "choose":
-        choose(args.output, args.width)
+        choose(args.output, args.width, args.middle)
         return
     excluded = frozenset(
         shard

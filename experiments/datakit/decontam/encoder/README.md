@@ -138,19 +138,22 @@ done
   `[answer]`, then hints: the passage words that `right` lacks (`[passage missing]`), the question
   and choice words that `right` lacks (`[missing]`, up to 32 words), and the answer words that
   `right` lacks (`[answer missing]`).
-- Training data: the judged label sets, generic synthetic pairs (copies in 14 layouts, edits,
-  variants, and for items with a passage: the passage alone, the passage with another question, the
-  question and choices without the passage), context synthetic pairs (items placed in real candidate
-  text), and silver negatives.
+- Training data: the judged label sets (including catalog candidates of the families that the first
+  models flagged wrongly), generic synthetic pairs (copies in 14 layouts, edits, variants, sibling
+  negatives: another instance of the same eval template, and for items with a passage: the passage
+  alone, the passage with another question, the question and choices without the passage), context
+  synthetic pairs (items placed in real candidate text), and silver negatives. Training rows on test
+  or validation items are removed.
 
 ### Cutoff rule
 
-The cutoff was fixed with a peer review before the iteration-15 results existed: score each pair
-with the mean of two seeds' scores, and take the lowest cutoff in {0.05, 0.1, 0.2, ..., 0.9, 0.95,
-0.99} where the stratum-weighted precision on a frozen validation set is at least 0.75 and its
-item-clustered stratified bootstrap 5% bound is at least 0.65. The floor follows the policy of
-removing every copy at a reasonable cost: stage 2 flags 2-4% of candidate records whatever the
-cutoff, which is about 0.002-0.005% of all records.
+The rule was fixed with a peer review before the iteration-15 results existed: score each pair with
+the mean of two seeds' scores, and take the lowest cutoff in {0.05, 0.1, 0.2, ..., 0.9, 0.95, 0.99}
+where the stratum-weighted precision on a validation set is at least 0.75 and its item-clustered
+stratified bootstrap 5% bound is at least 0.65. The floor follows the policy of removing every copy at
+a reasonable cost. The validation set that applies the rule must be drawn per eval family from catalog
+candidates: draws from the measure shards held few flags of the families that fail in the catalog
+(below). The removal check (set 20) then tests the removed records themselves.
 
 ## Measured results
 
@@ -178,26 +181,27 @@ key), so a separator between them (a number, a JSON field name) breaks every win
 stage-2 check (iteration 13, cutoff 0.9) no planted passage without its question was flagged; real
 records are less clean (see the limits).
 
-**Stage 2 on the pooled real test (1,913 pairs, 386 copies).** Iteration 15 (both seeds) has question
-AUC 0.984 / 0.985. Precision / recall: at score 0.5, 0.91 / 0.86 and 0.89 / 0.87; at 0.9, 0.98 / 0.72
-and 0.96 / 0.77.
+**Validation.** Two sets, weighted to their pools, with an item-clustered stratified bootstrap 5% bound.
+Set 19: 1,239 pairs from 114 measure shards that no earlier step used (every flag of iteration 15, a
+spread of lower scores). Set 23: 2,679 pairs from 2,000 catalog pair files that hold no labeled pair,
+drawn per family (every flag of either model up to 60 per family, 40 per family below the cutoff, 400
+low-score pairs). Iteration 15 is the earlier recipe; iteration 16 adds 2,035 judged catalog candidates
+of the weak families, sibling negatives and the current rubric's relabels.
 
-**Fresh validation (set 19).** 1,239 pairs from 114 shards that no earlier step used, sampled from
-16,577 key-1 pairs: every flag, every pair with a mean score of at least 0.05 below the cutoff, and 600
-pairs below 0.05. Weighted to the pool, with an item-clustered stratified bootstrap 5% bound:
-
-| Cutoff | Precision [bound] | Recall |
+| Model, cutoff | Set 19: precision [bound] / recall | Set 23: precision [bound] / recall |
 |---|---|---|
-| 0.3 | 0.747 [0.716] | 0.885 |
-| 0.5 (chosen on set 14) | 0.810 [0.781] | 0.814 |
-| 0.7 | 0.884 [0.860] | 0.732 |
-| 0.9 | 0.942 [0.921] | 0.606 |
-| 0.99 | 0.984 [0.968] | 0.334 |
+| Iteration 15, 0.5 | 0.810 [0.781] / 0.814 | 0.495 [0.459] / 0.761 |
+| Iteration 15, 0.95 (lowest passing on set 23) | - | 0.795 [0.722] / 0.513 |
+| Iteration 16, 0.3 (lowest passing on set 23) | 0.799 [0.765] / 0.879 | 0.757 [0.716] / 0.815 |
+| Iteration 16, 0.5 | 0.862 [0.829] / 0.818 | 0.818 [0.777] / 0.750 |
 
-At 0.5, precision by family is 0.87-0.97 for MMLU, MMLU-Pro, Minerva and Hendrycks math, and ASDiv
-(33-72 labeled flags each). It is low for RACE (0.45), SQuAD (0.38) and AGIEval (0.54), where a record
-holds the reading passage but not the question, and for FDA (0.00, shared form text). Only MMLU and
-MMLU-Pro have at least 50 labeled flags in the draw.
+Set 19 held few flags of the families that fail in the catalog; set 23 chose iteration 16 at 0.3. On
+labeled flags of iteration 16 at 0.3 (sets 19 and 23), precision is 0.84-1.00 for MMLU, MMLU-Pro,
+Minerva, Hendrycks math, ASDiv, GSM8K, HumanEval, ARC and RTE (54-125 flags each), and low for SQuAD
+(0.26), DROP (0.13), QQP (0.08), QNLI (0.21), RACE (0.45), BBH (0.38), AGIEval (0.54), CareQA and
+Uncheatable (0.60) and FDA (0.00). Iteration 15 at 0.5 had BBQ at 0.15, BBH at 0.30 and CoLA at 0.
+
+CATALOG_RESULTS
 
 **Exact rules on the same pairs.** On the real test pairs and on the earlier validation set, the block
 rule (`marin.datakit.item_match` in PR #10836: question, then every choice) finds 45% and 68% of the
@@ -208,12 +212,14 @@ a copy.
 ## Limits
 
 - **ZhoBLiMP copies in a numbered or JSON layout are not found** (see the planted copies above).
-- **Passage-only records and form boilerplate are flagged** in RACE, SQuAD, AGIEval and FDA. The
-  training data has synthetic passage-only negatives but few real ones.
-- **Validation is small per family.** Set 19 has 359 labeled flags; 21 of 23 flagged families have fewer than
-  50 labeled flags, so their precision is a rough estimate.
-- **Set 14 chose the cutoff.** Its weighted precision rests on a few low-band pairs that each stand
-  for hundreds of pool pairs; set 19 confirms the choice with flags sampled densely.
+- **Records with a passage but not its question are flagged** for SQuAD, DROP, QQP, QNLI and RACE, and
+  BBH templates and FDA form text are flagged; these families have precision 0.00-0.45.
+- **Validation is small per family.** 10 families have at least 50 labeled flags; the others' precision
+  is a rough estimate.
+- **Flags concentrate in dump records.** A record holding a whole eval can carry thousands of flagged
+  pairs, so pair-weighted precision leans on a few records; the removal check measures records.
+- **One-sentence evals.** CoLA and SST-2 sentences found without their fixed prompt ("Does this sentence
+  make sense?") are labeled not a copy; whether a sentence alone counts is a policy question.
 - **One key covers one place in a long item.** A record that copies only part of a long item (an
   Uncheatable document, a long code file) holds the item's key only if the copied part contains it.
 - **GPQA choice order is random.** lm-eval shuffles GPQA choices without a seed, so the question text,
