@@ -33,7 +33,11 @@ class Hold(EffectIssue):
 
 
 class Unreproducible(Hold):
-    """A fresh machine cannot reproduce an owner's recorded sandbox history."""
+    """A fresh machine cannot reproduce an owner's recorded sandbox history.
+
+    Rationale: every later recorded result would describe state that does not exist, so the workpiece holds for a
+    person instead of continuing on it.
+    """
 
 
 class LogFailure(EffectIssue):
