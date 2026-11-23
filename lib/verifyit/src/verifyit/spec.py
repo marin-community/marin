@@ -160,6 +160,7 @@ class MathSpec:
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
     profile: MathProfile = MathProfile.ANCHORED
     allow_additive_constant: bool = False
+    positive_symbols: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -315,8 +316,9 @@ class GotestSpec:
 RUBRIC_REFERENCE = "reference"
 RUBRIC_CHECKLIST = "checklist"
 RUBRIC_LABELS = "labels"
+RUBRIC_ANSWERS = "answers"
 RUBRIC_PAIRWISE = "pairwise"
-RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_PAIRWISE})
+RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_ANSWERS, RUBRIC_PAIRWISE})
 
 
 class JudgeCompletionPolicy(StrEnum):
@@ -330,7 +332,9 @@ class JudgeSpec:
 
     Rubric ``reference`` asks whether the answer matches any of ``references``, after an exact
     gate that answers verbatim matches without a model call. Rubric ``checklist`` asks one yes/no
-    question per entry of ``criteria`` and scores the fraction answered yes. ``context`` names a
+    question per entry of ``criteria`` and scores the fraction answered yes. Rubric ``answers`` asks
+    for one JSON verdict per entry of ``references`` in a single call and scores 1 only when every
+    reference is matched; its detail records the matched fraction as ``partial_credit``. ``context`` names a
     file under the tests directory (a conversation transcript, say) shown to the judge alongside the
     answer. ``constraints`` are IFEval checks that must all pass before the judge is consulted.
 

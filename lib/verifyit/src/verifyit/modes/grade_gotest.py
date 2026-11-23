@@ -42,11 +42,6 @@ def grade(spec: GotestSpec, tests_dir: Path, workspace: Path) -> Reward:
     return check_ids(outcomes, spec.must_pass, spec.must_not_break, exit_code=result.returncode)
 
 
-def parse_events(stream: str) -> dict[str, bool]:
-    """Test id to pass/fail from a ``go test -json`` stream. Skipped tests stay out of the map."""
-    return _parse_run(stream)[0]
-
-
 def _parse_run(stream: str) -> tuple[dict[str, bool], bool]:
     outcomes: dict[str, bool] = {}
     packages: set[str] = set()

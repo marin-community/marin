@@ -18,6 +18,14 @@ policies:
     routes:
       - receiver: ops-slack
         object_matchers:
+          - ["notification", "=", "storage-daily"]
+        group_by: ["alertname"]
+        active_time_intervals:
+          - storage-afternoon
+        # A 23-hour interval also permits the next afternoon after spring DST.
+        repeat_interval: 23h
+      - receiver: ops-slack
+        object_matchers:
           - ["notification", "=", "slack"]
       - receiver: ops-critical
         group_by: ["alertname", "run"]
