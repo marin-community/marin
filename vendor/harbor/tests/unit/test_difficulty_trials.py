@@ -464,6 +464,11 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
             request = Request(tokenize_url(endpoint) if unserved else endpoint + "/chat/completions", method="POST",
                               data=json.dumps({"messages": [{"role": "user", "content": "Original task"}]}).encode(),
                               headers={"Content-Type": "application/json"})
+            if unserved:
+                with urlopen(request, timeout=10) as response:
+                    assert json.load(response)["count"] > config.settings.input_tokens
+                request = Request(endpoint + "/chat/completions", method="POST", data=request.data,
+                                  headers={"Content-Type": "application/json"})
             with pytest.raises(HTTPError) as error:
                 urlopen(request, timeout=10)
             assert error.value.code == (400 if unserved else (401 if upstream_failure == "nonretryable" else 503))

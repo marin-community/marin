@@ -111,7 +111,7 @@ def budget_relay(
                     )
                 elif budget is not None or self.path.endswith("/tokenize"):
                     tokens = tokenizer.encode(body["prompt"], add_special_tokens=body.get("add_special_tokens", True))
-                if self.path.endswith("/tokenize") and (budget is None or len(tokens) <= budget.input_tokens):
+                if self.path.endswith("/tokenize"):
                     metadata = {} if budget is None else {"max_model_len": budget.context_tokens}
                     self.respond(200, {"tokens": tokens, "count": len(tokens), **metadata})
                     return

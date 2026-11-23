@@ -89,6 +89,8 @@ constructor temporarily clears process-wide `os.environ`; resolving a connection
 inside another trial thread can therefore report missing `api_key` and `target`
 even when the job received both. Keep URL and target in ordinary job environment
 variables and the DATA key in the named secret bundle.
+Launch the inventory subprocess with the current interpreter's absolute path;
+the SDK can also temporarily clear `PATH` while another trial starts.
 The inventory-admission CLI's `--api-key-env` selects that same named secret;
 it reads the mounted file first and then the same environment variable.
 
@@ -98,7 +100,11 @@ OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify
 its private secrets file. That is a launcher-specific setting, not an Iris
 requirement. See the source Jupiter runbook below for that workflow.
 
-## Difficulty native judge timeouts
+## Difficulty model traffic
+
+The `/tokenize` route counts oversized histories so native context managers can
+compact them. Generation requests still enforce the protocol input budget;
+token counting alone never dispatches a model request.
 
 Difficulty's declared native judges use a 30-second upstream HTTP timeout and
 up to six attempts. A stalled read can retry before the native grader's

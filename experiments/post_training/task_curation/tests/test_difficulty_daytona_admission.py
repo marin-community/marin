@@ -5,6 +5,7 @@
 
 import json
 import runpy
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -16,6 +17,17 @@ from daytona_api_client_async import SandboxState
 from shellbox.backends.daytona.connection import DaytonaConnection
 
 from experiments.post_training.task_curation.difficulty.launch import DATA_ADMISSION_COMMAND
+
+
+def test_inventory_admission_starts_with_path_unavailable():
+    result = subprocess.run(
+        [*DATA_ADMISSION_COMMAND, "--help"],
+        env={"PATH": "/nonexistent"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "--api-key-env" in result.stdout
 
 
 @pytest.mark.parametrize("started, expected_capacity", [(163, 1), (164, 0)])

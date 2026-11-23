@@ -26,6 +26,42 @@ from experiments.post_training.task_curation.difficulty_provider import Provider
 from experiments.post_training.task_curation.difficulty_trials import preserved_model_traffic
 
 
+def test_token_counting_allows_context_compaction_without_serving_oversized_prompts(tmp_path, monkeypatch):
+    calls = []
+
+    def upstream(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, json={"usage": {"prompt_tokens": 2, "completion_tokens": 1}})
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            return list(range(len(messages[0]["content"].split())))
+
+    real_client = httpx.Client
+    monkeypatch.setattr(difficulty_relay.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
+    monkeypatch.setattr(difficulty_relay.httpx, "Client", lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(upstream)))
+    with difficulty_relay.budget_relay(
+        endpoint="https://provider.fixture/v1", model="fixture", api_key="fixture",
+        tokenizer_model="fixture", tokenizer_revision="a" * 40, parameters={},
+        budget=RequestBudget(8, 4, 4),
+        provider_limits=ProviderLimits(max_in_flight=1, attempts=1, request_timeout=600), receipts=tmp_path,
+    ) as relay, real_client() as client:
+        oversized = {"messages": [{"role": "user", "content": "one two three four five six"}]}
+        counted = client.post(relay + "/task/tokenize", json=oversized)
+        assert counted.status_code == 200
+        assert counted.json()["count"] == 6
+        denied = client.post(relay + "/task/v1/chat/completions", json=oversized)
+        assert denied.status_code == 400
+        assert denied.json()["error"]["code"] == "input_budget_unserved"
+        assert calls == []
+        compacted = {"messages": [{"role": "user", "content": "one two"}]}
+        served = client.post(relay + "/task/v1/chat/completions", json=compacted)
+        assert served.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["messages"] == compacted["messages"]
+
+
 @pytest.mark.parametrize("attempts, expected_status", [(1, 502), (2, 200)])
 def test_provider_timeout_recovers_inside_the_native_call_budget(tmp_path, monkeypatch, attempts, expected_status):
     calls = []

@@ -3,6 +3,8 @@
 
 """Shared regional CPU-job envelope for the importer and controller."""
 
+import sys
+
 from rigging.timing import Duration
 from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL
 
@@ -10,7 +12,7 @@ JOB_TIMEOUT = Duration.from_hours(72)
 DAYTONA_API_URL = DEFAULT_DAYTONA_API_URL
 DAYTONA_TARGET = "us"
 DATA_ADMISSION_COMMAND = (
-    "python",
+    sys.executable,
     "-m",
     "shellbox.backends.daytona.usage_cli",
     "--api-key-env",
