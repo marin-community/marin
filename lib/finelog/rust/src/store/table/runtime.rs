@@ -837,6 +837,8 @@ mod tests {
     use crate::store::table::maintenance::{self, TableWork};
     use crate::store::table::test_tables::*;
 
+    const EVICTION_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
     /// Seal the buffer the way the maintenance scheduler would, then wait for the
     /// durability high-water mark. These tests open a runtime directly, so no
     /// scheduler is polling it.
@@ -881,7 +883,7 @@ mod tests {
             tokio::spawn(async move { maintenance::run(&table, TableWork::Eviction).await })
         };
         // Tokio rejects new readers once eviction queues its visibility writer.
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(EVICTION_WAIT_TIMEOUT, async {
             while table.query_visibility.try_read().is_ok() {
                 tokio::task::yield_now().await;
             }
@@ -893,13 +895,10 @@ mod tests {
             let table = Arc::clone(&table);
             tokio::task::spawn_blocking(move || table.update_policy(StoragePolicy::default()))
         };
-        let updated = tokio::time::timeout(Duration::from_secs(5), &mut update).await;
+        let updated = tokio::time::timeout(EVICTION_WAIT_TIMEOUT, &mut update).await;
         // Release the reader before an assertion so a regression cannot hang teardown.
         drop(reader);
         eviction.await.unwrap().unwrap();
-        if updated.is_err() {
-            update.await.unwrap();
-        }
         updated
             .expect("policy update blocked behind eviction")
             .unwrap();
