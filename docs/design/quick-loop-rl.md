@@ -2337,6 +2337,24 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   The sealed H100 comparison uses its originally prepared source.
   Live throughput and reward still require the completed native run.
 
+  The integrated candidate combines persisted draw IDs and deterministic
+  batch ordering with evaluation stopping at a complete tool call when
+  parallel tool calls are disabled. The two-group CPU restart fixture
+  passed on the combined source. A fresh serving process loaded the
+  exact step-2 published policy. Its typed evaluation response kept the
+  complete tool call's token and score prefix and preserved the ordinary
+  sibling response. The same training request returned byte-identical
+  replay before and after the mixed evaluation batch.
+
+  The stock launcher rendered `2026.11.23.91` offline with the same inputs,
+  two 100-task panels, checkpoint cadence, and five eight-H100 hosts as
+  the sealed `2026.11.23.90` run. Two fresh renders bound the same digest
+  from the stock Iris workspace archive. With sockets blocked, the
+  extracted rollout and serving tokenizer loaders read the same locally
+  pinned production assets and matched vocabulary and decoding. The
+  candidate changes training draws, batch order, and evaluation
+  stopping, so its live comparison needs a separate arm.
+
   A separate offline rehearsal replayed the archived CPU checkpoints
   through stock retention. It reproduced the archived step-2 index bytes and joined the
   retained index to the same generation and four object metadata records.
