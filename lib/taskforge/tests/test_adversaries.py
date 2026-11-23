@@ -31,30 +31,28 @@ from taskcompendium.models import EnvironmentRequirements
 from taskforge.coordinator import run_workpiece
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, StageCompleted
-from taskforge.effects.issues import ContextExceeded, OutputBudgetExhausted
+from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted
 from taskforge.effects.log import EventLog, decode
-from taskforge.llm.policy import replay_arguments
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
-from taskforge.model.llm import Completion, Message, Usage
+from taskforge.model.llm import Completion, Usage
 from taskforge.model.llm import Role as Speaker
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import (
     Accept,
     AdversaryStatus,
     Cause,
-    Continuation,
     Defect,
     DefectClaim,
     EvidenceKind,
+    Incomplete,
     MissingEvidence,
     Modify,
     Observation,
     ObservedStatus,
-    SearchEnd,
     SearchLimit,
 )
-from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, Prompt, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource
@@ -286,10 +284,9 @@ class Exhausting(Environments):
         return env
 
 
-# Review 2026-11-21: a revision that ran a shell command and then ran out of output kept the search's end at "reported"
-# and recorded the one-turn conversation of its first report. Owner's ruling: the exception consumes the remaining
-# opportunity (live Forge retried on a fresh machine and found the correction), and the last report stands.
-async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_conversation_it_ended_with(
+# Review 2026-11-21: a revision that ran a shell command and then ran out of output kept the search's end at "reported".
+# The exception consumes the remaining opportunity, and the last report stands.
+async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_with_its_last_report(
     workpiece: Workpiece,
 ) -> None:
     setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_reject"]}), {})
@@ -315,44 +312,33 @@ async def test_a_revision_that_exhausts_its_output_ends_out_of_budget_at_the_con
         "ran out of search budget without a finding (its output budget ran out during revision 1); "
         "this is not a validation of the task",
     )
-    (look,) = shell.tool_calls
-    ended = Message(Speaker.ASSISTANT, "", (replace(look, arguments=replay_arguments(look.arguments)),))
-    final = Conversation((*client.requests[1].conversation, ended), client.requests[1].tools)
-    owner = "validate/0/0/adversary:false_reject/0/0"
-    assert reject.continuation == Continuation(owner, SearchEnd.BUDGET_EXHAUSTED, digest(final), 2)
     decision = default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget)
     assert isinstance(decision, Accept)
 
 
 # Review 2026-11-21: a revision that ran into the context window, through a provider rejection or the
-# harness's own prompt-window cutoff, kept the last report but typed the search end as reported with the generic note.
+# harness's own prompt-window cutoff, kept the last report but gave the search a generic note.
 # A voluntary finish is the control.
 @pytest.mark.parametrize(
-    ("revision", "stopped", "how", "turns"),
+    ("revision", "how"),
     [
         (
             ContextExceeded("model window exceeded"),
-            SearchEnd.BUDGET_EXHAUSTED,
             "its context window ran out during revision 1",
-            1,
         ),
         (
             Completion("No report yet", usage=Usage(prompt_tokens=262144)),
-            SearchEnd.BUDGET_EXHAUSTED,
             "its context window ran out during revision 1",
-            2,
         ),
         (
             call("finish", {"reason": "nothing more"}, "finish"),
-            SearchEnd.REPORTED,
             "its revision 1 ended without a report",
-            2,
         ),
     ],
     ids=["provider rejection", "local cutoff", "voluntary finish"],
 )
 async def test_a_revision_that_runs_into_the_context_window_ends_out_of_budget_with_its_last_report(
-    workpiece: Workpiece, revision: Completion | ContextExceeded, stopped: SearchEnd, how: str, turns: int
+    workpiece: Workpiece, revision: Completion | ContextExceeded, how: str
 ) -> None:
     setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_reject"]}), {})
     first = call("report", {"findings": [finding(Defect.FALSE_REJECT, "12", 0.0, 1.0)]}, "first")
@@ -365,12 +351,28 @@ async def test_a_revision_that_runs_into_the_context_window_ends_out_of_budget_w
     assert [(f.candidate.reply, f.met) for f in reject.findings] == [("12", False)]
     (reason,) = reject.reasons
     assert reason == f"ran out of search budget without a finding ({how}); this is not a validation of the task"
-    assert reject.continuation is not None and reject.continuation.stopped is stopped
-    assert reject.continuation.turns == turns and reject.continuation.conversation is not None
-    if isinstance(revision, ContextExceeded):  # the conversation the rejected request carried
-        held = Conversation(client.requests[1].conversation, client.requests[1].tools)
-        assert reject.continuation.conversation == digest(held)
     assert isinstance(default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget), Accept)
+
+
+@pytest.mark.parametrize(
+    ("replies", "decided"),
+    [(("12.0", "12"), Modify), (("12",), Incomplete)],
+    ids=["a finding reproduced", "nothing reproduced"],
+)
+async def test_a_held_revision_keeps_a_finding_that_already_reproduced(
+    workpiece: Workpiece, replies: tuple[str, ...], decided: type[Modify | Incomplete]
+) -> None:
+    setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.roster": ["false_reject"]}), {})
+    report = call("report", {"findings": [finding(Defect.FALSE_REJECT, r, 0.0, 1.0) for r in replies]}, "first")
+    client = FakeInference((report, Hold("provider unavailable")))
+    ctx = Context(log=EventLog())
+    bundle = replace(stage_resources(ctx), role_inference={"solve_review": CleanReviewer(), "adversary": client})
+    result = (await validate(ctx, workpiece, setup, bundle)).result
+    assert len(client.requests) == 2
+    decision = default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget)
+    assert isinstance(decision, decided)
+    if isinstance(decision, Modify):
+        assert decision.findings == ("false_reject: 12.0 is graded 0.0, deserves 1.0",)
 
 
 # Review 2026-11-21: a report alleging a wrong score whose fresh verifier crashed correctly led to Modify, but the review
@@ -570,7 +572,7 @@ confirmation step's."""
 
 # Owner's ruling 2026-11-21: a search that ends without a reproduced finding counts for a strong task, but every record
 # says it ran out of search budget without a finding, never that it validated the task.
-async def test_searches_without_a_finding_accept_and_say_the_budget_ran_out_with_a_continuation(
+async def test_searches_without_a_finding_accept_and_say_the_budget_ran_out(
     proposal: TaskProposal,
 ) -> None:
     policy = load_policy(DEFAULTS_DIR).overlaid({**SETTINGS, "adversary.roster": ["false_accept", "false_reject"]})
@@ -583,18 +585,6 @@ async def test_searches_without_a_finding_accept_and_say_the_budget_ran_out_with
     exhausted, reported = workpiece.evidence[-1].adversary
     assert (exhausted.status, exhausted.limit) == (AdversaryStatus.EXHAUSTED, SearchLimit.CONTEXT_WINDOW)
     assert reported.status is AdversaryStatus.REPORTED and not reported.findings
-    owners = [r.opened.owner for r in log.records if r.opened is not None]
-    (first,) = (request for request in client.requests if BRIEFED["false_accept"] in request.conversation[1].content)
-    assert exhausted.continuation == Continuation(
-        "validate/0/0/adversary:false_accept/0/0",
-        SearchEnd.BUDGET_EXHAUSTED,
-        digest(Conversation(first.conversation, first.tools)),  # the conversation the stopped session held
-        0,
-    )
-    assert reported.continuation is not None and reported.continuation.stopped is SearchEnd.REPORTED
-    assert exhausted.continuation is not None and {exhausted.continuation.owner, reported.continuation.owner} <= set(
-        owners
-    )
     decision = workpiece.decisions[-1]
     assert isinstance(decision, Accept)
     notes = [reason for reason in decision.reasons if reason.startswith(("false_accept: ", "false_reject: "))]
