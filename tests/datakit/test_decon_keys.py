@@ -243,9 +243,20 @@ def test_a_reading_finds_the_first_place_of_a_piece_as_str_find_does():
     assert reading.first("zzzzzzzzzzzzzzzzzzzzzzzz") == -1
 
 
-def test_an_offset_in_a_stretch_without_safe_characters_is_estimated_within_the_stretch():
-    text = "intro " + "a" * 300_000 + " outro"
+@pytest.mark.parametrize(
+    "text",
+    [
+        "\\" + "a" * 100_000 + " " + "Which planet of the solar system has the most moons?",
+        "a" * 5000 + "uniquemarkerquestionwithoutspaces" + "a" * 5000 + "\u0301" * 60_000,
+    ],
+)
+def test_an_offset_after_or_inside_a_long_stretch_without_safe_characters_is_exact(text):
     reading = Reading(text)
-    for position in (10, 150_000, 299_990):
-        offset = reading.text_offset(position)
-        assert abs(offset - _full_search(text, position)) <= 1 + 300_000 // 4
+    for position in (0, len(reading.stream) // 2, len(reading.stream) - 1):
+        assert reading.text_offset(position) == _full_search(text, position)
+
+
+def test_the_first_place_lookup_checks_a_bounded_number_of_places():
+    # Every window of the stream is the piece's first window, and the piece occurs nowhere.
+    reading = Reading("a" * 50_000)
+    assert reading.first("a" * 20 + "b") == -1

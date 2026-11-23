@@ -58,11 +58,11 @@ KEY_COLUMNS = (
     "key2_hash",
     "key2_count",
 )
-# A chunk of a reading (``Reading``) starts at the first safe character after this many characters, and a
-# stretch without one is split after MAX_CHUNK_CHARS. A safe character starts no NFKC composition with the
-# character before it and ends any LaTeX command (see ``Reading``).
+# A chunk of a reading (``Reading``) starts at the first safe character after this many characters. A safe
+# character starts no NFKC composition with the character before it and ends any LaTeX command.
 CHUNK_CHARS = 4096
-MAX_CHUNK_CHARS = 65536
+# Places of a question's first window that ``Reading.first`` checks; past them, ``_located`` uses the key.
+FIRST_PLACES = 64
 _SAFE = re.compile(r"[\s0-9!-/:-@\[\]^-`{-~\u4e00-\u9fff\uac00-\ud7a3]")
 BEFORE = 1500
 AFTER = 3000
@@ -259,16 +259,17 @@ def keys_table(windows: Windows, window_counts: np.ndarray, width: int = WINDOW)
 
 
 class Reading:
-    """One reading of a record (``readings``): its text, stream and window hashes, with two lookups that cost
-    one pass over the record in all, whatever the number of hits.
+    """One reading of a record (``readings``): its text, stream and window hashes, with the lookups that
+    ``excerpt`` needs.
 
-    ``first`` finds the first place of a stream piece through a sorted index of the window hashes.
-    ``text_offset`` maps a stream position to a text offset. A stream is additive at a safe character
-    (``_SAFE``: whitespace, ASCII digits and punctuation other than the backslash, CJK ideographs, Hangul
-    syllables): no LaTeX command, NFKC composition or case rule crosses one. So the reading keeps the stream
-    length before each chunk start (a safe character about every ``CHUNK_CHARS`` characters) and searches
-    one chunk. A stretch of more than ``MAX_CHUNK_CHARS`` characters without a safe character is split
-    anyway, and an offset inside it is estimated in proportion.
+    ``first`` finds the first place of a stream piece through a sorted index of the window hashes; it checks
+    at most ``FIRST_PLACES`` places where the piece's first window occurs. ``text_offset`` maps a stream
+    position to a text offset. A stream is additive before a safe character (``_SAFE``: whitespace, ASCII
+    digits and punctuation other than the backslash, CJK ideographs, Hangul syllables): no LaTeX command or
+    NFKC composition crosses one, and lowercasing keeps the length of each character. So the reading keeps
+    the exact stream length before each chunk start (the first safe character after ``CHUNK_CHARS``
+    characters) and searches one chunk. A record costs one pass when a safe character occurs at least every
+    ``CHUNK_CHARS`` characters; a hit inside a longer stretch without one costs a search of that stretch.
     """
 
     def __init__(self, text: str, width: int = WINDOW) -> None:
@@ -280,51 +281,41 @@ class Reading:
         self._sorted: np.ndarray | None = None
         self._starts: list[int] = []
         self._before: list[int] = []
-        self._exact: list[bool] = []
 
     def first(self, piece: str) -> int:
-        """The first position of the stream *piece* in the stream, as ``str.find`` gives it."""
+        """The first position of the stream *piece* in the stream (``str.find``), among the first
+        ``FIRST_PLACES`` places of its first window; -1 if none of them holds the piece."""
         if len(piece) < self.width:
             return self.stream.find(piece)
         if self._order is None or self._sorted is None:
+            # A stable sort keeps the places of equal hashes in stream order.
             self._order = np.argsort(self.hashes, kind="stable")
             self._sorted = self.hashes[self._order]
         head = window_hashes(piece[: self.width], self.width)[0]
-        low, high = np.searchsorted(self._sorted, head, side="left"), np.searchsorted(self._sorted, head, side="right")
-        for position in np.sort(self._order[low:high]).tolist():
+        low = int(np.searchsorted(self._sorted, head, side="left"))
+        high = min(int(np.searchsorted(self._sorted, head, side="right")), low + FIRST_PLACES)
+        for position in self._order[low:high].tolist():
             if self.stream.startswith(piece, position):
                 return position
         return -1
 
     def _index(self) -> None:
-        starts, exact, position = [0], [True], CHUNK_CHARS
-        while position < len(self.text):
-            match = _SAFE.search(self.text, position, position + MAX_CHUNK_CHARS)
-            boundary = match.start() if match else position + MAX_CHUNK_CHARS
-            if boundary >= len(self.text):
-                break
-            # The chunk that ends at a forced split is not additive at its end; offsets inside it are estimates.
-            exact[-1] = exact[-1] and match is not None
-            starts.append(boundary)
-            exact.append(True)
-            position = boundary + CHUNK_CHARS
+        starts, position = [0], CHUNK_CHARS
+        while (match := _SAFE.search(self.text, position)) is not None:
+            starts.append(match.start())
+            position = match.start() + CHUNK_CHARS
         before = [0]
         for start, end in itertools.pairwise(starts):
             before.append(before[-1] + len(text_stream(self.text[start:end])))
-        self._starts, self._before, self._exact = starts, before, exact
+        self._starts, self._before = starts, before
 
     def text_offset(self, position: int) -> int:
-        """The smallest prefix length of the text whose stream is longer than *position* (an estimate inside a
-        stretch without safe characters; see the class)."""
+        """The smallest prefix length of the text whose stream is longer than *position*."""
         if not self._starts:
             self._index()
         chunk = bisect.bisect_right(self._before, position) - 1
         start, base = self._starts[chunk], self._before[chunk]
-        end = self._starts[chunk + 1] if chunk + 1 < len(self._starts) else len(self.text)
-        if not self._exact[chunk]:
-            length = self._before[chunk + 1] - base
-            return min(end, start + (position - base + 1) * (end - start) // max(length, 1))
-        low, high = start, end
+        low, high = start, self._starts[chunk + 1] if chunk + 1 < len(self._starts) else len(self.text)
         while low < high:
             middle = (low + high) // 2
             if base + len(text_stream(self.text[start:middle])) > position:
