@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 8:01 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 8:15 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -2168,6 +2168,13 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   separate Git environment stamp and embedded worker config. The
   acceptance check binds the candidate archive digest to the registered
   job and verifies the worker-written resolved config against the plan.
+
+  A fresh attempt allocated by the normal recipe was prepared and
+  reopened locally in a separate process. The authored plan, bound
+  worker bytes, workspace digest, and exact parentless regional job
+  ID reproduced. Read-only checks found the candidate's resolved config,
+  terminal receipt, and executor marker absent. The live launch needs a
+  current namespace check and an exclusive claim for that attempt.
   [Interrupted native attempt][iris-held-native-matched-preempted] ·
   [Accepted vLLM attempt][iris-held-vllm-validation-replacement]
 
