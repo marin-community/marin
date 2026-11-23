@@ -23,7 +23,12 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210_inputs import task_with_judge
+from experiments.evaluation.micro210_inputs import (
+    choice_seed,
+    reject_fixed_choice_positions,
+    task_with_judge,
+    truthfulqa_choice_task,
+)
 
 
 @pytest.fixture
@@ -132,3 +137,57 @@ def complete():
         "max_tokens": 1024,
     }
     assert request.extensions["timeout"]["read"] == 600.0
+
+
+def truthfulqa_fixture(task, task_id: str):
+    choices = ["a true answer", "a false answer", "another true answer", "another false answer"]
+    prompt = "Question?\n\n" + "\n".join(f"{chr(65 + i)}. {answer}" for i, answer in enumerate(choices))
+    prompt += "\n\nChoose one truthful answer. End with its letter in \\boxed{...}."
+    config = {
+        "spec": {
+            "doc": {"mc2_targets": {"choices": choices, "labels": [1, 0, 1, 0]}},
+            "grader": {"name": "lm_eval:truthfulqa_mc2"},
+            "requests": [{"continuation": answer} for answer in choices],
+            "target": 0,
+        }
+    }
+    context = task.context.model_copy(update={"events": (TextMessage(role="user", content=prompt),)})
+    resources = task.resources.model_copy(
+        update={"verifier": (inline_resource("config.json", json.dumps(config).encode()),)}
+    )
+    return task.model_copy(update={"id": task_id, "context": context, "resources": resources})
+
+
+def test_truthfulqa_shuffle_preserves_accepted_answer_text_and_records_seed(task):
+    source = truthfulqa_fixture(task, "truthfulqa/example")
+    shuffled = truthfulqa_choice_task(source)
+    assert shuffled == truthfulqa_choice_task(source)
+    assert shuffled.labels["micro210_choice_seed"] == str(choice_seed(source.id))
+    order = [int(index) for index in shuffled.labels["micro210_choice_order"].split(",")]
+    assert sorted(order) == list(range(4))
+    config = json.loads(resource_bytes(shuffled.resources.verifier[0]))["spec"]
+    expected = {"a true answer", "another true answer"}
+    assert {
+        choice
+        for choice, label in zip(
+            config["doc"]["mc2_targets"]["choices"], config["doc"]["mc2_targets"]["labels"], strict=True
+        )
+        if label
+    } == expected
+    assert config["target"] == order.index(0)
+    assert [request["continuation"] for request in config["requests"]] == [
+        config["doc"]["mc2_targets"]["choices"][i] for i in range(4)
+    ]
+    prompt = shuffled.context.events[-1].content
+    assert prompt is not None
+    for index, choice in enumerate(config["doc"]["mc2_targets"]["choices"]):
+        assert f"{chr(65 + index)}. {choice}" in prompt
+
+
+def test_micro210_rejects_benchmark_with_one_correct_letter_in_every_row(task):
+    rows = []
+    for index in range(3):
+        fixture = truthfulqa_fixture(task, f"truthfulqa/example-{index}")
+        rows.append({"task_id": fixture.id, "benchmark": "truthfulqa", "task_spec": fixture.model_dump_json()})
+    with pytest.raises(ValueError, match="truthfulqa accepts fixed choice position"):
+        reject_fixed_choice_positions(rows)
