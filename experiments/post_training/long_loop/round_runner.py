@@ -461,6 +461,7 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
         resume=resume,
         smoke=smoke,
         recipe_document=recipe,
+        max_new_tokens=recipe["context_budget"]["max_new_tokens_per_turn"],
         gpu_variant=rl.gpu_variant,
         curriculum=curriculum,
     )

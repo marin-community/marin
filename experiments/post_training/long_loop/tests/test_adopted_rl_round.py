@@ -147,6 +147,28 @@ def test_round_adopts_sft_or_native_rl_without_sft_and_keeps_absolute_steps(
         terminal.build_config(context)
 
 
+@pytest.mark.parametrize("profile", ["one-rack"])
+def test_round_preserves_response_budget_for_train_eval_and_pi(local_round, tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    recipe = copy.deepcopy(local_round.rl.recipe)
+    recipe["context_budget"].update(request_window_tokens=131072, max_new_tokens_per_turn=98304)
+    spec = dataclasses.replace(local_round, rl=dataclasses.replace(local_round.rl, recipe=recipe))
+    terminal = adopted_round_rl(spec)
+    context = StepContext.for_run(
+        str(tmp_path / "run"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    document = terminal.build_config(context).launch_config_yaml
+    validate_launch(document, tmp_path / "composed", model_config=b"{}")
+    launch = yaml.safe_load((tmp_path / "composed" / "compiled.yaml").read_text())["skyrl"]
+    generator = launch["generator"]
+    assert generator["sampling_params"]["max_generate_length"] == 98304
+    assert generator["eval_sampling_params"]["max_generate_length"] == 98304
+    assert generator["max_input_length"] == 32768
+    agent = launch["terminal_bench_config"]["installed_agent"]["agent"]["kwargs"]
+    assert agent["model_info"] == {"max_input_tokens": 131072, "max_output_tokens": 98304}
+    assert agent["compaction_reserve_tokens"] == 98304
+
+
 def _write_schema1_model(tmp_path: Path, checkpoint_step: int) -> tuple[Path, dict[str, str]]:
     """A Snowball-style handoff export: schema-1 config and a direct step manifest."""
     model = tmp_path / "model-schema1"
