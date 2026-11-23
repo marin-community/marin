@@ -11,8 +11,6 @@ from haliax import AxisSelector, NamedArray
 
 __all__ = ["Sampler"]
 
-_FULL_DISTRIBUTION_TOP_P = 1.0
-
 
 class Sampler(eqx.Module):
     """Simple temperature-based sampler for autoregressive models.
@@ -114,9 +112,7 @@ class Sampler(eqx.Module):
             top_p_array = top_ps.array
         else:
             top_p_array = top_ps
-        threshold = jnp.clip(jnp.asarray(top_p_array, dtype=jnp.float32), min=0.0, max=_FULL_DISTRIBUTION_TOP_P)[
-            ..., None
-        ]
+        threshold = jnp.clip(jnp.asarray(top_p_array, dtype=jnp.float32), min=0.0, max=1.0)[..., None]
 
         # Keep the smallest prefix whose cumulative mass reaches the threshold.
         # The cutoff-crossing token should remain eligible, but we should not
@@ -131,7 +127,7 @@ class Sampler(eqx.Module):
             axis=-1,
         )
         # Full-distribution rows keep their tails even in a mixed batch.
-        keep_sorted = keep_sorted | (threshold >= _FULL_DISTRIBUTION_TOP_P)
+        keep_sorted = keep_sorted | (threshold >= 1.0)
         filtered_sorted_logits = jnp.where(keep_sorted, sorted_logits, -jnp.inf)
         inverse_permutation = jnp.argsort(sorted_indices, axis=-1)
         filtered_logits = jnp.take_along_axis(filtered_sorted_logits, inverse_permutation, axis=-1)
