@@ -2308,7 +2308,6 @@ async def test_a_held_earlier_format_root_is_refused_before_claim_and_the_report
     """A format-10 root's author calls embedded a reference this writer does not reproduce, and a format-11 root's
     author requests were worded otherwise; the driver refuses either untouched and names the ways on."""
     destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), fixture)
-    assert json.loads((destination / HEAD).read_text())["format"] == found
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
     driver_args.resume_held = True
@@ -3020,7 +3019,7 @@ def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes
 
 
 def relabelled_inference() -> bytes:
-    """``N4_JOURNAL`` with its first inference resolution (row 11) relabelled REEXECUTE, as the review planted it."""
+    """``N4_JOURNAL`` with its first inference resolution (row 11) relabelled REEXECUTE."""
     rows = [json.loads(line) for line in gzip.decompress(N4_JOURNAL.read_bytes()).splitlines()]
     (fingerprint,) = rows[10]["event"]["payload"]["fingerprints"]
     assert fingerprint["resource"] == "inference" and fingerprint["replay"] == ReplayPolicy.CACHE

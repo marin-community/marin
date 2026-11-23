@@ -81,6 +81,9 @@ def test_driver_accepts_the_launchers_command() -> None:
 @pytest.mark.parametrize("command", ["run", "one"])
 def test_driver_endpoint_flags_build_the_gateway_source(command: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GLM_API_KEY", "secret-token")
+    # The flags alone name the gateway: the environment variables they replaced are ignored.
+    monkeypatch.setenv("GLM_BASE_URL", "http://stray/v1")
+    monkeypatch.setenv("GLM_RELAY_JOB", "/stray/relay")
     policy = load_policy(DEFAULTS_DIR)
     argv = [command, "--proposals", "p", "--output", "o", "--policy", "q"] + ["--concurrency", "1"] * (command == "run")
     relay = glm_source(policy, cli().parse_args([*argv, "--glm-relay-job", "/user/relay"]))
@@ -101,15 +104,6 @@ def test_driver_refuses_anything_but_one_endpoint_flag(
     assert "--glm-base-url" in error and "--glm-relay-job" in error
 
 
-def test_only_the_driver_entry_point_reads_endpoint_or_controller_settings() -> None:
-    """The entry point resolves external settings once; every module below it takes them as parameters."""
-    names = ("GLM_BASE_URL", "GLM_RELAY_JOB", "IRIS_CONTROLLER_URL")
-    source = Path(__file__).parents[1] / "src/taskforge"
-    files = {str(path.relative_to(source)): path.read_text() for path in source.rglob("*.py")}
-    readers = {(path, name) for path, text in files.items() for name in names if name in text}
-    assert readers == {("driver.py", "IRIS_CONTROLLER_URL")}
-
-
 def test_proposal_buckets_ignore_the_proposal_root() -> None:
     assert (
         3998
@@ -126,6 +120,7 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
 
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(wiring, "get_job_info", lambda: SimpleNamespace(controller_address="http://controller"))
+    monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://stray")  # only the entry point reads it, and passes it in
     monkeypatch.setattr(subprocess, "Popen", unexpected)
     monkeypatch.setattr(httpx.AsyncClient, "send", unexpected)
     policy = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")
