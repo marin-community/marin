@@ -12,10 +12,14 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from safetensors import SafetensorError
 from safetensors.numpy import load, save
 
+from levanter.layers.sampler import LogprobMode
+
 MEDIA_TYPE = "application/vnd.levanter.generate.v1"
 GENERATE_PATH = "/v1/levanter/generate"
 PROMPT_TOKEN_IDS = "prompt_token_ids"
 TOKEN_IDS = "token_ids"
+BEHAVIOR_LOGPROBS = "behavior_logprobs"
+POLICY_LOGPROBS = "policy_logprobs"
 EXPERT_IDS = "expert_ids"
 EXPERT_VALID = "expert_valid"
 MAX_POLICY_ID_LENGTH = 256
@@ -37,6 +41,7 @@ class GenerateOptions(BaseModel):
     n: StrictInt = Field(default=1, ge=1)
     return_route_captures: bool = False
     expected_policy_id: str | None = Field(default=None, min_length=1, max_length=MAX_POLICY_ID_LENGTH)
+    expected_logprob_mode: LogprobMode | None = None
 
 
 def encode_frame(metadata: dict, tensors: dict[str, np.ndarray]) -> bytes:

@@ -39,11 +39,13 @@ from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
 from levanter.inference.binary import (
+    BEHAVIOR_LOGPROBS,
     EXPERT_IDS,
     EXPERT_VALID,
     GENERATE_PATH,
     MEDIA_TYPE,
     MAX_POLICY_ID_LENGTH,
+    POLICY_LOGPROBS,
     PROMPT_TOKEN_IDS,
     TOKEN_IDS,
     GenerateOptions,
@@ -59,6 +61,7 @@ from levanter.inference.engine import (
     TokenSequenceLogprobs,
 )
 from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.layers.sampler import LogprobMode
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
@@ -868,6 +871,8 @@ def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options:
     if options.return_route_captures and not ctx.engine.supports_route_capture:
         raise HTTPException(status_code=400, detail="Expert route capture requires a Snowball model")
     config = ctx.engine.config
+    if options.expected_logprob_mode is not None and options.expected_logprob_mode != config.logprob_mode:
+        raise HTTPException(status_code=400, detail="The server is configured for a different logprob mode")
     max_prefill_size = config.max_prefill_size or config.max_seq_len
     if prompt.size + options.max_tokens > config.max_seq_len or prompt.size > max_prefill_size:
         raise HTTPException(status_code=400, detail="Prompt and generation must fit the configured context")
@@ -908,14 +913,16 @@ async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Respo
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    score_mode = LogprobMode(ctx.config.service.logprob_mode)
     if options.return_route_captures:
-        content = await asyncio.to_thread(_encode_binary_outputs, prompt, outputs)
+        content = await asyncio.to_thread(_encode_binary_outputs, prompt, outputs, score_mode)
     else:
-        content = _encode_binary_outputs(prompt, outputs)
+        content = _encode_binary_outputs(prompt, outputs, score_mode)
     return Response(content=content, media_type=MEDIA_TYPE)
 
 
-def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse]) -> bytes:
+def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse], score_mode: LogprobMode) -> bytes:
+    score_field = POLICY_LOGPROBS if score_mode == LogprobMode.POLICY else BEHAVIOR_LOGPROBS
     tensors = {PROMPT_TOKEN_IDS: prompt}
     choices = []
     for choice, output in enumerate(outputs):
@@ -928,11 +935,11 @@ def _encode_binary_outputs(prompt: np.ndarray, outputs: list[InferenceResponse])
         choices.append(metadata)
         tensors[choice_tensor_key(choice, TOKEN_IDS)] = np.asarray(output.tokens, dtype=np.int32)
         if output.logprobs is not None:
-            tensors[choice_tensor_key(choice, "behavior_logprobs")] = np.asarray(output.logprobs, dtype=np.float32)
+            tensors[choice_tensor_key(choice, score_field)] = np.asarray(output.logprobs, dtype=np.float32)
         if output.expert_routes is not None:
             tensors[choice_tensor_key(choice, EXPERT_IDS)] = np.ascontiguousarray(output.expert_routes.expert_ids)
             tensors[choice_tensor_key(choice, EXPERT_VALID)] = output.expert_routes.valid
-    return encode_frame({"choices": choices}, tensors)
+    return encode_frame({"choices": choices, "logprob_mode": score_mode}, tensors)
 
 
 class InferenceServer:

@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.layers.sampler import LogprobMode
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.models.lm_model import LmExample
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
@@ -638,6 +639,40 @@ def test_binary_generation_returns_exact_token_ids_and_scores(test_client):
     wrong_dtype = encode_frame({"max_tokens": 2}, {"prompt_token_ids": prompt.astype(np.float32)})
     response = client.post(GENERATE_PATH, content=wrong_dtype, headers={"content-type": MEDIA_TYPE})
     assert response.status_code == 400
+
+
+def test_binary_generation_returns_unwarped_policy_logprobs(inference_server_config, generated_model_and_tokenizer):
+    model, tokenizer = generated_model_and_tokenizer
+    config = dataclasses.replace(
+        inference_server_config,
+        service=dataclasses.replace(inference_server_config.service, logprob_mode=LogprobMode.POLICY),
+    )
+    model = jax.tree.map(jnp.zeros_like, model)
+    server = InferenceServer.create(config, model, tokenizer)
+    prompt = np.array([18, 7, 3, 18], dtype=np.int32)
+    fields = {"max_tokens": 1, "temperature": 0.7, "top_p": 0.05, "seed": 17}
+    try:
+        with TestClient(server.app) as client:
+            response = client.post(
+                GENERATE_PATH,
+                content=encode_frame(fields | {"expected_logprob_mode": "policy"}, {"prompt_token_ids": prompt}),
+                headers={"content-type": MEDIA_TYPE},
+            )
+            assert response.status_code == 200, response.text
+            metadata, tensors = decode_frame(response.content)
+            assert metadata["logprob_mode"] == "policy"
+            assert "choice.0.behavior_logprobs" not in tensors
+            expected = -np.log(model.Vocab.size)
+            np.testing.assert_allclose(tensors["choice.0.policy_logprobs"], [expected], atol=1e-5, rtol=0)
+
+            mismatch = client.post(
+                GENERATE_PATH,
+                content=encode_frame(fields | {"expected_logprob_mode": "behavior"}, {"prompt_token_ids": prompt}),
+                headers={"content-type": MEDIA_TYPE},
+            )
+            assert mismatch.status_code == 400
+    finally:
+        server.shutdown()
 
 
 def test_binary_generation_fences_rollouts_by_installed_policy(inference_server_config, generated_model_and_tokenizer):
