@@ -40,7 +40,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
 from experiments.models import ModelConfig, download_model
 from experiments.post_training.drafting import mochi
-from experiments.post_training.drafting.mochi_mix import smoke_mix
+from experiments.post_training.drafting.mochi_mix import scaled_mix, smoke_mix
 
 
 class TeacherFamily(StrEnum):
@@ -63,6 +63,7 @@ _TARGETS = MappingProxyType(
 )
 _RECIPE_VERSION = "2026.11.22.4"
 _MOCHI_AGENTIC_PRESET = "mochi-agentic"
+_MOCHI_SCALE_PRESET = "mochi-agentic-50m"
 
 
 @dataclass(frozen=True)
@@ -215,22 +216,30 @@ def _resolve_recipe(
             raise click.UsageError("Use --config or --preset")
         recipe = draccus.decode(OfflineDSpark, json.loads(StoragePath(config).read_text()))
         return recipe, _adopt_input(recipe.data)
-    if preset == _MOCHI_AGENTIC_PRESET:
-        mix = _adopt_input(data) if data is not None else smoke_mix()
+    if preset in (_MOCHI_AGENTIC_PRESET, _MOCHI_SCALE_PRESET):
+        scale = preset == _MOCHI_SCALE_PRESET
+        if data is not None:
+            mix = _adopt_input(data)
+        else:
+            mix = scaled_mix() if scale else smoke_mix()
+        sample = mochi.Sample.SMOKE if not scale and data is None and steps is None else mochi.Sample.ALL
+        step_budget = 15_000 if scale else 4_000
+        if sample is mochi.Sample.SMOKE:
+            step_budget = 3
         recipe = OfflineDSpark(
             teacher=MOCHI_STEP_400407,
             data=mix.path(prefix),
-            max_steps=steps if steps is not None else (3 if data is None else 4_000),
+            max_steps=steps if steps is not None else step_budget,
             teacher_replicas=8,
             trainer_ranks=1,
             max_sequence_length=8192,
             max_anchors=1024,
-            mochi_sample=mochi.Sample.SMOKE if data is None and steps is None else mochi.Sample.ALL,
+            mochi_sample=sample,
         )
         if draft_size is not None:
             recipe = replace(recipe, mochi_draft_size=draft_size)
         return recipe, mix
-    raise click.UsageError(f"Specify --config or --preset {_MOCHI_AGENTIC_PRESET}")
+    raise click.UsageError("Specify --config or choose a --preset")
 
 
 def _preflight(recipe: OfflineDSpark, teacher: ArtifactStep, prefix: str) -> dict:
@@ -268,7 +277,7 @@ def _validate_training_locations(recipe: OfflineDSpark, prefix: str) -> None:
 
 @click.command()
 @click.option("--config", help="Path or object storage URI of the DSpark JSON recipe.")
-@click.option("--preset", type=click.Choice((_MOCHI_AGENTIC_PRESET,)))
+@click.option("--preset", type=click.Choice((_MOCHI_AGENTIC_PRESET, _MOCHI_SCALE_PRESET)))
 @click.option("--data", help="Replace the named preset's smoke mix with a completed train/validation chat mix.")
 @click.option("--steps", type=click.IntRange(min=1), help="Optimizer step cap for the named preset.")
 @click.option(

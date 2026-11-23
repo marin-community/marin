@@ -124,6 +124,30 @@ Use `--draft-size two-layer` to reproduce the 766M Mochi variant with two
 Qwen3 layers and a 6,144-wide FFN. It uses the same teacher, data, vocabulary,
 and training budget as the default and publishes a separate artifact.
 
+## Scale the Mochi mix to about 50M input tokens
+
+`mochi-agentic-50m` samples more rows from the same three Datakit archives
+with the same prompt-group split. It trains the 521M draft for one packed
+epoch capped at 15,000 steps. Prepare on a CPU in `us-central2`, where the
+original Nemotron shards live. The CPU job writes the sampled mix and
+prepared Arrow data to the training region.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --job-name mochi-dspark-50m-prepare --region us-central2 \
+  --enable-extra-resources --cpu 2 --memory 12GB --disk 48GB --timeout 3600 \
+  --sync-package marin-core --extra cpu --extra dedup -e MARIN_PREFIX "$MARIN_PREFIX" \
+  --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
+  -- python -m experiments.post_training.dspark_sft --preset mochi-agentic-50m --stage prepare
+```
+
+After preparation succeeds, use the Mochi Iris command above with
+`--preset mochi-agentic-50m`, a fresh job name, `--disk 3TB`, and
+`--timeout 14400`. The leader will need about 2.3 TiB of local disk for
+teacher features at this scale, including the holdout.
+
+## Serve a Mochi draft
+
 Serving Mochi drafts requires ShortConv state to survive rejected proposals.
 The promoted wheel needs the upstream fix for that verification path.
 [ShortConv verifier fix](https://github.com/marin-community/vllm/pull/140)
