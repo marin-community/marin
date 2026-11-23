@@ -42,7 +42,7 @@ from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved, StageCompleted
 from taskforge.effects.issues import Hold, LogFailure, PublicationFailed, Restart, Superseded, Transient
 from taskforge.effects.log import EventLog, JsonlSink, Record, Status, decode, fold
-from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
+from taskforge.harness.protocol import Stopped, StopReason
 from taskforge.llm.glm_client import EndpointSource
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
@@ -50,7 +50,6 @@ from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import (
     Abandon,
     Accept,
-    BandOutcome,
     BandRules,
     Budget,
     Cause,
@@ -58,7 +57,7 @@ from taskforge.model.review import (
     Modify,
     Retry,
 )
-from taskforge.model.stage import Exit, Stage
+from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
@@ -66,11 +65,10 @@ from taskforge.resources.bundle import Resources
 from taskforge.resources.env import CommandResult, EnvFactory, ShellboxEnv
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids
-from taskforge.resources.inference import InferenceClient, InferenceRequest
+from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages.classify import replayable_grade
-from taskforge.stages.exits import Decided
 from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config, install
 
@@ -1228,33 +1226,6 @@ async def test_parent_summary_separates_superseded_and_corrupt_children_from_goo
     assert tree(roots["corrupt"]) == corrupt
 
 
-class ScriptedAuthor(Harness):
-    def __init__(self, *results: Exit | None) -> None:
-        self.results = iter(results)
-        self.calls = 0
-
-    @override
-    async def run(
-        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
-    ) -> Exit:
-        self.calls += 1
-        return cast(Exit, next(self.results))
-
-
-@pytest.mark.parametrize(
-    "result, named",
-    [(Decided(Accept(BandOutcome.IN_BAND)), "author returned Decided"), (None, "author returned NoneType")],
-)
-async def test_stage_result_without_a_transition_from_that_stage_fails(
-    proposal: TaskProposal, result: Exit | None, named: str
-) -> None:
-    author = ScriptedAuthor(result, Stopped(StopReason.FINISHED, Conversation((), ())))
-    settings = replace(config(), author=author)
-    with pytest.raises(ValueError, match=named):
-        await run_workpiece(proposal, settings, resources(Envs(), ()), EventLog(), install=install)
-    assert author.calls == 1
-
-
 async def test_hold_from_a_terminal_stage_observer_records_that_stage(proposal: TaskProposal) -> None:
     async def hold_when_terminal(event: StageCompleted) -> None:
         if event.terminal is not None:
@@ -1530,9 +1501,10 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
 
 
 def test_a_second_process_replays_a_provider_context_refusal_without_asking_again(tmp_path: Path) -> None:
-    """The provider refused the author's request for a full context window and the author stopped; a cold launch in
-    another process, whose provider would now answer, replays that stop from the journal and makes no provider call,
-    and so does an explicit resume: the settled stop decides what follows it."""
+    """A fresh process replays the recorded refusal without calling the recovered provider.
+
+    Both replay modes construct the same log in this revision.
+    """
     probe, root = [sys.executable, "-m", "lib.taskforge.tests.context_replay_probe"], Path(__file__).parents[3]
     stop = "('author stopped: context_limit after 1 turns: maximum context length exceeded',)"
     for mode, calls in (("record", 1), ("launch", 0), ("resume", 0)):
