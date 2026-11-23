@@ -18,7 +18,7 @@ from tempfile import TemporaryDirectory
 import requests
 from datasets import Dataset, load_from_disk
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, lower
-from marin.execution.step_runner import StepRunner
+from marin.execution.step_runner import StepRunner, step_is_built
 from marin.inference.config import InferenceModelConfig, ServingGeometry
 from marin.inference.iris_vllm import (
     IrisVllmLaunch,
@@ -44,6 +44,8 @@ from marin.training.drafting.dspark_distillation import (
     extraction_config,
     train_cached_and_export,
 )
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 from safetensors.torch import load_file
@@ -55,6 +57,7 @@ _SMOKE_VALIDATION_ROWS = 4
 _SMOKE_MAX_TOKENS = 2048
 _SMOKE_MAX_ANCHORS = 128
 _SMOKE_ROW_LENGTH = range(720, 1537)
+_ACTIVATION_TTL_DAYS = 3
 _MODEL_ALIAS = "mochi"
 _SHORT_CONV_COMPILATION = json.dumps(
     {
@@ -93,6 +96,7 @@ class CachedPrefill:
     """Run-time state for one distributed prefill and single-host trainer."""
 
     scratch: Path
+    hidden_states: StoragePath
     split: PreparedSplits
 
 
@@ -157,6 +161,7 @@ def _train_cached(config: CachedTraining, *, cache: CachedPrefill | None) -> DSp
         teacher_identity=config.teacher_identity,
         recipe=config.recipe,
         scratch=cache.scratch,
+        hidden_states=cache.hidden_states,
         split=cache.split,
     )
 
@@ -183,7 +188,7 @@ def _select_smoke_data(
     return subset, PreparedSplits.from_counts(len(train), len(validation))
 
 
-def _stage_data(prepared: str, scratch: Path, recipe: DraftRecipe, sample: Sample) -> tuple[Dataset, PreparedSplits]:
+def _stage_data(prepared: str, scratch: Path, sample: Sample) -> tuple[Dataset, PreparedSplits]:
     source = StoragePath(prepared) / PREPARED_DIR
     data = scratch / "data"
     staged = scratch / "prepared" if sample is Sample.SMOKE else data
@@ -193,14 +198,10 @@ def _stage_data(prepared: str, scratch: Path, recipe: DraftRecipe, sample: Sampl
     split = PreparedSplits(**json.loads((staged / SPLITS_FILE).read_text()))
     if sample is Sample.SMOKE:
         dataset, split = _select_smoke_data(dataset, split, staged, data)
-    tokens = sum(dataset["seq_len"])
-    state_bytes = tokens * len(recipe.extraction_taps) * recipe.data.shape.hidden_size * 2
-    if shutil.disk_usage(scratch).free < state_bytes + 50 * 1024**3:
-        raise ValueError(f"Insufficient scratch space for {state_bytes / 1024**3:.1f} GiB of Mochi hidden states")
     return dataset, split
 
 
-def _cache_rows(url: str, dataset: Dataset, hidden_states: Path, recipe: DraftRecipe) -> None:
+def _cache_rows(url: str, dataset: Dataset, hidden_states: StoragePath, recipe: DraftRecipe) -> None:
     def cache_row(row_index: int) -> None:
         ids = dataset[row_index]["input_ids"]
         response = requests.post(
@@ -225,7 +226,9 @@ def _cache_rows(url: str, dataset: Dataset, hidden_states: Path, recipe: DraftRe
             raise ValueError(f"Mochi returned incorrect tokens or tap dimensions for row {row_index}")
         if not bool(tensors["hidden_states"].isfinite().all()):
             raise ValueError(f"Mochi returned non-finite features for row {row_index}")
-        path.rename(hidden_states / f"hs_{row_index}.safetensors")
+        fs, key = filesystem_for(str(hidden_states / f"hs_{row_index}.safetensors"))
+        fs.put_file(str(path), key)
+        path.unlink()
         lock_path.unlink()
 
     # Pin requests to a local rank so the extracted tensors stay on the trainer's worker.
@@ -279,7 +282,7 @@ def train_mochi(
     prefix: str,
     sample: Sample,
 ) -> bool:
-    """Prefill on the gang and return whether this is the leader reporting the draft."""
+    """Prefill on the gang, then train and publish on the leader."""
 
     geometry = ServingGeometry(
         tensor_parallel_size=1,
@@ -292,19 +295,30 @@ def train_mochi(
     with TemporaryDirectory(prefix="mochi-dspark-") as directory, iris_vllm_launch(geometry) as launch:
         scratch = Path(directory)
         if launch.is_leader:
+            checkpoint = lower(draft)
+            if step_is_built(checkpoint):
+                with iris_vllm_followers(launch):
+                    StepRunner().run([checkpoint])
+                return True
             StepRunner().run([lower(prepared)])
-            dataset, split = _stage_data(prepared.path(prefix), scratch, recipe, sample)
+            dataset, split = _stage_data(prepared.path(prefix), scratch, sample)
+            cache = StoragePath(
+                marin_temp_bucket(_ACTIVATION_TTL_DAYS, prefix=f"dspark/{scratch.name}", source_prefix=prefix)
+            )
+            if cache.scheme not in ("s3", "gs"):
+                raise ValueError(f"Mochi needs a temporary object-storage bucket, got {cache}")
+            logger.info("Staging Mochi teacher activations in %s", cache)
         hidden = scratch / HIDDEN_STATES_DIR
         hidden.mkdir()
         with _teacher_environment(teacher, recipe, launch, hidden) as server:
             if launch.is_leader:
                 with iris_vllm_followers(launch):
-                    _cache_rows(server.server_url, dataset, hidden, recipe)
+                    _cache_rows(server.server_url, dataset, cache, recipe)
             else:
                 wait_for_iris_vllm_shutdown(launch, server.check_alive)
         if not launch.is_leader:
             notify_iris_vllm_stopped(launch)
             return False
-        ready = replace(draft, run=partial(_train_cached, cache=CachedPrefill(scratch, split)))
+        ready = replace(draft, run=partial(_train_cached, cache=CachedPrefill(scratch, cache, split)))
         StepRunner().run([lower(ready)])
         return True

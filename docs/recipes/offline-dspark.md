@@ -95,10 +95,12 @@ uv run --extra cpu python -m experiments.post_training.dspark_sft \
 ## Submit the Mochi Iris job
 
 Submit two four-GB200 tasks. The distributed BF16 teacher runs with TP1 and
-DP8/EP8. It caches teacher features on the leader's local disk and shuts
-down before Speculators uses one of the leader's GPUs. The RunAI loader
-caps each process's CPU buffer at 8 GiB. The trainer stages only the
-teacher's embedding and final gated head shards.
+DP8/EP8. Each activation file lands on the leader, moves to the S3 scratch
+bucket selected by `marin_temp_bucket`, and is removed locally after upload.
+The bucket expires the files after three days. The teacher shuts down before
+Speculators uses one of the leader's GPUs and reads activations as it batches
+examples. The RunAI loader caps each process's CPU buffer at 8 GiB. The trainer
+stages only the teacher's embedding and final gated head shards.
 
 Export `CW_KEY_ID` and `CW_KEY_SECRET` before submission so Iris can pass
 them to the job as secrets.
@@ -107,7 +109,7 @@ them to the job as secrets.
 uv run iris --cluster=marin job run --no-wait \
   --job-name mochi-dspark --target-cluster cw-us-east-08a --region us-east-08a \
   --enable-extra-resources --replicas 2 --gpu GB200x4 \
-  --cpu 48 --memory 768GB --disk 600GB --timeout 7200 \
+  --cpu 48 --memory 768GB --disk 128GB --timeout 7200 \
   --sync-package marin-core --extra cpu -e TMPDIR /cache -e MARIN_PREFIX "$MARIN_PREFIX" \
   --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
   -- python -m experiments.post_training.dspark_sft --preset mochi-agentic --stage train
@@ -117,8 +119,9 @@ The default smoke trains three updates on 12 training and up to four validation
 conversations. Add `--steps 4000` to train for one packed epoch, capped at
 4,000 optimizer steps, over the complete frozen mix. The epoch uses an
 8,192-token sequence and up to 1,024 anchors. Use `--data` to provide a
-different completed regional mix. Size scratch for the cached tensors at
-48 KiB per input token, plus the trainer's staged weights and checkpoint.
+different completed regional mix. Teacher activations take 48 KiB per input
+token in temporary object storage. Local scratch holds the files in flight,
+the trainer environment, frozen weights, and the draft checkpoint.
 
 Use `--draft-size two-layer` to reproduce the 766M Mochi variant with two
 Qwen3 layers and a 6,144-wide FFN. It uses the same teacher, data, vocabulary,
@@ -142,9 +145,9 @@ uv run iris --cluster=marin job run --no-wait \
 ```
 
 After preparation succeeds, use the Mochi Iris command above with
-`--preset mochi-agentic-50m`, a fresh job name, `--disk 3TB`, and
-`--timeout 14400`. The leader will need about 2.3 TiB of local disk for
-teacher features at this scale, including the holdout.
+`--preset mochi-agentic-50m`, a fresh job name, and `--timeout 14400`. The
+50M mix and its holdout use about 2.4 TiB of temporary object storage for
+teacher activations.
 
 ## Serve a Mochi draft
 

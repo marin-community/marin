@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a teacher and Speculators trainer together on one Iris GPU worker."""
+"""Train and export DSpark with a live teacher or cached teacher activations."""
 
 import json
 import logging
@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 from typing import Literal
 
 import numpy as np
+import rigging
 from levanter.compat.hf_checkpoints import SAFE_TENSORS_INDEX_NAME
 from rigging.filesystem.storage_path import StoragePath
 from safetensors import safe_open
@@ -165,7 +166,7 @@ def _worker_gpu_devices() -> str:
     return ",".join(output.splitlines())
 
 
-def _install_speculators(scratch: Path, env: dict[str, str]) -> str:
+def _install_speculators(scratch: Path, env: dict[str, str], extra_packages: tuple[str, ...]) -> str:
     """Install pinned Speculators and return the isolated Python executable."""
     source = scratch / "speculators"
     trainer_env = scratch / "trainer-env"
@@ -191,6 +192,7 @@ def _install_speculators(scratch: Path, env: dict[str, str]) -> str:
             "torchvision==0.26.0+cu130",
             "transformers==5.12.1",
             "datasets==5.0.1",
+            *extra_packages,
         ],
         env=env,
         check=True,
@@ -368,12 +370,13 @@ def _write_config_and_build_command(
     data: Path,
     scratch: Path,
     training: Path,
-    hidden_states: Path,
+    hidden_states: StoragePath,
     *,
     train_ratio: float,
     steps: int,
     endpoint: str | None,
 ) -> list[str]:
+    object_store = hidden_states.scheme in ("s3", "gs")
     train_config = {
         "speculator_type": _SPECULATOR_TYPE,
         "seed": recipe.seed,
@@ -389,7 +392,7 @@ def _write_config_and_build_command(
         "data": {
             "data_path": str(data / ARROW_DATASET_DIR),
             "train_data_ratio": train_ratio,
-            "hidden_states_backend": "file",
+            "hidden_states_backend": "object-store" if object_store else "file",
             "total_seq_len": recipe.data.max_sequence_length,
             "max_anchors": recipe.max_anchors,
             "num_workers": 2,
@@ -430,7 +433,11 @@ def _write_config_and_build_command(
     train = [python]
     if recipe.trainer_ranks > 1:
         train += ["-m", "torch.distributed.run", "--standalone", f"--nproc-per-node={recipe.trainer_ranks}"]
-    train += ["-m", "speculators.train", "--config", str(config_path)]
+    if object_store:
+        train.append(str(Path(__file__).with_name("speculators_storage.py")))
+    else:
+        train.extend(["-m", "speculators.train"])
+    train.extend(["--config", str(config_path)])
     return train
 
 
@@ -475,6 +482,7 @@ def _fit_and_publish(
     teacher_identity: str,
     recipe: DraftRecipe,
     scratch: Path,
+    hidden_states: StoragePath,
     split: PreparedSplits,
     devices: str,
     server_context: AbstractContextManager[VllmEnvironment | None],
@@ -482,7 +490,10 @@ def _fit_and_publish(
     env = _speculators_environment(devices)
     data = scratch / "data"
     training = scratch / "checkpoints"
-    python = _install_speculators(scratch, env)
+    # Install the checkout's bucket routing in the isolated trainer environment.
+    rigging_source = Path(rigging.__path__[0]).resolve().parents[1]
+    extra_packages = (str(rigging_source),) if hidden_states.scheme in ("s3", "gs") else ()
+    python = _install_speculators(scratch, env, extra_packages)
     steps, packages = _prepare_trainer_inputs(python, data, scratch, recipe, split.train, env)
     logger.info("Training DSpark for %s at %s for %d optimizer steps", teacher_identity, output, steps)
     with server_context as server:
@@ -493,7 +504,7 @@ def _fit_and_publish(
             data,
             scratch,
             training,
-            scratch / HIDDEN_STATES_DIR,
+            hidden_states,
             train_ratio=split.train_ratio,
             steps=steps,
             endpoint=server.server_url if server is not None else None,
@@ -521,9 +532,16 @@ def _stage_frozen_weights(source: StoragePath, teacher_path: Path) -> None:
 
 
 def train_cached_and_export(
-    *, output: str, teacher: str, teacher_identity: str, recipe: DraftRecipe, scratch: Path, split: PreparedSplits
+    *,
+    output: str,
+    teacher: str,
+    teacher_identity: str,
+    recipe: DraftRecipe,
+    scratch: Path,
+    hidden_states: StoragePath,
+    split: PreparedSplits,
 ) -> DSparkExport:
-    """Train on prepared Arrow data and indexed hidden states on the same worker."""
+    """Train on prepared Arrow data and indexed hidden states in object storage."""
 
     require_supported_vllm_release()
     _require_training_rows(split, recipe.trainer_ranks)
@@ -536,6 +554,7 @@ def train_cached_and_export(
         teacher_identity=teacher_identity,
         recipe=recipe,
         scratch=scratch,
+        hidden_states=hidden_states,
         split=split,
         devices=devices,
         server_context=nullcontext(),
@@ -580,6 +599,7 @@ def train_and_export(
             teacher_identity=teacher_identity,
             recipe=recipe,
             scratch=scratch,
+            hidden_states=StoragePath(str(hidden_states)),
             split=split,
             devices=trainer_devices,
             server_context=_teacher_environment(teacher_path, recipe, hidden_states, teacher_devices),
