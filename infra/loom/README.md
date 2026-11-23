@@ -225,6 +225,43 @@ key set as `CW_KEY_ID` and `CW_KEY_SECRET`. Iris attaches the submitter's keys
 to every CoreWeave job, so this key's access policy bounds what Belay runs can
 read and write. Replies on the intake issue use Loom's GitHub App token.
 
+## Automation session retention
+
+Choose the flow's profile explicitly when launching children; an omitted profile
+selects `default`, rather than inheriting the parent's retention policy.
+
+| Flow | Concurrency | Idle archive policy | Keep open while |
+|---|---:|---|---|
+| `ops` | 4 | 30 minutes | Coordinating incident triage and alert delivery |
+| `ops-investigation` | 8 | 15 minutes | Investigating an assigned incident |
+| `ops-report` | 1 | 60 seconds configured | Producing the scheduled report |
+| `pr-review`, `pr-holistic-review` | 16 each | 60 seconds configured | Completing the review |
+| `agentic-lint` | 8 | 60 seconds configured | Completing the lint review |
+| `codehealth-refinement` | 1 | 60 seconds configured | Working on or monitoring its PR |
+| `github-automation` | 12 | 30 minutes | Completing its assigned automation task |
+| `belay` | 1 | 60 seconds configured | Draining claimed Belay events |
+
+Loom archives only after the active agent turn ends. Ordinary sessions have a
+15-minute idle grace period, even when the configured delay is shorter;
+completed scheduled watch sessions use a five-minute cleanup delay. Suspending
+a session releases its runtime but still consumes its profile slot. Archiving
+preserves the branch, conversation, and run history while releasing the slot.
+An `auto-archive: disabled` tag opts a session out of automatic archiving.
+
+Publish incident evidence and the required human action, then end the turn
+instead of keeping an investigation open awaiting an operator. Alert delivery
+can create another coordinator when needed. These profile policies are captured
+at launch, so deployment changes apply to new sessions; old sessions retain
+their launch policy until explicitly archived or handed off.
+
+Keep Belay serialized: its application queue claims work for one active worker,
+and the watch prompt tells that worker to drain new events before finishing.
+Parallel workers could race the training node-cap check. The scheduled watch
+checks every ten minutes and has a four-hour run deadline; a long-running
+training job does not need a Loom session kept open beside it.
+
+## Claude authentication
+
 Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
 from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
 profiles, which accept a per-launch agent override, and the Claude automation
