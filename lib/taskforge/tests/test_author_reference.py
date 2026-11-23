@@ -11,8 +11,8 @@ from taskforge.model.controls import CONTROL
 from taskforge.policy.defaults import DEFAULT_POLICY
 from taskforge.stages.author import AUTHOR_REFERENCE, author_reference, system_prompt
 
-# sha256 of the reference d8c26e50ba rendered live from TaskSpec and CONTROL: what recorded author requests embed.
-V1_DIGEST = "a91b393984f9d4d9887ea534a22c35a3252bebd76244b8ad51a1c335eda87a06"
+# sha256 of the v2 reference as generated from TaskSpec and CONTROL: what recorded author requests embed.
+V2_DIGEST = "28bef7104d48e9e3752479bc0c98a9c87dae1af4a1704e0e22994e6d15b29a40"
 WORDING = frozenset({"description", "title"})
 # Keywords whose values are schemas; every other keyword's value is data (default, examples, const, enum, mapping, ...).
 SCHEMA = frozenset({"additionalProperties", "contains", "else", "if", "items", "not", "propertyNames", "then"})
@@ -42,9 +42,9 @@ def shapes(reference: dict[str, object]) -> dict[str, object]:
     return {name: shape(schema) for name, schema in reference.items()}
 
 
-def test_author_is_shown_the_v1_reference_bytes() -> None:
+def test_author_is_shown_the_v2_reference_bytes() -> None:
     reference = author_reference()
-    assert hashlib.sha256(reference.encode()).hexdigest() == V1_DIGEST
+    assert hashlib.sha256(reference.encode()).hexdigest() == V2_DIGEST
     assert reference in system_prompt(DEFAULT_POLICY)
 
 
