@@ -18,7 +18,7 @@ from harbor.environments import model_relay
 from harbor.environments.factory import EnvironmentFactory
 from harbor.environments.model_relay import ModelRelay
 from shellbox.backends.daytona.connection import DaytonaConnection
-from harbor.models.task.config import EnvironmentConfig, TaskConfig as PackageTaskConfig
+from harbor.models.task.config import EnvironmentConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
@@ -38,7 +38,7 @@ from skyrl_train.dataset.harbor_import import harbor_trial_task
 from skyrl_train.rollouts import agent_runtime
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 from skyrl_train.rollouts.agent_environment import BorrowedMachineEnvironment
-from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings, bind_original_verifier
+from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.harbor_trial_session import run_harbor_trial
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
@@ -187,15 +187,33 @@ async def test_bixbench_verifier_grades_through_host_judge_relay(harbor_package,
     machine.path("/logs/verifier").mkdir(parents=True)
     paths = TrialPaths(tmp_path / "trial")
     paths.mkdir()
-    config = TrialConfig(
-        task=TaskConfig(path=package),
-        agent=AgentConfig(name="pi"),
-        environment={"type": "daytona"},
-        verifier={"env": {"REWARD_PATH": str(machine.path("/logs/verifier/reward.txt"))}},
+    task_spec = harbor_trial_task(
+        package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     )
-    judge = JudgeConnection("https://provider.invalid/v1", "host-private-key")
-    config, capabilities = bind_original_verifier(
-        config, PackageTaskConfig.model_validate_toml((package / "task.toml").read_text()), judge, HostCapabilities()
+    settings = InstalledAgentSettings(
+        agent=AgentConfig(name="pi"),
+        output_path=str(tmp_path / "attempts"),
+        setup_timeout=5,
+        run_timeout=5,
+        cleanup_timeout=5,
+        service_startup_timeout=5,
+        service_shutdown_timeout=5,
+        judge_model="policy-judge",
+    )
+    connection = DaytonaConnection(api_key="daytona-secret")
+    runtime = InstalledAgentRuntime(
+        settings,
+        AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()),
+        128,
+        daytona_connection=connection,
+        eval_daytona_connection=connection,
+        judge=JudgeConnection("https://provider.invalid/v1", "host-private-key"),
+    )
+    binding = runtime.original_trial_binding(
+        lowered_task(task_spec, "harbor_trial", attempt_timeout=15),
+        HarborTaskSettings.from_config(OmegaConf.create({})),
+        "eval",
+        {"REWARD_PATH": str(machine.path("/logs/verifier/reward.txt"))},
     )
     observed = []
 
@@ -210,16 +228,15 @@ async def test_bixbench_verifier_grades_through_host_judge_relay(harbor_package,
         lambda **kwargs: client_type(transport=httpx.MockTransport(provider), **kwargs),
     )
     relay = ModelRelay.from_endpoint(
-        config.environment.kwargs["model_endpoint"],
-        config.environment.kwargs["model_name"],
-        authentication=capabilities.model_authentication,
+        binding.environment.kwargs["model_endpoint"],
+        binding.environment.kwargs["model_name"],
+        authentication=binding.host_capabilities.model_authentication,
     )
-    assert relay is not None
     task = Task(package)
     environment = BorrowedMachineEnvironment(
-        machine, tmp_path / "trial", "bixbench", task.config.environment, host_capabilities=capabilities
+        machine, tmp_path / "trial", "bixbench", task.config.environment, host_capabilities=binding.host_capabilities
     )
-    verifier = Verifier(task=task, trial_paths=paths, environment=environment, override_env=config.verifier.env)
+    verifier = Verifier(task=task, trial_paths=paths, environment=environment, override_env=binding.verifier_environment)
     try:
         async with asyncio.TaskGroup() as service_tasks:
             async with serve_http(machine, relay.handle, port=port, task_group=service_tasks):
@@ -230,7 +247,7 @@ async def test_bixbench_verifier_grades_through_host_judge_relay(harbor_package,
     assert len(observed) == 1
     assert observed[0][0] == "Bearer host-private-key"
     assert observed[0][1] == "/v1/chat/completions"
-    assert json.loads(observed[0][2])["model"] == "fixture-judge"
+    assert json.loads(observed[0][2])["model"] == "policy-judge"
 
 
 @pytest.mark.asyncio
@@ -403,13 +420,8 @@ async def test_original_trial_runs_setup_before_installation_and_retains_failure
     evidence = tmp_path / "setup-evidence"
     backend = AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder())
     result = await run_harbor_trial(
-        trial,
-        backend,
-        unexpected_model_request,
-        evidence,
-        setup_commands=commands,
-        setup_cwd=str(tmp_path),
-        setup_timeout=5,
+        trial, backend, unexpected_model_request, evidence,
+        setup_commands=commands, setup_cwd=str(tmp_path), setup_timeout=5,
     )
     assert (tmp_path / "prepared").read_text() == "task-value"
     evidence = evidence / "task-setup"
