@@ -140,10 +140,12 @@ class JudgeRequest:
 
 @dataclass(frozen=True)
 class JudgeCompletion:
-    """The reply and its chat ``finish_reason``, read as an endpoint reply with that finish would be.
+    """The reply and its chat ``finish_reason``.
 
     Strict chat retries ``length`` at the larger budget and fails any other finish but ``stop``; content-policy
-    chat keeps the text under any finish; Responses treats every finish but ``stop`` as an incomplete response.
+    chat keeps the text under any finish; both read a finish as an endpoint would. Responses treats every finish
+    but ``stop`` as an incomplete response that may be retried, unlike an endpoint, which retries only a
+    ``max_output_tokens`` cut and fails any other incomplete status.
     """
 
     text: str
@@ -614,7 +616,7 @@ def _label_completion(spec: JudgeSpec, client: _Client, model: str, messages: li
         reply = client(_request(spec, model, messages, budget))
         finish = reply.finish_reason
         if spec.api == "responses":
-            # An endpoint reports any unfinished response as incomplete, without its partial text.
+            # Unlike an endpoint's, every unfinished callback reply is retryable as incomplete, without its partial text.
             if finish != "stop":
                 return _LabelCompletion("", True, None, None, "incomplete")
             return _LabelCompletion(_completed_text(finish, reply.text), False, None, None, "completed")
