@@ -474,7 +474,14 @@ def test_cpu_draft_mirror_avoids_the_hub_until_any_mirror_file_expires(tmp_path,
         cache_source_prefix="s3://region/run",
         model_caches=(cache,),
     )
-    assert prepared == SpeculatorModelConfig(str(mirror), manifest.identity)
+    # The draft binds to the node's offline HF cache snapshot, never the mirror
+    # URI: the drafter's loader would find no weights in vLLM's object-store
+    # staging dir, which pulls config files only.
+    assert prepared.source_identity == manifest.identity
+    snapshot = Path(prepared.source_uri)
+    assert snapshot.is_absolute() and snapshot != mirror
+    assert snapshot.name == manifest.revision and "snapshots" in snapshot.parts
+    assert (snapshot / "model.safetensors").is_file()
     assert (mirror / "model.safetensors").is_file()
     assert hf_model_cache.load_model_manifest(str(mirror)).identity == manifest.identity
     assert opened == ([("org/draft", "d" * 40)] if missing else [])

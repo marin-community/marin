@@ -600,8 +600,24 @@ def prepare_draft_model(
                 source_prefix=cache_source_prefix,
                 tokenizer_mode="policy",
             )
-            return SpeculatorModelConfig(source_uri=source_uri, source_identity=manifest.identity)
-        return SpeculatorModelConfig(source_uri=cached.uri, source_identity=manifest.identity)
+            refreshed = HuggingFaceModelCache(
+                model_id=cached.model_id,
+                revision=cached.revision,
+                uri=source_uri,
+                identity=manifest.identity,
+                resolved_revision=manifest.revision,
+            )
+            # The engine loads the draft from this node's offline HF cache: an
+            # object-store draft source makes vLLM stage config files only, and
+            # the drafter's default loader then finds no weights beside them.
+            return SpeculatorModelConfig(
+                source_uri=str(stage_model(refreshed)),
+                source_identity=manifest.identity,
+            )
+        return SpeculatorModelConfig(
+            source_uri=str(stage_model(cached)),
+            source_identity=manifest.identity,
+        )
     if model.source_kind is SpeculatorModelSourceKind.LOCAL:
         assert model.local_source_path is not None
         filesystem, root = fs_and_path(model.local_source_path)
@@ -621,14 +637,30 @@ def prepare_draft_model(
             source_prefix=cache_source_prefix,
             tokenizer_mode="policy",
         )
-    else:
-        source_uri = model.source_uri
-        manifest = load_model_manifest(source_uri)
-        if model.source_identity != manifest.identity:
-            raise ValueError(
-                f"Draft manifest identity mismatch: requested {model.source_identity}, "
-                f"found {manifest.identity} at {source_uri}"
-            )
+        mirrored = HuggingFaceModelCache(
+            model_id=model.hugging_face_repo_id,
+            revision=model.source_identity,
+            uri=source_uri,
+            identity=manifest.identity,
+            resolved_revision=manifest.revision,
+        )
+        # Stage the mirror into this node's offline HF cache and bind the draft
+        # to the local snapshot: an object-store draft source makes vLLM stage
+        # config files only, and the drafter's default loader then finds no
+        # weights beside them.
+        return SpeculatorModelConfig(
+            source_uri=str(stage_model(mirrored)),
+            source_identity=manifest.identity,
+        )
+    # Artifact drafts keep their object-store source: the EAGLE3 drafter streams
+    # their weights through the Run:ai loader, which reads the staged object URI.
+    source_uri = model.source_uri
+    manifest = load_model_manifest(source_uri)
+    if model.source_identity != manifest.identity:
+        raise ValueError(
+            f"Draft manifest identity mismatch: requested {model.source_identity}, "
+            f"found {manifest.identity} at {source_uri}"
+        )
     return SpeculatorModelConfig(source_uri=source_uri, source_identity=manifest.identity)
 
 
