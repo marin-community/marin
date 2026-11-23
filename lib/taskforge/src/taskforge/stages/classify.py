@@ -73,37 +73,28 @@ def trial_cause(result: GradedRollout, task: TaskSpec) -> Cause | None:
         return Cause.AGENT_TIMEOUT
     if stop == MAX_TURNS_STOP_REASON:
         return Cause.BUDGET_EXHAUSTED
-    return limit(result) or grade_cause(result.grade, task)
-
-
-def limit(result: GradedRollout) -> Cause | None:
-    """The limit the solver's generation reached, if any: a definitive failed trial whatever the grade says."""
-    if (stop := result.rollout.stop_reason) == TIME_LIMIT_STOP_REASON:
+    if stop == TIME_LIMIT_STOP_REASON:
         return Cause.TIME_LIMIT
-    return Cause.GENERATION_LIMIT if stop in LIMIT_STOP_REASONS else None
+    return Cause.GENERATION_LIMIT if stop in LIMIT_STOP_REASONS else grade_cause(result.grade, task)
 
 
-def settled_loss(value: object) -> bool:
-    """A solver slot that reached a limit: an unsolved trial whatever its grade says, so a failed grade of its partial
-    output (kept for inspection) neither holds validation nor buys the slot again."""
-    return isinstance(value, GradedRollout) and limit(value) is not None
+def unsettled_grade(value: object) -> GradeResult | None:
+    """A grade that can still hold validation or reopen its slot. A generation limit settles a loss on its own."""
+    if isinstance(value, GradedRollout):
+        value = None if value.rollout.stop_reason in LIMIT_STOP_REASONS else value.grade
+    return value if isinstance(value, GradeResult) else None
 
 
 async def grader_infra_unavailable(event: Resolved[object]) -> None:
-    value = event.value
-    grade = value.grade if isinstance(value, GradedRollout) else value
-    if not settled_loss(value) and isinstance(grade, GradeResult) and grade_cause(grade) is Cause.GRADER_INFRA:
+    grade = unsettled_grade(event.value)
+    if grade is not None and grade_cause(grade) is Cause.GRADER_INFRA:
         raise Hold(grade.error or "Grader infrastructure unavailable")
 
 
 def replayable_grade(event: Resolved[object]) -> bool:
     """Resume successful evidence, settled losses and slot holds, but reevaluate unavailable grading."""
-    value = event.value
-    if settled_loss(value):
-        return True
-    grade = value.grade if isinstance(value, GradedRollout) else value
-    unavailable = isinstance(grade, GradeResult) and grade_cause(grade) in (Cause.GRADER_INFRA, Cause.NO_GRADE)
-    return refused(event.value) or not unavailable
+    grade = unsettled_grade(event.value)
+    return refused(event.value) or grade is None or grade_cause(grade) not in (Cause.GRADER_INFRA, Cause.NO_GRADE)
 
 
 def replaced_refusals(previous: Sequence[Record], resume: bool) -> Callable[[Resolved[object]], bool]:

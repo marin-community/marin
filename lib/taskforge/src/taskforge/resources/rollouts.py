@@ -71,17 +71,12 @@ class SolverGeneration(Event[Rollout]):
 TIME_LIMIT_STOP_REASON = "time_limit"
 """The stop reason of an attempt whose generation was still running at ``solver.time_limit``: the engine stopped it as
 at its generation limit, and ``RolloutResource`` records which limit it was, in a returned result and in an interrupted
-one alike. Graders are shown the engine's ``length`` for it (``graded_stop_reason``), as RolloutEngine's own grade
+one alike. Graders are shown the engine's ``length`` for it, as RolloutEngine's own grade
 was."""
 
 
 LIMIT_STOP_REASONS = frozenset({LENGTH_STOP_REASON, TIME_LIMIT_STOP_REASON, "context"})
 """The stop reasons of a generation that reached a limit: an unsolved trial whatever its grade says."""
-
-
-def graded_stop_reason(rollout: Rollout) -> str | None:
-    """The stop reason RolloutEngine presented to the grader of ``rollout``."""
-    return LENGTH_STOP_REASON if rollout.stop_reason == TIME_LIMIT_STOP_REASON else rollout.stop_reason
 
 
 class AttemptCapReached(Hold):

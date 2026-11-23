@@ -7,7 +7,6 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from types import MappingProxyType
 from typing import Annotated, Literal
 
 from pydantic import Field, TypeAdapter
@@ -356,16 +355,6 @@ FAULTS = frozenset(
     }
 )
 """The causes that are evidence against the task: its grader or the task itself failed on the answer."""
-OUTCOMES = MappingProxyType(
-    {
-        Cause.GENERATION_LIMIT: TrialOutcome.GENERATION_LIMIT,
-        Cause.TIME_LIMIT: TrialOutcome.TIME_LIMIT,
-        Cause.BUDGET_EXHAUSTED: TrialOutcome.BUDGET_EXHAUSTED,
-        **dict.fromkeys(FAULTS, TrialOutcome.FAULTED),
-    }
-)
-"""The diagnostic outcome of each cause, independent of what a review policy decides on it; every other cause
-(held, ungraded, timed out as an agent, grader infrastructure) is unscored."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,10 +368,14 @@ class TrialResult:
 
     @property
     def outcome(self) -> TrialOutcome:
-        """The trial's outcome, read from its recorded cause and grade (``OUTCOMES``): every reader of a trial asks
-        this, never the cause. Derived, not stored, so a cause and an outcome can never disagree."""
-        cause = self.cause or (Cause.NO_GRADE if self.grade is None else None)
-        return TrialOutcome.GRADED if cause is None else OUTCOMES.get(cause, TrialOutcome.UNSCORED)
+        """Derived from the recorded cause and grade, independently of the review policy."""
+        if not self.cause:
+            return TrialOutcome.GRADED if self.grade is not None else TrialOutcome.UNSCORED
+        if self.cause in FAULTS:
+            return TrialOutcome.FAULTED
+        if self.cause in (Cause.GENERATION_LIMIT, Cause.TIME_LIMIT, Cause.BUDGET_EXHAUSTED):
+            return TrialOutcome(self.cause)
+        return TrialOutcome.UNSCORED
 
 
 @dataclass(frozen=True, slots=True)

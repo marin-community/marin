@@ -38,14 +38,13 @@ def reason_class(reason: str) -> str:
 def trial_outcomes(workpiece: Workpiece) -> Counter[TrialOutcome]:
     """The outcome of every solver slot the workpiece bought, once: a confirmation record repeats the trials it keeps
     under their slots' identities."""
-    slots: dict[tuple[int, int], TrialOutcome] = {}
-    evidence = workpiece.evidence
-    for index, result in enumerate(evidence):
-        kept = set() if result.confirms is None else {t.trial for t in evidence[result.confirms].solver}
-        for trial in result.solver:
-            bought = result.confirms if result.confirms is not None and trial.trial in kept else index
-            slots[bought, trial.trial] = trial.outcome
-    return Counter(slots.values())
+    counts: Counter[TrialOutcome] = Counter()
+    for result in workpiece.evidence:
+        carried = (
+            () if result.confirms is None else {trial.trial for trial in workpiece.evidence[result.confirms].solver}
+        )
+        counts.update(trial.outcome for trial in result.solver if trial.trial not in carried)
+    return counts
 
 
 async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]:

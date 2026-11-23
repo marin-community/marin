@@ -468,8 +468,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   the engine's model-turn wall from before admission) bounds one solver generation, from its first generated token:
   a generation still running past it is cut, and the trial is recorded at the time limit (`time_limit`): unsolved,
   never retried. The engine has no model-turn wall: the model client owns a turn, its time limit, stalls and
-  availability window. `solver.attempt_timeout` (8400 s, greater than `solver.time_limit`: at equal values the cap fires first and a
-  time-limited trial would read as a capped one) is a spending cap on one
+  availability window. `solver.attempt_timeout` (8400 s; the run refuses one that is not greater than `solver.time_limit`) is a spending cap on one
   physical attempt, machine preparation and grading included: an attempt that reaches it is recorded as a parked
   slot (`attempt_cap`, unscored, its prefix and failure record kept), counted against `budget.max_missing_trials` as
   a held slot is, and never bought again when its visit or cohort is replayed (a validation retry's fresh cohort
@@ -481,7 +480,9 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
   `provider.backoff_*`), `provider.stall_timeout`, `provider.max_connections`. The run refuses a
   `solver.time_limit` that is not positive and finite, and a `solver.attempt_timeout` that is not finite and
-  greater than it.
+  greater than it. That is a configuration check, not a promise about which clock wins: the cap should leave room
+  above the time limit for machine preparation, tool turns and grading, and a cap close to the limit can park a trial
+  (`attempt_cap`, unscored) that the limit would have failed.
 - **Tools**: `tools.output_chars` (at least 240); longer output is saved to `.tool-output/<digest>.txt` in
   the workspace and the model gets the head plus the path, or, for a session without a machine, is clipped.
 

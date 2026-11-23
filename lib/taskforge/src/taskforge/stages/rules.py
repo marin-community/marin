@@ -6,7 +6,7 @@
 
 import math
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -105,14 +105,11 @@ def limited(result: ValidationResult) -> tuple[str, ...]:
     return (f"Counted unsolved without a gradable answer: {named}",) * bool(counts)
 
 
-def decided(trials: Iterable[TrialResult | ControlResult | AdversaryFinding]) -> list[Cause | None]:
-    """The cause review decides on for each of ``trials``, in order. A limit has none, so it never reaches
-    ``CAUSE_DECISIONS``: it is an unsolved trial (``TrialResult.outcome``)."""
-    return [
-        t.cause or (Cause.NO_GRADE if t.grade is None else None)
-        for t in trials
-        if not (isinstance(t, TrialResult) and t.outcome in LIMITS)
-    ]
+def decision_cause(trial: TrialResult | ControlResult | AdversaryFinding) -> Cause | None:
+    """Limits count unsolved; review decides on the cause of every other trial."""
+    if isinstance(trial, TrialResult) and trial.outcome in LIMITS:
+        return None
+    return trial.cause or (Cause.NO_GRADE if trial.grade is None else None)
 
 
 def tagged(band: BandOutcome) -> tuple[str, ...]:
@@ -211,7 +208,7 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         return confirmation_review(workpiece, band, budget)
     decision = assess(result, band, budget.max_missing_trials)
     if isinstance(decision, Incomplete):
-        retryable = decided((*result.solver, *result.controls))
+        retryable = map(decision_cause, (*result.solver, *result.controls))
         retries = sum(isinstance(item, Retry) for item in workpiece.decisions)
         cause = next((cause for cause in retryable if CAUSE_DECISIONS.get(cause) is Retry), None)
         held = sum(trial.cause in PARKED for trial in result.solver) > budget.max_missing_trials  # never re-bought
@@ -351,7 +348,7 @@ def assess(result: ValidationResult, band: BandRules, max_missing: int) -> Decis
     absent = len(result.solver) - len(scored)
     solver = scored if absent <= max_missing else result.solver
     trials = (*solver, *result.controls, *(f for a in result.adversary for f in a.findings))
-    causes = Counter(decided(trials))
+    causes = Counter(map(decision_cause, trials))
     unavailable = tuple(
         f"{count} ungraded trial(s): {cause}"
         for cause, count in sorted((cause, count) for cause, count in causes.items() if cause is not None)
