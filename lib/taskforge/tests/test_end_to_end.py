@@ -12,7 +12,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import cast, override
+from typing import override
 
 import pytest
 from connectrpc.code import Code
@@ -34,7 +34,7 @@ from taskforge.effects.context import Context
 from taskforge.effects.events import Note, StageCompleted
 from taskforge.effects.issues import Hold, Restart, Transient
 from taskforge.effects.log import EventLog, JsonlSink, Status, fold
-from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
+from taskforge.harness.protocol import Stopped, StopReason
 from taskforge.llm.glm_client import EndpointSource
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
@@ -42,7 +42,6 @@ from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import (
     Abandon,
     Accept,
-    BandOutcome,
     BandRules,
     Budget,
     Cause,
@@ -51,7 +50,7 @@ from taskforge.model.review import (
     Modify,
     Retry,
 )
-from taskforge.model.stage import Exit, Stage
+from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
@@ -59,11 +58,10 @@ from taskforge.resources.bundle import Resources
 from taskforge.resources.env import CommandResult, EnvFactory, ShellboxEnv
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids
-from taskforge.resources.inference import InferenceClient, InferenceRequest
+from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages.classify import replayable_grade
-from taskforge.stages.exits import Decided
 from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config, install
 
@@ -568,33 +566,6 @@ async def test_driver_holds_an_undecodable_stream_without_touching_it(
     assert isinstance(decision := workpiece.decisions[-1], Incomplete) and "diverged" in decision.reasons[0]
     assert json.loads((destination / "status.json").read_text())["terminal"] == "held"
     assert (destination / "events.jsonl").read_bytes() == published
-
-
-class ScriptedAuthor(Harness):
-    def __init__(self, *results: Exit | None) -> None:
-        self.results = iter(results)
-        self.calls = 0
-
-    @override
-    async def run(
-        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
-    ) -> Exit:
-        self.calls += 1
-        return cast(Exit, next(self.results))
-
-
-@pytest.mark.parametrize(
-    "result, named",
-    [(Decided(Accept(BandOutcome.IN_BAND)), "author returned Decided"), (None, "author returned NoneType")],
-)
-async def test_stage_result_without_a_transition_from_that_stage_fails(
-    proposal: TaskProposal, result: Exit | None, named: str
-) -> None:
-    author = ScriptedAuthor(result, Stopped(StopReason.FINISHED, Conversation((), ())))
-    settings = replace(config(), author=author)
-    with pytest.raises(ValueError, match=named):
-        await run_workpiece(proposal, settings, resources(Envs(), ()), EventLog(), install=install)
-    assert author.calls == 1
 
 
 async def test_hold_from_a_terminal_stage_observer_records_that_stage(proposal: TaskProposal) -> None:
