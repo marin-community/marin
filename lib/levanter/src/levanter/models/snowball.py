@@ -1511,7 +1511,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             routes_by_layer = []
             for layer_index, block in enumerate(self.transformer.blocks):
                 use_long = _is_long_attention_layer(layer_index, num_layers)
-                state, routes = layer_step(state, (layer_index, self._inference_block(block, tokens.shape[0]), use_long))
+                state, routes = layer_step(
+                    state, (layer_index, self._inference_block(block, tokens.shape[0]), use_long)
+                )
                 if routes is not None:
                     routes_by_layer.append(routes)
             hidden, cache_pages = state
@@ -1535,9 +1537,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             return block
         # A receiver can get every sender's assignments. Reserve that worst-case
         # capacity so expert dispatch cannot drop tokens at serving time.
-        experts = dataclasses.replace(
-            block.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size)
-        )
+        experts = dataclasses.replace(block.mlp.expert_mlp, implementation="ring", capacity_factor=float(expert_size))
         selected = (
             self._selected_ep_decode
             and token_rows == expert_size

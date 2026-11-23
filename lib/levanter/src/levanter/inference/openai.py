@@ -10,6 +10,7 @@ drop-in replacements for OpenAI models.
 """
 
 import asyncio
+import base64
 import collections
 import collections.abc
 import logging
@@ -544,9 +545,14 @@ def _sse_event(payload: str) -> str:
 
 
 def _chat_completion_events(
-    completion: ChatCompletion, *, emitted_text: dict[int, str] | None = None, include_usage: bool = False
+    completion: ChatCompletion,
+    *,
+    emitted_text: dict[int, str] | None = None,
+    include_usage: bool = False,
+    route_frame: str | None = None,
 ) -> collections.abc.Iterator[str]:
     """Finish each choice and optionally deliver final token usage."""
+    final_choice = completion.choices[-1].index
     for choice in completion.choices:
         logprobs = (
             ChunkChoiceLogprobs(content=choice.logprobs.content, refusal=choice.logprobs.refusal)
@@ -578,7 +584,10 @@ def _chat_completion_events(
                 model=completion.model,
                 choices=[chunk_choice],
             )
-            yield _sse_event(chunk.model_dump_json())
+            payload = chunk.model_dump_json()
+            if route_frame is not None and choice.index == final_choice and chunk_choice.finish_reason is not None:
+                payload = payload[:-1] + ',"levanter_route_frame":"' + route_frame + '"}'
+            yield _sse_event(payload)
     if include_usage:
         usage = ChatCompletionChunk(
             id=completion.id,
@@ -860,6 +869,8 @@ def _submit_chat_completion(
         future=future,
         n_generations=request.n or 1,
         on_tokens=on_tokens,
+        return_route_captures=request.return_route_captures,
+        expected_policy_id=request.expected_policy_id,
     )
     return prompt_tokens, future
 
@@ -939,6 +950,8 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         )
     except HTTPException:
         raise
+    except PolicyMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Error in chat completion")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -978,6 +991,9 @@ async def _stream_chat_completion(
         closed.set()
         future.cancel()
         raise
+    except PolicyMismatchError as exc:
+        closed.set()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         closed.set()
         logger.exception("Error before chat streaming started")
@@ -1002,13 +1018,20 @@ async def _stream_chat_completion(
                     )
                     yield _sse_event(chunk.model_dump_json())
                 update = await updates.get()
+            results = future.result()
             completion = _format_chat_completion(
-                ctx, request, prompt, future.result(), completion_id=header.id, created=header.created
+                ctx, request, prompt, results, completion_id=header.id, created=header.created
             )
+            frame = None
+            if request.return_route_captures:
+                frame = await asyncio.to_thread(
+                    _encode_chat_route_frame, prompt, results, LogprobMode(ctx.config.service.logprob_mode)
+                )
             yield_events = _chat_completion_events(
                 completion,
                 emitted_text={choice: "".join(pieces) for choice, pieces in emitted.items()},
                 include_usage=include_usage,
+                route_frame=frame,
             )
             for event in yield_events:
                 yield event
@@ -1020,6 +1043,11 @@ async def _stream_chat_completion(
             future.cancel()
 
     return StreamingResponse(events(), media_type=_EVENT_STREAM)
+
+
+def _encode_chat_route_frame(prompt: list[int], results: list[InferenceResponse], score_mode: LogprobMode) -> str:
+    frame = _encode_binary_outputs(np.asarray(prompt, dtype=np.int32), results, score_mode)
+    return base64.b64encode(frame).decode("ascii")
 
 
 def _validate_binary_options(ctx: InferenceContext, prompt: np.ndarray, options: GenerateOptions) -> None:
@@ -1175,6 +1203,13 @@ class InferenceServer:
         async def create_chat_completion(request: ChatCompletionRequest):
             include_usage = (request.stream_options or {}).get("include_usage") is True
             tokenizer = inference_context.tokenizer
+            if request.return_route_captures and (
+                not request.stream
+                or request.logprobs
+                or not isinstance(tokenizer, HfMarinTokenizer)
+                or not inference_context.engine.supports_route_capture
+            ):
+                raise HTTPException(status_code=400, detail="Route frames require native Snowball streaming")
             if request.stream and not request.logprobs and isinstance(tokenizer, HfMarinTokenizer):
                 return await _stream_chat_completion(
                     inference_context, request, tokenizer, include_usage=include_usage
