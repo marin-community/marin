@@ -413,15 +413,33 @@ def main() -> None:
     results, failures, deferred = [], [], 0
     family_a_rows = [row for row in rows if row["benchmark"] not in HARBOR_BENCHMARKS]
 
+    def guarded(grade, row):
+        try:
+            return row, grade(row)
+        except Exception as error:
+            return row, {
+                "task_id": row["task_id"],
+                "repetition_index": row["repetition_index"],
+                "failed": True,
+                "error": f"{type(error).__name__}: {error}",
+            }
+
     def grade_family_a(row):
-        return row, grade_family_a_row(
-            row, judge_environment, source_rows.get((row["task_id"], row["repetition_index"]))
+        return guarded(
+            lambda row: grade_family_a_row(
+                row, judge_environment, source_rows.get((row["task_id"], row["repetition_index"]))
+            ),
+            row,
         )
 
     graded = 0
     with ThreadPoolExecutor(max_workers=8) as pool:
         for row, result in pool.map(grade_family_a, family_a_rows):
             graded += 1
+            if result.get("failed"):
+                failures.append({**result, "benchmark": row["benchmark"], "check": "row"})
+                results.append(result)
+                continue
             oracle_minimum, nop_maximum = expectations(row["benchmark"])
             oracle = result["oracle_reward"]
             if oracle < oracle_minimum and not result.get("environment_exception"):
@@ -436,12 +454,19 @@ def main() -> None:
     if harbor_rows:
 
         def grade_harbor(row):
-            return row, grade_family_b_row(
-                row, judge_environment, source_rows.get((row["task_id"], row["repetition_index"]))
+            return guarded(
+                lambda row: grade_family_b_row(
+                    row, judge_environment, source_rows.get((row["task_id"], row["repetition_index"]))
+                ),
+                row,
             )
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             for row, result in pool.map(grade_harbor, harbor_rows):
+                if result.get("failed"):
+                    failures.append({**result, "benchmark": row["benchmark"], "check": "row"})
+                    results.append(result)
+                    continue
                 oracle_minimum, nop_maximum = expectations(row["benchmark"])
                 if result["oracle_reward"] < oracle_minimum:
                     failures.append({**result, "check": "oracle", "required": oracle_minimum})
