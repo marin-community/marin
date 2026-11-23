@@ -41,9 +41,10 @@ Run, with a known difference:
 | NUPA | no output cap | protocol cap 256 tokens |
 | OlympiadBench | no output cap | protocol cap 32,768 tokens |
 | TB2, OT-TBLite | external Harbor fork | vendored Harbor; retry list adds the sandbox errors classified since October |
+| All Harbor benchmarks | Daytona snapshots | declarative image builds in the Daytona eval account, which create no snapshots |
 | SWE-bench Verified, DS-1000 | registry at `016dd78` | registry at `38742b0` |
 | SWE-bench Verified | 32,768-token budget in the campaign file | same; the campaign README says the policy ran 131,072, unconfirmed |
-| OT-TBLite | registry version `2.0` | same; not commit-pinned |
+| OT-TBLite | registry version `2.0` | same; the version maps every task to [OpenThoughts-TBLite](https://github.com/open-thoughts/OpenThoughts-TBLite) commit `f075e46`, but the mapping itself is not pinned |
 
 The same as October: the 20 single-turn selections (thinking mode, repeats, few-shot count,
 MRCR and MMLU-Pro windows), seed 42 on AIME24 and OlympiadBench, and the Together
@@ -52,3 +53,21 @@ October campaign files.
 
 Not yet compared: prompt text, item counts and dataset revisions against October's Evalchemy
 tasks; task changes between the two Harbor registry pins.
+
+## Known problems
+
+A 20-item Qwen3.6 smoke run on 2026-11-21 and 2026-11-23 found these. They are recorded, not
+fixed; each is a later change to this policy.
+
+| Benchmark | Problem |
+| --- | --- |
+| GPQA Diamond | The dataset is gated on Hugging Face; the run's token has not accepted its terms, so preparation fails with HTTP 403. |
+| NUPA | All 20 answers hit the protocol's 256-token cap while thinking, scoring 0.0. |
+| OlympiadBench | The grader takes the first `\boxed{}` in reasoning plus answer. Qwen3.6's reasoning often quotes the prompt's "\boxed" instruction first, so the extracted answer is empty (62 of the attempts that finished normally); 76 of 200 attempts also hit the 32,768-token cap. Score 0.08. |
+| OT-TBLite | 40 of 100 tasks build an image from Launchpad's deadsnakes PPA at trial time. While Launchpad was slow or returning 503s, 7 of the 20 smoke tasks did not start within Harbor's 600 s limit, and the run failed the 90% coverage check (37 of 60 trials graded). |
+| All Harbor benchmarks | Images build from Dockerfiles or tagged images at trial time; none is pinned by digest. |
+| All Harbor benchmarks | October's configs cap grading at 300 s (`verifier.override_timeout_sec`), below the 900 to 3,600 s most tasks declare, and retry `VerifierTimeoutError`. TB2's `torch-pipeline-parallelism` times out in grading on every attempt, so each attempt reruns until the retry limit. |
+
+SWE-bench Verified graded all 20 trials (9 solved) and DS-1000 passed the coverage check (2 of
+20 solved). TB2 finished 19 of 20 tasks before the run was cancelled on the grading retries
+above. The other single-turn benchmarks completed, and FinanceBench had no judge failures.
