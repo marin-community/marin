@@ -2626,8 +2626,8 @@ def test_small_ep_decode_matches_ring_with_a_padded_token():
         valid = jax.sharding.reshard(jnp.array([True, False]), P("expert"))
         args = (tokens, indices, combine)
         reference = mlp(*args, token_valid=valid, mesh=mesh)
-        selected = mlp.decode_small_ep(*args, token_valid=valid, mesh=mesh)
+        decoded = mlp.decode_small_ep(*args, token_valid=valid, mesh=mesh)
 
-    np.testing.assert_allclose(selected, reference, atol=1e-6, rtol=1e-5)
-    assert np.any(np.asarray(selected)[0] != 0)
-    np.testing.assert_array_equal(np.asarray(selected)[1], 0)
+    np.testing.assert_allclose(decoded, reference, atol=1e-6, rtol=1e-5)
+    assert np.any(np.asarray(decoded)[0] != 0)
+    np.testing.assert_array_equal(np.asarray(decoded)[1], 0)

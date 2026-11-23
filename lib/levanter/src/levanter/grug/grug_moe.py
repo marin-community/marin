@@ -459,7 +459,7 @@ class MoEExpertMlp(eqx.Module):
         token_valid: Bool[Array, "T"],
         mesh: jax.sharding.AbstractMesh,
     ) -> Float[Array, "T D"]:
-        """Read only the experts selected in a decode batch with one token row per EP shard."""
+        """Return weighted expert outputs for one token per EP shard, with zero output for padding."""
         ep_size = _mesh_axis_size(mesh, "expert")
         if ep_size <= 1 or x.shape[0] != ep_size or self.capacity_factor < ep_size:
             raise ValueError("Small expert decode requires one token row per EP shard and capacity for all routes")
