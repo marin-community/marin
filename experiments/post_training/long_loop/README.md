@@ -1325,9 +1325,10 @@ regional Qwen3-0.6B checkpoint on two H100s (one policy GPU and one serving GPU)
 in 02a at interactive priority. Its shared recipe is
 `rounds/priority-drain-h100.yaml`; only the drain mode and run identity vary.
 It runs eight steps with evaluation every two steps, no baseline or checkpoint
-work, four GS2 training groups, and a 256-token response cap. The fixed 512-row
-evaluation cohort forces 256 output tokens per request to extend each session;
-training uses unrestricted temperature-only sampling with `min_tokens: 0`.
+work, four GS2 training groups, and a 256-token response cap. The fixed 2,048-row
+evaluation cohort extends each session through its size and low concurrency.
+Train and eval both use full-support temperature-only sampling with `min_tokens: 0`;
+forcing a minimum output length is incompatible with requested behavior logprobs.
 Eight workers each admit two tasks; evaluation admits two tasks globally, while
 the four-group training in-flight limit leaves workers available for eval.
 The 64-step lookahead keeps background generation supplied during the eval fence.

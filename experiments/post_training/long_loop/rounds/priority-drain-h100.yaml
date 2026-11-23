@@ -104,7 +104,7 @@ generator:
   eval_sampling_params:
     temperature: 0.7
     top_p: 1.0
-    min_tokens: 256
+    min_tokens: 0
     logprobs: 0
   eval_n_samples_per_prompt: 1
   trajectory_reward_shaping:

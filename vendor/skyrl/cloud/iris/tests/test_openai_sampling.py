@@ -1,6 +1,19 @@
+from pathlib import Path
+
 import pytest
+import yaml
 
 from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
+
+
+def test_h100_control_train_and_eval_requests_pass_runtime_sampling_guard() -> None:
+    recipe = Path(__file__).resolve().parents[5] / "experiments/post_training/long_loop/rounds/priority-drain-h100.yaml"
+    generator = yaml.safe_load(recipe.read_text())["generator"]
+    for phase in ("sampling_params", "eval_sampling_params"):
+        request = {**generator[phase], "logprobs": True, "max_completion_tokens": 256}
+        resolved = apply_openai_sampling(request, generator["sampling_params"], validate_rollout_logprob_sampling=True)
+        assert resolved["max_completion_tokens"] == 256
+        assert resolved["logprobs"] is True
 
 
 @pytest.mark.parametrize("logprobs", [None, False])

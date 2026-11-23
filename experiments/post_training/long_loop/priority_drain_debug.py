@@ -52,7 +52,10 @@ MODEL = "Qwen/Qwen3-0.6B"
 MODEL_REVISION = "c1899de289a04d12100db370d81485cdf75e47ca"
 MODEL_URI = "s3://marin-us-east-02a/marin/models/Qwen--Qwen3-0-6B--c1899de"
 MODEL_CONFIG_SHA256 = "660db3b73d788119c04535e48cf9be5f55bc3100841a718637ae695b442f27dd"
-DATA_VERSION = "2026.11.23.1"
+MODEL_ARTIFACT_VERSION = "2026.11.23.1"
+DATA_VERSION = "2026.11.23.2"
+TRAIN_PROMPTS = 1024
+EVAL_PROMPTS = 2048
 OUTPUT_PREFIX = "s3://marin-us-east-02a/marin/users/benfeuer/mochi-priority-drain-debug"
 TEMPORARY_PREFIX = "s3://marin-us-east-02a/tmp"
 RECIPE_PATH = Path(__file__).with_name("rounds") / "priority-drain-h100.yaml"
@@ -118,7 +121,7 @@ def build_data(config: DebugData) -> None:
     root = StoragePath(config.output_path)
     root.mkdirs(exist_ok=True)
     files = {}
-    for split, count in (("train", 1024), ("validation", 512)):
+    for split, count in (("train", TRAIN_PROMPTS), ("validation", EVAL_PROMPTS)):
         sink = pa.BufferOutputStream()
         pq.write_table(pa.Table.from_pylist(control_rows(split, count)), sink)
         payload = sink.getvalue().to_pybytes()
@@ -146,7 +149,7 @@ def debug_run(drain: str, version: str) -> ArtifactStep:
             model=ArtifactHfModel(
                 step=ArtifactStep.adopt(
                     user_owned_name("long-loop/priority-drain-debug-model"),
-                    DATA_VERSION,
+                    MODEL_ARTIFACT_VERSION,
                     source=MODEL_URI,
                     kind=LevanterCheckpoint,
                     config={"hf_revision": MODEL_REVISION, "config_sha256": MODEL_CONFIG_SHA256},

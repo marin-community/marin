@@ -15,8 +15,24 @@ from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import _failed_rollout
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
+from skyrl_train.trajectory_runners.model_clients import ModelServerError
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
 from tests.cpu.task_specs import lowered_task, task_input, text_task
+
+
+def test_model_server_error_retains_failure_instead_of_masking_it_with_attribute_error():
+    error = ModelServerError(category="server_error", request_id="request", status_code=400)
+    interruption = GradedRolloutInterrupted(
+        Rollout("attempt", (), "error", {}, {}), RolloutOperation.MODEL,
+        GradeResult(Outcome.INFRA_ERROR, None, "Model request failed"),
+    )
+    interruption.__cause__ = error
+    result = _failed_rollout(interruption, lowered_task(text_task(), "agent"))
+    assert result.failure is not None
+    assert result.failure.diagnostics["error_category"] == "server_error"
+    assert result.failure.diagnostics["message"] == str(error)
+    assert result.failure.diagnostics["status_code"] == 400
+    assert result.grade.reward is None
 
 
 @pytest.mark.parametrize("reward", [0.0, 1.0, None])
