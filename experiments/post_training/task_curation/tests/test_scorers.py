@@ -428,20 +428,41 @@ ULTRA_CODE = ScorerClosure(
 """What the Ultra code grade script ships: ``code_gen`` imports the one vendored LiveCodeBench evaluator."""
 
 ULTRA_CODE_CHECK = """
-import json, sys, tracemalloc
+import json, sys, time, tracemalloc
 sys.path.insert(0, sys.argv[1])
 from skyrl_gym.envs.nemotron_ultra.code_gen import grade_code
 tracemalloc.start()
+cpu_start = time.process_time()
 reward, detail = grade_code(sys.stdin.read(), {"verifier_metadata": {"unit_tests": json.loads(sys.argv[2])}})
-print(json.dumps([reward, detail["result"], detail["test_results"], tracemalloc.get_traced_memory()[1]]))
+cpu_seconds = time.process_time() - cpu_start
+print(json.dumps([reward, detail["result"], detail["test_results"], tracemalloc.get_traced_memory()[1], cpu_seconds]))
 """
-"""Grades the reply on stdin with Ultra's ``grade_code`` and prints the result with the peak memory it allocated."""
+"""Grades the reply on stdin with Ultra's ``grade_code`` and prints the result with the peak memory and CPU time it
+used in the grading process."""
 
 PRINTS_64_MIB = 'print("x" * (64 << 20))'
 """A stdin program whose output is 64 MiB, for tests that expect a few bytes."""
 
+WRITES_COLLIDING_DICT = """import gc, json, os, struct
+from multiprocessing.connection import Connection
 
-def ultra_code_grade(tmp_path: Path, cases: list[dict], program: str) -> tuple[float, str, list, int]:
+P = (1 << 61) - 1
+# The fractions (1 + 2jP) / 2 all have one hash, and comparing two of them runs Python code.
+pairs = [[["fraction", 1 + 2 * j * P, 2], 0] for j in range(24000)]
+frame = json.dumps(["value", ["dict", pairs], 0], separators=(",", ":")).encode()
+
+class Solution:
+    def add(self, a, b):
+        for item in gc.get_objects():
+            if isinstance(item, Connection) and item.writable:
+                data = struct.pack("!Q", len(frame)) + frame
+                while data:
+                    data = data[os.write(item.fileno(), data):]
+        return a + b"""
+"""Writes its own result to the verifier child's pipe: a dict whose 24,000 keys share one hash, in just under 1 MiB."""
+
+
+def ultra_code_grade(tmp_path: Path, cases: list[dict], program: str) -> tuple[float, str, list, int, float]:
     ULTRA_CODE.skip_if_unavailable()
     tests = ULTRA_CODE.stage(tmp_path)
     result = subprocess.run(
@@ -451,8 +472,8 @@ def ultra_code_grade(tmp_path: Path, cases: list[dict], program: str) -> tuple[f
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    reward, outcome, test_results, peak_bytes = json.loads(result.stdout.splitlines()[-1])
-    return reward, outcome, test_results, peak_bytes
+    reward, outcome, test_results, peak_bytes, cpu_seconds = json.loads(result.stdout.splitlines()[-1])
+    return reward, outcome, test_results, peak_bytes, cpu_seconds
 
 
 def test_ultra_code_grade_scores_a_program_without_the_tested_function_zero(tmp_path: Path):
@@ -461,7 +482,14 @@ def test_ultra_code_grade_scores_a_program_without_the_tested_function_zero(tmp_
 
 
 def test_ultra_code_grade_fails_an_oversized_output_without_reading_it(tmp_path: Path):
-    reward, outcome, test_results, peak_bytes = ultra_code_grade(tmp_path, STDIN_ADD, PRINTS_64_MIB)
+    reward, outcome, test_results, peak_bytes, _ = ultra_code_grade(tmp_path, STDIN_ADD, PRINTS_64_MIB)
     assert (reward, outcome, test_results) == (0.0, "failed_tests", [-2])
     # The grading process reads the 64 MiB result in 1 MiB pieces and drops it.
     assert peak_bytes < 16 << 20
+
+
+def test_ultra_code_grade_fails_a_dict_with_colliding_keys_without_building_it(tmp_path: Path):
+    reward, outcome, test_results, _, cpu_seconds = ultra_code_grade(tmp_path, FUNCTIONAL_ADD, WRITES_COLLIDING_DICT)
+    assert (reward, outcome, test_results) == (0.0, "failed_tests", [False])
+    # Building the dict would take about 24,000 ** 2 / 2 key comparisons in the grading process.
+    assert cpu_seconds < 10

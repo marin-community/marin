@@ -383,7 +383,10 @@ class _VerifierChildLost(BaseException):
 
 
 class _Unsupported:
-    """A returned value of a type the verifier child does not send back; it equals nothing."""
+    """A returned value the parent does not rebuild; it equals nothing.
+
+    Either of a type the verifier child does not send back, or a dict with a key that is not a string.
+    """
 
     def __init__(self, text: str):
         self.text = text
@@ -395,13 +398,16 @@ class _Unsupported:
         return self.text
 
 
+_NON_STRING_KEY = "a dict with a key that is not a string"
+"""How the parent shows a returned dict that it does not rebuild."""
+
 _NUMPY_SCALARS = frozenset(
     {"bool", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float16", "float32", "float64"}
 )
 
 
 def _value_form(value):
-    """The JSON form of a returned value, from which ``_value_from_form`` rebuilds one that compares the same.
+    """The JSON form of a value, from which ``_value_from_form`` rebuilds one equal to the same expected outputs.
 
     Subclasses of ``int``, ``float``, ``str``, ``list``, ``tuple`` and ``dict`` become their base type, so a class
     that overrides ``__eq__`` cannot decide a comparison. Raises ``TypeError`` for a value of any other type.
@@ -438,7 +444,12 @@ def _value_from_form(form):
         case ["tuple", list(items)]:
             return tuple(_value_from_form(item) for item in items)
         case ["dict", list(pairs)]:
-            return {_value_from_form(key): _value_from_form(item) for key, item in pairs}
+            # A key that is not a string hashes by a public function of its value, so keys can be chosen to collide
+            # and make building the dict take quadratic time. Expected outputs are JSON, whose keys are strings, so
+            # such a dict equals none of them.
+            if not all(isinstance(key, str) for key, _ in pairs):
+                return _Unsupported(_NON_STRING_KEY)
+            return {key: _value_from_form(item) for key, item in pairs}
         case ["numpy", str(name), value] if name in _NUMPY_SCALARS:
             return numpy.dtype(name).type(value)
         case ["fraction", int(numerator), int(denominator)]:
