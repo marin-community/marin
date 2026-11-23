@@ -15,6 +15,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.budget import campaign_budget
 from experiments.post_training.task_curation.difficulty.executor import (
+    ATTEMPT_JOBS_PER_SOLVER,
     CONCURRENT_JOB_CAP,
     EscalationLog,
     Job,
@@ -169,7 +170,7 @@ def test_budget_counts_recorded_spend_and_inflight_reservations_across_restart(t
     assert len(escalations) == 1
 
 
-def test_repair_backlog_preserves_two_attempt_lanes_per_solver(tmp_path):
+def test_repair_backlog_preserves_attempt_lanes_for_each_solver(tmp_path):
     ledger = str(tmp_path / "ledger")
     sources = [replace(SOURCE, source_id=f"source-{index}") for index in range(9)]
     repairs = [
@@ -183,14 +184,14 @@ def test_repair_backlog_preserves_two_attempt_lanes_per_solver(tmp_path):
             1,
         )
         for solver in Solver
-        for source in sources[:2]
+        for source in sources[: ATTEMPT_JOBS_PER_SOLVER[solver]]
     ]
     backend = JobStore(str(tmp_path / "jobs"))
     result = execute_plan(repairs + attempts, [], sources, ledger, backend, EscalationLog(ledger))
     accepted = {path.stem for path in (tmp_path / "jobs").glob("*.json")}
     assert accepted == {action_id(action) for action in repairs[:8] + attempts}
     assert result["deferred"] == [action_id(repairs[8])]
-    assert result["active_job_slots"] == 40
+    assert result["active_job_slots"] == 64
 
 
 @pytest.mark.parametrize(

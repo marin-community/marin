@@ -39,15 +39,15 @@ def test_train_sources_dispatch_before_eval_sources():
 
 
 def test_one_solver_cannot_fill_all_attempt_lanes(tmp_path):
-    sources = [replace(SOURCE, source_id=f"source-{i}") for i in range(4)]
+    sources = [replace(SOURCE, source_id=f"source-{i}") for i in range(6)]
     cells = [
-        cell_state([], source, Solver.SMALL if i < 3 else Solver.LARGE, CoveragePolicy())
+        cell_state([], source, Solver.SMALL if i < 5 else Solver.LARGE, CoveragePolicy())
         for i, source in enumerate(sources)
     ]
     ledger = str(tmp_path / "ledger")
     actions = plan(cells, [])
     result = execute_plan(actions, [], sources, ledger, JobStore(str(tmp_path / "jobs")), EscalationLog(ledger))
     submitted = [row for row in read_rows(ledger) if row.outcome == Outcome.SUBMITTED]
-    assert len(result["submitted"]) == 3
-    assert sum(row.solver == Solver.SMALL for row in submitted) == 2
+    assert len(result["submitted"]) == 5
+    assert sum(row.solver == Solver.SMALL for row in submitted) == 4
     assert sum(row.solver == Solver.LARGE for row in submitted) == 1

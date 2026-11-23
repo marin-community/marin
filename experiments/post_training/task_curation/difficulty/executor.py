@@ -8,6 +8,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from types import MappingProxyType
 from typing import Protocol
 
 from finestore.rl.difficulty import Solver
@@ -56,10 +57,17 @@ from experiments.post_training.task_curation.difficulty.state import (
     Outcome,
 )
 
-CONCURRENT_JOB_CAP = 40
+CONCURRENT_JOB_CAP = 64
 REPAIR_JOB_SLOT_CAP = 8
 ATTEMPT_JOB_SLOTS = 4
-ATTEMPT_JOBS_PER_SOLVER = 2
+ATTEMPT_JOBS_PER_SOLVER = MappingProxyType(
+    {
+        Solver.SMALL: 4,
+        Solver.LARGE: 4,
+        Solver.SNOWBALL: 4,
+        Solver.HOSTED: 2,
+    }
+)
 LOGGER = logging.getLogger(__name__)
 
 
@@ -177,7 +185,7 @@ def execute_plan(
             deferred.append(key)
             continue
         if isinstance(action, AttemptBatch):
-            if sum(job.active and job.solver == action.solver for job in jobs) >= ATTEMPT_JOBS_PER_SOLVER:
+            if sum(job.active and job.solver == action.solver for job in jobs) >= ATTEMPT_JOBS_PER_SOLVER[action.solver]:
                 deferred.append(key)
                 continue
             cells = {(source.source_id, action.solver.value) for source in action.sources}

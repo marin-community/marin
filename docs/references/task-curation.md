@@ -2815,10 +2815,11 @@ collect those children's terminal results. The lease and content-addressed
 job names prevent duplicate submissions. Repeating an unchanged plan schedules
 nothing. Each attempt batch has at most 20 tasks. Sources explicitly intended
 for training plan before evaluation and unclassified sources; typed repair
-priority applies within each group. The controller admits at most two attempt
-batches per solver, with sixteen workers per batch. Attempt batches reserve four
-of 40 job slots; CPU repairs reserve one and share at most eight slots. This
-leaves room for two attempt batches per solver while repairs are backlogged.
+priority applies within each group. The controller admits at most four attempt
+batches per self-hosted solver and two for Hosted, with sixteen workers per batch.
+Attempt batches reserve four of 64 job slots; CPU repairs reserve one and share
+at most eight slots. This leaves room for all fourteen attempt batches while
+repairs are backlogged.
 Persistent engine and controller jobs
 are outside this work queue. A cell keeps at most one in-flight batch.
 Serving keeps compilation and CUDA graphs enabled.
