@@ -853,33 +853,29 @@ class SnowballBlock(eqx.Module):
         token_valid: Array,
     ) -> tuple[Array, KvPageCache]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
+
+        def attend(long_context: bool):
+            return self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="long" if long_context else "short")
+
         if isinstance(use_long, bool):
-            attn_out, cache = self.attn.decode(
-                attn_in, cache, batch_info, pos_ids, mode="long" if use_long else "short"
-            )
+            attn_out, cache = attend(use_long)
         else:
-            attn_out, cache = jax.lax.cond(
-                use_long,
-                lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="long"),
-                lambda _: self.attn.decode(attn_in, cache, batch_info, pos_ids, mode="short"),
-                operand=None,
-            )
+            attn_out, cache = jax.lax.cond(use_long, lambda: attend(True), lambda: attend(False))
         return self._after_attention(x, attn_out, return_routes=False, token_valid=token_valid).output, cache
+
+
+def _is_long_attention_layer(index, num_layers: int):
+    return ((index + 1) % _LONG_ATTENTION_INTERVAL == 0) | (index == num_layers - 1)
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
     """Bool[num_layers], True where a layer runs full-causal attention instead of the sliding window."""
-    idx = jnp.arange(num_layers)
-    return ((idx % _LONG_ATTENTION_INTERVAL) == _LONG_ATTENTION_INTERVAL - 1) | (idx == num_layers - 1)
+    return _is_long_attention_layer(jnp.arange(num_layers), num_layers)
 
 
 def num_long_attention_layers(num_layers: int) -> int:
     """Number of layers that run full-causal attention, counted without JAX for FLOP estimates."""
-    return sum(
-        1
-        for i in range(num_layers)
-        if i % _LONG_ATTENTION_INTERVAL == _LONG_ATTENTION_INTERVAL - 1 or i == num_layers - 1
-    )
+    return sum(_is_long_attention_layer(i, num_layers) for i in range(num_layers))
 
 
 class SnowballTransformer(eqx.Module):
@@ -988,7 +984,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     _unroll_decode: bool = eqx.field(static=True, default=False)
 
     def with_unrolled_decode(self) -> "SnowballLMHeadModel":
-        """Compile a separate block body for each layer during token decode."""
+        """Return a model that unrolls its layer loop during token decode."""
         return dataclasses.replace(self, _unroll_decode=True)
 
     @property
@@ -1203,7 +1199,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if unroll:
             state = initial
             for layer_index, block in enumerate(self.transformer.blocks):
-                use_long = (layer_index + 1) % _LONG_ATTENTION_INTERVAL == 0 or layer_index == num_layers - 1
+                use_long = _is_long_attention_layer(layer_index, num_layers)
                 state, _ = layer_step(state, (layer_index, self._inference_block(block), use_long))
             hidden, cache_pages = state
         else:
