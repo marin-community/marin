@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 22, 2026 at 4:23 p.m. PST.
+Draft for review. Accelerator status last checked November 22, 2026 at 4:54 p.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | The matched frozen comparison is complete. |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. The local port passed the bounded optimizer gate and replayed four 24,576-token trajectories through the fused scorer on the small TPUv4 fixture. | Qualify production shapes and fused replay against the pinned checkpoint. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 67B live swap and real tool-turn replay passed. The latest full-context probe found one score ratio outside the permitted range across 32,768 sampled tokens. The repaired five-host pilot installed policy 0, scored 32 of 100 baseline tasks and stopped on an assistant-prefix request before its first update. | Qualify evaluation batching and assistant-prefix replay on H100, complete the held comparison and resolve the full-context scoring discrepancy. |
+| Native inventory backend | The 67B live swap and real tool-turn replay passed. The repaired binary worker generated all 100 fixed-panel prompts in 26.1 minutes on one eight-H100 host and passed an assistant-prefix replay case there. The latest full-context probe found one score ratio outside the permitted range across 32,768 sampled tokens. | Complete the held comparison and resolve the full-context scoring discrepancy. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. Both passed exact TPUv4 recovery. The typed learner also passed CPU Gloo expert-block publication. | Verify the production four-learner-host handoff and measure the typed learner at 67B. The frozen H100 learner keeps its original pipe for the smoke and matched comparison. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -1816,8 +1816,10 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   against their previous launch settings. The new vLLM child started on
   all five eight-H100 hosts and all 40 ranks passed the interconnect gate.
   Serving rank zero streamed its 15.6 GiB share of the regional HF export
-  in 92.0 seconds. The native five-host retry awaits the single-host
-  qualification.
+  in 92.0 seconds. All eight serving ranks verified policy 0 in 150.7
+  seconds with zero mismatches across 157,498,867,712 bytes. The run
+  scored the 100-task baseline in 19.2 seconds and admitted the first 32
+  groups at zero staleness. It is writing the exact-restoration checkpoint.
   [Fresh held vLLM child][iris-held-vllm-retry]
 
   The native coordinator lost its first slot before the GPU group was
@@ -1890,6 +1892,13 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   the visible accelerator inventory. The calibration times the serving
   worker on the 100 exact prompt token sequences and leaves grading and
   Ray overhead to the full held run.
+  The revised task restored the exact policy-0 snapshot in 153.5 seconds.
+  Its typed batch capacity was four. From the cold evaluation start, it
+  completed all 100 requests in 1,563.5 of the allowed 1,800 seconds,
+  with 53,055 prompt tokens and 49,078 generated tokens. The same worker
+  returned an assistant-prefix training frame with all 79 prompt tokens,
+  contiguous positions and exactly ten raw logprobs for the ten sampled
+  tokens. The warm unary-versus-batched comparison is in progress.
   [Original calibration][iris-native-serving-eval-first] ·
   [Revised calibration][iris-native-serving-eval-retry]
 
