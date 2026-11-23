@@ -544,7 +544,7 @@ def build_nop_packets(
         directory = output_dir / canonical_sha256(task.id)[:20]
         write_native_task(task, directory)
         path = directory / TASK_TOML
-        document = tomlkit.parse(path.read_text().decode())
+        document = tomlkit.parse(path.read_text())
         (document.get("environment") or {})["storage_mb"] = measured_storage_mb
         path.write_bytes(tomlkit.dumps(document).encode())
         packets.append({"task_id": task.id, "packet": str(directory)})
@@ -653,7 +653,10 @@ def run_calibration_source(
 
     census = census_report(census_release(source_id, release_parquet))
     (work / "census.json").write_text(json.dumps(census, indent=2, sort_keys=True) + "\n")
+    output = StoragePath(output_root)
+    (output / "census.json").write_text(json.dumps(census, indent=2, sort_keys=True) + "\n")
     pack = pack_calibration(source_id, release_parquet, panel_local, work, sample_size=sample_size)
+    (output / "pack-summary.json").write_text((work / "pack-summary.json").read_text())
 
     calibration_dir = work / "calibration"
     try:
@@ -693,9 +696,16 @@ def run_calibration_source(
         "dispatch_reference": DISPATCH_REFERENCE,
     }
     (work / "calibration-summary.json").write_text(json.dumps(calibration_summary, indent=2, sort_keys=True) + "\n")
+    (output / "calibration-summary.json").write_text(json.dumps(calibration_summary, indent=2, sort_keys=True) + "\n")
 
     revision_dir = work / "revision"
     revision = build_revision(source_id, release_parquet, measured_storage_mb, revision_dir)
+    (output / "revision-summary.json").write_text((revision_dir / "revision-summary.json").read_text())
+    (output / "revision-ledger.json").write_text((revision_dir / "revision-ledger.json").read_text())
+    revision_target = output / "revision" / "tasks.parquet"
+    revision_target.parent.mkdirs(exist_ok=True)
+    with (revision_dir / "tasks.parquet").open("rb") as stream:
+        revision_target.write_bytes(stream.read())
 
     nop_dir = work / "nop-packets"
     packets = build_nop_packets(release_parquet, panel_local, measured_storage_mb, nop_dir)
@@ -712,25 +722,8 @@ def run_calibration_source(
         "skipped": skip_nop,
     }
     (work / "nop-summary.json").write_text(json.dumps(nop_summary, indent=2, sort_keys=True) + "\n")
+    (output / "nop-summary.json").write_text(json.dumps(nop_summary, indent=2, sort_keys=True) + "\n")
 
-    output = StoragePath(output_root)
-    for parent in (work, work / "revision"):
-        for name in (
-            "census.json",
-            "pack-summary.json",
-            "calibration-summary.json",
-            "revision-summary.json",
-            "revision-ledger.json",
-            "nop-summary.json",
-            "sealed.json",
-        ):
-            source = parent / name
-            if source.exists() and not (output / name).exists():
-                (output / name).write_text(source.read_text())
-    revision_target = output / "revision" / "tasks.parquet"
-    revision_target.parent.mkdirs(exist_ok=True)
-    with (revision_dir / "tasks.parquet").open("rb") as stream:
-        revision_target.write_bytes(stream.read())
     sealed = {
         "source_id": source_id,
         "census": census,
