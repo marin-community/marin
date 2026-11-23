@@ -72,7 +72,7 @@ _DSPARK = sections.SpeculativeDecoding(
         source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
         source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
     ),
-    num_speculative_tokens=8,
+    num_speculative_tokens=4,
 )
 
 _DEFAULT_MODEL = ArtifactHfModel(
@@ -247,7 +247,7 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.22.2",
+    revision="2026.11.22.3",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
     default_speculative_decoding=_DSPARK,
@@ -408,14 +408,12 @@ _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="speed-short",
-        revision="2026.11.22.3",
         checkpoints="none",
         recipe=replace(
             _GENERATING,
             fixed_reply_tokens=4096,
             config=_GENERATING.config.merge(RecipePatch(generator=sections.Generator(gpu_memory_utilization=0.80))),
         ),
-        default_speculative_decoding=_DSPARK.replace(num_speculative_tokens=4),
         updates=0,
         measured=range(1),
         control_preset="speed-short",

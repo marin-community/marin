@@ -575,6 +575,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.1": "a379319d",
             "2026.11.20.3": "d4749482",
             "2026.11.22.2": "43b4c17c",
+            "2026.11.22.3": "fac45152",
         },
         "speed-medium": {
             "2026.11.12.1": "e75349ff",
@@ -584,6 +585,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "dbc38bdf",
             "2026.11.22.1": "eded19d9",
             "2026.11.22.2": "3d5693c0",
+            "2026.11.22.3": "f4c0a7fb",
         },
         "learning-medium": {
             "2026.11.12.1": "ba638a12",
@@ -594,6 +596,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "ce8666ce",
             "2026.11.20.4": "36e0cfd0",
             "2026.11.22.2": "cf281241",
+            "2026.11.22.3": "84355781",
         },
         "data-medium": {
             "2026.11.12.1": "ba638a12",
@@ -604,6 +607,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "ce8666ce",
             "2026.11.20.4": "36e0cfd0",
             "2026.11.22.2": "cf281241",
+            "2026.11.22.3": "84355781",
         },
         "speed-long": {
             "2026.11.11.1": "cd0a5f4e",
@@ -612,6 +616,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.1": "3d1fe22d",
             "2026.11.20.3": "87feb546",
             "2026.11.22.2": "0d2cff7d",
+            "2026.11.22.3": "0e0786a5",
         },
         "train-long": {
             "2026.11.11.1": "4945b701",
@@ -622,12 +627,14 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.3": "40c0256e",
             "2026.11.20.4": "7826cc5a",
             "2026.11.22.2": "8f00501f",
+            "2026.11.22.3": "9d29b026",
         },
         "train-long-harbor": {
             "2026.11.20.5": "e1f1635a",
             "2026.11.20.6": "76baa3fb",
             "2026.11.20.7": "9ceb90cb",
             "2026.11.22.2": "965dcf45",
+            "2026.11.22.3": "68fab3ae",
         },
         "train-medium-agentic": {
             "2026.11.19.1": "756f58ef",
@@ -635,14 +642,25 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.4": "f76d6b51",
             "2026.11.20.5": "aa36f9de",
             "2026.11.22.2": "09cc792c",
+            "2026.11.22.3": "18aa725e",
         },
-        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f", "2026.11.22.2": "f793a47f"},
-        "train-medium-tools": {"2026.11.20.1": "45b0a101", "2026.11.22.2": "5b4d7a2e"},
+        "train-long-agentic": {
+            "2026.11.20.4": "7123c960",
+            "2026.11.20.5": "0043357f",
+            "2026.11.22.2": "f793a47f",
+            "2026.11.22.3": "2b5bba63",
+        },
+        "train-medium-tools": {
+            "2026.11.20.1": "45b0a101",
+            "2026.11.22.2": "5b4d7a2e",
+            "2026.11.22.3": "7085ba81",
+        },
         "eval-short": {
             "2026.11.19.1": "8144570a",
             "2026.11.20.1": "fad362ca",
             "2026.11.20.3": "85b0359d",
             "2026.11.22.2": "655b38d2",
+            "2026.11.22.3": "93f043cb",
         },
     }
     configs = assert_revisioned_native_configs(
