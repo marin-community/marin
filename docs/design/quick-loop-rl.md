@@ -1,6 +1,6 @@
 # Levanter quick-loop RL
 
-Draft for review. Accelerator status last checked November 23, 2026 at 7:51 a.m. PST.
+Draft for review. Accelerator status last checked November 23, 2026 at 8:01 a.m. PST.
 
 Move the learner in the Snowball inventory quick loop from Megatron to
 Levanter with SkyRL and vLLM in place. The inventory quick loop trains the
@@ -924,6 +924,18 @@ The prototype kept the broadcast order and passed three two-version CPU
 Gloo cases, including source-spool and installed-receiver corruption. Measure
 the hash wait on H100 before adopting it and keep exact byte verification
 on the receiver. [Original timing audit and prototype][held-publication-overlap]
+
+A separate candidate adds one-frame read-ahead within an expert layer
+and projection. It fetches the next detached binary payload while the
+sender stages and sends the current one. Reads across projection boundaries
+and all dense reads stay on the sender thread. Each extra frame is bounded
+at 64 MiB. The existing collective order, CUDA fences, both SHA-256 passes,
+and receiver replay still apply. Two CPU sweeps with 900 MiB per trial
+used the production binary pipe and identical host copy, hashing, and
+spool work. Median wall time moved from 0.96 to 0.90 seconds in one sweep
+and from 1.75 to 0.70 seconds in the other. All digests were exact. The
+spread is large and H100 speedup remains unmeasured. The two-version CPU
+Gloo cases passed with both source and receiver corruption detected.
 
 Across the 23 warm updates from step 2 through 24, median step time was
 450.4 seconds for Levanter and 150.1 seconds for Megatron. They processed
