@@ -1202,19 +1202,21 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             logits = logits.astype(loss_type)
         if logit_soft_cap is not None:
             logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
-        return (
-            next_token_loss(
-                self.Pos,
-                self.Vocab,
-                logits,
-                example.tokens,
-                loss_weight=example.loss_weight,
-                reduction=reduction,
-                reduction_axis=reduction_axis,
-                logsumexp_weight=logsumexp_weight,
+        # Keep the one-hot target contraction in the same FP32 precision as the scores.
+        with jax.default_matmul_precision("highest"):
+            return (
+                next_token_loss(
+                    self.Pos,
+                    self.Vocab,
+                    logits,
+                    example.tokens,
+                    loss_weight=example.loss_weight,
+                    reduction=reduction,
+                    reduction_axis=reduction_axis,
+                    logsumexp_weight=logsumexp_weight,
+                )
+                + aux_loss
             )
-            + aux_loss
-        )
 
     def get_lm_head(self) -> NamedArray:
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))
