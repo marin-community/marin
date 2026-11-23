@@ -143,12 +143,18 @@ def broker() -> BrokerConfig:
 
 
 def worker_resources() -> ResourceConfig:
-    """One engine: a single GB200x4 task on the pool cluster, preemption-free."""
+    """One engine: a single GB200x4 task on the pool cluster, preemption-free.
+
+    Host RAM must budget the full checkpoint (the distributed streamer pipelines a
+    ~76 GiB shard per TP process; marin's own sizing guidance budgets the whole
+    checkpoint per task), so 256 GiB OOMKills during weight loading — 512 GiB
+    clears it on the 768 GiB node.
+    """
     return ResourceConfig.with_gpu(
         "GB200",
         count=GPUS_PER_ENGINE,
         cpu=16.0,
-        ram="256g",
+        ram="512g",
         disk="200g",
         preemptible=False,
         target_cluster=CLUSTER,
