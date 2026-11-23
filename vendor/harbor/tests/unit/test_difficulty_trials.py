@@ -18,6 +18,7 @@ import pytest
 import yaml
 from finestore.reader import ReadView
 from harbor.environments.docker_translate import ComposeDocument
+from harbor.host_capabilities import HostCapabilities
 from harbor.llms.openai_llm import OpenAILLM
 from harbor.utils.logger import logger as harbor_logger
 from harbor.llms.vllm_tokenization import completion_budget_from_count, tokenize_url
@@ -44,6 +45,7 @@ from verifyit.modes.grade_math import (
     MATH_VERIFIER_DEADLINE,
 )
 from rigging.filesystem.storage_path import StoragePath
+from shellbox.machine import UnsupportedMachineSpec
 
 from experiments.post_training.task_curation import difficulty_relay, difficulty_trials
 from experiments.post_training.task_curation.difficulty import ledger_worker
@@ -60,6 +62,11 @@ from experiments.post_training.task_curation.difficulty_sampling import request_
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 
 
+@pytest.fixture(autouse=True)
+def daytona_connection_environment(monkeypatch):
+    monkeypatch.setenv("DAYTONA_API_URL", "https://fixture.invalid")
+    monkeypatch.setenv("DAYTONA_TARGET", "us")
+
 
 def batch_manifest(root, source):
     sample = source.sample.model_dump(mode="json")
@@ -75,7 +82,7 @@ def batch_manifest(root, source):
 def math_deadline_trial(phase):
     """A trial fixture whose verifier verdict carries one math-deadline phase."""
 
-    async def deadline_trial(configuration, _authentication, _guest_environment):
+    async def deadline_trial(configuration, _authentication, _guest_environment, _host_capabilities):
         trial_dir = configuration.trials_dir / "candidate"
         verifier_dir = trial_dir / "verifier"
         verifier_dir.mkdir(parents=True)
@@ -99,7 +106,7 @@ def math_deadline_trial(phase):
 
 
 def scored_trial():
-    async def scored(configuration, _authentication, _guest_environment):
+    async def scored(configuration, _authentication, _guest_environment, _host_capabilities):
         trial_dir = configuration.trials_dir / "candidate"
         verifier_dir = trial_dir / "verifier"
         verifier_dir.mkdir(parents=True)
@@ -126,6 +133,7 @@ def deadline_fixture(root, source_id="fixture:hardmath", task_id="hardmath"):
     runtime_sha256 = canonical_sha256(runtime)
     directory = root
     directory.mkdir(parents=True, exist_ok=True)
+    (directory / "task-spec.json").write_text(json.dumps({"resources": {}}))
     (directory / "source-runtime.json").write_text(TaskSpecRuntimeBinding(
         task_sha256="d" * 64, runtime_sha256=runtime_sha256, runtime=runtime,
     ).model_dump_json())
@@ -173,7 +181,8 @@ def test_reference_phase_deadline_blocks_after_streak(tmp_path, monkeypatch):
     monkeypatch.setattr(difficulty_trials, "execute_trial", math_deadline_trial(MATH_DEADLINE_REFERENCE_PARSE))
     output = tmp_path / "receipts"
     outcome = difficulty_trials.run_task(
-        task, config, "https://fixture.invalid", tmp_path / "local" / "source", str(output), None, 0
+        task, config, "https://fixture.invalid", tmp_path / "local" / "source", str(output), None, 0,
+        host_capabilities=HostCapabilities(),
     )
     limit = difficulty_trials.MATH_DEADLINE_LIMIT
     assert [attempt.status for attempt in outcome.attempts] == ["infrastructure"] * (limit - 1) + ["blocked"]
@@ -199,7 +208,8 @@ def test_comparison_phase_deadlines_do_not_block_and_report_the_gap(tmp_path, mo
     monkeypatch.setattr(difficulty_trials, "execute_trial", math_deadline_trial(MATH_DEADLINE_COMPARISON))
     output = tmp_path / "receipts"
     outcome = difficulty_trials.run_task(
-        task, config, "https://fixture.invalid", tmp_path / "local" / "source", str(output), None, 0
+        task, config, "https://fixture.invalid", tmp_path / "local" / "source", str(output), None, 0,
+        host_capabilities=HostCapabilities(),
     )
     assert [attempt.status for attempt in outcome.attempts] == ["infrastructure"] * config.attempts_per_task
     assert all(
@@ -219,14 +229,15 @@ def test_scored_attempt_clears_the_deadline_streak(tmp_path, monkeypatch):
     task, config, sample, identity, measurement = deadline_fixture(tmp_path / "source-task")
     phases = [MATH_DEADLINE_REFERENCE_PARSE, MATH_DEADLINE_REFERENCE_PARSE]
 
-    async def mixed_trial(configuration, _authentication, _guest_environment):
+    async def mixed_trial(configuration, _authentication, _guest_environment, host_capabilities):
         if phases:
-            return await math_deadline_trial(phases.pop(0))(configuration, _authentication, {})
-        return await scored_trial()(configuration, _authentication, {})
+            return await math_deadline_trial(phases.pop(0))(configuration, _authentication, {}, host_capabilities)
+        return await scored_trial()(configuration, _authentication, {}, host_capabilities)
 
     monkeypatch.setattr(difficulty_trials, "execute_trial", mixed_trial)
     outcome = difficulty_trials.run_task(
-        task, config, "https://fixture.invalid", tmp_path / "local" / "source", str(tmp_path / "receipts"), None, 0
+        task, config, "https://fixture.invalid", tmp_path / "local" / "source", str(tmp_path / "receipts"), None, 0,
+        host_capabilities=HostCapabilities(),
     )
     assert [attempt.status for attempt in outcome.attempts] == ["infrastructure", "infrastructure", "scored"]
     assert outcome.attempts[-1].reward == 1.0
@@ -278,6 +289,8 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     )
     directory = tmp_path / "source-task"
     directory.mkdir()
+    if workload == "task_spec":
+        (directory / "task-spec.json").write_text(json.dumps({"resources": {}}))
     (directory / "task.toml").write_text('[environment]\nworkdir = "/app"\n')
     (directory / "instruction.md").write_text("Original task")
     (directory / "tests").mkdir()
@@ -294,6 +307,13 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
             source.tasks[0], source.tasks[1].model_copy(update={"reason": None, "path": str(directory),
                                                "workload": "native" if upstream_failure == "missing_images" else "task_spec"}),
         ]})
+        if upstream_failure == "missing_image":
+            blocked_directory = tmp_path / "blocked-task"
+            shutil.copytree(directory, blocked_directory)
+            (blocked_directory / "task-spec.json").write_text(json.dumps({"resources": {}}))
+            source = source.model_copy(update={"tasks": [
+                source.tasks[0], source.tasks[1].model_copy(update={"path": str(blocked_directory)}),
+            ]})
     if upstream_failure == "compose_unsupported":
         (directory / "task.toml").write_text('[environment]\ndocker_image = "example.test/native@sha256:' + "a" * 64 + '"\nworkdir = "/app"\n')
         (directory / "instruction.md").write_text("Original native task")
@@ -386,10 +406,10 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     continuing = False
     original_execute_trial = difficulty_trials.execute_trial
 
-    async def physical_trial(configuration, authentication, _guest_environment):
+    async def physical_trial(configuration, authentication, _guest_environment, host_capabilities):
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
         if upstream_failure in {"missing_image", "missing_images"} and configuration.agent.name == "terminus-2":
-            return await original_execute_trial(configuration, authentication, {})
+            return await original_execute_trial(configuration, authentication, {}, host_capabilities)
         if upstream_failure == "compose_unsupported" and configuration.agent.name == "terminus-2":
             # The local backend cannot reach compose validation off Linux; raise the
             # genuine translator error the prepared sandbox would raise at construction.
@@ -512,6 +532,7 @@ def test_recovered_transport_retry_preserves_the_valid_grade(tmp_path, monkeypat
     )
     directory = tmp_path / "source-task"
     directory.mkdir()
+    (directory / "task-spec.json").write_text(json.dumps({"resources": {}}))
     (directory / "task.toml").write_text('[environment]\nworkdir = "/app"\n')
     (directory / "instruction.md").write_text("Original task")
     (directory / "tests").mkdir()
@@ -559,7 +580,7 @@ def test_recovered_transport_retry_preserves_the_valid_grade(tmp_path, monkeypat
         **kwargs, transport=httpx.MockTransport(model_response)))
     monkeypatch.setattr(ledger_worker, "require_secret", lambda name: "fixture-host-key")
 
-    async def physical_trial(configuration, authentication, _guest_environment):
+    async def physical_trial(configuration, authentication, _guest_environment, _host_capabilities):
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
         # The trial's first model request is transiently rejected and its retry succeeds through the relay.
         endpoint = configuration.agent.kwargs["api_base"]
@@ -625,10 +646,8 @@ def test_worker_host_capabilities_binds_data_without_an_eval_fallback():
     assert callable(factory)
     assert capabilities.daytona.api_key == "data-key"
 
-    incomplete = worker_host_capabilities({}, environment={"DAYTONA_API_KEY": "eval-key"})
-    assert (incomplete.daytona.api_key, incomplete.daytona.target) == (None, None)
-    with pytest.raises(ValueError, match="explicit api_key"):
-        incomplete.daytona.client_factory()
+    with pytest.raises(UnsupportedMachineSpec, match="missing api_key, target"):
+        worker_host_capabilities({}, environment={"DAYTONA_API_KEY": "eval-key"})
 
 
 

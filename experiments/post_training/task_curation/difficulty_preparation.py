@@ -4,9 +4,8 @@
 """Materialize unchanged sampled contracts for production Harbor candidate trials."""
 
 import argparse
-import base64
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 
 from finestore.rl.difficulty import DifficultyGap, difficulty_gap_reason, require_difficulty_gaps
@@ -25,7 +24,11 @@ from experiments.post_training.task_curation.difficulty_contracts import (
     difficulty_task_contract,
     resolve_receipt_vintage,
 )
-from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
+from experiments.post_training.task_curation.difficulty_prepared import (
+    PreparedSource,
+    PreparedTask,
+    grader_requires_multi_uid,
+)
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource, load_queue_sources
 from experiments.post_training.task_curation.judges import JUDGE_TIERS
 from experiments.post_training.task_curation.prebuilt import validate_native_package
@@ -46,27 +49,6 @@ def source_gap_reason(gap: DifficultyGap, detail: str | None = None) -> str:
 
 LOCAL_ACTOR_SOURCES: frozenset[str] = frozenset({"OpenResearcher:OpenResearcher-Dataset"})
 """Sources whose actor image exceeds the Daytona snapshot limit and rerun on the maintained LOCAL backend."""
-
-GRADER_PRIVILEGE_DROP_UID = "user=65534"
-"""The sandbox call a privilege-dropping grader makes before compiling untrusted content.
-
-The Nemotron Ultra Lean graders construct their compile sandbox with ``user=65534`` so the
-untrusted proof compiles as ``nobody`` rather than as the grader itself."""
-
-
-def grader_requires_multi_uid(spec: Mapping) -> bool:
-    """Whether the grader's sandbox drops privileges to a fixed uid before it compiles.
-
-    Daytona containers carry a full uid map, so the drop succeeds there. The LOCAL bubblewrap
-    tier maps a single uid inside its user namespace, so the same drop fails with EPERM
-    (measured on the Nemotron Ultra Lean graders). Detected from the grader's verifier
-    resources, so the served task bytes stay unchanged.
-    """
-    for resource in (spec.get("resources") or {}).get("verifier") or ():
-        content = base64.b64decode(resource["source"]["content_base64"]).decode("utf-8", errors="replace")
-        if GRADER_PRIVILEGE_DROP_UID in content:
-            return True
-    return False
 
 
 def grader_tier_backend(source_backend: str, *, native: bool, requires_multi_uid: bool) -> str:

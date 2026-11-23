@@ -60,8 +60,7 @@ from experiments.post_training.task_curation.difficulty_config import (
     CandidateRun,
 )
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
-from experiments.post_training.task_curation.difficulty_preparation import grader_requires_multi_uid
-from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
+from experiments.post_training.task_curation.difficulty_prepared import PreparedTask, grader_requires_multi_uid
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 from experiments.post_training.task_curation.environment import Environment
 
@@ -652,6 +651,7 @@ def run_task(
         LOGGER.info("Grader machine for %s runs from the composed toolchain image %s", task.task_id, machine_image)
     if (
         task.backend == "local"
+        and task.workload == "task_spec"
         and task.path is not None
         and grader_requires_multi_uid(json.loads((Path(task.path) / "task-spec.json").read_text()))
     ):

@@ -18,12 +18,12 @@ from experiments.post_training.task_curation.difficulty.importer import receipt_
 from experiments.post_training.task_curation.difficulty.planner import AttemptBatch, SourceAttempts
 from experiments.post_training.task_curation.difficulty.run_action import REGISTRY_AUTH_SECRET, attempt_command
 from experiments.post_training.task_curation.difficulty.state import GapReason, Outcome
-from experiments.post_training.task_curation.difficulty_preparation import (
+from experiments.post_training.task_curation.difficulty_preparation import grader_tier_backend
+from experiments.post_training.task_curation.difficulty_prepared import (
     GRADER_PRIVILEGE_DROP_UID,
+    PreparedTask,
     grader_requires_multi_uid,
-    grader_tier_backend,
 )
-from experiments.post_training.task_curation.difficulty_prepared import PreparedTask
 from experiments.post_training.task_curation.difficulty_trials import (
     DEFECTIVE_ACTOR_IMAGES,
     actor_phase_gap_reason,
