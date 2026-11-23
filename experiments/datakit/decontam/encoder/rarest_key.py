@@ -3,13 +3,16 @@
 
 """Stage 1: choose the rarest 20-character key of each eval item, and measure its candidate volume.
 
-``count``: for every item, up to ``WINDOWS_PER_ITEM`` evenly spaced windows of its item
-stream (letters and digits) are candidate keys. Short question streams include the lettered
-choices. A Zephyr job over reference shards counts in how many records each candidate window
+``prepare``: for every item and key stream, up to ``WINDOWS_PER_ITEM`` evenly spaced windows
+of the stream (letters and digits) are candidate keys; with ``--windows content`` only windows
+outside the prefix and suffix that all of the eval's streams of that kind share.
+
+``count``: a Zephyr job over reference shards counts in how many records each candidate window
 occurs; each worker writes sparse counts.
 
-``choose``: sum the counts; each item keeps its least frequent window (ties: the earliest) and
-the next least frequent window that does not overlap it.
+``choose``: sum the counts; each stream keeps its least frequent window and the next least
+frequent window that does not overlap it. Ties go to the earliest window, or with ``--tie
+shared`` to the window that the fewest other items hold.
 
 ``measure``: a Zephyr job over measure shards counts the records with a candidate and the
 candidate pairs, for the first window, key 1, and key 1 or 2; it also writes a sample of
@@ -68,11 +71,17 @@ def item_streams(root: str, width: int) -> tuple[list[str], list[str], list[str]
     return ids, kinds, streams, evals
 
 
-def prepare(items: str, output: str, width: int, content: bool = False) -> None:
+class WindowSource(StrEnum):
+    """Where ``prepare`` takes an item stream's candidate windows."""
+
+    WHOLE = "whole"
+    CONTENT = "content"  # outside the prefix and suffix that all of the eval's streams of that kind share
+
+
+def prepare(items: str, output: str, width: int, source: WindowSource) -> None:
     ids, kinds, streams, evals = item_streams(items, width)
-    # With content, keys come from outside each eval's shared template (per stream kind).
     groups = [f"{e}\t{k}" for e, k in zip(evals, kinds, strict=True)]
-    bounds = template_bounds(streams, groups, width) if content else None
+    bounds = template_bounds(streams, groups, width) if source == WindowSource.CONTENT else None
     hashes, owners, offsets = candidate_windows(streams, width, bounds)
     buffer = io.BytesIO()
     np.savez(
@@ -269,11 +278,11 @@ def main() -> None:
     parser.add_argument("--measure-per-source", type=int, default=1, help="measure shards drawn per source")
     parser.add_argument("--tie", type=Tie, default=Tie.EARLIEST, help="choose: how equally rare windows are ordered")
     parser.add_argument(
-        "--content", action="store_true", help="prepare: windows only outside each eval's shared template"
+        "--windows", type=WindowSource, default=WindowSource.WHOLE, help="prepare: whole streams, or content only"
     )
     args = parser.parse_args()
     if args.step == "prepare":
-        prepare(args.items, args.output, args.width, args.content)
+        prepare(args.items, args.output, args.width, args.windows)
         return
     if args.step == "choose":
         choose(args.output, args.width, args.tie)

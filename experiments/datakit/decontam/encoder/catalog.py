@@ -28,6 +28,7 @@ from zephyr.dataset import Dataset
 
 from experiments.datakit.decontam.encoder.candidates import LOCATORS, Records, make_scan
 from experiments.datakit.decontam.encoder.tables import (
+    NORMALIZED,
     item_texts,
     parquet_files,
     read_frame,
@@ -84,6 +85,11 @@ def catalog_shards(sources_path: str, input_root: str) -> list[str]:
     return [shard for shards in listed for shard in shards]
 
 
+def _source(path: str) -> str:
+    """The normalized source of a shard path: the first directory under ``NORMALIZED``."""
+    return path.split(NORMALIZED)[1].split("/")[0]
+
+
 def _removed_in(path: str, cutoff: float) -> tuple[int, pd.DataFrame]:
     """The number of scored pairs in one scores file, and its records whose best pair reaches *cutoff*."""
     frame = read_frame(path)
@@ -101,13 +107,13 @@ def collect(output: str, scores_dir: str, cutoff: float) -> None:
         scored = list(pool.map(lambda path: _removed_in(path, cutoff), parquet_files(scores_dir)))
     shards = json.loads(StoragePath(prefix_join(output, "shards.json")).read_text())
     removed = pd.concat([part for _, part in scored], ignore_index=True)
-    removed["source"] = removed["path"].str.split("/normalized/").str[1].str.split("/").str[0]
+    removed["source"] = removed["path"].map(_source)
     result = scores_dir.rstrip("/")
     write_frame(removed, f"{result}-removed.parquet")
     totals: Counter = Counter()
     by_source: dict[str, Counter] = {}
     for row in stats:
-        source = row["path"].split("/normalized/")[1].split("/")[0]
+        source = _source(row["path"])
         counts = by_source.setdefault(source, Counter())
         for key in ("records", "chars", "candidate_records", "pairs"):
             counts[key] += row[key]

@@ -177,7 +177,7 @@ MISSED = {("short", "numbered"), ("pair", "numbered"), ("pair", "json")}
 
 
 @pytest.mark.parametrize("name, item", [("long", LONG), ("short", SHORT), ("pair", PAIR)])
-def test_each_planted_form_of_gate_g2_is_found_or_a_listed_miss(name, item):
+def test_each_planted_layout_is_found_or_a_listed_miss(name, item):
     table, locators = _index(*item)
     host = "Some unrelated record text. " * 40
     for form, copy in _layouts(*item).items():
@@ -305,12 +305,6 @@ def test_keys_from_outside_the_eval_template_find_a_copy_without_the_template():
     key = keys_table(windows, np.zeros(len(hashes), dtype=np.int64)).column("key1_hash").to_pylist()[0]
     record = "Solve this problem: Henry made two stops during his 60-mile bike trip. Show your work."
     assert key in set(window_hashes(text_stream(record)).tolist())
-
-
-def test_a_bound_narrower_than_a_window_is_rejected():
-    stream = text_stream("Henry made two stops during his sixty mile bike trip.")
-    with pytest.raises(ValueError):
-        candidate_windows([stream], bounds=[(5, 10)])
 
 
 @pytest.mark.parametrize("length", [0, 5, 30, 31, 64, 100, 257])

@@ -75,7 +75,7 @@ def make_extract(output: str):
                 if record_id not in wanted:
                     continue
                 record_text = str(record.get("text") or "")
-                streams = record_readings(record_text)
+                readings_of = record_readings(record_text)
                 for candidate in wanted[record_id]:
                     item_id, kind, offset = candidate["item"], candidate["kind"], candidate["key1_offset"]
                     item = items[item_id]
@@ -84,7 +84,7 @@ def make_extract(output: str):
                     keyed = key_streams(item["question"], list(item["choices"] or []), item["passage"] or "")
                     stream_of_kind = keyed.get(KeyStream(kind), "")
                     key = stream_of_kind[offset : offset + WINDOW] if offset >= 0 else ""
-                    right, stream, at = excerpt(streams, len(item["question"]), question, key, offset)
+                    right, stream, at = excerpt(readings_of, len(item["question"]), question, key, offset)
                     after = stream[at + len(question) :] if at >= 0 and stream.startswith(question, at) else ""
                     answer = text_stream(item["answer"])
                     pairs.append(

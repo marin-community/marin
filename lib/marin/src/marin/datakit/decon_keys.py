@@ -434,7 +434,7 @@ def _located(readings_of: list[Reading], question: str, key: str, offset: int) -
     """The first reading with the question or key, and the estimated item position in its stream (-1 if absent)."""
     for reading in readings_of:
         # A question shorter than a window is no place marker: it can occur anywhere. Its key holds the choices.
-        at = reading.first(question) if len(question) >= WINDOW else -1
+        at = reading.first(question) if len(question) >= reading.width else -1
         if at < 0 and key:
             # The record holds the key (stage 1 found it); the item starts that far before it.
             hit = reading.first(key)
@@ -448,7 +448,8 @@ def excerpt(
     readings_of: list[Reading], question_chars: int, question: str, key: str, offset: int
 ) -> tuple[str, str, int]:
     """The record text around the item (``BEFORE`` characters before it, ``AFTER`` after its question), the
-    reading's stream, and the item's position in that stream (-1 when only an estimate exists).
+    reading's stream, and the item's position in that stream: where its question is, else an estimate from
+    the key, or -1 when neither is found (the excerpt then starts at the record's start).
 
     *readings_of* are the record's readings (``record_readings``), *question* the item's question stream and
     *question_chars* the length of its question text, *key* the matched key window and *offset* its position
@@ -471,15 +472,15 @@ def pieces(text: str, size: int = MAX_DOC_CHARS, overlap: int = PIECE_OVERLAP) -
 def record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table, width: int = WINDOW) -> list[dict]:
     """One pair per item whose key-1 window a reading of *text* holds; an item keyed by several streams
     takes the first locator row found."""
-    streams = record_readings(text, width)
-    found = table.found(np.concatenate([reading.hashes for reading in streams]))
+    readings_of = record_readings(text, width)
+    found = table.found(np.concatenate([reading.hashes for reading in readings_of]))
     pairs: dict[str, dict] = {}
     for row in table.items_of(found):
         located = {name: locators.column(name)[int(row)].as_py() for name in LOCATOR_COLUMNS if name != "key1_hash"}
         if located["item"] in pairs:
             continue
         right, _, at = excerpt(
-            streams, located["question_chars"], located["question"], located["key"], located["offset"]
+            readings_of, located["question_chars"], located["question"], located["key"], located["offset"]
         )
         pairs[located["item"]] = {
             "record": record_id,

@@ -199,7 +199,7 @@ plain, parenthesized, extra-option, no-line-break and JSON-escaped (once and twi
 Markdown. Almost all misses are ZhoBLiMP: its items are two short Chinese sentences (97% shorter than a
 key), so a separator between them (a number, a JSON field name) breaks every window. In the planted
 stage-2 check (iteration 13, cutoff 0.9) no planted passage without its question was flagged; real
-records are less clean (see the limits). With the template-free keys (`prepare --content`, `choose --tie
+records are less clean (see the limits). With the template-free keys (`prepare --windows content`, `choose --tie
 shared`), stage 1 finds 95.98% (96.02% with the earlier keys on the same item table).
 
 **Validation.** Two sets, weighted to their pools, with an item-clustered stratified bootstrap 5% bound.
@@ -264,8 +264,8 @@ a copy.
   text, so they did not show this. A rendered GSM8K question starts with "Question:", and the bare
   question's windows occur in the reference shards (GSM8K copies are common), so the rarest window spans
   the prompt and a record with the bare question lacks it. Two key options fix this (`rarest_key prepare
-  --content`, `choose --tie shared`); on the same 2,000 shards they raise the share to 99.0% (GSM8K 100%,
-  MMLU 98%) at 1.44 times the candidate pairs. `--content` leaves out of the candidate windows the prefix
+  --windows content`, `choose --tie shared`); on the same 2,000 shards they raise the share to 99.0% (GSM8K 100%,
+  MMLU 98%) at 1.44 times the candidate pairs. `--windows content` leaves out of the candidate windows the prefix
   and suffix that all of an eval's streams share; `--tie shared` breaks ties among equally rare windows by
   the number of other items that hold the window. The catalog run above used the earlier keys; a rescan
   with the new keys (`catalog-v11-full`) needs scoring and a removal check.
