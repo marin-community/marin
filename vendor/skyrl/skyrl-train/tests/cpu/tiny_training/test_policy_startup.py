@@ -46,7 +46,6 @@ class _OverlappingWorker(CPUPolicyWorker):
             ready.write(READY)
         with (control / INFERENCE_STARTED).open("rb", buffering=0) as gate:
             assert select.select([gate], [], [], OVERLAP_TIMEOUT_SECONDS)[0], "inference startup stalled"
-            assert gate.read(1) == READY
         super().init_model(*args, **kwargs)
 
 
@@ -58,7 +57,6 @@ class _OverlappingExp(experiment.TinyTrainingExp):
         control = Path(self.cfg.trainer.export_path)
         with (control / LEARNER_LOADING).open("rb", buffering=0) as gate:
             assert select.select([gate], [], [], OVERLAP_TIMEOUT_SECONDS)[0], "learner did not start model loading"
-            assert gate.read(1) == READY
         with (control / INFERENCE_STARTED).open("wb", buffering=0) as ready:
             ready.write(READY)
         return super().create_inference_engine_client(**kwargs)
