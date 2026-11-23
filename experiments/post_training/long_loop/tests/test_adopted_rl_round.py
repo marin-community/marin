@@ -209,7 +209,8 @@ def test_mochi_normalized_round_resolves_batch_optimizer_and_route_capacity(loca
     assert trainer["train_batch_size"] == trainer["policy_mini_batch_size"] == 64
     assert generator["n_samples_per_prompt"] == 8
     optimizer = trainer["policy"]["optimizer_config"]
-    assert optimizer["lr"] == optimizer["optimizer_kwargs"]["adam_lr"] == 1e-6
+    assert optimizer["lr"] == 1e-5
+    assert optimizer["optimizer_kwargs"]["adam_lr"] == 2.307692307692308e-6
     assert optimizer["max_grad_norm"] == 0.5
     buffer = trainer["rollout_buffer"]
     assert buffer["max_staleness_steps"] == 3

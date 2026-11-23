@@ -73,7 +73,7 @@ rl:
       policy:
         optimizer_config:
           optimizer: MuonH
-          lr: 1.0e-06
+          lr: 1.0e-05
           adam_betas:
           - 0.9
           - 0.95
@@ -82,7 +82,7 @@ rl:
           num_warmup_steps: 0
           scheduler: constant_with_warmup
           optimizer_kwargs:
-            adam_lr: 1.0e-06
+            adam_lr: 2.307692307692308e-06
             momentum: 0.95
             nesterov: true
             backend_steps: 5
