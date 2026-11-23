@@ -8,18 +8,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.experimental.pallas import tpu as pltpu
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import ragged_paged_attention
-from levanter.grug.attention._paged import ragged_paged_attention_append
+from levanter.grug.attention._paged import _tpu_v3_available, ragged_paged_attention_append
 from levanter.testing.devices import use_test_devices
-
-
-_SUPPORTS_RPA_V3 = jax.default_backend() == "tpu" and pltpu.get_tpu_info().chip_version in (
-    pltpu.ChipVersion.TPU_V5P,
-    pltpu.ChipVersion.TPU_V6E,
-)
 
 
 class _PagedCase(NamedTuple):
@@ -147,7 +140,7 @@ def test_grug_tpu_paged_attention_fp32_64k():
 
 
 @pytest.mark.tpu
-@pytest.mark.skipif(not _SUPPORTS_RPA_V3, reason="v5p or v6e Pallas configuration")
+@pytest.mark.skipif(not _tpu_v3_available(), reason="v5p or v6e Pallas configuration")
 @pytest.mark.parametrize("window,offsets", [(None, [0, 1, 2, -1]), (None, [0, 129, 130, -1]), (96, [0, 129, 130, -1])])
 def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
     rng = np.random.default_rng(21)
@@ -171,7 +164,7 @@ def test_grug_tpu_v3_paged_attention_matches_dense(window, offsets):
 
 
 @pytest.mark.tpu
-@pytest.mark.skipif(not _SUPPORTS_RPA_V3, reason="v5p or v6e Pallas configuration")
+@pytest.mark.skipif(not _tpu_v3_available(), reason="v5p or v6e Pallas configuration")
 @pytest.mark.parametrize("window", [None, 2048])
 @pytest.mark.parametrize(
     "width,queries,heads",
