@@ -4,6 +4,7 @@
 """vLLM local inference backend."""
 
 import contextlib
+import json
 import os
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
@@ -63,6 +64,50 @@ def _with_subprocess_env(
     if subprocess_env:
         environment.update(subprocess_env)
     return VllmLauncherWithEnvironment(launcher, environment)
+
+
+RUNAI_STREAMER_LOADER_FLAG = "--model-loader-extra-config"
+DISTRIBUTED_STREAMER_DEFAULT_CONCURRENCY = 4
+DISTRIBUTED_STREAMER_DEFAULT_MEMORY_LIMIT_BYTES = 16 * (1 << 30)
+BOUNDED_DISTRIBUTED_STREAMER_CONFIG = json.dumps(
+    {
+        "distributed": True,
+        "concurrency": DISTRIBUTED_STREAMER_DEFAULT_CONCURRENCY,
+        "memory_limit": DISTRIBUTED_STREAMER_DEFAULT_MEMORY_LIMIT_BYTES,
+    }
+)
+
+
+def bound_distributed_streamer_buffers(extra_args: Sequence[str]) -> tuple[str, ...]:
+    """Fill the runai streamer's host RAM buffer bounds into a distributed loader config.
+
+    The evaluation serving path resolves a distributed ``--model-loader-extra-config`` with
+    these bounds; a distributed config without them lets the streamer buffer unbounded while
+    streaming a checkpoint through the serve child's cgroup, which OOMKills the container
+    mid-load. Keys the caller set explicitly pass through untouched; a config that does not
+    select distributed loading is returned unchanged. Raises ``ValueError`` for a config that
+    is not valid JSON.
+    """
+    if RUNAI_STREAMER_LOADER_FLAG not in extra_args:
+        return tuple(extra_args)
+    index = extra_args.index(RUNAI_STREAMER_LOADER_FLAG)
+    if index + 1 >= len(extra_args):
+        return tuple(extra_args)
+    try:
+        config = json.loads(extra_args[index + 1])
+    except ValueError as error:
+        raise ValueError(f"{RUNAI_STREAMER_LOADER_FLAG} is not valid JSON: {extra_args[index + 1]!r}") from error
+    if not isinstance(config, dict) or config.get("distributed") is not True:
+        return tuple(extra_args)
+    defaults = {
+        "concurrency": DISTRIBUTED_STREAMER_DEFAULT_CONCURRENCY,
+        "memory_limit": DISTRIBUTED_STREAMER_DEFAULT_MEMORY_LIMIT_BYTES,
+    }
+    missing = {key: value for key, value in defaults.items() if key not in config}
+    if not missing:
+        return tuple(extra_args)
+    filled = dict(config, **missing)
+    return (*extra_args[: index + 1], json.dumps(filled), *extra_args[index + 2 :])
 
 
 @contextlib.contextmanager
@@ -166,7 +211,7 @@ class VllmBackend:
             and _is_object_store_path(spec.weights)
             and not any(arg.partition("=")[0] in {"--load-format", "--model-loader-extra-config"} for arg in loader_args)
         ):
-            loader_args = ("--model-loader-extra-config", '{"distributed":true}', *loader_args)
+            loader_args = ("--model-loader-extra-config", BOUNDED_DISTRIBUTED_STREAMER_CONFIG, *loader_args)
         return [
             *(
                 ("--tensor-parallel-size", str(spec.tensor_parallel_size))
