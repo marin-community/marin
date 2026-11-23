@@ -11,7 +11,7 @@ PROBE = Path(__file__).parent / "import_boundary_probe.py"
 
 
 def test_every_taskforge_module_imports_with_only_its_declared_dependencies() -> None:
-    """Review 2026-11-21: the solve-review imported TaskCompendium's review pipeline, which loads
+    """Regression: the solve-review imported TaskCompendium's review pipeline, which loads
     Zephyr from an optional extra Taskforge does not install, so a clean install could not import the driver. The
     shared development environment, which has Zephyr, hid it; the probe refuses every undeclared distribution."""
     done = subprocess.run([sys.executable, str(PROBE)], capture_output=True, text=True, timeout=120)

@@ -87,7 +87,8 @@ async def solver_result(
     ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int, rollouts: dict[int, GradedRollout] | None = None
 ) -> TrialResult:
     """One slot's ``SolverRollout``, kept in ``rollouts`` for the solve-review: a slot-local hold is recorded missing
-    evidence; any other hold or restart propagates."""
+    evidence, and a rollout that exhausts its output budget twice is recorded as a submission failure; any other hold
+    or restart propagates."""
     for retry in range(2):
         try:
             result = await ctx.emit(SolverRollout(spec, trial, attempt))
@@ -430,6 +431,12 @@ async def run_adversary(
             except* OutputBudgetExhausted as error:  # ends at the conversation the exhausted command left
                 limit = SearchLimit.OUTPUT_BUDGET
                 ended = next((e.session for e in error.exceptions if isinstance(e, OutputBudgetExhausted)), None)
+            except* Hold as error:
+                # A revision is extra search: its hold leaves a finding that already reproduced standing.
+                if not any(actionable(finding) for finding, _ in replays):
+                    raise
+                ctx.notify(Note(f"Adversary {name}: revision {revision} held: {'; '.join(failure_reasons(error))}"))
+                ended = None
             if (revised := report_of(ended)) is None:  # the last report stands
                 how = f"its revision {revision} ended without a report"
                 break

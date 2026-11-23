@@ -299,7 +299,7 @@ async def test_grade_reports_a_missing_draft_but_propagates_grading_infrastructu
             await tool(ctx, {"reply": "12"})
 
 
-# Review 2026-11-20 (follow-up 1): the grading machine's output limit escaped the grade tool, and validation
+# Regression: the grading machine's output limit escaped the grade tool, and validation
 # credited the adversary with an exhausted search that reported nothing.
 async def test_grading_machine_exhaustion_is_grade_tool_feedback_and_the_session_continues() -> None:
     ctx = Context(log=EventLog())
@@ -331,7 +331,7 @@ async def test_grading_machine_exhaustion_is_grade_tool_feedback_and_the_session
     assert client.requests[2].conversation[-1].content.startswith("Grading this candidate failed and produced no grade")
 
 
-# Review 2026-11-21: a live grade showed "cut": 3.0, "level": 4.0 and the same grade
+# Regression: a live grade showed "cut": 3.0, "level": 4.0 and the same grade
 # reloaded from the journal showed 3 and 4, so the author's next request changed and a cold resume paid for a recorded
 # turn. The grade tool renders the numbers one way either side of a resume.
 @pytest.mark.parametrize("level", [4.0, 4, 3.5])
@@ -557,8 +557,8 @@ def iris_env(ctx: Context, workdir: Path, controller: LocalController) -> Shellb
     return env
 
 
-# Review 2026-11-20: Iris reported ENOENT below a regular file and below a directory it cannot search, and
-# (follow-up 1) archived a directory read and held the workpiece.
+# Regression: Iris reported ENOENT below a regular file and below a directory it cannot search, and
+# then archived a directory read and held the workpiece.
 @pytest.mark.parametrize(
     "path,code",
     [
@@ -587,8 +587,8 @@ async def test_reading_a_refused_path_on_iris_is_tool_feedback_with_its_errno(
     assert result == ToolResult(f"File operation failed: [Errno {code}] {os.strerror(code)}: '{path}'")
 
 
-# Review 2026-11-20: a missing transfer helper and a full host disk reached the model as path errors, and
-# (follow-up 1) the helper failure was a raw error the driver stored as a bug.
+# Regression: a missing transfer helper and a full host disk reached the model as path errors, and
+# then the helper failure was a raw error the driver stored as a bug.
 @pytest.mark.parametrize("failure", ["guest helper", "host disk"])
 async def test_file_tool_infrastructure_failures_are_not_author_feedback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
@@ -611,7 +611,7 @@ async def test_file_tool_infrastructure_failures_are_not_author_feedback(
     await ctx.drain()
 
 
-# Review 2026-11-20: a ShellSim symlink loop crashed the workpiece with a raw SimulationError.
+# Regression: a ShellSim symlink loop crashed the workpiece with a raw SimulationError.
 async def test_reading_a_shellsim_symlink_loop_is_tool_feedback() -> None:
     ctx = Context(log=EventLog())
     requirements = EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR)

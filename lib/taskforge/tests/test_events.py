@@ -89,7 +89,7 @@ RECORDED = b"""\
 COMMITTED = Committed("visit", 0, ValidationResult("task", (), (), ()))
 
 
-# Review 2026-11-23: an unconditional ``committed`` field moved every marker's digest, so a format-12 root's repeated
+# Regression: an unconditional ``committed`` field moved every marker's digest, so a format-12 root's repeated
 # markers, stored as digest references, no longer decoded. A marker without a commitment keeps its format-12 digest.
 def test_recorded_kinds_decoders_and_replay_digests_are_pinned() -> None:
     assert wiring.install  # importing wiring registers every library event

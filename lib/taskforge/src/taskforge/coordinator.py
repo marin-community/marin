@@ -15,7 +15,7 @@ from dataclasses import replace
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
-from taskforge.effects.events import Committed, StageCompleted
+from taskforge.effects.events import Committed, Note, StageCompleted
 from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart, Transient, describe_exception
 from taskforge.effects.log import EventLog
 from taskforge.harness.loop import stock
@@ -244,14 +244,12 @@ async def run_workpiece(
                     # A committed visit returns its evidence and runs nothing: no call, scope, observer or read.
                     result = Validated(hit.result) if hit else await STAGES[stage](ctx, wp, config, resources)
                 except* (Restart, Transient) as error:
-                    logging.warning(
-                        "Stage %s round %d attempt %d of %d: %s",
-                        stage,
-                        wp.round,
-                        attempt,
-                        STAGE_REPLAY_ATTEMPTS,
-                        reasons(error),
+                    # Journal each attempt's cause; a hold reason names only the last one.
+                    cause = f"Stage {stage} round {wp.round} attempt {attempt} of {STAGE_REPLAY_ATTEMPTS}: " + (
+                        "; ".join(reasons(error))
                     )
+                    logging.warning("%s", cause)
+                    await ctx.emit(Note(cause))
                     if attempt >= STAGE_REPLAY_ATTEMPTS:
                         raise
                     attempt += 1  # replay the interrupted stage

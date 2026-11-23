@@ -5,7 +5,6 @@
 
 import logging
 import math
-import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, fields, replace
@@ -128,7 +127,7 @@ class RelayEndpoint(EndpointSource):
 
 def endpoint_source(base_url: str | None, relay_job: str | None, token: str, model: str, pool: str) -> EndpointSource:
     if bool(base_url) == bool(relay_job):
-        raise ValueError("Set exactly one of GLM_RELAY_JOB and GLM_BASE_URL")
+        raise ValueError("Pass exactly one of --glm-base-url and --glm-relay-job")
     if relay_job:
         return RelayEndpoint(relay_job, token, Pool(pool), model)
     assert base_url is not None
@@ -282,9 +281,8 @@ def build_resources(
     execution = digest((settings, command_timeout, policy.setting("sandbox.output_budget_mb", int)))
     solver = clients["solver"]
     sampling = policy_sampling(policy, solver.profile.sampling)
-    # Provider settings (provider.*, pools) shape how a request is served, not what it returns, so replay keys carry
-    # the model, the role, what the request itself records and a non-default profile's identity. A replayed rollout or
-    # grade skips the inference inside it, so its own key carries the non-default profiles of the roles that shaped it.
+    # Replay keys carry the model, role, request and non-default profile identity. Rollout and grade keys also carry
+    # non-default profiles of roles whose inference a replayed outer result skips.
     inference = {role: GlmInference(client, role) for role, client in clients.items()}
     profile = solver.profile.replay_identity()
     judge = clients["judge"].profile.replay_identity() if "judge" in clients else None
@@ -427,12 +425,14 @@ async def runtime(
     providers: Mapping[str, Provider] = NO_PROVIDERS,
     profiles: Mapping[str, ModelProfile] = DEFAULT_PROFILES,
     decision_model: DecisionModelReader | None = None,
+    controller_url: str | None = None,
 ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
     """The process-boundary bindings for ``policy``.
 
     Each role reaches ``<role>.model`` through a ``GlmProvider`` on ``source`` unless ``providers`` names one for it,
     and uses ``GLM_5_3`` unless ``profiles`` does. A configured ``decision_model.model`` reads through
-    ``decision_model``, by default Clef on ``source`` at ``decision_model.route``. The caller owns what it passes.
+    ``decision_model``, by default Clef on ``source`` at ``decision_model.route``. Iris sandboxes reach
+    ``controller_url``, by default the controller of the Iris job this process runs in. The caller owns what it passes.
     """
     policy = provider_policy(policy)
     declared = load_policy(DEFAULTS_DIR)
@@ -444,7 +444,7 @@ async def runtime(
         DEFAULT_RETRY_MAX_ELAPSED,
     )
     job = get_job_info()
-    controller = os.environ.get("IRIS_CONTROLLER_URL") or (job.controller_address if job else None)
+    controller = controller_url or (job.controller_address if job else None)
     if not controller:
         raise ValueError("Iris sandboxes require a controller URL or an Iris job context")
     container = IrisMachineFactory(controller_url=controller, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT)

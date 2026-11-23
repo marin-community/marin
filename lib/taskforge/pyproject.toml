@@ -41,7 +41,7 @@ markers = [
     "requires_cluster: live cluster",
     "docker: Docker daemon",
     "manual: explicit validation",
-    "live_glm: calls the live GLM-5.3 endpoint; skips unless TASKFORGE_GLM_BASE_URL and GLM_HIGH_TOKEN are set",
+    "live_glm: calls the live GLM-5.3 endpoint; deselected by default",
 ]
 
 [tool.ruff]

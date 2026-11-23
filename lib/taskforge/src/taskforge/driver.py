@@ -56,7 +56,7 @@ from taskforge.effects.issues import (
     UnsupportedFormat,
 )
 from taskforge.effects.log import EventLog, Status, fold
-from taskforge.llm.glm_provider import EndpointSource
+from taskforge.llm.glm_provider import API_ROOT, EndpointSource
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import Terminal, Workpiece
@@ -139,19 +139,20 @@ def eligible(proposal: TaskProposal, policy: Policy) -> bool:
     return True
 
 
-def glm_source(policy: Policy) -> EndpointSource:
-    """The GLM gateway this process reaches, from ``GLM_BASE_URL`` or ``GLM_RELAY_JOB``."""
+def glm_source(policy: Policy, args: argparse.Namespace) -> EndpointSource:
+    """The GLM gateway named by ``--glm-base-url`` or ``--glm-relay-job``."""
     return endpoint_source(
-        os.environ.get("GLM_BASE_URL"),
-        os.environ.get("GLM_RELAY_JOB"),
+        args.glm_base_url,
+        args.glm_relay_job,
         require_secret("GLM_API_KEY"),
         policy.setting("author.model", str),
         policy.setting("provider.pool", str),
     )
 
 
-async def one(args: argparse.Namespace) -> int:
-    """Run one proposal to a published head; ``DEFERRED`` when it waits for the decision model, else 0."""
+async def one(args: argparse.Namespace, controller_url: str | None = None) -> int:
+    """Run one proposal to a published head; ``DEFERRED`` when it waits for the decision model, ``ANSWERED`` when a
+    ``--probe`` run got a fresh decision-model answer, else 0."""
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
         proposal = TASK_PROPOSAL.validate_json(source.read())
@@ -178,7 +179,8 @@ async def one(args: argparse.Namespace) -> int:
     readers: list[DecisionModel | None] = [None]  # this process's decision model, as the runtime built it
     try:
         async with checkpoints.running():
-            async with runtime(policy, glm_source(policy), get_secret("PARALLEL_API_KEY") or "") as (config, resources):
+            gateway, key = glm_source(policy, args), get_secret("PARALLEL_API_KEY") or ""
+            async with runtime(policy, gateway, key, controller_url=controller_url) as (config, resources):
                 readers[0] = resources.decision_model
                 wp[0] = await run_workpiece(
                     proposal, config, resources, log, install=install, reached=partial(wp.__setitem__, 0)
@@ -213,11 +215,11 @@ async def one(args: argparse.Namespace) -> int:
     return DEFERRED if deferred(wp[0]) else ANSWERED if reader is not None and reader.answered else 0
 
 
-async def recovery(policy: Policy) -> DecisionModelHealth:
+async def recovery(policy: Policy, args: argparse.Namespace) -> DecisionModelHealth:
     """HEALTHY once the default decision model's host (``one``'s gateway) says so; UNSUPPORTED after a host without
     the health route says so and ``decision_model.retry_interval`` passes, when one deferred proposal probes it."""
     async with httpx.AsyncClient() as http:
-        reader = clef(policy, glm_source(policy), http)
+        reader = clef(policy, glm_source(policy, args), http)
         while (health := await reader.health()) is not DecisionModelHealth.HEALTHY:
             await asyncio.sleep(policy.setting("decision_model.retry_interval", float))
             if health is DecisionModelHealth.UNSUPPORTED:
@@ -267,7 +269,8 @@ async def run(args: argparse.Namespace) -> None:
                 command += ["--die-with-parent", str(lifeline)]
                 command += [
                     item
-                    for name in ("output", "policy", "work_dir")
+                    for name in ("output", "policy", "work_dir", "glm_base_url", "glm_relay_job")
+                    if getattr(args, name) is not None
                     for item in (f"--{name.replace('_', '-')}", getattr(args, name))
                 ]
                 if args.resume_held:  # the operator's flag alone: a child enters an outage-only hold by itself
@@ -303,7 +306,7 @@ async def run(args: argparse.Namespace) -> None:
                     if code != SUPERSEDED:
                         failed.append(path)
             if parked and waiting is None and probe is None:
-                waiting = asyncio.create_task(recovery(policy))
+                waiting = asyncio.create_task(recovery(policy, args))
     finally:
         os.close(lifeline)  # first, so that neither end outlives this call and each child reads end of file
         os.close(kept)
@@ -331,6 +334,19 @@ def exit_code(error: Exception) -> int | None:
     return None
 
 
+def relay_job(value: str) -> str:
+    """A non-blank relay job, so that a quoted unset variable is a usage error before anything is claimed."""
+    if not value.strip():
+        raise argparse.ArgumentTypeError(f"must name an Iris relay job, got {value!r}")
+    return value
+
+
+def base_url(value: str) -> str:
+    if not value.endswith(API_ROOT):
+        raise argparse.ArgumentTypeError(f"must be a URL ending in {API_ROOT}, got {value!r}")
+    return value
+
+
 def cli() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -343,6 +359,9 @@ def cli() -> argparse.ArgumentParser:
         command.add_argument("--output", required=True)
         command.add_argument("--policy", required=True)
         command.add_argument("--work-dir", default="forge-work")
+        gateway = command.add_mutually_exclusive_group(required=True)
+        gateway.add_argument("--glm-relay-job", type=relay_job, help="The Iris relay job that resolves the GLM gateway")
+        gateway.add_argument("--glm-base-url", type=base_url, help=f"A direct GLM gateway endpoint ending in {API_ROOT}")
         command.add_argument(
             "--resume-held",
             action="store_true",
@@ -368,10 +387,27 @@ def die_with_parent(lifeline: int) -> None:
     threading.Thread(target=lambda: os.read(lifeline, 1) or os._exit(143), daemon=True).start()
 
 
+def exit_on_sigterm() -> None:
+    """Exit 143 at SIGTERM: a crash, so the journal's last committed head survives. A Python handler runs only once the
+    main thread returns to the interpreter, which a write to a full pipe nobody reads never does when the signal landed
+    just before it; the C handler also writes the signal's number to the wakeup pipe, and a watching thread exits."""
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(143))
+    wakeup, woken = os.pipe()
+    os.set_blocking(woken, False)
+    signal.set_wakeup_fd(woken)
+
+    def watch() -> None:
+        while number := os.read(wakeup, 1):
+            if number[0] == signal.SIGTERM:
+                os._exit(143)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def main() -> None:
     args = cli().parse_args()
     if threading.current_thread() is threading.main_thread():  # an in-process test child runs on another thread
-        signal.signal(signal.SIGTERM, lambda *_: os._exit(143))  # a crash: the journal's last committed head survives
+        exit_on_sigterm()
         if getattr(args, "die_with_parent", None) is not None:
             die_with_parent(args.die_with_parent)
     configure_logging()
@@ -382,7 +418,8 @@ def main() -> None:
         asyncio.run(run(args))
     else:
         try:
-            code = asyncio.run(one(args))
+            # Iris sets the controller address inside a job; outside one it is the caller's to export.
+            code = asyncio.run(one(args, os.environ.get("IRIS_CONTROLLER_URL")))
         except Exception as error:
             if (code := exit_code(error)) is None:
                 raise

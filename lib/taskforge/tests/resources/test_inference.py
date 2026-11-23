@@ -100,7 +100,7 @@ async def test_provider_failures_preserve_classification_and_retry_bound(
         assert str(caught.value) == error.body and caught.value.__cause__ is error
 
 
-# Review 2026-11-21: a 503 before a context refusal made two physical requests, and the recorded stop
+# Regression: a 503 before a context refusal made two physical requests, and the recorded stop
 # carried no retry notice. The transport's attempts ride on the refusal into the harness's recorded stop.
 async def test_a_context_refusal_after_a_503_keeps_its_retry_in_the_recorded_stop() -> None:
     attempts = (

@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Source: Taskforge integration 9807c5cfb3, spec/verdict.py.
-
 """Parse per-check evidence from a grader's reward detail."""
 
 from dataclasses import dataclass

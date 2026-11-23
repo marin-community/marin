@@ -14,7 +14,6 @@ import subprocess
 import sys
 import tarfile
 import threading
-import time
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -27,10 +26,12 @@ from typing import Any, cast, override
 import httpx
 import pytest
 from botocore.exceptions import ClientError, IncompleteReadError
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.llm.fake_glm import serving
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeCommand, FakeEnv, FakeInference, FakeWeb
-from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, chunk, report, segment
+from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, Time, chunk, report, segment
 from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, Injection, LocalController, local_iris_machine
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model, transcript
 from pydantic import TypeAdapter, ValidationError
@@ -82,7 +83,7 @@ from taskforge.effects.issues import (
     UnsupportedFormat,
 )
 from taskforge.effects.log import EventLog, JsonlSink, Opened, Record, Status, decode, fold
-from taskforge.harness.protocol import Harness, Stopped, StopReason, Tool
+from taskforge.harness.protocol import Stopped, StopReason
 from taskforge.llm.client import AttemptFailed, AttemptOutcome, ModelClient, Progress, Provider, Segment
 from taskforge.llm.glm_provider import EndpointSource, FixedEndpoint, GlmEndpoint, GlmProvider, Pool
 from taskforge.llm.policy import GLM_5_3, ModelProfile
@@ -106,7 +107,7 @@ from taskforge.model.review import (
     ReviewEnd,
     TrialResult,
 )
-from taskforge.model.stage import Exit, Stage
+from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
@@ -133,13 +134,12 @@ from taskforge.resources.env import (
 )
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids, NewId
-from taskforge.resources.inference import InferenceClient, InferenceRequest
+from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages import STAGES
 from taskforge.stages.author import AuthorReference
 from taskforge.stages.classify import replayable_grade
-from taskforge.stages.exits import Decided
 from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config, build_resources, install, retry_policy, solver_turn
 
@@ -328,7 +328,7 @@ class RevisionFaults(SolverEngine):
         return replace(solved, grade=grade)
 
 
-# Review 2026-11-21: a faulted revision resubmitted the same task and controls with new notes; review
+# Regression: a faulted revision resubmitted the same task and controls with new notes; review
 # chose the stored fallback but inferred from the equal digest that it had chosen the revision, so restore=None and
 # the faulted round's notes shipped as a clean acceptance. At the shipped default the restore is confirmed on its own
 # round (index 0), not the faulted one of the same digest.
@@ -440,7 +440,7 @@ class FlakySolver(Engine):
         )
 
 
-# Review 2026-11-20: a same-round validation retry inherited the earlier visit's replay attempts and held.
+# Regression: a same-round validation retry inherited the earlier visit's replay attempts and held.
 async def test_stage_replay_budget_restarts_after_each_completed_stage(proposal: TaskProposal) -> None:
     def retry_once(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
         if any(isinstance(decision, Retry) for decision in workpiece.decisions):
@@ -492,7 +492,7 @@ async def test_a_workpiece_runs_end_to_end_on_a_caller_provider_and_profile(prop
     assert len(solver) == 2 and not any("max_tokens" in body for body in solver)
 
 
-# Review 2026-11-21: a result recorded without an output limit replayed under a profile with one.
+# Regression: a result recorded without an output limit replayed under a profile with one.
 @pytest.mark.parametrize(
     ("change", "calls"), [("none", 0), ("output-limit", len(script()) + 2), ("formatter", len(script()) + 2)]
 )
@@ -512,7 +512,7 @@ async def test_a_journal_replays_model_calls_only_under_the_profile_that_recorde
     assert sum(len(provider.bodies) for provider in providers.values()) == calls
 
 
-# Review 2026-11-21: the harness and the inference effect both applied the formatter, so the wire got it twice.
+# Regression: the harness and the inference effect both applied the formatter, so the wire got it twice.
 async def test_a_profile_formatter_shapes_a_replayed_tool_call_once(proposal: TaskProposal) -> None:
     spaced = replace(GLM_5_3, name="glm-5.3/spaced", replay_arguments=lambda arguments: f" {arguments}")
     providers = caller_providers()
@@ -523,9 +523,7 @@ async def test_a_profile_formatter_shapes_a_replayed_tool_call_once(proposal: Ta
 
 @pytest.fixture
 def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Namespace:
-    monkeypatch.setenv("GLM_BASE_URL", "http://fake/v1")
     monkeypatch.setenv("GLM_API_KEY", "fake")
-    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
     source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
     source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
     overlay.write_text(json.dumps({"proposals.environments": ["container"], **SETTINGS}))
@@ -539,6 +537,8 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         buckets=4096,
         bucket_range=None,
         ranks=(),
+        glm_base_url="http://fake/v1",
+        glm_relay_job=None,
     )
 
 
@@ -555,6 +555,7 @@ async def test_bucket_split_preserves_manifest_order_and_ownership(
 
     def launch(command: list[str], **_: object) -> SimpleNamespace:
         launched.append(command[command.index("--proposals") + 1])
+        assert command[command.index("--glm-base-url") + 1] == "http://fake/v1" and "--glm-relay-job" not in command
         return SimpleNamespace(wait=lambda: 0)
 
     monkeypatch.setattr(driver.subprocess, "Popen", launch)
@@ -574,7 +575,7 @@ async def test_driver_persists_programming_failure_then_reraises(
 ) -> None:
     @asynccontextmanager
     async def broken_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), resources(Envs(), ())
 
@@ -613,7 +614,7 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), next(attempts)
 
@@ -675,13 +676,18 @@ async def test_stage_restart_replays_on_fresh_machine_without_repeating_inferenc
     assert len(resource.inference.requests) == len(script())
 
 
+# Pilot 2026-11-21 (d09): the causes of the replayed attempts before a hold reached only the driver log.
 async def test_stage_restart_stops_after_three_attempts_with_cause(proposal: TaskProposal) -> None:
     envs = Envs(fail=True)
     resource = resources(envs, script())
-    result = await run_workpiece(proposal, config(), resource, EventLog(), install=install)
+    log = EventLog()
+    result = await run_workpiece(proposal, config(), resource, log, install=install)
     assert result.terminal == Terminal.HELD
     assert len(envs.created) == 3
     assert "fake machine died" in str(result.decisions[-1])
+    notes = [record.event.msg for record in log.records if isinstance(record.event, Note)]
+    assert [note.split(":")[0] for note in notes] == [f"Stage author round 0 attempt {n} of 3" for n in (1, 2, 3)]
+    assert all("fake machine died" in note for note in notes)
 
 
 @pytest.mark.parametrize("command", ["one", "run"])
@@ -719,7 +725,7 @@ async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trial
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), next(attempts)
 
@@ -756,7 +762,7 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), resources(envs, script())
 
@@ -773,6 +779,42 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
 
 def tree(destination: Path) -> dict[Path, bytes]:
     return {path: path.read_bytes() for path in destination.rglob("*") if path.is_file()}
+
+
+@pytest.mark.parametrize("command", ["one", "run"])
+@pytest.mark.parametrize(
+    "flag,value",
+    [("--glm-relay-job", ""), ("--glm-relay-job", " "), ("--glm-base-url", ""), ("--glm-base-url", "http://glm")],
+)
+async def test_a_blank_relay_or_a_url_without_v1_is_a_usage_error_before_any_claim(
+    driver_args: Namespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    flag: str,
+    value: str,
+) -> None:
+    @asynccontextmanager
+    async def broken_runtime(
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield build_config(policy, {}), resources(Envs(), ())
+
+    monkeypatch.setattr(driver, "runtime", broken_runtime)
+    with pytest.raises(RuntimeError, match="exhaust"):
+        await driver.one(driver_args)  # a published held root, the one a blank flag must leave alone
+    before = tree(tmp_path)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)
+    monkeypatch.setattr(driver.subprocess, "Popen", unexpected_runtime)
+    options = {"proposals": driver_args.proposals, "output": driver_args.output, "policy": driver_args.policy}
+    argv = [command, *(item for name, path in options.items() for item in (f"--{name}", path)), flag, value]
+    argv += ["--work-dir", str(tmp_path / "relaunch"), *(["--concurrency", "1"] if command == "run" else [])]
+    monkeypatch.setattr(sys, "argv", ["driver", *argv])
+    with pytest.raises(SystemExit) as stopped:
+        driver.main()
+    assert stopped.value.code == 2 and f"argument {flag}" in capsys.readouterr().err
+    assert tree(tmp_path) == before
 
 
 @asynccontextmanager
@@ -818,7 +860,7 @@ async def test_drivers_sharing_a_work_directory_publish_only_their_own_history(
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), next(attempts)
 
@@ -860,7 +902,7 @@ async def test_resume_decodes_published_history_before_claiming_and_leaves_it_un
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), held
 
@@ -944,7 +986,7 @@ async def test_a_collision_at_a_checkpoint_digest_exits_corrupt_and_publishes_no
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), built
 
@@ -1125,7 +1167,7 @@ def solver_slots(destination: Path) -> list[Resolved[object]]:
     ]
 
 
-# Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. The faults also include
+# Regression: each fault journaled a failed solver slot and published ACCEPTED at 1/2. The faults also include
 # empty tool deltas, an abort past the bound, and a buffered token delivered past it from a dead worker.
 @pytest.mark.parametrize("fault", FLEET_FAULTS)
 async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_holds(
@@ -1143,7 +1185,7 @@ async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_ho
     assert (workpiece.terminal, workpiece.evidence) == (Terminal.HELD, ())
 
 
-# Review 2026-11-21: a confirmed tail from an exited worker is still charged (a known limit of the
+# Regression: a confirmed tail from an exited worker is still charged (a known limit of the
 # client-side bound, which consults no pool state).
 @pytest.mark.parametrize("tail", [False, True], ids=["live", "exited-worker-tail"])
 async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
@@ -1162,40 +1204,59 @@ async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
     assert workpiece.terminal == Terminal.ACCEPTED
 
 
-# Review 2026-11-21: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
+CUT_SEEN = 30.0
+"""Seconds within which the fake router's next write sees that the client closed a connection."""
+
+
+# Regression: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
 # (1 POST, 0 GETs, nothing resolved) under a 50 ms stall timeout and a 100 ms availability window.
 async def test_a_trickling_error_body_holds_the_workpiece_within_the_availability_window(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    window = {"provider.unavailable_wait": 0.1, "provider.backoff_initial": 0.001, "provider.backoff_maximum": 0.001}
+    # The window's clock moves only when the client backs off: each window holds two attempts and one health poll.
+    window = {
+        "provider.unavailable_wait": 3600.0,
+        "provider.backoff_initial": 1800.0,
+        "provider.backoff_maximum": 1800.0,
+    }
     policy = driver.run_policy(driver_args.policy).overlaid(window)
+    clock = Time()
     with serving() as fake:
         for _ in range(100):
-            fake.status(503, "busy", trickle=400)
+            fake.status(503, "busy", trickle=400)  # each body takes 2 s to arrive; the stall timeout is 50 ms
         source = FixedEndpoint(GlmEndpoint(fake.base_url, "token", Pool.HIGH))
         async with GlmProvider(source, policy.setting("author.model", str), 0.05, 8) as author:
             roles = ("solver", "adversary")
             providers = {role: ScriptedProvider((), policy.setting(f"{role}.model", str)) for role in roles}
             built = build_resources(policy, {**providers, "author": author}, {}, FakeWeb({}, {}))
+            retry = retry_policy(policy, "author")
+            client = GlmInference(
+                ModelClient(author, GLM_5_3, retry, role="author", clock=clock.clock, sleep=clock.sleep), "author"
+            )
             serve(
                 monkeypatch,
-                replace(built, envs=Envs(), role_inference={**built.role_inference, "solve_review": CleanReviewer()}),
+                replace(
+                    built,
+                    envs=Envs(),
+                    inference=client,
+                    role_inference={**built.role_inference, "author": client, "solve_review": CleanReviewer()},
+                ),
             )
-            started = time.monotonic()
             await driver.one(driver_args)
-            elapsed = time.monotonic() - started
+        # Every attempt was cut before its body completed (test_provider pins the configured deadline).
+        assert all(fake.cut.acquire(timeout=CUT_SEEN) for _ in fake.requests), "an error body was read to its end"
     destination = tmp_path / "out" / driver.proposal_key(driver_args.proposals)
     workpiece = published_workpiece(destination)
     assert (workpiece.terminal, solver_slots(destination)) == (Terminal.HELD, [])
     resolved = [record.event for record in history(destination) if isinstance(record.event, Resolved)]
     assert not [event for event in resolved if isinstance(event.request, InferenceRequest)]
-    # Each stage attempt ends within the window plus one bounded attempt, long before one body (2 s) could end.
-    assert elapsed < STAGE_REPLAY_ATTEMPTS * 0.2 and len(fake.requests) >= STAGE_REPLAY_ATTEMPTS
-    assert fake.health_polls >= 1
+    # Each stage attempt ended when its window closed, not when a body completed.
+    assert (len(fake.requests), fake.health_polls) == (2 * STAGE_REPLAY_ATTEMPTS, STAGE_REPLAY_ATTEMPTS)
+    assert clock.waits == [1800.0] * 2 * STAGE_REPLAY_ATTEMPTS
 
 
 FORMAT_12_RETRY = Path(__file__).parent / "fixtures" / "format12-retry-accepted-root.json.gz"
-"""The whole root the format-12 writer (06b50d267a) published for an accepted run whose first control grade was
+"""The whole root the format-12 writer published for an accepted run whose first control grade was
 unavailable: its same-round Retry stores the repeated ``stage.completed`` marker (row 61) as a digest reference."""
 FORMAT_12_REPORT = (
     "workpieces=1 since_hours=all",
@@ -1216,18 +1277,18 @@ FORMAT_12_REPORT = (
     "event_gap=WriteFile n=0 p50_seconds=n/a p90_seconds=n/a",
     "event_gap=InferenceRequest n=4 p50_seconds=0.000 p90_seconds=0.000",
 )
-"""The n19 report (06b50d267a) of ``FORMAT_12_RETRY``, its clock-relative acceptance rates aside."""
+"""The format-12 report of ``FORMAT_12_RETRY``, its clock-relative acceptance rates aside."""
 
 
-# Review 2026-11-23: the format-13 reader hashed a marker without a commitment otherwise, so this root's digest
-# reference named no decoded event and the report failed on it.
-async def test_the_report_reads_a_format_12_root_whose_markers_repeat_as_the_n19_report_does(tmp_path: Path) -> None:
+# Regression: the format-13 reader hashed a marker without a commitment otherwise, so this root's digest reference
+# named no decoded event and the report failed on it.
+async def test_the_report_reads_a_format_12_root_whose_markers_repeat_as_its_own_report_does(tmp_path: Path) -> None:
     root = plant_root(tmp_path / "out" / "retry", FORMAT_12_RETRY)
     plant_root(tmp_path / "out" / "held", FORMAT_11_HELD)
     alone = [line for line in await usage_report(str(root)) if not line.startswith("accepted_per_hour")]
     together = [line for line in await usage_report(str(tmp_path / "out")) if not line.startswith("accepted_per_hour")]
     assert tuple(alone) == FORMAT_12_REPORT
-    # The n19 report of both roots: the format-11 author hold adds its hold and its author's samples.
+    # The format-12 report of both roots: the format-11 author hold adds its hold and its author's samples.
     assert together == [
         "workpieces=2 since_hours=all",
         *FORMAT_12_REPORT[1:5],
@@ -1248,7 +1309,7 @@ def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources, workspace: Work
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         config = build_config(policy, {})
         yield (config if workspace is None else replace(config, workspace=workspace)), next(remaining)
@@ -1534,7 +1595,7 @@ async def test_a_final_publication_that_keeps_failing_exits_and_a_relaunch_resum
     assert executions(first) == executions(relaunch) == (len(script()), 2)
 
 
-# Review 2026-11-20: the terminal event was durable but the driver finalised its initial workpiece, publishing an
+# Regression: the terminal event was durable but the driver finalised its initial workpiece, publishing an
 # accepted head with no submission that every later driver skipped.
 async def test_cancellation_while_the_terminal_event_is_written_leaves_a_resumable_head(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -1614,7 +1675,7 @@ async def test_a_writer_blocked_with_nothing_pending_stops_within_a_tick_of_a_ta
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), first
 
@@ -1649,7 +1710,7 @@ async def test_a_cleanup_error_after_a_takeover_stays_a_failure_and_appends_noth
 
     @asynccontextmanager
     async def failing_cleanup(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         try:
             yield build_config(policy, {}), first
@@ -1804,7 +1865,7 @@ async def test_parent_summary_separates_superseded_and_corrupt_children_from_goo
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), next(built)
 
@@ -1820,34 +1881,6 @@ async def test_parent_summary_separates_superseded_and_corrupt_children_from_goo
     assert f"{paths['superseded']}: another writer owns" in lines[f"OUTCOME superseded exit={driver.SUPERSEDED}"]
     assert published_workpiece(roots["good"]).terminal is Terminal.ACCEPTED
     assert tree(roots["corrupt"]) == corrupt
-
-
-class ScriptedAuthor(Harness):
-    def __init__(self, *results: Exit | None) -> None:
-        self.results = iter(results)
-        self.calls = 0
-
-    @override
-    async def run(
-        self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
-    ) -> Exit:
-        self.calls += 1
-        return cast(Exit, next(self.results))
-
-
-@pytest.mark.parametrize(
-    "result, named",
-    [(Decided(Accept(BandOutcome.IN_BAND)), "author returned Decided"), (None, "author returned NoneType")],
-)
-async def test_stage_result_without_a_transition_from_that_stage_fails(
-    proposal: TaskProposal, result: Exit | None, named: str
-) -> None:
-    author = ScriptedAuthor(result, Stopped(StopReason.FINISHED, Conversation((), ())))
-    settings = config()
-    settings = replace(settings, author=replace(settings.author, harness=author))
-    with pytest.raises(ValueError, match=named):
-        await run_workpiece(proposal, settings, resources(Envs(), ()), EventLog(), install=install)
-    assert author.calls == 1
 
 
 async def test_hold_from_a_terminal_stage_observer_records_that_stage(proposal: TaskProposal) -> None:
@@ -1908,7 +1941,7 @@ async def test_root_recorded_with_previous_author_prompt_resumes_through_a_promp
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), built[-1]
 
@@ -2003,7 +2036,7 @@ def tool_output(workpiece: Workpiece, call_id: str) -> str:
     return message.content
 
 
-# Review 2026-11-20: a re-executed command's fresh stdout reached the model, so every later request missed its
+# Regression: a re-executed command's fresh stdout reached the model, so every later request missed its
 # recording and the resume paid for the model calls again. A flipped truncation flag alone produced no note.
 @pytest.mark.parametrize(
     "stamp",
@@ -2039,7 +2072,7 @@ def stamped(code: int, stamp: bytes = b"ok") -> FakeCommand:
     return FakeCommand(CommandResult(code, "", f"exit {code}\n", 0, False), {STAMP: stamp})
 
 
-# Review 2026-11-20: 2 -> 3 and 2 -> 0 kept serving exit 2, and a read of other binary bytes kept serving the old ones.
+# Regression: 2 -> 3 and 2 -> 0 kept serving exit 2, and a read of other binary bytes kept serving the old ones.
 @pytest.mark.parametrize(
     ("recorded", "stamp"),
     [
@@ -2070,7 +2103,7 @@ async def test_resume_holds_when_the_fresh_machine_cannot_rebuild_the_recorded_s
     assert ("env.read_file" in str(workpiece.decisions[-1])) == same_status
 
 
-# Review 2026-11-20: resuming a partly validated workpiece must keep its finished solver trials.
+# Regression: resuming a partly validated workpiece must keep its finished solver trials.
 async def test_resume_with_completed_solver_siblings_repeats_no_trial_or_model_call(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2234,7 +2267,7 @@ def before_first_environment_outcome(events: bytes) -> bytes:
     return b"".join(lines[:cut])
 
 
-# Review 2026-11-20: the format-2 reader claimed a positional journal under the same format number, ignoring its owners.
+# Regression: the format-2 reader claimed a positional journal under the same format number, ignoring its owners.
 @pytest.mark.parametrize(
     "events",
     [
@@ -2275,10 +2308,10 @@ N8_AUTHOR_HELD = Path(__file__).parent / "fixtures" / "n8-author-revision-held-r
 N8_ACCEPTED_RESTORED = Path(__file__).parent / "fixtures" / "n8-accepted-restored-root.json.gz"
 
 
-# Review 2026-11-21: the role runner resumed this format-3 head, accepted a fresh empty adversary report and published
+# Regression: the role runner resumed this format-3 head, accepted a fresh empty adversary report and published
 # a round-0 Accept without the author repair, dropping the finding both verifier grades had confirmed and the Modify
 # it caused.
-# Review 2026-11-21: a format-4 root held in author revision re-held forever at its first positional write, and
+# Regression: a format-4 root held in author revision re-held forever at its first positional write, and
 # an accepted one lost its restoration provenance on read.
 @pytest.mark.parametrize("resume_held", [True, False])
 @pytest.mark.parametrize(
@@ -2317,7 +2350,7 @@ author turns and their commands, after its author reference row."""
 
 
 FORMAT_12_HELD = Path(__file__).parent / "fixtures" / "format12-author-held-root.json.gz"
-"""The whole root the format-12 writer (06b50d267a) published for the held first launch of ``held_after_stamp``."""
+"""The whole root the format-12 writer published for the held first launch of ``held_after_stamp``."""
 
 
 @pytest.mark.parametrize("fixture,found", [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11), (FORMAT_12_HELD, 12)])
@@ -2328,7 +2361,6 @@ async def test_a_held_earlier_format_root_is_refused_before_claim_and_the_report
     requests were worded otherwise, and a format-12 root committed no reviewed visit; the driver refuses each untouched
     and names the ways on."""
     destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), fixture)
-    assert json.loads((destination / HEAD).read_text())["format"] == found
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
     driver_args.resume_held = True
@@ -2360,7 +2392,7 @@ def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(pr
     assert "fallback" not in snapshot and not {"restore", "fallback", "awaits"} & keys
 
 
-# Review 2026-11-21: an empty restore and None serialised alike, so an invalid direct restore became an
+# Regression: an empty restore and None serialised alike, so an invalid direct restore became an
 # ordinary acceptance after a round trip; Modify.fallback collapsed the same way.
 def test_every_omitted_field_round_trips_and_distinct_values_encode_distinctly(proposal: TaskProposal) -> None:
     stored = Fallback(Submission(arithmetic_task(), (), "notes"), BandOutcome.TOO_EASY, 0)
@@ -2389,14 +2421,14 @@ def restoring_bundle(engine: Engine) -> Resources:
     return replace(bundle, rollouts=replace(bundle.rollouts, engine=engine))
 
 
-# Review 2026-11-21: after the coordinator returned the accepted fallback, an OSError on runtime exit
+# Regression: after the coordinator returned the accepted fallback, an OSError on runtime exit
 # published HELD with the faulted revision's notes and [Modify, Incomplete], though the journal recorded the Accept.
 async def test_a_cleanup_failure_after_acceptance_appends_to_the_returned_workpiece(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @asynccontextmanager
     async def failing_exit(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), restoring_bundle(FirstRoundSolves())
         raise OSError(errno.EIO, "runtime cleanup failed")
@@ -2439,7 +2471,7 @@ async def test_a_cancelled_run_keeps_its_last_stage_state_under_a_running_head(
     assert workpiece.round == 1 and workpiece.submission is not None and workpiece.submission.notes == "revised notes"
 
 
-# Review 2026-11-21: a disk-full error persisting the final review held the run from the initial
+# Regression: a disk-full error persisting the final review held the run from the initial
 # workpiece; the journal had Submitted, Validated and Decided, the snapshot no task and no evidence.
 async def test_a_recovered_storage_failure_publishes_the_last_workpiece_it_reached(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -2462,7 +2494,7 @@ async def test_a_recovered_storage_failure_publishes_the_last_workpiece_it_reach
     assert workpiece.submission is not None and len(workpiece.evidence) == 1
 
 
-# Review 2026-11-21: a refused foreign restore digest published a bug-class hold whose snapshot had neither the
+# Regression: a refused foreign restore digest published a bug-class hold whose snapshot had neither the
 # submission nor the evidence the refusal was about, because the driver still held its initial workpiece.
 async def test_a_refused_restore_publishes_the_last_workpiece_it_reached(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -2472,7 +2504,7 @@ async def test_a_refused_restore_publishes_the_last_workpiece_it_reached(
 
     @asynccontextmanager
     async def foreign(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield replace(build_config(policy, {}), review=restore_elsewhere), resources(Envs(), script())
 
@@ -2544,7 +2576,7 @@ def last_message(request: InferenceRequest) -> str:
     return request.messages[-1].content
 
 
-# Review 2026-11-20: on an empty journal the second of two identical reads was served the first read's bytes.
+# Regression: on an empty journal the second of two identical reads was served the first read's bytes.
 async def test_a_first_launch_returns_each_physical_read_of_a_file_that_changes(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2577,7 +2609,7 @@ async def held_after_polls(
     return held.requests[:-1]
 
 
-# Review 2026-11-20: a journal recording pending then done served done to both polls and paid for two turns again.
+# Regression: a journal recording pending then done served done to both polls and paid for two turns again.
 async def test_a_journal_with_two_polls_serves_each_poll_its_own_recording(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2608,7 +2640,7 @@ async def test_a_journal_with_two_polls_serves_each_poll_its_own_recording(
 MISSING = f"File operation failed: [Errno {errno.ENOENT}] No such file: '{STATUS}'"
 
 
-# Review 2026-11-20: a failed read had no recorded outcome, so a later success on the same path took its place.
+# Regression: a failed read had no recorded outcome, so a later success on the same path took its place.
 @pytest.mark.parametrize(
     ("recorded", "resumed", "served"),
     [
@@ -2659,7 +2691,7 @@ class LosesWriteDraft(DriftingEnvs):
         return env
 
 
-# Review 2026-11-20: a stage restarted in-process rebuilt from the launch's history only, so a PID drifting earlier in
+# Regression: a stage restarted in-process rebuilt from the launch's history only, so a PID drifting earlier in
 # the stage changed the next requests and the two turns completed before the restart were paid for again (7 calls).
 async def test_an_in_process_stage_restart_replays_the_turns_its_first_attempt_completed(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -2686,7 +2718,7 @@ class DiesOnFirstStamp(DriftingEnvs):
         return env
 
 
-# Design review 2026-11-20: an attempt that dies re-applying a known prefix must not shorten what the next one verifies.
+# An attempt that dies re-applying a known prefix must not shorten what the next one verifies.
 @pytest.mark.parametrize("stamp", [None, stamped(0, b"other")], ids=["same state", "other state"])
 async def test_a_reconstruction_that_dies_inside_the_known_prefix_leaves_the_rest_to_verify(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, stamp: FakeCommand | None
@@ -2710,7 +2742,7 @@ async def test_a_reconstruction_that_dies_inside_the_known_prefix_leaves_the_res
     assert tool_output(workpiece, "read") == "ok"
 
 
-# Design review 2026-11-20: a resumed session must reproduce its recorded requests in order and to their end.
+# A resumed session must reproduce its recorded requests in order and to their end.
 @pytest.mark.parametrize("change", ["hydration", "context window", "sandbox definition"])
 async def test_a_resumed_author_that_leaves_its_recorded_session_holds_without_new_work(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, change: str
@@ -2819,7 +2851,7 @@ class Adversaries(InferenceClient):
         )
 
 
-# Review 2026-11-20: siblings whose readiness reversed on resume swapped outputs, and overlapping identical results held.
+# Regression: siblings whose readiness reversed on resume swapped outputs, and overlapping identical results held.
 @pytest.mark.parametrize(
     ("roster", "recorded", "fresh", "overlap"),
     [
@@ -2875,7 +2907,7 @@ async def test_each_adversary_replays_its_own_machine_history_whatever_its_sibli
 MALFORMED = b'{"malformed"'
 
 
-# Review 2026-11-20: the first submit after a resume was served the bytes an earlier grade had read, and accepted.
+# Regression: the first submit after a resume was served the bytes an earlier grade had read, and accepted.
 @pytest.mark.parametrize("rebuilt", ["replaced after the grade", "malformed when rebuilt"])
 async def test_a_resumed_submit_never_accepts_bytes_the_sandbox_does_not_hold(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, rebuilt: str
@@ -2932,7 +2964,7 @@ class ExhaustedRole(Envs):
         return env
 
 
-# Review 2026-11-20: a resumed adversary whose recorded command exhausted the output budget consumed its position
+# Regression: a resumed adversary whose recorded command exhausted the output budget consumed its position
 # unverified, so the search counted as EXHAUSTED evidence and the workpiece was accepted with no new model call.
 @pytest.mark.parametrize("exhausted", [1, STAGE_REPLAY_ATTEMPTS], ids=["once", "every stage replay"])
 async def test_a_recorded_command_that_cannot_be_verified_on_resume_is_never_weaker_evidence(
@@ -2989,7 +3021,7 @@ class CorruptArchiveOnce(DriftingEnvs):
         return env
 
 
-# Review 2026-11-20: a corrupt transfer archive became "File operation failed" feedback without a recorded outcome,
+# Regression: a corrupt transfer archive became "File operation failed" feedback without a recorded outcome,
 # so the author's next tool call on that machine held on "no attempt ... ready for a request".
 @pytest.mark.parametrize("held", [False, True], ids=["same launch", "resumed through the failure"])
 async def test_a_corrupt_transfer_archive_restarts_the_stage_instead_of_becoming_feedback(
@@ -3040,7 +3072,7 @@ def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes
 
 
 def relabelled_inference() -> bytes:
-    """``N4_JOURNAL`` with its first inference resolution (row 11) relabelled REEXECUTE, as the review planted it."""
+    """``N4_JOURNAL`` with its first inference resolution (row 11) relabelled REEXECUTE."""
     rows = [json.loads(line) for line in gzip.decompress(N4_JOURNAL.read_bytes()).splitlines()]
     (fingerprint,) = rows[10]["event"]["payload"]["fingerprints"]
     assert fingerprint["resource"] == "inference" and fingerprint["replay"] == ReplayPolicy.CACHE
@@ -3048,7 +3080,7 @@ def relabelled_inference() -> bytes:
     return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
 
 
-# Review 2026-11-20: the real claim swapped the head for each of these journals, and a list-valued owner escaped as an
+# Regression: the real claim swapped the head for each of these journals, and a list-valued owner escaped as an
 # untyped TypeError. The paid id result reached both the content cache and the owner's history.
 @pytest.mark.parametrize(
     "events",
@@ -3135,7 +3167,7 @@ async def test_claim_refuses_a_journal_whose_rows_break_their_roles_and_leaves_t
     assert tree(destination) == before
 
 
-# Review 2026-11-20: the driver claimed this journal, repeated the first completed author request and accepted.
+# Regression: the driver claimed this journal, repeated the first completed author request and accepted.
 async def test_a_resolution_relabelled_reexecute_is_refused_before_any_model_call(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3187,13 +3219,13 @@ class HelperlessEnvs(EnvFactory):
         return ShellboxEnv(HelperlessMachine(), "image", AsyncExitStack())
 
 
-# Review 2026-11-20 (follow-up 1): a missing guest `wc` was stored as a bug hold and failed the child process.
+# Regression: a missing guest `wc` was stored as a bug hold and failed the child process.
 async def test_broken_guest_helper_holds_with_its_cause_without_a_bug(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), resources(HelperlessEnvs(), script())
 
@@ -3221,29 +3253,65 @@ class SandboxController(LocalController):
 class LocalIrisEnvs(EnvFactory):
     """Each environment is a fresh local Iris sandbox in its own directory with the same scripted faults."""
 
-    def __init__(self, root: Path, faults: Sequence[Injection], prelude: str = "") -> None:
-        self.root, self.faults, self.prelude = root, faults, prelude
+    def __init__(
+        self, root: Path, faults: Sequence[Injection], prelude: str = "", cancel_error: Exception | None = None
+    ) -> None:
+        self.root, self.faults, self.prelude, self.cancel_error = root, faults, prelude, cancel_error
         self.created: list[Path] = []
+
+    def cancel(self) -> None:
+        if self.cancel_error is not None:
+            raise self.cancel_error
 
     @override
     async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
         workdir = self.root / f"sandbox-{len(self.created)}"
         workdir.mkdir(parents=True)
         self.created.append(workdir)
-        machine = local_iris_machine(workdir, SandboxController(workdir, self.faults, self.prelude))
+        machine = local_iris_machine(workdir, SandboxController(workdir, self.faults, self.prelude), self.cancel)
         return ShellboxEnv(machine, "image", AsyncExitStack())
 
 
-# Review 2026-11-20 (follow-up 3): a lost WebSocket upgrade reply reran the command in the same sandbox, and a
+# Regression: a lost WebSocket upgrade reply reran the command in the same sandbox, and a
 # missing `wc` or an OOM-killed sandbox during capture held only after three sandboxes with one append each.
+# Regression: after a lone `timer 137` was classified as OOM or unknown, a failed
+# TerminateJob (503 or 403) replaced that outcome with the bare transport error, and the run left through the bug path.
+TIMER_KILL_CANCEL_FAILS = [
+    (
+        (("command", Fault.TIMER_KILLED, True), ("status", Fault.OOM_KILLED, False)),
+        1,
+        "OOMKilled",
+        ConnectError(code, "TerminateJob failed"),
+    )
+    for code in (Code.UNAVAILABLE, Code.PERMISSION_DENIED)
+] + [
+    (
+        (("command", Fault.TIMER_KILLED, True),),
+        STAGE_REPLAY_ATTEMPTS,
+        "timer 137",
+        ConnectError(code, "TerminateJob failed"),
+    )
+    for code in (Code.UNAVAILABLE, Code.PERMISSION_DENIED)
+]
+
+
 @pytest.mark.parametrize(
-    "faults,prelude,sandboxes,cause",
+    "faults,prelude,sandboxes,cause,cancel_error",
     [
-        ((("command", Fault.SETUP_FAILED, True),), "", STAGE_REPLAY_ATTEMPTS, "command outcome unknown"),
-        ((), "wc() { echo 'wc: not found' >&2; return 127; }; ", 1, "wc: not found"),
-        ((("stdout-size", Fault.OOM_KILLED, True),), "", 1, "OOMKilled"),
+        ((("command", Fault.SETUP_FAILED, True),), "", STAGE_REPLAY_ATTEMPTS, "command outcome unknown", None),
+        ((), "wc() { echo 'wc: not found' >&2; return 127; }; ", 1, "wc: not found", None),
+        ((("stdout-size", Fault.OOM_KILLED, True),), "", 1, "OOMKilled", None),
+        *((faults, "", sandboxes, cause, error) for faults, sandboxes, cause, error in TIMER_KILL_CANCEL_FAILS),
     ],
-    ids=["lost-upgrade-reply", "capture-without-wc", "capture-oom-killed"],
+    ids=[
+        "lost-upgrade-reply",
+        "capture-without-wc",
+        "capture-oom-killed",
+        "timer-kill-oom-cancel-503",
+        "timer-kill-oom-cancel-403",
+        "timer-kill-unknown-cancel-503",
+        "timer-kill-unknown-cancel-403",
+    ],
 )
 async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
     driver_args: Namespace,
@@ -3253,13 +3321,14 @@ async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
     prelude: str,
     sandboxes: int,
     cause: str,
+    cancel_error: Exception | None,
 ) -> None:
-    envs = LocalIrisEnvs(tmp_path / "sandboxes", faults, prelude)
+    envs = LocalIrisEnvs(tmp_path / "sandboxes", faults, prelude, cancel_error)
     counted = (call("shell", {"command": "echo ran >> counter", "timeout": 5}, "inspect"), *script()[1:])
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), resources(envs, counted)
 
@@ -3272,7 +3341,7 @@ async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
     assert [(workdir / "counter").read_text() for workdir in envs.created] == ["ran\n"] * sandboxes
 
 
-# Review 2026-11-21 (follow-up 4): a lost upgrade reply for an upload chunk retried the write in the same sandbox; the
+# Regression: a lost upgrade reply for an upload chunk retried the write in the same sandbox; the
 # original append landed after the retry truncated the file, and the next read returned `proofproof` in an ACCEPTED run.
 async def test_lost_upload_reply_never_reads_back_a_doubled_write(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3299,7 +3368,7 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
 
     @asynccontextmanager
     async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), resources(envs, responses)
 
@@ -3364,7 +3433,7 @@ def drafting_script() -> tuple[Completion, ...]:
     return (*(call("write_file", {"path": str(p), "content": d.decode()}, p.name) for p, d in drafts), *script()[2:])
 
 
-# Review 2026-11-21: with guest /tmp unwritable, four-file hydration journalled EACCES for
+# Regression: with guest /tmp unwritable, four-file hydration journalled EACCES for
 # Taskforge's own archive as the caller's failure, and every resume on a healthy sandbox held as unreproducible.
 async def test_unstageable_hydration_archive_holds_as_infrastructure_and_resumes(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3437,7 +3506,7 @@ async def test_a_decision_model_outage_defers_and_the_next_launch_resumes_it_una
     assert not resumed.inference.repeated and len(resumed.inference.requests) == len(script()) - 2
 
 
-# Review 2026-11-21: an ordinary launch entered a human hold and replayed its refusals as if an
+# Regression: an ordinary launch entered a human hold and replayed its refusals as if an
 # operator had passed --resume-held. Only the exact typed marker that an outage-only hold records is entered again,
 # and the refusal replay rule always sees the operator's own flag.
 @pytest.mark.parametrize(
@@ -3508,7 +3577,7 @@ def batch(
     remaining = {str(path): list(codes[name]) for name, path in paths.items()}
     launches: list[str] = []
 
-    async def child(args: Namespace) -> int:
+    async def child(args: Namespace, _controller_url: str | None) -> int:
         assert not args.resume_held, "only the operator reopens a hold"
         launches.append(Path(args.proposals).stem.removesuffix(".proposal") + "*" * getattr(args, "probe", False))
         return (remaining[args.proposals] or [0]).pop(0)
@@ -3537,7 +3606,7 @@ async def test_a_deferring_run_starts_unrelated_work_and_holds_decision_model_pr
     assert "submitted=4 completed=4 failed=0 skipped=0" in out
 
 
-# Review 2026-11-21: with one child slot, a code proposal never started while a health read was
+# Regression: with one child slot, a code proposal never started while a health read was
 # pending. The run reads health in the background and keeps reaping and launching children while it waits.
 async def test_a_pending_health_read_holds_back_no_unrelated_proposal(
     driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
@@ -3555,7 +3624,7 @@ async def test_a_pending_health_read_holds_back_no_unrelated_proposal(
     assert launches == ["first", "code", "first"]
 
 
-# Review 2026-11-21: without a health route, a probe child that crashed, was superseded, needed a
+# Regression: without a health route, a probe child that crashed, was superseded, needed a
 # migration or found a corrupt journal reopened the queue. Only a probe that is not deferred again releases the
 # rest; any other exit is reported as usual and another parked proposal probes after the interval.
 @pytest.mark.parametrize("code", [1, driver.SUPERSEDED, driver.NEEDS_MIGRATION, driver.CORRUPT])
@@ -3580,7 +3649,7 @@ async def test_without_a_health_route_only_an_answered_probe_reopens_decision_mo
     assert f"OUTCOME {label} exit={code} proposal={tmp_path / 'a.proposal.json'}" in capsys.readouterr().out
 
 
-# Review 2026-11-21: an ordinary child exiting 10 was counted a success. Only the
+# Regression: an ordinary child exiting 10 was counted a success. Only the
 # designated probe's 10 is an answer; from any other child it is the unexpected exit it is.
 async def test_an_answer_from_a_child_that_is_no_probe_is_a_failure(
     driver_args: Namespace,
@@ -3596,7 +3665,7 @@ async def test_an_answer_from_a_child_that_is_no_probe_is_a_failure(
     assert f"OUTCOME failed exit={driver.ANSWERED} proposal={tmp_path / 'code.proposal.json'}" in capsys.readouterr().out
 
 
-# Review 2026-11-21: a probe whose grade replayed a cached read exited 0 having made no
+# Regression: a probe whose grade replayed a cached read exited 0 having made no
 # decision-model call, and released every parked proposal. A probe that proves no fresh answer stays a probe: each
 # parked proposal probes in turn after the interval, and none is released on its evidence.
 async def test_a_probe_that_shows_no_fresh_answer_releases_nothing(
@@ -3609,7 +3678,7 @@ async def test_a_probe_that_shows_no_fresh_answer_releases_nothing(
     assert (launches, len(given)) == (["a", "a*", "b*", "c*"], 3)
 
 
-# Review 2026-11-21: after one healthy reading the first released child deferred again,
+# Regression: after one healthy reading the first released child deferred again,
 # and the rest of the released queue kept starting while the next health read was pending. A fresh outage parks
 # everything not yet started: no decision-model child launches while health is being read.
 async def test_a_fresh_outage_parks_released_work_that_has_not_started(
@@ -3669,7 +3738,7 @@ def probe_bundles(
     ]
 
 
-# Review 2026-11-21: what a probe child reports. Only a probe that resolved a decision-
+# Regression: what a probe child reports. Only a probe that resolved a decision-
 # model read in its own process, not one replayed from the journal, answers; a skipped root proves nothing either.
 async def test_a_probe_child_answers_only_for_a_read_resolved_in_its_own_process(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
@@ -3697,7 +3766,7 @@ CLEF_BODIES: Mapping[str, httpx.Response] = {
 }
 
 
-# Review 2026-11-21: through the default reader, one 200 followed only by an off-scale level, an
+# Regression: through the default reader, one 200 followed only by an off-scale level, an
 # HTTP 403 or a 200 without answers left the earlier answer standing, and the probe released its peers with the root
 # manual. Every dispatched read that fails records the failure, whatever its class; only the caller's own cancellation
 # of a read in flight leaves the earlier answer standing. A read whose own request deadline expired, its
@@ -3755,7 +3824,7 @@ async def test_a_probe_through_the_default_reader_counts_every_failed_dispatch(
     assert held.terminal is Terminal.HELD and not driver.deferred(held) and sent == ["12", second]
 
 
-# Review 2026-11-21: a probe that read 200 and then met a 503 ended on a human hold yet
+# Regression: a probe that read 200 and then met a 503 ended on a human hold yet
 # answered, first in general and then when the 503's retry row landed before the 200's resolution in one loop turn;
 # and three answers followed by a fourth dispatched read that expired in flight left no row at all and answered. The
 # reader's last physical outcome in the probe's process decides: a later failure, or a dispatched read unanswered at

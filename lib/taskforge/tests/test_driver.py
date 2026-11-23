@@ -16,7 +16,7 @@ from iris.cluster.types import JobName
 from shellbox.backends.iris.machine import IrisMachineFactory
 
 from taskforge import wiring
-from taskforge.driver import cli, eligible, inputs, proposal_bucket, proposal_key
+from taskforge.driver import cli, eligible, glm_source, inputs, proposal_bucket, proposal_key
 from taskforge.model.proposal import Environment, TaskProposal, Verification
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
@@ -69,11 +69,39 @@ def test_empty_prefix_fails_instead_of_reporting_a_successful_empty_run(tmp_path
 
 def test_driver_accepts_the_launchers_command() -> None:
     argv = ["--proposals", "p", "--output", "o", "--policy", "q", "--job-prefix", "j", "--drivers", "2"]
-    args = launch.parser().parse_args([*argv, "--concurrency", "4", "--cpu", "8", "--ranks", "0,1", "--resume-held"])
-    command = launch.commands(args, {"CW_KEY_ID": "k", "CW_KEY_SECRET": "s", "GLM_API_KEY": "g", "GLM_BASE_URL": "u"})[1]
+    argv += ["--concurrency", "4", "--cpu", "8", "--ranks", "0,1", "--resume-held", "--glm-relay-job", "/me/relay"]
+    args = launch.parser().parse_args(argv)
+    command = launch.commands(args, {"CW_KEY_ID": "k", "CW_KEY_SECRET": "s", "GLM_API_KEY": "g"})[1]
     parsed = cli().parse_args(command[command.index("taskforge.driver") + 1 :])
     assert (parsed.command, parsed.buckets, parsed.bucket_range) == ("run", 4096, (2048, 4096))
     assert (parsed.concurrency, parsed.ranks, parsed.resume_held) == (4, (0, 1), True)
+    assert (parsed.glm_relay_job, parsed.glm_base_url) == ("/me/relay", None)
+
+
+@pytest.mark.parametrize("command", ["run", "one"])
+def test_driver_endpoint_flags_build_the_gateway_source(command: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GLM_API_KEY", "secret-token")
+    # The flags alone name the gateway: the environment variables they replaced are ignored.
+    monkeypatch.setenv("GLM_BASE_URL", "http://stray/v1")
+    monkeypatch.setenv("GLM_RELAY_JOB", "/stray/relay")
+    policy = load_policy(DEFAULTS_DIR)
+    argv = [command, "--proposals", "p", "--output", "o", "--policy", "q"] + ["--concurrency", "1"] * (command == "run")
+    relay = glm_source(policy, cli().parse_args([*argv, "--glm-relay-job", "/user/relay"]))
+    assert isinstance(relay, wiring.RelayEndpoint) and relay.job == "/user/relay"
+    assert relay.model == policy.setting("author.model", str)
+    assert relay.pool.value == policy.setting("provider.pool", str)
+    fixed = glm_source(policy, cli().parse_args([*argv, "--glm-base-url", "http://fixed/v1"])).current()
+    assert (fixed.base_url, fixed.token) == ("http://fixed/v1", "secret-token")
+
+
+@pytest.mark.parametrize("endpoints", [(), ("--glm-base-url", "http://fixed/v1", "--glm-relay-job", "/user/relay")])
+def test_driver_refuses_anything_but_one_endpoint_flag(
+    endpoints: tuple[str, ...], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        cli().parse_args(["one", "--proposals", "p", "--output", "o", "--policy", "q", *endpoints])
+    error = capsys.readouterr().err
+    assert "--glm-base-url" in error and "--glm-relay-job" in error
 
 
 def test_proposal_buckets_ignore_the_proposal_root() -> None:
@@ -91,8 +119,8 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
         raise AssertionError("Runtime initialization must not probe a sandbox or transport")
 
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.delenv("IRIS_CONTROLLER_URL", raising=False)
     monkeypatch.setattr(wiring, "get_job_info", lambda: SimpleNamespace(controller_address="http://controller"))
+    monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://stray")  # only the entry point reads it, and passes it in
     monkeypatch.setattr(subprocess, "Popen", unexpected)
     monkeypatch.setattr(httpx.AsyncClient, "send", unexpected)
     policy = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")
@@ -104,6 +132,9 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
         assert factory.controller_url == "http://controller"
         assert factory.cluster is None
         assert factory.scheduling_timeout == SANDBOX_SCHEDULING_TIMEOUT
+    async with wiring.runtime(policy, source, "fake", controller_url="http://explicit") as (_, resources):
+        explicit = resources.factories["gvisor"]
+        assert isinstance(explicit, IrisMachineFactory) and explicit.controller_url == "http://explicit"
 
 
 @pytest.mark.parametrize("pool", ["high", "bulk"])

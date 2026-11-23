@@ -167,7 +167,7 @@ class ModelUnavailable(Exception):
 class GenerationTimedOut(Exception):
     """A call generated for ``RetryPolicy.generation_timeout`` seconds without finishing.
 
-    Evidence about the request, not the provider (production 2026-11-19: three solver turns of 70 minutes each).
+    Evidence about the request, not the provider: a healthy provider can stream one solver turn for over an hour.
     """
 
 
@@ -216,7 +216,7 @@ class Progress:
             self.first_token = now
         if self.remaining is None or now - self.first_token < self.remaining:
             return True
-        # A finishing chunk ends the stream: its finish reason, an abort included, decides the attempt, not the bound.
+        # A finishing chunk, including abort, decides the attempt before the generation bound.
         if any(choice.get("finish_reason") for choice in chunk.get("choices") or ()):
             return True
         if self.past_bound is None:

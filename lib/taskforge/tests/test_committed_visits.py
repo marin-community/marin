@@ -184,7 +184,7 @@ class Driver:
 
         @asynccontextmanager
         async def runtime(
-            policy: Policy, _: EndpointSource, __: str
+            policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
         ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
             yield configure(build_config(policy, {}, profiles)), attempt.bundle
 
@@ -210,9 +210,7 @@ class Driver:
 
 @pytest.fixture
 def launches(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Driver:
-    monkeypatch.setenv("GLM_BASE_URL", "http://fake/v1")
     monkeypatch.setenv("GLM_API_KEY", "fake")
-    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
     source = tmp_path / "test.proposal.json"
     source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
     args = Namespace(
@@ -225,6 +223,8 @@ def launches(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyP
         buckets=4096,
         bucket_range=None,
         ranks=(),
+        glm_base_url="http://fake/v1",
+        glm_relay_job=None,
     )
     return Driver(args, monkeypatch, [])
 
@@ -533,7 +533,7 @@ def holding_reviewer(config: TaskforgeConfig) -> TaskforgeConfig:
     return replace(config, solve_review=replace(config.solve_review, harness=harness))
 
 
-# Review 2026-11-23: a reviewer subclass shared the stock compatibility digest, so a cold launch accepted on the stock
+# Regression: a reviewer subclass shared the stock compatibility digest, so a cold launch accepted on the stock
 # reviewer's committed evidence while a fresh run with that reviewer held.
 async def test_a_reviewer_subclass_reuses_no_stock_visit_and_decides_as_a_fresh_run(launches: Driver) -> None:
     assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED

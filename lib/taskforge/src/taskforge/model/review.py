@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Source: Taskforge integration 9807c5cfb3, stage60_review/{decision,rules}.py and stage50_validate/outcome.py.
-
 """Completed validation evidence and the decisions made from it."""
 
 import math
@@ -21,9 +19,9 @@ OMIT_NONE, OMIT_EMPTY = Field(exclude_if=lambda value: value is None), Field(exc
 OMIT_NOTHING = Field(exclude_if=lambda value: value == ())
 OMIT_FALSE = Field(exclude_if=lambda value: value is False)
 """Persistence rule: a new optional persisted field is omitted from its serialised form when it holds its ONE declared
-default (``None``, ``""`` or ``()``, marked ``Annotated[T, OMIT_NONE]``, ``OMIT_EMPTY`` or ``OMIT_NOTHING``), so
-adding it changes no existing serialised bytes, and no other valid value encodes like it. Canonical content digests
-still visit every field; a change of meaning bumps the journal format."""
+default (``None``, ``""``, ``()`` or ``False``, marked ``Annotated[T, OMIT_NONE]``, ``OMIT_EMPTY``, ``OMIT_NOTHING`` or
+``OMIT_FALSE``), so adding it changes no existing serialised bytes, and no other valid value encodes like it.
+Canonical content digests still visit every field; a change of meaning bumps the journal format."""
 
 
 def nonempty(digest: str | None) -> None:
@@ -294,7 +292,7 @@ type Decision = Annotated[Accept | Reject | Modify | Revise | Retry | Incomplete
 
 @dataclass(frozen=True, slots=True)
 class BandRules:
-    """Inclusive solve-rate band, copied from Taskforge's review rules."""
+    """Inclusive solve-rate band."""
 
     low: float
     high: float

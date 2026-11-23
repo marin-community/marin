@@ -65,7 +65,8 @@ def argv(command: str, directory: Path, work: str = "work") -> list[str]:
     source = directory / ("manifest.txt" if command == "run" else "test.proposal.json")
     options = {"proposals": source, "output": directory / "out", "policy": directory / "policy.json"}
     flags = [item for name, value in options.items() for item in (f"--{name}", str(value))]
-    return [command, *flags, "--work-dir", str(directory / work), *(["--concurrency", "2"] if command == "run" else [])]
+    flags += ["--work-dir", str(directory / work), "--glm-base-url", "http://fake/v1"]
+    return [command, *flags, *(["--concurrency", "2"] if command == "run" else [])]
 
 
 def roots(directory: Path, sources: list[Path]) -> list[Path]:
@@ -156,7 +157,7 @@ def assert_reopened(tmp_path: Path, sources: list[Path], command: str) -> None:
     assert all(published_workpiece(root).terminal is Terminal.ACCEPTED for root in roots(tmp_path, sources))
 
 
-# Review 2026-11-21: a cancelled or preempted driver job's children kept working after SIGTERM, spent their stage
+# Regression: a cancelled or preempted driver job's children kept working after SIGTERM, spent their stage
 # attempts on sandboxes that had died with the job and published holds only --resume-held clears; and a driver killed
 # outright left its children running, buying work, as orphans. SIGTERM is now a crash, and children die with it.
 @pytest.mark.timeout(300)
@@ -179,7 +180,7 @@ def test_a_terminated_run_takes_its_children_and_a_relaunch_finishes_both(
     assert_reopened(tmp_path, sources, "run")
 
 
-# Review 2026-11-21: a signal could arrive while run was starting a child or collecting one that had exited; neither
+# Regression: a signal could arrive while run was starting a child or collecting one that had exited; neither
 # window may leave a child behind.
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize(
@@ -199,7 +200,7 @@ def test_a_terminated_run_leaves_no_child_while_it_spawns_or_reaps_one(
     assert parent.signal(signal.SIGTERM) == TERMINATED
 
 
-# Review 2026-11-21: once one child had exited, a sibling that held the parent's end of a pipe would keep its own
+# Regression: once one child had exited, a sibling that held the parent's end of a pipe would keep its own
 # watcher from ever reading end of file. The child left running dies when its parent is killed.
 @pytest.mark.timeout(300)
 def test_a_child_that_outlives_its_sibling_still_dies_with_the_parent(proposal: TaskProposal, tmp_path: Path) -> None:
@@ -209,7 +210,7 @@ def test_a_child_that_outlives_its_sibling_still_dies_with_the_parent(proposal: 
     assert parent.signal(signal.SIGKILL) == -signal.SIGKILL
 
 
-# Review 2026-11-21: a standalone child ignored SIGTERM while it worked. It now exits 143 at once, at the first signal
+# Regression: a standalone child ignored SIGTERM while it worked. It exits 143 at once, at the first signal
 # or a repeated one, and its root reopens.
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("signals", [1, 2])
@@ -225,32 +226,37 @@ def test_a_terminated_standalone_child_exits_and_its_root_reopens(
     assert_reopened(tmp_path, sources, "one")
 
 
-# Review 2026-11-21: a forced exit that flushed output first could block on a full stdout or stderr pipe nobody read.
+# Regression: a forced exit that flushed output first could block on a full stdout or stderr pipe nobody read.
+# A SIGTERM that landed just before the driver's write to such a pipe never interrupted it, so the Python handler never
+# ran: ``uninterrupted`` puts the driver in that state on purpose.
 @pytest.mark.timeout(300)
-def test_unread_full_output_pipes_do_not_delay_the_exit(proposal: TaskProposal, tmp_path: Path) -> None:
+@pytest.mark.parametrize("scenario", ["flood", "flood+uninterrupted"])
+def test_unread_full_output_pipes_do_not_delay_the_exit(proposal: TaskProposal, tmp_path: Path, scenario: str) -> None:
     inputs(proposal, tmp_path)
-    os.mkfifo(tmp_path / "flooding")
-    reader = os.open(tmp_path / "flooding", os.O_RDONLY | os.O_NONBLOCK)
     child = subprocess.Popen(
-        [sys.executable, "-m", MODULE, "child", "flood", *argv("one", tmp_path)],
+        [sys.executable, "-m", MODULE, "child", scenario, *argv("one", tmp_path)],
         cwd=ROOT,
-        stdout=subprocess.PIPE,  # never read
+        stdout=subprocess.PIPE,  # read only once the child is gone
         stderr=subprocess.PIPE,  # never read
+        start_new_session=True,
     )
     try:
-        assert select.select([reader], [], [], STARTUP)[0], "the child never began to flood its output"
+        # The first byte on stdout means stderr is full and the driver is inside a write that cannot complete.
+        assert select.select([child.stdout], [], [], STARTUP)[0], "the child never began to flood its output"
         child.send_signal(signal.SIGTERM)
         assert child.wait(timeout=PROMPT) == TERMINATED
+        assert child.stdout is not None and child.stdout.read(1) == b"x", "something else wrote to stdout first"
     finally:
-        child.kill()
-        os.close(reader)
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        child.communicate()
 
 
 HIGH = 1100
 """A descriptor number above ``FD_SETSIZE`` (1024), which ``select.select`` refuses."""
 
 
-# Review 2026-11-21: a child started after its parent had died would see a closed pipe only once its watching thread
+# Regression: a child started after its parent had died would see a closed pipe only once its watching thread
 # ran; it checks before anything else, so it claims nothing. A parent with many files open passed its pipe at fd 1030,
 # which the readiness check refused, so every proposal failed before it ran.
 @pytest.mark.timeout(300)
@@ -322,7 +328,7 @@ def is_open(descriptor: int) -> bool:
     return True
 
 
-# Review 2026-11-21: an embedding caller cancelled run() while it waited for a child during cleanup; both ends of the
+# Regression: an embedding caller cancelled run() while it waited for a child during cleanup; both ends of the
 # pipe stayed open after it returned, and the open writer kept the surviving child from ever reading end of file.
 @pytest.mark.timeout(300)
 async def test_a_run_cancelled_during_cleanup_closes_its_pipe_and_its_child_follows(
@@ -365,6 +371,7 @@ async def test_a_run_cancelled_during_cleanup_closes_its_pipe_and_its_child_foll
         bucket_range=None,
         ranks=(),
         resume_held=False,
+        glm_relay_job=None,
     )
     launch = asyncio.create_task(driver.run(args))
     try:
@@ -380,7 +387,7 @@ async def test_a_run_cancelled_during_cleanup_closes_its_pipe_and_its_child_foll
             child.kill()
 
 
-# Review 2026-11-21: a crash can land after a head's conditional write committed but before the driver heard back. The
+# Regression: a crash can land after a head's conditional write committed but before the driver heard back. The
 # relaunch reads the committed head: a hold it skips, buying nothing, and an outage-only hold it enters and finishes.
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("scenario", ["held", "deferred"])
@@ -417,14 +424,12 @@ def test_an_interrupted_run_stops_its_children_as_before(proposal: TaskProposal,
 def serving(monkeypatch: pytest.MonkeyPatch, bundle: Resources) -> None:
     @asynccontextmanager
     async def runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), bundle
 
     monkeypatch.setattr(driver, "runtime", runtime)
-    monkeypatch.setenv("GLM_BASE_URL", "http://fake/v1")
     monkeypatch.setenv("GLM_API_KEY", "fake")
-    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
 
 
 # Control: without any signal a refusal still publishes its hold.
@@ -436,7 +441,7 @@ async def test_an_unsignalled_refusal_still_holds_the_workpiece(
     serving(monkeypatch, replace(built, inference=FakeInference((Hold("the host refused the request"),))))
     flags = dict(zip(argv("one", tmp_path)[1::2], argv("one", tmp_path)[2::2], strict=True))
     args = Namespace(**{name.removeprefix("--").replace("-", "_"): value for name, value in flags.items()})
-    assert await driver.one(Namespace(**vars(args), resume_held=False)) == 0
+    assert await driver.one(Namespace(**vars(args), resume_held=False, glm_relay_job=None)) == 0
     held = published_workpiece(roots(tmp_path, sources)[0])
     last = held.decisions[-1]
     assert held.terminal is Terminal.HELD and isinstance(last, Incomplete)

@@ -140,7 +140,7 @@ class Profile:
         return Fingerprint("inference", self.name, ReplayPolicy.CACHE)
 
 
-# Review 2026-11-21: cold launches under author profiles A, then B, then A reported
+# Regression: cold launches under author profiles A, then B, then A reported
 # cumulative author tokens 40/20, 80/40 and 120/60: the third bought again what A had already paid. It reports 80/40.
 async def test_a_launch_under_a_profile_already_paid_adds_no_reported_tokens(
     tmp_path: Path, proposal: TaskProposal
@@ -201,7 +201,7 @@ async def test_a_freshly_reclaimed_root_counts_as_running_in_a_short_window(
     assert "tokens role=author prompt=0 cached=0 completion=0" in lines
 
 
-# Review 2026-11-21: one root in an earlier journal format failed the whole report.
+# Regression: one root in an earlier journal format failed the whole report.
 async def test_a_root_in_another_journal_format_is_named_and_the_report_completes(
     tmp_path: Path, proposal: TaskProposal
 ) -> None:
@@ -217,7 +217,7 @@ async def test_a_root_in_another_journal_format_is_named_and_the_report_complete
     assert unsupported in lines
 
 
-# Review 2026-11-21: while a judge call was in flight, an adversary call of 37 prompt tokens completed, then the judge's
+# Regression: while a judge call was in flight, an adversary call of 37 prompt tokens completed, then the judge's
 # of 11; the cold report charged 48 to the judge and none to the adversary.
 async def test_overlapping_scopes_charge_each_call_to_the_role_its_scope_bills(
     tmp_path: Path, proposal: TaskProposal

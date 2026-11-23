@@ -265,7 +265,7 @@ class ReentrantSink(Sink):
             self.ctx.notify(Note("diagnostic"))
 
 
-# Review 2026-11-20: a recording or observer run started while another was starting replaced the collection the outer
+# Regression: a recording or observer run started while another was starting replaced the collection the outer
 # one was appended to, so its failure was lost and drain returned with a row pending.
 async def test_a_recording_started_while_another_is_written_surfaces_its_failure_at_drain() -> None:
     sink = ReentrantSink()
@@ -303,7 +303,7 @@ async def test_an_observer_run_started_while_another_starts_reports_its_hold() -
         loop.set_task_factory(None)
 
 
-# Review 2026-11-20: a scope-entry observer ran in the parent's context, so its Note bypassed the child's observers.
+# Regression: a scope-entry observer ran in the parent's context, so its Note bypassed the child's observers.
 async def test_a_note_from_a_scope_entry_observer_reaches_the_entered_scope_observers() -> None:
     ctx = Context(log=EventLog())
     seen: list[str] = []

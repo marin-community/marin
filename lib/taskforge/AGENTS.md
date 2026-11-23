@@ -21,7 +21,8 @@ effects, never whole stages.
   `uv run --frozen --package marin-taskforge --group test pyrefly check --config lib/taskforge/pyproject.toml`;
   `./infra/pre-commit.py --all-files --fix`.
 - Keep dependency direction: model <- effects <- resources <- lowering <- harness
-  <- config <- stages <- coordinator. Copy modules with a source citation.
+  <- config <- stages <- coordinator. Copied code carries no source-citation header; its provenance belongs in
+  the commit message and the PR description.
 - `taskforge.llm.client.ModelClient` is the one owner of model retries; a new model host is a `Provider`
   and a new model is a `ModelProfile`, never a second client or a retry loop around one.
 - `Event` alone uses an explicit covariant `TypeVar`: PEP 695 infers invariance

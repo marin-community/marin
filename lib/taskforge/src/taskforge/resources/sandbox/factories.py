@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Source: Taskforge integration 9807c5cfb3, sandbox/factories.py and taskforge_adapters/backends.py.
-
 """Backend selection shared with task lowering."""
 
 import shellsim

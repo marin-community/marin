@@ -3,12 +3,14 @@
 
 """Mode judge: IFEval gate, exact gate, then an LLM judge.
 
-Four rubrics. ``reference`` ports the Nemotron open-QA harness: most correct responses match a
+Five rubrics. ``reference`` ports the Nemotron open-QA harness: most correct responses match a
 reference verbatim once normalized, so the exact gate answers them for free and only the survivors
 reach the model. ``checklist`` ports the rewardkit checklist graders: each criterion is a yes/no
 question put to the model on its own, and the reward is the fraction answered yes, as rewardkit's
 default mean aggregation scored them. ``labels`` maps a configured final verdict label to its
 explicit task score. ``pairwise`` ports Arena-Hard's two-game comparison against a baseline answer.
+``answers`` follows Humanity's Last Exam's judge, extended to several results: one call returns a
+JSON verdict per reference, and the task scores 1 only when every one is correct.
 All rubrics can sit behind ``constraints``, deterministic IFEval checks that must all pass first.
 
 The judge is any OpenAI-compatible chat endpoint, configured through ``VERIFYIT_JUDGE_BASE_URL``,
@@ -22,7 +24,6 @@ import math
 import os
 import random
 import re
-import statistics
 import string
 import time
 import unicodedata
@@ -39,11 +40,9 @@ from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 
 from verifyit.file_ops.read import read_text
 from verifyit.grade import (
-    Aggregation,
     GradingInfraError,
     InvalidTask,
     Reward,
-    aggregate_rewards,
     empty_output_policy,
     read_output,
     scored,
@@ -55,6 +54,7 @@ from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.modes.ifeval import Check
 from verifyit.reasoning_markup import REASONING_DELIMITERS
 from verifyit.spec import (
+    RUBRIC_ANSWERS,
     RUBRIC_CHECKLIST,
     RUBRIC_LABELS,
     RUBRIC_PAIRWISE,
@@ -116,6 +116,7 @@ SCORE: <0|1>
 LABEL_FIELDS = frozenset({"question", "reference", "candidate"})
 PAIRWISE_METRIC = "win_rate"
 PAIRWISE_FIELDS = frozenset({"question", "answer_a", "answer_b"})
+ANSWERS_FIELDS = frozenset({"question", "references", "candidate"})
 
 SCORE_PATTERN = re.compile(r"score\s*:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 
@@ -140,10 +141,12 @@ class JudgeRequest:
 
 @dataclass(frozen=True)
 class JudgeCompletion:
-    """The reply and its chat ``finish_reason``, read as an endpoint reply with that finish would be.
+    """The reply and its chat ``finish_reason``.
 
     Strict chat retries ``length`` at the larger budget and fails any other finish but ``stop``; content-policy
-    chat keeps the text under any finish; Responses treats every finish but ``stop`` as an incomplete response.
+    chat keeps the text under any finish; both read a finish as an endpoint would. Responses treats every finish
+    but ``stop`` as an incomplete response that may be retried, unlike an endpoint, which retries only a
+    ``max_output_tokens`` cut and fails any other incomplete status.
     """
 
     text: str
@@ -194,6 +197,15 @@ class _ScoreResult:
 
 
 @dataclass(frozen=True)
+class _AnswerVerdict:
+    index: int
+    label: Any
+    extracted_final_answer: Any
+    reasoning: str
+    correct: bool
+
+
+@dataclass(frozen=True)
 class _LabelCompletion:
     text: str
     incomplete: bool
@@ -241,7 +253,7 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
     if not isinstance(spec.strip_candidate_reasoning_blocks, bool):
         raise InvalidTask("strip_candidate_reasoning_blocks must be boolean")
-    if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE) and (
+    if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE, RUBRIC_ANSWERS) and (
         not isinstance(spec.system_prompt, str)
         or not isinstance(spec.prompt_template, str)
         or not isinstance(spec.question, str)
@@ -256,6 +268,8 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask("judge rubric 'checklist' needs non-empty criteria")
     if spec.rubric == RUBRIC_LABELS:
         _validate_label_spec(spec, references)
+    if spec.rubric == RUBRIC_ANSWERS:
+        _validate_answers_spec(spec, references)
     if spec.rubric == RUBRIC_PAIRWISE:
         _validate_pairwise_spec(spec)
     elif spec.label_weights or spec.verdict_patterns:
@@ -316,7 +330,7 @@ def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> 
     try:
         with client:
             completion = _label_completion(
-                spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens
+                spec, client.with_options(max_retries=0), model, messages, spec.max_completion_tokens, 0.0
             )
     except GradingInfraError as error:
         raise GradingInfraError(str(error), model=model, **error.detail) from error
@@ -393,6 +407,8 @@ def grade_judge_candidate(
             return _judge_labels(spec, validated.references[0], candidate, client, model)
         if spec.rubric == RUBRIC_PAIRWISE:
             return _judge_pairwise(spec, spec.references[0], candidate, client, model)
+        if spec.rubric == RUBRIC_ANSWERS:
+            return _judge_answers(spec, validated.references, candidate, client, model)
         return _judge_checklist(spec, validated.criteria, context, candidate, client, model)
 
 
@@ -418,6 +434,13 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
             raise InvalidTask("label metrics require named finite observations")
     if not {"reference", "candidate"} <= _template_fields(spec, LABEL_FIELDS):
         raise InvalidTask("judge template must include reference and candidate")
+
+
+def _validate_answers_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
+    if not references or len(references) != len(spec.references) or not spec.prompt_template.strip():
+        raise InvalidTask("answers rubric requires nonempty references and a prompt template")
+    if not {"references", "candidate"} <= _template_fields(spec, ANSWERS_FIELDS):
+        raise InvalidTask("judge template must include references and candidate")
 
 
 def _validate_pairwise_spec(spec: JudgeSpec) -> None:
@@ -509,7 +532,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: _Clie
     messages = _judge_messages(spec, {"question": spec.question, "reference": reference, "candidate": candidate})
     labels = _case_normalized(spec, spec.label_scores)
     label_metrics = _case_normalized(spec, spec.label_metrics)
-    answer, detail = _judged_answer(spec, client, model, messages)
+    answer, detail = _judged_answer(spec, client, model, messages, temperature=0.0)
     if spec.label_scan == "whole":
         final = answer
         observed = {answer}
@@ -536,12 +559,23 @@ def _judge_messages(spec: JudgeSpec, fields: dict[str, str]) -> list[ChatComplet
 
 
 def _judged_answer(
-    spec: JudgeSpec, client: _Client, model: str, messages: list[ChatCompletionMessageParam]
+    spec: JudgeSpec,
+    client: _Client,
+    model: str,
+    messages: list[ChatCompletionMessageParam],
+    *,
+    temperature: float | None,
 ) -> tuple[str, dict[str, Any]]:
-    """The judge's final answer, case-normalized, after retrying incomplete replies with larger budgets."""
+    """The judge's final answer, case-normalized, after retrying incomplete replies with larger budgets.
+
+    ``temperature=None`` leaves sampling to the judge's defaults.
+    """
     budgets = _completion_budgets(spec)
     for index, budget in enumerate(budgets):
-        completion = _label_completion(spec, client, model, messages, budget)
+        completion = _label_completion(spec, client, model, messages, budget, temperature)
+        request: dict[str, Any] = {"model": model, "messages": messages, "max_completion_tokens": budget}
+        if temperature is not None:
+            request["temperature"] = temperature
         detail: dict[str, Any] = {
             "model": model,
             "requested_model": model,
@@ -550,7 +584,7 @@ def _judged_answer(
             "finish_reason": completion.finish_reason,
             "transport_attempts": completion.transport_attempts,
             "completion": completion.text,
-            "judge_request": {"model": model, "messages": messages, "max_completion_tokens": budget, "temperature": 0.0},
+            "judge_request": request,
         }
         if completion.incomplete:
             if index + 1 < len(budgets):
@@ -572,7 +606,7 @@ def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: _Cli
     weight = 0.0
     for candidate_position, answer_a, answer_b in (("B", baseline, candidate), ("A", candidate, baseline)):
         messages = _judge_messages(spec, {"question": spec.question, "answer_a": answer_a, "answer_b": answer_b})
-        answer, detail = _judged_answer(spec, client, model, messages)
+        answer, detail = _judged_answer(spec, client, model, messages, temperature=0.0)
         verdict = _pairwise_verdict(answer, spec.verdict_patterns)
         if verdict is None or verdict not in labels:
             raise GradingInfraError("judge returned no recognized pairwise verdict", verdict=verdict, **detail)
@@ -600,6 +634,58 @@ def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: _Cli
     )
 
 
+def _judge_answers(
+    spec: JudgeSpec, references: tuple[str, ...], candidate: str, client: openai.OpenAI, model: str
+) -> Reward:
+    listed = "\n".join(f"{index}. {reference}" for index, reference in enumerate(references))
+    messages = _judge_messages(spec, {"question": spec.question, "references": listed, "candidate": candidate})
+    reply, detail = _judged_answer(spec, client, model, messages, temperature=None)
+    verdicts = _answer_verdicts(reply, len(references))
+    if verdicts is None:
+        raise GradingInfraError("judge returned malformed per-answer verdicts", **detail)
+    answers, confidence = verdicts
+    correct = [answer.correct for answer in answers]
+    strict = float(all(correct))
+    detail.update(
+        answers=[asdict(answer) for answer in answers],
+        confidence=confidence,
+        partial_credit=sum(correct) / len(correct),
+    )
+    return scored(strict, **detail)
+
+
+def _answer_verdicts(reply: str, count: int) -> tuple[list[_AnswerVerdict], int | None] | None:
+    start, end = reply.find("{"), reply.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        data = json.loads(reply[start : end + 1])
+    except ValueError:
+        return None
+    answers = data.get("answers") if isinstance(data, dict) else None
+    if not isinstance(answers, list) or len(answers) != count:
+        return None
+    verdicts = []
+    for index, answer in enumerate(answers):
+        verdict = str(answer.get("correct", "")).strip().lower() if isinstance(answer, dict) else ""
+        if verdict not in {"yes", "no"}:
+            return None
+        verdicts.append(
+            _AnswerVerdict(
+                index=index,
+                label=answer.get("label"),
+                extracted_final_answer=answer.get("extracted_final_answer"),
+                reasoning=str(answer.get("reasoning", ""))[:REASONING_LIMIT],
+                correct=verdict == "yes",
+            )
+        )
+    try:
+        confidence = max(0, min(100, round(float(str(data.get("confidence")).rstrip("%")))))
+    except (ValueError, OverflowError):
+        confidence = None
+    return verdicts, confidence
+
+
 def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
     """The last nonempty match of the first pattern with one, as Arena-Hard parses verdicts."""
     for pattern in patterns:
@@ -609,12 +695,16 @@ def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
     return None
 
 
-def _label_completion(spec: JudgeSpec, client: _Client, model: str, messages: list, budget: int) -> _LabelCompletion:
+def _label_completion(
+    spec: JudgeSpec, client: _Client, model: str, messages: list, budget: int, temperature: float | None
+) -> _LabelCompletion:
     if not isinstance(client, openai.OpenAI):
+        if temperature != 0.0:  # a JudgeRequest is one greedy sample, so another temperature would be dropped
+            raise InvalidTask(f"a judge callback samples at temperature 0; the {spec.rubric} rubric needs {temperature}")
         reply = client(_request(spec, model, messages, budget))
         finish = reply.finish_reason
         if spec.api == "responses":
-            # An endpoint reports any unfinished response as incomplete, without its partial text.
+            # Unlike an endpoint's, every unfinished callback reply is retryable as incomplete, without its partial text.
             if finish != "stop":
                 return _LabelCompletion("", True, None, None, "incomplete")
             return _LabelCompletion(_completed_text(finish, reply.text), False, None, None, "completed")
@@ -625,7 +715,9 @@ def _label_completion(spec: JudgeSpec, client: _Client, model: str, messages: li
         return _LabelCompletion(_completed_text(finish, reply.text), False, None, None, finish)
     if spec.api == "chat_completions":
         options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-        request = {"model": model, "messages": messages, "temperature": 0.0, "max_completion_tokens": budget, **options}
+        if temperature is not None:
+            options["temperature"] = temperature
+        request = {"model": model, "messages": messages, "max_completion_tokens": budget, **options}
         response, attempts = _judge_transport(
             spec,
             lambda timeout: _chat_completion(client, timeout=timeout, **request),
@@ -828,7 +920,9 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[_Clien
             raise TypeError(f"Judge callback must be callable, got {type(callback).__name__}")
         return cast(JudgeCallback, callback), model
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
-    options: dict[str, Any] = {"max_retries": 0} if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE) else {}
+    options: dict[str, Any] = (
+        {"max_retries": 0} if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE, RUBRIC_ANSWERS) else {}
+    )
     return (
         openai.OpenAI(
             base_url=base_url,
@@ -985,117 +1079,3 @@ def _score(reply: str, allowed_scores: tuple[float, ...]) -> float | None:
 def _reasoning(reply: str) -> str:
     text = SCORE_PATTERN.sub("", reply)
     return re.sub(r"\s+", " ", text).strip()[:REASONING_LIMIT]
-
-
-def grade_paired_ordinal(
-    cohort_size: int,
-    expected_edges: list[tuple[int, int]],
-    ratings: object,
-    *,
-    rating_bounds: tuple[float, float] = (1.0, 5.0),
-    ranking_bounds: tuple[float, float] = (1.0, 6.0),
-    tie_policy: str = "ranking_midpoint",
-) -> list[Reward]:
-    """Grade a complete decoded pairwise judge cohort, without partial credit.
-
-    Requires the schema extra in addition to judge. Transport and reward
-    shaping belong to the caller; malformed provider cohorts raise RuntimeError.
-    """
-
-    from verifyit.modes.grade_json_schema import grade_json_schema_candidate  # noqa: PLC0415
-
-    if type(cohort_size) is not int or cohort_size < 2 or tie_policy != "ranking_midpoint":
-        raise InvalidTask("paired judge needs at least two responses and ranking_midpoint policy")
-    if not isinstance(expected_edges, list) or not expected_edges:
-        raise InvalidTask("paired judge needs expected directed edges")
-    edges = set()
-    covered = set()
-    for edge in expected_edges:
-        if (
-            not isinstance(edge, tuple)
-            or len(edge) != 2
-            or any(type(index) is not int or not 0 <= index < cohort_size for index in edge)
-            or edge[0] == edge[1]
-            or edge in edges
-        ):
-            raise InvalidTask("paired judge expected edges contain invalid or duplicate indices")
-        edges.add(edge)
-        covered.update(edge)
-    if len(covered) != cohort_size:
-        raise InvalidTask("paired judge expected edges must cover every response")
-
-    def finite_scalar(value: object) -> bool:
-        try:
-            return type(value) in (int, float) and math.isfinite(cast(int | float, value))
-        except OverflowError:
-            return False
-
-    for bounds in (rating_bounds, ranking_bounds):
-        if (
-            not isinstance(bounds, tuple)
-            or len(bounds) != 2
-            or any(not finite_scalar(value) for value in bounds)
-            or bounds[0] >= bounds[1]
-        ):
-            raise InvalidTask("paired judge bounds must be finite increasing pairs")
-    ranking_width = ranking_bounds[1] - ranking_bounds[0]
-    midpoint = ranking_bounds[0] + ranking_width / 2
-    low = rating_bounds[0] - ranking_width / 2
-    high = rating_bounds[1] + ranking_width / 2
-    width = high - low
-    if not all(math.isfinite(value) for value in (ranking_width, midpoint, low, high, width)) or width <= 0:
-        raise InvalidTask("paired judge derived bounds must be finite")
-    items = []
-    for left, right in expected_edges:
-        items.append(
-            {
-                "type": "object",
-                "required": ["left", "right", "score_left", "score_right", "ranking"],
-                "additionalProperties": False,
-                "properties": {
-                    "left": {"type": "integer", "const": left},
-                    "right": {"type": "integer", "const": right},
-                    "score_left": {"type": "number", "minimum": rating_bounds[0], "maximum": rating_bounds[1]},
-                    "score_right": {"type": "number", "minimum": rating_bounds[0], "maximum": rating_bounds[1]},
-                    "ranking": {"type": "number", "minimum": ranking_bounds[0], "maximum": ranking_bounds[1]},
-                },
-            }
-        )
-    schema = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "array",
-        "prefixItems": items,
-        "minItems": len(items),
-        "maxItems": len(items),
-    }
-    protocol = grade_json_schema_candidate(schema, ratings)
-    if protocol.reward != 1.0:
-        raise RuntimeError(f"paired judge cohort protocol failed: {protocol.detail}")
-    assert isinstance(ratings, list)
-    components: dict[int, list[Reward]] = {index: [] for index in covered}
-    for record in ratings:
-        left_score, right_score = record["score_left"], record["score_right"]
-        if left_score == right_score:
-            adjustment = midpoint - record["ranking"]
-            left_score += adjustment
-            right_score -= adjustment
-        for index, raw in ((record["left"], left_score), (record["right"], right_score)):
-            components[index].append(scored((raw - low) / width))
-    individual_scores = [record[key] for record in ratings for key in ("score_left", "score_right")]
-    metrics = {
-        "mean_individual_score": statistics.mean(individual_scores),
-        "std_individual_score": statistics.pstdev(individual_scores),
-        "tiebreak_usage_rate": sum(record["score_left"] == record["score_right"] for record in ratings) / len(ratings),
-    }
-    rewards = []
-    for index in range(cohort_size):
-        verdict = aggregate_rewards(components[index], expected_total=len(components[index]), policy=Aggregation.MEAN)
-        rewards.append(
-            scored(
-                verdict.reward,
-                raw_score=low + width * verdict.reward,
-                raw_bounds=[low, high],
-                comparison_metrics=metrics,
-            )
-        )
-    return rewards
