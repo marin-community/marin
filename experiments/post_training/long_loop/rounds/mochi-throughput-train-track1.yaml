@@ -228,8 +228,6 @@ rl:
       trajectory_reward_shaping:
         enabled: true
         overlong:
-          l_max: 98304
-          l_cache: 16384
           penalty_scale: 0.0
         reasoning_span:
           penalty: 0.1
@@ -318,6 +316,8 @@ rl:
       request_window_tokens: 131072
       max_new_tokens_per_turn: 98304
       max_turns: 128
+      generated_budget_fraction: 0.75
+      overlong_cache_fraction: 0.16666666666666666
     extra_env:
       DAYTONA_TARGET: us
       OT_AGENT_RAY_OBJECT_STORE_CAP_GIB: '32'
