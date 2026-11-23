@@ -441,7 +441,7 @@ SNOWBALL_AGENTX_PROFILES: Mapping[LevanterServingProfile, SnowballAgentxGeometry
             device_kind="TPU v6 lite",
             expert_shards=8,
             scoped_vmem_kib=98_304,
-            max_pages=16_384,
+            max_pages=12_288,
             window_pages=2_880,
             retained_spans=1,
             retained_prompts=128,
