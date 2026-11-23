@@ -80,3 +80,35 @@ def test_policy_scores_match_unwarped_next_token_loss():
     np.testing.assert_array_equal(behavior_scores.array[:2], jnp.zeros(2))
     np.testing.assert_array_equal(policy_scores.array[:2], -losses.array[:2])
     assert jnp.all(policy_scores.array[:2] < 0)
+
+
+@pytest.mark.parametrize(
+    "second_cutoff,num_samples",
+    [
+        pytest.param(1.0, 2, id="full-distribution"),
+        pytest.param(0.5, 2, id="mixed-cutoffs"),
+        pytest.param(0.5, 1, id="stale-padding-cutoff"),
+    ],
+)
+def test_sampling_positions_matches_seeded_distributions(second_cutoff, num_samples):
+    position, vocab = hax.Axis("position", 2), hax.Axis("vocab", 4)
+    logits = jnp.array([[0.25, 1.0, -0.5, -2.0], [6.0, 5.0, 1.0, -1.0]])
+    temperatures = jnp.array([0.5, 1.0])
+    keys = jax.random.split(jax.random.key(17), position.size)
+    sampler = Sampler(vocab)
+
+    tokens, logprobs = jax.jit(sampler.sample_positions)(
+        hax.named(logits, (position, vocab)),
+        hax.named(temperatures, position),
+        top_ps=hax.named(jnp.array([1.0, second_cutoff]), position),
+        num_samples=jnp.int32(num_samples),
+        key=keys,
+    )
+
+    distributions = logits / temperatures[:, None]
+    if num_samples == 2 and second_cutoff == 0.5:
+        distributions = distributions.at[1, 1:].set(-jnp.inf)
+    expected_tokens = jax.vmap(jax.random.categorical)(keys, distributions)
+    expected_logprobs = jax.nn.log_softmax(distributions)[jnp.arange(position.size), expected_tokens]
+    np.testing.assert_array_equal(tokens.array, expected_tokens)
+    np.testing.assert_allclose(logprobs.array, expected_logprobs, rtol=1e-6, atol=1e-7)

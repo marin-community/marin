@@ -518,21 +518,29 @@ def _decode_for_sampling(
 
 
 def _sample_sharded_positions(
-    sampler: Sampler, logits: NamedArray, temperatures: NamedArray, top_ps: NamedArray, keys: jax.Array
+    sampler: Sampler,
+    logits: NamedArray,
+    temperatures: NamedArray,
+    top_ps: NamedArray,
+    num_samples: jax.Array,
+    keys: jax.Array,
 ) -> tuple[NamedArray, NamedArray]:
     sharding = named_sharding_of(logits.array)
     if sharding is None or sharding.mesh.empty or not sharding.spec or sharding.spec[0] is None:
-        return hax.vmap(sampler, "position")(logits, temperatures, top_ps=top_ps, key=keys)
+        return sampler.sample_positions(logits, temperatures, top_ps=top_ps, num_samples=num_samples, key=keys)
 
     row_spec = PartitionSpec(sharding.spec[0])
     logits_spec = PartitionSpec(sharding.spec[0], None)
+    positions = hax.arange(logits.resolve_axis("position"))
+    top_ps = hax.where(positions < num_samples, top_ps, 1.0)
 
     def local_sample(local_logits, local_temps, local_top_ps, local_keys):
         rows = hax.Axis("position", local_logits.shape[0])
-        tokens, scores = hax.vmap(sampler, "position")(
+        tokens, scores = sampler.sample_positions(
             hax.named(local_logits, (rows, sampler.Vocab)),
             hax.named(local_temps, rows),
             top_ps=hax.named(local_top_ps, rows),
+            num_samples=jnp.int32(rows.size),
             key=local_keys,
         )
         return tokens.array, scores.array
@@ -620,7 +628,9 @@ def _prefill_kernel(
     temps = decode_state.temperature["seq", new_slot_ids]
     top_ps = decode_state.top_p["seq", new_slot_ids]
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
+    )
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -801,7 +811,9 @@ def _handle_clones(
     top_ps = gen_state.decode_state.top_p["seq", tgt_ids]
     prng_keys = gen_state.decode_state.prng_keys_for(tgt_ids, pos_ids_this_time)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_this_time, temps, top_ps=top_ps, num_samples=num_new, key=prng_keys
+    )
 
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
@@ -924,10 +936,12 @@ def _run_generation_loop(
         top_ps = decode_state.top_p["seq", new_slot_ids]
 
         if sample_locally:
-            new_tokens, log_probs = _sample_sharded_positions(sampler, logits_at_samples, temps, top_ps, prng_keys)
+            new_tokens, log_probs = _sample_sharded_positions(
+                sampler, logits_at_samples, temps, top_ps, num_new_tokens, prng_keys
+            )
         else:
-            new_tokens, log_probs = hax.vmap(sampler, "position")(
-                logits_at_samples, temps, top_ps=top_ps, key=prng_keys
+            new_tokens, log_probs = sampler.sample_positions(
+                logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
             )
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
