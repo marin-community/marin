@@ -30,7 +30,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
-from shellbox.backends.daytona.machine import DaytonaImageBuild
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.evaluation_profiles import (
@@ -336,10 +335,6 @@ class HarborEvaluationCallback(TrainerCallback):
         minimum_native_coverage: float,
     ):
         self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
-        for cohort in self.cohorts:
-            kwargs = cohort["job"].get("environment", {}).get("kwargs", {})
-            # Reject unknown image build modes before the trainer allocates GPUs.
-            DaytonaImageBuild(kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT))
         self.timeout = timeout
         self.minimum_coverage = minimum_coverage
         self.minimum_native_coverage = minimum_native_coverage

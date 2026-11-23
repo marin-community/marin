@@ -45,7 +45,13 @@ _VERIFIER_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType({"TOGETHER_API
 # Destinations beyond Iris's base egress allowlist (iris.cluster.egress). The
 # orchestrator job declares them; they take effect on clusters that enforce the
 # allowlist.
-_DAYTONA_EGRESS: tuple[str, ...] = ("app.daytona.io", "*.app.daytona.io")
+# Daytona v2: the API and its event websocket, the regional sandbox proxies
+# (proxy.<zone>.<region>.daytona.app), and the bucket Dockerfile build contexts upload to.
+_DAYTONA_EGRESS: tuple[str, ...] = (
+    "api.daytona.com",
+    "*.*.*.daytona.app",
+    "prod-rlp-contexts.s3.us-east-1.amazonaws.com",
+)
 # Harbor's dataset registry, a Supabase project (Harbor's HARBOR_SUPABASE_URL).
 _HARBOR_REGISTRY_EGRESS: tuple[str, ...] = ("hlqxxzsirfrgeqasvaps.supabase.co",)
 

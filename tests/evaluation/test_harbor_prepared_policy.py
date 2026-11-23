@@ -163,8 +163,7 @@ def test_preflight_checks_each_resolved_task_before_submission(
 
 
 @pytest.mark.parametrize("other_role", ["REFUSAL_JUDGE_MODEL", "EXPANSION_MODEL"])
-def test_preflight_rejects_distinct_judge_roles_before_allocation(tmp_path, prepared_policy, other_role, monkeypatch):
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
+def test_preflight_rejects_distinct_judge_roles_before_allocation(tmp_path, prepared_policy, other_role):
     document = json.loads(prepared_policy.read_text())
     document["environment"] = {"type": "daytona"}
     document["verifier"] = {

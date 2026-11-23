@@ -380,15 +380,6 @@ for launch in (config, changed):
         assert 2 * attempt_budget + job.retry.min_wait_sec < harbor.timeout
 assert windows[0] != windows[1]
 
-changed_harbor = next(row for row in changed.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-changed_harbor.cohorts[0].job.environment.kwargs.image_build = "unrecognized-build"
-try:
-    create_callbacks_from_config(changed.skyrl)
-except ValueError as error:
-    assert "unrecognized-build" in str(error), str(error)
-else:
-    raise AssertionError("Harbor accepted an unknown Daytona image build")
-
 selected = []
 for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
     directory = Path(sys.argv[1]).parent / f"coverage-{index}"

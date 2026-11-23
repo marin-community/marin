@@ -104,7 +104,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         service_shutdown_timeout=5,
     )
     connections = {
-        name: DaytonaConnection(api_key=f"{name}-key", api_url=f"https://{name}.invalid/api", target=f"{name}-target")
+        name: DaytonaConnection(api_key=f"{name}-key")
         for name in ("train", "eval")
     }
     runtime = InstalledAgentRuntime(
@@ -126,8 +126,6 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     )
     configured, harnesses = worker._configured_task_and_harnesses(lowered, harbor, "session", phase)
     monkeypatch.setenv("DAYTONA_API_KEY", "ambient-key")
-    monkeypatch.setenv("DAYTONA_API_URL", "https://ambient.invalid/api")
-    monkeypatch.setenv("DAYTONA_TARGET", "ambient-target")
     # Replace only SDK allocation and external endpoint registration. Harbor still
     # constructs the real agent, environment and trial, and owns failure cleanup.
     attempted = []
@@ -135,6 +133,10 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     class UnavailableDaytona:
         def __init__(self, config):
             self.config = config
+
+        @property
+        def v2(self):
+            return self
 
         async def __aenter__(self):
             attempted.append(self.config)
@@ -163,11 +165,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
 
     assert len(attempted) == 1
     selected = connections[phase]
-    assert (attempted[0].api_key, attempted[0].api_url, attempted[0].target) == (
-        selected.api_key,
-        selected.api_url,
-        selected.target,
-    )
+    assert attempted[0].api_key == selected.api_key
     attempts = list((tmp_path / "attempts").iterdir())
     assert len(attempts) == 1
     assert (attempts[0] / "identity.json").is_file()

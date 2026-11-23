@@ -187,8 +187,6 @@ def test_cli_snapshots_private_backend_connection_after_dotenv_and_isolates_gues
     tmp_path: Path, monkeypatch, fail, command, use_env_file
 ):
     monkeypatch.setenv("DAYTONA_API_KEY", "private-backend-canary")
-    monkeypatch.setenv("DAYTONA_API_URL", "https://daytona.invalid/api")
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     configurations = []
     connections = []
 
@@ -198,7 +196,7 @@ def test_cli_snapshots_private_backend_connection_after_dotenv_and_isolates_gues
 
     monkeypatch.setattr(
         "daytona.AsyncDaytona",
-        lambda config: SimpleNamespace(config=config),
+        lambda config: SimpleNamespace(v2=SimpleNamespace(config=config)),
     )
     monkeypatch.setattr("harbor.environments.daytona.DaytonaMachineFactory", factory)
     _capture_job_config(monkeypatch, tmp_path)
@@ -206,8 +204,6 @@ def test_cli_snapshots_private_backend_connection_after_dotenv_and_isolates_gues
     async def create(config, *, host_capabilities, guest_environment):
         configurations.append(config)
         monkeypatch.setenv("DAYTONA_API_KEY", "changed-after-snapshot")
-        monkeypatch.setenv("DAYTONA_API_URL", "https://changed.invalid/api")
-        monkeypatch.setenv("DAYTONA_TARGET", "changed-target")
         EnvironmentFactory.create_environment_from_config(
             config.environment,
             environment_dir=tmp_path,
@@ -241,8 +237,6 @@ def test_cli_snapshots_private_backend_connection_after_dotenv_and_isolates_gues
         env_file = tmp_path / "backend.env"
         env_file.write_text(
             "DAYTONA_API_KEY=private-backend-canary\n"
-            "DAYTONA_API_URL=https://daytona.invalid/api\n"
-            "DAYTONA_TARGET=test-target\n"
         )
         arguments.extend(["--env-file", str(env_file)])
     result = runner.invoke(app, arguments)
@@ -250,8 +244,6 @@ def test_cli_snapshots_private_backend_connection_after_dotenv_and_isolates_gues
     assert result.exit_code == (1 if fail else 0), result.output
     assert len(connections) == 1
     assert connections[0].api_key == "private-backend-canary"
-    assert connections[0].api_url == "https://daytona.invalid/api"
-    assert connections[0].target == "test-target"
     assert "private-backend-canary" not in configurations[0].model_dump_json()
     assert configurations[0].environment.kwargs == {}
     monkeypatch.delenv("DAYTONA_API_KEY")

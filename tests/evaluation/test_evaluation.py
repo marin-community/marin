@@ -935,7 +935,7 @@ def test_pipeline_retry_preserves_completed_evaluations(tmp_path, monkeypatch, v
 def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):
     captured: dict = {}
     resolved_value = "resolved-evaluation-secret"
-    runtime_values = {"DAYTONA_TARGET": "test-target", "DAYTONA_API_URL": "https://daytona.example/api"}
+    runtime_values = {"DAYTONA_V2_API_URL": "https://daytona.example"}
     for name, value in runtime_values.items():
         monkeypatch.setenv(name, value)
 

@@ -19,14 +19,14 @@ from harbor.utils.env import resolve_env_vars
 from harbor_config import JobConfig
 from harbor_config.models.job.config import DatasetConfig
 from harbor_config.models.trial.config import AgentConfig, TaskConfig, TrialConfig
-from shellbox.backends.daytona.snapshot import SnapshotRequest
+from shellbox.backends.daytona.images import ImageRequest
 from shellbox.image import RegistryImage
 from marin.evaluation.harbor.trial_driver import (
     RuntimeOverlay,
     _model_authentication,
     _model_environment,
     _preflight_one,
-    _snapshot_specs,
+    _image_specs,
     _validate_environment,
     effective_job_config,
 )
@@ -504,18 +504,14 @@ def test_preflight_requires_runtime_judge_for_primary_and_peer_model_access(
     )
     judge = None if authority == "missing-judge" else "judge-alias"
     if authority == "runtime":
-        report = _preflight_one(
-            path, {}, judge, host_environment={"DAYTONA_TARGET": "test-target"}
-        )
+        report = _preflight_one(path, {}, judge, host_environment={})
         assert report["benchmark_metadata"]["n_benchmark"] == 1
     else:
         diagnostic = (
             "host judge" if authority == "missing-judge" else "judge_access='runtime'"
         )
         with pytest.raises(ValueError, match=diagnostic):
-            _preflight_one(
-                path, {}, judge, host_environment={"DAYTONA_TARGET": "test-target"}
-            )
+            _preflight_one(path, {}, judge, host_environment={})
 
 
 def test_preflight_validates_later_peer_aliases_after_primary_model_endpoint(
@@ -557,27 +553,6 @@ def test_preflight_validates_later_peer_aliases_after_primary_model_endpoint(
         _preflight_one(path, {}, "judge-alias", host_environment={})
 
 
-def test_preflight_daytona_requires_target_before_resolving_tasks(
-    tmp_path, prepared_task
-):
-    path = tmp_path / "policy.json"
-    path.write_text(
-        json.dumps(
-            {
-                "environment": {"type": "daytona"},
-                "agents": [{"name": "terminus-2"}],
-                "datasets": [{"path": "dataset"}],
-            }
-        )
-    )
-    with pytest.raises(ValueError, match="DAYTONA_TARGET"):
-        _preflight_one(path, {}, None, host_environment={})
-    report = _preflight_one(
-        path, {}, None, host_environment={"DAYTONA_TARGET": "test-target"}
-    )
-    assert report["benchmark_metadata"]["n_benchmark"] == 1
-
-
 @pytest.mark.parametrize("backend", ["local", "daytona"])
 def test_preflight_standalone_pi_requires_matching_prepared_main_image(
     tmp_path, prepared_task, backend
@@ -593,7 +568,7 @@ def test_preflight_standalone_pi_requires_matching_prepared_main_image(
         )
     )
     kwargs = {"thinking_format": "chat-template"}
-    host = {"DAYTONA_TARGET": "test-target"}
+    host: dict[str, str] = {}
     with pytest.raises(
         ValueError, match="Standalone Pi requires a prepared main image"
     ):
@@ -625,30 +600,30 @@ def test_preflight_standalone_pi_requires_matching_prepared_main_image(
     assert report["benchmark_metadata"]["n_benchmark"] == 1
 
 
-async def test_snapshot_specs_apply_job_resource_overrides(prepared_task):
-    config = JobConfig.model_validate(
-        {
-            "environment": {
-                "type": "daytona",
-                "override_cpus": 1,
-                "override_memory_mb": 4096,
-                "override_storage_mb": 4096,
-            },
-            "agents": [{"name": "terminus-2"}],
-            "datasets": [{"path": str(prepared_task.parent)}],
-        }
+async def test_image_specs_ignore_job_resource_overrides(prepared_task):
+    def job(resources):
+        return JobConfig.model_validate(
+            {
+                "environment": {"type": "daytona", **resources},
+                "agents": [{"name": "terminus-2"}],
+                "datasets": [{"path": str(prepared_task.parent)}],
+            }
+        )
+
+    specs = await _image_specs(job({}), None)
+    overridden = await _image_specs(
+        job({"override_cpus": 1, "override_memory_mb": 4096, "override_storage_mb": 4096}),
+        None,
     )
 
-    specs = await _snapshot_specs(config, None)
-
-    request = SnapshotRequest.from_dict(specs[0])
+    # Sandbox resources are set per sandbox, so they select the same image.
+    assert overridden == specs
+    request = ImageRequest.from_dict(specs[0])
     assert specs == [request.as_dict()]
     assert request.source == RegistryImage("example.test/task@sha256:" + "a" * 64)
-    assert (request.resources.cpu, request.resources.memory, request.resources.disk) == (1, 4, 4)
-    assert request.resources.gpu is None
 
 
-async def test_snapshot_specs_apply_runtime_overlay(tmp_path, prepared_task, overlay):
+async def test_image_specs_apply_runtime_overlay(tmp_path, prepared_task, overlay):
     other = tmp_path / "other-dataset"
     other_task = other / "task"
     (other_task / "environment").mkdir(parents=True)
@@ -668,17 +643,17 @@ async def test_snapshot_specs_apply_runtime_overlay(tmp_path, prepared_task, ove
         }
     )
 
-    baseline = await _snapshot_specs(policy, None)
-    assert SnapshotRequest.from_dict(baseline[0]).source == RegistryImage("example.test/other@sha256:" + "b" * 64)
+    baseline = await _image_specs(policy, None)
+    assert ImageRequest.from_dict(baseline[0]).source == RegistryImage("example.test/other@sha256:" + "b" * 64)
 
     relocated = overlay.model_copy(
         update={"dataset_path": str(prepared_task.parent), "task_limit": 1}
     )
-    specs = await _snapshot_specs(policy, relocated)
-    assert SnapshotRequest.from_dict(specs[0]).source == RegistryImage("example.test/task@sha256:" + "a" * 64)
+    specs = await _image_specs(policy, relocated)
+    assert ImageRequest.from_dict(specs[0]).source == RegistryImage("example.test/task@sha256:" + "a" * 64)
 
 
-async def test_snapshot_specs_materialize_uncached_git_tasks(tmp_path, monkeypatch):
+async def test_image_specs_materialize_uncached_git_tasks(tmp_path, monkeypatch):
     monkeypatch.setattr("harbor_config.models.task.id.TASK_CACHE_DIR", tmp_path / "cache")
     git_task = TaskConfig(git_url="https://registry.example/org/task.git", path=Path("task"))
 
@@ -713,7 +688,7 @@ async def test_snapshot_specs_materialize_uncached_git_tasks(tmp_path, monkeypat
         }
     )
 
-    specs = await _snapshot_specs(config, None)
+    specs = await _image_specs(config, None)
 
-    request = SnapshotRequest.from_dict(specs[0])
+    request = ImageRequest.from_dict(specs[0])
     assert request.source == RegistryImage("example.test/git@sha256:" + "c" * 64)

@@ -28,6 +28,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import random
 import tempfile
 from collections import defaultdict
@@ -194,11 +195,9 @@ def _grader_placement(
         # (cgroup.procs is unwritable there), so an explicit parent overrides discovery.
         factory = LocalMachineFactory(cgroup_parent=cgroup_parent) if cgroup_parent else LocalMachineFactory()
         return _GraderPlacement(factory, machine, "")
-    from shellbox.backends.daytona.machine import (  # noqa: PLC0415
-        DaytonaMachineFactory,
-        snapshot_identity,
-        snapshot_resources,
-    )
+    from shellbox.backends.daytona.connection import DaytonaConnection  # noqa: PLC0415
+    from shellbox.backends.daytona.images import image_request_for_spec  # noqa: PLC0415
+    from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
 
     from experiments.post_training.task_curation.daytona_identity import declared_machine  # noqa: PLC0415
 
@@ -210,9 +209,8 @@ def _grader_placement(
         memory_mb=runtime.memory_mb,
         storage_mb=runtime.storage_mb,
     )
-    return _GraderPlacement(
-        DaytonaMachineFactory(), machine, snapshot_identity(machine.source, snapshot_resources(machine))
-    )
+    factory = DaytonaMachineFactory(DaytonaConnection(api_key=os.environ.get("DAYTONA_API_KEY")).client_factory())
+    return _GraderPlacement(factory, machine, image_request_for_spec(machine).name)
 
 
 def classify_result(task_id: str, base: str, snapshot: str, result: GradeResult) -> LivenessResult:
