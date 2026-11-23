@@ -209,13 +209,14 @@ def make_backend(
     which = config.provider_kind()
     capabilities = (
         frozenset({BackendCapability.DIRECT_DISPATCH})
-        if which == "kubernetes_provider"
+        if which in ("kubernetes_provider", "daytona_provider")
         else frozenset({BackendCapability.WORKER_FLEET} | ({BackendCapability.AUTOSCALER} if not dry_run else set()))
     )
+    kinds = {"kubernetes_provider": BackendKind.KUBERNETES, "daytona_provider": BackendKind.DAYTONA}
     descriptor = BackendDescriptor(
         backend_id=DEFAULT_BACKEND_ID,
         display_name=config.name or DEFAULT_BACKEND_ID,
-        kind=BackendKind.KUBERNETES if config.provider_kind() == "kubernetes_provider" else BackendKind.WORKER,
+        kind=kinds.get(which or "", BackendKind.WORKER),
         advertised_attributes={key: frozenset(values) for key, values in backend_attribute_sets(config).items()},
         scale_groups=frozenset(config.scale_groups),
         capabilities=capabilities,
@@ -223,6 +224,21 @@ def make_backend(
             frozenset({SANDBOX_IMAGE_WORKDIR_CAPABILITY}) if which == "kubernetes_provider" else frozenset()
         ),
     )
+    if which == "daytona_provider":
+        # The Daytona SDK is the optional `daytona` extra; only a Daytona cluster imports it.
+        from iris.cluster.backends.daytona.tasks import make_daytona_provider  # noqa: PLC0415
+
+        assert config.daytona_provider is not None
+        provider = make_daytona_provider(
+            config.daytona_provider,
+            descriptor=descriptor,
+            remote_state_dir=remote_state_dir,
+            logs=log_stack.client,
+            cluster_name=config.name,
+        )
+        logger.info("Backend created: %s", type(provider).__name__)
+        return provider
+
     if which == "kubernetes_provider":
         provider = make_task_backend(
             config,

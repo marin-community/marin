@@ -5248,6 +5248,9 @@ controller = [
     { name = "marin-finelog-server" },
     { name = "marin-rigging", extra = ["secrets"] },
 ]
+daytona = [
+    { name = "daytona" },
+]
 iap = [
     { name = "marin-rigging", extra = ["iap"] },
 ]
@@ -5293,6 +5296,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.3.1" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "connect-python", specifier = ">=0.9.0" },
+    { name = "daytona", marker = "extra == 'daytona'", specifier = "==2.1.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "google-auth", specifier = ">=2.0" },
@@ -5320,7 +5324,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
     { name = "zstandard", specifier = ">=0.22.0" },
 ]
-provides-extras = ["controller", "worker", "iap"]
+provides-extras = ["daytona", "controller", "worker", "iap"]
 
 [package.metadata.requires-dev]
 dev = [
