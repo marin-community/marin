@@ -137,7 +137,7 @@ def _deterministic_order(names: list[str], in_policy: set[str]) -> list[str]:
 
 
 def _family_pool(benchmark: str) -> list[str]:
-    from huggingface_hub import HfApi, hf_hub_download, list_repo_files
+    from huggingface_hub import hf_hub_download, list_repo_files
 
     if benchmark == "humanevalplus":
         dataset, revision = "evalplus/humanevalplus", "v0.1.10"
@@ -150,16 +150,7 @@ def _family_pool(benchmark: str) -> list[str]:
         files = list_repo_files(dataset, repo_type="dataset", revision=revision)
         return sorted({name.split("/")[0] for name in files if "/" in name and not name.startswith(".")})
     if benchmark == "tb2-recovery":
-        api = HfApi()
-        listing = api.list_repo_files("harbor-framework/terminal-bench-1", repo_type="dataset") if False else None
-        import urllib.request
-
-        request = urllib.request.Request(
-            "https://api.github.com/repos/harbor-framework/terminal-bench-1/contents/original-tasks",
-            headers={"Accept": "application/vnd.github+json"},
-        )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            entries = json.loads(response.read())
+        entries = _github_json("https://api.github.com/repos/harbor-framework/terminal-bench-1/contents/original-tasks")
         return sorted(entry["name"] for entry in entries)
     raise ValueError(f"No replacement pool for benchmark {benchmark!r}")
 
@@ -225,12 +216,13 @@ def _tb2_package(source_task_id: str) -> dict[str, bytes]:
                 f"https://raw.githubusercontent.com/harbor-framework/terminal-bench-1/{_TB2_PIN}/{path}", timeout=60
             ) as response:
                 package[relative] = response.read()
+    # Micro210 rows use task.toml; the upstream task.yaml converts mechanically and
+    # carries the instruction (the registry has no instruction.md file).
+    yaml_text = package.pop("task.yaml", b"").decode()
+    package["instruction.md"] = package.get("instruction.md") or _yaml_instruction(yaml_text).encode()
     for required in ("instruction.md", "tests", "solution.sh"):
         if not any(name.startswith(required) for name in package):
             raise ValueError(f"terminal-bench task {source_task_id} lacks {required} at {_TB2_PIN}")
-    # Micro210 rows use task.toml; the upstream task.yaml converts mechanically.
-    yaml_text = package.pop("task.yaml", b"").decode()
-    package["instruction.md"] = package.get("instruction.md", _yaml_instruction(yaml_text).encode())
     package.setdefault("solution/solve.sh", package.pop("solution.sh", b""))
     package.setdefault("tests/test.sh", _TB_TEST_SH.encode())
     package["task.toml"] = _tb_task_toml(yaml_text, source_task_id).encode()
