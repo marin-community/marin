@@ -6,14 +6,17 @@ import json
 from dataclasses import replace
 from functools import partial
 from pathlib import PurePosixPath
+from typing import override
 from unittest.mock import AsyncMock
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
-from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
+from rolloutengine.machines import MachineSetupError
+from rolloutengine.models import GradedRollout, Model, Rollout, RolloutInterrupted, RolloutOperation, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
+from shellbox.machine import ExitReason, Result
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import inline_resource
@@ -22,7 +25,7 @@ from taskforge.arms import decided, validated
 from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
-from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Restart
+from taskforge.effects.issues import ContextExceeded, EnvironmentSetupFailed, Hold, OutputBudgetExhausted, Restart
 from taskforge.effects.log import EventLog
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Returned, Stopped, StopReason, Submitted
@@ -58,16 +61,21 @@ from taskforge.model.review import (
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
+from taskforge.resources.bundle import Resources
+from taskforge.resources.clock import Clock
+from taskforge.resources.env import FakeEnv
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
+from taskforge.resources.ids import Ids
 from taskforge.resources.inference import FakeInference
-from taskforge.resources.rollouts import SolverRollout
+from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
+from taskforge.resources.web import FakeWeb
 from taskforge.stages.author import author
 from taskforge.stages.classify import grade_cause, replayable_grade
 from taskforge.stages.exits import Decided, Validated
 from taskforge.stages.review import review
 from taskforge.stages.rules import default_review
 from taskforge.stages.validate import adversary_result, claim_result, control_result, solver_result, validate
-from taskforge.wiring import build_config
+from taskforge.wiring import build_config, install
 
 
 @pytest.fixture
@@ -212,6 +220,68 @@ async def test_validate_returns_a_source_task_whose_id_changed_to_the_author(wor
     assert result.lowering_error is not None and "'renamed'" in result.lowering_error
     decision = default_review(source.with_(evidence=(result,)), config().band, config().budget)
     assert isinstance(decision, Modify)
+
+
+class SetupFails(Engine):
+    """A task whose environment's setup command fails on every machine, for rollouts and grades alike."""
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        error = RolloutInterrupted(Rollout(run_id or "setup", (), "interrupted"), RolloutOperation.START)
+        raise error from MachineSetupError(
+            "git clone", Result(128, b"", b"fatal: could not read from remote", False, False, ExitReason.EXITED)
+        )
+
+
+async def test_validate_returns_a_failing_environment_setup_to_the_author(workpiece: Workpiece) -> None:
+    ctx = Context(log=EventLog())
+    bundle = Resources(
+        Environments(),
+        FakeInference(()),
+        RolloutResource(SetupFails(), solver_model, "solver"),
+        GradingResource(SetupFails(), "grader"),
+        Clock(),
+        Ids(),
+        {},
+        FakeWeb({}, {}),
+    )
+    install(ctx, bundle)
+    result = (await validate(ctx, workpiece, config(), bundle)).result
+    await ctx.drain()
+    assert {trial.cause for trial in (*result.solver, *result.controls)} == {Cause.INVALID_TASK}
+    decision = default_review(workpiece.with_(evidence=(result,)), config().band, config().budget)
+    assert isinstance(decision, Modify) and any("git clone" in finding for finding in decision.findings)
+
+
+async def test_source_author_works_in_author_image_when_the_task_environment_will_not_start(
+    workpiece: Workpiece,
+) -> None:
+    assert workpiece.submission is not None
+    image = "ghcr.io/example/swe-task@sha256:" + "a" * 64
+    environment = requirements(image=image, workdir="/testbed", setup=("git clone https://example.invalid/repo .",))
+    task = workpiece.submission.task.model_copy(update={"environment_requirements": environment})
+    submission = Submission(task, (), "source task")
+    source = Workpiece("source", submission=submission, source=submission, decisions=(Modify(("no controls",)),))
+
+    class SourceSetupFails(Environments):
+        @override
+        async def create(self, requirements: EnvironmentRequirements) -> FakeEnv:
+            if requirements.docker_image == image:
+                self.requested.append(requirements)
+                raise EnvironmentSetupFailed("Environment setup command failed: exited, exit=128")
+            return await super().create(requirements)
+
+    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
+    setup = config(harness)
+    setup = replace(setup, policy=setup.policy.overlaid({"sandbox.source_images": [image]}))
+    ctx = Context(log=EventLog())
+    bundle = replace(resources(ctx), envs=SourceSetupFails())
+    await author(ctx, source, setup, bundle)
+    await ctx.drain()
+    assert isinstance(bundle.envs, SourceSetupFails)
+    assert [requested.docker_image for requested in bundle.envs.requested] == [image, GRADER_BASE_IMAGE]
+    assert harness.session is not None
+    assert "exit=128" in harness.session.messages[-1].content
 
 
 async def test_author_reference_describes_valid_wire_values_and_supported_environments(workpiece: Workpiece) -> None:

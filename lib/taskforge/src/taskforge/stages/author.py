@@ -12,6 +12,8 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
+from taskforge.effects.events import Note
+from taskforge.effects.issues import EnvironmentSetupFailed
 from taskforge.lowering import host_requirements, lowering_settings, requirements
 from taskforge.model.controls import CONTROL, CONTROLS
 from taskforge.model.llm import Message, Role
@@ -123,6 +125,10 @@ def author_requirements(workpiece: Workpiece, policy: Policy) -> EnvironmentRequ
         "sandbox.source_images", tuple
     ):
         return host_requirements(submission.task.environment_requirements)
+    return author_image_requirements(policy)
+
+
+def author_image_requirements(policy: Policy) -> EnvironmentRequirements:
     return requirements(
         image=policy.setting("author.image", str) or None,
         packages=policy.setting("author.packages", tuple),
@@ -134,7 +140,16 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
     policy = config.policy
     workdir = PurePosixPath(policy.setting("author.workdir", str))
     machine = author_requirements(workpiece, policy)
-    env = await resources.envs.create(host_requirements(machine))
+    setup_failure: str | None = None
+    try:
+        env = await resources.envs.create(host_requirements(machine))
+    except EnvironmentSetupFailed as error:
+        if machine.docker_image not in policy.setting("sandbox.source_images", tuple):
+            raise
+        # The source task's environment is what needs repair, so the author works beside it in author.image.
+        setup_failure = str(error)
+        machine = author_image_requirements(policy)
+        env = await resources.envs.create(host_requirements(machine))
     try:
         async with ctx.scope("author"):
             install_env(ctx, env)
@@ -172,6 +187,12 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
                 ),
                 tuple(tool.schema for tool in tools.values()),
             )
+            if setup_failure is not None:
+                await ctx.emit(Note(f"Author falls back to author.image: {setup_failure}"))
+                notice = policy.prompt("author.environment_failure").render(
+                    error=setup_failure, image=machine.docker_image or "ShellSim"
+                )
+                session = Conversation((*session.messages, Message(Role.USER, notice)), session.tool_schemas)
             return await config.author.run(ctx, session, resources.inference_for("author"), tools)
     finally:
         await close_resource(env.close, ctx.emit)

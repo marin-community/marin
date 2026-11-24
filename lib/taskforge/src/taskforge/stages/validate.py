@@ -14,7 +14,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
+from taskforge.effects.issues import EnvironmentSetupFailed, Hold, OutputBudgetExhausted, describe_exception
 from taskforge.harness.protocol import Returned, Stopped, StopReason
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from taskforge.lowering import (
@@ -51,8 +51,24 @@ from taskforge.stages.summary import task_manifest
 NO_PROPOSAL = "None: the task came from another source without one."
 
 
+def setup_failure(error: BaseExceptionGroup[EnvironmentSetupFailed]) -> GradeResult:
+    """The grade of an attempt whose task environment's setup failed: an invalid task, returned to the author."""
+    reasons = "; ".join(str(issue) for issue in error.exceptions)
+    return GradeResult(Outcome.INVALID_TASK, None, f"Task environment setup failed: {reasons}")
+
+
+async def graded(ctx: Context, event: GradeCandidate) -> GradeResult:
+    grade: GradeResult | None = None
+    try:
+        grade = await ctx.emit(event)
+    except* EnvironmentSetupFailed as error:
+        grade = setup_failure(error)
+    assert grade is not None
+    return grade
+
+
 async def control_result(ctx: Context, spec: TaskRolloutSpec, index: int, control: Control) -> ControlResult:
-    grade = await ctx.emit(GradeCandidate(spec, control.candidate))
+    grade = await graded(ctx, GradeCandidate(spec, control.candidate))
     cause = grade_cause(grade, spec.task)
     return ControlResult(index, grade, cause is None and control.expected.met_by(grade), cause)
 
@@ -60,10 +76,15 @@ async def control_result(ctx: Context, spec: TaskRolloutSpec, index: int, contro
 async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int) -> TrialResult:
     for retry in range(2):
         result = None
+        setup: GradeResult | None = None
         try:
             result = await ctx.emit(SolverRollout(spec, trial, attempt))
         except* OutputBudgetExhausted:
             await ctx.emit(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
+        except* EnvironmentSetupFailed as error:
+            setup = setup_failure(error)
+        if setup is not None:
+            return TrialResult(trial, setup, Cause.INVALID_TASK)
         if result is not None:
             return TrialResult(trial, result.grade, trial_cause(result, spec.task))
     return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
@@ -78,6 +99,9 @@ async def adversary_result(
             result = await run_adversary(ctx, workpiece, config, resources, spec, name)
         except* Hold as error:
             result = AdversaryResult(name, AdversaryStatus.FAILED, (), failure_reasons(error))
+        except* EnvironmentSetupFailed as error:
+            reasons = tuple(f"task environment setup failed: {issue}" for issue in error.exceptions)
+            result = AdversaryResult(name, AdversaryStatus.UNSTARTED, (), reasons)
         if result is not None:
             return result
         await ctx.emit(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
@@ -100,9 +124,9 @@ def failure_reasons(error: BaseException) -> tuple[str, ...]:
 
 
 async def claim_result(ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim) -> AdversaryFinding:
-    grade = await ctx.emit(GradeCandidate(spec, claim.candidate))
+    grade = await graded(ctx, GradeCandidate(spec, claim.candidate))
     if grade_cause(grade, spec.task) is None and claim.expected.met_by(grade):
-        grade = await ctx.emit(GradeCandidate(spec, claim.candidate, fresh_verifier=True))
+        grade = await graded(ctx, GradeCandidate(spec, claim.candidate, fresh_verifier=True))
     cause = grade_cause(grade, spec.task)
     return AdversaryFinding(
         claim.claim, claim.candidate, claim.expected, grade, cause is None and claim.expected.met_by(grade), cause

@@ -25,6 +25,15 @@ class OutputBudgetExhausted(Restart):
     """Replace this agent's machine once; repeated exhaustion is failed agent evidence."""
 
 
+class EnvironmentSetupFailed(EffectIssue):
+    """A task environment's own setup commands exited non-zero on a machine that started.
+
+    Retrying replays the same commands on the same image, so this is evidence about the task, like a
+    failing grader: validation records it as an invalid-task grade, which review returns to the author,
+    and the author works in ``author.image`` while it repairs the environment.
+    """
+
+
 class Hold(EffectIssue):
     """Publish held until explicit resume; exhausted resources require human review.
 

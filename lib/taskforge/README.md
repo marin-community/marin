@@ -233,6 +233,12 @@ instead of `author.image`, so it sees what the solver and grader see; its system
 that machine and tells it to keep the source images. A generated task has no source images, so
 nothing changes for generation runs.
 
+A task environment whose own setup commands fail is evidence about the task, not a machine fault to
+retry. Validation records each such trial and control as an invalid task, so review returns it to
+the author with the failing command and its output. The author of a source task whose environment
+won't start works in `author.image` instead, with the task's files hydrated, and its conversation
+says why.
+
 ## Running locally
 
 Only the tests run locally; the pipeline does not.

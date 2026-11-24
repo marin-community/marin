@@ -129,9 +129,18 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
     )
     place = band.place(solved / len(result.solver))
     finding = f"{solved} of {len(result.solver)} trials solved: {place}"
+    unstarted = tuple(
+        f"{trial.name}: {reason}"
+        for trial in result.adversary
+        if trial.status is AdversaryStatus.UNSTARTED
+        for reason in trial.reasons
+    )
     if findings:
         # A source task's first author also needs the solve rate its review measured, not only the missing controls.
         return Modify((*findings, finding) if NO_CONTROLS in findings else findings)
+    if unstarted:
+        # The setup failure that stopped an adversary normally fails the solver trials too; alone it is incomplete.
+        return Incomplete(unstarted)
     if place is BandOutcome.IN_BAND and place in band.accepted:
         return Accept(place, exhausted_notes(result))
     if place is BandOutcome.TOO_EASY:

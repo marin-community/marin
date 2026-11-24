@@ -15,7 +15,7 @@ from tempfile import TemporaryDirectory
 from typing import Protocol, override
 from uuid import uuid4
 
-from rolloutengine.machines import prepare_machine
+from rolloutengine.machines import MachineSetupError, prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.iris.machine import IrisMachine, never_connected
 from shellbox.machine import (
@@ -37,7 +37,14 @@ from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.staging import StagedFile, write_archive
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, digest
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient, describe_exception
+from taskforge.effects.issues import (
+    EnvironmentSetupFailed,
+    Hold,
+    OutputBudgetExhausted,
+    Restart,
+    Transient,
+    describe_exception,
+)
 from taskforge.resources.execution import Notify, retry_effect
 from taskforge.resources.sandbox.factories import DEFAULT_WORKDIR
 
@@ -311,6 +318,8 @@ class ShellboxEnvFactory(EnvFactory):
             raise _machine_issue(error) from error
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
+        except MachineSetupError as error:
+            raise EnvironmentSetupFailed(str(error)) from error
         image = digest((requirements, self.runtime))
         return ShellboxEnv(machine, image, self.notify, owned, requirements.working_directory or DEFAULT_WORKDIR)
 
