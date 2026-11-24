@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
@@ -32,6 +31,7 @@ from marin.inference.structured_output import StructuredTool
 from math_verify import parse, verify
 from pydantic import Field, ValidationError
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 from transformers import AutoTokenizer
 from verifyit.modes.extract import extract_boxed, strip_math_delimiters
 from zephyr.readers import load_parquet

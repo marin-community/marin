@@ -671,7 +671,7 @@
       },
       "JsonAnswer": {
         "additionalProperties": false,
-        "description": "The string ``answer`` field of a JSON object in the final assistant message.",
+        "description": "The string ``answer`` field of a JSON object, or a number for number tasks.",
         "properties": {
           "kind": {
             "const": "json_answer",
@@ -708,12 +708,19 @@
       },
       "JudgeSpec": {
         "additionalProperties": false,
-        "description": "An LLM judge over the answer file.\n\nRubric ``reference`` asks whether the answer matches any of ``references``, after an exact\ngate that answers verbatim matches without a model call. Rubric ``checklist`` asks one yes/no\nquestion per entry of ``criteria`` and scores the fraction answered yes. ``context`` names a\nfile under the tests directory (a conversation transcript, say) shown to the judge alongside the\nanswer. ``constraints`` are IFEval checks that must all pass before the judge is consulted.\n\nRubric ``pairwise`` compares the answer with the single baseline in ``references`` twice, once\nin each position, as Arena-Hard does. ``prompt_template`` places the two answers with\n``{answer_a}`` and ``{answer_b}``. The last match of the first ``verdict_patterns`` entry that\nmatches the reply names a verdict, ``label_scores`` gives assistant A's score for it, and\n``label_weights`` repeats it as several games (Arena-Hard counts a decisive verdict three times).",
+        "description": "An LLM judge over the answer file.\n\nRubric ``reference`` asks whether the answer matches any of ``references``, after an exact\ngate that answers verbatim matches without a model call. Rubric ``checklist`` asks one yes/no\nquestion per entry of ``criteria`` and scores the fraction answered yes. Rubric ``answers`` asks\nfor one JSON verdict per entry of ``references`` in a single call and scores 1 only when every\nreference is matched; its detail records the matched fraction as ``partial_credit``. ``context`` names a\nfile under the tests directory (a conversation transcript, say) shown to the judge alongside the\nanswer. ``constraints`` are IFEval checks that must all pass before the judge is consulted.\n\nRubric ``pairwise`` compares the answer with the single baseline in ``references`` twice, once\nin each position, as Arena-Hard does. ``prompt_template`` places the two answers with\n``{answer_a}`` and ``{answer_b}``. The last match of the first ``verdict_patterns`` entry that\nmatches the reply names a verdict, ``label_scores`` gives assistant A's score for it, and\n``label_weights`` repeats it as several games (Arena-Hard counts a decisive verdict three times).",
         "properties": {
           "api": {
             "default": "chat_completions",
             "title": "Api",
             "type": "string"
+          },
+          "chat_template_kwargs": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Chat Template Kwargs",
+            "type": "object"
           },
           "completion_policy": {
             "$ref": "#/$defs/JudgeCompletionPolicy",
@@ -731,6 +738,11 @@
             "default": "",
             "title": "Context",
             "type": "string"
+          },
+          "context_char_limit": {
+            "default": 60000,
+            "title": "Context Char Limit",
+            "type": "integer"
           },
           "criteria": {
             "default": [],
@@ -806,6 +818,11 @@
             "title": "Max Completion Tokens",
             "type": "integer"
           },
+          "max_turns": {
+            "default": 1,
+            "title": "Max Turns",
+            "type": "integer"
+          },
           "model": {
             "default": "",
             "title": "Model",
@@ -815,6 +832,11 @@
             "default": "/app/answer.txt",
             "title": "Output",
             "type": "string"
+          },
+          "parse_attempts": {
+            "default": 2,
+            "title": "Parse Attempts",
+            "type": "integer"
           },
           "prompt_template": {
             "default": "",
@@ -864,8 +886,20 @@
             "title": "System Prompt",
             "type": "string"
           },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 0.0,
+            "title": "Temperature"
+          },
           "transport_attempts": {
-            "default": 1,
+            "default": 3,
             "title": "Transport Attempts",
             "type": "integer"
           },
