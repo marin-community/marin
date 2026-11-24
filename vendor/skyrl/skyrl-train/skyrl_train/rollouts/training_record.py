@@ -132,7 +132,10 @@ def reject_malformed_reasoning(rollout: TrainingRollout) -> TrainingRollout:
         0.0,
         "Malformed reasoning span",
         passed=False,
-        diagnostics={REASONING_VIOLATIONS_DIAGNOSTIC: [asdict(violation) for violation in violations]},
+        diagnostics={
+            **rollout.grade.diagnostics,
+            REASONING_VIOLATIONS_DIAGNOSTIC: [asdict(violation) for violation in violations],
+        },
     )
     steps = tuple(
         replace(step, transition=replace(step.transition, reward=None, token_rewards=None, reward_components={}))
