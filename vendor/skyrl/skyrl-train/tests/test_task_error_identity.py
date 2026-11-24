@@ -16,6 +16,7 @@ from skyrl_train.rollouts.training_record import TrainingRollout
 from skyrl_train.task_errors import TIMED_OUT_DIAGNOSTIC
 from skyrl_train.trajectory_runners.trajectory_processing import normalize_trajectory_batches
 from skyrl_train.trajectory_runners.types import BatchFields, TaskRequestBatch
+from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.utils.trainer_utils import dump_per_dataset_eval_results
 from taskcompendium.grading_result import GradeResult, Outcome
 
@@ -94,12 +95,15 @@ def test_failure_fields_survive_projection_mixed_batches_and_safe_eval_dump(tmp_
         batches, fields=BatchFields.from_groups([BatchFields.from_batch(batch) for batch in batches])
     )
     assert combined["error_identities"] == [None, failure]
+    metadata = [
+        TrajectoryMetadata("success", "taskcompendium", "fixture"),
+        TrajectoryMetadata("failure", "taskcompendium", "fixture"),
+    ]
     dump_per_dataset_eval_results(
         str(tmp_path),
         tokenizer,
         combined,
-        ["fixture", "fixture"],
-        ["fixture", "fixture"],
+        metadata,
         {},
         ["success", "failure"],
         attempt_id="attempt",
