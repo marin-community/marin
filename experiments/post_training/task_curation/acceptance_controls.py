@@ -152,9 +152,10 @@ async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
             grade = await grade_empty_in_sandbox(
                 task, factory, grading_spec, timeout=task.grader.timeout, task_machine=task_machine
             )
-    if grade.outcome is Outcome.GRADED:
+    if grade.status is Outcome.GRADED:
         return ControlOutcome(task.id, expected, grade.reward, "graded", "")
-    return ControlOutcome(task.id, expected, grade.reward, grade.outcome.value, str(grade.detail or "")[:300])
+    detail = str(grade.error or grade.detail or "")[:300]
+    return ControlOutcome(task.id, expected, grade.reward, grade.status.value, detail)
 
 
 def _expected_reward(task_id: str, rewards: dict[str, float]) -> float:
