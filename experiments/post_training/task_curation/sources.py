@@ -116,6 +116,10 @@ PENDING_MEASUREMENT_SOURCES = (
     *lean_proofs.sources(),
     *lean_numina.sources(),
     *swe_rebench_v2.sources(),
+    # The repaired identity-following variant is measured and admission-gated at its
+    # sealed intake pin; it stages here until its release adopts it (R41), so its
+    # registry receipts bind without entering the served declarations.
+    *tasktrove_identity_repair.repaired_sources(),
 )
 
 
@@ -151,7 +155,6 @@ def configured_sources() -> list[RlDataSource]:
         *tasktrove_qa.sources(),
         *tasktrove_calendar.sources(),
         *tasktrove_instructions.sources(),
-        *tasktrove_identity_repair.repaired_sources(),
         *tasktrove_multichallenge.sources(),
         *tasktrove_puzzles.sources(),
         *arc.sources(),
