@@ -39,7 +39,9 @@ from finestore.layout import (
     SealMarker,
     Shard,
     SystemColumns,
+    TableContentVersion,
     TableMetadata,
+    TableVersion,
     parse_uri,
 )
 from finestore.merge import key_values, merge_sorted_runs, newest_indices, sorted_by_key
@@ -947,10 +949,17 @@ class ReadView(_ReadOperations):
         """Return the table names selected by this view's manifest."""
         return tuple(sorted(self._snapshot.manifest.tables))
 
+    def table_version(self, table: str) -> TableVersion:
+        """Capture the exact table state, including physical shard paths."""
+        return self._snapshot.manifest.table_version(table)
+
+    def table_content_version(self, table: str) -> TableContentVersion:
+        """Capture table contents for a guard that permits compaction."""
+        return self._snapshot.manifest.table_content_version(table)
+
     def schema_version(self, table: str) -> int | None:
-        """Return the table schema version, or ``None`` when it has no active shards."""
-        state = self._snapshot.manifest.tables.get(table)
-        if state is None or not state.shards:
+        """Return the published table schema version, or ``None`` when the table is absent."""
+        if table not in self._snapshot.manifest.tables:
             return None
         return self._meta(table).schema_version
 
