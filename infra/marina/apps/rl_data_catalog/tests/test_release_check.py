@@ -276,7 +276,7 @@ def test_browser_api_response_serves_the_candidate_taxonomy_when_the_served_revi
     status, tables = release_check.browser_api_response(_NotFoundReader(), "api/taxonomy", [])
     assert status == 200
     assert tables == taxonomy_tables(requirement_values=[requirement.value for requirement in Requirement])
-    assert set(tables) == {"status", "stage", "reason", "use", "method", "format", "backend", "backend-reason"}
+    assert set(tables) == {"status", "stage", "reason", "use", "method", "backend", "backend-reason"}
 
 
 class _Flaky504Reader:

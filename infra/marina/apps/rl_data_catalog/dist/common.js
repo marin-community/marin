@@ -192,7 +192,7 @@ function overlapEvidence(source, labels) {
 // is the supported-production-backends enum; backendReason covers the
 // auto-derived blockers for unsupported production backends.
 const AtlasTaxonomy = {
-  status: {}, stage: {}, reason: {}, use: {}, method: {}, format: {}, backend: {}, backendReason: {},
+  status: {}, stage: {}, reason: {}, use: {}, method: {}, backend: {}, backendReason: {},
 };
 async function loadTaxonomy() {
   const tables = await json('api/taxonomy');
@@ -201,7 +201,6 @@ async function loadTaxonomy() {
   AtlasTaxonomy.reason = tables.reason || {};
   AtlasTaxonomy.use = tables.use || {};
   AtlasTaxonomy.method = tables.method || {};
-  AtlasTaxonomy.format = tables.format || {};
   AtlasTaxonomy.backend = tables.backend || {};
   AtlasTaxonomy.backendReason = tables['backend-reason'] || {};
   return tables;

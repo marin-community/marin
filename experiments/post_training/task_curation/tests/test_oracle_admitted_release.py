@@ -21,6 +21,7 @@ from finestore.rl.curation import (
     SourceQualityResult,
     SourceUse,
 )
+from finestore.rl.status_taxonomy import ExclusionReason
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt
@@ -132,7 +133,7 @@ def admitted_release(tmp_path):
     receipt = OracleAdmittedReleaseReceipt(
         source_id=source.info.id,
         intended_use=source.intended_use,
-        task_format=TaskFormat.HARBOR,
+        task_format=TaskFormat.TASKSPEC,
         original_pipeline=source.pipeline_reference,
         original_info=source.info,
         filtration=filtration,
@@ -169,7 +170,7 @@ def test_native_filtered_pin_is_selectable_with_fresh_qualification(admitted_rel
     bound = with_consumer_receipt(bind_oracle_admitted_release(source, receipt))
     bound = bind_derived_oversight(bound, receipt.sample, receipt.full_content)
 
-    assert bound.pipeline is import_oracle_harbor_prebuilt
+    assert bound.pipeline is import_taskcompendium_prebuilt
     assert bound.current_release == receipt.filtration.filtered_release
     assert bound.declaration.task_count == 1 and bound.declaration.status == "Available"
     assert bound.info.actor_census_input == receipt.actor.input
@@ -184,6 +185,29 @@ def test_native_filtered_pin_is_selectable_with_fresh_qualification(admitted_rel
 
     unqualified = replace(bound, info=replace(bound.info, actor_census_input=None))
     assert filtration(unqualified.declaration.model_dump(mode="json"))["example_count"] is None
+
+
+def test_harbor_oracle_admitted_receipt_binds_but_cannot_admit(admitted_release):
+    """TaskSpec-only admission: a Harbor release receipt binds for provenance and refuses admission.
+
+    The receipt itself stays valid (its census, controls and SAMPLE evidence are
+    real); the bound source's declared shape is not a TaskSpec population, so
+    the fail-closed conversion gate refuses it with NOT_TASKSPEC_CONVERTED until
+    the conversion chain produces a TaskSpec release (ruling 2026-11-24).
+    """
+    source, receipt = admitted_release
+    harbor = OracleAdmittedReleaseReceipt.model_validate(
+        {**receipt.model_dump(mode="json"), "task_format": TaskFormat.HARBOR}
+    )
+    bound = with_consumer_receipt(bind_oracle_admitted_release(source, harbor))
+
+    assert bound.pipeline is import_oracle_harbor_prebuilt
+    assert "admission requires a verified TaskSpec conversion receipt for the admitted revision" in (
+        bound.admission_blockers
+    )
+    reasons = {claim.reason for claim in bound.admission_claims}
+    assert ExclusionReason.NOT_TASKSPEC_CONVERTED in reasons
+    assert bound.declaration.status == "Excluded"
 
 
 @pytest.mark.parametrize("missing_grading", [False, True])

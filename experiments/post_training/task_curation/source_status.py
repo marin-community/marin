@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from finestore.rl.curation import SourceUse, TaskFormat, source_display_name
+from finestore.rl.curation import SourceUse, source_display_name
 from finestore.rl.status_taxonomy import (
     REASON_EXPLANATIONS,
     ExclusionReason,
@@ -59,8 +59,6 @@ class StatusRow:
     dataset_revision: str | None = None
     use: SourceUse | None = None
     """The declared intended use; metadata-only rows carry none."""
-    task_format: TaskFormat | None = None
-    """The declared payload shape; an unconfigured intake source may carry none."""
     method_tags: tuple[SourceMethod, ...] = ()
     """The variants' Method values; intake sources show RL only."""
     reasons: tuple[dict[str, Any], ...] = field(default=())
@@ -73,10 +71,9 @@ class StatusRow:
 
 
 def intake_columns(source: RlDataSource) -> dict[str, Any]:
-    """The typed Use, Format and Method values one row renders from its declaration."""
+    """The typed Use and Method values one row renders from its declaration."""
     return {
         "use": source.intended_use,
-        "task_format": source.info.task_format,
         "method_tags": tuple(
             SourceMethod(tag) for tag in variant_projection({"id": source.info.id}, None)["method_tags"]
         ),
@@ -206,11 +203,11 @@ def reason_explanations() -> dict[str, dict[str, str]]:
 def require_typed_rows(rows: list[dict[str, Any]]) -> None:
     """Fail the build when an extras row breaks the typed status contract.
 
-    Every row's Status, PendingStage, ExclusionReason, Use, Format and Method
-    value must be a member of its enum, every Pending row carries its computed
-    PendingStage and every Excluded row carries at least one typed
-    ExclusionReason; a violation here fails the release build's status-extras
-    generation, not a later page render.
+    Every row's Status, PendingStage, ExclusionReason, Use and Method value must
+    be a member of its enum, every Pending row carries its computed PendingStage
+    and every Excluded row carries at least one typed ExclusionReason; a
+    violation here fails the release build's status-extras generation, not a
+    later page render.
     """
 
     def member(enum: type, value: Any, source_id: str, field: str) -> str:
@@ -234,8 +231,6 @@ def require_typed_rows(rows: list[dict[str, Any]]) -> None:
             raise ValueError(f"Excluded source carries no ExclusionReason: {source_id}")
         if row.get("use") is not None:
             member(SourceUse, row["use"], source_id, "use")
-        if row.get("task_format") is not None:
-            member(TaskFormat, row["task_format"], source_id, "format")
         for tag in row.get("method_tags") or ():
             member(SourceMethod, tag, source_id, "method")
 

@@ -407,7 +407,7 @@ def audit_typed_status() -> list[str]:
     could see them. The extras artifact is plain JSON with no model, so the
     audit measures its rows here.
     """
-    from finestore.rl.curation import SourceUse, TaskFormat  # noqa: PLC0415
+    from finestore.rl.curation import SourceUse  # noqa: PLC0415
     from finestore.rl.status_taxonomy import (  # noqa: PLC0415
         PendingStage,
         SourceMethod,
@@ -420,7 +420,6 @@ def audit_typed_status() -> list[str]:
     statuses = {status.value for status in SourceStatus}
     stages = {stage.value for stage in PendingStage}
     uses = {use.value for use in SourceUse}
-    formats = {item.value for item in TaskFormat}
     methods = {method.value for method in SourceMethod}
     findings: list[str] = []
     for row in [*extras["pending"], *extras["remediation_queue"], *extras["metadata_exclusions"]]:
@@ -430,8 +429,6 @@ def audit_typed_status() -> list[str]:
             findings.append(f"extras stage {row['stage']!r} is outside PendingStage: {row['id']}")
         if row.get("use") is not None and row["use"] not in uses:
             findings.append(f"extras Use {row['use']!r} is outside SourceUse: {row['id']}")
-        if row.get("task_format") is not None and row["task_format"] not in formats:
-            findings.append(f"extras Format {row['task_format']!r} is outside TaskFormat: {row['id']}")
         for tag in row.get("method_tags") or []:
             if tag not in methods:
                 findings.append(f"extras Method tag {tag!r} is outside SourceMethod: {row['id']}")

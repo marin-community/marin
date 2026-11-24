@@ -93,6 +93,7 @@ POPULATION_BLOCKER_PREFIX_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
 _LEXICAL_EVAL_MESSAGE = "Evaluation requires a measured lexical receipt for the current dataset pin"
 _DECON_MEASUREMENT_MISSING = "Decontamination measurement and private-release admission receipt are missing"
 _DECON_BLOCKED_PREFIX = "Decontamination admission blocked: "
+_TASKSPEC_CONVERSION_BLOCKER = "admission requires a verified TaskSpec conversion receipt for the admitted revision"
 
 
 def population_blocker_reason(blocker: str) -> ExclusionReason:
@@ -449,6 +450,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             )
         except ValueError as error:
             blockers.append(str(error))
+        if info.task_format is not TaskFormat.TASKSPEC:
+            blockers.append(_TASKSPEC_CONVERSION_BLOCKER)
         if not self.has_actor_census:
             blockers.append("actor census evidence is missing")
         if (
@@ -543,6 +546,21 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 ExclusionClaim(
                     reason=lexical_blocker_reason(str(error)),
                     evidence=ExclusionEvidence(kind=ExclusionEvidenceKind.CHECK_OUTPUT, message=str(error)),
+                )
+            )
+        if info.task_format is not TaskFormat.TASKSPEC:
+            claims.append(
+                ExclusionClaim(
+                    reason=ExclusionReason.NOT_TASKSPEC_CONVERTED,
+                    evidence=ExclusionEvidence(
+                        kind=ExclusionEvidenceKind.MISSING_ARTIFACT,
+                        message=_TASKSPEC_CONVERSION_BLOCKER,
+                        expected=(
+                            "a verified TaskSpec conversion receipt covering the admitted revision: the "
+                            "conversion census bound at the admitted pin for declared shape "
+                            f"{info.task_format.value if info.task_format is not None else 'unspecified'}"
+                        ),
+                    ),
                 )
             )
         if not self.has_actor_census:

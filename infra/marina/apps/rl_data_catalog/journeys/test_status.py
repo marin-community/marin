@@ -108,7 +108,6 @@ def seeded_extras(journey: Journey):
             "upstream_url": "https://example.org/queued",
             "notes": "Awaiting licensed intake conversion.",
             "use": "train",
-            "task_format": "harbor",
             "method_tags": ["RL"],
             "reasons": [],
         }
@@ -125,7 +124,6 @@ def seeded_extras(journey: Journey):
             "dataset_id": "fixture/excluded",
             "dataset_revision": "a" * 40,
             "notes": "Declaration metadata only.",
-            "task_format": "taskspec",
             "reasons": [
                 {
                     "reason": "license-ban",

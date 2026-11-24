@@ -130,7 +130,6 @@ TABLE_SOURCE_FIELDS = frozenset(
         "difficulty",
         "intended_use",
         "method_tags",
-        "task_format",
         "data_restriction",
         "backend_capabilities",
         "partial_overlaps",
@@ -483,7 +482,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         'dataset_id',declaration->'dataset_id','license_receipt',declaration->'license_receipt',
                         'within_source_dedup',declaration->'within_source_dedup',
                         'actor_census_input',declaration->'actor_census_input',
-                        'intended_use',declaration->'intended_use','task_format',declaration->'task_format',
+                        'intended_use',declaration->'intended_use',
                         'consumer_receipt',declaration->'consumer_receipt',
                         'consumer_decision',declaration->'consumer_decision',
                         'consumer_findings',declaration->'consumer_findings',
@@ -519,7 +518,6 @@ def create_api(services: AppletServices) -> FastAPI:
                                 "notes",
                                 "consumer_findings",
                                 "intended_use",
-                                "task_format",
                             )
                         }
                         | {

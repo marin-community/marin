@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 from finestore.rl.curation import DatasetRelease, OversightEvidence, OversightLevel
-from finestore.rl.status_taxonomy import DataRestriction, SourceStatus
+from finestore.rl.status_taxonomy import (
+    REASON_EXPLANATIONS,
+    DataRestriction,
+    ExclusionEvidenceKind,
+    ExclusionReason,
+    SourceStatus,
+)
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation import sources as source_catalog
@@ -147,6 +153,55 @@ def _agentic(task_format: TaskFormat | None, source_id: str = "Marin:agentic") -
 def test_unaccepted_agentic_formats_are_rejected(task_format, source_id, error):
     with pytest.raises(ValueError, match=error):
         require_accepted_task_format(_agentic(task_format, source_id))
+
+
+def _admitted_fixture(tmp_path: Path) -> RlDataSource:
+    from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census  # noqa: PLC0415
+    from experiments.post_training.task_curation.tests.numbers_pipeline import number_source  # noqa: PLC0415
+
+    source = number_source(tmp_path / "input")
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            oversight=OversightEvidence(
+                level=OversightLevel.SAMPLE,
+                campaign="fixture",
+                verification="Fixture ingestion and grader controls executed.",
+            ),
+        ),
+    )
+    return with_admission_census(source)
+
+
+def test_harbor_source_is_refused_without_a_taskspec_conversion_receipt(tmp_path):
+    """TaskSpec-only admission: a Harbor population fails closed, never admits.
+
+    marin #12167 removes the Harbor runtime from SkyRL; RL serves only
+    executable TaskSpecs through RolloutEngine. A source whose declared shape
+    is not TaskSpec has no verified TaskSpec conversion receipt for its
+    admitted revision, so admission refuses it with NOT_TASKSPEC_CONVERTED
+    even when every other admission receipt is complete. Declaring the
+    TaskSpec shape (the conversion census then binds the admitted pin) is what
+    clears it.
+    """
+    source = _admitted_fixture(tmp_path)
+    assert source.status is SourceStatus.AVAILABLE
+    harbor = replace(source, info=replace(source.info, task_format=TaskFormat.HARBOR))
+    blocker = "admission requires a verified TaskSpec conversion receipt for the admitted revision"
+    assert blocker in harbor.admission_blockers
+    claims = {claim.reason for claim in harbor.admission_claims}
+    assert ExclusionReason.NOT_TASKSPEC_CONVERTED in claims
+    claim = next(c for c in harbor.admission_claims if c.reason is ExclusionReason.NOT_TASKSPEC_CONVERTED)
+    assert claim.evidence.kind is ExclusionEvidenceKind.MISSING_ARTIFACT
+    assert "harbor" in claim.evidence.expected
+    assert harbor.status is SourceStatus.EXCLUDED
+
+
+def test_not_taskspec_converted_explanation_requires_a_verified_conversion_receipt():
+    explanation = REASON_EXPLANATIONS[ExclusionReason.NOT_TASKSPEC_CONVERTED]
+    assert "verified TaskSpec conversion receipt" in explanation.meaning
+    assert "admitted revision" in explanation.clears
 
 
 @pytest.mark.data_integration

@@ -20,16 +20,10 @@ def test_canonical_members_pass_through_unchanged():
         "status": "Pending",
         "stage": "Intake queued",
         "intended_use": "train",
-        "task_format": "harbor",
         "method_tags": ["RL", "SFT-viable"],
         "exclusion_claims": [],
     }
     assert require_typed_served_declaration(row) == row
-
-
-def test_legacy_format_alias_maps_and_never_reenters():
-    row = {"id": "Fixture:legacy", "status": "Available", "task_format": "taskcompendium"}
-    assert require_typed_served_declaration(row)["task_format"] == "taskspec"
 
 
 def test_out_of_enum_status_fails_loudly():
@@ -41,7 +35,6 @@ def test_out_of_enum_fields_fail_with_the_source_id():
     for field, value in [
         ("stage", "Sometime soon"),
         ("intended_use", "distillation"),
-        ("task_format", "spreadsheets"),
         ("method_tags", ["legacy"]),
     ]:
         with pytest.raises(ValueError, match="Fixture:drift"):

@@ -63,7 +63,6 @@
     <div class="status-filter-row"><span class="metric-label">STAGE</span><div class="status-metrics" id="stage-filters" role="group" aria-label="Filter by pending stage"></div></div>
     <div class="status-filter-row"><span class="metric-label">USE</span><div class="status-metrics" id="use-filters" role="group" aria-label="Filter by use"></div></div>
     <div class="status-filter-row"><span class="metric-label">METHOD</span><div class="status-metrics" id="method-filters" role="group" aria-label="Filter by method"></div></div>
-    <div class="status-filter-row"><span class="metric-label">FORMAT</span><div class="status-metrics" id="format-filters" role="group" aria-label="Filter by format"></div></div>
   </section>
   <p id="message" class="sync-banner" role="status" aria-live="polite">Loading source status…</p>
   <section class="catalog">
@@ -77,7 +76,7 @@
       <button id="clear-filters" class="text-button" type="button">Reset</button>
     </form>
     <div class="table-scroller" tabindex="0" aria-label="Source status">
-      <table id="status-table" class="source-table"><caption class="sr-only">Every source with status, pending stage, use, method, format, exclusion reasons and evidence, and last change</caption><colgroup><col style="width:22%"><col style="width:13%"><col style="width:6%"><col style="width:9%"><col style="width:9%"><col style="width:26%"><col style="width:9%"><col style="width:6%"></colgroup><thead><tr><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Use</th><th scope="col">Method</th><th scope="col">Format</th><th scope="col">Reasons</th><th scope="col">Evidence</th><th scope="col">Last change</th></tr></thead><tbody id="rows"></tbody></table>
+      <table id="status-table" class="source-table"><caption class="sr-only">Every source with status, pending stage, use, method, exclusion reasons and evidence, and last change</caption><colgroup><col style="width:24%"><col style="width:14%"><col style="width:6%"><col style="width:10%"><col style="width:30%"><col style="width:10%"><col style="width:6%"></colgroup><thead><tr><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Use</th><th scope="col">Method</th><th scope="col">Reasons</th><th scope="col">Evidence</th><th scope="col">Last change</th></tr></thead><tbody id="rows"></tbody></table>
       <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search or reset the filters.</p></div>
     </div>
     <footer class="table-footer"><span id="visible-count"></span><span>Open a reason or stage for what it means and what advances it</span></footer>

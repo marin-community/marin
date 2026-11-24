@@ -469,7 +469,6 @@ def test_status_inventory_matches_source_statuses_without_loading_task_evidence(
         "consumer_findings",
         "data_restriction",
         "intended_use",
-        "task_format",
         "method_tags",
         "updated_at",
     )

@@ -15,14 +15,12 @@ from finestore.rl.curation import (
     OversightLevel,
     QualifiedSourceDeclaration,
     SourceUse,
-    TaskFormat,
     require_typed_status_fields,
 )
 from finestore.rl.difficulty import DIFFICULTY_GAPS
 from finestore.rl.status_taxonomy import (
     BACKEND_BLOCKER_EXPLANATIONS,
     BACKEND_EXPLANATIONS,
-    FORMAT_EXPLANATIONS,
     METHOD_EXPLANATIONS,
     REASON_EXPLANATIONS,
     STAGE_EXPLANATIONS,
@@ -83,6 +81,10 @@ BLOCKER_REASON_RULES = (
     ("actor census evidence is missing", ExclusionReason.ACTOR_CENSUS_MISSING),
     ("evidence-derived oversight with verification is missing", ExclusionReason.OVERSIGHT_MISSING),
     ("accepted agentic task format is missing", ExclusionReason.AGENTIC_TASK_FORMAT_MISSING),
+    (
+        "admission requires a verified TaskSpec conversion receipt for the admitted revision",
+        ExclusionReason.NOT_TASKSPEC_CONVERTED,
+    ),
     ("production snapshot identity measurement is missing", ExclusionReason.SNAPSHOT_IDENTITY_MISSING),
     ("execution requirement measurement is missing", ExclusionReason.EXECUTION_REQUIREMENT_MISSING),
 )
@@ -321,14 +323,12 @@ def test_every_state_has_one_canonical_explanation(table, members):
 
 
 def test_column_explanations_cover_the_column_enums():
-    """The Use, Method and Format label tables cover exactly their enum values."""
+    """The Use and Method label tables cover exactly their enum values."""
     assert set(USE_EXPLANATIONS) == {use.value for use in SourceUse}
     assert set(METHOD_EXPLANATIONS) == set(SourceMethod)
-    assert set(FORMAT_EXPLANATIONS) == {item.value for item in TaskFormat}
-    for table in (USE_EXPLANATIONS, FORMAT_EXPLANATIONS):
-        for item in table.values():
-            assert item.label.strip()
-            assert item.meaning.strip()
+    for item in USE_EXPLANATIONS.values():
+        assert item.label.strip()
+        assert item.meaning.strip()
     for item in METHOD_EXPLANATIONS.values():
         assert item.label.strip()
         assert item.meaning.strip()
@@ -543,14 +543,6 @@ def test_extras_row_outside_an_enum_fails_the_build():
             "use": "distillation",
         },
         {
-            "id": "Fixture:format",
-            "display_name": "Fixture · format",
-            "status": "Available",
-            "stage": None,
-            "reasons": [],
-            "task_format": "spreadsheets",
-        },
-        {
             "id": "Fixture:method",
             "display_name": "Fixture · method",
             "status": "Available",
@@ -655,17 +647,21 @@ def test_superseded_sources_are_deprecated_with_resolvable_replacements():
 
 
 @pytest.mark.data_integration
-def test_snapshot_budget_source_waits_pending_with_the_repair_stage():
-    """Ruling 2026-11-23: a snapshot budget queues Pending repair, never Excluded.
+def test_harbor_snapshot_budget_source_is_excluded_pending_conversion():
+    """Ruling 2026-11-24: TaskSpec-only admission supersedes the repair queue for Harbor rows.
 
-    The CalibForge shared cohort also owes a lexical receipt; that claim stays
-    visible while the budget is the stage the row queues under.
+    The CalibForge shared cohort is a Harbor population: TaskSpec-only admission
+    refuses it with NOT_TASKSPEC_CONVERTED beside its outstanding lexical claim,
+    and the convert -> census -> controls -> lexical -> SAMPLE QA -> admission
+    chain is what re-admits it. The snapshot-budget repair stage was the
+    2026-11-23 queue for the same source; the conversion requirement replaces
+    that queue because the rebuilt population must be a TaskSpec population.
     """
     source = all_sources()["TaskTrove:smartie-calibforge-shared-v2"]
-    assert source.status is SourceStatus.PENDING
-    assert source.stage is PendingStage.SNAPSHOT_REPAIR_QUEUED
+    assert source.status is SourceStatus.EXCLUDED
     assert {claim.reason for claim in source.declaration.exclusion_claims} == {
-        ExclusionReason.LEXICAL_REMEDIATION_REQUIRED
+        ExclusionReason.LEXICAL_REMEDIATION_REQUIRED,
+        ExclusionReason.NOT_TASKSPEC_CONVERTED,
     }
 
 
@@ -696,10 +692,9 @@ def test_pending_rows_carry_typed_columns():
     uses = {use.value for use in SourceUse}
     methods = {method.value for method in SourceMethod}
     stages = {stage.value for stage in PendingStage}
-    formats = {item.value for item in TaskFormat}
     for row in source_status.pending_rows():
         assert row["use"] in uses, f"Pending row Use outside SourceUse: {row['id']}"
-        assert row["task_format"] in formats, f"Pending row Format outside TaskFormat: {row['id']}"
+        assert "task_format" not in row, f"Pending row still carries the dropped Format column: {row['id']}"
         assert row["method_tags"] and set(row["method_tags"]) <= methods, row["id"]
         assert row["stage"] in stages, f"Pending row stage outside PendingStage: {row['id']}"
 

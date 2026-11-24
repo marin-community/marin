@@ -1,7 +1,7 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 
 // The source-status page shows data only: statuses, stages, reason labels and
-// evidence links, plus the typed Use, Method and Format columns. Every label
+// evidence links, plus the typed Use and Method columns. Every label
 // and explanation renders from the canonical taxonomy (/api/taxonomy); reason
 // explanations render only when a label is clicked open; policy prose lives in
 // the guide.
@@ -14,7 +14,6 @@ const state = {
   stage: 'all',
   use: 'all',
   method: 'all',
-  format: 'all',
 };
 
 // Chip filter groups: filter key -> the taxonomy table and the row field it reads.
@@ -22,7 +21,6 @@ const CHIP_FILTERS = [
   ['stage', 'stage', 'stage'],
   ['use', 'use', 'use'],
   ['method', 'method', 'method_tags'],
-  ['format', 'format', 'task_format'],
 ];
 
 function entry(kind, value) {
@@ -143,9 +141,6 @@ function requireTypedRows(rows) {
       fail(row, 'replacement_source_id', row.replacement_source_id);
     }
     if (row.use !== undefined && row.use !== null && !entry('use', row.use)) fail(row, 'use', row.use);
-    if (row.task_format !== undefined && row.task_format !== null && !entry('format', row.task_format)) {
-      fail(row, 'format', row.task_format);
-    }
     for (const tag of row.method_tags || []) if (!entry('method', tag)) fail(row, 'method', tag);
     for (const claim of row.reasons || []) if (!entry('reason', claim.reason)) fail(row, 'reason', claim.reason);
   }
@@ -176,7 +171,7 @@ function row(item) {
   }
   if (item.stage) status.append(chipRow(item.stage, 'stage'));
   if (item.replacement_source_id) status.append(replacementLink(item));
-  tr.append(status, columnCell(item.use, 'use'), columnCell(item.method_tags, 'method'), columnCell(item.task_format, 'format'));
+  tr.append(status, columnCell(item.use, 'use'), columnCell(item.method_tags, 'method'));
   const claims = item.reasons || [];
   const reasons = node('td');
   if (claims.length) {
@@ -297,7 +292,6 @@ async function load() {
     status: declaration.status,
     stage: stages[declaration.id] || declaration.stage || null,
     use: declaration.intended_use,
-    task_format: declaration.task_format,
     method_tags: declaration.method_tags || [],
     reasons: declaration.exclusion_claims || [],
     notes: declaration.notes,

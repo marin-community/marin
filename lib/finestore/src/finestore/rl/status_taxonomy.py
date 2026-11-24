@@ -156,6 +156,7 @@ class ExclusionReason(StrEnum):
     LEXICAL_REMEDIATION_REQUIRED = "lexical-remediation-required"
     OVERSIGHT_MISSING = "oversight-missing"
     AGENTIC_TASK_FORMAT_MISSING = "agentic-task-format-missing"
+    NOT_TASKSPEC_CONVERTED = "not-taskspec-converted"
     SNAPSHOT_IDENTITY_MISSING = "snapshot-identity-missing"
     EXECUTION_REQUIREMENT_MISSING = "execution-requirement-missing"
     GRADER_DEFECT = "grader-defect"
@@ -251,10 +252,19 @@ REASON_EXPLANATIONS: dict[ExclusionReason, ReasonExplanation] = {
         "nor a SAMPLE or FULL review receipt with recorded verification.",
         clears="A QUICK conversion receipt, or a SAMPLE or FULL review receipt with recorded verification.",
     ),
+    ExclusionReason.NOT_TASKSPEC_CONVERTED: ReasonExplanation(
+        label="Not TaskSpec converted",
+        meaning="The source's admitted population carries no verified TaskSpec conversion receipt for its "
+        "admitted revision: its declared shape is not an executable TaskSpec population, so the RL "
+        "runtime cannot serve it.",
+        clears="A verified TaskSpec conversion receipt covering the admitted revision — the conversion "
+        "census bound at the admitted pin with the declared TaskSpec shape — produced by the required "
+        "conversion stage.",
+    ),
     ExclusionReason.AGENTIC_TASK_FORMAT_MISSING: ReasonExplanation(
         label="Agentic task format missing",
         meaning="An agentic source declares no accepted task format.",
-        clears="A declared TaskCompendium or Harbor task format (or grandfathered registration).",
+        clears="A declared TaskSpec task format (or grandfathered registration).",
     ),
     ExclusionReason.SNAPSHOT_IDENTITY_MISSING: ReasonExplanation(
         label="Snapshot identity missing",
@@ -508,24 +518,9 @@ METHOD_EXPLANATIONS: dict[SourceMethod, ValueExplanation] = {
     ),
 }
 
-FORMAT_EXPLANATIONS: dict[str, ValueExplanation] = {
-    "harbor": ValueExplanation(
-        label="Harbor",
-        meaning="The served payload rows are Harbor task package rows.",
-    ),
-    "taskspec": ValueExplanation(
-        label="TaskSpec",
-        meaning="The served payload rows are TaskSpec rows with no task package.",
-    ),
-    "marinskyrl": ValueExplanation(
-        label="MarinSkyRL",
-        meaning="The served payload rows are MarinSkyRL blend records.",
-    ),
-}
-
 
 def taxonomy_tables(requirement_values: Sequence[str]) -> dict[str, Any]:
-    """The canonical status, stage, reason and Use/Method/Format explanation tables.
+    """The canonical status, stage, reason and Use/Method explanation tables.
 
     The Atlas ``/api/taxonomy`` endpoint serves exactly this document and every
     page renders its labels and explanations from it; the release checker
@@ -542,7 +537,6 @@ def taxonomy_tables(requirement_values: Sequence[str]) -> dict[str, Any]:
         "reason": {reason.value: item.model_dump(mode="json") for reason, item in REASON_EXPLANATIONS.items()},
         "use": {value: item.model_dump(mode="json") for value, item in USE_EXPLANATIONS.items()},
         "method": {method.value: item.model_dump(mode="json") for method, item in METHOD_EXPLANATIONS.items()},
-        "format": {value: item.model_dump(mode="json") for value, item in FORMAT_EXPLANATIONS.items()},
         "backend": {backend.value: item.model_dump(mode="json") for backend, item in BACKEND_EXPLANATIONS.items()},
         "backend-reason": {
             **{reason.value: item.model_dump(mode="json") for reason, item in BACKEND_BLOCKER_EXPLANATIONS.items()},

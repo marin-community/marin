@@ -5,7 +5,7 @@
 
 The catalog load validates declarations on construction; this is the serve-time
 guard on the JSONB the selected load carries. A row whose Status, PendingStage,
-ExclusionReason, Use, Format or Method value falls outside its enum is
+ExclusionReason, Use or Method value falls outside its enum is
 served-catalog drift, and the projection refuses it instead of rendering free
 text on the Atlas pages.
 """
@@ -13,7 +13,7 @@ text on the Atlas pages.
 from enum import StrEnum
 from typing import Any, TypeVar
 
-from finestore.rl.curation import SourceUse, TaskFormat
+from finestore.rl.curation import SourceUse
 from finestore.rl.status_taxonomy import ExclusionReason, PendingStage, SourceMethod, SourceStatus
 
 EnumT = TypeVar("EnumT", bound=StrEnum)
@@ -42,8 +42,6 @@ def require_typed_served_declaration(declaration: dict[str, Any]) -> dict[str, A
         result["stage"] = _enum_value(PendingStage, result["stage"], "stage", source_id)
     if result.get("intended_use") is not None:
         result["intended_use"] = _enum_value(SourceUse, result["intended_use"], "use", source_id)
-    if result.get("task_format") is not None:
-        result["task_format"] = _enum_value(TaskFormat, result["task_format"], "format", source_id)
     if result.get("method_tags") is not None:
         result["method_tags"] = [_enum_value(SourceMethod, tag, "method", source_id) for tag in result["method_tags"]]
     result["exclusion_claims"] = [

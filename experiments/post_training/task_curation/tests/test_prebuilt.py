@@ -237,6 +237,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
                 level=OversightLevel.FULL, verification="Fixture grader behavior is checked locally."
             ),
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 2),
+            task_format=TaskFormat.TASKSPEC,
         ),
     )
     source = with_admission_census(source)
@@ -344,19 +345,23 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
             ),
         )
         source = with_admission_census(source)
-        step = prebuilt.import_harbor_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
-        if change == "missing_contract":
-            with pytest.raises(RuntimeError) as failure:
-                run(step)
-            assert "shared_integrity_contract_missing" in str(failure.value.__cause__.__cause__)
+        # TaskSpec-only admission refuses a Harbor population in the admitted
+        # publish modes; the QUICK conversion-recording view is the only publish
+        # a Harbor cohort can take (ruling 2026-11-24), and it must preserve the
+        # controlled package bytes.
+        with pytest.raises(
+            ValueError,
+            match="cannot admit tasks: admission requires a verified TaskSpec conversion receipt",
+        ):
+            prebuilt.import_harbor_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
+        if change != "none":
             return
-        artifact = run(step)[0]
-        destination = Path(artifact.path)
-        assert pq.read_table(str(destination / "tasks.parquet")).to_pylist() == pq.read_table(path).to_pylist()
-        for view in ("normalize", "final"):
-            rows = pq.read_table(next((destination / view).glob("*.parquet"))).to_pylist()
-            assert rows[0]["task_json"] == serialized
-            assert hashlib.sha256(rows[0]["task_json"].encode()).hexdigest() == receipt["task_sha256"]
+        quick = run(
+            prebuilt.import_harbor_prebuilt(source, PipelineOptions(SourceProcessingMode.QUICK, CampaignRuntime()))
+        )[0]
+        quick_rows = pq.read_table(str(Path(quick.path) / "normalize" / "part-00000.parquet")).to_pylist()
+        assert quick_rows[0]["task_json"] == serialized
+        assert hashlib.sha256(quick_rows[0]["task_json"].encode()).hexdigest() == receipt["task_sha256"]
     else:
         with pytest.raises(ValueError, match=r"differs from its control|controls do not admit"):
             prebuilt.import_harbor_cohort(_cohort(1))
@@ -540,6 +545,7 @@ def test_prebuilt_rejects_calibration_only_success_without_strong_model_executab
                 level=OversightLevel.SAMPLE, verification="Fixture negative controls are tested locally."
             ),
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
+            task_format=TaskFormat.TASKSPEC,
         ),
     )
     source = with_admission_census(source)
