@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 VERSION = "2026.11.17.2"
 # The version of the datasets whose rule renders a judge spec into each task. Their recipe identity
 # does not cover the rendered judge, so a change to it bumps this version.
-JUDGED_VERSION = "2026.11.19"
+JUDGED_VERSION = "2026.11.23"
 # Terminal-Bench's build-pov-ray allows its agent and its verifier 12,000 seconds each.
 TERMINAL_BENCH_ATTEMPT_TIMEOUT = 8 * 60 * 60
 

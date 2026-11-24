@@ -305,4 +305,4 @@ suites:
   - bfcl
   - aider
   - medagentbench
-  # financeagent and ot-tblite do not run; see their entries in experiments/evaluation/evals.py.
+  # The standalone financeagent and ot-tblite recipes in benchmarks/agentic.py are outside this suite.

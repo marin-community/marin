@@ -435,7 +435,10 @@ def test_schema_0_30_judge_candidate_flag_upgrades_to_steps_that_grade_the_same(
     payloads = {payload["id"]: payload for payload in json.loads(TASK_SPEC_0_30.read_text())}
     upgraded = TaskSpec.model_validate(payloads["judge-in-process"])
     current_judge = JudgeSpec(
-        references=("Mars",), question="Which planet is red?", candidate_steps=(StripReasoningBlocks(),)
+        references=("Mars",),
+        question="Which planet is red?",
+        candidate_steps=(StripReasoningBlocks(),),
+        transport_attempts=1,
     )
     current = upgraded.model_copy(update={"grader": verifyit_package(current_judge).grader})
     script = TaskSpec.model_validate(payloads["script-judge"]).grader

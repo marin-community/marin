@@ -41,8 +41,8 @@ from verifyit.spec import (
     ScriptSpec,
     Spec,
     StdioSpec,
-    upgrade_judge_table,
     spec_from_table,
+    upgrade_judge_table,
 )
 
 SCHEMA_VERSION = "0.31"
