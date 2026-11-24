@@ -1,0 +1,5 @@
+{
+  "task_id": "9",
+  "question": "Calculate the 3 year revenue CAGR for Palantir Technologies from 2021 to 2024.",
+  "expected_answer": "2024: 2,865,507\n2021: 1,541,889\n\nCAGR: 22.9%"
+}

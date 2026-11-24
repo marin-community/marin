@@ -9,7 +9,13 @@ import pytest
 from verifyit.spec import ScriptSpec
 
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, Source
+from taskcompendium.models import (
+    CommandSemantics,
+    EnvironmentRequirements,
+    GraderMachine,
+    ResourceGroups,
+    Source,
+)
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -304,8 +310,10 @@ def test_contract_signature_separates_grader_code_but_not_reference_values():
             "grader": (
                 verifyit_package(
                     ScriptSpec(path="grade.py"),
-                    environment=EnvironmentRequirements(
-                        docker_image="fixture@sha256:" + "0" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
+                    placement=GraderMachine(
+                        environment=EnvironmentRequirements(
+                            docker_image="fixture@sha256:" + "0" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
+                        )
                     ),
                 ).grader
             ),

@@ -251,6 +251,10 @@ class ExecSetupFailed(RuntimeError):
     """A helper exec's transport reported a setup failure; Kubernetes also reports one after a lost upgrade reply."""
 
 
+class MachineDiskFull(RuntimeError):
+    """The machine's filesystem has no space left for the files that start a command."""
+
+
 class CommandOutputLost(RuntimeError):
     """A process inside the machine removed a command's captured output before it was read."""
 

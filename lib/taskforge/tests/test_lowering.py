@@ -17,6 +17,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     FinalAction,
     FunctionDefinition,
+    GraderMachine,
     NoGrader,
     PlainText,
     ScriptGrader,
@@ -71,7 +72,7 @@ def test_grader_image_precheck_respects_available_host_factories(image: str | No
         grader=ScriptGrader(
             argv=("sh", "-c", "echo 1"),
             reward=StdoutReward(),
-            environment=requirements(image=image),
+            placement=GraderMachine(environment=requirements(image=image)),
             answer_path=None,
             timeout=1,
         )
@@ -98,8 +99,10 @@ def test_missing_workdir_resolves_before_machine_creation(directory: str | None)
     spec = lower_with_settings(task, lowering_settings(policy), {"gvisor": AvailableFactory(Backend.GVISOR)})
     assert spec.task.environment_requirements.working_directory == (directory or "/workspace")
     assert spec.task_machine is not None
-    assert _machine_spec(spec.task.environment_requirements, spec.task_machine).workdir == (directory or "/workspace")
-    assert _machine_spec(declared, machine_runtime(backend="gvisor")).workdir == (directory or "")
+    with _machine_spec(spec.task.environment_requirements, spec.task_machine) as runtime:
+        assert runtime.workdir == (directory or "/workspace")
+    with _machine_spec(declared, machine_runtime(backend="gvisor")) as runtime:
+        assert runtime.workdir == (directory or "")
 
 
 def test_policy_memory_and_actual_grader_timeout_reach_both_machine_specs() -> None:
@@ -110,7 +113,7 @@ def test_policy_memory_and_actual_grader_timeout_reach_both_machine_specs() -> N
     package = ScriptGrader(
         argv=("true",),
         reward=StdoutReward(),
-        environment=requirements(image=GRADER_BASE_IMAGE),
+        placement=GraderMachine(environment=requirements(image=GRADER_BASE_IMAGE)),
         answer_path=None,
         timeout=900,
     )
@@ -161,7 +164,9 @@ async def test_authored_interface_errors_return_tool_feedback(
             rubric="checklist" if defect == "checklist" else "reference",
             references=(" ",) if defect == "blank_reference" else (),
         )
-        grader = ScriptGrader(argv=("true",), environment=requirements(image=None)).model_copy(update={"judge": judge})
+        grader = ScriptGrader(argv=("true",), placement=GraderMachine(environment=requirements(image=None))).model_copy(
+            update={"judge": judge}
+        )
         task = arithmetic_task().model_copy(update={"grader": grader})
         message = "needs non-empty criteria" if defect == "checklist" else "needs non-empty reference answers"
     settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())

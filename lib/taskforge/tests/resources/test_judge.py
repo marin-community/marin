@@ -10,7 +10,7 @@ from rolloutengine.models import TraceMode
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import ScriptGrader
+from taskcompendium.models import GraderMachine, ScriptGrader
 from verifyit.spec import JudgeSpec
 
 from taskforge.effects.context import Context
@@ -121,7 +121,7 @@ async def test_host_judge_records_inference_and_replays_without_provider(rubric:
 def test_disabled_and_script_judges_return_actionable_authored_rejection(script: bool) -> None:
     judge = JudgeSpec(references=("12",))
     grader = (
-        ScriptGrader(argv=("true",), environment=requirements(image=None), judge=judge)
+        ScriptGrader(argv=("true",), placement=GraderMachine(environment=requirements(image=None)), judge=judge)
         if script
         else verifyit_package(judge).grader
     )

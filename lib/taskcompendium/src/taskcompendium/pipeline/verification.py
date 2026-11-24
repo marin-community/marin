@@ -88,8 +88,8 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
     grader = task.grader
     if isinstance(grader, NoGrader):
         return [CheckResult(check="source_evaluator", status=CheckStatus.UNSUPPORTED, detail=grader.reason)]
-    if not isinstance(grader, VerifyitGrader) or grader.environment is not None:
-        return [CheckResult(check="runtime", status=CheckStatus.UNSUPPORTED, detail="A grading environment is required")]
+    if not isinstance(grader, VerifyitGrader) or grader.placement is not None:
+        return [CheckResult(check="runtime", status=CheckStatus.UNSUPPORTED, detail="A grading machine is required")]
     try:
         verifier = verifyit_spec(grader)
     except ValueError as error:

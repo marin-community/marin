@@ -6,8 +6,8 @@
 # Each task ships only its scorer's modules and optional dependencies.
 # ruff: noqa: PLC0415
 
+import argparse
 import json
-import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -16,7 +16,8 @@ from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, infra
 from verifyit.spec import Constraint, JudgeSpec, parse_spec
 
 
-def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
+def score(scorer: str, config: dict[str, Any], response: str, judge: JudgeSpec | None = None) -> Reward:
+    """Grade ``response`` with the named source scorer; judged scorers require ``judge``."""
     # Scorers load only the dependencies of the selected dataset's environment.
     if scorer == "genomeqa":
         from .genomeqa import grade_genomeqa
@@ -53,8 +54,7 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
             return result
         from verifyit.modes.grade_judge import grade_judge_candidate
 
-        judge = parse_spec(Path("/tests/judge.toml").read_text())
-        assert isinstance(judge, JudgeSpec)
+        assert judge is not None, "A judged olympiad scorer requires --judge-spec"
         verdict = grade_judge_candidate(judge, answer)
         return Reward(verdict.reward, verdict.status, {**verdict.detail, "extracted": answer, "method": "llm_judge"})
     if scorer == "facts_grounding":
@@ -62,8 +62,7 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
 
         from .facts_grounding import grade_facts_grounding
 
-        judge = parse_spec(Path("/tests/judge.toml").read_text())
-        assert isinstance(judge, JudgeSpec)
+        assert judge is not None, "The FACTS Grounding scorer requires --judge-spec"
         return grade_facts_grounding(
             config["full_prompt"],
             judge.question,
@@ -120,9 +119,17 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("scorer")
+    parser.add_argument("--judge-spec", type=Path, help="Judge contract TOML for scorers that call an LLM judge.")
+    args = parser.parse_args()
+    judge = None
+    if args.judge_spec is not None:
+        judge = parse_spec(args.judge_spec.read_text())
+        assert isinstance(judge, JudgeSpec)
     config = json.loads(Path("/tests/config.json").read_text())
     try:
-        result = score(sys.argv[1], config, Path("/app/answer.txt").read_text())
+        result = score(args.scorer, config, Path("/app/answer.txt").read_text(), judge)
     except InvalidTask as error:
         result = invalid_task(str(error))
     except GradingInfraError as error:

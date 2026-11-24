@@ -19,7 +19,7 @@ from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationItem
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.models import GraderMachine, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 
@@ -47,7 +47,7 @@ def convert_supergpqa(row: RawRow, context: ConversionContext) -> TaskSpec:
                 extraction=McqExtraction.SUPERGPQA_REFERENCE,
                 option_texts=tuple(options),
             ),
-            environment=required_grader_environment(context),
+            placement=GraderMachine(environment=required_grader_environment(context)),
         ),
         evidence={**row.data, "options": options},
     )

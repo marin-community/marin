@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
-from verifyit.spec import RUBRIC_PAIRWISE, EmptyOutputPolicy, JudgeSpec
+from verifyit.spec import RUBRIC_PAIRWISE, EmptyOutputPolicy, JudgeSpec, StripReasoningBlocks
 
 from taskcompendium.convert.answers import answer_task, source_defect, source_evidence
 from taskcompendium.evaluation.corpus import chat_item
@@ -74,7 +74,7 @@ def econevals_spec(question: str, baseline: str) -> JudgeSpec:
         label_case="upper",
         # Reasoning judges may echo candidate verdict labels before their final one.
         strip_reasoning_blocks=True,
-        strip_candidate_reasoning_blocks=True,
+        candidate_steps=(StripReasoningBlocks(),),
         max_completion_tokens=JUDGE_MAX_TOKENS,
         request_timeout=300,
         transport_attempts=3,

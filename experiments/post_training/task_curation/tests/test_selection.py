@@ -29,6 +29,7 @@ from taskcompendium.models import (
     ConversationInput,
     DockerBuildContext,
     EnvironmentRequirements,
+    GraderMachine,
     NoGrader,
     PlainText,
     ResourceGroups,
@@ -36,6 +37,7 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
+    grader_environment,
 )
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.models import IntendedUse
@@ -100,9 +102,11 @@ def source_task(identifier: str, *, dataset: str = "fixture", image: bool = Fals
         grader=ScriptGrader(
             argv=("python", "/tests/grade.py"),
             env={"MODE": "fixture"},
-            environment=EnvironmentRequirements(
-                command_semantics=CommandSemantics.LINUX_PROCESS,
-                **({"docker_image": "python@sha256:" + "a" * 64} if image else {"packages_lock": "numpy==2.3.5\n"}),
+            placement=GraderMachine(
+                environment=EnvironmentRequirements(
+                    command_semantics=CommandSemantics.LINUX_PROCESS,
+                    **({"docker_image": "python@sha256:" + "a" * 64} if image else {"packages_lock": "numpy==2.3.5\n"}),
+                )
             ),
         ),
         resources=ResourceGroups(verifier=(inline_resource("private.txt", identifier.encode()),)),
@@ -124,6 +128,8 @@ def heldout_rows() -> list[dict]:
                 )
                 task["resources"]["verifier"].append(config.model_dump(mode="json"))
             else:
+                # The pinned heldout specs keep the 0.30 grader shape.
+                del task["grader"]["placement"]
                 task["grader"]["environment"] = {
                     "command_semantics": "linux_process",
                     "packages_lock": "numpy==2.3.5\n",
@@ -306,15 +312,17 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     for component, family in settings.sources.items():
         task = source_task(f"training-{family}", image=family == "agents")
         if family != "agents":
-            grader = task.grader.model_copy(update={"environment": environments[family]})
-            task = task.model_copy(update={"grader": grader})
+            placement = GraderMachine(environment=environments[family])
+            task = task.model_copy(update={"grader": task.grader.model_copy(update={"placement": placement})})
         curated[component] = admitted_source(tmp_path / family, [task])
     originals = {}
     for row in rows:
         document = json.loads(row["lowered_task_spec"])
         task = document["task"]
         if task["source"]["dataset"] != "structure-closure":
-            task["grader"]["environment"] = source_task("image", image=True).grader.environment.model_dump(mode="json")
+            image_environment = grader_environment(source_task("image", image=True).grader)
+            assert image_environment is not None
+            task["grader"]["environment"] = image_environment.model_dump(mode="json")
             task["grader"]["argv"][0] = "python3"
             task["grader"]["env"] = {"MODE": "historical"}
             task["grader"]["timeout"] = 330
@@ -345,10 +353,10 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
         }
         if family == STRUCTURAL_FAMILY:
             continue
-        assert task.grader.environment == environments[family]
+        assert grader_environment(task.grader) == environments[family]
         assert task.resources.model_dump(mode="json") == original["resources"]
-        assert task.grader.model_dump(mode="json", exclude={"environment"}) == {
-            key: value for key, value in original["grader"].items() if key != "environment"
+        assert task.grader.model_dump(mode="json", exclude={"placement"}) == {
+            key: value for key, value in original["grader"].items() if key not in ("environment", "collect", "artifacts")
         }
     summary = json.loads((output / "summary.json").read_text())
     assert summary["grader_kind_counts"] == {
@@ -1189,9 +1197,13 @@ TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
             "grader": (
                 source_task("docker-build").grader.model_copy(
                     update={
-                        "environment": EnvironmentRequirements(
-                            command_semantics=CommandSemantics.LINUX_PROCESS,
-                            docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM python:3.12"),)),
+                        "placement": GraderMachine(
+                            environment=EnvironmentRequirements(
+                                command_semantics=CommandSemantics.LINUX_PROCESS,
+                                docker_build=DockerBuildContext(
+                                    files=(inline_resource("Dockerfile", b"FROM python:3.12"),)
+                                ),
+                            )
                         )
                     }
                 )
