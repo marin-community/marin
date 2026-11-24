@@ -30,7 +30,7 @@ from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
-from skyrlrecipe.documents import set_path
+from skyrlrecipe.documents import merge_mappings, set_path
 
 from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
@@ -606,6 +606,11 @@ def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_
     callbacks = {row["type"] for row in config["skyrl"]["trainer"]["callbacks"]}
     assert EVALUATION_CALLBACK in callbacks
     assert callbacks.isdisjoint({"checkpoint", BEST_CHECKPOINT_CALLBACK, HF_MODEL_SAVE_CALLBACK})
+
+    docs = (recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
+    section = docs.split("## Mochi inference on GB200\n", 1)[1]
+    fragment = yaml.safe_load(section.split("```yaml\n", 1)[1].split("```", 1)[0])
+    assert merge_mappings(config["skyrl"], fragment) == config["skyrl"]
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
