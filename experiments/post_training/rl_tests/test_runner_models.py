@@ -20,7 +20,6 @@ from marin.execution.lazy import ArtifactStep, apply, artifact_identity, materia
 from marin.rl.skyrl import IrisSkyRLExecution, skyrl_execution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
 
@@ -31,6 +30,7 @@ from experiments.post_training.rl_presets import BatchMix
 from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, fake_s3, write_published_artifact
 from experiments.post_training.snowball_rl import SNOWBALL
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 
 @pytest.fixture
@@ -533,7 +533,7 @@ def test_command_refusals(selection, table, name, options, error, mode, request,
 
 def test_mochi_agentic_plan_collects_attempts_with_exports_disabled(selection, tmp_path, monkeypatch):
     model = MOCHI.by_name["train-medium-agentic"].model
-    marker = StoragePath(model.step.path()) / COMPLETION_MANIFEST
+    marker = StoragePath(model.step.path()) / MODEL_MANIFEST_FILENAME
     fake_s3(monkeypatch, str(marker).removeprefix("s3://"))
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)

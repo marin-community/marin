@@ -59,7 +59,8 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_trai
 ```
 
 The Mochi RL presets default to the verified CoreWeave copy of the production Mochi SFT
-step-400407 export and the tokenizer pinned by that SFT run. Use `--init NAME@VERSION`
+step-400407 export. Its SkyRL model manifest binds the weights to the SFT run's tokenizer.
+Use `--init NAME@VERSION`
 to start from another published model or select an SFT preset with `--sft`.
 Mochi writes artifacts under the cluster's
 `tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to use a durable prefix.
