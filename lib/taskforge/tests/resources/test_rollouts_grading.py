@@ -1,12 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 from functools import partial
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import pytest
+from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, LocalIrisFactory
 from lib.taskforge.tests.resources.rollout_fakes import FakeEngine, twelve
+from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.models import (
@@ -14,9 +17,18 @@ from rolloutengine.models import (
     Rollout,
     RolloutInterrupted,
     RolloutOperation,
+    TaskRolloutSpec,
     TraceMode,
 )
-from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits, rollout_spec
+from rolloutengine.test_support import (
+    arithmetic_task,
+    machine_runtime,
+    rollout_limits,
+    rollout_spec,
+    shell_call,
+    tool_observations,
+)
+from shellbox.backends.iris import machine as iris_backend
 from shellbox.machine import (
     ExecSetupFailed,
     MachineCancelled,
@@ -28,9 +40,11 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
     AssistantToolCalls,
+    CommandSemantics,
     ConversationInput,
     ConversationToolCall,
     ConversationTrace,
+    EnvironmentRequirements,
     ResourceGroups,
     ScriptGrader,
     StdoutReward,
@@ -46,10 +60,10 @@ from taskforge.effects.issues import OutputBudgetExhausted, Restart, Transient
 from taskforge.effects.log import EventLog
 from taskforge.harness.protocol import ToolResult as ToolReply
 from taskforge.harness.tools.grade import GradeTool
-from taskforge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
+from taskforge.lowering import GRADING_MACHINE, TOOL_HARNESS, LoweringSettings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
 from taskforge.resources.env import ShellboxEnvFactory, WriteFile
-from taskforge.resources.grading import GradeCandidate, GradingResource, candidate_turns, grade
+from taskforge.resources.grading import GradeCandidate, GradingResource, ScriptedModel, candidate_turns, grade
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, interruption, run_rollout
 from taskforge.resources.sandbox.factories import shellsim_factory
 from taskforge.stages.author import install_env
@@ -251,3 +265,79 @@ print(int(staged.exists() and staged.read_text() == 'print(12)' and not Path('/w
         assert "pass a path relative to /workspace" in result.content
     else:
         assert json.loads(result.content)["reward"] == 1
+
+
+SHELL_TASK = arithmetic_task(
+    environment_requirements=EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image="fixture@sha256:" + "0" * 64,
+        capabilities=("shell",),
+    )
+)
+
+
+def iris_spec() -> TaskRolloutSpec:
+    return rollout_spec(
+        SHELL_TASK, harness=TOOL_HARNESS, machine=machine_runtime(backend="iris"), trace=TraceMode.MESSAGES
+    )
+
+
+# Pilot 2026-11-21 (d09): a shell command that outlived its 30 s timeout closed the Iris sandbox; the next command
+# raised "Machine is closed", which restarted the validation stage and discarded every sibling solver trial.
+async def test_solver_command_timeout_on_iris_continues_on_the_same_machine_beside_its_siblings(
+    tmp_path: Path,
+) -> None:
+    factory = LocalIrisFactory(tmp_path)
+    turns = (
+        shell_call("sleep 30", call_id="slow"),
+        shell_call("printf 12 > answer"),
+        {"role": "assistant", "content": "12"},
+    )
+    resource = RolloutResource(rollout_engine({"iris": factory}, command_timeout=0.3), ScriptedModel(turns, 0), "config")
+    events: list[Event[None]] = []
+    async with asyncio.TaskGroup() as group:
+        trials = [
+            group.create_task(run_rollout(SolverRollout(iris_spec(), trial, 0), resource, notify=events.append))
+            for trial in range(3)
+        ]
+    for trial in trials:
+        graded = trial.result()
+        assert (graded.grade.status, graded.grade.reward) == (Outcome.GRADED, 1)
+        slow, after = tool_observations(graded)
+        assert (slow["reason"], slow["exit_code"]) == ("timed_out", None)
+        assert (after["reason"], after["exit_code"]) == ("exited", 0)
+    # One machine per trial, each still holding the file its post-timeout command wrote.
+    assert [(root / "workspace" / "answer").read_text() for root in factory.created] == ["12"] * 3
+    assert not events
+
+
+QUEUED_COMMAND_TIMEOUT = 2.0
+"""The control replay's command timeout: each copy runs in well under it, even on a loaded runner."""
+QUEUED_BACKOFF = 1.1
+"""Seconds the client sleeps after each refused admission; the second ends after the command timeout."""
+
+
+# Pilot 2026-11-21 (d09): a control replay's first `cp` waited on the controller past its 30 s timeout, which closed the
+# sandbox; the second `cp` raised "Machine is closed" and restarted the stage.
+async def test_control_grade_on_iris_survives_a_first_copy_queued_past_its_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without jitter and since a sleep never ends early, the first copy's third refusal comes after its timeout, even
+    # under a retry budget clipped to it, while each copy has the whole timeout once it runs. The timeout was 0.1 s;
+    # this test failed under load on a laptop, never on CI, with no failure text kept, and the suspected cause, a copy
+    # outliving 0.1 s itself, was never reproduced.
+    assert 2 * QUEUED_BACKOFF > QUEUED_COMMAND_TIMEOUT
+    backoff = ExponentialBackoff(initial=QUEUED_BACKOFF, maximum=QUEUED_BACKOFF, jitter=0.0)
+    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", backoff)
+    monkeypatch.setitem(SITES, "first-copy", lambda script: "forge-candidates/0 " in script and "4> /tmp/" in script)
+    factory = LocalIrisFactory(tmp_path, [("first-copy", Fault.ADMISSION_REFUSED, False)] * 3)
+    grader = GradingResource(rollout_engine({"iris": factory}, command_timeout=QUEUED_COMMAND_TIMEOUT), "config")
+    candidate = Candidate("12", (inline_resource("a.txt", b"first"), inline_resource("b.txt", b"second")))
+    events: list[Event[None]] = []
+    result = await grade(GradeCandidate(iris_spec(), candidate), grader, notify=events.append)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1)
+    (root,), (controller,) = factory.created, factory.controllers
+    assert [(root / "workspace" / name).read_bytes() for name in ("a.txt", "b.txt")] == [b"first", b"second"]
+    # Every refusal hit the first copy, which was admitted on its fourth send.
+    assert (controller.faults, controller.sent("first-copy")) == ([], 4)
+    assert not events
