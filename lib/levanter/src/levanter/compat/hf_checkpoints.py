@@ -19,7 +19,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Protocol, Self, Tuple, Type, TypeVar, Union, cast
+from typing import Any, Callable, Generic, Optional, Protocol, Self, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
@@ -78,15 +78,14 @@ from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
     AutoProcessor,
     AutoTokenizer,
+    BaseImageProcessor,
+    FeatureExtractionMixin,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
+    ProcessorMixin,
 )
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
-
-if TYPE_CHECKING:
-    # transformers is an optional dep; keep guard to avoid import at type-check time only
-    from transformers import BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 MAX_CONCURRENT_HF_SHARDS = 16
