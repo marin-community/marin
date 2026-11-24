@@ -4,10 +4,10 @@
 r"""Grade mathematical answers, either symbolically or as a number with tolerance.
 
 The default anchored profile takes the last ``\boxed{}`` expression, or the last non-empty line when the output has
-none. Both sides are parsed as anchored LaTeX (``$...$``) so math-verify reads a whole expression
-instead of the first bare number it finds, falling back to parsing the raw text with math-verify's
-own anchors (``the answer is ...``) when the anchored parse yields nothing. Other profiles retain
-raw source extraction or require a boxed expression; their parser options remain task-controlled.
+none. References parse as a whole LaTeX expression. Candidates first use
+anchored LaTeX (``$...$``), then math-verify's own anchors (``the answer is ...``) if that yields
+nothing. Other profiles retain raw source extraction or require a boxed expression; their parser
+options remain task-controlled.
 
 ``math_type`` selects the comparison. Set and interval answers allow math-verify's set/relation
 comparison, so an expected ``(2, \infty)`` accepts a candidate ``x > 2``. A list is an ordered
@@ -61,6 +61,11 @@ def _timeout() -> int:
 
 
 _DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|times))\s*$")
+TEXT_CONNECTOR_CONTENT = r"\s*(?:and|or)\s*"
+REFERENCE_TEXT_GROUP = re.compile(r"\\(?:text|mbox|mathrm)\{(?!" + TEXT_CONNECTOR_CONTENT + r"\})")
+LEADING_LIST_CONNECTOR = re.compile(r"^\\text\{" + TEXT_CONNECTOR_CONTENT + r"\}\s*")
+# The current normalizer strips one unbraced digit or a braced whole-number power after a unit.
+TERMINAL_UNIT_POWER = re.compile(r"\^(?:[0-9]|\{[0-9]+\})")
 
 
 def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
@@ -83,13 +88,87 @@ def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = N
     return parse(text, extraction_config=unitless, **kwargs)
 
 
-def _parse(text: str) -> list:
-    """math-verify's parse of ``text`` as a LaTeX expression, else of the text as written."""
+def _parse(text: str, *, strip_units: bool = True) -> list:
+    """Parse a candidate as anchored LaTeX, else as written."""
+    from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
 
     timeout = _timeout()
+    latex = LatexExtractionConfig()
+    if not strip_units:
+        latex = replace(latex, normalization_config=replace(latex.normalization_config, units=False))
+    extraction_config = [latex, ExprExtractionConfig()]
     return _math_verify_parse(
-        f"${strip_math_delimiters(text)}$", parsing_timeout=timeout, raise_on_error=True
-    ) or _math_verify_parse(text, parsing_timeout=timeout, raise_on_error=True)
+        f"${strip_math_delimiters(text)}$",
+        extraction_config=extraction_config,
+        parsing_timeout=timeout,
+        raise_on_error=True,
+    ) or _math_verify_parse(text, extraction_config=extraction_config, parsing_timeout=timeout, raise_on_error=True)
+
+
+def _parse_reference(text: str) -> tuple[list, bool]:
+    """Parse a whole reference and return whether candidates should strip units."""
+    from latex2sympy2_extended import latex2sympy, normalize_latex  # noqa: PLC0415
+    from math_verify.grader import should_treat_as_complex  # noqa: PLC0415
+    from math_verify.parser import LatexExtractionConfig  # noqa: PLC0415
+    from math_verify.utils import timeout  # noqa: PLC0415
+
+    value = strip_math_delimiters(text)
+    text_groups = list(REFERENCE_TEXT_GROUP.finditer(value))
+    strip_units = bool(text_groups)
+    symbolic_text_group = False
+    if re.search(r"(?<!\\)\$", value) or any(delimiter in value for delimiter in (r"\(", r"\)", r"\[", r"\]")):
+        return [], strip_units
+    for text_group in text_groups:
+        # Unit normalization removes a terminal text-group suffix. It can
+        # also swallow any intervening expression up to the final closing brace.
+        _, first_close = _scan_brackets(value[text_group.end() - 1 :])
+        if first_close is None:
+            return [], strip_units
+        group_contents = value[text_group.end() : text_group.end() + first_close - 1]
+        suffix = value[text_group.end() + first_close :].strip()
+        if suffix and not TERMINAL_UNIT_POWER.fullmatch(suffix):
+            prefix = value[: text_group.start()].rstrip()
+            upright_symbol = text_group.group() == r"\mathrm{" and len(group_contents) == 1 and group_contents.isalpha()
+            no_gap_before_group = text_group.start() > 0 and not value[text_group.start() - 1].isspace()
+            if not re.fullmatch(r"[^\s~]+", group_contents) or (
+                prefix and prefix[-1] not in "([{=+-*/^" and not upright_symbol and not no_gap_before_group
+            ):
+                return [], strip_units
+            # A text symbol starting a term or adjacent to one is part of the expression.
+            symbolic_text_group = True
+            strip_units = False
+        if text_group.start() == 0 and len(group_contents.split()) > 4:
+            return [], strip_units
+    latex = LatexExtractionConfig(boxed_match_priority=-1)
+
+    # math-verify can match an inner math fragment or retry only the last equation.
+    @timeout(_timeout())
+    def parse_whole() -> tuple[object, bool]:
+        normalized = normalize_latex(value, config=latex.normalization_config)
+        candidate_strip_units = not symbolic_text_group and (strip_units or normalized == value)
+        if strip_units and _DANGLING_OPERATOR.search(normalized):
+            # A terminal text symbol can be the operand that unit normalization removed.
+            candidate_strip_units = False
+        if not candidate_strip_units:
+            # Other normalization changes, such as \dfrac -> \frac, do not imply a stripped unit.
+            unitless = normalize_latex(value, config=replace(latex.normalization_config, units=False))
+            candidate_strip_units = not symbolic_text_group and normalized == unitless
+            if not candidate_strip_units:
+                normalized = unitless
+        parsed = latex2sympy(
+            normalized,
+            is_real=not should_treat_as_complex(normalized),
+            convert_degrees=False,
+            normalization_config=None,
+        )
+        return parsed, candidate_strip_units
+
+    try:
+        parsed, strip_units = parse_whole()
+    except Exception as error:
+        # latex2sympy reports syntax errors as bare Exception.
+        raise InvalidTask(f"math-verify cannot parse expected {text!r}") from error
+    return ([parsed] if parsed is not None else []), strip_units
 
 
 def _as_list(value: Any) -> list:
@@ -287,13 +366,7 @@ def _candidate_parse(parse: Callable[[], list]) -> list:
         return []
 
 
-def _parsed_members(text: str) -> list[list]:
-    return [_parse(member) for member in _split_members(text)]
-
-
 def _members_match(expected: list[list], candidate: list[list]) -> bool:
-    if len(expected) != len(candidate):
-        return False
     return all(
         bool(parsed_candidate) and _verify(parsed_expected, parsed_candidate)
         for parsed_expected, parsed_candidate in zip(expected, candidate, strict=True)
@@ -477,13 +550,26 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
                 match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
     is_list = spec.math_type is MathType.LIST
+    reference_members = _split_members(spec.expected) if is_list else [spec.expected]
+    if is_list:
+        # A connector after a list comma normalizes to another leading comma.
+        reference_members = [LEADING_LIST_CONNECTOR.sub("", member) for member in reference_members]
     with _deadline_phase(MATH_DEADLINE_REFERENCE_PARSE):
-        expected = _parsed_members(spec.expected) if is_list else [_parse(spec.expected)]
+        references = [_parse_reference(member) for member in reference_members]
+    expected = [parsed for parsed, _ in references]
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
 
+    candidate_members = _split_members(candidate) if is_list else [candidate]
+    if len(candidate_members) != len(expected):
+        return scored(0.0, extracted=candidate, expected=spec.expected)
     with _deadline_phase(MATH_DEADLINE_CANDIDATE_PARSE):
-        parsed = _candidate_parse(lambda: _parsed_members(candidate) if is_list else [_parse(candidate)])
+        parsed = _candidate_parse(
+            lambda: [
+                _parse(member, strip_units=strip_units)
+                for member, (_, strip_units) in zip(candidate_members, references, strict=True)
+            ]
+        )
     if not any(parsed):
         return scored(0.0, reason="unparsable", extracted=candidate, expected=spec.expected)
 
