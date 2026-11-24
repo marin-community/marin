@@ -88,12 +88,15 @@ def transform_table(source_rollouts: Path, output: Path, library: GraderLibrary)
     return counts
 
 
-def build_environment(old_policy: dict, digest: str, location: str, rows: list[dict], path: Path) -> None:
+def build_environment(
+    old_policy: dict, digest: str, location: str, rows: list[dict], path: Path, runtime_revision: str
+) -> None:
     """Write the environment manifest with per-row content hashes under the new staged location."""
     source_environment = json.loads((StoragePath(old_policy["prepared_inputs_uri"]) / "environment.json").read_bytes())
     source_environment["data_uri"] = location
     source_environment["source_prepared_rollouts_sha256"] = old_policy["prepared_rollouts_sha256"]
     source_environment["source_task_environment_sha256"] = old_policy["task_environment_sha256"]
+    source_environment["runtime_revision"] = runtime_revision
     source_environment["tasks"] = [
         {
             "task_id": row["task_id"],
@@ -155,6 +158,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--emit-policy", action="store_true", help="Emit policy.json; requires --gate-receipt")
     parser.add_argument("--gate-receipt", type=Path, help="Oracle/NoP gate receipt for the built table")
+    parser.add_argument(
+        "--runtime-revision",
+        required=True,
+        help="The eval runtime git SHA the new version's runs execute from (pinned in environment.json)",
+    )
     arguments = parser.parse_args()
 
     old_policy = verify_source(arguments.source_rollouts, arguments.source_policy)
@@ -167,7 +175,7 @@ def main() -> None:
     rows = pq.read_table(prepared, columns=["task_id", "task_spec", "task_rollout_spec", "repetition_index"]).to_pylist()
 
     environment_path = arguments.output / "environment.json"
-    build_environment(old_policy, digest, location, rows, environment_path)
+    build_environment(old_policy, digest, location, rows, environment_path, arguments.runtime_revision)
 
     print(f"prepared: {digest} ({len(rows)} rows)")
     print(f"environment: {sha256(environment_path)}")
