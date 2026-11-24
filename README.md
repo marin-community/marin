@@ -104,7 +104,7 @@ tinystories_tokenized = tokenized(
 # 2. Train the model — depends on the tokenized dataset above.
 nano_tinystories_model = train_lm(
     name="checkpoints/marin-nano-tinystories",
-    version="v1",
+    version="dev",
     model=llama_nano,
     optimizer=AdamConfig(learning_rate=6e-4, weight_decay=0.1),
     # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
