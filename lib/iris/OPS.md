@@ -118,10 +118,13 @@ iris job logs /user/job --max-lines 400000 --no-tail --substring 'Saving checkpo
 
 Tag each root job you submit with what it is for: `--project <effort>`,
 `--category <kind>` and `--description "<what it does>"` (SDK:
-`IrisClient.submit(tags=job_pb2.JobTags(...))`). Suggested categories:
-`data-processing`, `data-generation`, `pre-training`, `post-training`,
-`evaluation`, `external-collaboration`, `infrastructure`. On a child job, each
+`IrisClient.submit(tags=job_pb2.JobTags(...))`). Suggested projects and
+categories are in "Iris Job Tags" in the root `AGENTS.md`. On a child job, each
 tag it leaves unset comes from the parent. The tags go to Finelog `iris.controller_db__jobs.tags`.
+A controller older than job tags accepts a tagged submission and drops the
+tags, so the job runs untagged; the job and its command are otherwise unchanged.
+Iris options go before the command: from its first word on, every argument,
+`--project` included, belongs to the command, with or without `--`.
 
 Kubernetes rejects `EXISTING_JOB_POLICY_RECREATE` for an active job. Cancel it
 and verify its Pods are gone before submitting the replacement; a terminal job

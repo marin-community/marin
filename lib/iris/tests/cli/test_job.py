@@ -74,6 +74,20 @@ def test_job_run_sends_tags_only_when_given(recorded_job_submissions):
     assert [s["tags"] for s in recorded_job_submissions] == [_job_pb2.JobTags(category="evaluation"), None]
 
 
+def test_job_run_passes_flags_after_the_command_to_the_command(recorded_job_submissions):
+    # The command's own --project and --description must reach it untouched,
+    # not become job tags, even without '--'.
+    result = CliRunner().invoke(
+        run,
+        ["--no-wait", "python", "train.py", "--project", "p", "--description", "d", "--cpu", "4"],
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+    assert result.exit_code == 0, result.output
+    [submission] = recorded_job_submissions
+    assert submission["entrypoint"].command[-7:] == ["train.py", "--project", "p", "--description", "d", "--cpu", "4"]
+    assert submission["tags"] is None
+
+
 def test_validate_region_zone_valid_region(recorded_job_submissions):
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
     result = _run_cli(["--region", "us-central2"], config=config)
