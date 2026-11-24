@@ -673,9 +673,8 @@ def _validate_launch_profile(
     ):
         raise ConnectError(
             Code.INVALID_ARGUMENT,
-            "gVisor container profiles are CPU-only: the runsc runtime cannot pass a GPU or TPU "
-            "through to the sandboxed guest. Use the default or privileged profile for "
-            "accelerator tasks.",
+            "SANDBOX and legacy GVISOR container profiles are CPU-only: Iris does not pass a GPU "
+            "or TPU into the sandbox runtime. Use the default or privileged profile for accelerator tasks.",
         )
     if request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX and (request.bundle_blob or request.bundle_id):
         raise ConnectError(

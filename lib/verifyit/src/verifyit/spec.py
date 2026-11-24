@@ -13,9 +13,7 @@ or missing fields; ``render_spec`` writes it back. Paths in a spec (``schema``, 
 import dataclasses
 import json
 from dataclasses import dataclass, field, fields
-from typing import Any, get_origin
-
-import tomli_w
+from typing import Any, Literal, get_origin
 
 from verifyit.closure_scoring import ClosureFormat
 from verifyit.compat import StrEnum, tomllib
@@ -95,10 +93,13 @@ class McqExtraction(StrEnum):
 
     ``ANSWER_LINE`` reads the last ``Answer: X`` line or a bare letter. ``SUPERGPQA_REFERENCE``
     reproduces the SuperGPQA runner's zero-shot extraction, including its option-text fallback.
+    ``MEDMCQA_COT_REFERENCE`` reproduces lm-eval-harness's ``medmcqa_cot`` filter: the first
+    ``Final Answer: X``, where X must be a standalone letter.
     """
 
     ANSWER_LINE = "answer_line"
     SUPERGPQA_REFERENCE = "supergpqa_reference"
+    MEDMCQA_COT_REFERENCE = "medmcqa_cot_reference"
 
 
 @dataclass(frozen=True)
@@ -160,6 +161,7 @@ class MathSpec:
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
     profile: MathProfile = MathProfile.ANCHORED
     allow_additive_constant: bool = False
+    positive_symbols: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -315,8 +317,9 @@ class GotestSpec:
 RUBRIC_REFERENCE = "reference"
 RUBRIC_CHECKLIST = "checklist"
 RUBRIC_LABELS = "labels"
+RUBRIC_ANSWERS = "answers"
 RUBRIC_PAIRWISE = "pairwise"
-RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_PAIRWISE})
+RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_ANSWERS, RUBRIC_PAIRWISE})
 
 
 class JudgeCompletionPolicy(StrEnum):
@@ -325,20 +328,69 @@ class JudgeCompletionPolicy(StrEnum):
 
 
 @dataclass(frozen=True)
+class StripReasoningBlocks:
+    """Drop reasoning blocks, text before the last closing delimiter, outer whitespace and a final ``<|eot_id|>``.
+
+    An answer with an unclosed opening delimiter becomes empty.
+    """
+
+    kind: Literal["strip_reasoning_blocks"] = "strip_reasoning_blocks"
+
+
+@dataclass(frozen=True)
+class StripOuterWhitespace:
+    kind: Literal["strip_outer_whitespace"] = "strip_outer_whitespace"
+
+
+@dataclass(frozen=True)
+class ExtractGroup:
+    """Replace the answer with the first group of the first ``re.search`` match; leave it unchanged without one."""
+
+    kind: Literal["extract_group"] = field(default="extract_group", kw_only=True)
+    pattern: str
+
+
+CandidateStep = StripReasoningBlocks | StripOuterWhitespace | ExtractGroup
+CANDIDATE_STEP_TYPES: dict[str, type[CandidateStep]] = {
+    "strip_reasoning_blocks": StripReasoningBlocks,
+    "strip_outer_whitespace": StripOuterWhitespace,
+    "extract_group": ExtractGroup,
+}
+
+
+@dataclass(frozen=True)
+class JudgeSamplingParams:
+    """Sampling options for judge requests. A ``None`` member is omitted."""
+
+    temperature: float | None = None
+
+
+@dataclass(frozen=True)
 class JudgeSpec:
     """An LLM judge over the answer file.
 
-    Rubric ``reference`` asks whether the answer matches any of ``references``, after an exact
-    gate that answers verbatim matches without a model call. Rubric ``checklist`` asks one yes/no
-    question per entry of ``criteria`` and scores the fraction answered yes. ``context`` names a
-    file under the tests directory (a conversation transcript, say) shown to the judge alongside the
-    answer. ``constraints`` are IFEval checks that must all pass before the judge is consulted.
+    ``candidate_steps`` rewrite the answer, in order, before the constraints, the exact gates and
+    the prompt, for every rubric. ``constraints`` are IFEval checks that must all pass before the
+    judge is consulted.
+
+    Rubric ``reference`` asks whether the answer matches any of ``references``, after an exact gate
+    that scores verbatim matches 1 without a model call. Rubric ``checklist`` asks one yes/no
+    question per entry of ``criteria`` and scores the fraction answered yes; ``context`` names a
+    file under the tests directory (a conversation transcript, say) shown to the judge alongside
+    the answer. Rubric ``labels`` reads a verdict label from the reply, as ``label_scan`` selects,
+    and scores it with ``label_scores``. Rubric ``answers`` asks for one JSON verdict per entry of
+    ``references`` in a single call and scores 1 when every reference is matched. Its detail
+    records the matched fraction as ``partial_credit``.
 
     Rubric ``pairwise`` compares the answer with the single baseline in ``references`` twice, once
     in each position, as Arena-Hard does. ``prompt_template`` places the two answers with
     ``{answer_a}`` and ``{answer_b}``. The last match of the first ``verdict_patterns`` entry that
     matches the reply names a verdict, ``label_scores`` gives assistant A's score for it, and
     ``label_weights`` repeats it as several games (Arena-Hard counts a decisive verdict three times).
+
+    ``system_role`` is the role of the ``system_prompt`` message, ``system`` or ``developer``.
+    ``response_format`` is sent with each Chat Completions label request. An empty ``sampling`` table
+    uses the endpoint defaults. The ``answers`` rubric always uses the endpoint sampling defaults.
     """
 
     references: tuple[str, ...] = ()
@@ -350,7 +402,7 @@ class JudgeSpec:
     model: str = ""
     exact_gate: bool = True
     request_timeout: float = 120.0
-    transport_attempts: int = field(default=1, kw_only=True)
+    transport_attempts: int = field(default=3, kw_only=True)
     transport_budget: float = field(default=180.0, kw_only=True)
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
@@ -362,13 +414,21 @@ class JudgeSpec:
     exact_gate_answers: tuple[str, ...] = ()
     exact_gate_label: str = ""
     strip_reasoning_blocks: bool = False
-    strip_candidate_reasoning_blocks: bool = False
+    candidate_steps: tuple[CandidateStep, ...] = field(default=(), kw_only=True)
     max_completion_tokens: int = 8192
     incomplete_retry_tokens: int = 0
     reasoning_effort: str = ""
     label_scan: str = "literal"
+    label_field: str = ""
     label_case: str = "sensitive"
     api: str = "chat_completions"
+    context_char_limit: int = field(default=60_000, kw_only=True)
+    max_turns: int = field(default=1, kw_only=True)
+    parse_attempts: int = field(default=2, kw_only=True)
+    chat_template_kwargs: dict[str, str] = field(default_factory=dict, kw_only=True)
+    system_role: Literal["system", "developer"] = field(default="system", kw_only=True)
+    response_format: dict[str, Any] = field(default_factory=dict, kw_only=True)
+    sampling: JudgeSamplingParams = field(default_factory=lambda: JudgeSamplingParams(temperature=0.0), kw_only=True)
     verdict_patterns: tuple[str, ...] = field(default=(), kw_only=True)
     label_weights: dict[str, float] = field(default_factory=dict, kw_only=True)
 
@@ -509,6 +569,17 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
         return tuple(value)
     if annotation == tuple[Constraint, ...]:
         return tuple(Constraint(name=c["name"], params=dict(c.get("params", {}))) for c in value)
+    if annotation == tuple[CandidateStep, ...]:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(f"field {name!r} expects a list of steps")
+        return tuple(_step_from_table(name, step) for step in value)
+    if annotation is JudgeSamplingParams:
+        if not isinstance(value, dict):
+            raise ValueError(f"field {name!r} expects a table")
+        declared = {f.name: f for f in fields(JudgeSamplingParams)}
+        if unknown := sorted(set(value) - set(declared)):
+            raise ValueError(f"field {name!r} does not accept {unknown}")
+        return JudgeSamplingParams(**{key: _coerce(key, declared[key].type, member) for key, member in value.items()})
     if annotation == dict[str, float]:
         if not isinstance(value, dict):
             raise ValueError(f"field {name!r} expects a table of numbers")
@@ -544,6 +615,37 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
     return value
 
 
+def _step_from_table(name: str, table: Any) -> CandidateStep:
+    if not isinstance(table, dict) or table.get("kind") not in CANDIDATE_STEP_TYPES:
+        raise ValueError(f"field {name!r} expects steps of kind {sorted(CANDIDATE_STEP_TYPES)}")
+    step_type = CANDIDATE_STEP_TYPES[table["kind"]]
+    declared = {f.name for f in fields(step_type)}
+    if set(table) != declared or any(not isinstance(value, str) for value in table.values()):
+        raise ValueError(f"step {table['kind']!r} takes exactly the string fields {sorted(declared)}")
+    return step_type(**table)
+
+
+def upgrade_judge_table(table: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade candidate preprocessing and sampling in previously serialized judges."""
+    if "strip_candidate_reasoning_blocks" not in table and "temperature" not in table:
+        return table
+    table = dict(table)
+    if "strip_candidate_reasoning_blocks" in table:
+        if "candidate_steps" in table:
+            raise ValueError("judge spec sets both strip_candidate_reasoning_blocks and candidate_steps")
+        strip = table.pop("strip_candidate_reasoning_blocks")
+        if type(strip) is not bool:
+            raise ValueError("field 'strip_candidate_reasoning_blocks' expects bool")
+        if strip:
+            table["candidate_steps"] = [{"kind": "strip_reasoning_blocks"}]
+    if "temperature" in table:
+        if "sampling" in table:
+            raise ValueError("judge spec sets both temperature and sampling")
+        temperature = table.pop("temperature")
+        table["sampling"] = {} if temperature is None or temperature == "API default" else {"temperature": temperature}
+    return table
+
+
 def _coerced_float(name: str, value: Any) -> float:
     if type(value) not in (int, float):
         raise ValueError(f"field {name!r} expects a number")
@@ -558,6 +660,8 @@ def spec_from_table(table: dict[str, Any]) -> Spec:
     if "mode" not in table:
         raise ValueError("verifier spec has no mode")
     mode = Mode(table["mode"])
+    if mode is Mode.JUDGE:
+        table = upgrade_judge_table(table)
     spec_type = MODE_DESCRIPTORS[mode].spec_type
     declared = {f.name: f for f in fields(spec_type)}
     unknown = sorted(set(table) - set(declared) - {"mode"})
@@ -588,7 +692,10 @@ def parse_spec(text: str) -> Spec:
 
 
 def spec_to_table(spec: Spec) -> dict[str, Any]:
-    """The flat TOML table for a spec: ``mode`` first, then every field, optional ``None`` fields omitted."""
+    """The TOML table for a spec: ``mode`` first, then every field except ``None`` at a ``None`` default.
+
+    Judge ``sampling`` is a nested table without its ``None`` members.
+    """
     table: dict[str, Any] = {"mode": mode_of(spec).value}
     for f in fields(spec):
         value = getattr(spec, f.name)
@@ -596,6 +703,8 @@ def spec_to_table(spec: Spec) -> dict[str, Any]:
             continue
         if isinstance(value, tuple):
             value = [dataclasses.asdict(v) if dataclasses.is_dataclass(v) else v for v in value]
+        elif isinstance(value, JudgeSamplingParams):
+            value = {key: member for key, member in dataclasses.asdict(value).items() if member is not None}
         elif isinstance(value, StrEnum):
             value = value.value
         table[f.name] = value
@@ -610,4 +719,8 @@ def render_spec(spec: Spec) -> str:
         ]
     if isinstance(spec, StructuredExactSpec):
         table["expected"] = json.dumps(spec.expected, allow_nan=False)
+    # Rendering is host-side staging; the grader machine never imports this, so the
+    # writer dependency stays off the machine's interpreter.
+    import tomli_w  # noqa: PLC0415
+
     return tomli_w.dumps(table)

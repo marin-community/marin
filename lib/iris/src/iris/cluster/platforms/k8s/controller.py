@@ -936,10 +936,9 @@ class K8sControllerProvider:
         Checks the Namespace, iris-controller ServiceAccount, namespace-qualified
         ClusterRole/ClusterRoleBinding, one NodePool per non-skipped scale group,
         the configured sandbox RuntimeClass, the Kueue ClusterQueue and its
-        referenced ResourceFlavors, and (best-effort) the IngressClass. The 02a
-        RuntimeClass and other Iris-owned resources are provisioned by
-        `infra/pulumi`; the default gvisor class comes from CoreWeave. This
-        method creates nothing. Raises
+        referenced ResourceFlavors, and (best-effort) the IngressClass.
+        Iris-owned resources are provisioned by `infra/pulumi`; the sandbox
+        RuntimeClass is CoreWeave's. This method creates nothing. Raises
         PrerequisitesNotProvisionedError enumerating every missing object if any are absent.
         """
         missing: list[str] = []
@@ -966,7 +965,7 @@ class K8sControllerProvider:
 
         runtime_class = config.kubernetes_provider.sandbox_runtime_class
         if self._kubectl.get_json(K8sResource.RUNTIME_CLASSES, runtime_class) is None:
-            missing.append(f"RuntimeClass/{runtime_class}")
+            missing.append(f"RuntimeClass/{runtime_class} (provided by CoreWeave, not by pulumi up)")
 
         label_prefix = config.platform.label_prefix
         for name, sg in config.scale_groups.items():

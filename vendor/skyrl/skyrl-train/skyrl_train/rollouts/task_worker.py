@@ -83,7 +83,7 @@ from skyrl_train.rollouts.training_record import (
     reject_malformed_reasoning,
     training_rollout,
 )
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
+from skyrl_train.task_error_handling import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -683,7 +683,7 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
-            from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
+            from shellbox.backends.daytona.connection import DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 
@@ -694,8 +694,6 @@ class TaskRolloutWorkerSpec:
             daytona_options = harbor.environment.kwargs
             daytona_connection = DaytonaConnection(
                 api_key=os.environ.get(daytona_options.get("api_key_env") or "DAYTONA_API_KEY"),
-                api_url=os.environ.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
-                target=os.environ.get("DAYTONA_TARGET"),
             )
             installed_agents = InstalledAgentRuntime(
                 settings,

@@ -14,10 +14,10 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it | Ran on GPU |
 |---|---|---|---|---| --- |
-| `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers, 14–17 min and about 2 H100-hours | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. | CPU plan only |
+| `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers. 11m42s and 1.56 H100-hours in the four-proposal comparison. | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
 | `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. | CPU plan only |
 | `eval-short` | Published model scores | 8 H100s. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. | Ran as written |
-| `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. Wall time and cost are unmeasured. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | CPU plan only |
+| `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. 20m12s and 13.47 H100-hours in the four-proposal comparison. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
 | `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | CPU plan only |
 | `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Shares the `learning-medium` gate and controls. | Train on a `--tasks` selection after it passes the short screen. | CPU plan only |
 | `speed-long` | Sustained asynchronous update time and policy agreement | 40 H100s, 20 updates, 45–75 min and 30–50 H100-hours | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. | CPU plan only |
@@ -57,6 +57,7 @@ Both Mochi layouts restrict NCCL to the `ibp` InfiniBand rails. The long presets
 | --- | --- | --- | --- | --- |
 | `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | `h100x88`, 11 nodes × 8 H100s | Best eligible policy. | Ran with the v4 task selection, reduced batches and a bounded attempt |
 | `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | `h100x256`, 32 nodes × 8 H100s | Best eligible policy. | CPU plan only |
+| `train-medium-tools` | Ten updates on a `--tasks` selection of shell-tool tasks. | `p40`, 5 nodes × 8 H100s | None by default. | Ran three updates on a 164-task forge selection |
 
 When a trained step has the best eligible score, a successful waiting run keeps that native
 checkpoint and returns its HF export. When step zero wins, the result points to the starting HF
@@ -66,6 +67,9 @@ Detached launches use the trainer’s rolling checkpoint window.
 The smaller Snowball layouts pack one trajectory per replica with context parallelism of one and
 no separate packing token budget, and the campaign layout splits a 102,400-token request into
 20,480 packed token positions per context rank, with an update at that length still unmeasured.
+
+`train-medium-tools` runs Linux tasks and image graders on Daytona sandboxes in the RL organization, so set
+`DAYTONA_RL_API_KEY`.
 
 ### Task selection and native resume
 
@@ -147,6 +151,9 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-short --ve
 ```
 
 Plans and host-side submissions run the native driver checks on CPU before Iris submission.
+The rollout worker count times its CPUs per worker must fit the driver task's Iris CPU request.
+Static preference training with `trainer.evaluation_runner=training` skips this check because it starts
+no inference rollout pool.
 A plan without `--require` uses the declared control pin. With `--require`, planning also validates the pin
 and checks that control r0 recorded the requested metric. Gated execution and comparison require the pin's revision to match
 the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
@@ -241,6 +248,17 @@ Placement, data bindings, retention, evaluation and measurement settings belong 
 Learning and train-long can change task sampling, optimizer, schedule and batch shape.
 Data presets require `--tasks` and refuse `--set`.
 
+Snowball generation and disaggregated training presets using the pinned 09.21 Datakit initializer
+load the frozen Dr. Doom DSpark draft.
+DSpark uses probabilistic drafting and standard verification. Use
+`--set generator.speculative_decoding=null` for plain decoding on presets that accept settings.
+Snowball uses four proposals. The `speed-short` burst preset uses a 0.80 vLLM GPU memory
+fraction. The other presets use 0.75.
+To compare another draft against the same policy, set `generator.speculative_decoding.model` to a
+JSON object with `source_uri` and `source_identity`. For `hf://` sources, use the full Hub commit SHA.
+With an alternate initializer, set the complete `generator.speculative_decoding` block to use its
+compatible draft. Online draft training remains EAGLE3-only.
+
 Set `TASK_SELECTION` to a published `NAME@VERSION`. Custom selections must use the default development panel (`recipe.heldout`)
 and record the complete frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.
 Create an immutable candidate through [task curation](../references/task-curation.md#final-task-selection).
@@ -310,15 +328,12 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
    preset-specific default. `_DEFAULT_PATCH` supplies shared settings, including context budget.
    Trainer precision, engine precision and batch invariance use the native recipe keys through `--set`.
 2. Bump that preset's `revision`. Data-medium shares learning-medium's settings and revision.
-3. From the repository root, check the composed configuration against the golden fixture:
+3. From the repository root, run the native launcher checks for Snowball presets.
 
    ```bash
-   uv run pytest -s -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_presets_match_revisioned_native_configs
+   uv run pytest -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_snowball_presets_plan_native_launches
    ```
 
-   Inspect the composed settings and add the new revision's hash under that preset in the
-   test's `revisions` table.
-   The compared-configuration hash includes actual execution memory and priority.
 4. Controls are collected by CI after the default change merges, once per changed default.
    That CI workflow is planned separately; control collection is not a merge gate.
    The manual `--control` command remains available for an explicitly authorized calibration.
@@ -382,6 +397,11 @@ Keep the native run ID and attempt ID together. The run identifies the experimen
 identifies one native execution, including a resumed execution. In `resolved-launch.yaml`, these
 are `config.run.id` and `config.run.attempt_id`. Pair them with the output path and source revision
 when recording a result.
+
+For quick-loop training time, use `elapsed_excluding_eval_seconds` from the
+`Training run completed` line in the SkyRL training driver logs. The timer runs from
+tracker setup through shutdown and subtracts all inline evaluation time, including
+step-zero and final evaluations when enabled.
 
 | Sink | Where to find the run |
 |---|---|
@@ -479,9 +499,6 @@ its own model, tasks, layout and recipe. A preset with held-out evaluations decl
 `held_out_tasks` and the evaluation profiles. A `mochi_rl.py` entry fits the same interface with the
 model label `mochi`, its own namespace, and Mochi's initializer, resources and evaluation choices.
 The preset table's namespace owns run and control paths.
-The model entry's preset golden test owns the launch documents composed through `rl_compose.py`.
-Use `assert_revisioned_native_configs` in `skyrl_test_support.py` with the table's pinned revisions
-and native hashes. The launch-document census covers the other authored builders.
 
 Python callers can pass `init: SkyRLModelSource` to `rl.main(table, argv=..., init=...)` or
 `build_experiment(preset, table=..., init=...)`. An `ArtifactHfModel` accepts any `ArtifactStep`;

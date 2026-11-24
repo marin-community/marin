@@ -21,7 +21,8 @@ same rows when entries depend only on their task's seed and index. Entries that 
 reads or on process state can differ between runs; the grader cannot reproduce them either, which is
 what the fresh-dataset check records.
 
-The grader imports this module from ``/tests`` for the seeds and the JSON encoding.
+The grader imports this module from ``/tests`` for the seeds, the JSON encoding and the comparison of a
+regenerated entry with the recorded one.
 """
 
 import argparse
@@ -43,6 +44,7 @@ import numpy as np
 with contextlib.redirect_stdout(sys.stderr):
     import reasoning_gym
     from reasoning_gym.factory import DATASETS
+    from verifyit.modes.reasoning_gym_scorers import score_reasoning_gym_reply
 
 ROWS_PER_TASK = 1000
 GENERATION_SEED = 42
@@ -69,15 +71,32 @@ def encoded(value: object) -> Any:
     return json.loads(json.dumps(value, default=json_value))
 
 
+def without_generation_day(entry: dict[str, Any]) -> dict[str, Any]:
+    """An encoded entry without the metadata that records the day its generator ran.
+
+    ``time_intervals`` parses the two times of a time-only question with ``dateutil``, which fills in
+    the current date, and stores the results as ``start_time`` and ``end_time``. The question holds
+    both times, so the remaining fields still identify the entry.
+    """
+    metadata = entry["metadata"]
+    if metadata["source_dataset"] != "time_intervals" or not metadata["task_type"].startswith("time"):
+        return entry
+    kept = {key: value for key, value in metadata.items() if key not in ("start_time", "end_time")}
+    return {**entry, "metadata": kept}
+
+
 def task_seed(name: str) -> int:
     """The seed of a task's dataset; registry positions fix seeds even for excluded tasks."""
     return GENERATION_SEED + sorted(DATASETS).index(name)
 
 
-def negative_control(scorer: Scorer, entry: dict[str, Any]) -> dict[str, Any]:
+def negative_control(name: str, scorer: Scorer, entry: dict[str, Any]) -> dict[str, Any]:
     """Record the scorer's reward for a fixed wrong answer, or the error it raised."""
     try:
-        return {"candidate": NEGATIVE_CANDIDATE, "reward": float(scorer(NEGATIVE_CANDIDATE, entry))}
+        return {
+            "candidate": NEGATIVE_CANDIDATE,
+            "reward": float(score_reasoning_gym_reply(name, NEGATIVE_CANDIDATE, entry, scorer)),
+        }
     except Exception as error:
         return {
             "candidate": NEGATIVE_CANDIDATE,
@@ -142,12 +161,15 @@ def generated_rows(
         scorer = scorers[position]
         answer = positive_candidate(name, entry)
         # Scorers may compare tuple-valued metadata, so score the entry before its JSON round trip.
-        positive = {"candidate": answer, "reward": float(scorer(answer, entry)) if answer is not None else None}
+        positive = {
+            "candidate": answer,
+            "reward": float(score_reasoning_gym_reply(name, answer, entry, scorer)) if answer is not None else None,
+        }
         yield (
             index * len(names) + position,
             {
                 "entry": encoded(entry),
-                "reproducible": encoded(fresh) == encoded(entry),
+                "reproducible": without_generation_day(encoded(fresh)) == without_generation_day(encoded(entry)),
                 "generation": {
                     "task": name,
                     "seed": task_seed(name),
@@ -158,8 +180,8 @@ def generated_rows(
                 "recorded_pinned_generator_controls": {
                     "generator_version": generator_version,
                     "positive": positive,
-                    "negative": negative_control(scorer, entry),
-                    "execution": "Pinned reasoning-gym scorer",
+                    "negative": negative_control(name, scorer, entry),
+                    "execution": "Pinned reasoning-gym scorer with Marin repairs",
                 },
             },
         )

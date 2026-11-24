@@ -36,8 +36,8 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
 runtime on the host. The Daytona SDK and current Iris dependencies require
 `--prerelease allow`. A checkout can supply Iris as a workspace dependency.
-Iris uses `CONTAINER_PROFILE_SANDBOX`: gVisor, no cluster environment,
-credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
+Iris uses `CONTAINER_PROFILE_SANDBOX`: the cluster's sandbox runtime, no cluster
+environment, credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
@@ -279,7 +279,8 @@ Daytona records process-group leader PIDs as root in a root-only directory befor
 Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
 Model commands that run as root can stop other root-owned processes.
 
-For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
+For Daytona, set `DAYTONA_API_KEY`. The API URL and target region are constants
+(`https://app.daytona.io/api` and `us`).
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
 Each machine owns and closes its client. In the default build mode, the factory
 creates sandboxes from shared snapshots. Snapshot names derive from the registry

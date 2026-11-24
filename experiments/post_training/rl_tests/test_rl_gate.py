@@ -35,6 +35,7 @@ from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 
@@ -48,6 +49,7 @@ from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
+    cache_native_compositions,
     controls,
     edit_receipt,
     evaluation_task_rows,
@@ -107,6 +109,58 @@ def test_compare_leave_one_out_writes_the_printed_report(recorded_runs):
         recorded_runs("speed-medium", candidate, speed=speed, metrics={KL: kl})
         result = compare("speed-medium", "--candidate", candidate)
         assert (result["verdict"], result["effect"]) == (verdict, effect), result
+
+
+def test_compare_validates_staged_model_and_tokenizer_bindings(recorded_runs):
+    preset = "speed-short"
+    control_roots = controls(recorded_runs, preset)
+    candidate = recorded_runs(preset, "users/test/staged-metadata", speed=102)
+    wrong_tokenizer = recorded_runs(preset, "users/test/wrong-staged-tokenizer", speed=102)
+    for root in (*control_roots, candidate, wrong_tokenizer):
+        with edit_receipt(root) as receipt:
+            launch = receipt["config"]
+            model = launch["inputs"]["model"]
+            staging_root = Path("/tmp/skyrl-worker")
+            model_path = str(staging_root / model_metadata_relative_path(model["uri"], model["identity"]))
+            tokenizer_revision = (
+                "different" if root == wrong_tokenizer else model["tokenizer_revision"] or DEFAULT_TOKENIZER_REVISION
+            )
+            tokenizer_path = str(staging_root / model_metadata_relative_path(model["tokenizer_uri"], tokenizer_revision))
+            for role in ("policy", "ref"):
+                launch["skyrl"]["trainer"][role]["model"].update(
+                    path=model_path, tokenizer_path=tokenizer_path, tokenizer_revision=None
+                )
+
+    assert compare(preset, "--candidate", "users/test/staged-metadata")["verdict"] == "pass"
+    invalid = compare(preset, "--candidate", "users/test/wrong-staged-tokenizer")
+    assert invalid["verdict"] == "invalid" and "skyrl.trainer.policy.model.tokenizer_path" in invalid["reason"]
+
+
+def test_compare_checks_hf_draft_mirror_against_the_requested_revision(recorded_runs):
+    preset = "speed-short"
+    control_roots = controls(recorded_runs, preset)
+    candidate = recorded_runs(preset, "users/test/mirrored-draft", speed=102)
+    wrong_mirror = recorded_runs(preset, "users/test/wrong-draft-mirror", speed=102)
+    for root in (*control_roots, candidate, wrong_mirror):
+        with edit_receipt(root) as receipt:
+            launch = receipt["config"]
+            draft = launch["skyrl"]["generator"]["speculative_decoding"]["model"]
+            commit = draft["source_identity"]
+            uri, identity = "s3://test-bucket/draft-mirror", "sha256:" + "f" * 64
+            launch["inputs"]["hugging_face_models"] = [
+                {
+                    "model_id": draft["source_uri"].removeprefix("hf://"),
+                    "revision": commit,
+                    "resolved_revision": "a" * 40 if root == wrong_mirror else commit,
+                    "uri": uri,
+                    "identity": identity,
+                }
+            ]
+            draft.update(source_uri=uri, source_identity=identity)
+
+    assert compare(preset, "--candidate", "users/test/mirrored-draft")["verdict"] == "pass"
+    invalid = compare(preset, "--candidate", "users/test/wrong-draft-mirror")
+    assert invalid["verdict"] == "invalid" and "skyrl.generator.speculative_decoding.model" in invalid["reason"]
 
 
 def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
@@ -677,6 +731,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     parent, key = path.rsplit(".", 1)
                     assert get_path(receipt, parent).pop(key) == original
     if case == "schema-timeout":
+        cache_native_compositions(monkeypatch)
         original_subprocess = subprocess.run
         for diagnostic in ("timeout", "empty", "whitespace", "oserror"):
             with monkeypatch.context() as unavailable:

@@ -43,6 +43,7 @@ NATIVE_PACKAGE_POLICY = PullRequestPolicy(
             "lib/dupekit/pyproject.toml",
             "lib/iris/pyproject.toml",
             "uv.lock",
+            "vendor/skyrl/uv.lock",
         }
     ),
 )

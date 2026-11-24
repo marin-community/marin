@@ -570,11 +570,14 @@ identity; lock-backed worker environments retain their existing identities.
 
 A task's grader is one of three kinds:
 
-- `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
-  in process; with `environment=required_grader_environment(context)` it grades
-  in a fresh machine of the grader's environment. A `judge` grades on the host,
-  through its judge service, also when it declares an environment.
-- `ScriptGrader` runs a command in a fresh machine of the grader's environment. Archived
+- `VerifyitGrader` names a stock verifyit mode. Without a placement it grades
+  in process; with
+  `placement=GraderMachine(environment=required_grader_environment(context))` it
+  grades in a fresh machine of the grader's environment. A `judge` grades on the
+  host, through its judge service, also when it declares a placement.
+- `ScriptGrader` runs a command in the machine its placement selects: a fresh
+  machine of the grader's environment (`GraderMachine`), or the agent's machine
+  after the agent finishes (`AgentMachine`). Archived
   TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
   to a file (`FileReward`).
 - `NoGrader` records a source evaluator this repository cannot run, with the
@@ -901,8 +904,9 @@ self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
 placed file at its declared path, runs graders with the declared `env`, and
 concurrent graders on one host build it once.
 Image grading requires `--image-backend gvisor` or `--image-backend daytona`.
-The gVisor launcher uses the enclosing Iris job's controller, or `--controller-url`
-outside a job, to create sandbox jobs. Daytona creates remote sandboxes through its API.
+The gvisor backend (Iris SANDBOX jobs) uses the enclosing Iris job's controller, or
+`--controller-url` outside a job, to create sandbox jobs. Daytona creates remote
+sandboxes through its API.
 Neither path requires a Docker daemon in the Zephyr worker. Without an image backend,
 controls can still use package locks through Local or explicit simulator requirements
 through ShellSim. Programmatic callers pass grading machines through `RecipeSettings.machines`.

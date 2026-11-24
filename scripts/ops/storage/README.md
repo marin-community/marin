@@ -87,7 +87,7 @@ COREWEAVE_API_TOKEN=... \
   uv run python -m scripts.ops.storage.coreweave_usage --dry-run
 ```
 
-`.github/workflows/ops-coreweave-storage.yaml` runs the collector hourly at
+`.github/workflows/ops-coreweave-storage.yaml` schedules the collector hourly at
 minute 17. The workflow writes to the `marin` Finelog server through the
 standard GCP SSH tunnel. It needs the repository secret
 `COREWEAVE_API_TOKEN` and fails without it, because a green run that collects
@@ -95,14 +95,53 @@ nothing hides a frozen dashboard. The collector does not run on an Iris
 CoreWeave controller or worker, so restarting those services does not restart
 collection.
 
+GitHub scheduled runs are best effort. Production runs have been 4–10 hours
+apart despite the hourly cron; see the
+[collection-gap incident](https://marina.oa.dev/echo/wiki/1036).
+
 The Grafana `Storage` dashboard shows bucket bytes and quota use for each zone.
 The `CoreWeaveStorageQuotaExceeded` rule pages after usage stays above the live
 zone quota for five minutes. The critical notification reaches Slack and opens
 the Loom ops agent on that alert thread. The rule reads the quota metric, so it
 also follows a later quota change.
 
+`CoreWeaveStorageHeadroomLow` warns when a zone and storage class use more
+than 80% of their current quota or are projected to do so within 24 hours.
+Grafana evaluates it every five minutes and delivers notifications to
+`#marin-alerts` between 15:00 and 16:00
+`America/Los_Angeles` each day, leaving at least an hour before a 17:00 finish.
+The notification repeats after 23 hours, so the next afternoon is eligible
+even when daylight saving time begins. Changed alert groups can notify again
+within the window. The `storage-afternoon` interval and `storage-daily` policy
+in `infra/grafana/provisioning/alerting/` own this schedule.
+
+`CoreWeaveStorageQuotaPredicted` warns at any time of day when recent growth
+projects usage above the current quota within 24 hours of the evaluation.
+It uses the faster positive linear regression over the last 24 or 72 hours,
+measured at the source `observed_at` timestamps. The 24-hour estimate needs at
+least three distinct observations spanning eight hours; the 72-hour estimate
+needs at least six spanning twenty-four hours. These windows tolerate the
+observed collection cadence. The projection includes the age of the latest
+observation, so its horizon remains 24 hours from the evaluation time.
+Repeated collections of the same source timestamp count once. Both warnings
+use this projection, with
+current usage as a floor when history is insufficient or has no positive
+trend. The exhaustion warning repeats every four hours while it fires.
+
+The critical page and both warnings share one query that groups bucket bytes
+by zone and storage class, deduplicates retried collection rows, and uses the
+newest snapshot for each group. The critical page reads measured quota use;
+the warnings read the projection. They require a collection and source
+observation from the last twelve hours. Their five-minute pending period
+suppresses brief changes between evaluations.
+Forecasts assume recent growth continues; collection gaps, unexpected new
+writes, and cleanup limit their accuracy. The daily headroom warning provides
+a working-hours reminder even when growth has stopped. Check the Storage
+dashboard's bucket curves to identify the active writers and arrange cleanup
+or redirect new writes before leaving for the day.
+
 The `CoreWeaveStorageTelemetryMissing` rule sends one Slack warning when the
-newest collector timestamp is more than 24 hours old. It reads `collected_at`,
+newest collector timestamp is more than twelve hours old. It reads `collected_at`,
 so the warning reports whether the workflow delivered telemetry without
 creating one alert for every bucket and quota series. Check the workflow
 history first:
@@ -120,9 +159,9 @@ Finelog when the workflow succeeds but the Storage dashboard appears frozen.
 For a quota warning, check the zone values in the Storage dashboard and in the
 [CoreWeave quota page].
 
-Both rules read the `storage.usage` namespace, which exists only after the
+These rules read the `storage.usage` namespace, which exists only after the
 collector writes its first rows. Until then Finelog reports the namespace as
-missing, and both rules alert on that non-retryable query error. Run the
+missing, and the rules alert on that non-retryable query error. Run the
 collector once when you add a rule that reads a new namespace. A retryable
 Finelog service failure returns no data and stays normal; `FinelogFleetUnhealthy`
 reports the outage instead.
