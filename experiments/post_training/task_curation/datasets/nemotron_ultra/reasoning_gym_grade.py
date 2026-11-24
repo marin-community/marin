@@ -8,6 +8,7 @@ final answer. The grader packages' ``reasoning_gym`` scores it against the row's
 metadata; the metadata's ``source_dataset`` names the task.
 """
 
+import contextlib
 import json
 import re
 import sys
@@ -19,6 +20,9 @@ from verifyit.modes.grade_reasoning_gym import score_reasoning_gym_answer
 sys.path.insert(0, "/tests")
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text, last_boxed_answer
+
+CONFIG = Path("/tests/config.json")
+ANSWER = Path("/app/answer.txt")
 
 
 def candidate(reply: str) -> str:
@@ -37,13 +41,20 @@ def candidate(reply: str) -> str:
 
 
 def main() -> None:
-    contract = json.loads(Path("/tests/config.json").read_text())["contract"]
+    contract = json.loads(CONFIG.read_text())["contract"]
     entry = {"question": contract["question"], "answer": contract.get("answer"), "metadata": contract["metadata"]}
-    print(
-        score_reasoning_gym_answer(
-            contract["metadata"]["source_dataset"], entry, candidate(Path("/app/answer.txt").read_text())
-        )
-    )
+    dataset = contract["metadata"]["source_dataset"]
+    answer = candidate(ANSWER.read_text())
+    with contextlib.redirect_stdout(sys.stderr):
+        try:
+            reward = score_reasoning_gym_answer(dataset, entry, answer)
+        except Exception as error:
+            # An unfamiliar parser failure is a bad candidate only if the reference still scores.
+            reference = entry["answer"]
+            if reference is not None and not score_reasoning_gym_answer(dataset, entry, reference) > 0:
+                raise ValueError("Reasoning Gym reference answer does not score") from error
+            reward = 0.0
+    print(reward)
 
 
 if __name__ == "__main__":

@@ -55,7 +55,15 @@ def main() -> None:
         entry = regenerated_entry(generation)
         if without_generation_day(encoded(entry)) != without_generation_day(contract["entry"]):
             raise ValueError("Regenerated entry differs from the recorded entry")
-        reward = score_reasoning_gym_answer(generation["task"], entry, candidate(ANSWER.read_text(errors="replace")))
+        answer = candidate(ANSWER.read_text(errors="replace"))
+        try:
+            reward = score_reasoning_gym_answer(generation["task"], entry, answer)
+        except Exception as error:
+            # An unfamiliar parser failure is a bad candidate only if the reference still scores.
+            reference = entry["answer"]
+            if reference is not None and not score_reasoning_gym_answer(generation["task"], entry, reference) > 0:
+                raise ValueError("Reasoning Gym reference answer does not score") from error
+            reward = 0.0
     print(reward)
 
 
