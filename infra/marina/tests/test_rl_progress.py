@@ -109,6 +109,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         ("test/legacy", record | {"run_id": "test/legacy", "attempt_id": "bad", "evaluation": None}),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
+        ("test/bad-scalar", "unexpected"),
         (
             "test/bad-result",
             record | {"run_id": "test/bad-result", "attempt_id": "bad", "gate_result": {"comparisons": "invalid"}},
@@ -162,6 +163,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert "evaluation: extra_forbidden" in skipped["test/legacy"]
     assert set(skipped) == {
         "test/bad-shape",
+        "test/bad-scalar",
         "test/bad-result",
         "test/huge-extra",
         "test/huge-gate",

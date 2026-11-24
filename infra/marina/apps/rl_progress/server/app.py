@@ -107,7 +107,8 @@ def create_api(services):
         with engine.connect() as connection:
             rows = connection.execute(
                 text(
-                    "SELECT run_id, attempt_id, CASE WHEN record -> 'grader_report' = 'null'::jsonb "
+                    "SELECT run_id, attempt_id, CASE WHEN jsonb_typeof(record) != 'object' "
+                    "OR record -> 'grader_report' = 'null'::jsonb "
                     "THEN record ELSE record - 'grader_report' END AS record, "
                     "record -> 'grader_report' IS NOT NULL AND record -> 'grader_report' != 'null'::jsonb "
                     "AS has_grader_report FROM rl_runs ORDER BY run_id, attempt_id"
