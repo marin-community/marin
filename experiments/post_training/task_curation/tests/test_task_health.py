@@ -75,6 +75,7 @@ def selection_digest(task: TaskSpec) -> str:
 
 def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_path):
     task = harbor_task("example", SHARED_IMAGE)
+    killed = harbor_task("killed", "swe/killed")
     export = tmp_path / "export"
     receipts = export / ATTEMPT_RECEIPTS_DIRECTORY
     receipts.mkdir(parents=True)
@@ -85,20 +86,30 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
         outcome=Outcome.INFRA_ERROR,
         grading_failure=None,
         exception_type="VerifierRuntimeError",
-        error="Task setup command exited 1",
+        error="Dependency installation failed",
         phase=Phase.TASK_SETUP,
         docker_image=SHARED_IMAGE,
         setup_sha256=hashlib.sha256(SETUP.encode()).hexdigest(),
         setup_completed=False,
+        setup_exit_code=1,
         setup_stdout=None,
         setup_stderr=MISSING_MODULE,
         verifier_stdout=None,
         verifier_stderr=None,
     )
     first = receipts / "first.jsonl"
-    first.write_text(json.dumps(asdict(receipt)) + "\n")
     second = receipts / "second.jsonl"
-    second.write_text(json.dumps(asdict(replace(receipt, attempt_id="trial-2"))) + "\n")
+    for ordinal, path in enumerate((first, second), start=1):
+        failed_setup = replace(receipt, attempt_id=f"setup-{ordinal}")
+        killed_setup = replace(
+            receipt,
+            attempt_id=f"killed-{ordinal}",
+            task_id=killed.id,
+            task_digest=selection_digest(killed),
+            docker_image="swe/killed",
+            setup_exit_code=137,
+        )
+        path.write_text("\n".join(json.dumps(asdict(row)) for row in (failed_setup, killed_setup)) + "\n")
     config = {
         "skyrl": {"trainer": {"export_path": str(export)}},
         "inputs": {"train_data": [{"identity": f"{SELECTION_PREFIX}/fixture-pi:1"}]},
@@ -106,10 +117,13 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
     snapshot = task_health._extract_attempts(config, "fixture@1", StoragePath(str(tmp_path / "snapshot")))
     rows = pq.read_table(str(snapshot)).to_pylist()
 
-    assert [row["selection"] for row in rows] == ["fixture-pi", "fixture-pi"]
-    assert [row["address"] for row in rows] == [str(first), str(second)]
-    assert {row["task_digest"] for row in rows} == {receipt.task_digest}
-    training = write_tasks(tmp_path / TRAIN_FILENAME, [task])
+    assert {row["selection"] for row in rows} == {"fixture-pi"}
+    assert {row["address"] for row in rows} == {str(first), str(second)}
+    assert {(row["task_digest"], row["setup_exit_code"]) for row in rows} == {
+        (receipt.task_digest, 1),
+        (selection_digest(killed), 137),
+    }
+    training = write_tasks(tmp_path / TRAIN_FILENAME, [task, killed])
     skip = StoragePath(str(tmp_path / "skip"))
     publish_skip_list(StoragePath(str(training.parent)), [snapshot], skip, "fixture")
     assert pq.read_table(str(skip / SKIP_FILENAME))["task_id"].to_pylist() == [task.id]

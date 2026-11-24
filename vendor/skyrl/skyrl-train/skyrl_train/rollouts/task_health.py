@@ -10,6 +10,7 @@ from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, AttemptReceipt,
 from rigging.filesystem.storage_path import StoragePath
 from rigging.redaction import redact_string
 from rolloutengine.models import SETUP_COMPLETED_METRIC, RolloutOperation, TaskRolloutSpec
+from shellbox.machine import ExitReason
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.runtime.environment import environment_identity
@@ -36,7 +37,7 @@ def attempt_receipt(
     diagnostics = failure.diagnostics if failure is not None else {}
     operation = diagnostics.get("operation")
     evidence = grade.diagnostics
-    setup_exit = diagnostics.get("setup_exit_code")
+    setup_exit = diagnostics.get("setup_exit_code") if diagnostics.get("setup_reason") == ExitReason.EXITED else None
     setup_failed = "setup_reason" in diagnostics
     completed = result.metrics.get(SETUP_COMPLETED_METRIC)
     setup_completed = bool(completed) if setup is not None and completed is not None else None
@@ -50,9 +51,6 @@ def attempt_receipt(
     else:
         phase = Phase.AGENT
     graded = grade.status == Outcome.GRADED
-    error = grade.error
-    if diagnostics.get("setup_reason") == "exited" and isinstance(setup_exit, int) and 0 < setup_exit < 128:
-        error = f"Task setup command exited {setup_exit}"
     return AttemptReceipt(
         attempt_id=attempt_id,
         task_id=task.id,
@@ -60,11 +58,12 @@ def attempt_receipt(
         outcome=grade.status,
         grading_failure=grade.failure,
         exception_type=failure.exception_type if failure is not None else None,
-        error=None if graded else _diagnostic_tail(error, _ERROR_CHARS),
+        error=None if graded else _diagnostic_tail(grade.error, _ERROR_CHARS),
         phase=phase,
         docker_image=image,
         setup_sha256=setup,
         setup_completed=setup_completed,
+        setup_exit_code=setup_exit,
         setup_stdout=None if graded else _diagnostic_tail(diagnostics.get("setup_stdout"), _OUTPUT_TAIL_CHARS),
         setup_stderr=None if graded else _diagnostic_tail(diagnostics.get("setup_stderr"), _OUTPUT_TAIL_CHARS),
         verifier_stdout=None if graded else _diagnostic_tail(evidence.get("stdout"), _OUTPUT_TAIL_CHARS),

@@ -34,3 +34,4 @@ class AttemptReceipt:
     setup_stderr: str | None
     verifier_stdout: str | None
     verifier_stderr: str | None
+    setup_exit_code: int | None = None
