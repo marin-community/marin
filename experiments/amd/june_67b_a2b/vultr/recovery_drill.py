@@ -15,8 +15,7 @@ does not fire it again):
   ``--abort-process`` after that step is dispatched.
 
 Every skipped step is reported with the input arrays that failed and their first damaged values, read from the
-batch, which the drill keeps for two steps. Launch one process per node (``--gpus-per-node 8``), or one per GPU on
-one node for the single-GPU corruption rate (``--gpus-per-node`` unset, ``HIP_VISIBLE_DEVICES`` set per process).
+batch, which the drill keeps for two steps. Launch one process per node (``--gpus-per-node 8``).
 """
 
 import argparse
