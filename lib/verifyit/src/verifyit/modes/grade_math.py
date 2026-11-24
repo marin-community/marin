@@ -62,16 +62,18 @@ def _timeout() -> int:
 
 _DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|times))\s*$")
 TEXT_CONNECTOR_CONTENT = r"\s*(?:and|or)\s*"
-REFERENCE_TEXT_GROUP = re.compile(r"\\(?:text|mbox|mathrm)\{(?!" + TEXT_CONNECTOR_CONTENT + r"\})")
+TEXT_GROUP_COMMAND = r"\\(?:text|mbox|mathrm)"
+REFERENCE_TEXT_GROUP = re.compile(TEXT_GROUP_COMMAND + r"\{(?!" + TEXT_CONNECTOR_CONTENT + r"\})")
 LEADING_LIST_CONNECTOR = re.compile(r"^\\text\{" + TEXT_CONNECTOR_CONTENT + r"\}\s*")
 # Unit normalization strips terminal text groups and their powers.
 TERMINAL_UNIT_POWER = r"\^(?:[+-]?[0-9]|\{\s*[+-]?[0-9]+\s*\})"
-TERMINAL_UNIT_GROUP = r"\\(?:text|mbox|mathrm)\{[\s~]*[A-Za-z]+\}"
+UNIT_GROUP_CONTENT_PATTERN = r"[\s~]*[A-Za-z]+"
+TERMINAL_UNIT_GROUP = TEXT_GROUP_COMMAND + r"\{" + UNIT_GROUP_CONTENT_PATTERN + r"\}"
 TERMINAL_UNIT_SUFFIX = re.compile(
     rf"(?:{TERMINAL_UNIT_POWER})?(?:\s*(?:/|\\cdot|\\times)\s*{TERMINAL_UNIT_GROUP}(?:{TERMINAL_UNIT_POWER})?)*"
 )
-UNIT_GROUP_CONTENT = re.compile(r"[\s~]*[A-Za-z]+")
-ORDINAL_SUFFIX = re.compile(r"(?<=\d)\^\{\\text\{(?:st|nd|rd|th)\}\}(?=\s*(?:\\(?:text|mbox|mathrm)\{|$))")
+UNIT_GROUP_CONTENT = re.compile(UNIT_GROUP_CONTENT_PATTERN)
+ORDINAL_SUFFIX = re.compile(r"(?<=\d)\^\{\\text\{(?:st|nd|rd|th)\}\}(?=\s*(?:" + TEXT_GROUP_COMMAND + r"\{|$))")
 
 
 def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
