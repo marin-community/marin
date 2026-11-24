@@ -539,6 +539,7 @@ def run_index_identity(
 
 
 def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
+    """Read the main-base preset revision, or None if it cannot be determined."""
     root = recipe.REPO_ROOT
     preset = index.preset
     program = """

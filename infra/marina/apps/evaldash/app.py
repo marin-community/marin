@@ -389,7 +389,7 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "jobs": dict(record.jobs),
         "rl_run_id": attempt.run_id if attempt is not None else None,
         "rl_attempt_id": attempt.attempt_id if attempt is not None else None,
-        "rl_step": getattr(attempt, "step", None),
+        "rl_step": attempt.step if attempt is not None else None,
     }
 
 
