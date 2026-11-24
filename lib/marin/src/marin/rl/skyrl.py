@@ -61,6 +61,7 @@ _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 _BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
+LOCAL_VLLM_SERVED_MODEL_NAME = "policy"
 # The SkyRL runtime is packaged separately, so its matching limit is checked there too.
 _COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
 
@@ -1034,6 +1035,15 @@ def _launch_config_yaml(
     recipe = _parsed_config(spec.config_yaml)
     recipe["entrypoint"] = spec.topology.role_plan.entrypoint
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
+    generator = cast(dict[str, object], recipe["generator"])
+    if generator["backend"] == "vllm" and generator["run_engines_locally"]:
+        engine_kwargs = cast(dict[str, object], generator.setdefault("engine_init_kwargs", {}))
+        declared_name = engine_kwargs.setdefault("served_model_name", LOCAL_VLLM_SERVED_MODEL_NAME)
+        if declared_name != LOCAL_VLLM_SERVED_MODEL_NAME:
+            raise ValueError(
+                f"generator.engine_init_kwargs.served_model_name must be {LOCAL_VLLM_SERVED_MODEL_NAME!r} "
+                "for local vLLM engines"
+            )
     for callback in recipe.get("trainer", {}).get("callbacks") or []:
         if callback["type"] == _BEST_CHECKPOINT_CALLBACK:
             callback["initial_model_uri"] = model.uri

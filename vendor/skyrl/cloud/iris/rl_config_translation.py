@@ -372,7 +372,7 @@ def _skyrl_config_sections(
 
     model_path = _apply_policy_model_source(trainer, dict(exp_args))
     if model_path:
-        generator.setdefault("engine_init_kwargs", {})["served_model_name"] = model_path.rsplit("/", 1)[-1]
+        generator.setdefault("engine_init_kwargs", {}).setdefault("served_model_name", model_path.rsplit("/", 1)[-1])
 
     hf_hub_repo_id = exp_args.get("hf_hub_repo_id")
     if exp_args.get("export_hf_artifact") is not None:

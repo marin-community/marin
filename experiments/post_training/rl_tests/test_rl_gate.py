@@ -28,7 +28,7 @@ from finestore.rl.strata import (
 )
 from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, run
+from marin.execution.lazy import ArtifactStep, materialized_config, run
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
@@ -89,6 +89,24 @@ def edit_metrics(root, edit):
     for values in metrics.values():
         edit(values)
     write_metrics(root, metrics)
+
+
+@pytest.mark.parametrize("model_directory", ["policy", "other-model"])
+def test_control_comparison_normalizes_the_fixed_alias_independently_of_the_model_directory(
+    selection, tmp_path, model_directory
+):
+    preset = snowball_model.SNOWBALL.by_name["train-long"]
+    model = ArtifactHfModel(
+        ArtifactStep.adopt(f"tests/{model_directory}", "2026.11.20", f"s3://models/{model_directory}"), relative_path=""
+    )
+    step = recipe.run_step(preset, recipe.run_spec(preset, name="tests/alias-comparison", init=model))
+    path = tmp_path / "launch.yaml"
+    path.write_text(materialized_config(step, recipe.artifact_prefix(preset.recipe.layout.cluster)).launch_config_yaml)
+    [launch] = gate.compose_configs([str(path)])
+
+    compared = gate.comparison_config(launch)
+
+    assert compared["skyrl.generator.engine_init_kwargs.served_model_name"] == "<served-model-name>"
 
 
 def test_compare_leave_one_out_writes_the_printed_report(recorded_runs):

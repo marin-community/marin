@@ -327,6 +327,29 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     )
 
 
+@pytest.mark.parametrize("model_path,declared_name", [("s3://models/first", None), ("s3://models/second", "policy")])
+def test_local_vllm_launch_uses_a_path_independent_serving_alias(model_path, declared_name):
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    if declared_name is not None:
+        recipe["generator"]["engine_init_kwargs"] = {"served_model_name": declared_name}
+    model = dataclasses.replace(spec.model, step=ArtifactStep.adopt("tests/policy", "2026.11.20", model_path))
+    step = skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe), model=model), _execution())
+
+    launch = yaml.safe_load(materialized_config(step, prefix="s3://marin-us-east-08a").launch_config_yaml)
+
+    assert launch["skyrl"]["generator"]["engine_init_kwargs"]["served_model_name"] == "policy"
+
+
+def test_local_vllm_launch_rejects_a_conflicting_serving_alias():
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["generator"]["engine_init_kwargs"] = {"served_model_name": "other-policy"}
+
+    with pytest.raises(ValueError, match="served_model_name"):
+        skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe)), _execution())
+
+
 @pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])
 @pytest.mark.parametrize("value", [False, True])
 def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str, value: bool) -> None:

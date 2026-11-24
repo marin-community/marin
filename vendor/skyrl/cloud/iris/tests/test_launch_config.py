@@ -48,10 +48,14 @@ from skyrl_train.utils.tracking import Tracking
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
 from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
+    MODEL_METADATA_PATH_KEY,
     _build_inference_engine_runtime_env,
     should_verify_inference_workers,
 )
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
+from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
+from skyrl_train.trajectory_runners.model_clients import DirectModelClient
+from skyrl_train.entrypoints.main_base import create_ray_wrapped_inference_engines_from_config
 
 
 @pytest.mark.parametrize(
@@ -1210,6 +1214,75 @@ def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, mon
         "org/tokenizer": 1,
         revision: 2,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_engines,served_name", [(True, "policy"), (False, "remote-policy")])
+async def test_declared_serving_alias_survives_composition_and_streamed_cache_requests(
+    tmp_path, monkeypatch, local_engines, served_name
+):
+    raw = raw_launch_config()
+    raw["skyrl"]["generator"].update(
+        run_engines_locally=local_engines,
+        model_loading="stream",
+        engine_init_kwargs={"served_model_name": served_name},
+    )
+    launch_path = tmp_path / "launch.yaml"
+    launch_path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(launch_path)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+    cache_path = str(tmp_path / "streamed-cache" / "weights-123")
+    final_path = task_runtime._write_final_config(
+        config,
+        policy_model=task_runtime.PreparedPolicyModel("s3://models/qwen", "sha256:model", cache_path),
+        policy_tokenizer=None,
+        draft_model=None,
+    )
+    final = OmegaConf.load(final_path).skyrl
+    assert final.trainer.policy.model.path == cache_path
+    submitted_models = []
+
+    class Engine:
+        async def tokenize(self, request):
+            submitted_models.append(request["json"]["model"])
+            return {"tokens": [1]}
+
+        async def chat_completion(self, request):
+            submitted_models.append(request["json"]["model"])
+            return {
+                "prompt_token_ids": [1],
+                "choices": [
+                    {"message": {"role": "assistant", "content": "answer"}, "finish_reason": "stop", "token_ids": [2]}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    backend = Tokenizer(models.WordLevel({"[UNK]": 0, "hello": 1, "answer": 2}, unk_token="[UNK]"))
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
+    engines = [Engine()]
+    if local_engines:
+        allocations = []
+
+        def allocate_engines(**kwargs):
+            allocations.append(kwargs)
+            return engines
+
+        monkeypatch.setattr(
+            "skyrl_train.inference_engines.ray_wrapped_inference_engine.create_ray_wrapped_inference_engines",
+            allocate_engines,
+        )
+        engines = create_ray_wrapped_inference_engines_from_config(final, None)
+        [allocation] = allocations
+        assert allocation["pretrain"] == "s3://models/qwen"
+        assert allocation["engine_init_kwargs"]["load_format"] == "runai_streamer"
+        assert allocation["engine_init_kwargs"][MODEL_METADATA_PATH_KEY] == cache_path
+    client = DirectModelClient(InferenceEngineClient(engines, tokenizer, final))
+    output = await client.generate(
+        {"prompts": [[{"role": "user", "content": "hello"}]], "chat_completion_params": [{}]}
+    )
+
+    assert submitted_models == [served_name, served_name]
+    assert output["response_ids"] == [[2]]
 
 
 def test_loaded_launch_policy_revision_reaches_trainer_config(tmp_path, monkeypatch):

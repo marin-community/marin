@@ -27,7 +27,6 @@ LAUNCH_PATHS = frozenset(
         "trainer.ref.model.path",
         "trainer.ref.model.tokenizer_path",
         "trainer.ref.model.tokenizer_revision",
-        "generator.engine_init_kwargs.served_model_name",
         "generator.trajectory_retention.output_path",
     }
 )

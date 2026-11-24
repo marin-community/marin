@@ -345,6 +345,11 @@ vLLM applies these sampling values to requests that omit them. SkyRL rollouts
 send explicit sampling parameters, and behavior-logprob training sets
 `generation_config: vllm` so the checkpoint's defaults never reach rollouts.
 
+Marin binds local vLLM engines to the serving alias `policy`. Leave
+`generator.engine_init_kwargs.served_model_name` unset or set it to `policy`;
+a different value fails before launch. Iris composition and cache staging preserve
+the configured name, including declared names for remote engines.
+
 The `best_checkpoint` callback accepts a `selection_metric` whose values must be
 finite normalized scores in [0, 1], with larger values preferred. Set
 `save_after_fraction` to delay trained-checkpoint selection until that fraction
