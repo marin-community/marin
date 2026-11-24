@@ -47,6 +47,12 @@ def arc_agi_prompt(train: list[dict[str, Any]], test_input: list[list[int]]) -> 
     return ARC_AGI_PROMPT.format(training_examples=examples, test_input=json.dumps(test_input))
 
 
+def _member_json(archive: tarfile.TarFile, member: tarfile.TarInfo) -> Any:
+    handle = archive.extractfile(member)
+    assert handle is not None, f"{member.name} is not a regular file"
+    return json.load(handle)
+
+
 def read_arc_agi_2(file: StoragePath, _context: ConversionContext) -> Iterator[dict[str, Any]]:
     """Yield one row per test input of the repository archive's public evaluation tasks, in task-id order.
 
@@ -54,7 +60,7 @@ def read_arc_agi_2(file: StoragePath, _context: ConversionContext) -> Iterator[d
     """
     with file.open("rb") as stream, tarfile.open(fileobj=stream, mode="r:gz") as archive:
         tasks = {
-            PurePosixPath(member.name).stem: json.load(archive.extractfile(member))
+            PurePosixPath(member.name).stem: _member_json(archive, member)
             for member in archive.getmembers()
             if member.isfile()
             and PurePosixPath(member.name).parent.parts[1:] == ARC_AGI_EVALUATION_DIR
