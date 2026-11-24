@@ -10,15 +10,18 @@ vector artifacts stay in-region.
 
 import argparse
 import hashlib
+import io
 import json
 import logging
 import os
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
+import numpy as np
 import pyarrow.parquet as pq
 from finestore.rl.licenses import LicenseReceipt, require_license
 from huggingface_hub import snapshot_download
@@ -172,11 +175,84 @@ def verify_entries(entries: list[dict], shards: list[Path]) -> int:
     return total
 
 
+def adopt_regional_parts(output: StoragePath, staged_output: Path) -> set[str]:
+    """Adopt parts a previous attempt already uploaded, so restarts resume anywhere."""
+    receipts = staged_output / "part-receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    adopted: set[str] = set()
+    try:
+        receipt_paths = sorted((output / "part-receipts").iterdir())
+    except FileNotFoundError:
+        return adopted
+    for receipt_path in receipt_paths:
+        entry = json.loads(receipt_path.read_text())
+        vectors_target = staged_output / "vectors" / entry["vectors"]
+        docids_target = staged_output / "docids" / entry["docids"]
+        if vectors_target.exists() and docids_target.exists():
+            with pq.ParquetFile(docids_target) as existing:
+                docid_rows = existing.metadata.num_rows
+            if docid_rows == entry["documents"] and vectors_target.stat().st_size == entry["vectors_bytes"]:
+                adopted.add(entry["shard"])
+                continue
+        for relative in (f"vectors/{entry['vectors']}", f"docids/{entry['docids']}"):
+            with (output / relative).open("rb") as reader, (staged_output / relative).open("wb") as writer:
+                shutil.copyfileobj(reader, writer, length=8 * 1024 * 1024)
+        vectors_target = staged_output / "vectors" / entry["vectors"]
+        docids_target = staged_output / "docids" / entry["docids"]
+        if (
+            vectors_target.stat().st_size != entry["vectors_bytes"]
+            or file_sha256(StoragePath(str(vectors_target))) != entry["vectors_sha256"]
+            or file_sha256(StoragePath(str(docids_target))) != entry["docids_sha256"]
+        ):
+            raise ValueError(f"Regional part differs from its receipt: {entry['shard']}")
+        (receipts / receipt_path.name).write_text(receipt_path.read_text())
+        adopted.add(entry["shard"])
+    if adopted:
+        logger.info("Adopted %d previously uploaded parts", len(adopted))
+    return adopted
+
+
+def upload_completed_parts(output: StoragePath, staged_output: Path, uploaded: set[str], stop: threading.Event) -> None:
+    """Upload finished parts to the region as workers complete them."""
+    receipts = staged_output / "part-receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    while True:
+        for receipt_path in sorted(receipts.glob("*.json")):
+            name = receipt_path.stem
+            if name in uploaded:
+                continue
+            entry = json.loads(receipt_path.read_text())
+            for relative, expected_sha, expected_bytes in (
+                (f"vectors/{entry['vectors']}", entry["vectors_sha256"], entry["vectors_bytes"]),
+                (f"docids/{entry['docids']}", entry["docids_sha256"], None),
+            ):
+                source = staged_output / relative
+                if not source.exists():
+                    break
+                destination = output / relative
+                with source.open("rb") as reader, destination.open("wb", auto_mkdir=True) as writer:
+                    shutil.copyfileobj(reader, writer, length=8 * 1024 * 1024)
+                actual = file_sha256(StoragePath(str(destination)))
+                if actual != expected_sha or (
+                    expected_bytes is not None and destination.stat().st_size != expected_bytes
+                ):
+                    raise ValueError(f"Regional part upload differs: {relative}")
+            (output / "part-receipts" / receipt_path.name).write_text(receipt_path.read_text())
+            uploaded.add(name)
+            logger.info("Uploaded part %s", name)
+        pending = {path.stem for path in receipts.glob("*.json")} - uploaded
+        if stop.is_set() and not pending:
+            break
+        stop.wait(timeout=20)
+
+
 def run_workers(
     config: EmbeddingConfig, shards: list[Path], model_manifest: list[dict], work: Path, output: StoragePath
 ) -> list[dict]:
     """Embed every corpus shard once across the visible GPUs, then verify each part."""
     staged_output = work / "embedding-output"
+    staged_output.mkdir(parents=True, exist_ok=False)
+    uploaded = adopt_regional_parts(output, staged_output)
     gpus = visible_gpus(config.embed_python)
     logger.info("Embedding %d corpus shards across %d GPUs", len(shards), gpus)
     workers = []
@@ -217,7 +293,12 @@ def run_workers(
                 },
             )
         )
+    stop = threading.Event()
+    uploader = threading.Thread(target=upload_completed_parts, args=(output, staged_output, uploaded, stop), daemon=True)
+    uploader.start()
     failures = [number for number, worker in enumerate(workers) if worker.wait() != 0]
+    stop.set()
+    uploader.join()
     if failures:
         raise RuntimeError(f"Embedding workers failed: {failures}")
     entries = []
@@ -225,14 +306,7 @@ def run_workers(
         entries.extend(json.loads((staged_output / f"worker-manifest-{worker}.json").read_text()))
     entries.sort(key=lambda entry: entry["shard"])
     total = verify_entries(entries, shards)
-    logger.info("Embedded %d documents; uploading vector shards", total)
-    for relative in ("vectors", "docids"):
-        destination = output / relative
-        for source in sorted((staged_output / relative).iterdir()):
-            with source.open("rb") as reader, (destination / source.name).open("wb", auto_mkdir=True) as writer:
-                shutil.copyfileobj(reader, writer, length=8 * 1024 * 1024)
-            if file_sha256(StoragePath(str(destination / source.name))) != file_sha256(StoragePath(str(source))):
-                raise ValueError(f"Regional embedding upload differs: {source.name}")
+    logger.info("Embedded %d documents; verifying regional uploads", total)
     manifest = json.dumps(entries, indent=2) + "\n"
     (output / "shard-manifest.json").write_text(manifest)
     return entries
@@ -276,7 +350,8 @@ def measure_token_stats(config: EmbeddingConfig) -> None:
 
     Fixes the document token cap before the GPU job: the stats record total
     tokens and full-coverage counts at each candidate cap, and the chosen cap
-    is then recorded in the embedding artifact and retrieval state.
+    is then recorded in the embedding artifact and retrieval state. Per-shard
+    length checkpoints in the region let preempted attempts resume.
     """
     if not os.environ.get("IRIS_TASK_ID"):
         raise RuntimeError("Corpus statistics must be measured inside the regional Iris CPU job")
@@ -289,45 +364,48 @@ def measure_token_stats(config: EmbeddingConfig) -> None:
         EMBEDDING_MODEL, revision=EMBEDDING_MODEL_REVISION, trust_remote_code=False
     )
     caps = (1024, 2048, 4096, 8192, 16384, 32768)
-    documents, total_tokens, total_chars = 0, 0, 0
-    per_cap = {cap: {"tokens": 0, "documents_fully_embedded": 0, "documents_truncated": 0} for cap in caps}
-    percentiles_source: list[int] = []
+    checkpoint_dir = StoragePath(config.output_path) / "checkpoints"
+    measured: dict[str, np.ndarray] = {}
     for shard in shards:
-        with pq.ParquetFile(shard) as parquet:
-            for batch in parquet.iter_batches(batch_size=1024, columns=["docid", "text"]):
-                rows = batch.to_pylist()
-                # Batch encoding parallelizes inside the fast tokenizer.
-                lengths = [
-                    len(ids) for ids in tokenizer([row["text"] for row in rows], add_special_tokens=False)["input_ids"]
-                ]
-                documents += len(rows)
-                total_tokens += sum(lengths)
-                total_chars += sum(len(row["text"]) for row in rows)
-                percentiles_source.extend(lengths)
-                for cap in caps:
-                    bucket = per_cap[cap]
-                    for length in lengths:
-                        bucket["tokens"] += min(length, cap)
-                        if length <= cap:
-                            bucket["documents_fully_embedded"] += 1
-                        else:
-                            bucket["documents_truncated"] += 1
-        logger.info("Measured shard %s: %d documents so far", shard.name, documents)
+        checkpoint = checkpoint_dir / (shard.stem + ".npz")
+        if checkpoint.exists():
+            with checkpoint.open("rb") as reader:
+                lengths = np.load(io.BytesIO(reader.read()))["lengths"]
+            logger.info("Resuming measured shard %s: %d documents", shard.name, len(lengths))
+        else:
+            computed: list[int] = []
+            with pq.ParquetFile(shard) as parquet:
+                for batch in parquet.iter_batches(batch_size=1024, columns=["docid", "text"]):
+                    rows = batch.to_pylist()
+                    # Batch encoding parallelizes inside the fast tokenizer.
+                    computed.extend(
+                        len(ids)
+                        for ids in tokenizer([row["text"] for row in rows], add_special_tokens=False)["input_ids"]
+                    )
+            lengths = np.asarray(computed, dtype=np.int32)
+            payload = io.BytesIO()
+            np.savez(payload, lengths=lengths)
+            checkpoint.write_bytes(payload.getvalue())
+            logger.info("Measured shard %s: %d documents", shard.name, len(lengths))
+        measured[shard.stem] = lengths
+    all_lengths = np.concatenate([measured[key] for key in sorted(measured)])
+    documents = int(all_lengths.size)
     if documents != EXPECTED_DOCUMENTS:
         raise ValueError(f"Corpus contains {documents} documents; expected {EXPECTED_DOCUMENTS}")
-    percentiles_source.sort()
-
-    def percentile(fraction: float) -> int:
-        return percentiles_source[min(int(fraction * documents), documents - 1)]
-
     stats = {
         "embedding_model": EMBEDDING_MODEL,
         "embedding_model_revision": EMBEDDING_MODEL_REVISION,
         "documents": documents,
-        "total_tokens": total_tokens,
-        "total_chars": total_chars,
-        "token_percentiles": {str(p): percentile(p) for p in (0.5, 0.75, 0.9, 0.95, 0.99)},
-        "caps": {str(cap): per_cap[cap] for cap in caps},
+        "total_tokens": int(all_lengths.sum()),
+        "token_percentiles": {str(p): int(np.percentile(all_lengths, p * 100)) for p in (0.5, 0.75, 0.9, 0.95, 0.99)},
+        "caps": {
+            str(cap): {
+                "tokens": int(np.minimum(all_lengths, cap).sum()),
+                "documents_fully_embedded": int((all_lengths <= cap).sum()),
+                "documents_truncated": int((all_lengths > cap).sum()),
+            }
+            for cap in caps
+        },
     }
     (StoragePath(config.output_path) / "token-stats.json").write_text(json.dumps(stats, indent=2) + "\n")
     logger.info("Token stats: %s", json.dumps(stats))

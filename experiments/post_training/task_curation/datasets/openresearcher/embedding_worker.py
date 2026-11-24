@@ -75,7 +75,7 @@ def embed_shard(
         expected_bytes = docid_rows * EMBEDDING_DIM * 2
         if docid_rows > 0 and vectors_path.stat().st_size == expected_bytes:
             logger.info("Resuming %s: adopting %d embedded documents", shard.name, docid_rows)
-            return {
+            entry = {
                 "shard": shard.name,
                 "vectors": vectors_path.name,
                 "docids": docids_path.name,
@@ -84,6 +84,10 @@ def embed_shard(
                 "vectors_bytes": vectors_path.stat().st_size,
                 "docids_sha256": sha256_file(docids_path),
             }
+            receipts = vectors_path.parent.parent / "part-receipts"
+            receipts.mkdir(parents=True, exist_ok=True)
+            (receipts / (Path(shard).stem + ".json")).write_text(json.dumps(entry))
+            return entry
         if vectors_path.exists():
             vectors_path.unlink()
         if docids_path.exists():
@@ -120,7 +124,7 @@ def embed_shard(
     table = pa.Table.from_arrays([pa.array(docids)], names=["docid"])
     with docids_path.open("wb") as writer:
         pq.write_table(table, writer, compression="zstd")
-    return {
+    entry = {
         "shard": shard.name,
         "vectors": vectors_path.name,
         "docids": docids_path.name,
@@ -129,6 +133,11 @@ def embed_shard(
         "vectors_bytes": vectors_path.stat().st_size,
         "docids_sha256": sha256_file(docids_path),
     }
+    # The per-part receipt lets the orchestrator upload and resume this part
+    # independently of the rest of the worker's assignment.
+    (vectors_path.parent.parent / "part-receipts").mkdir(parents=True, exist_ok=True)
+    (vectors_path.parent.parent / "part-receipts" / (Path(shard).stem + ".json")).write_text(json.dumps(entry))
+    return entry
 
 
 def main() -> None:
