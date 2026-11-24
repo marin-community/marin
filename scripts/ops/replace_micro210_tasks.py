@@ -24,11 +24,15 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import random
+import urllib.request
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import yaml
+from huggingface_hub import hf_hub_download, list_repo_files
 
 from experiments.evaluation.micro210_gate import HARBOR_BENCHMARKS
 from experiments.evaluation.micro210_replacements import (
@@ -39,6 +43,7 @@ from experiments.evaluation.micro210_replacements import (
     ot_tblite_candidate,
     tb2_candidate,
 )
+from scripts.ops.verify_micro210_spec_gate import grade_family_a_row, grade_family_b_row
 
 REPLACEMENT_ATTEMPTS_PER_FAMILY = 4
 CANDIDATE_RETRIES = 2
@@ -84,7 +89,6 @@ def grade_candidate(candidate: CandidateRow, table_path: Path, output: Path) -> 
         record["task_rollout_spec"] = json.dumps(rollout, sort_keys=True)
     candidates_path = output / f"candidates-{candidate.benchmark}.parquet"
     pq.write_table(pa.Table.from_pylist(records, schema=table.schema), candidates_path)
-    from scripts.ops.verify_micro210_spec_gate import grade_family_a_row, grade_family_b_row
 
     graded = []
     for record in pq.read_table(candidates_path).to_pylist():
@@ -137,8 +141,6 @@ def _deterministic_order(names: list[str], in_policy: set[str]) -> list[str]:
 
 
 def _family_pool(benchmark: str) -> list[str]:
-    from huggingface_hub import hf_hub_download, list_repo_files
-
     if benchmark == "humanevalplus":
         dataset, revision = "evalplus/humanevalplus", "v0.1.10"
         path = hf_hub_download(
@@ -156,10 +158,8 @@ def _family_pool(benchmark: str) -> list[str]:
 
 
 def _ot_tblite_package(source_task_id: str) -> dict[str, bytes]:
-    from huggingface_hub import hf_hub_download
-
     dataset, revision = "DCAgent/dev_set_v2", "377118ff3031c934"
-    files = list_repo_files_local(dataset, revision)
+    files = list_repo_files(dataset, repo_type="dataset", revision=revision)
     package = {}
     for name in files:
         if not name.startswith(f"{source_task_id}/"):
@@ -177,17 +177,8 @@ def _ot_tblite_package(source_task_id: str) -> dict[str, bytes]:
     return package
 
 
-def list_repo_files_local(dataset: str, revision: str) -> list[str]:
-    from huggingface_hub import list_repo_files
-
-    return list_repo_files(dataset, repo_type="dataset", revision=revision)
-
-
 def _tb2_package(source_task_id: str) -> dict[str, bytes]:
     """Fetch one terminal-bench task's package from the pinned registry commit."""
-    import urllib.request
-
-    base = f"https://raw.githubusercontent.com/harbor-framework/terminal-bench-1/{_TB2_PIN}/{source_task_id}"
     package = {}
     listing = _github_json(
         f"https://api.github.com/repos/harbor-framework/terminal-bench-1/git/trees/{_TB2_PIN}?recursive=1"
@@ -208,9 +199,7 @@ def _tb2_package(source_task_id: str) -> dict[str, bytes]:
             continue
         blob = next(entry for entry in listing.get("tree", []) if entry["path"] == path)
         if blob.get("encoding") == "base64":
-            import base64 as base64_module
-
-            package[relative] = base64_module.b64decode(blob.get("content", ""))
+            package[relative] = base64.b64decode(blob.get("content", ""))
         else:
             with urllib.request.urlopen(
                 f"https://raw.githubusercontent.com/harbor-framework/terminal-bench-1/{_TB2_PIN}/{path}", timeout=60
@@ -231,7 +220,6 @@ def _tb2_package(source_task_id: str) -> dict[str, bytes]:
 
 def _github_headers() -> dict:
     """GitHub API headers; the token avoids the unauthenticated rate limits."""
-    import os
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     headers = {"Accept": "application/vnd.github+json"}
@@ -241,7 +229,6 @@ def _github_headers() -> dict:
 
 
 def _github_json(url: str) -> dict:
-    import urllib.request
 
     request = urllib.request.Request(url, headers=_github_headers())
     with urllib.request.urlopen(request, timeout=120) as response:
@@ -249,14 +236,12 @@ def _github_json(url: str) -> dict:
 
 
 def _yaml_instruction(yaml_text: str) -> str:
-    import yaml
 
     parsed = yaml.safe_load(yaml_text)
     return parsed["instruction"]
 
 
 def _tb_task_toml(yaml_text: str, source_task_id: str) -> str:
-    import yaml
 
     parsed = yaml.safe_load(yaml_text)
     metadata = parsed.get("metadata") or {}

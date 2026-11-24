@@ -24,6 +24,7 @@ import random
 from dataclasses import dataclass
 
 import pyarrow.parquet as pq
+from huggingface_hub import hf_hub_download
 
 REPLACEMENT_SEED = 20261124
 
@@ -31,6 +32,7 @@ TB2_REGISTRY = ("harbor-framework/terminal-bench-1", "original-tasks")
 TB2_IMAGE_TAG = "20251031"
 OT_TBLITE_DATASET = ("DCAgent/dev_set_v2", "377118ff3031c934")
 HUMANEVALPLUS_DATASET = ("evalplus/humanevalplus", "v0.1.10")
+_EVALPLUS_PARQUET = "data/test-00000-of-00001-5973903632b82d40.parquet"
 
 BROKEN_TASKS = {
     "tb2-recovery/terminal-bench/mcmc-sampling-stan": (
@@ -76,14 +78,8 @@ def _shuffled(names: list[str], skip: set[str]) -> list[str]:
 
 def humanevalplus_candidate(source_task_id: str, template_row: dict) -> CandidateRow:
     """Build one humanevalplus row from the evalplus pool in the frozen row's shape."""
-    from huggingface_hub import hf_hub_download
-
     dataset, revision = HUMANEVALPLUS_DATASET
-    table = pq.read_table(
-        hf_hub_download(
-            dataset, repo_type="dataset", revision=revision, filename="data/test-00000-of-00001-5973903632b82d40.parquet"
-        )
-    )
+    table = pq.read_table(hf_hub_download(dataset, repo_type="dataset", revision=revision, filename=_EVALPLUS_PARQUET))
     problems = {row["task_id"]: row for row in table.to_pylist()}
     record = problems[source_task_id]
     spec = _row_spec(template_row)
@@ -253,7 +249,8 @@ def _pi_dockerfile(upstream_dockerfile: str) -> str:
         "\nCOPY --from=long_loop_pi_runtime /usr/local/bin/node /opt/long-loop-node/node\n"
         "COPY --from=long_loop_pi_runtime /opt/long-loop-pi /opt/long-loop-pi\n"
         "ENV PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH}\n"
-        'RUN PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH} bash -c \'test "$(pi --version)" = "0.87.0"\'\n'
+        "RUN PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH} "
+        'bash -c \'test "$(pi --version)" = "0.87.0"\'\n'
     )
     return stage + upstream_dockerfile.rstrip("\n") + "\n" + tail
 
@@ -270,6 +267,7 @@ def _pi_dockerfile_tb2(source_task_id: str) -> str:
         "\nCOPY --from=long_loop_pi_runtime /usr/local/bin/node /opt/long-loop-node/node\n"
         "COPY --from=long_loop_pi_runtime /opt/long-loop-pi /opt/long-loop-pi\n"
         "ENV PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH}\n"
-        'RUN PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH} bash -c \'test "$(pi --version)" = "0.87.0"\'\n'
+        "RUN PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH} "
+        'bash -c \'test "$(pi --version)" = "0.87.0"\'\n'
     )
     return stage + f"FROM alexgshaw/{source_task_id}:{TB2_IMAGE_TAG}\n" + tail
