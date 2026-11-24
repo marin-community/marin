@@ -232,6 +232,26 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
 
 
 @pytest.mark.asyncio
+async def test_attempts_larger_than_the_store_s_batch_limit_are_saved(
+    tmp_path, published_corpora, run_config, monkeypatch
+):
+    open_store = evaluation.DataStore.open
+    monkeypatch.setattr(evaluation.DataStore, "open", lambda root: open_store(root, max_buffer_bytes=64 * 1024))
+    reply = "red " * 64 * 1024
+
+    async def model(_request):
+        return ModelTurn({"role": "assistant", "content": reply}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "results")
+    await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert finished
+    assert all(row["outcome"] == "graded" for row in finished)
+    assert all(reply in reader.read_blob(row["result_blob"]).decode() for row in finished)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("changed_setting", ["selection", "backend", "turn_budget", "token_budget"])
 async def test_driver_resume_rejects_different_scoring_settings(
     tmp_path, published_corpora, run_config, changed_setting
