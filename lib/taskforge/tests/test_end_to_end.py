@@ -2105,7 +2105,7 @@ def rows(records: Sequence[Record]) -> list[Record]:
     return [replace(record, wall_time=0.0) for record in records]
 
 
-FIXTURE_CONFIG_DIGEST = "1797f796269d33067b1b26a1bbf934c262605ebaa992e42691d91cbe014f7384"
+FIXTURE_CONFIG_DIGEST = "6719d6bc52bb8a517e6e07784d5070046b31452217b04aa623e74091c19a7b58"
 """The policy digest the ``N4_JOURNAL`` and ``N4_POLLS`` fixtures recorded. A later policy entry changes only that
 digest in an author-only journal."""
 
