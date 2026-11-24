@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from functools import partial
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from jinja2 import TemplateError
@@ -215,8 +215,14 @@ async def _model_turn(
     )
 
 
-def _daytona_diagnostics(error: DaytonaError) -> dict[str, Any]:
-    diagnostics: dict[str, Any] = {"provider_sdk_call": "unknown"}
+class _DaytonaDiagnostics(TypedDict, total=False):
+    provider_sdk_call: str
+    provider_status_code: int
+    provider_rate_limits: dict[str, int]
+
+
+def _daytona_diagnostics(error: DaytonaError) -> _DaytonaDiagnostics:
+    diagnostics: _DaytonaDiagnostics = {"provider_sdk_call": "unknown"}
     status = error.status_code
     if isinstance(status, int) and 100 <= status <= 599:
         diagnostics["provider_status_code"] = status
@@ -567,7 +573,7 @@ class TaskRolloutWorker:
                 else [task.id for task in tasks],
                 self.group_graders,
                 phase,
-                [self.error_handling] * len(tasks),
+                self.error_handling,
                 logprobs_required=require_logprobs,
             )
         return rollouts

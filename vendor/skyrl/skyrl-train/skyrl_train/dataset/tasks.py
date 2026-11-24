@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 from datasets import Dataset
 from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
-from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from rolloutengine.models import TASK_ROLLOUT_COLUMN, MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
@@ -39,7 +39,6 @@ from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
 from finestore.rl.strata import SelectionManifest, TaskEvaluationIdentity, TaskStrata, read_selection_manifest
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
-TASK_ROLLOUT_COLUMN = "task_rollout_spec"
 TASK_SPEC_COLUMN = "task_spec"
 TASK_EVALUATION_IDENTITY = "task_evaluation_identity"
 TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=False)])

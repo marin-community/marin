@@ -36,7 +36,7 @@ class ErrorHandlingConfig:
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "ErrorHandlingConfig":
-        """Validate the schema-derived training error policy."""
+        """Read the training error policy and fill omitted fields with defaults."""
         defaults = DEFAULT_ERROR_HANDLING_CONFIG
         return cls(
             enable_error_classification=bool(

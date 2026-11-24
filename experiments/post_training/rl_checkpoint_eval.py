@@ -14,7 +14,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS
-from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
+from rolloutengine.models import TASK_ROLLOUT_COLUMN, MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 from shellbox.machine import NetworkPolicy
 from skyrlrecipe.declared import DAYTONA_EVAL_BACKEND, EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
@@ -178,7 +178,7 @@ def write_checkpoint_tasks(
                 importer_revision=CHECKPOINT_EVALUATION_REVISION,
             )
             rollout = _rollout_spec(cohort, package, root / path, provenance, image_digests)
-            yield {"task_rollout_spec": rollout.model_dump_json()}
+            yield {TASK_ROLLOUT_COLUMN: rollout.model_dump_json()}
 
     write_parquet_file(rows(), str(StoragePath(output) / CHECKPOINT_TASKS_FILENAME))
 
