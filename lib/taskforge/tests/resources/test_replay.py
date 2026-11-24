@@ -20,6 +20,7 @@ from taskforge.effects.context import Context
 from taskforge.effects.events import Failed, Fingerprint, Note, ReplayPolicy, Resolved, ScopeEntered
 from taskforge.effects.issues import LogFailure, Restart, Unreproducible
 from taskforge.effects.log import EventLog, JsonlSink, Opened, Owners, Record
+from taskforge.harness.role import install_env
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.controls import Candidate
 from taskforge.model.llm import Completion, Message, Role, ToolSchema
@@ -36,7 +37,6 @@ from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.ids import Ids, NewId, new_id
 from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
 from taskforge.resources.rollouts import SolverRollout
-from taskforge.stages.author import install_env
 
 
 def configure(ctx: Context, env: Env, client: InferenceClient, ids: Ids) -> None:

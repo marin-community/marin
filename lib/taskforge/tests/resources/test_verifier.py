@@ -9,6 +9,7 @@ from typing import Literal, override
 
 import pytest
 from lib.taskforge.tests.resources.rollout_fakes import FakeEngine
+from lib.taskforge.tests.stage_fakes import OVER_CREDITED
 from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn, Rollout, TraceMode
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.machine import (
@@ -36,7 +37,7 @@ from taskforge.lowering import (
     requirements,
     rollout_engine,
 )
-from taskforge.model.controls import Candidate, RewardBand
+from taskforge.model.controls import Candidate
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.rollouts import RolloutResource, SolverRollout
 from taskforge.resources.sandbox.factories import shellsim_factory
@@ -203,7 +204,7 @@ async def test_fresh_confirmation_and_replay_require_no_shared_machine_state() -
     pool, resource = setup(factory)
     log = EventLog()
     candidate = event()
-    claim = AdversaryClaim("passes", candidate.candidate, RewardBand(Outcome.GRADED, 1, 1))
+    claim = AdversaryClaim("passes", candidate.candidate, OVER_CREDITED)
     try:
         ctx = Context(log=log)
         ctx.handle(GradeCandidate, lambda ev, res: grade(ev, res, notify=ctx.notify), resource)
@@ -301,9 +302,7 @@ async def test_fresh_adversary_result_overrides_shared_confirmation() -> None:
     ctx = Context(log=EventLog())
     ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), resource)
     candidate = event()
-    finding = await claim_result(
-        ctx, candidate.spec, AdversaryClaim("passes", candidate.candidate, RewardBand(Outcome.GRADED, 1, 1))
-    )
+    finding = await claim_result(ctx, candidate.spec, AdversaryClaim("passes", candidate.candidate, OVER_CREDITED))
     await ctx.drain()
     assert not finding.met and finding.grade is not None and finding.grade.reward == 0
     assert len(shared.run_ids) == len(fresh.run_ids) == 1

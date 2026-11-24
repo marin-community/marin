@@ -3,14 +3,13 @@
 
 """Runtime composition: Python adapters beside immutable policy data."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Protocol
 
 from taskcompendium.models import TaskResource
 
-from taskforge.harness.protocol import Harness, Tool
+from taskforge.harness.role import Role
 from taskforge.model.review import BandRules, Budget, Decision
 from taskforge.model.workpiece import Workpiece
 from taskforge.policy import Policy
@@ -40,17 +39,10 @@ class WorkspaceHydration:
 @dataclass(frozen=True, slots=True)
 class TaskforgeConfig:
     policy: Policy
-    author: Harness
-    adversaries: Mapping[str, Harness]
-    tools: Mapping[str, Mapping[str, Tool[object]]]
+    author: Role
+    adversary: Role
+    """Every name on ``adversary.roster`` runs this role."""
     review: ReviewRules
     band: BandRules
     budget: Budget
     workspace: WorkspaceHydration = WorkspaceHydration()
-
-    def __post_init__(self) -> None:
-        # A frozen dataclass does not freeze the mappings it holds; read-only views keep the config immutable.
-        object.__setattr__(self, "adversaries", MappingProxyType(dict(self.adversaries)))
-        object.__setattr__(
-            self, "tools", MappingProxyType({name: MappingProxyType(dict(tools)) for name, tools in self.tools.items()})
-        )

@@ -5,48 +5,58 @@
 
 
 import asyncio
+import itertools
+import json
+from collections.abc import Sequence
 from pathlib import PurePosixPath
+from typing import cast
 
 from rolloutengine.models import TaskRolloutSpec, TraceMode
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
-from taskforge.effects.log import Opened
 from taskforge.harness.protocol import Returned, Stopped, StopReason
+from taskforge.harness.role import Answer, Files, Fresh, Visit, sitting
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from taskforge.lowering import (
     InvalidTaskSpec,
-    host_requirements,
     lower_with_settings,
     lowering_settings,
     requirements,
 )
+from taskforge.model.content_hash import digest
 from taskforge.model.controls import Control
-from taskforge.model.llm import Message, Role
+from taskforge.model.llm import Role
 from taskforge.model.proposal import render
 from taskforge.model.review import (
     AdversaryFinding,
     AdversaryResult,
     AdversaryStatus,
     Cause,
+    Continuation,
     ControlResult,
+    Modify,
+    Observation,
+    ObservedStatus,
+    SearchEnd,
     SearchLimit,
     TrialResult,
     ValidationResult,
 )
+from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation, Workpiece
 from taskforge.resources.bundle import Resources
-from taskforge.resources.env import WriteFiles
-from taskforge.resources.execution import close_resource
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
-from taskforge.stages.author import install_env, sandbox_limits
-from taskforge.stages.classify import grade_cause, grader_infra_unavailable, trial_cause
+from taskforge.stages.author import sandbox_limits
+from taskforge.stages.classify import CAUSE_DECISIONS, grade_cause, grader_infra_unavailable, trial_cause
 from taskforge.stages.exits import Validated
+from taskforge.stages.rules import actionable
 from taskforge.stages.summary import task_manifest
 
 
@@ -79,24 +89,41 @@ async def adversary_result(
 ) -> AdversaryResult:
     """One roster entry, ``occurrence`` among entries with its name; each search is its own environment owner."""
     visit = f"validate/{workpiece.round}/{len(workpiece.evidence)}"
+    owner = ""
     for retry in range(2):
         result = None
         try:
             owner = f"{visit}/adversary:{name}/{occurrence}/{retry}"
             result = await run_adversary(ctx, workpiece, config, resources, spec, name, owner)
         except* Hold as error:
-            result = AdversaryResult(name, AdversaryStatus.FAILED, (), failure_reasons(error))
+            held = Continuation(owner, SearchEnd.HELD)
+            result = AdversaryResult(name, AdversaryStatus.FAILED, (), failure_reasons(error), continuation=held)
         if result is not None:
             return result
         ctx.notify(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
-    return exhausted(name, SearchLimit.OUTPUT_BUDGET)
+    return exhausted(name, SearchLimit.OUTPUT_BUDGET, Continuation(owner, SearchEnd.BUDGET_EXHAUSTED))
 
 
-def exhausted(name: str, limit: SearchLimit) -> AdversaryResult:
-    reason = (
-        f"ran out of its {limit} without reporting a defect; its search budget ran out, it did not validate the task"
-    )
-    return AdversaryResult(name, AdversaryStatus.EXHAUSTED, (), (reason,), limit)
+REPLAY_CLAIM_CHARS = 600
+"""How much of a claim the replay feedback quotes back to its adversary."""
+
+
+def no_finding(how: str) -> str:
+    """The one wording for a search that ended without a reproduced finding: budget spent, never a validation."""
+    return f"ran out of search budget without a finding ({how}); this is not a validation of the task"
+
+
+def exhausted(name: str, limit: SearchLimit, continuation: Continuation) -> AdversaryResult:
+    reason = no_finding(f"its {limit} ran out before it reported")
+    return AdversaryResult(name, AdversaryStatus.EXHAUSTED, (), (reason,), limit, continuation)
+
+
+def stopped_at(owner: str, end: SearchEnd, ended: Exit | Conversation | None) -> Continuation:
+    """Where a session ended: at its exit, or at the conversation it held when a command raised."""
+    session = ended.session if isinstance(ended, Returned | Stopped) else ended
+    if not isinstance(session, Conversation):
+        return Continuation(owner, end)
+    return Continuation(owner, end, digest(session), sum(message.role == Role.ASSISTANT for message in session.messages))
 
 
 def failure_reasons(error: BaseException) -> tuple[str, ...]:
@@ -107,14 +134,27 @@ def failure_reasons(error: BaseException) -> tuple[str, ...]:
     return reasons + (failure_reasons(error.__cause__) if error.__cause__ is not None else ())
 
 
+def observation(grade: GradeResult, task: TaskSpec) -> Observation | None:
+    """What a replay shows about the grader; an infrastructure failure shows nothing."""
+    cause = grade_cause(grade, task)
+    if cause is not None:
+        return Observation(ObservedStatus.GRADER_ERROR) if CAUSE_DECISIONS.get(cause) is Modify else None
+    if grade.status is Outcome.SUBMISSION_FAILURE:
+        return Observation(ObservedStatus.SUBMISSION_FAILURE)
+    return Observation(ObservedStatus.GRADED, grade.reward)
+
+
+def shows(claim: AdversaryClaim, grade: GradeResult, task: TaskSpec) -> bool:
+    return (observed := observation(grade, task)) is not None and claim.defect.shown_by(observed)
+
+
 async def claim_result(ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim) -> AdversaryFinding:
+    """The one reproduction check of every brief: the defect shows on the round's verifier, then on a fresh one."""
     grade = await ctx.emit(GradeCandidate(spec, claim.candidate))
-    if grade_cause(grade, spec.task) is None and claim.expected.met_by(grade):
+    if shows(claim, grade, spec.task):
         grade = await ctx.emit(GradeCandidate(spec, claim.candidate, fresh_verifier=True))
-    cause = grade_cause(grade, spec.task)
-    return AdversaryFinding(
-        claim.claim, claim.candidate, claim.expected, grade, cause is None and claim.expected.met_by(grade), cause
-    )
+    met = shows(claim, grade, spec.task)  # on the fresh verifier's grade: the first one did not show it otherwise
+    return AdversaryFinding(claim.claim, claim.candidate, claim.defect, grade, met, grade_cause(grade, spec.task))
 
 
 async def reproduced(
@@ -124,14 +164,43 @@ async def reproduced(
 
     Its own scope collects observer holds on its grades, so a sibling claim's grade survives them.
     """
-    finding, reasons = AdversaryFinding(claim.claim, claim.candidate, claim.expected, None, False), ()
     try:
-        async with ctx.scope(f"claim:{index}"):
-            graded = await claim_result(ctx, spec, claim)
-        finding = graded
+        async with ctx.scope(f"claim:{index}"):  # its exit may still raise, and then the claim stays ungraded
+            return await claim_result(ctx, spec, claim), ()
     except* (OutputBudgetExhausted, Hold) as error:
         reasons = failure_reasons(error)
-    return finding, reasons
+    return AdversaryFinding(claim.claim, claim.candidate, claim.defect, None, False), reasons
+
+
+def report_of(outcome: object) -> Returned[AdversaryReport] | None:
+    if isinstance(outcome, Returned) and outcome.tool == "report" and isinstance(outcome.payload, AdversaryReport):
+        return cast(Returned[AdversaryReport], outcome)
+    return None
+
+
+def replay_feedback(missed: Sequence[AdversaryFinding], remaining: int) -> str:
+    """Tell the adversary what the replay saw for each finding that did not reproduce."""
+    lines = [f"Validation replayed your report against the original task. {len(missed)} finding(s) did not reproduce:"]
+    for index, finding in enumerate(missed):
+        claim, grade = finding.defect, finding.grade
+        replay = {} if grade is None else {"status": grade.status, "reward": grade.reward, "error": grade.error}
+        replay = {key: value for key, value in {**replay, "cause": finding.cause}.items() if value not in ("", None)}
+        lines += [
+            f"{index + 1}. Claim: {finding.claim[:REPLAY_CLAIM_CHARS]}",
+            f"   You reported: defect {claim.defect}, grader_observed {claim.observed.status} reward "
+            f"{claim.observed.reward}, deserved_reward {claim.deserved_reward}.",
+            f"   The replay observed: {json.dumps(replay, default=str)}.",
+        ]
+    lines.append(
+        "The replay failed to reproduce these findings, so they do not count. You may call report again with a "
+        "revised submission (fix the candidate, or correct the fields so grader_observed_* says what the grader "
+        "actually returns and deserved_reward says what the candidate should get), or submit an entirely new defect. "
+        "A finding still has to show the grade is WRONG and say why; restating a correct grade is not a finding. "
+        "Findings that already reproduced are kept, so do not repeat them. If you cannot demonstrate a defect, call "
+        "report with an empty findings list. "
+        + (f"After this you have {remaining} more revision(s)." if remaining else "This is your last revision.")
+    )
+    return "\n".join(lines)
 
 
 async def run_adversary(
@@ -144,83 +213,101 @@ async def run_adversary(
     owner: str,
 ) -> AdversaryResult | None:
     """One adversary search and the reproduction of its claims; ``None`` when the search ran out of output."""
-    requested = (
+    workdir = config.policy.setting("author.workdir", str)
+    machine = (
         spec.task.environment_requirements
         if spec.task_machine is not None
-        else requirements(
-            image=config.policy.setting("adversary.image", str) or None,
-            workdir=config.policy.setting("author.workdir", str),
-        )
+        else requirements(image=config.policy.setting("adversary.image", str) or None, workdir=workdir)
     )
-    files = (*spec.task.resources.all, *spec.task.resources.worker)
-    env = await resources.envs.create(host_requirements(requested))
-    try:
-        async with ctx.scope(f"adversary:{name}", Opened(owner, env.fingerprint().digest)):
-            install_env(ctx, env)
-            task_json = spec.task.model_dump_json().encode()
-            await ctx.emit(
-                WriteFiles(
-                    (
-                        *((PurePosixPath("/", file.path), resource_bytes(file)) for file in files),
-                        (PurePosixPath(config.policy.setting("author.workdir", str), "task.json"), task_json),
-                    )
-                )
+
+    def files() -> Files:
+        shared = (*spec.task.resources.all, *spec.task.resources.worker)
+        task = (PurePosixPath(workdir, "task.json"), spec.task.model_dump_json().encode())
+        return (*((PurePosixPath("/", file.path), resource_bytes(file)) for file in shared), task)
+
+    graded: dict[str, Observation] = {}
+
+    async def remember(event: Resolved[object]) -> None:
+        # Every grade of a candidate in this visit, the adversary's own and the replays alike.
+        if isinstance(event.request, GradeCandidate) and isinstance(event.value, GradeResult):
+            if (shown := observation(event.value, spec.task)) is not None:
+                graded[digest(event.request.candidate)] = shown
+
+    visit = Visit(f"adversary:{name}", owner, machine, files, {"report": ReportTool(spec.task, graded)})
+    async with sitting(ctx, config.adversary, visit, resources) as session:
+        ctx.observe(Resolved, remember)
+        brief = f"adversary.brief.{name}"  # without one, the name is the strategy, as wiring allows for {name} prompts
+        opening = Fresh(
+            config.policy.prompt("adversary.system").render(sandbox_limits=sandbox_limits(config.policy)),
+            config.policy.prompt("adversary.user").render(
+                task=task_manifest(spec.task),
+                proposal=render(workpiece.proposal),
+                name=name,
+                brief=config.policy.prompt(brief).template if brief in config.policy.entries else name,
+                workdir=workdir,
+            ),
+        )
+        try:
+            outcome = await session(opening)
+        except* OutputBudgetExhausted:
+            # Only the search session's own output counts as an exhausted search, never claim reproduction.
+            outcome = None
+        if outcome is None:
+            return None
+        if isinstance(outcome, Stopped) and outcome.reason is StopReason.CONTEXT_LIMIT:
+            return exhausted(name, SearchLimit.CONTEXT_WINDOW, stopped_at(owner, SearchEnd.BUDGET_EXHAUSTED, outcome))
+        if (report := report_of(outcome)) is None:
+            reason = (
+                f"{outcome.summary} without report"
+                if isinstance(outcome, Stopped)
+                else f"Expected report, got {type(outcome).__name__}"
             )
-            tools = {**config.tools[name], "report": ReportTool(spec.task)}
-            session = Conversation(
-                (
-                    Message(
-                        Role.SYSTEM,
-                        config.policy.prompt("adversary.system").render(sandbox_limits=sandbox_limits(config.policy)),
-                    ),
-                    Message(
-                        Role.USER,
-                        config.policy.prompt("adversary.user").render(
-                            task=task_manifest(spec.task),
-                            proposal=render(workpiece.proposal),
-                            name=name,
-                            workdir=config.policy.setting("author.workdir", str),
-                        ),
-                    ),
-                ),
-                tuple(tool.schema for tool in tools.values()),
+            return AdversaryResult(
+                name, AdversaryStatus.FAILED, (), (reason,), continuation=stopped_at(owner, SearchEnd.HELD, outcome)
             )
-            try:
-                outcome = await config.adversaries[name].run(ctx, session, resources.inference_for("adversary"), tools)
-            except* OutputBudgetExhausted:
-                # Only the search session's own output counts as an exhausted search, never claim reproduction.
-                outcome = None
-            if outcome is None:
-                return None
-            if isinstance(outcome, Stopped) and outcome.reason is StopReason.CONTEXT_LIMIT:
-                return exhausted(name, SearchLimit.CONTEXT_WINDOW)
-            if (
-                not isinstance(outcome, Returned)
-                or outcome.tool != "report"
-                or not isinstance(outcome.payload, AdversaryReport)
-            ):
-                reason = (
-                    f"{outcome.summary} without report"
-                    if isinstance(outcome, Stopped)
-                    else f"Expected report, got {type(outcome).__name__}"
-                )
-                return AdversaryResult(name, AdversaryStatus.FAILED, (), (reason,))
-            report = outcome.payload
+        revisions = config.policy.setting("adversary.max_revisions", int)
+        replays: list[tuple[AdversaryFinding, tuple[str, ...]]] = []
+        end, how, limit = SearchEnd.REPORTED, "its session ended with a report and no reproduced finding", None
+        ended: Exit | Conversation | None = report
+        for revision in itertools.count(1):  # the first report is reproduced whatever the revision budget
             async with asyncio.TaskGroup() as group:
                 claims = [
-                    group.create_task(reproduced(ctx, spec, claim, index)) for index, claim in enumerate(report.findings)
+                    group.create_task(reproduced(ctx, spec, claim, len(replays) + index))
+                    for index, claim in enumerate(report.payload.findings)
                 ]
-            results = [claim.result() for claim in claims]
-            # A claim that could not be reproduced is incomplete adversary evidence: review cannot accept on it.
-            reasons = tuple(
-                f"reproducing {finding.claim!r} was inconclusive: {reason}"
-                for finding, failure in results
-                for reason in failure
-            )
-            status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
-            return AdversaryResult(name, status, tuple(finding for finding, _ in results), reasons)
-    finally:
-        await close_resource(env.close, ctx.notify)
+            replays += (results := [claim.result() for claim in claims])
+            missed = tuple(finding for finding, failure in results if not failure and not actionable(finding))
+            if not missed or revision > revisions:
+                break
+            ctx.notify(Note(f"Adversary {name}: {len(missed)} finding(s) did not reproduce; revision {revision}"))
+            try:
+                ended = await session(Answer(report.session, replay_feedback(missed, revisions - revision)))
+            except* OutputBudgetExhausted as error:  # ends at the conversation the exhausted command left
+                limit = SearchLimit.OUTPUT_BUDGET
+                ended = next((e.session for e in error.exceptions if isinstance(e, OutputBudgetExhausted)), None)
+            except* Hold as error:
+                # A revision is extra search: its hold leaves a finding that already reproduced standing.
+                if not any(actionable(finding) for finding, _ in replays):
+                    raise
+                ctx.notify(Note(f"Adversary {name}: revision {revision} held: {'; '.join(failure_reasons(error))}"))
+                ended = None
+            if (revised := report_of(ended)) is None:  # the last report stands
+                how = f"its revision {revision} ended without a report"
+                break
+            report = revised
+        if isinstance(ended, Stopped) and ended.reason is StopReason.CONTEXT_LIMIT:
+            limit = SearchLimit.CONTEXT_WINDOW
+        if limit is not None:  # a revision ran out of search budget, which consumes the remaining revisions
+            end, how = SearchEnd.BUDGET_EXHAUSTED, f"its {limit} ran out during revision {revision}"
+        findings = tuple(finding for finding, _ in replays)
+        # A claim that could not be reproduced is incomplete adversary evidence: review cannot accept on it.
+        reasons = tuple(
+            f"reproducing {f.claim!r} was inconclusive: {reason}" for f, failure in replays for reason in failure
+        )
+        status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
+        if not reasons and not any(map(actionable, findings)):
+            reasons = (no_finding(how),)
+        return AdversaryResult(name, status, findings, reasons, continuation=stopped_at(owner, end, ended))
 
 
 async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:

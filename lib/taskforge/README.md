@@ -15,7 +15,7 @@ This file covers how to run it.
 |---|---|
 | `src/taskforge/effects/` | effect types, the event log, replay, observers, `Hold`/`Restart`/`Transient` |
 | `src/taskforge/resources/` | executors: inference (per-role waiting backend), environments, grading, rollouts, the round-owned verifier machine |
-| `src/taskforge/harness/` | the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `report`, `finish`, web) |
+| `src/taskforge/harness/` | the role runner (`role.py`: machine, hydration, scope, session, close for every model role), the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `report`, `finish`, web) |
 | `src/taskforge/stages/` | `author`, `validate`, `review`; the review rules; prompt summaries |
 | `src/taskforge/model/` | frozen data: proposal, workpiece, task spec, verdicts, decisions |
 | `src/taskforge/llm/` | the model client (the one retry owner), the `Provider` protocol and its GLM default, model profiles, wire helpers |
@@ -65,8 +65,9 @@ command line; the driver reads them from Iris secret files.
   carries `environment` (`reasoning`, `shellsim`, `container`). The driver skips environments not
   in `proposals.environments` (default: reasoning and shellsim) and prints `SKIP <id>: environment=container`.
 - **Policy overlay**: a JSON object of `key: value` pairs layered over
-  `src/taskforge/policy/defaults/policy.json`, stored on S3. The pilots use
-  `{"adversary.roster": ["adversary"]}` because the default roster is empty.
+  `src/taskforge/policy/defaults/policy.json`, stored on S3. The default roster runs the two
+  adversary briefs; the earlier pilots' `{"adversary.roster": ["adversary"]}` still selects their
+  single legacy adversary.
 - **Ranks**: `--ranks 0,1,2` selects proposals by rank; no trailing comma (BSD `seq -s,` adds
   one, strip it with `sed 's/,$//'`).
 
@@ -120,7 +121,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 3); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 4); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -138,9 +139,12 @@ compare-and-swap when it starts and advances it the same way after each chunk. A
 the same workpiece (a relaunch racing a live driver, a preempted worker's replacement) takes the
 head; the first then fails with `Superseded` at its next checkpoint and publishes nothing more.
 Readers follow only the chunks the head names. A root in any other journal format, including the
-format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`) and format 2 (sandbox rows
-replayed by content, without owners), fails with an error naming the format found and exits 4 with the
-root untouched; such roots are converted once by a separate migration. Before claiming, the reader
+format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), format 2 (sandbox rows
+replayed by content, without owners) and format 3 (adversary findings with an expected reward band, not a
+defect direction with observed and deserved grades), fails with an error naming both formats and exits 4
+with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 4` and reports the
+rest. Such roots are converted once by a separate migration, or rebuilt. Before claiming, the reader
 validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
 one envelope field; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
 resolution under re-executed sandbox fingerprints or a failure with an errno-name category, and no other
@@ -225,11 +229,28 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
   reverting to the earlier submission if the hardening broke something.
 - **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
-- **Adversary**: `adversary.roster` (names of adversary harnesses; empty by default),
-  `adversary.image`. A finding is a demonstrated claim with a candidate and an expected grade;
-  the review counts only claims the grader confirms, re-graded on a fresh machine. An adversary
-  whose context window or output budget runs out before it reports is `exhausted`: the task can
-  still be accepted, and the Accept's reasons say the search budget ran out, not that it validated the task.
+- **Adversary**: `adversary.roster` (brief names, each run as one adversary session; default
+  `false_accept` and `false_reject`), `adversary.image`. The default user prompt renders `{brief}`, so each
+  name needs a prompt `adversary.brief.<name>` (`prompts/adversary/brief/<name>.md`); a user prompt
+  that renders only `{name}` (`Review strategy: {name}`) uses the roster name itself as the strategy
+  and runs any name. The default briefs: `false_accept` looks for a submission
+  the grader accepts but should not, `false_reject` for a correct submission the grader rejects, and
+  `adversary` is the earlier single adversary's strategy line. An overlay may rewrite a brief's text;
+  a new brief is a new prompt entry in the policy (`Policy({**policy.entries, "adversary.brief.mine":
+  Prompt("...")})`) and a name on the roster. Every brief reports through one schema: a defect
+  direction (`false_accept`, `false_reject`, `grader_crash`), the candidate, the grade the grader
+  OBSERVED and the reward the candidate DESERVES. Validation keeps a finding only when the replayed
+  grade is wrong in the stated direction on the round's verifier and again on a fresh one. The report
+  tool refuses a finding whose observed grade differs from the adversary's own latest grade of that
+  exact candidate in its visit. When findings of a nonempty report fail reproduction, the replay's
+  grades answer the pending report call and the adversary may report again in the same session,
+  `adversary.max_revisions` times (default 1); reproduced findings are kept. A search
+  that ends without a reproduced finding, by an empty report or because its context window or output
+  budget ran out first (`exhausted`), counts as evidence of a strong task: the task can still be
+  accepted, and its result and the Accept's reasons say it ran out of search budget without a finding,
+  never that it validated the task. Each result carries a `continuation` (the search's sandbox owner,
+  why it stopped: `reported`, `budget_exhausted` or `held`, and the digest of its conversation at the
+  stop) for a workflow that continues an exhausted search; the default workflow does not.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
   `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
@@ -240,8 +261,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   workspace and the model gets the head plus the path.
 
 Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the pinned
-`TaskSpec` and control reference (`defaults/author-reference-v2.json`), and the adversary's user prompt renders the task without file
-payloads (they are in the workdir).
+`TaskSpec` and control reference (`defaults/author-reference-v2.json`), and the adversary's user prompt renders its brief and the task without
+file payloads (they are in the workdir).
 
 ## Models and providers
 

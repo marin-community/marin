@@ -13,6 +13,7 @@ from rigging.filesystem.factory import url_to_fs
 
 from taskforge.checkpoint import FORMAT_1, HEAD, read_journal
 from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted
+from taskforge.effects.issues import UnsupportedFormat
 from taskforge.effects.log import decode
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
@@ -56,11 +57,16 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
     tokens: dict[str, Counter[str]] = defaultdict(Counter)
     durations: dict[str, list[float]] = defaultdict(list)
     accepted: list[float] = []
+    unsupported: list[str] = []
     gate = asyncio.Semaphore(32)
 
     async def collect(path: PurePosixPath) -> None:
         async with gate:
-            journal = await asyncio.to_thread(read_journal, fs.unstrip_protocol(str(path)))
+            try:
+                journal = await asyncio.to_thread(read_journal, fs.unstrip_protocol(str(path)))
+            except UnsupportedFormat as error:  # Named below; a migration brings it to this format.
+                unsupported.append(str(error))
+                return
             if journal is None:
                 return
             status = journal.head.status
@@ -112,6 +118,7 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
     lines = [f"workpieces={sum(counts.values())} since_hours={since_hours if since_hours is not None else 'all'}"]
     if legacy:
         lines.append(f"skipped journal_format=1 count={len(legacy)} roots={named}")
+    lines += [f"skipped unsupported_format {error}" for error in sorted(unsupported)]
     lines += [f"terminal={terminal} count={counts[terminal]}" for terminal in ("running", *Terminal)]
     lines += [
         f"terminal={terminal} reason={reason} count={count}" for (terminal, reason), count in sorted(reasons.items())

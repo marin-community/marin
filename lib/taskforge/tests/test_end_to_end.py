@@ -770,11 +770,11 @@ FINISHED = {"stage": "review", "round": 1, "terminal": "accepted"}
         ({"format": 3.0}, None, driver.CORRUPT),
         ({"format": 2.0}, None, driver.CORRUPT),
         ({"format": True}, None, driver.CORRUPT),
-        ({"format": 4}, None, driver.NEEDS_MIGRATION),
+        ({"format": checkpoint.JOURNAL_FORMAT + 1}, None, driver.NEEDS_MIGRATION),
         ({"status": FINISHED, "workpiece": None}, None, driver.CORRUPT),
         ({}, MALFORMED_REQUEST, driver.CORRUPT),
     ],
-    ids=["string", "float", "float 2", "bool", "format 4", "finished without workpiece", "resolved without request"],
+    ids=["string", "float", "float 2", "bool", "next format", "finished without workpiece", "resolved without request"],
 )
 async def test_driver_refuses_a_damaged_head_or_history_before_skipping_or_claiming(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, change: dict[str, object], event: object, code: int
@@ -1827,6 +1827,22 @@ def rows(records: Sequence[Record]) -> list[Record]:
     return [replace(record, wall_time=0.0) for record in records]
 
 
+FIXTURE_CONFIG_DIGEST = "c2c325d70cb80fa73625a0c2b9745c52c33eea84250542b1d4013d4bd8e16f49"
+"""The policy digest the ``N3_JOURNAL`` and ``N4_JOURNAL`` fixtures recorded. The default policy has since gained the
+two adversary briefs, which changes only that digest in an author-only journal."""
+
+
+def rebased(recorded: Sequence[Record], fresh: Sequence[Record]) -> list[Record]:
+    """``recorded`` with each stage completion's fixture policy digest replaced by the one ``fresh`` recorded."""
+    current = next(r.event.config_digest for r in fresh if isinstance(r.event, StageCompleted))
+    completed = [r.event for r in recorded if isinstance(r.event, StageCompleted)]
+    assert completed and all(event.config_digest == FIXTURE_CONFIG_DIGEST for event in completed)
+    return [
+        replace(r, event=replace(r.event, config_digest=current)) if isinstance(r.event, StageCompleted) else r
+        for r in recorded
+    ]
+
+
 async def test_a_journal_written_by_positional_dispatch_resumes_without_repeated_model_calls(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
 ) -> None:
@@ -1836,7 +1852,8 @@ async def test_a_journal_written_by_positional_dispatch_resumes_without_repeated
     recorded = decode(gzip.decompress(N4_JOURNAL.read_bytes()))
     await held_after_stamp(monkeypatch, driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    assert rows(history(destination)) == rows(recorded)
+    fresh = history(destination)
+    assert rows(fresh) == rows(rebased(recorded, fresh))
     served = [
         record.event.request
         for record in recorded
@@ -1899,6 +1916,38 @@ async def test_a_format_2_root_needs_migration_before_claim_and_stays_untouched(
     assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
     assert f"journal format {checkpoint.JOURNAL_FORMAT}" in driver.OUTCOMES[driver.NEEDS_MIGRATION][1]
     assert tree(destination) == before
+
+
+N6_MODIFY_HELD = Path(__file__).parent / "fixtures" / "n6-modify-held-root.json.gz"
+
+
+def plant_root(directory: Path, fixture: Path) -> Path:
+    """Write the published root ``fixture`` holds (relative path to text) at ``directory``."""
+    for name, text in json.loads(gzip.decompress(fixture.read_bytes())).items():
+        (directory / name).parent.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_text(text)
+    return directory
+
+
+# Review 2026-11-21: the role runner resumed this format-3 head, accepted a fresh empty adversary report and published
+# a round-0 Accept without the author repair, dropping the finding both verifier grades had confirmed and the Modify
+# it caused.
+@pytest.mark.parametrize("resume_held", [True, False])
+async def test_a_format_3_root_needs_migration_before_claim_and_stays_untouched(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, resume_held: bool
+) -> None:
+    """The fixture is the whole root the format-3 driver (d510505b69) published under ``{"adversary.roster":
+    ["adversary"]}``: a finding with an expected reward band that both verifier grades confirmed, Modify, and the
+    author held in round 1 (73 rows). Format 4 changed what an adversary finding means, so no reader resumes it."""
+    destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), N6_MODIFY_HELD)
+    assert json.loads((destination / HEAD).read_text())["format"] == 3
+    before = tree(destination)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)  # no model, sandbox or verifier is ever built
+    driver_args.resume_held = resume_held
+    with pytest.raises(LogFailure, match=f"has journal format 3, not {checkpoint.JOURNAL_FORMAT}") as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
+    assert tree(destination) == before and not Path(driver_args.work_dir).exists()
 
 
 STATUS = PurePosixPath("/workspace/status.txt")
@@ -2003,7 +2052,8 @@ async def test_a_journal_with_two_polls_serves_each_poll_its_own_recording(
     deliberate change to the author prompts, tool schemas, event identities or envelopes invalidates it."""
     served = await held_after_polls(monkeypatch, driver_args, (b"pending", b"done"))
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    assert rows(history(destination)) == rows(decode(gzip.decompress(N4_POLLS.read_bytes())))
+    fresh = history(destination)
+    assert rows(fresh) == rows(rebased(decode(gzip.decompress(N4_POLLS.read_bytes())), fresh))
     envs = ProducerEnvs(STATUS, (b"pending", b"done"))
     resumed = replace(resources(envs, ()), inference=ServedOnce(polling_script()[2:], served))
     serve(monkeypatch, resumed)
@@ -2194,6 +2244,10 @@ class RoleEnvs(Envs):
         return env
 
 
+BRIEFED = {"false_accept": "hunt false accepts", "false_reject": "hunt false rejects"}
+"""Each default brief by a phrase its first user message carries."""
+
+
 class Adversaries(InferenceClient):
     """Each adversary runs ``ROLE``, then reports no findings, or with ``hold`` fails on that turn instead."""
 
@@ -2220,7 +2274,7 @@ class Adversaries(InferenceClient):
         """(adversary name, the role output its report turn saw), for each report turn."""
         return sorted(
             (
-                next(name for name in ("alpha", "beta") if name in request.conversation[1].content),
+                next(name for name in BRIEFED if BRIEFED[name] in request.conversation[1].content),
                 json.loads(request.conversation[-1].content)["stdout"],
             )
             for request in self.requests
@@ -2232,9 +2286,9 @@ class Adversaries(InferenceClient):
 @pytest.mark.parametrize(
     ("roster", "recorded", "fresh", "overlap"),
     [
-        (("alpha", "beta"), ("alpha 1\n", "beta 1\n"), ("alpha 2\n", "beta 2\n"), False),
-        (("alpha", "alpha"), ("first 1\n", "second 1\n"), ("first 2\n", "second 2\n"), False),
-        (("alpha", "beta"), ("/workspace\n", "/workspace\n"), ("/workspace\n", "/workspace\n"), True),
+        (("false_accept", "false_reject"), ("accept 1\n", "reject 1\n"), ("accept 2\n", "reject 2\n"), False),
+        (("false_accept", "false_accept"), ("first 1\n", "second 1\n"), ("first 2\n", "second 2\n"), False),
+        (("false_accept", "false_reject"), ("/workspace\n", "/workspace\n"), ("/workspace\n", "/workspace\n"), True),
     ],
     ids=["reversed readiness", "duplicate roster names", "identical results overlapping"],
 )
@@ -2341,7 +2395,7 @@ async def test_a_recorded_command_that_cannot_be_verified_on_resume_is_never_wea
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, exhausted: int
 ) -> None:
     overlay = json.loads(Path(driver_args.policy).read_text())
-    Path(driver_args.policy).write_text(json.dumps({**overlay, "adversary.roster": ["alpha"]}))
+    Path(driver_args.policy).write_text(json.dumps({**overlay, "adversary.roster": ["false_accept"]}))
     held = Adversaries(hold=True)
     serve(monkeypatch, replace(resources(ExhaustedRole(0), script()), role_inference={"adversary": held}))
     await driver.one(driver_args)

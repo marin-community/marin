@@ -10,6 +10,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import PurePosixPath
+from string import Formatter
 from types import MappingProxyType
 from typing import override
 
@@ -30,6 +31,7 @@ from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import Hold
 from taskforge.harness.loop import AgenticHarness
+from taskforge.harness.role import Role
 from taskforge.harness.tools import adversary_tools, standard_tools
 from taskforge.llm.client import ContextExhausted, GenerationTimedOut, ModelClient, Provider
 from taskforge.llm.glm_provider import (
@@ -283,14 +285,25 @@ def build_config(
     policy: Policy, factories: Mapping[str, MachineFactory], profiles: Mapping[str, ModelProfile] = DEFAULT_PROFILES
 ) -> TaskforgeConfig:
     """The run's sessions and rules; ``profiles`` overrides the model profile per role, as in ``build_resources``."""
+    # A user prompt that renders only {name} uses the roster name as its strategy; one that renders {brief} needs it.
+    template = policy.prompt("adversary.user").template  # {brief[0]} and {brief.x} need a brief as {brief} does
+    fields = {field.partition(".")[0].partition("[")[0] for _, field, _, _ in Formatter().parse(template) if field}
+    roster = policy.setting("adversary.roster", tuple) if "brief" in fields else ()
+    unbriefed = [name for name in roster if f"adversary.brief.{name}" not in policy.entries]
+    if unbriefed:
+        raise ValueError(
+            f"adversary.user renders {{brief}}, but adversary.roster names {', '.join(unbriefed)} without a prompt "
+            "adversary.brief.<name>"
+        )
+    if (revisions := policy.setting("adversary.max_revisions", int)) < 0:
+        raise ValueError(f"adversary.max_revisions must be at least 0, not {revisions}")
     settings = lowering_settings(policy)
-    author = agentic_harness(policy, "author", profiles.get("author", GLM_5_3))
-    adversary = agentic_harness(policy, "adversary", profiles.get("adversary", GLM_5_3))
-    adversaries = {name: adversary for name in policy.setting("adversary.roster", tuple)}
     root = PurePosixPath(policy.setting("author.workdir", str))
     task_path, controls_path = str(root / "task.json"), str(root / "controls.json")
-    tools = {
-        "author": standard_tools(
+    author = Role(
+        "author",
+        agentic_harness(policy, "author", profiles.get("author", GLM_5_3)),
+        standard_tools(
             task_path=task_path,
             controls_path=controls_path,
             policy=policy,
@@ -298,11 +311,12 @@ def build_config(
             settings=settings,
             gate=partial(submit_gate, settings=settings, factories=factories),
         ),
-        **{
-            name: adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings)
-            for name in adversaries
-        },
-    }
+    )
+    adversary = Role(
+        "adversary",
+        agentic_harness(policy, "adversary", profiles.get("adversary", GLM_5_3)),
+        adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings),
+    )
     budget = Budget(
         policy.setting("budget.max_modify_rounds", int), policy.setting("budget.max_validation_retries", int)
     )
@@ -315,15 +329,7 @@ def build_config(
             else frozenset({BandOutcome.IN_BAND})
         ),
     )
-    return TaskforgeConfig(
-        policy,
-        author,
-        adversaries,
-        tools,
-        default_review,
-        band,
-        budget,
-    )
+    return TaskforgeConfig(policy, author, adversary, default_review, band, budget)
 
 
 def provider_policy(policy: Policy) -> Policy:

@@ -5,6 +5,7 @@
 
 """Completed validation evidence and the decisions made from it."""
 
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Literal
@@ -12,7 +13,7 @@ from typing import Annotated, Literal
 from pydantic import Field, TypeAdapter
 from taskcompendium.grading_result import GradeResult
 
-from taskforge.model.controls import Candidate, RewardBand
+from taskforge.model.controls import Candidate
 
 
 class Cause(StrEnum):
@@ -132,11 +133,70 @@ class ControlResult:
     cause: Cause | None = None
 
 
+class Defect(StrEnum):
+    """How a grader mis-scores a candidate, relative to the reward the candidate deserves."""
+
+    FALSE_ACCEPT = "false_accept"
+    FALSE_REJECT = "false_reject"
+    GRADER_CRASH = "grader_crash"
+
+
+class ObservedStatus(StrEnum):
+    GRADED = "graded"
+    SUBMISSION_FAILURE = "submission_failure"
+    GRADER_ERROR = "grader_error"
+
+
+REWARD_TOLERANCE = 1e-6
+"""Rewards a grader prints and a model copies back agree to this tolerance."""
+
+
+@dataclass(frozen=True, slots=True)
+class Observation:
+    """What a grader did to a candidate: a finite reward exactly when it graded."""
+
+    status: ObservedStatus
+    reward: float | None = None
+
+    def __post_init__(self) -> None:
+        if (self.status is ObservedStatus.GRADED) != (self.reward is not None and math.isfinite(self.reward)):
+            raise ValueError("an observed reward is given, and finite, exactly when the status is graded")
+
+    def matches(self, other: "Observation") -> bool:
+        if self.reward is None or other.reward is None:
+            return self.status is other.status
+        return abs(self.reward - other.reward) <= REWARD_TOLERANCE
+
+
+@dataclass(frozen=True, slots=True)
+class DefectClaim:
+    """What the grader DID to a candidate (``observed``), kept apart from what the candidate DESERVES."""
+
+    defect: Defect
+    observed: Observation
+    deserved_reward: float | None
+
+    def shown_by(self, observation: Observation) -> bool:
+        """Whether ``observation`` is wrong in the claimed direction; a correct grade never is."""
+        if self.defect is Defect.GRADER_CRASH:
+            return observation.status is ObservedStatus.GRADER_ERROR
+        deserved = self.deserved_reward
+        if deserved is None or observation.status is ObservedStatus.GRADER_ERROR:
+            return False
+        if observation.reward is None:  # a submission failure: no credit, wrong only for a deserving candidate
+            return self.defect is Defect.FALSE_REJECT and deserved > REWARD_TOLERANCE
+        if self.defect is Defect.FALSE_ACCEPT:
+            return observation.reward > deserved + REWARD_TOLERANCE
+        return observation.reward < deserved - REWARD_TOLERANCE
+
+
 @dataclass(frozen=True, slots=True)
 class AdversaryFinding:
+    """A reported claim and its replay; ``met`` when a fresh verifier's grade also showed the claimed defect."""
+
     claim: str
     candidate: Candidate
-    expected: RewardBand
+    defect: DefectClaim
     grade: GradeResult | None
     met: bool
     cause: Cause | None = None
@@ -162,12 +222,36 @@ class SearchLimit(StrEnum):
     OUTPUT_BUDGET = "output budget"
 
 
+class SearchEnd(StrEnum):
+    """Why an adversary session stopped."""
+
+    REPORTED = "reported"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    HELD = "held"
+    """It raised a hold, or ended without its report: the workpiece cannot accept on it."""
+
+
+@dataclass(frozen=True, slots=True)
+class Continuation:
+    """Where an adversary session stopped, for a consumer that continues it; the default workflow never does.
+
+    ``owner`` is the sandbox owner whose journal rows rebuild the session's machine; ``conversation`` is the content
+    digest of its conversation at the exit, which replaying that owner's session reproduces (None when the session
+    raised before an exit), and ``turns`` its assistant turns.
+    """
+
+    owner: str
+    stopped: SearchEnd
+    conversation: str | None = None
+    turns: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class AdversaryResult:
     """One adversary's search; ``limit`` is set exactly when ``status`` is ``EXHAUSTED``.
 
-    The adversary's conversation is not kept here; a continuation of an exhausted search would need
-    it added as a session field, as the author's ``Workpiece.session`` is kept.
+    A search without a reproduced finding is evidence of a strong task, and its ``reasons`` say it ran out of
+    search budget without a finding, never that it validated the task.
     """
 
     name: str
@@ -175,6 +259,7 @@ class AdversaryResult:
     findings: tuple[AdversaryFinding, ...]
     reasons: tuple[str, ...] = ()
     limit: SearchLimit | None = None
+    continuation: Continuation | None = None
 
 
 @dataclass(frozen=True, slots=True)

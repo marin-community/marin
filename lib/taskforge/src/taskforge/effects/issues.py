@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from taskforge.model.workpiece import Conversation
+
 
 class EffectIssue(Exception):
     """A typed execution decision with provider retry history for the event log."""
@@ -23,6 +25,8 @@ class Restart(EffectIssue):
 
 class OutputBudgetExhausted(Restart):
     """Replace this agent's machine once; repeated exhaustion is failed agent evidence."""
+
+    session: Conversation | None = None  # the conversation of the agentic session whose command exhausted the budget
 
 
 class Hold(EffectIssue):

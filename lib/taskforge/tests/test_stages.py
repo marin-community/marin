@@ -12,7 +12,15 @@ import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.resource_doubles import FakeInference
-from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
+from lib.taskforge.tests.stage_fakes import (
+    OVER_CREDITED,
+    CandidateEngine,
+    Environments,
+    RecordingHarness,
+    SolverEngine,
+    over_credited,
+    solver_model,
+)
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -22,7 +30,7 @@ from taskcompendium.runtime.resources import inline_resource
 from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.coordinator import apply_decision
 from taskforge.effects.context import Context
-from taskforge.effects.events import Note, Resolved
+from taskforge.effects.events import Note, Resolved, ScopeEntered, ScopeExited
 from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Restart
 from taskforge.effects.log import EventLog
 from taskforge.harness.loop import AgenticHarness
@@ -31,6 +39,7 @@ from taskforge.harness.tools import adversary_tools
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport
 from taskforge.llm.policy import LLMPolicy, replay_arguments
 from taskforge.lowering import lowering_settings, machine_backend, requirements
+from taskforge.model.content_hash import digest
 from taskforge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, Message, Role, ToolCall, Usage
 from taskforge.model.proposal import ResearchNeed, TaskProposal, render
@@ -44,10 +53,16 @@ from taskforge.model.review import (
     BandRules,
     Budget,
     Cause,
+    Continuation,
     ControlResult,
+    Defect,
+    DefectClaim,
     Incomplete,
     Modify,
+    Observation,
+    ObservedStatus,
     Retry,
+    SearchEnd,
     SearchLimit,
     TrialResult,
     ValidationResult,
@@ -55,6 +70,7 @@ from taskforge.model.review import (
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
+from taskforge.resources.env import WriteFiles
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import author
@@ -80,19 +96,19 @@ def workpiece(proposal: TaskProposal) -> Workpiece:
 
 
 def config(harness: RecordingHarness | None = None) -> TaskforgeConfig:
-    return replace(
-        build_config(load_policy(DEFAULTS_DIR), {}),
-        author=harness or RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ()))),
-    )
+    setup = build_config(load_policy(DEFAULTS_DIR), {})
+    author = harness or RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
+    return replace(setup, author=replace(setup.author, harness=author))
 
 
 def adversary_config(harness: RecordingHarness) -> TaskforgeConfig:
+    """One adversary whose recorded harness returns one fixed report; these tests pin that report's reproduction, so
+    it gets no revision (``test_adversaries`` pins the revision)."""
     setup = config(harness)
     return replace(
         setup,
-        policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
-        adversaries={"finder": harness},
-        tools={"finder": {}},
+        policy=setup.policy.overlaid({"adversary.roster": ["false_accept"], "adversary.max_revisions": 0}),
+        adversary=replace(setup.adversary, harness=harness, tools={}),
     )
 
 
@@ -140,6 +156,56 @@ async def test_author_workspace_holds_caller_files_on_fresh_and_revision_entries
         files = bundle.envs.created[0].files
         assert files[PurePosixPath("/workspace/reference/static.txt")] == b"static"
         assert files[PurePosixPath("/workspace/reference/id.txt")] == workpiece.proposal.header.id.encode()
+
+
+def unavailable_reference(_workpiece: Workpiece, _policy: Policy) -> tuple[TaskResource, ...]:
+    raise Hold("reference data unavailable")
+
+
+# Review 2026-11-21: the role runner prepared the caller's files and the opening before it opened the machine and scope,
+# so a renderer hold created no machine and journalled nothing, and a prompt failure lost the recorded hydration. Before
+# the role runner (d510505b69) both failures journal these rows and close the one machine.
+@pytest.mark.parametrize(
+    ("failure", "rows"),
+    [
+        ("renderer", [ScopeEntered, ScopeExited]),
+        ("prompt", [ScopeEntered, WriteFiles, Resolved, ScopeExited]),
+    ],
+)
+@pytest.mark.parametrize("revision", [False, True])
+async def test_an_author_visit_failing_before_its_first_model_call_journals_and_closes_its_machine(
+    workpiece: Workpiece, failure: str, rows: list[type[object]], revision: bool
+) -> None:
+    policy = load_policy(DEFAULTS_DIR)
+    setup = build_config(
+        policy.overlaid({"author.user": "{proposal} {undeclared}"}) if failure == "prompt" else policy, {}
+    )
+    if failure == "renderer":
+        setup = replace(setup, workspace=WorkspaceHydration(rendered=unavailable_reference))
+    log = EventLog()
+    ctx = Context(log=log)
+    bundle = resources(ctx)
+    with pytest.raises(Hold if failure == "renderer" else KeyError):
+        await author(ctx, workpiece if revision else workpiece.with_(submission=None), setup, bundle)
+    await ctx.drain()
+    assert [type(record.event) for record in log.records] == rows
+    assert isinstance(bundle.envs, Environments) and [env.closed for env in bundle.envs.created] == [True]
+
+
+# Review 2026-11-21: the adversary rendered its opening before entering its visit, so a prompt key error created no
+# machine and journalled nothing. Before the role runner (40d35b8bcc) it journals these rows and closes the one machine.
+async def test_an_adversary_visit_failing_before_its_first_model_call_journals_and_closes_its_machine(
+    workpiece: Workpiece,
+) -> None:
+    setup = build_config(load_policy(DEFAULTS_DIR).overlaid({"adversary.user": "{name} {absent}"}), {})
+    log = EventLog()
+    ctx = Context(log=log)
+    bundle = resources(ctx)
+    with pytest.raises(KeyError, match="absent"):
+        await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "false_accept", 0)
+    await ctx.drain()
+    assert [type(record.event) for record in log.records] == [ScopeEntered, WriteFiles, Resolved, ScopeExited]
+    assert isinstance(bundle.envs, Environments) and [env.closed for env in bundle.envs.created] == [True]
 
 
 async def test_author_new_session_and_failed_harness_close_environment(workpiece: Workpiece) -> None:
@@ -229,7 +295,7 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     harness = RecordingHarness(
         Returned(
             "report",
-            AdversaryReport((AdversaryClaim("wrong answer accepted", Candidate(reply), RewardBand(Outcome.GRADED, 1)),)),
+            AdversaryReport((AdversaryClaim("wrong answer accepted", Candidate(reply), OVER_CREDITED),)),
             session,
         )
     )
@@ -257,9 +323,7 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
 async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept(
     workpiece: Workpiece, replies: tuple[str, ...]
 ) -> None:
-    claims = tuple(
-        AdversaryClaim(f"{reply} earns credit", Candidate(reply), RewardBand(Outcome.GRADED, 1)) for reply in replies
-    )
+    claims = tuple(AdversaryClaim(f"{reply} earns credit", Candidate(reply), OVER_CREDITED) for reply in replies)
     setup = adversary_config(RecordingHarness(Returned("report", AdversaryReport(claims), Conversation((), ()))))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
@@ -286,7 +350,7 @@ async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept
 # recorded an exhausted search with no findings and review accepted.
 async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_accept(workpiece: Workpiece) -> None:
     setup = config()
-    claim = {"claim": "13 earns credit", "candidate": {"reply": "13"}, "expected": {"status": "graded", "reward_min": 1}}
+    claim = over_credited("13 earns credit", "13")
     client = FakeInference(
         (
             Completion("", (ToolCall("1", "grade", json.dumps({"reply": "13"})),)),
@@ -304,9 +368,8 @@ async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_acc
     harness = AgenticHarness(262144, sampling(setup.policy, LLMPolicy()), "report findings", 20000, replay_arguments)
     setup = replace(
         setup,
-        policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
-        adversaries={"finder": harness},
-        tools={"finder": tools},
+        policy=setup.policy.overlaid({"adversary.roster": ["false_accept"]}),
+        adversary=replace(setup.adversary, harness=harness, tools=tools),
     )
 
     async def output_limited(event: GradeCandidate, grading: GradingResource) -> GradeResult:
@@ -330,9 +393,7 @@ async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_acc
 async def test_observed_grader_outage_on_one_claim_keeps_both_claims_and_the_sibling_grade(
     workpiece: Workpiece,
 ) -> None:
-    claims = tuple(
-        AdversaryClaim(f"{reply} earns credit", Candidate(reply), RewardBand(Outcome.GRADED, 1)) for reply in ("13", "9")
-    )
+    claims = tuple(AdversaryClaim(f"{reply} earns credit", Candidate(reply), OVER_CREDITED) for reply in ("13", "9"))
     setup = adversary_config(RecordingHarness(Returned("report", AdversaryReport(claims), Conversation((), ()))))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
@@ -407,6 +468,7 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
     workpiece: Workpiece, status: Outcome, failure: GradingFailure | None, cause: Cause
 ) -> None:
     setup = config()
+    setup = replace(setup, policy=setup.policy.overlaid({"adversary.roster": []}))  # controls alone
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
     grader = GradingResource(
@@ -450,7 +512,7 @@ async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Wor
     setup = adversary_config(harness)
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
-    await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(task), "finder", 0)
+    await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(task), "false_accept", 0)
     await ctx.drain()
     assert harness.session is not None
     prompt = harness.session.messages[-1].content
@@ -469,7 +531,7 @@ async def test_author_hydrates_full_validation_evidence(workpiece: Workpiece) ->
     finding = AdversaryFinding(
         "wrong answer accepted",
         Candidate("x", (inline_resource("answer.bin", b"\x00\xffz"),)),
-        RewardBand(Outcome.GRADED, 1),
+        OVER_CREDITED,
         grade,
         True,
     )
@@ -477,7 +539,7 @@ async def test_author_hydrates_full_validation_evidence(workpiece: Workpiece) ->
         workpiece.submission.digest,
         (TrialResult(0, grade),),
         (ControlResult(0, grade, True),),
-        (AdversaryResult("finder", AdversaryStatus.REPORTED, (finding,)),),
+        (AdversaryResult("false_accept", AdversaryStatus.REPORTED, (finding,)),),
     )
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     ctx = Context(log=EventLog())
@@ -502,7 +564,7 @@ async def test_control_and_claim_preemption_restarts_validation(workpiece: Workp
     spec = rollout_spec(workpiece.submission.task)
     with pytest.raises(Restart, match="verifier preempted"):
         if claim:
-            await claim_result(ctx, spec, AdversaryClaim("wrong", control.candidate, control.expected))
+            await claim_result(ctx, spec, AdversaryClaim("wrong", control.candidate, OVER_CREDITED))
         else:
             await control_result(ctx, spec, 0, control)
     await ctx.drain()
@@ -522,6 +584,10 @@ async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None
     ctx = Context(log=EventLog())
     assert (await review(ctx, current, setup, resources(ctx))).decision is expected
     await ctx.drain()
+
+
+OWNER = "validate/0/0/adversary:false_accept/0"
+"""The first roster entry's sandbox owner in round 0, less its search retry."""
 
 
 # Pilot o-w6: each output-exhausted agent gets one fresh-machine retry, then failed evidence.
@@ -544,8 +610,11 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
         assert isinstance(outcome, Returned)
         harness = RecordingHarness(outcome)
         harness.run = run
-        setup = replace(config(), adversaries={"finder": harness}, tools={"finder": {}})
-        result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder", 0)
+        setup = config()
+        setup = replace(setup, adversary=replace(setup.adversary, harness=harness, tools={}))
+        result = await adversary_result(
+            ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "false_accept", 0
+        )
         if failures == 2:
             assert (result.status, result.limit, result.findings) == (
                 AdversaryStatus.EXHAUSTED,
@@ -553,8 +622,14 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
                 (),
             )
             assert "ran out" in result.reasons[0]
+            assert result.continuation == Continuation(f"{OWNER}/1", SearchEnd.BUDGET_EXHAUSTED)
         else:
-            assert result == AdversaryResult("finder", AdversaryStatus.REPORTED, ())
+            assert (result.status, result.findings) == (AdversaryStatus.REPORTED, ())
+            assert result.reasons == (
+                "ran out of search budget without a finding (its session ended with a report and no reproduced "
+                "finding); this is not a validation of the task",
+            )
+            assert result.continuation == Continuation(f"{OWNER}/1", SearchEnd.REPORTED, digest(Conversation((), ())), 0)
         assert isinstance(bundle.envs, Environments) and len(bundle.envs.created) == 2
         assert all(env.closed for env in bundle.envs.created)
         evidence = ValidationResult(
@@ -691,9 +766,9 @@ def test_grader_failure_classification_and_repair(workpiece: Workpiece, failure:
     finding = AdversaryFinding(
         "Huge integer breaks the grader",
         Candidate('{"target_value":' + "9" * 400 + "}"),
-        RewardBand(Outcome.GRADED, 0, 0),
+        DefectClaim(Defect.GRADER_CRASH, Observation(ObservedStatus.GRADER_ERROR), None),
         grade,
-        False,
+        True,  # a claimed crash that the replay showed
         cause,
     )
     final = reviewed(
@@ -743,10 +818,18 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
         result = (await validate(ctx, workpiece, setup, bundle)).result
         restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(result,))))
         reason = "Hold: unavailable"
-        assert restored.evidence[0].adversary == (AdversaryResult("finder", AdversaryStatus.FAILED, (), (reason,)),)
+        assert restored.evidence[0].adversary == (
+            AdversaryResult(
+                "false_accept",
+                AdversaryStatus.FAILED,
+                (),
+                (reason,),
+                continuation=Continuation(f"{OWNER}/0", SearchEnd.HELD),
+            ),
+        )
         assert len(result.solver) == 3 and len(result.controls) == 2
         decision = default_review(restored, setup.band, setup.budget)
-        assert isinstance(decision, Incomplete) and decision.reasons == (f"finder: {reason}",)
+        assert isinstance(decision, Incomplete) and decision.reasons == (f"false_accept: {reason}",)
     await ctx.drain()
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
 
@@ -761,7 +844,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     assert workpiece.submission is not None
     setup = config()
     harness = AgenticHarness(32, sampling(setup.policy, LLMPolicy()), "report findings", 20000, replay_arguments)
-    setup = replace(setup, adversaries={"finder": harness}, tools={"finder": {}})
+    setup = replace(setup, adversary=replace(setup.adversary, harness=harness, tools={}))
     client = FakeInference(
         (
             (
@@ -773,7 +856,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     )
     ctx = Context(log=EventLog())
     bundle = replace(resources(ctx), role_inference={"adversary": client})
-    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder", 0)
+    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "false_accept", 0)
     assert (result.status, result.limit, result.findings) == (AdversaryStatus.EXHAUSTED, SearchLimit.CONTEXT_WINDOW, ())
     (note,) = result.reasons
     assert "ran out" in note and "context window" in note
@@ -788,7 +871,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     author = Conversation((Message(Role.SYSTEM, "author"),), ())
     after = apply_decision(wp.with_(session=author), decision, setup.budget, setup.policy)
     if isinstance(decision, Accept):
-        assert f"finder: {note}" in decision.reasons and after.terminal is Terminal.ACCEPTED
+        assert f"false_accept: {note}" in decision.reasons and after.terminal is Terminal.ACCEPTED
     if isinstance(decision, Modify):
         assert after.session is not None and after.session.messages[-1].role == Role.USER
         assert not any(note in text for text in (*decision.findings, after.session.messages[-1].content))

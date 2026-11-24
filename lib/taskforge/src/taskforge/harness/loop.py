@@ -15,7 +15,7 @@ from pathlib import PurePosixPath
 from typing import override
 
 from taskforge.effects.context import Context
-from taskforge.effects.issues import ContextExceeded, Hold
+from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted
 from taskforge.harness.events import ToolInvoked, ToolReturned
 from taskforge.harness.protocol import (
     FinishRequest,
@@ -127,7 +127,11 @@ class AgenticHarness(Harness):
                         )
                     else:
                         tool = tools.get(call.name)
-                        outcome = ToolResult(f"Unknown tool: {call.name}") if tool is None else await tool(ctx, args)
+                        try:
+                            outcome = ToolResult(f"Unknown tool: {call.name}") if tool is None else await tool(ctx, args)
+                        except OutputBudgetExhausted as error:
+                            error.session = session  # for a caller that records where the session ended
+                            raise
                     if len(result.tool_calls) > 1 and isinstance(outcome, (SubmitRequest, ReturnRequest, FinishRequest)):
                         outcome = ToolResult("Session-returning tools must be called alone. Retry this call by itself.")
                     if isinstance(outcome, SubmitRequest):

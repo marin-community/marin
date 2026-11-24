@@ -4,7 +4,6 @@
 """Hydrate a fresh environment and continue the author's saved conversation."""
 
 import json
-from functools import partial
 from pathlib import PurePosixPath
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
@@ -12,29 +11,16 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
-from taskforge.effects.log import Opened
-from taskforge.lowering import host_requirements, lowering_settings, requirements
+from taskforge.harness.role import Files, Fresh, Visit, sitting
+from taskforge.lowering import lowering_settings, requirements
 from taskforge.model.controls import CONTROLS
-from taskforge.model.llm import Message, Role
 from taskforge.model.proposal import render
 from taskforge.model.review import VALIDATION_RESULT
 from taskforge.model.stage import Exit
-from taskforge.model.workpiece import Conversation, Workpiece
+from taskforge.model.workpiece import Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
-from taskforge.resources.env import (
-    Env,
-    ReadFile,
-    RunCommand,
-    WriteFile,
-    WriteFiles,
-    read_file,
-    run_command,
-    write_file,
-    write_files,
-)
-from taskforge.resources.execution import close_resource
 from taskforge.stages.summary import validation_path
 
 # The TaskSpec and Control schemas the author is shown. Every author request embeds them, so they are pinned data: a
@@ -86,59 +72,45 @@ def sandbox_limits(policy: Policy) -> str:
     )
 
 
-def install_env(ctx: Context, env: Env) -> None:
-    ctx.handle(RunCommand, partial(run_command, notify=ctx.notify), env)
-    ctx.handle(ReadFile, partial(read_file, notify=ctx.notify), env)
-    ctx.handle(WriteFile, partial(write_file, notify=ctx.notify), env)
-    ctx.handle(WriteFiles, partial(write_files, notify=ctx.notify), env)
-
-
 async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Exit:
     policy = config.policy
     workdir = PurePosixPath(policy.setting("author.workdir", str))
-    requested = requirements(
+    machine = requirements(
         image=policy.setting("author.image", str) or None,
         packages=policy.setting("author.packages", tuple),
         workdir=str(workdir),
     )
-    env = await resources.envs.create(host_requirements(requested))
-    try:
-        # A round has one author visit, which a stage restart reconstructs on its fresh machine.
-        async with ctx.scope("author", Opened(f"author/{workpiece.round}", env.fingerprint().digest)):
-            install_env(ctx, env)
-            files = (*config.workspace.static, *config.workspace.rendered(workpiece, policy))
-            writes = [(PurePosixPath("/", file.path), resource_bytes(file)) for file in files]
-            submission = workpiece.submission
-            if submission is not None:
-                writes.extend(
-                    (PurePosixPath("/", file.path), resource_bytes(file))
-                    for file in (*submission.task.resources.all, *submission.task.resources.worker)
-                )
-                writes.extend(
-                    (PurePosixPath("/tests", file.path), resource_bytes(file))
-                    for file in submission.task.resources.verifier
-                )
-                writes.extend(
-                    (
-                        (workdir / "task.json", submission.task.model_dump_json().encode()),
-                        (workdir / "controls.json", CONTROLS.dump_json(submission.controls)),
-                    )
-                )
-            proposal = render(workpiece.proposal)
+    proposal = render(workpiece.proposal)
+
+    def workspace() -> Files:
+        files = (*config.workspace.static, *config.workspace.rendered(workpiece, policy))
+        writes = [(PurePosixPath("/", file.path), resource_bytes(file)) for file in files]
+        submission = workpiece.submission
+        if submission is not None:
             writes.extend(
-                (validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence))
-                for index, evidence in enumerate(workpiece.evidence)
+                (PurePosixPath("/", file.path), resource_bytes(file))
+                for file in (*submission.task.resources.all, *submission.task.resources.worker)
             )
-            writes.append((workdir / "proposal.json", proposal.encode()))
-            await ctx.emit(WriteFiles(tuple(writes)))
-            tools = config.tools["author"]
-            session = workpiece.session or Conversation(
+            writes.extend(
+                (PurePosixPath("/tests", file.path), resource_bytes(file)) for file in submission.task.resources.verifier
+            )
+            writes.extend(
                 (
-                    Message(Role.SYSTEM, system_prompt(policy)),
-                    Message(Role.USER, policy.prompt("author.user").render(proposal=proposal)),
-                ),
-                tuple(tool.schema for tool in tools.values()),
+                    (workdir / "task.json", submission.task.model_dump_json().encode()),
+                    (workdir / "controls.json", CONTROLS.dump_json(submission.controls)),
+                )
             )
-            return await config.author.run(ctx, session, resources.inference_for("author"), tools)
-    finally:
-        await close_resource(env.close, ctx.notify)
+        writes.extend(
+            (validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence))
+            for index, evidence in enumerate(workpiece.evidence)
+        )
+        writes.append((workdir / "proposal.json", proposal.encode()))
+        return tuple(writes)
+
+    # A round has one author visit, which a stage restart reconstructs on its fresh machine. The caller's files are
+    # prepared inside it and the opening after hydration, so either failing is journalled and its machine closed.
+    visit = Visit("author", f"author/{workpiece.round}", machine, workspace)
+    async with sitting(ctx, config.author, visit, resources) as session:
+        if workpiece.session is not None:
+            return await session(workpiece.session)
+        return await session(Fresh(system_prompt(policy), policy.prompt("author.user").render(proposal=proposal)))

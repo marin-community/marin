@@ -59,6 +59,7 @@ from taskforge.effects.events import Event, Retrying
 from taskforge.effects.issues import OutputBudgetExhausted, Restart, Transient
 from taskforge.effects.log import EventLog, Opened
 from taskforge.harness.protocol import ToolResult as ToolReply
+from taskforge.harness.role import install_env
 from taskforge.harness.tools.grade import GradeTool
 from taskforge.lowering import GRADING_MACHINE, TOOL_HARNESS, LoweringSettings, requirements, rollout_engine
 from taskforge.model.controls import Candidate
@@ -66,7 +67,6 @@ from taskforge.resources.env import ShellboxEnvFactory, WriteFile
 from taskforge.resources.grading import GradeCandidate, GradingResource, ScriptedModel, candidate_turns, grade
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, interruption, run_rollout
 from taskforge.resources.sandbox.factories import shellsim_factory
-from taskforge.stages.author import install_env
 
 
 def test_candidate_file_calls_do_not_collide_with_conversation_history() -> None:
