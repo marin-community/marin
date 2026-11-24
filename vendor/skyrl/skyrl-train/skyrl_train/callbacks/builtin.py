@@ -320,6 +320,59 @@ def _harbor_telemetry_config() -> dict[str, str] | None:
     }
 
 
+@register_callback("ftpo_pilot")
+class FtpoPilotCallback(TrainerCallback):
+    """Stop a stage on a pilot correctness breach or two unchanged loop upper bounds."""
+
+    def __init__(self, *, patience_evaluations: int, max_pass_rate_drop: float):
+        self.patience_evaluations = patience_evaluations
+        self.max_pass_rate_drop = max_pass_rate_drop
+        self.baseline_pass_rate: float | None = None
+        self.best_upper_bound: float | None = None
+        self.stagnant_evaluations = 0
+
+    async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
+        path = join_resource_path(trainer.cfg.trainer.export_path, "ftpo_pilot_state.json")
+        upper_bound = metrics["eval/all/loop_upper_bound"]
+        pass_rate = metrics["eval/all/fail_closed_pass_rate"]
+        if state.global_step == 0:
+            self.baseline_pass_rate = pass_rate
+            self.best_upper_bound = upper_bound
+            self.stagnant_evaluations = 0
+        else:
+            if self.baseline_pass_rate is None and io.exists(path):
+                with io.open_file(path, "r") as stream:
+                    saved = json.load(stream)
+                self.baseline_pass_rate = saved["baseline_pass_rate"]
+                self.best_upper_bound = saved["best_upper_bound"]
+                self.stagnant_evaluations = saved["stagnant_evaluations"]
+            if self.baseline_pass_rate is None or self.best_upper_bound is None:
+                raise ValueError("FTPO pilot stopping requires a step-zero evaluation or saved stage baseline")
+            if upper_bound < self.best_upper_bound:
+                self.best_upper_bound = upper_bound
+                self.stagnant_evaluations = 0
+            else:
+                self.stagnant_evaluations += 1
+            if pass_rate < self.baseline_pass_rate - self.max_pass_rate_drop:
+                control.should_training_stop = True
+                logger.info("FTPO pilot correctness fell beyond the stage limit")
+            elif self.stagnant_evaluations >= self.patience_evaluations:
+                control.should_training_stop = True
+                logger.info("FTPO pilot loop upper bound reached its stage plateau")
+        payload = {
+            "step": state.global_step,
+            "baseline_pass_rate": self.baseline_pass_rate,
+            "best_upper_bound": self.best_upper_bound,
+            "stagnant_evaluations": self.stagnant_evaluations,
+            "upper_bound": upper_bound,
+            "pass_rate": pass_rate,
+            "stopped": control.should_training_stop,
+        }
+        io.makedirs(trainer.cfg.trainer.export_path, exist_ok=True)
+        io.write_bytes_atomic(path, json.dumps(payload).encode())
+        return control
+
+
 @register_callback("harbor_evaluation")
 class HarborEvaluationCallback(TrainerCallback):
     """Evaluate frozen policy weights through Harbor before checkpoint selection."""

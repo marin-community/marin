@@ -617,6 +617,31 @@ def _generation_plan() -> SkyRLGenerationPlan:
     )
 
 
+@pytest.mark.parametrize("engines,nodes", [(1, 4), (8, 32)])
+def test_generation_launch_places_cross_host_experts_without_policy_hosts(engines, nodes):
+    plan = dataclasses.replace(
+        _generation_plan(),
+        num_inference_engines=engines,
+        inference_engine_data_parallel_size=16,
+        inference_engine_expert_parallel_size=16,
+    )
+    spec = dataclasses.replace(
+        _spec(),
+        topology=SkyRLTopology(
+            num_nodes=plan.num_nodes,
+            gpus_per_node=4,
+            gpu_variant="GB200",
+            role_plan=plan,
+        ),
+    )
+    execution = dataclasses.replace(_execution(), role_topology=RoleTopologyMode.NVLINK_DOMAIN)
+    step = skyrl_step(spec, execution)
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    document = yaml.safe_load(config.launch_config_yaml)
+    assert document["iris"]["allocation"]["num_nodes"] == nodes
+    assert document["skyrl"]["entrypoint"] == "generate"
+
+
 @pytest.mark.parametrize("failure", ["extra-node", "node-width", "entrypoint"])
 def test_generation_plan_rejects_geometry_conflicts(failure):
     spec, plan = _spec(), _generation_plan()

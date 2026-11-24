@@ -267,8 +267,19 @@ class Training:
                     initial_model_uri=initial_model_uri,
                     expected_tasks=expected_tasks,
                     minimum_scored_tasks=minimum_scored_tasks,
+                    **(
+                        {"selection_metric": preset.checkpoint_selection_metric}
+                        if preset.checkpoint_selection_metric
+                        else {}
+                    ),
+                    **(
+                        {"preservation_max_drop": preset.checkpoint_preservation_max_drop}
+                        if preset.checkpoint_preservation_max_drop
+                        else {}
+                    ),
                 )
             )
+        callbacks.extend(preset.additional_callbacks)
         every = preset.checkpoint_every
         if preset.export != "none":
             callbacks.append(
@@ -337,7 +348,8 @@ class Generation:
         expected_tasks: int,
         initial_model_uri: str | None,
     ) -> tuple[Callback, ...]:
-        return (EvaluationCallback(type="evaluation", additional_evaluations=profiles),) if profiles else ()
+        callbacks = (EvaluationCallback(type="evaluation", additional_evaluations=profiles),) if profiles else ()
+        return (*callbacks, *preset.additional_callbacks)
 
 
 @dataclass(frozen=True)
@@ -427,6 +439,9 @@ class Preset:
     publishes: bool = False
     control_preset: str | None = None
     checkpoint_every: int | None = None
+    checkpoint_selection_metric: str | None = None
+    checkpoint_preservation_max_drop: Mapping[str, float] | None = None
+    additional_callbacks: tuple[Callback, ...] = ()
     checkpoints: CheckpointPolicy = "best"
     keep_every: int | None = None
     owned_keys: frozenset[str] = frozenset()

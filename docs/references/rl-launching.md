@@ -61,7 +61,9 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_trai
 The Mochi RL presets default to the completed production Mochi SFT export. The export
 supplies its own tokenizer. Use `--init NAME@VERSION` to start from another published model,
 or select an SFT preset with `--sft`. Mochi writes artifacts under the cluster's
-`tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to use a durable prefix.
+`tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to use a durable prefix. The override also applies
+to presets with durable outputs. Set `MARIN_TEMP_PREFIX` to keep native checkpoints and other
+temporary artifacts in a specific bucket; both storage overrides are forwarded to the coordinator.
 
 ```bash
 uv run python -m experiments.post_training.mochi_rl \
@@ -86,6 +88,12 @@ checkpoint, including after an early stop.
 uv run --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpoint \
   --launch-config ./training-launch.yaml --recover-best
 ```
+
+Generation-only workloads can place vLLM TP1/PP1 engines with EP=DP across hosts. On four-GPU
+NVL72 hosts, use `role_topology=nvlink.domain` so each expert group stays within one NVLink domain.
+For example, eight DP16/EP16 engines allocate 32 hosts (128 GPUs), with no policy or reference role.
+
+Presets using only `console` and `records` logging do not require a W&B API key.
 
 ## One Hydra launch document
 

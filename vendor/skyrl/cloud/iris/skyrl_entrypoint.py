@@ -91,7 +91,7 @@ def run_config(config_path: Path) -> None:
             config.skyrl.runtime.prepared_task_cache = OmegaConf.structured(prepared_cache)
         if topology is not None:
             config.skyrl.runtime.placement = {
-                "policy": topology.selector("policy"),
+                "policy": topology.selector("policy") if "policy" in topology.roles else {},
                 "engines": [topology.selector(role) for role in topology.roles if role != "policy"],
             }
     run(config.skyrl)

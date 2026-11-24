@@ -252,9 +252,10 @@ def artifact_prefix(cluster: str) -> str:
 def run_prefix(preset: Preset) -> str:
     cluster = preset.recipe.layout.cluster
     prefix = artifact_prefix(cluster)
-    if preset.output_ttl_days is None:
-        return prefix
-    output = os.environ.get("MARIN_PREFIX") or marin_temp_bucket(preset.output_ttl_days, source_prefix=prefix)
+    explicit = os.environ.get("MARIN_PREFIX")
+    output = explicit or (
+        prefix if preset.output_ttl_days is None else marin_temp_bucket(preset.output_ttl_days, source_prefix=prefix)
+    )
     scheme = StoragePath(prefix).scheme
     output_scheme = StoragePath(output).scheme
     if scheme and output_scheme != scheme:
@@ -646,9 +647,11 @@ def run_step(
     """Bind an RL specification to its declared execution resources."""
     layout = preset.recipe.layout
     config = yaml.safe_load(spec.config_yaml)
-    required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
+    uses_wandb = "wandb" in config.get("trainer", {}).get("logger", sections.Trainer().logger)
+    required_env = (("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)) if uses_wandb else ()
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
+    required_env += tuple(name for name in ("MARIN_PREFIX", "MARIN_TEMP_PREFIX") if os.environ.get(name))
     if preset.harbor is not None:
         required_env += (preset.harbor.daytona_api_key_env,)
     required_env += tuple(_recipe_env(config))

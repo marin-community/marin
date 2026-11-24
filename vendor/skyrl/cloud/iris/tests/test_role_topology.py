@@ -50,6 +50,19 @@ def test_single_domain_mode_rejects_a_trainer_that_needs_multiple_racks(tmp_path
         load_launch_config(path)
 
 
+def test_generation_only_locality_allocates_engines_without_a_policy(tmp_path):
+    path = launch_config(tmp_path, nodes=32, engines=8, dp=16)
+    raw = yaml.safe_load(path.read_text())
+    raw["skyrl"]["entrypoint"] = "generate"
+    raw["runtime"]["entrypoint"] = "skyrl_train.entrypoints.main_generate"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
+    topology = derive_launch_topology(OmegaConf.to_container(config, resolve=True))
+    assert topology.role_topology.roles == tuple(f"inference_{index}" for index in range(8))
+    assert topology.role_topology.locality.group_sizes == (16, 16)
+    assert topology.role_topology.locality.role_groups == (0, 0, 0, 0, 1, 1, 1, 1)
+
+
 @pytest.mark.parametrize("mode", ["preference_pair", "checkpoint_export"])
 def test_policy_only_launch_keeps_trainer_local_without_inference(tmp_path, mode):
     path = launch_config(tmp_path, nodes=8, policy_nodes=8, engines=1)

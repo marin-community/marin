@@ -1398,3 +1398,25 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         receipt["result"]["state"] = "failed"
     result = invoke_with_preflight_stub(entry)
     assert result.exit_code == 3 and published[-1].status == "failed", (result.output, result.exception)
+
+
+def test_records_only_run_submits_without_wandb_and_preserves_storage_override(
+    selection, preset_table, monkeypatch, tmp_path, capsys
+):
+    client, _ = fake_iris(monkeypatch, "records-only-campaign")
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    campaign = str(tmp_path / "campaign")
+    monkeypatch.setenv("MARIN_PREFIX", campaign)
+    preset = snowball_model.SNOWBALL.by_name["train-long"]
+    config = preset.recipe.config.with_settings(('trainer.logger=["console","records"]',))
+    table = preset_table(replace(preset, recipe=replace(preset.recipe, config=config), temporary_output=False))
+    result = snowball.main(
+        table,
+        argv=["--preset", preset.name, "--version", preset.revision, "--run"],
+        entry_module="experiments.post_training.snowball_rl",
+    )
+    assert result == 0, capsys.readouterr().out
+    environment = client.submit.call_args.kwargs["environment"]
+    assert environment.env_vars["MARIN_PREFIX"] == campaign
+    assert "WANDB_API_KEY" not in environment.env_vars
+    assert recipe.run_prefix(table.by_name[preset.name]) == campaign

@@ -112,6 +112,12 @@ class BestCheckpointCallback(Section):
     preservation_max_drop: NumberMap | None = unset_field()
 
 
+class FtpoPilotCallback(Section):
+    type: Literal["ftpo_pilot"]
+    patience_evaluations: PositiveInt
+    max_pass_rate_drop: float
+
+
 class DistillationTokenBudgetCallback(Section):
     type: Literal["distillation_token_budget"]
     token_budget: PositiveInt
@@ -205,6 +211,7 @@ CorrectionRule = Annotated[TokenRule | SequenceRule, Field(discriminator="kind")
 Callback = Annotated[
     CheckpointCallback
     | BestCheckpointCallback
+    | FtpoPilotCallback
     | DistillationTokenBudgetCallback
     | EvaluationCallback
     | ReferenceLikelihoodCallback

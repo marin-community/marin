@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from skyrl_gym.verification import VerificationResult
+from skyrl_train.config.reward_shaping import LoopCreditConfig
+from skyrl_train.ftpo import ftpo_evaluation_metrics
 from vendor.skyrl.scripts.loop_audit import audit_cohort, prompt_hash
 
 
@@ -42,3 +45,25 @@ def test_open_thinking_at_cap_includes_the_rendered_prompt(response, expected):
     row.update(input_prompt="<|start_think|>", output_response=response, stop_reason="length")
     result = audit_cohort(cohort, [row])
     assert (result.length_stop, result.open_think) == (1, expected)
+
+
+def test_native_pilot_ranks_fewer_loops_above_correctness_and_counts_errors():
+    detector = LoopCreditConfig(max_period_tokens=2048, tail_tokens=16384, minimum_occurrences=8)
+    correct = VerificationResult.verified(1.0, passed=True)
+    wrong = VerificationResult.verified(0.0, passed=False)
+    damaged = ftpo_evaluation_metrics({
+        "response_ids": [[7] * 8, list(range(10)), [], [9] * 8],
+        "verification_results": [correct, wrong, correct, correct],
+        "server_errors": [None, None, None, {"error": "timeout"}],
+    }, detector)
+    assert (damaged["eval/all/loop_confirmed"], damaged["eval/all/loop_unassessed"],
+            damaged["eval/all/loop_upper_bound"], damaged["eval/all/fail_closed_pass_rate"]) == (1, 2, 3, 0.25)
+    fewer_loops = ftpo_evaluation_metrics({
+        "response_ids": [[7] * 8, list(range(10)), list(range(10)), list(range(10))],
+        "verification_results": [wrong] * 4,
+    }, detector)
+    more_correct = ftpo_evaluation_metrics({
+        "response_ids": [[7] * 8, [8] * 8, list(range(10)), list(range(10))],
+        "verification_results": [correct] * 4,
+    }, detector)
+    assert fewer_loops["eval/all/ftpo_selection_score"] > more_correct["eval/all/ftpo_selection_score"]

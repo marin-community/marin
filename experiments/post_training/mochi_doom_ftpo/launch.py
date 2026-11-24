@@ -3,17 +3,24 @@
 
 """Baseline and staged FTPO presets for the Mochi doom-loop campaign."""
 
+import os
 from dataclasses import replace
 
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLGenerationPlan, SkyRLRetentionPolicy, SkyRLRolePlan
 from skyrlrecipe import ContextBudget, RecipePatch, sections
-from skyrlrecipe.declared import EvaluationProfile
+from skyrlrecipe.declared import EvaluationProfile, FtpoPilotCallback
 from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import mochi_rl, rl
-from experiments.post_training.mochi_doom_ftpo.constants import SELECTION_NAME, TOKENIZER, TOKENIZER_REVISION, VERSION
+from experiments.post_training.mochi_doom_ftpo.constants import (
+    REGIONAL_ROOT,
+    SELECTION_NAME,
+    TOKENIZER,
+    TOKENIZER_REVISION,
+    VERSION,
+)
 from experiments.post_training.rl_presets import (
     STOP_TOKEN_IDS,
     Evaluation,
@@ -151,7 +158,15 @@ def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
         )
     )
     if not training:
-        return base
+        return base.merge(
+            RecipePatch(
+                trainer=sections.Trainer(
+                    logger=("console", "records"),
+                    policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(moe_router_replay=False)),
+                    ref=sections.Ref(megatron_config=sections.RefMegatronConfig(moe_router_replay=False)),
+                )
+            )
+        )
     transformer = {
         "bias_activation_fusion": True,
         "grug_checkpoint_cpu_offload": True,
@@ -167,6 +182,8 @@ def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
                 algorithm=sections.Algorithm(
                     policy_loss_type="ftpo",
                     advantage_estimator="uniform",
+                    group_advantage_min_size=None,
+                    rloo_n_filter_zero_reward_groups=False,
                     advantage_batch_normalize=False,
                     loss_reduction="token_mean",
                     think_token_weight=1.0,
@@ -210,7 +227,7 @@ def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
 
 BASELINE = Preset(
     name="doom-baseline",
-    revision=VERSION,
+    revision="2026.11.24.2",
     recipe=Recipe(
         layout=BASELINE_LAYOUT,
         fixed_reply_tokens=None,
@@ -223,19 +240,30 @@ BASELINE = Preset(
     tasks=f"{SELECTION_NAME}@{VERSION}",
     held_out_tasks=f"{SELECTION_NAME}@{VERSION}",
     model=MODEL,
-    evaluations=(evaluation("math16k", "math16k", 16384), evaluation("panel32k", "panel32k", 32768)),
+    evaluations=(
+        evaluation("math16k", "math16k", 16384),
+        evaluation("panel32k", "panel32k", 32768),
+        evaluation("sampled32k", "panel32k", 32768, 0.7),
+    ),
     accepts_init=True,
     seed=20261124,
     sample_namespace="datasets/mochi-doom-ftpo",
     wandb_entity="marin-community",
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=4, temporary_storage_ttl_days=3),
-    temporary_output=True,
+    temporary_output=False,
     budget="128 GB200, estimated 2-2.5 hours for baseline and sampled panel",
 )
 SAMPLED = replace(
     BASELINE, name="doom-baseline-sampled", evaluations=(evaluation("sampled32k", "panel32k", 32768, 0.7),)
 )
-RESERVE = replace(BASELINE, name="doom-reserve", evaluations=(evaluation("reserve32k", "reserve32k", 32768),))
+RESERVE = replace(
+    BASELINE,
+    name="doom-reserve",
+    evaluations=(
+        evaluation("reserve32k", "reserve32k", 32768),
+        evaluation("sampled_reserve32k", "reserve32k", 32768, 0.7),
+    ),
+)
 MATH = replace(
     BASELINE,
     name="doom-math",
@@ -245,6 +273,9 @@ MATH = replace(
     measured=range(1, 13),
     checkpoints="best",
     checkpoint_every=3,
+    checkpoint_selection_metric="eval/all/ftpo_selection_score",
+    checkpoint_preservation_max_drop={"eval/all/fail_closed_pass_rate": 0.05},
+    additional_callbacks=(FtpoPilotCallback(type="ftpo_pilot", patience_evaluations=2, max_pass_rate_drop=0.05),),
     export="best",
     evaluations=(evaluation("pilot", "validation", 16384, every=3, at_start=True),),
 )
@@ -254,6 +285,9 @@ SMOKE = replace(
     updates=2,
     measured=range(1, 3),
     checkpoint_every=1,
+    checkpoints="latest",
+    export="latest",
+    additional_callbacks=(),
     recipe=replace(MATH.recipe, config=config(32768, 3e-6, training=True)),
     evaluations=(evaluation("pilot", "validation", 32768, every=1, at_start=True),),
 )
@@ -261,6 +295,9 @@ MIXED = replace(MATH, name="doom-mixed", tasks=f"{SELECTION_NAME}@{VERSION}", ta
 LONG = replace(
     SMOKE,
     name="doom-long",
+    checkpoints="best",
+    export="best",
+    additional_callbacks=MATH.additional_callbacks,
     tasks=f"{SELECTION_NAME}@{VERSION}",
     tasks_input="optional",
     updates=4,
@@ -275,14 +312,20 @@ LONG_16K = replace(
     evaluations=(evaluation("pilot", "validation", 16384, every=1, at_start=True),),
 )
 EVAL = replace(BASELINE, name="doom-eval", recipe=replace(BASELINE.recipe, layout=EVAL_LAYOUT))
+EVAL_GREEDY = replace(EVAL, name="doom-eval-greedy", evaluations=BASELINE.evaluations[:2])
 MOCHI_DOOM = ModelPresets(
     model="mochi",
     namespace="mochi-doom-ftpo",
     control_pins={},
-    presets=(BASELINE, SAMPLED, RESERVE, SMOKE, MATH, MIXED, LONG, LONG_PP16, LONG_16K, EVAL),
+    presets=(BASELINE, SAMPLED, RESERVE, SMOKE, MATH, MIXED, LONG, LONG_PP16, LONG_16K, EVAL, EVAL_GREEDY),
     needs_completed_default_export=False,
 )
 
 
 if __name__ == "__main__":
-    raise SystemExit(rl.main(MOCHI_DOOM))
+    os.environ.setdefault("MARIN_PREFIX", REGIONAL_ROOT)
+    os.environ.setdefault("MARIN_TEMP_PREFIX", "s3://marin-us-east-08a/tmp/ttl=3d")
+    for variable in ("MARIN_PREFIX", "MARIN_TEMP_PREFIX"):
+        if not os.environ[variable].startswith("s3://marin-us-east-08a/"):
+            raise ValueError(f"{variable} must stay in the campaign's cw-us-east-08a region")
+    raise SystemExit(rl.main(MOCHI_DOOM, forward_env=("MARIN_PREFIX", "MARIN_TEMP_PREFIX")))

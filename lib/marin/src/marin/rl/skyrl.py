@@ -160,14 +160,7 @@ class SkyRLRolePlan(_InferenceGeometry):
     @property
     def uses_expert_parallel_placement(self) -> bool:
         """Whether rollout uses cross-host, one-GPU expert-parallel workers."""
-        return (
-            not self.colocate_all
-            and self.inference_engine_tensor_parallel_size == 1
-            and self.inference_engine_pipeline_parallel_size == 1
-            and self.inference_engine_expert_parallel_size
-            == self.inference_engine_data_parallel_size
-            > self.policy_num_gpus_per_node
-        )
+        return not self.colocate_all and _uses_cross_host_expert_parallel(self, self.gpus_per_node)
 
     @property
     def num_nodes(self) -> int:
@@ -332,6 +325,8 @@ class SkyRLGenerationPlan(_InferenceGeometry):
 
     @property
     def num_nodes(self) -> int:
+        if _uses_cross_host_expert_parallel(self, self.gpus_per_node):
+            return -(-(self.num_inference_engines * self.engine_gpus) // self.gpus_per_node)
         return _inference_nodes(self)
 
     def config_values(self) -> dict[str, object]:
@@ -345,14 +340,25 @@ class SkyRLGenerationPlan(_InferenceGeometry):
         _validate_inference_geometry(self)
         if self.num_inference_engines <= 0 or self.n_samples_per_prompt <= 0:
             raise ValueError("SkyRL generation engines and samples per prompt must be positive")
-        _validate_engine_fits_node(self, topology)
+        if not _uses_cross_host_expert_parallel(self, self.gpus_per_node):
+            _validate_engine_fits_node(self, topology)
         if topology.num_nodes != self.num_nodes:
             raise ValueError("SkyRL generation topology must allocate exactly the inference engine nodes")
         if self.gpus_per_node != topology.gpus_per_node:
             raise ValueError("SkyRL inference node width must match the whole-node topology width")
 
     def validate_recipe(self, config: dict[str, object], topology: SkyRLTopology) -> None:
-        return None
+        if _uses_cross_host_expert_parallel(self, self.gpus_per_node):
+            if _declared_config_value(config, "generator.backend") != "vllm":
+                raise ValueError("Cross-host expert-parallel generation requires vLLM")
+
+
+def _uses_cross_host_expert_parallel(plan: _InferenceGeometry, gpus_per_node: int) -> bool:
+    return (
+        plan.inference_engine_tensor_parallel_size == 1
+        and plan.inference_engine_pipeline_parallel_size == 1
+        and plan.inference_engine_expert_parallel_size == plan.inference_engine_data_parallel_size > gpus_per_node
+    )
 
 
 def _validate_engine_fits_node(plan: SkyRLRolePlan | SkyRLGenerationPlan, topology: SkyRLTopology) -> None:
@@ -1043,15 +1049,15 @@ def _launch_config_yaml(
             raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
         plan = spec.topology.role_plan
         locality = plan_nvlink_roles(
-            policy_gpus=plan.policy_num_nodes * plan.policy_num_gpus_per_node,
+            policy_gpus=plan.policy_num_nodes * plan.policy_num_gpus_per_node if isinstance(plan, SkyRLRolePlan) else 0,
             num_inference_engines=plan.num_inference_engines,
             tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
             pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
             data_parallel_size=plan.inference_engine_data_parallel_size,
             expert_parallel_size=plan.inference_engine_expert_parallel_size,
             inference_backend=cast(str, _declared_config_value(recipe, "generator.backend")),
-            colocate_all=plan.colocate_all,
-            colocate_policy_ref=plan.colocate_policy_ref,
+            colocate_all=plan.colocate_all if isinstance(plan, SkyRLRolePlan) else False,
+            colocate_policy_ref=plan.colocate_policy_ref if isinstance(plan, SkyRLRolePlan) else True,
             gpus_per_node=spec.topology.gpus_per_node,
             max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
         )

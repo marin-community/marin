@@ -224,3 +224,26 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
     assert model.is_relative_to(output)
     assert (model / "rank_0.pt").read_bytes() == b"policy"
     assert json.loads((output / "exports/best_checkpoint.json").read_text()) == selected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("last_upper_bound,last_pass_rate", [(8, 0.81), (7, 0.70)])
+async def test_ftpo_pilot_stops_at_plateau_or_correctness_breach_after_resume(tmp_path, last_upper_bound, last_pass_rate):
+    config = OmegaConf.create({"trainer": {"callbacks": [{"type": "ftpo_pilot",
+        "patience_evaluations": 2, "max_pass_rate_drop": 0.05}]}})
+    trainer = SimpleNamespace(cfg=SimpleNamespace(trainer=SimpleNamespace(export_path=str(tmp_path))))
+    callback = create_callbacks_from_config(config)[0]
+
+    async def evaluate(step, upper_bound, pass_rate):
+        return await callback.on_evaluate_async(TrainerState(step, 0, 12, 12), TrainerControl(), trainer=trainer,
+            metrics={"eval/all/loop_upper_bound": upper_bound, "eval/all/fail_closed_pass_rate": pass_rate})
+
+    assert not (await evaluate(0, 10, 0.80)).should_training_stop
+    assert not (await evaluate(3, 8, 0.78)).should_training_stop
+    assert not (await evaluate(6, 8, 0.80)).should_training_stop
+    callback = create_callbacks_from_config(config)[0]
+    result = await evaluate(9, last_upper_bound, last_pass_rate)
+    assert result.should_training_stop is True
+    record = json.loads((tmp_path / "ftpo_pilot_state.json").read_text())
+    assert record["baseline_pass_rate"] == 0.80
+    assert record["stopped"] is True

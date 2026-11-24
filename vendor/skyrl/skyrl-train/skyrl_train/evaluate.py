@@ -49,6 +49,9 @@ from skyrl_train.trajectory_runners.trajectory_retention import (
 )
 
 from omegaconf import DictConfig
+from marinskyrl.runtime_options import ftpo_requested
+from skyrl_train.config.reward_shaping import LoopCreditConfig, parse_trajectory_reward_shaping_config
+from skyrl_train.ftpo import ftpo_evaluation_metrics
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
 
@@ -222,6 +225,7 @@ def _calculate_eval_metrics(
     uids: List[str],
     data_sources: List[str | None],
     samples_per_prompt: int,
+    loop_config: LoopCreditConfig | None = None,
 ) -> Dict[str, float]:
     metrics = calculate_per_dataset_metrics(batch, uids, data_sources, samples_per_prompt)
     overall_avg_score, overall_pass_at_n = get_metrics_from_trajectory_batch(batch, uids)
@@ -247,7 +251,15 @@ def _calculate_eval_metrics(
             if key.startswith(GENERATE_OUTCOME_METRIC_PREFIX)
         }
     )
+    if loop_config is not None:
+        metrics.update(ftpo_evaluation_metrics(batch, loop_config))
     return metrics
+
+
+def _ftpo_loop_config(cfg: DictConfig) -> LoopCreditConfig | None:
+    if not ftpo_requested(cfg.trainer.algorithm):
+        return None
+    return parse_trajectory_reward_shaping_config(cfg.generator.trajectory_reward_shaping).loop
 
 
 def _evaluation_task_rows(
@@ -439,6 +451,7 @@ async def evaluate(
             rollouts.uids,
             rollouts.data_sources,
             cfg.generator.eval_n_samples_per_prompt,
+            _ftpo_loop_config(cfg),
         )
         _persist_evaluation(cfg, global_step, val_set_name, rollouts, records_export_root)
         _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics, val_set_name=val_set_name)
@@ -513,7 +526,8 @@ async def evaluate_step_wise(
         ordinals=[ordinal for ordinal, final in zip(rollouts.ordinals, is_last_step_mask, strict=True) if final],
     )
     eval_metrics = _calculate_eval_metrics(
-        final_rollouts.batch, final_rollouts.uids, final_rollouts.data_sources, cfg.generator.eval_n_samples_per_prompt
+        final_rollouts.batch, final_rollouts.uids, final_rollouts.data_sources, cfg.generator.eval_n_samples_per_prompt,
+        _ftpo_loop_config(cfg),
     )
     _persist_evaluation(cfg, global_step, val_set_name, final_rollouts, records_export_root)
     _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics, val_set_name=val_set_name)

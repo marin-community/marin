@@ -12,14 +12,49 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
+from skyrl_gym.verification import VerificationStatus
 from verifyit.tool_call_markup import THINK_CLOSE, TOOL_OPEN, ToolCallStatus, tool_call_regions
 
 from skyrl_train.config.ftpo import FTPOBoundary, FTPOConfig
 from skyrl_train.config.reward_shaping import LoopCreditConfig
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import tail_loop
+from skyrl_train.trajectory_runners.types import TrajectoryBatch
 
 ROLE_HEADER_START = "<|start_header_id|>"
 ASSISTANT_HEADER = "<|start_header_id|>assistant<|end_header_id|>"
+
+
+def ftpo_evaluation_metrics(batch: TrajectoryBatch, config: LoopCreditConfig) -> dict[str, float]:
+    """Rank fewer upper-bound loops ahead of any correctness tie-break improvement."""
+    responses = batch["response_ids"]
+    count = len(responses)
+    assert count > 0
+    confirmed = unassessed = passes = 0
+    for index, response in enumerate(responses):
+        error = (
+            bool((batch.get("server_errors") or [None] * count)[index])
+            or bool((batch.get("exception_types") or [None] * count)[index])
+            or (batch.get("error_treatments") or [None] * count)[index] not in (None, "none")
+        )
+        if error or not response:
+            unassessed += 1
+        elif tail_loop(response, [1] * len(response), config) is not None:
+            confirmed += 1
+        verification = (batch.get("verification_results") or [None] * count)[index]
+        passes += int(
+            not error and bool(response) and verification is not None
+            and verification.status == VerificationStatus.VERIFIED and verification.passed is True
+        )
+    upper_bound = confirmed + unassessed
+    # One fewer loop dominates all N possible changes in pass count; normalize for the selector.
+    selection_score = ((count - upper_bound) * (count + 1) + passes) / (count * (count + 2))
+    return {
+        "eval/all/loop_confirmed": float(confirmed),
+        "eval/all/loop_unassessed": float(unassessed),
+        "eval/all/loop_upper_bound": float(upper_bound),
+        "eval/all/fail_closed_pass_rate": passes / count,
+        "eval/all/ftpo_selection_score": selection_score,
+    }
 
 
 @dataclass(frozen=True)
