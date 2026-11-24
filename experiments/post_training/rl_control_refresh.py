@@ -91,7 +91,6 @@ def plan_refresh(table: ModelPresets, preset_name: str | None = None) -> tuple[s
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preset", help="Plan the control cohort for one gated preset")
-    parser.add_argument("--dry-run", action="store_true", required=True)
     args = parser.parse_args(argv)
     configure_coreweave_s3()
     commit, planned = plan_refresh(SNOWBALL, args.preset)

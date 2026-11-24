@@ -25,10 +25,6 @@ jobs:
     timeout-minutes: 30
     env:
       REQUESTED_PRESET: ${{ inputs.preset }}
-      # Reserved for live collection after the policies and service account are approved.
-      RL_CONTROLS_CODE_CHANGES: ${{ vars.RL_CONTROLS_CODE_CHANGES }}
-      RL_CONTROLS_PIN_MERGE_POLICY: ${{ vars.RL_CONTROLS_PIN_MERGE_POLICY }}
-      RL_CONTROLS_BOT_LOGIN: ${{ vars.RL_CONTROLS_BOT_LOGIN }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -55,7 +51,7 @@ jobs:
           CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          options=(--dry-run)
+          options=()
           if [[ -n "$REQUESTED_PRESET" ]]; then
             options+=(--preset "$REQUESTED_PRESET")
           fi

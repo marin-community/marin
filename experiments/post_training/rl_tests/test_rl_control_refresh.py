@@ -13,9 +13,7 @@ from experiments.post_training import rl_control_refresh as refresh
 from experiments.post_training.snowball_rl import SNOWBALL
 
 
-def test_nightly_and_named_dry_runs_plan_revision_and_launch_selected_training_changes(
-    recorded_runs, tmp_path, monkeypatch, capsys
-):
+def test_nightly_and_named_plans_detect_revision_and_training_changes(recorded_runs, tmp_path, monkeypatch, capsys):
     recorded = recorded_runs("learning-medium", "users/test/refresh-source")
     attempt = refresh.read_stored_skyrl_attempt(str(recorded))
     assert attempt is not None and attempt.config is not None
@@ -39,10 +37,6 @@ def test_nightly_and_named_dry_runs_plan_revision_and_launch_selected_training_c
         },
     )
     monkeypatch.setattr(refresh, "SNOWBALL", table)
-    monkeypatch.setattr(refresh, "configure_coreweave_s3", lambda: pytest.fail("planner accepted a live invocation"))
-    with pytest.raises(SystemExit) as error:
-        refresh.main(())
-    assert error.value.code == 2 and "--dry-run" in capsys.readouterr().err
     monkeypatch.setattr(refresh, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(
         refresh.Provenance, "capture", lambda _: refresh.Provenance("tree", "a" * 10, False, "main", "test")
@@ -62,7 +56,7 @@ def test_nightly_and_named_dry_runs_plan_revision_and_launch_selected_training_c
     monkeypatch.setattr(refresh, "read_stored_skyrl_attempt", read_attempt)
 
     def planned(*args):
-        refresh.main(("--dry-run", *args))
+        refresh.main(args)
         report = json.loads(capsys.readouterr().out)
         assert report["commit"] == "a" * 10
         return report["refresh"]

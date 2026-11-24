@@ -344,7 +344,8 @@ checks the current head once per run. Each check uses the latest defaults on mai
 Data-short compares the sampled training input recorded for screening. A changed sample binding
 qualifies the cohort even before the sample is materialized.
 
-The planner only produces a dry-run plan. The cohort-link report is available for stored runs.
+The planner reports planned refreshes. Generating a cohort-link report currently requires a
+Python caller; the CLI does not run or publish it.
 Live collection and pin proposals require a decision on code-only changes, the pin PR merge
 policy and the bot account.
 
