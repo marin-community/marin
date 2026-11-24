@@ -176,36 +176,51 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     assert bundle.envs.created[0].closed
 
 
-@pytest.mark.parametrize("admitted", [False, True])
-async def test_source_task_author_works_in_the_tasks_container_when_admitted(
-    workpiece: Workpiece, admitted: bool
+SWE_IMAGE = "docker.io/swerebench/sweb.eval.x86_64.astropy_1776_astropy-12907@sha256:" + "b" * 64
+
+
+@pytest.mark.parametrize(
+    "image,admitted,own",
+    [(SWE_IMAGE, [SWE_IMAGE], True), (SWE_IMAGE, [], False), (GRADER_BASE_IMAGE, [], True)],
+    ids=["source-image", "unadmitted-image", "pinned-image"],
+)
+async def test_source_task_author_works_in_the_tasks_own_environment_when_admitted(
+    workpiece: Workpiece, image: str, admitted: list[str], own: bool
 ) -> None:
     assert workpiece.submission is not None
-    image = "docker.io/swerebench/sweb.eval.x86_64.astropy_1776_astropy-12907@sha256:" + "b" * 64
-    environment = requirements(image=image, workdir="/testbed", setup=("git status",))
-    task = workpiece.submission.task.model_copy(update={"environment_requirements": environment})
+    environment = requirements(image=image, workdir="/testbed", setup=("sh setup.sh",))
+    notes = inline_resource("workspace/setup.sh", b"true\n")
+    task = workpiece.submission.task.model_copy(
+        update={
+            "environment_requirements": environment,
+            "resources": workpiece.submission.task.resources.model_copy(update={"worker": (notes,)}),
+        }
+    )
+    submission = Submission(task, (), "source task")
     source = Workpiece(
-        "source",
-        submission=Submission(task, (), "source task"),
-        decisions=(Modify(("The task has no controls",)),),
+        "source", submission=submission, source=submission, decisions=(Modify(("The task has no controls",)),)
     )
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     setup = config(harness)
-    setup = replace(setup, policy=setup.policy.overlaid({"sandbox.source_images": [image] if admitted else []}))
+    setup = replace(setup, policy=setup.policy.overlaid({"sandbox.source_images": admitted}))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
     await author(ctx, source, setup, bundle)
     await ctx.drain()
     assert isinstance(bundle.envs, Environments)
     (requested,) = bundle.envs.requested
-    if admitted:
+    (installed,) = bundle.envs.installed
+    if own:
         assert requested == environment
+        # The task's own setup may read its files, so they are installed before it runs, as for the solver.
+        assert notes in installed
     else:
         assert (requested.docker_image, requested.working_directory) == (GRADER_BASE_IMAGE, "/workspace")
+        assert installed == ()
     assert harness.session is not None
     system = harness.session.messages[0].content
     # The prompt describes the machine the author got: its image and the directory its shell starts in.
-    assert (f"`{requested.docker_image}`" in system, "`/testbed`" in system) == (True, admitted)
+    assert (f"`{requested.docker_image}`" in system, "`/testbed`" in system) == (True, own)
 
 
 async def test_validate_returns_a_source_task_whose_id_changed_to_the_author(workpiece: Workpiece) -> None:
@@ -265,7 +280,9 @@ async def test_source_author_works_in_author_image_when_the_task_environment_wil
 
     class SourceSetupFails(Environments):
         @override
-        async def create(self, requirements: EnvironmentRequirements) -> FakeEnv:
+        async def create(
+            self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()
+        ) -> FakeEnv:
             if requirements.docker_image == image:
                 self.requested.append(requirements)
                 raise EnvironmentSetupFailed("Environment setup command failed: exited, exit=128")

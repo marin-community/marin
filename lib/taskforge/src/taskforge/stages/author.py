@@ -114,19 +114,20 @@ def opening_prompt(workpiece: Workpiece, policy: Policy) -> str:
     return policy.prompt("author.repair").render(kind="review", detail="\n".join(decision.findings))
 
 
-def author_requirements(workpiece: Workpiece, policy: Policy) -> EnvironmentRequirements:
-    """The author's machine: the task's own container when it is a source image, else ``author.image``.
+def source_environment(workpiece: Workpiece, policy: Policy) -> EnvironmentRequirements | None:
+    """The source task's own container environment for its author, or ``None`` for ``author.image``.
 
     A task from another source names the image its repository and tests live in, so the author works in
-    the same environment, setup included, that the solver and grader get. Only a source task's images are
-    in ``sandbox.source_images``, so a generated task's author always gets ``author.image``.
+    the same environment, setup included, that the solver and grader get, when that image is admitted:
+    the pinned image or one of ``sandbox.source_images``. A generated task's author always gets
+    ``author.image``.
     """
     submission = workpiece.submission
-    if submission is not None and submission.task.environment_requirements.docker_image in policy.setting(
-        "sandbox.source_images", tuple
-    ):
-        return host_requirements(submission.task.environment_requirements)
-    return author_image_requirements(policy)
+    if workpiece.source is None or submission is None:
+        return None
+    environment = submission.task.environment_requirements
+    admitted = (GRADER_BASE_IMAGE, *policy.setting("sandbox.source_images", tuple))
+    return host_requirements(environment) if environment.docker_image in admitted else None
 
 
 def author_image_requirements(policy: Policy) -> EnvironmentRequirements:
@@ -149,15 +150,18 @@ class AuthorMachine:
 async def author_machine(workpiece: Workpiece, policy: Policy, resources: Resources) -> AuthorMachine:
     """Start the author's machine, in ``author.image`` when a source task's own environment will not start.
 
-    The source task's environment is then what needs repair, so the author works beside it.
+    The source task's environment is then what needs repair, so the author works beside it. Its resources
+    are installed before its setup commands run, as RolloutEngine installs them for the solver.
     """
-    requested = host_requirements(author_requirements(workpiece, policy))
+    fallback = host_requirements(author_image_requirements(policy))
+    own = source_environment(workpiece, policy)
+    if own is None:
+        return AuthorMachine(await resources.envs.create(fallback), fallback, None)
+    assert workpiece.submission is not None
+    files = (*workpiece.submission.task.resources.all, *workpiece.submission.task.resources.worker)
     try:
-        return AuthorMachine(await resources.envs.create(requested), requested, None)
+        return AuthorMachine(await resources.envs.create(own, files), own, None)
     except EnvironmentSetupFailed as error:
-        if requested.docker_image not in policy.setting("sandbox.source_images", tuple):
-            raise
-        fallback = host_requirements(author_image_requirements(policy))
         return AuthorMachine(await resources.envs.create(fallback), fallback, str(error))
 
 

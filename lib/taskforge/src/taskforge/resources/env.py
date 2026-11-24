@@ -33,7 +33,7 @@ from shellbox.machine import (
     MachineTerminated,
 )
 from shellsim import SimulationError
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import EnvironmentRequirements, TaskResource
 from taskcompendium.runtime.staging import StagedFile, write_archive
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, digest
@@ -92,7 +92,9 @@ class Env(Protocol):
 
 
 class EnvFactory(Protocol):
-    async def create(self, requirements: EnvironmentRequirements) -> Env: ...
+    """Start an environment; ``resources`` are installed before its setup commands run, as RolloutEngine does."""
+
+    async def create(self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()) -> Env: ...
 
 
 def _stable(result: CommandResult) -> tuple[str, ...]:
@@ -308,11 +310,15 @@ class ShellboxEnvFactory(EnvFactory):
     notify: Notify
 
     @override
-    async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+    async def create(
+        self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()
+    ) -> ShellboxEnv:
         owned = AsyncExitStack()
         try:
             machine = await owned.enter_async_context(
-                prepare_machine(requirements, (), self.factory, self.runtime, cleanup_timeout=self.cleanup_timeout)
+                prepare_machine(
+                    requirements, resources, self.factory, self.runtime, cleanup_timeout=self.cleanup_timeout
+                )
             )
         except (MachineTerminated, ExecSetupFailed, MachineCancelled) as error:
             raise _machine_issue(error) from error

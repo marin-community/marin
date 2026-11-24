@@ -20,7 +20,7 @@ from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from shellbox.machine import Command, ExitReason, GuestHelperFailed, Machine, Result
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import EnvironmentRequirements, TaskResource
 
 from taskforge import checkpoint, driver
 from taskforge.config import TaskforgeConfig
@@ -83,7 +83,9 @@ class Envs(EnvFactory):
         self.commands = {"inspect": FakeCommand(result, {}), "write-draft": FakeCommand(result, writes)}
 
     @override
-    async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+    async def create(
+        self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()
+    ) -> RecordingEnv:
         env = RecordingEnv(self.commands, self.fail)
         self.created.append(env)
         return env
@@ -436,7 +438,9 @@ def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, reason:
 async def test_stage_restart_replays_on_fresh_machine_without_repeating_inference(proposal: TaskProposal) -> None:
     class Recovers(Envs):
         @override
-        async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+        async def create(
+            self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()
+        ) -> RecordingEnv:
             env = await super().create(requirements)
             self.fail = False
             return env
@@ -526,7 +530,9 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
         calls = 0
 
         @override
-        async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+        async def create(
+            self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()
+        ) -> RecordingEnv:
             self.calls += 1
             if self.calls <= failures:
                 raise Transient("Environment startup did not resolve")
@@ -616,7 +622,9 @@ class HelperlessMachine(Machine):
 
 class HelperlessEnvs(EnvFactory):
     @override
-    async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+    async def create(
+        self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()
+    ) -> ShellboxEnv:
         return ShellboxEnv(HelperlessMachine(), "image", lambda _: None, AsyncExitStack())
 
 
@@ -659,7 +667,9 @@ class LocalIrisEnvs(EnvFactory):
         self.created: list[Path] = []
 
     @override
-    async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+    async def create(
+        self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()
+    ) -> ShellboxEnv:
         workdir = self.root / f"sandbox-{len(self.created)}"
         workdir.mkdir(parents=True)
         self.created.append(workdir)
@@ -712,7 +722,9 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
 ) -> None:
     class FirstSandboxFaulted(LocalIrisEnvs):
         @override
-        async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+        async def create(
+            self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()
+        ) -> ShellboxEnv:
             env = await super().create(requirements)
             self.faults = ()
             return env
