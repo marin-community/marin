@@ -604,8 +604,6 @@ def _preflight_one(
     assert isinstance(dataset, DatasetConfig)
     agent_name = _agent_class(agent).name()
     environment_name = _validate_environment(config)
-    if config.environment.type == EnvironmentType.DAYTONA and not host_environment.get("DAYTONA_TARGET"):
-        raise ValueError("Harbor Daytona policies require DAYTONA_TARGET before model allocation")
     dataset_metadata = _dataset_metadata(dataset, _raw_dataset_path(document))
 
     stable_config = _stable_config(config)

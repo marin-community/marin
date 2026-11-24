@@ -78,6 +78,9 @@ evaluations:
   olympiadbench:
     benchmark: olympiadbench
     run: *together_judge
+  imo-answerbench:
+    benchmark: imo-answerbench
+    run: *together_judge
   physics-verified:
     benchmark: physics-verified
     run:

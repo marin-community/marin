@@ -14,8 +14,6 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from marin.evaluation.task_worker import (
     DAYTONA_API_KEY,
-    DAYTONA_API_URL,
-    DAYTONA_TARGET,
     DEFAULT_MAX_ATTEMPTS,
     JUDGE_API_KEY,
     JUDGE_ENDPOINT,
@@ -51,7 +49,6 @@ def submit_evaluation(
     resources: ResourceSpec,
     timeout: int,
     secrets: dict[str, str],
-    env_vars: dict[str, str] | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     responses_from: str | None = None,
 ) -> Job:
@@ -67,7 +64,7 @@ def submit_evaluation(
         entrypoint=Entrypoint.from_callable(run_worker, datasets, output, config, max_attempts, responses_from),
         name=name,
         resources=resources,
-        environment=EnvironmentSpec(setup_scripts=(worker_setup_script(config),), secrets=secrets, env_vars=env_vars),
+        environment=EnvironmentSpec(setup_scripts=(worker_setup_script(config),), secrets=secrets),
         egress_allow=worker_egress(config),
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         timeout=Duration.from_seconds(timeout),
@@ -153,11 +150,9 @@ def main() -> None:
         return
     secrets = {SOLVER_ENDPOINT: base_url, SOLVER_API_KEY: api_key}
     secrets.update({name: require_secret(name) for name in config.task_secrets})
-    env_vars = {}
     if daytona is not None:
-        assert daytona.api_key is not None and daytona.api_url is not None and daytona.target is not None
+        assert daytona.api_key is not None
         secrets[DAYTONA_API_KEY] = daytona.api_key
-        env_vars = {DAYTONA_API_URL: daytona.api_url, DAYTONA_TARGET: daytona.target}
     if arguments.judge_endpoint:
         secrets[JUDGE_ENDPOINT] = arguments.judge_endpoint
         secrets[JUDGE_API_KEY] = require_secret(arguments.judge_api_key_env)
@@ -171,7 +166,6 @@ def main() -> None:
             resources=ResourceSpec(cpu=arguments.cpu, memory=arguments.memory, disk=arguments.disk),
             timeout=arguments.timeout,
             secrets=secrets,
-            env_vars=env_vars,
             max_attempts=arguments.max_attempts,
             responses_from=arguments.responses_from,
         )
