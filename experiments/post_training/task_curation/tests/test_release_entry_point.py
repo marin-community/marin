@@ -133,6 +133,26 @@ def test_run_mode_gates_on_the_submission_guard(tmp_path, plan_document, monkeyp
     assert "not landed" in capsys.readouterr().err
 
 
+def test_resume_mode_forces_failed_stages_alone(tmp_path, plan_document, monkeypatch, capsys):
+    """Resume forces failed stages alone through the same terminal run.
+
+    Regression: the dispatch passed ``force_run_failed`` to ``mode_resume``, which
+    does not accept it, so every resume died at the handler boundary.
+    """
+    captured = {}
+
+    def fake_run(*handles, **kwargs):
+        captured["force_run_failed"] = kwargs["force_run_failed"]
+        return []
+
+    monkeypatch.setattr(entry_point, "assert_submission_allowed", lambda *a, **k: None)
+    monkeypatch.setattr(entry_point, "run_handles", fake_run)
+    exit_code = entry_point.main(_argv(plan_document, "resume"))
+    assert exit_code == 0
+    assert captured["force_run_failed"] is True
+    assert "RESUME testrelease" in capsys.readouterr().out
+
+
 def test_status_mode_reports_missing_state(tmp_path, plan_document, capsys):
     exit_code = entry_point.main(_argv(plan_document, "status", "--json"))
     output = capsys.readouterr().out

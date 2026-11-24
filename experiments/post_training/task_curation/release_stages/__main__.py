@@ -223,13 +223,13 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "plan": mode_plan,
         "preflight": mode_preflight,
-        "run": mode_run,
         "status": mode_status,
         "resume": mode_resume,
     }
     try:
-        if args.mode in ("run", "resume"):
-            return handlers[args.mode](args, force_run_failed=args.mode == "resume")
+        if args.mode == "run":
+            # run threads the explicit force flag; resume sets it itself.
+            return mode_run(args, force_run_failed=False)
         return handlers[args.mode](args)
     except Exception as error:
         print(f"ATLAS-RELEASE REFUSED: {str(error)[:600]}", file=sys.stderr)
