@@ -59,7 +59,6 @@ from cloud.iris.artifacts import (
     file_inventory,
     fs_and_path,
     materialize,
-    write_json,
 )
 from cloud.iris.hf_model_cache import (
     download_hugging_face_snapshot,
@@ -2380,8 +2379,7 @@ def main() -> None:
         apply_policy_chat_template(model_path, args.policy_chat_template)
     resolve_ray_ports()
     rank = _rank()
-    trainer = launch_config.skyrl.get("trainer", {})
-    debug_mode = DebugMode(str(trainer.get("debug_mode", DebugMode.LIGHT.value)))
+    debug_mode = DebugMode(str(launch_config.skyrl.get("trainer", {}).get("debug_mode", DebugMode.LIGHT.value)))
     if rank == 0:
         final_config_path = _write_final_config(
             launch_config,

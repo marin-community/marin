@@ -358,7 +358,7 @@ class _OutputAttempts:
     records: dict[str, AttemptRecord]
 
 
-def _publication_attempts(path: str, failed_coordinator: str | None) -> _OutputAttempts:
+def _prepare_publication_attempts(path: str, failed_coordinator: str | None) -> _OutputAttempts:
     current, attempts = read_stored_skyrl_attempts(path)
     if failed_coordinator is not None:
         for key, record in _coordinator_attempts(path, failed_coordinator).items():
@@ -415,7 +415,7 @@ def publish_runs(
     snapshots = {}
     for path in outputs:
         try:
-            snapshots[path] = _publication_attempts(path, failed_coordinator)
+            snapshots[path] = _prepare_publication_attempts(path, failed_coordinator)
         except Exception as error:
             result.unserved_records.append(path)
             result.errors.append(str(error))
