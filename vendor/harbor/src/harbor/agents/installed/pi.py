@@ -390,9 +390,7 @@ export default function (pi) {
             )
 
         super().__init__(*args, **kwargs)
-        if self.mcp_servers:
-            if self._mcp_adapter_version is None:
-                raise ValueError("mcp_adapter_version must be pinned when Pi uses MCP servers")
+        if self._mcp_adapter_version is not None:
             try:
                 Version(self._mcp_adapter_version)
             except InvalidVersion as exc:
@@ -511,6 +509,15 @@ export default function (pi) {
 
     async def install(self, environment: BaseEnvironment) -> None:
         """Check the Pi runtime supplied by the environment image."""
+        if self.mcp_servers and self._mcp_adapter_version is not None:
+            # The revised adapter-pin contract (#12122): the agent loads the
+            # image-provided pi-mcp-extension, so a pi-mcp-adapter pin cannot be honored
+            # when the task actually configures MCP servers; without servers the pin is
+            # accepted and ignored.
+            raise RuntimeError(
+                f"Pi cannot honor pi-mcp-adapter version {self._mcp_adapter_version} with MCP servers: "
+                "this agent loads the image-provided pi-mcp-extension"
+            )
         result = await self.exec_as_agent(environment, command="pi --version")
         installed_version = self.parse_version(result.stdout)
         if self._version is not None and installed_version != self._version:

@@ -34,6 +34,7 @@ from skyrl_train.inference_engines.utils import (
     get_pg_bundle_node_ips,
     reserve_rendezvous_ports,
 )
+from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 from skyrl_train.models.grug_moe import GRUG_MOE_ARCHITECTURE, GRUG_MOE_MODEL_TYPE
 from skyrl_train.env_vars import (
     DEFAULT_RUNAI_STREAMER_LOG_TO_STDERR,
@@ -189,17 +190,21 @@ def _reserve_engine_rendezvous(
     placement_group,
     bundle_index: int,
     data_parallel_size: int,
-    allocated_ports: set[int],
+    allocated_ports: dict[str, set[int]],
 ) -> ReservedRendezvousPorts | None:
     if data_parallel_size == 1:
         return None
+    (address,) = get_pg_bundle_node_ips(placement_group, [bundle_index])
+    node_ports = allocated_ports.setdefault(address, set())
     rendezvous = reserve_rendezvous_ports(
         placement_group,
         bundle_index,
         port_count=1 + VLLM_DATA_PARALLEL_MASTER_PORT_COUNT,
-        excluded_ports=allocated_ports,
+        excluded_ports=node_ports | set(range(*DEFAULT_TASK_PORT_RANGE)),
     )
-    allocated_ports.update(rendezvous.ports)
+    assert rendezvous.address == address, "Rendezvous reservation moved away from its placement-group node"
+    node_ports.update(rendezvous.ports)
+    logger.info("Reserved vLLM DP rendezvous on {}: {}", address, rendezvous.ports)
     return rendezvous
 
 
@@ -783,7 +788,7 @@ def create_ray_wrapped_inference_engines(
             _release_node_local_gang([], per_engine_pgs)
             raise
 
-    allocated_rendezvous_ports: set[int] = set()
+    allocated_rendezvous_ports: dict[str, set[int]] = {}
     for i in range(num_inference_engines):
         if placement_mode is EnginePlacementMode.PER_ENGINE:
             engine_pg = per_engine_pgs[i]

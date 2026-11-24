@@ -16,10 +16,12 @@ import pytest
 from upath import UPath
 
 from harbor.agents.installed.base import (
+
     AgentKilledBySignalError,
     ModelAuthenticationError,
     NonZeroAgentExitCodeError,
 )
+from harbor.models.task.config import MCPServerConfig
 from harbor.agents.installed.pi import Pi
 from harbor.llms.base import ContextLengthExceededError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
@@ -122,6 +124,30 @@ async def test_interrupted_staging_keeps_endpoint_capabilities_out_of_logs(temp_
     for path in shell.uploads:
         assert not path.is_relative_to(temp_dir / "logs")
         assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+
+
+@pytest.mark.asyncio
+async def test_pi_ignores_mcp_adapter_pin_without_servers(temp_dir, monkeypatch):
+    """A pi-mcp-adapter pin with no MCP servers is accepted and never read (#12122)."""
+    shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf "0.87.0\\n"\n')
+    agent = Pi(logs_dir=temp_dir, mcp_adapter_version="7.0.0")
+
+    await agent.install(shell.environment)
+
+    assert agent.version() == "0.87.0"
+
+
+@pytest.mark.asyncio
+async def test_pi_rejects_mcp_adapter_pin_with_servers(temp_dir):
+    """MCP servers plus an adapter pin fail setup: the image provides pi-mcp-extension."""
+    agent = Pi(
+        logs_dir=temp_dir,
+        mcp_adapter_version="7.0.0",
+        mcp_servers=[MCPServerConfig(name="tools", transport="sse", url="http://mcp-server:8000/sse")],
+    )
+
+    with pytest.raises(RuntimeError, match="pi-mcp-adapter version 7.0.0"):
+        await agent.install(AsyncMock())
 
 
 @pytest.mark.asyncio
