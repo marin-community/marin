@@ -88,3 +88,9 @@ def test_bos_counts_as_context_so_only_continuation_tokens_are_scored():
     prepared = VllmLikelihood(None, "fixture", CharacterTokenizer(), 64, 0, BOS).prepare("ab", "c")
     assert prepared.prompt_token_ids == (BOS, ord("a"), ord("b"), ord("c"))
     assert (prepared.context_tokens, prepared.continuation_tokens) == (3, 1)
+
+
+def test_truncation_keeps_bos_and_drops_the_oldest_context_text():
+    prepared = VllmLikelihood(None, "fixture", CharacterTokenizer(), 5, 0, BOS).prepare("abcd", "e")
+    assert prepared.prompt_token_ids == (BOS, ord("c"), ord("d"), ord("e"))
+    assert (prepared.context_tokens, prepared.truncated_context_tokens) == (3, 2)

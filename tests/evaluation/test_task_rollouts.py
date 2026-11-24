@@ -1701,7 +1701,7 @@ async def test_mixed_reuse_regrades_generations_and_rescores_likelihoods(tmp_pat
             machine_factories={"shellsim": ShellSimMachineFactory()},
             tokenizer=tokenizer,
             completion_model=CompletionModel(client, "fixture"),
-            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
+            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0, None),
         )
         model = ChatModel(client, "fixture", 16)
         with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):

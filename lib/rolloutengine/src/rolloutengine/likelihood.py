@@ -107,16 +107,19 @@ class VllmLikelihood:
             prefix_token_id=self.prefix_token_id,
             bos_token_id=self.bos_token_id,
         )
+        # Truncation drops the oldest context text but keeps the BOS that starts it.
+        bos = context_tokens[:1] if self.bos_token_id is not None and context else ()
+        text = context_tokens[len(bos) :]
         maximum_prompt = self.context_size - 1
         removed = max(0, len(context_tokens) + len(continuation_tokens) - maximum_prompt)
-        retained_context = len(context_tokens) - removed
+        retained_context = len(text) - removed
         if not continuation_tokens or retained_context < 1:
             raise InvalidLikelihoodRequest(
                 "Likelihood scoring requires a nonempty continuation and a retained context token"
             )
         return EncodedLikelihood(
-            prompt_token_ids=(context_tokens + continuation_tokens)[-maximum_prompt:],
-            context_tokens=retained_context,
+            prompt_token_ids=bos + (text + continuation_tokens)[removed:],
+            context_tokens=len(bos) + retained_context,
             continuation_tokens=len(continuation_tokens),
             truncated_context_tokens=removed,
         )
