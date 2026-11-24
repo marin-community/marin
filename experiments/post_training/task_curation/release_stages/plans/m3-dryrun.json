@@ -9,7 +9,7 @@
   "expected_contract_tasks": 51879,
   "expected_panels": 227,
   "expected_population_tasks": 4362969,
-  "expected_prior_sources": 325,
+  "expected_prior_sources": 332,
   "expected_selected_panels": 227,
   "expected_source_count": 335,
   "gpu_runtime": null,
@@ -398,7 +398,7 @@
   "previously_available": [],
   "prior": {
     "catalog_uri": "s3://marin-us-east-02a/marin/rl-data/catalog/production",
-    "load_id": "6be14f6a1bd24a44a75fb9c9dbc19d33",
+    "load_id": "b4da147d2ad143089445ef8cf2c35217",
     "release_id": "r39-admissions-refresh",
     "snapshot_sha256": "7e0f9346135b6fb3de057661754c3d1b821cb8682663ce6e9440eaf91f38a01b",
     "snapshot_uri": "s3://marin-us-east-02a/marin/rl-data/catalog/production/data/curation_snapshots/w=assembly-r39-admissions-20261123-v2-catalog"
@@ -424,7 +424,7 @@
   },
   "slice_output_root": "",
   "snapshot_id": "assembly-r39-admissions-20261123-v2",
-  "source_revision": "c58a2d4faaf570d671e760561d1ab5239233408b",
+  "source_revision": "cee02b3ea363db7f475ca1c7527473aaa6570942",
   "strict_audit_local": false,
   "targets": [
     "Lego-X:Terminal-Lego-15k",
