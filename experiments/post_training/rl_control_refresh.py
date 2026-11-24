@@ -12,8 +12,8 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.provenance import Provenance
 
 from experiments.post_training import rl_compose, rl_gate
-from experiments.post_training.rl_measurements import RunInputs, read_recorded_launch, read_task_set
-from experiments.post_training.rl_presets import ControlPin, ModelPresets, Preset
+from experiments.post_training.rl_measurements import RunInputs, read_recorded_launch, read_task_set, recorded_sources
+from experiments.post_training.rl_presets import ControlPin, Generation, ModelPresets, Preset
 from experiments.post_training.snowball_rl import SNOWBALL
 
 
@@ -47,15 +47,36 @@ def plan_refresh(table: ModelPresets, preset_name: str | None = None) -> tuple[s
         return digests[paths]
 
     def training_changed(preset: Preset, previous: ControlPin) -> bool:
+        screening = isinstance(preset.recipe.layout.workload, Generation)
+
+        def inputs(launch: RecordedLaunch) -> list[RecordedSource]:
+            if not screening:
+                return launch.train_data
+            return [
+                source
+                for evaluation in preset.evaluations
+                if evaluation.source == "tasks"
+                for source in recorded_sources(launch, evaluation.name)
+            ]
+
         (config,) = rl_gate._compose_plans(preset, (RunInputs(preset_name=preset.name),))
         expected = RecordedLaunch.from_document(config, attempt=config["run"]["attempt_id"])
-        current_tasks = digest(expected.train_data)
+        current = inputs(expected)
+        if not current:
+            raise ValueError(f"expected a task set for {preset.name}")
         for index in range(previous.replicates):
             output = rl_gate.control_path(preset, previous, index, table=table)
             receipt = read_stored_skyrl_attempt(output)
             if receipt is None or receipt.native.result.state != "succeeded":
                 raise ValueError(f"expected a successful pinned control receipt at {output}")
-            if digest(read_recorded_launch(receipt).train_data) != current_tasks:
+            observed = inputs(read_recorded_launch(receipt))
+            if not observed:
+                raise ValueError(f"expected a task set in the pinned receipt at {output}")
+            # A screening sample is keyed by its input selection and seed. A new sample
+            # may not have been materialized yet.
+            if screening and [source.identity for source in observed] != [source.identity for source in current]:
+                return True
+            if digest(observed) != digest(current):
                 return True
         return False
 

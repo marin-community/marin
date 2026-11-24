@@ -323,6 +323,7 @@ The workflow reads main's head at 04:43 UTC. A manual run accepts one gated pres
 entry points run on CPU and report which cohorts have a changed revision or, for a preset that
 takes a training set at launch, a changed training-set digest. The workflow serializes runs and
 checks the current head once per run. Each check uses the latest defaults on main when it starts.
+Data-short compares the sampled training input recorded for screening.
 
 The planner only produces a dry-run plan. The cohort-link report is available for stored runs.
 Live collection and pin proposals require a decision on code-only changes, the pin PR merge

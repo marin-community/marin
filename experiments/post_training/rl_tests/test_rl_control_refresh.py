@@ -95,3 +95,36 @@ def test_nightly_and_named_dry_runs_plan_revision_and_launch_selected_training_c
     assert planned("--preset", "data-medium") == ["learning-medium"]
     with pytest.raises(ValueError, match="choose a gated preset"):
         planned("--preset", "train-long")
+
+
+def test_generation_refresh_reads_the_sampled_training_set(recorded_runs, tmp_path, monkeypatch):
+    root = recorded_runs("data-short", "users/test/refresh-screening")
+    attempt = refresh.read_stored_skyrl_attempt(str(root))
+    assert attempt is not None and attempt.config is not None
+    config = deepcopy(attempt.config)
+    assert config["inputs"]["train_data"] == []
+
+    for name, prompt in (("current", "current task"), ("old", "old task")):
+        pq.write_table(pa.table({"task_spec": [json.dumps({"id": "task", "prompt": prompt})]}), tmp_path / name)
+    current = {
+        "identity": "selection/sample@version:fingerprint",
+        "uri": str(tmp_path),
+        "relative_path": "current",
+        "local_path": str(tmp_path),
+    }
+    config["inputs"]["validation_data"] = [current]
+    observed = deepcopy(config)
+    preset = SNOWBALL.by_name["data-short"]
+    pin = replace(SNOWBALL.control_pins[preset.name], revision=preset.revision)
+    table = replace(SNOWBALL, control_pins={preset.name: pin})
+    monkeypatch.setattr(
+        refresh.Provenance, "capture", lambda _: refresh.Provenance("tree", "a" * 10, False, "main", "test")
+    )
+    monkeypatch.setattr(refresh.rl_gate, "_compose_plans", lambda *args: [config])
+    monkeypatch.setattr(refresh, "read_stored_skyrl_attempt", lambda _: attempt.model_copy(update={"config": observed}))
+
+    assert refresh.plan_refresh(table, preset.name)[1] == []
+    observed["inputs"]["validation_data"][0]["relative_path"] = "old"
+    assert refresh.plan_refresh(table, preset.name)[1] == [preset.name]
+    current.update(identity="selection/sample@version:new-fingerprint", relative_path="unbuilt")
+    assert refresh.plan_refresh(table, preset.name)[1] == [preset.name]
