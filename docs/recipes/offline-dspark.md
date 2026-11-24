@@ -99,10 +99,13 @@ uv run --extra cpu python -m experiments.post_training.dspark_sft \
 Submit two four-GB200 tasks. The distributed BF16 teacher runs with TP1 and
 DP8/EP8. Each activation file lands on the leader, moves to the S3 scratch
 bucket selected by `marin_temp_bucket`, and is removed locally after upload.
-The bucket expires the files after three days. The teacher shuts down before
-Speculators uses one of the leader's GPUs and reads activations as it batches
-examples. The RunAI loader caps each process's CPU buffer at 8 GiB. The trainer
-stages only the teacher's embedding and final gated head shards.
+The bucket expires the files after three days. A completed cache can be reused
+for 48 hours from the start of extraction. Cache identity includes the teacher,
+prepared dataset, sample mode, tap layers, sequence limit, and extraction
+runtime. On a cache hit the teacher processes do not start. Speculators uses
+one of the leader's GPUs and reads activations as it batches examples. The
+RunAI loader caps each process's CPU buffer at 8 GiB. The trainer stages only
+the teacher's embedding and final gated head shards.
 
 Teacher prefill requests generate one token to return each activation file.
 The cache progress log reports completed conversations and prompt tokens per
@@ -131,7 +134,9 @@ the trainer environment, frozen weights, and the draft checkpoint.
 
 Use `--draft-size two-layer` to reproduce the 766M Mochi variant with two
 Qwen3 layers and a 6,144-wide FFN. It uses the same teacher, data, vocabulary,
-and training budget as the default and publishes a separate artifact.
+and training budget as the default and publishes a separate checkpoint.
+Both sizes share one prepared Arrow artifact and the same teacher activation
+cache. The trainer builds its decoder config from the chosen size.
 
 ## Scale the Mochi mix to about 50M input tokens
 

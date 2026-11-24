@@ -40,6 +40,7 @@ from marin.training.drafting.dspark_data import (
     TOKEN_FREQUENCIES_FILE,
     DraftDataConfig,
     PreparedSplits,
+    draft_decoder_config,
     tensor_files,
 )
 
@@ -113,6 +114,8 @@ class DraftRecipe:
     total_variation_weight: float
     optimizer: Literal["muon", "adamw"]
     lr_schedule: Literal["linear", "cosine", "none"]
+    draft_layers: int = 3
+    draft_intermediate_size: int | None = None
     draft_vocab_size: int = 32000
     block_size: int = 8
     markov_rank: int = 256
@@ -120,6 +123,8 @@ class DraftRecipe:
     seed: int = DEFAULT_DRAFT_SEED
 
     def __post_init__(self) -> None:
+        if self.draft_layers <= 0 or (self.draft_intermediate_size is not None and self.draft_intermediate_size <= 0):
+            raise ValueError("Draft layer count and intermediate size must be positive")
         if not self.feature_taps or tuple(sorted(set(self.feature_taps))) != self.feature_taps:
             raise ValueError("Feature taps must be strictly increasing")
         if self.feature_taps[0] < 0 or self.feature_taps[-1] >= self.data.shape.num_hidden_layers:
@@ -135,6 +140,10 @@ class DraftRecipe:
     @property
     def extraction_taps(self) -> tuple[int, ...]:
         return (*self.feature_taps, self.data.shape.num_hidden_layers)
+
+    @property
+    def intermediate_size(self) -> int:
+        return self.draft_intermediate_size or 3 * self.data.shape.hidden_size // 2
 
 
 class DSparkExport(Artifact):
@@ -259,8 +268,8 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
         decoder["model_type"] != DRAFT_LAYER_TYPE
         or decoder["hidden_size"] != recipe.data.shape.hidden_size
         or decoder["vocab_size"] != recipe.data.shape.vocab_size
-        or decoder["num_hidden_layers"] != recipe.data.draft_layers
-        or decoder["intermediate_size"] != recipe.data.intermediate_size
+        or decoder["num_hidden_layers"] != recipe.draft_layers
+        or decoder["intermediate_size"] != recipe.intermediate_size
         or config["speculators_config"]["proposal_methods"][0]["speculative_tokens"] != recipe.block_size
     ):
         raise ValueError("DSpark decoder or proposal dimensions disagree with the recipe")
@@ -383,7 +392,7 @@ def _write_config_and_build_command(
         "seed": recipe.seed,
         "verifier": {"verifier_name_or_path": str(teacher)},
         "draft": {
-            "draft_config": str(data / DRAFT_CONFIG_FILE),
+            "draft_config": str(scratch / DRAFT_CONFIG_FILE),
             "draft_vocab_size": recipe.draft_vocab_size,
             "d2t_path": str(scratch / _D2T_FILE),
             "t2d_path": str(scratch / _T2D_FILE),
@@ -491,6 +500,13 @@ def _fit_and_publish(
     env = _speculators_environment(devices)
     data = scratch / "data"
     training = scratch / "checkpoints"
+    decoder = draft_decoder_config(
+        json.loads((teacher_path / CONFIG_NAME).read_text()),
+        recipe.data,
+        layers=recipe.draft_layers,
+        intermediate_size=recipe.intermediate_size,
+    )
+    (scratch / DRAFT_CONFIG_FILE).write_text(json.dumps(decoder, indent=2) + "\n")
     # Install the checkout's bucket routing in the isolated trainer environment.
     rigging_source = Path(rigging.__path__[0]).resolve().parents[1]
     extra_packages = (str(rigging_source),) if hidden_states.scheme in ("s3", "gs") else ()

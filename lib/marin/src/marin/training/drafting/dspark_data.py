@@ -72,18 +72,10 @@ class DraftDataConfig:
     shape: GrugShape
     mask_token_id: int
     max_sequence_length: int
-    draft_layers: int = 3
-    draft_intermediate_size: int | None = None
 
     def __post_init__(self) -> None:
         if not 0 <= self.mask_token_id < self.shape.vocab_size:
             raise ValueError("The mask token must have an embedding in the teacher")
-        if self.draft_intermediate_size is not None and self.draft_intermediate_size <= 0:
-            raise ValueError("Draft intermediate size must be positive")
-
-    @property
-    def intermediate_size(self) -> int:
-        return self.draft_intermediate_size or 3 * self.shape.hidden_size // 2
 
 
 @dataclass(frozen=True)
@@ -163,7 +155,7 @@ def _check_teacher_tensors(root: StoragePath, shape: GrugShape) -> None:
             raise ValueError(f"Unexpected shape for teacher tensor {name}, expected {expected}")
 
 
-def _draft_decoder_config(target: dict, config: DraftDataConfig) -> dict[str, str | int | float | bool | None]:
+def _check_teacher_config(target: dict, config: DraftDataConfig) -> None:
     if (
         target["model_type"] != GRUG_MOE_MODEL_TYPE
         or target["architectures"] != [GRUG_MOE_ARCHITECTURE]
@@ -176,6 +168,13 @@ def _draft_decoder_config(target: dict, config: DraftDataConfig) -> dict[str, st
     if config.max_sequence_length >= target["max_position_embeddings"]:
         raise ValueError("Teacher needs context for the full prefill row and one output token")
 
+
+def draft_decoder_config(
+    target: dict, config: DraftDataConfig, *, layers: int, intermediate_size: int
+) -> dict[str, str | int | float | bool | None]:
+    """Build the decoder configuration for a particular draft trained on the prepared data."""
+    _check_teacher_config(target, config)
+    shape = config.shape
     return {
         "model_type": DRAFT_LAYER_TYPE,
         "hidden_size": shape.hidden_size,
@@ -183,8 +182,8 @@ def _draft_decoder_config(target: dict, config: DraftDataConfig) -> dict[str, st
         "num_key_value_heads": shape.num_key_value_heads,
         "head_dim": shape.head_dim,
         "vocab_size": shape.vocab_size,
-        "intermediate_size": config.intermediate_size,
-        "num_hidden_layers": config.draft_layers,
+        "intermediate_size": intermediate_size,
+        "num_hidden_layers": layers,
         "max_position_embeddings": target["max_position_embeddings"],
         "rms_norm_eps": target["rms_norm_eps"],
         "initializer_range": target["initializer_range"],
@@ -198,25 +197,31 @@ def _draft_decoder_config(target: dict, config: DraftDataConfig) -> dict[str, st
 
 def _teacher_inputs(
     root: StoragePath, config: DraftDataConfig, tokenizer_source: str | None = None
-) -> tuple[dict[str, str | int | float | bool | None], MarinTokenizer]:
-    decoder = _draft_decoder_config(json.loads((root / CONFIG_NAME).read_text()), config)
+) -> tuple[dict, MarinTokenizer]:
+    target = json.loads((root / CONFIG_NAME).read_text())
+    _check_teacher_config(target, config)
     _check_teacher_tensors(root, config.shape)
     tokenizer = load_tokenizer(tokenizer_source or str(root))
     if not tokenizer.chat_template or tokenizer.vocab_size > config.shape.vocab_size:
         raise ValueError("Teacher export needs its matching tokenizer and chat template")
     if tokenizer.encode(GRUG_MASK_TOKEN) != [config.mask_token_id]:
         raise ValueError("Teacher tokenizer disagrees with the DSpark mask token")
-    return decoder, tokenizer
+    return target, tokenizer
 
 
 def inspect_teacher(
-    root: StoragePath, config: DraftDataConfig, *, tokenizer_source: str | None = None
+    root: StoragePath,
+    config: DraftDataConfig,
+    *,
+    layers: int,
+    intermediate_size: int,
+    tokenizer_source: str | None = None,
 ) -> dict[str, str | int | float | bool | None]:
     """Validate pinned metadata and weight headers and return the draft decoder configuration."""
 
-    decoder, tokenizer = _teacher_inputs(root, config, tokenizer_source)
+    target, tokenizer = _teacher_inputs(root, config, tokenizer_source)
     ChatProcessor(tokenizer)  # Require a template that marks supervised spans.
-    return decoder
+    return draft_decoder_config(target, config, layers=layers, intermediate_size=intermediate_size)
 
 
 def _chat_rows(files: list[StoragePath]) -> Iterator[dict]:
@@ -328,14 +333,13 @@ def prepare_data(
     """Write the Speculators Arrow dataset with a trailing, disjoint holdout."""
 
     destination = StoragePath(output) / PREPARED_DIR
-    decoder, tokenizer = _teacher_inputs(StoragePath(teacher) / teacher_subdirectory, config, tokenizer_source)
+    _, tokenizer = _teacher_inputs(StoragePath(teacher) / teacher_subdirectory, config, tokenizer_source)
     train_files, val_files = inspect_mix(StoragePath(mix))
 
     with TemporaryDirectory(prefix="dspark-prepare-") as directory:
         prepared = Path(directory) / PREPARED_DIR
         prepared.mkdir()
         splits = _write_masked_dataset(prepared, train_files, val_files, tokenizer, config)
-        (prepared / DRAFT_CONFIG_FILE).write_text(json.dumps(decoder, indent=2) + "\n")
         for file in sorted(prepared.rglob("*")):
             if file.is_file():
                 target = destination / file.relative_to(prepared).as_posix()

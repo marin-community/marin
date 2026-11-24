@@ -67,6 +67,23 @@ def test_coordinator_latches_shutdown_and_tracks_stopped_followers():
     assert coordinator.followers_stopped((1, 2))
 
 
+@pytest.mark.parametrize("start", [True, False], ids=["cache-miss", "cache-hit"])
+def test_follower_uses_the_leaders_startup_decision(monkeypatch, start):
+    coordinator = iris_vllm.VllmCoordinatorActor("10.0.0.1")
+    leader = iris_vllm.IrisGangCoordinator("vllm", task_index=0, num_tasks=2)
+    follower = replace(leader, task_index=1)
+    monkeypatch.setattr(iris_vllm, "_coordinator_client", lambda _: coordinator)
+
+    def resolve_cache(_delay):
+        if start:
+            iris_vllm.start_iris_vllm_followers(leader)
+        else:
+            coordinator.request_shutdown()
+
+    monkeypatch.setattr("time.sleep", resolve_cache)
+    assert iris_vllm.wait_for_iris_vllm_start(follower) is start
+
+
 def test_leader_failure_leaves_follower_running_for_iris_retry(monkeypatch):
     coordinator = iris_vllm.VllmCoordinatorActor("10.0.0.1")
     coordinator.follower_stopped(1)

@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from connectrpc.code import Code
@@ -33,12 +34,18 @@ _VLLM_HOST_IP_ENV = "VLLM_HOST_IP"
 _GLOO_SOCKET_IFNAME_ENV = "GLOO_SOCKET_IFNAME"
 
 
+class _GangState(StrEnum):
+    WAITING = "waiting"
+    STARTED = "started"
+    STOPPING = "stopping"
+
+
 class VllmCoordinatorActor:
     """Leader-owned, latched lifecycle state for an Iris vLLM gang."""
 
     def __init__(self, vllm_primary_address: str):
         self._vllm_primary_address = vllm_primary_address
-        self._shutdown_requested = False
+        self._state = _GangState.WAITING
         self._stopped_followers: set[int] = set()
         self._lock = threading.Lock()
 
@@ -47,11 +54,22 @@ class VllmCoordinatorActor:
 
     def shutdown_requested(self) -> bool:
         with self._lock:
-            return self._shutdown_requested
+            return self._state is _GangState.STOPPING
+
+    def request_start(self) -> None:
+        with self._lock:
+            if self._state is _GangState.WAITING:
+                self._state = _GangState.STARTED
+
+    def startup_decision(self) -> bool | None:
+        with self._lock:
+            if self._state is _GangState.WAITING:
+                return None
+            return self._state is _GangState.STARTED
 
     def request_shutdown(self) -> None:
         with self._lock:
-            self._shutdown_requested = True
+            self._state = _GangState.STOPPING
 
     def follower_stopped(self, task_index: int) -> None:
         with self._lock:
@@ -149,6 +167,39 @@ def iris_gang_coordinator(identity: IrisGangIdentity, advertise_host: str, prima
 
             _wait_until(coordinator_available, error_message="Timed out waiting for the vLLM coordinator")
         yield primary_address
+
+
+def start_iris_vllm_followers(launch: IrisGangIdentity) -> None:
+    """Release followers that are waiting for an explicit startup decision."""
+    if launch.task_index != 0:
+        raise RuntimeError("Only the vLLM leader may request follower startup")
+    client = _coordinator_client(launch.coordinator_name)
+
+    def request_start() -> bool:
+        client.request_start()
+        return True
+
+    _wait_until(request_start, error_message="Timed out requesting vLLM follower startup")
+
+
+def wait_for_iris_vllm_start(launch: IrisGangIdentity) -> bool:
+    """Return whether to launch vLLM once the leader starts or skips the server."""
+    if launch.task_index == 0:
+        raise RuntimeError("The vLLM leader does not wait for follower startup")
+    client = _coordinator_client(launch.coordinator_name)
+    decision: bool | None = None
+
+    def refresh_decision() -> bool:
+        nonlocal decision
+        decision = client.startup_decision()
+        return True
+
+    polling = ExponentialBackoff(initial=_POLL_SECONDS, maximum=30.0)
+    while decision is None:
+        _wait_until(refresh_decision, error_message="Timed out contacting the vLLM leader")
+        if decision is None:
+            time.sleep(polling.next_interval())
+    return decision
 
 
 def wait_for_iris_vllm_shutdown(

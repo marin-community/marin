@@ -66,7 +66,7 @@ _TARGETS = MappingProxyType(
         ),
     }
 )
-_RECIPE_VERSION = "2026.11.22.4"
+_RECIPE_VERSION = "2026.11.24"
 _MOCHI_AGENTIC_PRESET = "mochi-agentic"
 _MOCHI_SCALE_PRESET = "mochi-agentic-50m"
 
@@ -113,9 +113,9 @@ class OfflineDSpark:
                 shape=shape,
                 mask_token_id=128004,
                 max_sequence_length=self.max_sequence_length,
-                draft_layers=layers,
-                draft_intermediate_size=intermediate_size,
             ),
+            draft_layers=layers,
+            draft_intermediate_size=intermediate_size,
             feature_taps=taps,
             max_anchors=self.max_anchors,
             max_steps=self.max_steps,
@@ -252,7 +252,13 @@ def _preflight(recipe: OfflineDSpark, teacher: ArtifactStep, prefix: str) -> dic
         raise click.UsageError("Run the prepare stage to stage the pinned Hub teacher in Marin storage")
     tokenizer = _hub_model(recipe.teacher.tokenizer_source) if recipe.teacher.tokenizer_source else None
     tokenizer_ref = f"{tokenizer.hf_repo_id}@{tokenizer.hf_revision}" if tokenizer else None
-    decoder = inspect_teacher(teacher_root, settings.data, tokenizer_source=tokenizer_ref)
+    decoder = inspect_teacher(
+        teacher_root,
+        settings.data,
+        layers=settings.draft_layers,
+        intermediate_size=settings.intermediate_size,
+        tokenizer_source=tokenizer_ref,
+    )
     train, validation = inspect_mix(StoragePath(recipe.data))
     total_gpus = settings.teacher_replicas
     if recipe.teacher.family is TeacherFamily.SNOWBALL:
@@ -315,6 +321,7 @@ def main(
     if stage == "train" and recipe.teacher.family is TeacherFamily.MOCHI:
         if mochi.train_mochi(
             teacher=str(StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path),
+            teacher_identity=artifact_identity(teacher),
             prepared=prepared,
             draft=draft,
             recipe=mochi.cached_recipe(recipe.training_recipe(), recipe.mochi_sample),
