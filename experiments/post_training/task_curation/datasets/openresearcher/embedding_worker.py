@@ -123,7 +123,7 @@ def main() -> None:
     model_dir, output = Path(args.model_dir), Path(args.output)
     verify_model(model_dir, plan["model_manifest"])
     tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, padding_side="left")
-    model = AutoModel.from_pretrained(model_dir, torch_dtype=torch.float16, local_files_only=True)
+    model = AutoModel.from_pretrained(model_dir, torch_dtype=torch.bfloat16, local_files_only=True)
     model.to("cuda").eval()
     if model.config.hidden_size != EMBEDDING_DIM:
         raise ValueError(
