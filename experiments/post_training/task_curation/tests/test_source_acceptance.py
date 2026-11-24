@@ -8,6 +8,7 @@ from finestore.rl.curation import DaytonaSafety
 from finestore.rl.status_taxonomy import DataRestriction
 
 from experiments.post_training.task_curation.source import (
+    ATLAS_ADMITTED_TAG,
     EXCLUDED_TAG,
     GRANDFATHERED_MARINSKYRL_SOURCES,
     RlDataSource,
@@ -87,8 +88,8 @@ def test_task_directory_formats_pass_and_non_agentic_sources_need_none(task_form
     )
 
 
-def test_pipeline_less_pointers_are_inventory_never_admitted():
-    """A pointer stays visible in the Atlas, labelled Inventory and unselectable."""
+def test_pipeline_less_sources_are_never_admitted_to_selection():
+    """A pipeline-less source stays visible and unselectable, whatever its label."""
     sources = all_sources()
     runnable = set(runnable_sources())
     pointers = [source for source in sources.values() if source.pipeline is None]
@@ -100,6 +101,8 @@ def test_pipeline_less_pointers_are_inventory_never_admitted():
             assert status == "Deprecated"
         elif EXCLUDED_TAG in source.info.tags:
             assert status == "Excluded"
+        elif ATLAS_ADMITTED_TAG in source.info.tags:
+            assert status == "Atlas-admitted"
         else:
             assert status == "Inventory"
         assert source.name not in runnable
