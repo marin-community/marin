@@ -16,6 +16,11 @@ storage layer resolves (the operator's secrets environment: `CW_KEY_ID` /
 `CW_KEY_SECRET` for the CoreWeave buckets). The preflight type-check launches
 `uvx`, which needs a writable uv tool directory (`UV_TOOL_DIR`) and cache
 (`UV_CACHE_DIR`) — in a sandboxed environment point both at writable paths.
+Every stage emits its alerts directly to the watchdog feed, which defaults to
+the operator's `~/Documents/experiments/active/job-watchdog/alerts.jsonl` and
+is overridden with `ATLAS_WATCHDOG_FEED` — a sandboxed environment points it at
+a writable path (that variable changes where alerts are WRITTEN; it never makes
+anything under `~/Documents/experiments` an input).
 Credentials are infrastructure access, not pipeline configuration — nothing
 outside the repository supplies any pipeline input.
 

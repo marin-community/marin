@@ -11,10 +11,16 @@ entries are proposals merged by the operator.
 
 import dataclasses
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-WATCHDOG_FEED = Path.home() / "Documents/experiments/active/job-watchdog/alerts.jsonl"
+WATCHDOG_FEED = Path(
+    os.environ.get(
+        "ATLAS_WATCHDOG_FEED",
+        Path.home() / "Documents/experiments/active/job-watchdog/alerts.jsonl",
+    )
+)
 
 KIND_START = "STAGE_START"
 KIND_FINISH = "STAGE_FINISH"
