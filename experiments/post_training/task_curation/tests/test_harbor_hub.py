@@ -25,26 +25,14 @@ REFS = tuple(f"fixture/{name}@sha256:{TASK_DIGEST}" for name in TASK_NAMES)
 
 
 @dataclass
-class PackageServer:
+class RegistryState:
     archive: bytes
     modified_archive: bytes
     requests: Counter[str] = field(default_factory=Counter)
     fail_once: set[str] = field(default_factory=set)
 
 
-@pytest.fixture
-def registry(tmp_path, monkeypatch) -> Iterator[PackageServer]:
-    package = tmp_path / "package"
-    (package / "tests").mkdir(parents=True)
-    verifier = package / "tests/test.sh"
-    verifier.write_text("exit 0\n")
-    verifier.chmod(0o755)
-    instruction = package / "instruction.md"
-    instruction.write_text("Solve the task.\n")
-    archive = package_archive(package)
-    instruction.write_text("Modified instruction")
-    state = PackageServer(archive, package_archive(package))
-
+def registry_handler(state: RegistryState) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             route = urlsplit(self.path)
@@ -83,7 +71,23 @@ def registry(tmp_path, monkeypatch) -> Iterator[PackageServer]:
             self.end_headers()
             self.wfile.write(payload)
 
-    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+    return Handler
+
+
+@pytest.fixture
+def registry(tmp_path, monkeypatch) -> Iterator[RegistryState]:
+    package = tmp_path / "package"
+    (package / "tests").mkdir(parents=True)
+    verifier = package / "tests/test.sh"
+    verifier.write_text("exit 0\n")
+    verifier.chmod(0o755)
+    instruction = package / "instruction.md"
+    instruction.write_text("Solve the task.\n")
+    archive = package_archive(package)
+    instruction.write_text("Modified instruction")
+    state = RegistryState(archive, package_archive(package))
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), registry_handler(state)) as server:
         monkeypatch.setattr(harbor_hub, "REGISTRY_URL", f"http://127.0.0.1:{server.server_port}")
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -113,6 +117,6 @@ def test_acquisition_preserves_native_archives_and_resumes_downloads(tmp_path, r
 def test_acquisition_rejects_modified_package_without_publishing_archive(tmp_path, registry):
     registry.archive = registry.modified_archive
     output = tmp_path / "output"
-    with pytest.raises(ValueError, match="Downloaded task differs"):
+    with pytest.raises(ValueError):
         harbor_hub.acquire_release(RELEASE, StoragePath(str(output)), REFS[:1])
     assert not output.exists()

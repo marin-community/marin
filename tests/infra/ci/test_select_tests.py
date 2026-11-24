@@ -545,7 +545,7 @@ def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_p
         "experiments/post_training/task_curation/tests/test_daytona_identity.py",
     ],
 )
-def test_harbor_rebuild_changes_select_isolated_runtime(tmp_path: Path, path: str) -> None:
+def test_harbor_curation_changes_select_isolated_runtime(tmp_path: Path, path: str) -> None:
     selection = select_changed_tests([path], tmp_path)
 
     assert "harbor-unit" in selection.suites

@@ -14,13 +14,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from tempfile import TemporaryFile
-from typing import Any, BinaryIO
+from typing import BinaryIO, TypedDict, cast
 from urllib.parse import quote
 
 import requests
 from rigging.filesystem.storage_path import StoragePath
 
 LOGGER = logging.getLogger(__name__)
+# This host serves the pinned releases used by the curated corpus recipes.
 REGISTRY_HOST = "ofhuhcpkvzjlejydnvyd.supabase.co"
 REGISTRY_URL = f"https://{REGISTRY_HOST}"
 # Harbor's public client key. Public releases are readable without a user session.
@@ -28,6 +29,7 @@ REGISTRY_KEY = "sb_publishable_Z-vuQbpvpG-PStjbh4yE0Q_e-d3MTIH"
 PAGE_SIZE = 1000
 REQUEST_TIMEOUT = (10, 60)
 CHUNK_BYTES = 1024 * 1024
+DIGEST_PREFIX = "sha256:"
 
 
 @dataclass(frozen=True)
@@ -36,7 +38,27 @@ class _TaskArchive:
     archive_path: str
 
 
-def _registry_rows(session: requests.Session, table: str, params: dict[str, str | int]) -> list[dict[str, Any]]:
+class _DatasetVersion(TypedDict):
+    id: str
+    content_hash: str
+
+
+class _Package(TypedDict):
+    name: str
+    org: dict[str, str]
+
+
+class _TaskVersion(TypedDict):
+    content_hash: str
+    archive_path: str
+    package: _Package
+
+
+class _DatasetTask(TypedDict):
+    task_version: _TaskVersion
+
+
+def _registry_rows(session: requests.Session, table: str, params: dict[str, str | int]) -> object:
     with session.get(f"{REGISTRY_URL}/rest/v1/{table}", params=params, timeout=REQUEST_TIMEOUT) as response:
         response.raise_for_status()
         return response.json()
@@ -44,10 +66,11 @@ def _registry_rows(session: requests.Session, table: str, params: dict[str, str 
 
 def _release_archives(session: requests.Session, release: str) -> dict[str, _TaskArchive]:
     dataset, digest = release.rsplit("@", 1)
-    if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+    content_hash = digest.removeprefix(DIGEST_PREFIX)
+    if content_hash == digest or re.fullmatch(r"[0-9a-f]{64}", content_hash) is None:
         raise ValueError("Select a release by content digest, not a tag")
     org, name = dataset.split("/")
-    versions = _registry_rows(
+    version_rows = _registry_rows(
         session,
         "dataset_version",
         {
@@ -55,10 +78,11 @@ def _release_archives(session: requests.Session, release: str) -> dict[str, _Tas
             "package.type": "eq.dataset",
             "package.name": f"eq.{name}",
             "package.org.name": f"eq.{org}",
-            "content_hash": f"eq.{digest.removeprefix('sha256:')}",
+            "content_hash": f"eq.{content_hash}",
         },
     )
-    if len(versions) != 1 or f"sha256:{versions[0]['content_hash']}" != digest:
+    versions = cast(list[_DatasetVersion], version_rows)
+    if len(versions) != 1 or versions[0]["content_hash"] != content_hash:
         raise ValueError(f"Hub did not resolve the pinned release: {release}")
     version = f"eq.{versions[0]['id']}"
     if _registry_rows(session, "dataset_version_file", {"select": "id", "dataset_version_id": version, "limit": 1}):
@@ -67,7 +91,7 @@ def _release_archives(session: requests.Session, release: str) -> dict[str, _Tas
     refs: dict[str, _TaskArchive] = {}
     offset = 0
     while True:
-        page = _registry_rows(
+        task_rows = _registry_rows(
             session,
             "dataset_version_task",
             {
@@ -81,11 +105,12 @@ def _release_archives(session: requests.Session, release: str) -> dict[str, _Tas
                 "offset": offset,
             },
         )
+        page = cast(list[_DatasetTask], task_rows)
         for row in page:
             task = row["task_version"]
             package = task["package"]
             task_digest = task["content_hash"]
-            ref = f"{package['org']['name']}/{package['name']}@sha256:{task_digest}"
+            ref = f"{package['org']['name']}/{package['name']}@{DIGEST_PREFIX}{task_digest}"
             if ref in refs:
                 raise ValueError(f"Duplicate task identity in release: {ref}")
             refs[ref] = _TaskArchive(task_digest, task["archive_path"])
@@ -95,8 +120,8 @@ def _release_archives(session: requests.Session, release: str) -> dict[str, _Tas
 
 
 def _task_content_hash(stream: BinaryIO) -> str:
-    # Hub tarballs contain the package files selected by its packager. The digest
-    # covers sorted relative paths and file digests, independent of tar metadata.
+    # Pinned Hub references use the registry's wire format: Packager.compute_content_hash
+    # hashes sorted relative paths and file digests, independent of tar metadata.
     files: dict[str, str] = {}
     with tarfile.open(fileobj=stream, mode="r|gz") as archive:
         for member in archive:
