@@ -131,6 +131,25 @@ A new model goes to production as a copy of `<run>/model/` under
 `<MARIN_PREFIX>/datakit/decontam/models/<name>` in each region, with `MODEL_NAMES` and `MODELS_VERSION` in
 `experiments/datakit/decontam/config.py` updated.
 
+## Settings and their evidence
+
+Each production setting, with the check that chose it. The checks and their labeled sets are described under
+[Measured results](#measured-results).
+
+| Setting | Value | Evidence |
+|---|---|---|
+| Precision floor | weighted precision >= 0.75, item-clustered bootstrap 5% bound >= 0.65 | Set by the user for recall-first removal, in place of a 5% bound of 0.95, which the models met only near cutoff 0.99, with recall about 0.62 (set 14) |
+| Key width (`WINDOW`) | 20 characters | Width comparison on the same 41,350 planted items: planted recall 0.985 / 0.966 / 0.952 / 0.944 at widths 10 / 13 / 16 / 20, for 6.1e9 / 1.5e9 / 1.3e8 / 4.2e7 catalog candidates (about 3,900 / 970 / 83 / 27 H100-hours). No width reached full planted recall; the misses are the same kinds at every width (mostly ZhoBLiMP sentence pairs laid out numbered or as JSON, accepted as a limit), so the cheapest width is used |
+| Key streams | question; unlettered question with choices for a short question; passage, each kept only when no reference record holds it | Planted recall 0.944 -> 0.960 (Markdown 0.858 -> 0.999) |
+| Readings | as is, JSON escapes read once and twice | Planted copies escaped once and twice: stage-1 recall 1.000 |
+| Template-free windows, shared tie order | windows outside each eval's shared prefix and suffix; ties to the window that the fewest items hold | Clear copies of the block rule with a candidate: 99.0% (GSM8K 100%) against 79.8% (GSM8K 46%), at 1.44 times the pairs; planted recall 95.98% |
+| Reference sample (`REFERENCE_SHARDS_PER_SOURCE`, `REFERENCE_SEED`) | 2 shards per source, seed 11 | The reference sample of every measured key build; not varied |
+| Long records (`MAX_DOC_CHARS`, `PIECE_OVERLAP`) | pieces of 5,000,000 characters overlapping by 9,000 | 293,105 catalog records over 5,000,000 characters read with no failed shard; their removals: 0.803 [0.743] (set 25) |
+| Models | iteration 16, seeds 0 and 1, mean of their question scores | Catalog-drawn set 23: 0.818 [0.777] at 0.5, against 0.495 [0.459] for iteration 15 |
+| Cutoff (`CUTOFF`) | 0.6 | Removal check set 26: 0.5 fails (0.731 [0.666]), 0.6 is the lowest that passes (0.783 [0.714]); fresh set 27: 0.852 [0.818] |
+| Second model only above `LATER_MODELS_FLOOR` | 0.01 | On 1,673,046 scored pairs, 96.7% score below it; 6 of 14,075 pairs with a mean of at least 0.5 had a first score below it |
+| Removal budget | at most 0.5% of characters overall, 2% per source | Final list: 0.110% of characters; stack-v3 loses the most, 0.94% |
+
 ## Model
 
 - Base model: `jhu-clsp/mmBERT-base` (ModernBERT architecture, multilingual), with two sigmoid
