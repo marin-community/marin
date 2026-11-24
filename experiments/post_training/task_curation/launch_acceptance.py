@@ -4,14 +4,28 @@
 """Submit the acceptance-control jobs for published conversion releases in-region.
 
 The acceptance runs the recorded negative controls against the converted graders
-on the Daytona RL org (the backend the Harbor trials used), with the judge keys
-resolved through the Iris secret sources: the local environment first, then GSM.
+on the Daytona RL org (the backend the Harbor trials used). The job environment
+carries the org's API key and the judge key directly: the Daytona SDK and the
+harnesses read plain environment variables, so the launcher resolves each value
+at submission (the RL key from the operator environment, the judge key through
+GSM first) and the CLI redacts secret-shaped values from its submit record.
 """
 
 import argparse
+import os
 import subprocess
 
+from rigging.secrets import resolve_secret_spec
+
 RAW_SCRIPT = "https://raw.githubusercontent.com/marin-community/marin/{revision}/experiments/post_training/task_curation/run_acceptance.sh"
+JUDGE_KEY_SPEC = "gcp-secret://projects/hai-gcp-models/secrets/OPENAI_API_KEY/versions/latest"
+
+
+def _required_env(name: str, what: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise SystemExit(f"missing {what}: set {name} in the environment (source secrets.env) before launching")
+    return value
 
 
 def main() -> None:
@@ -26,6 +40,10 @@ def main() -> None:
     parser.add_argument("--disk", default="128GB")
     parser.add_argument("--timeout", default="259200", help="Job timeout in seconds (default: three days).")
     args = parser.parse_args()
+
+    daytona_key = _required_env("DAYTONA_RL_API_KEY", "the Daytona RL org key")
+    # The judge key comes from GSM; a missing key is a tooling bug, not a reason to skip.
+    judge_key = resolve_secret_spec(JUDGE_KEY_SPEC).value
 
     script_url = RAW_SCRIPT.format(revision=args.revision)
     command = (
@@ -43,18 +61,18 @@ def main() -> None:
         "--secret",
         "HF_TOKEN",
         "env:HF_TOKEN",
-        "--secret",
+        "--env-vars",
         "DAYTONA_API_KEY",
-        "env:DAYTONA_RL_API_KEY",
-        "--secret",
-        "OPENAI_API_KEY",
-        "gcp-secret://projects/hai-gcp-models/secrets/OPENAI_API_KEY/versions/latest",
+        daytona_key,
         "--env-vars",
         "DAYTONA_API_URL",
         "https://app.daytona.io/api",
         "--env-vars",
         "DAYTONA_TARGET",
         "us",
+        "--env-vars",
+        "OPENAI_API_KEY",
+        judge_key,
         "--no-wait",
         "--job-name",
         args.job_name,
