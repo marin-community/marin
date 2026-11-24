@@ -273,6 +273,11 @@ records were copies (mostly MedConceptsQA, FDA, ARC and MMLU items that share a 
 and 27 give 17 of 55 families at least 50 labeled removals at 0.6, holding 87% of the removals; QQP (0.02),
 Toxigen (0.05), QNLI (0.31), MedConceptsQA (0.36), SQuAD (0.41) and FDA (0.43) are the low ones.
 
+**Final removal list.** The list from the template-free keys at 0.6 plus the 60,237 records that only the
+earlier list removes: their precision is 0.619 [0.520] (set 28, a random half of a 1,046-record draw judged),
+and the union reaches 0.815 [0.782], above the floor. 376,124 records (0.002%), 1.15e11 characters (0.110%);
+stack-v3 loses the most, 0.94% of its characters. `removed-final.parquet` marks which run each record comes from.
+
 **Exact rules on the same pairs.** On the real test pairs and on the earlier validation set, the block
 rule (`marin.datakit.item_match` in PR #10836: question, then every choice) finds 45% and 68% of the
 copies, and the exact question rule 52% and 69%, both at lower precision than the classifier at 0.9.
