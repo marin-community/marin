@@ -40,6 +40,15 @@ submitting user. FineStore stores the author as given and does not verify it. A
 transaction without rows on a non-empty archive publishes no commit and records
 nothing.
 
+`transaction.read(table, keys)` returns the newest rows for those primary keys from
+the transaction's pinned snapshot. It also guards the keys: if another writer commits
+any of them after that snapshot, whether the key existed or not, the commit raises
+`RowConflict` instead of replacing the newer row. Rows the transaction writes without
+reading them are not checked. `store.update(table, keys, edit, message=...)`
+is the read-modify-write form for `OnConflict.SUPERSEDE` tables. It reads the rows,
+writes `edit(row)` for each, and on `RowConflict` backs off and runs `edit` again on the
+newer rows, so `edit` must be safe to repeat.
+
 The transaction buffers its rows and object bytes in memory. Each participating
 table produces one level-zero Parquet shard. FineStore writes every shard and an
 immutable full manifest before it conditionally advances `HEAD`. Until that final

@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from types import TracebackType
@@ -22,14 +22,16 @@ from rigging import telemetry
 from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock, lease_refresh
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.provenance import launch_user
-from rigging.timing import ExponentialBackoff
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from finestore.commit import (
+    ArchiveSnapshot,
     Attribution,
     ClearSeal,
     CommitConflict,
     CommitCoordinator,
     CommitDelta,
+    Precondition,
     TableAddition,
     initialize_archive,
     write_schema,
@@ -66,6 +68,10 @@ OBJECT_PART_BYTES = 8 * 1024 * 1024
 INLINE_BLOB_BYTES = 128 * 1024
 _MAINTENANCE_BACKOFF_INITIAL = 1.0
 _MAINTENANCE_BACKOFF_MAXIMUM = 10 * 60.0
+DEFAULT_UPDATE_ATTEMPTS = 20
+# retry_with_backoff copies the schedule, so one instance serves every update.
+_UPDATE_BACKOFF = ExponentialBackoff(initial=0.05, maximum=2.0, factor=2.0, jitter=0.25)
+_SHOWN_KEYS = 5
 
 _LEASE_ACQUIRED = telemetry.counter("finestore_maintenance_lease_acquired", unit="{acquisition}")
 _LEASE_LOST = telemetry.counter("finestore_maintenance_lease_lost", unit="{loss}")
@@ -98,6 +104,30 @@ class PrimaryKeyConflict(ValueError):
 
 class TransactionTooLarge(ValueError):
     """A transaction exceeded its configured in-memory byte limit."""
+
+
+class RowConflict(CommitConflict):
+    """Another writer committed keys this transaction read after its snapshot was pinned."""
+
+    def __init__(self, table: str, keys: Sequence[tuple]) -> None:
+        self.table = table
+        self.keys = tuple(keys)
+        shown = ", ".join(repr(key) for key in self.keys[:_SHOWN_KEYS])
+        more = f" and {len(self.keys) - _SHOWN_KEYS} more" if len(self.keys) > _SHOWN_KEYS else ""
+        super().__init__(f"table {table!r} rows changed after this transaction read them: {shown}{more}")
+
+
+def _rows_unchanged_since(root: str, guards: Mapping[str, frozenset[tuple]], sequence: int) -> Precondition:
+    def check(snapshot: ArchiveSnapshot) -> None:
+        if snapshot.manifest.sequence <= sequence:
+            return
+        view = ReadView(root, snapshot)
+        for table, keys in guards.items():
+            changed = view.keys_committed_after(table, keys, sequence)
+            if changed:
+                raise RowConflict(table, changed)
+
+    return check
 
 
 def _attribution(author: str | None, message: str | None) -> Attribution | None:
@@ -349,6 +379,56 @@ class DataStore:
         self.raise_if_failed()
         return Transaction(self, max_bytes=None, attribution=_attribution(author, message))
 
+    def update(
+        self,
+        table: str,
+        keys: Sequence[tuple],
+        edit: Callable[[dict], dict],
+        *,
+        message: str,
+        author: str | None = None,
+        attempts: int = DEFAULT_UPDATE_ATTEMPTS,
+    ) -> CommitToken:
+        """Replace each keyed row with ``edit(row)`` in one guarded commit.
+
+        The rows are read from a fresh snapshot and guarded. When another writer commits any of
+        them first, ``edit`` runs again on the newer rows after a backoff, so it may run more than
+        once. After ``attempts`` conflicting attempts the last ``RowConflict`` is raised. A missing
+        key raises ``KeyError``, and an edit that changes the primary key raises ``ValueError``.
+        The table must use ``OnConflict.SUPERSEDE``, since an update writes a newer row for a key.
+        """
+        if attempts < 1:
+            raise ValueError("attempts must be positive")
+        registered = self._tables.get(table)
+        if registered is None:
+            raise KeyError(f"table {table!r} must be registered before an update")
+        if registered.on_conflict != OnConflict.SUPERSEDE:
+            raise ValueError(f"update writes newer rows, so table {table!r} must use OnConflict.SUPERSEDE")
+
+        def attempt() -> CommitToken:
+            transaction = self.unbounded_transaction(message=message, author=author)
+            rows = transaction.read(table, keys)
+            missing = [key for key in keys if tuple(key) not in rows]
+            if missing:
+                raise KeyError(f"table {table!r} has no rows for keys {missing[:_SHOWN_KEYS]}")
+            primary_key = registered.primary_key
+            edited = []
+            for key, row in rows.items():
+                new = edit(dict(row))
+                if tuple(new.get(name) for name in primary_key) != key:
+                    raise ValueError(f"edit changed the primary key of {key!r} in table {table!r}")
+                edited.append(new)
+            transaction.table(table).extend(edited)
+            return transaction.commit()
+
+        return retry_with_backoff(
+            attempt,
+            retryable=lambda exc: isinstance(exc, RowConflict),
+            max_attempts=attempts,
+            backoff=_UPDATE_BACKOFF,
+            operation=f"FineStore update of {table!r} at {self.root}",
+        )
+
     def flush(self) -> CommitToken | None:
         """Commit all buffers with one HEAD update, or return ``None`` when empty."""
         self.raise_if_failed()
@@ -383,7 +463,13 @@ class DataStore:
                     table._restore(pending)
                 raise
 
-    def _commit_transaction(self, rows: dict[str, list[ArrowRow]], *, attribution: Attribution | None) -> CommitToken:
+    def _commit_transaction(
+        self,
+        rows: dict[str, list[ArrowRow]],
+        *,
+        attribution: Attribution | None,
+        precondition: Precondition | None,
+    ) -> CommitToken:
         with self._commit_lock:
             additions = {}
             for name, pending_rows in rows.items():
@@ -396,9 +482,12 @@ class DataStore:
             if not additions:
                 snapshot = self._commits.snapshot()
                 if snapshot.token is None:
-                    return self._commits.commit(CommitDelta(attribution=attribution))
+                    return self._commits.commit(CommitDelta(attribution=attribution, precondition=precondition))
+                if precondition is not None:
+                    precondition(snapshot)
                 return snapshot.token
-            return self._commits.commit(replace(_addition_delta(additions), attribution=attribution))
+            delta = _addition_delta(additions)
+            return self._commits.commit(replace(delta, attribution=attribution, precondition=precondition))
 
     def compact(self, table: str, *, generation: int | None = None) -> CompactionResult:
         """Logically compact one table against the current manifest."""
@@ -621,11 +710,36 @@ class Transaction:
         self._base = store.read_view()
         self._rows: dict[str, list[ArrowRow]] = {}
         self._objects: dict[str, bytes] = {}
+        self._guards: dict[str, set[tuple]] = {}
         self._attribution = attribution
         self._max_bytes = max_bytes
         self._buffer_bytes = 0
         self._closed = False
         self.token: CommitToken | None = None
+
+    def read(self, table: str, keys: Sequence[tuple]) -> dict[tuple, dict]:
+        """Read keyed rows from the pinned snapshot and guard them until commit.
+
+        Returns the present rows by primary-key tuple, without FineStore's system columns.
+        The commit raises ``RowConflict`` if another writer commits any of these keys,
+        present or absent, after this transaction's snapshot.
+        """
+        if table not in self._store._tables:
+            raise KeyError(f"table {table!r} must be registered before the transaction")
+        keys = [tuple(key) for key in keys]
+        if any(value is None for key in keys for value in key):
+            raise ValueError(f"read keys for table {table!r} must not contain null values")
+        self._guards.setdefault(table, set()).update(keys)
+        if not keys or self._base.table_metadata_path(table) is None:
+            return {}
+        width = len(self._base.primary_key(table))
+        if any(len(key) != width for key in keys):
+            raise ValueError(f"keys for table {table!r} must have {width} columns")
+        rows = self._base.rows_by_key(table, keys)
+        return {
+            key: {name: value for name, value in row.items() if name not in RESERVED_COLUMNS}
+            for key, row in rows.items()
+        }
 
     def table(self, name: str) -> TransactionTable:
         if name not in self._store._tables:
@@ -673,7 +787,14 @@ class Transaction:
             if self.token is None:
                 raise RuntimeError("transaction closed without committing")
             return self.token
-        self.token = self._store._commit_transaction(self._rows, attribution=self._attribution)
+        precondition = None
+        if self._guards:
+            base_sequence = self._base.token.sequence if self._base.token is not None else 0
+            guards = {table: frozenset(keys) for table, keys in self._guards.items()}
+            precondition = _rows_unchanged_since(self._store.root, guards, base_sequence)
+        self.token = self._store._commit_transaction(
+            self._rows, attribution=self._attribution, precondition=precondition
+        )
         self._closed = True
         return self.token
 

@@ -722,14 +722,49 @@ class _ReadOperations:
             return None
         return result.slice(0, 1).to_pylist()[0]
 
+    def rows_by_key(self, table: str, keys: Iterable[tuple]) -> dict[tuple, dict]:
+        """The newest row for each of ``keys`` that ``table`` holds, by primary-key tuple."""
+        wanted = {tuple(key) for key in keys}
+        if not wanted or self.table_metadata_path(table) is None:
+            return {}
+        rows = self._lookup_rows(table, list(wanted), _TABLE_SCAN_PROFILE)
+        if rows is None:
+            return {}
+        primary_key = self.primary_key(table)
+        found = {}
+        for row in rows.to_pylist():
+            key = tuple(row[name] for name in primary_key)
+            if key in wanted:
+                found[key] = row
+        return found
+
+    def keys_committed_after(self, table: str, keys: Iterable[tuple], sequence: int) -> list[tuple]:
+        """Return, sorted, the ``keys`` whose newest row was committed after ``sequence``."""
+        wanted = {tuple(key) for key in keys}
+        if not wanted or self.table_metadata_path(table) is None:
+            return []
+        rows = self._lookup_rows(table, list(wanted), _TABLE_SCAN_PROFILE, committed_after=sequence)
+        if rows is None:
+            return []
+        primary_key = self.primary_key(table)
+        commits = rows[SystemColumns.COMMIT].to_pylist()
+        changed = {key_values(rows, index, primary_key) for index, commit in enumerate(commits) if commit > sequence}
+        return sorted(changed & wanted)
+
     def _lookup_rows(
         self,
         table: str,
         keys: Sequence[tuple],
         scan_profile: _ScanProfile,
         diagnostics: BlobReadDiagnostics | None = None,
+        *,
+        committed_after: int | None = None,
     ) -> pa.Table | None:
-        shards = sorted(self.list_shards(table), key=lambda shard: shard.row_commit_upper_bound, reverse=True)
+        shards = self.list_shards(table)
+        if committed_after is not None:
+            # A key changed after ``committed_after`` has its newest row in a shard committed later.
+            shards = [shard for shard in shards if shard.row_commit_upper_bound > committed_after]
+        shards = sorted(shards, key=lambda shard: shard.row_commit_upper_bound, reverse=True)
         if not shards:
             return None
         primary_key = self.primary_key(table)
