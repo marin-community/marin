@@ -112,6 +112,13 @@ def _docker_network() -> str:
     return "host" if os.environ.get("MICRO210_GATE_DOCKER_HOST_NETWORK") == "1" else "default"
 
 
+def _docker_dns_mounts() -> list[str]:
+    """Mount the pod's resolv.conf so image-baked resolver files cannot break egress."""
+    if os.environ.get("MICRO210_GATE_DOCKER_HOST_NETWORK") != "1" or not Path("/etc/resolv.conf").exists():
+        return []
+    return ["-v", "/etc/resolv.conf:/etc/resolv.conf:ro"]
+
+
 def extract_row(task_spec_json: str) -> Path:
     """Materialise one row's verifier resources under a fresh sandbox root."""
     spec = json.loads(task_spec_json)
@@ -170,6 +177,7 @@ def docker_grade(root: Path, judge_environment: dict[str, str] | None, *, image:
         "--rm",
         "--network",
         _docker_network(),
+        *_docker_dns_mounts(),
         "-v",
         f"{root / 'tests'}:/tests:ro",
         "-v",
@@ -339,6 +347,9 @@ def _run_harbor_tests(
                     container,
                     "--platform",
                     "linux/amd64",
+                    "--network",
+                    _docker_network(),
+                    *_docker_dns_mounts(),
                     "--workdir",
                     workdir,
                     image,
