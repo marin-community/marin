@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, materialized_config
-from marin.rl.skyrl import skyrl_cpu_command, skyrl_cpu_environment
+from marin.rl.skyrl import SKYRL_PROJECT, skyrl_cpu_command, skyrl_cpu_environment
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import rl_compose as recipe
@@ -52,13 +52,15 @@ def native_json(*uv_options: str):
         with TemporaryDirectory(prefix="skyrl-test-") as directory:
             program = Path(directory) / "native_test.py"
             program.write_text(script)
+            runner = recipe.REPO_ROOT / "experiments/post_training/rl_tests/native_script.py"
+            args = [str(runner), str(recipe.REPO_ROOT / SKYRL_PROJECT), str(program), *paths]
             try:
                 if uv_options:
-                    command = skyrl_cpu_command(*uv_options, "python", "-I", str(program), *paths)
+                    command = skyrl_cpu_command(*uv_options, "python", "-I", *args)
                     return gate._native_command_json(
                         "Run isolated native test program", command, env=skyrl_cpu_environment(), timeout=170
                     )
-                return gate._native_json("Run native test program", str(program), *paths, timeout=170)
+                return gate._native_json("Run native test program", *args, timeout=170)
             except gate.InvalidComparison as error:
                 cause = error.__cause__
                 if isinstance(cause, subprocess.CalledProcessError) and cause.stderr:

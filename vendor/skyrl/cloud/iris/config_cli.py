@@ -8,8 +8,17 @@ import json
 import logging
 import sys
 from pathlib import Path
+from types import ModuleType
 
 logger = logging.getLogger(__spec__.name if __spec__ else __name__)
+
+
+def verify_checkout(checkout: Path, *modules: ModuleType) -> None:
+    """Require the native modules to come from the selected SkyRL checkout."""
+    checkout = checkout.resolve()
+    for module in modules:
+        if module.__file__ is None or not Path(module.__file__).resolve().is_relative_to(checkout):
+            raise RuntimeError(f"{module.__name__} loaded from outside the vendor SkyRL checkout")
 
 
 def main() -> None:
@@ -37,10 +46,7 @@ def main() -> None:
     import skyrl_train
     from cloud.iris import launch_config, rl_config_translation
 
-    checkout = args.checkout.resolve()
-    for module in (sys.modules[__name__], launch_config, rl_config_translation, skyrl_train, marinskyrl):
-        if module.__file__ is None or not Path(module.__file__).resolve().is_relative_to(checkout):
-            raise RuntimeError(f"{module.__name__} loaded from outside the vendor SkyRL checkout")
+    verify_checkout(args.checkout, sys.modules[__name__], launch_config, rl_config_translation, skyrl_train, marinskyrl)
 
     if args.command == "compose":
         from rigging.filesystem.s3_compat import configure_coreweave_s3
