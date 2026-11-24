@@ -256,7 +256,10 @@ def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
 
 
 @pytest.mark.parametrize("preset", ["speed-short", "learning-medium"])
-def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset):
+def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset_table, monkeypatch, preset):
+    if preset == "learning-medium":
+        preset_table(small_learning_trial(snowball_model.SNOWBALL.by_name[preset]))
+        cache_native_compositions(monkeypatch)
     controls(recorded_runs, preset)
     root = recorded_runs(preset, "users/test/current-generation", speed=101)
     if preset == "speed-short":
@@ -580,8 +583,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "priority",
         "stale-default",
         "control-commit",
-        "unbound-data",
-        "allocation",
         "cached-default",
         "zero-spread",
         "missing-guard",
@@ -590,9 +591,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "omitted-schema-nondefault",
         "omitted-candidate-default",
         "schema-timeout",
-        "protocol-temperature",
-        "evaluation-cadence",
-        "malformed-seed",
     ],
 )
 def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorded_runs, tmp_path, monkeypatch, case):
@@ -732,38 +730,12 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         "omitted-schema-nondefault": ("control config differs",),
         "omitted-candidate-default": ("skyrl.generator.chat_template_kwargs",),
     }.get(case, ())
-    mutation = {
-        "control-commit": (control_roots[0], "result.provenance.base_commit", "wrong-commit", "does not match its pin"),
-        "unbound-data": (candidate, "config.skyrl.data.train_data", ["/unbound/train.parquet"], "skyrl.data.train_data"),
-        "allocation": (
-            candidate,
-            "config.iris.allocation.num_nodes",
-            preset.recipe.layout.workload.plan.num_nodes + 1,
-            "iris.allocation.num_nodes",
-        ),
-        "protocol-temperature": (
-            candidate,
-            "config.skyrl.generator.eval_sampling_params.temperature",
-            0.5,
-            "evaluation protocol",
-        ),
-        "malformed-seed": (candidate, "config.skyrl.trainer.seed", None, "malformed recorded configuration", "seed"),
-    }.get(case)
-    if mutation is not None:
-        root, path, value, *reasons = mutation
-        with edit_receipt(root) as receipt:
-            set_path(receipt, path, value)
+    if case == "control-commit":
+        with edit_receipt(control_roots[0]) as receipt:
+            set_path(receipt, "result.provenance.base_commit", "wrong-commit")
+        reasons = ("does not match its pin",)
     if case == "missing-guard":
         edit_metrics(candidate, lambda row: row.update({"policy/mismatch/staleness0/selected_tokens": 0}))
-    if case == "evaluation-cadence":
-        with edit_receipt(candidate) as receipt:
-            evaluation = next(
-                callback
-                for callback in receipt["config"]["skyrl"]["trainer"]["callbacks"]
-                if callback["type"] == "evaluation"
-            )
-            evaluation["eval_steps"] = 17
-        reasons = ("eval_steps",)
     report = compare(preset.name, "--candidate", name)
     if reasons:
         assert report["verdict"] == "invalid" and all(reason in report["reason"] for reason in reasons), report
@@ -783,6 +755,48 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         updated = compare(preset.name, "--candidate", name)
         assert updated["verdict"] == "invalid" and "weight_decay" in updated["reason"]
         assert updated["report"] != report["report"]
+
+
+def test_gate_rejects_changed_candidate_configuration(recorded_runs, preset_table, monkeypatch):
+    preset = small_learning_trial(snowball_model.SNOWBALL.by_name["learning-medium"])
+    preset_table(preset)
+    cache_native_compositions(monkeypatch)
+    controls(recorded_runs, preset.name)
+    inputs = RunInputs(preset_name=preset.name, settings=("trainer.policy.optimizer_config.lr=2e-6",))
+
+    cases = (
+        ("unbound-data", "config.skyrl.data.train_data", ["/unbound/train.parquet"], ("skyrl.data.train_data",)),
+        (
+            "allocation",
+            "config.iris.allocation.num_nodes",
+            preset.recipe.layout.workload.plan.num_nodes + 1,
+            ("iris.allocation.num_nodes",),
+        ),
+        (
+            "protocol-temperature",
+            "config.skyrl.generator.eval_sampling_params.temperature",
+            0.5,
+            ("evaluation protocol",),
+        ),
+        ("malformed-seed", "config.skyrl.trainer.seed", None, ("malformed recorded configuration", "seed")),
+    )
+    for case, path, value, reasons in cases:
+        name = "users/test/config-" + case
+        with edit_receipt(recorded_runs(preset.name, name, inputs=inputs)) as receipt:
+            set_path(receipt, path, value)
+        report = compare(preset.name, "--candidate", name)
+        assert report["verdict"] == "invalid" and all(reason in report["reason"] for reason in reasons), report
+
+    name = "users/test/config-evaluation-cadence"
+    with edit_receipt(recorded_runs(preset.name, name, inputs=inputs)) as receipt:
+        evaluation = next(
+            callback
+            for callback in receipt["config"]["skyrl"]["trainer"]["callbacks"]
+            if callback["type"] == "evaluation"
+        )
+        evaluation["eval_steps"] = 17
+    report = compare(preset.name, "--candidate", name)
+    assert report["verdict"] == "invalid" and "eval_steps" in report["reason"], report
 
 
 def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
