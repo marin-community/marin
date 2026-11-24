@@ -94,14 +94,29 @@ def test_driver_endpoint_flags_build_the_gateway_source(command: str, monkeypatc
     assert (fixed.base_url, fixed.token) == ("http://fixed/v1", "secret-token")
 
 
-@pytest.mark.parametrize("endpoints", [(), ("--glm-base-url", "http://fixed/v1", "--glm-relay-job", "/user/relay")])
-def test_driver_refuses_anything_but_one_endpoint_flag(
-    endpoints: tuple[str, ...], capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("command", ["run", "one"])
+@pytest.mark.parametrize(
+    "endpoints, expected_errors",
+    [
+        ((), ("--glm-base-url", "--glm-relay-job")),
+        (("--glm-base-url", "http://fixed/v1", "--glm-relay-job", "/user/relay"), ("--glm-base-url", "--glm-relay-job")),
+        (("--glm-relay-job", ""), ("argument --glm-relay-job",)),
+        (("--glm-relay-job", " "), ("argument --glm-relay-job",)),
+        (("--glm-base-url", ""), ("argument --glm-base-url",)),
+        (("--glm-base-url", "http://glm"), ("argument --glm-base-url",)),
+    ],
+)
+def test_driver_refuses_missing_conflicting_or_invalid_endpoint_flags(
+    command: str, endpoints: tuple[str, ...], expected_errors: tuple[str, ...], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    with pytest.raises(SystemExit):
-        cli().parse_args(["one", "--proposals", "p", "--output", "o", "--policy", "q", *endpoints])
+    argv = [command, "--proposals", "p", "--output", "o", "--policy", "q"]
+    if command == "run":
+        argv += ["--concurrency", "1"]
+    with pytest.raises(SystemExit) as stopped:
+        cli().parse_args([*argv, *endpoints])
+    assert stopped.value.code == 2
     error = capsys.readouterr().err
-    assert "--glm-base-url" in error and "--glm-relay-job" in error
+    assert all(expected in error for expected in expected_errors)
 
 
 def test_proposal_buckets_ignore_the_proposal_root() -> None:
