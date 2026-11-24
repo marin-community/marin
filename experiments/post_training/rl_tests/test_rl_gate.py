@@ -97,7 +97,7 @@ def test_compare_leave_one_out_writes_the_printed_report(recorded_runs, monkeypa
     table = snowball_model.SNOWBALL
     preset = table.by_name["speed-medium"]
     pin = gate.control_pin(preset, table=table)
-    for index in range(len(pin.members)):
+    for index in range(4):
         name = gate.control_name(pin.preset, pin.commit, index, table=table)
         if index != 1:
             recorded_runs(preset.name, name, speed=100 + index)

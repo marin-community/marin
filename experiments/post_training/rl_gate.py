@@ -1011,7 +1011,7 @@ def command(table: ModelPresets) -> click.Command:
         "--leave-out",
         "leave_out",
         metavar="rN",
-        help="Compare pinned member N with the remaining controls and record its verdict. Keep every completed, "
+        help="Compare pin slot N with the remaining controls and record its verdict. Keep every completed, "
         "measured run. Give this or --candidate.",
     )
     @click.option(

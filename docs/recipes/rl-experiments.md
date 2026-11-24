@@ -282,7 +282,7 @@ time from the first recorded workload start to native job completion. The window
 same attempt and excludes queue time before the first workload start.
 
 Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit, revision and
-replicate count. A pin can also record the collection cluster. The gate reads controls and held-out candidates
+ordered cohort members. A pin can also record the collection cluster. The gate reads controls and held-out candidates
 from that cluster, and ordinary candidates use the preset's cluster. Data-medium shares learning-medium's pin.
 Before submission, the command composes the
 candidate on CPU and checks every control against current defaults. During comparison, candidate configuration
@@ -328,9 +328,8 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
    Inspect the composed settings and add the new revision's hash under that preset in the
    test's `revisions` table.
    The compared-configuration hash includes actual execution memory and priority.
-4. Controls are collected by CI after the default change merges, once per changed default.
-   That CI workflow is planned separately; control collection is not a merge gate.
-   The manual `--control` command remains available for an explicitly authorized calibration.
+4. Collect controls after the default change merges, once per changed default.
+   Use `--control` for an explicitly authorized calibration.
    The source, revision and ordered members live in `snowball_rl.SNOWBALL.control_pins`.
 5. Run `snowball_rl compare --leave-out rN` for each pinned member and record the verdict. Keep every
    completed, measured run regardless of verdict. Resubmit only after an infrastructure failure.
