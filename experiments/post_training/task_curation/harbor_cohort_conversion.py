@@ -273,16 +273,19 @@ def convert_cohort_task(task: TaskSpec, *, input_task_sha256: str) -> CohortConv
         for block in verifier["collect"]
     )
     workdir = environment["workdir"] or "/"
-    # Native reward-file result mode: the script runs unchanged even when its
-    # tests fail, its exact exit code persists beside the reward file it wrote,
-    # and the reward file arbitrates the score (the recorded Harbor bug control
-    # exits nonzero by design while writing a scored zero).
+    # Native reward-file result mode: the verifier log directory is recreated
+    # clean (the cohort images may carry a recorded trial's stale verdict —
+    # grading it would be a false pass), the script runs unchanged even when
+    # its tests fail, its exact exit code persists beside the reward file it
+    # wrote, and the reward file arbitrates the score (the recorded Harbor bug
+    # control exits nonzero by design while writing a scored zero).
     execute = VerifierCommand(
         argv=(
             "bash",
             "-c",
-            f"( /tests/test.sh ) > {HARBOR_TEST_STDOUT} 2>&1 || status=$?; "
-            f'printf "%s\\n" "${{status-0}}" > {HARBOR_TEST_EXIT}; exit 0',
+            f"rm -rf /logs/verifier && mkdir -p /logs/verifier && "
+            f"( ( /tests/test.sh ) > {HARBOR_TEST_STDOUT} 2>&1 || status=$?; "
+            f'printf "%s\\n" "${{status-0}}" > {HARBOR_TEST_EXIT} ); exit 0',
         ),
         cwd=workdir,
         env=verifier_env,

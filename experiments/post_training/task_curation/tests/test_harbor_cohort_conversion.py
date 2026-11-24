@@ -129,8 +129,9 @@ def test_grader_replays_the_harbor_verifier_steps_in_order():
     assert steps[-1].argv == (
         "bash",
         "-c",
-        "( /tests/test.sh ) > /logs/verifier/test-stdout.txt 2>&1 || status=$?; "
-        'printf "%s\\n" "${status-0}" > /logs/verifier/exit-code.txt; exit 0',
+        "rm -rf /logs/verifier && mkdir -p /logs/verifier && "
+        "( ( /tests/test.sh ) > /logs/verifier/test-stdout.txt 2>&1 || status=$?; "
+        'printf "%s\\n" "${status-0}" > /logs/verifier/exit-code.txt ); exit 0',
     )
     assert steps[-1].env == {"VERIFIER_MODE": "strict"}
     assert all(command.argv[:1] != ("chmod",) for command in steps)
