@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The lane's CLI: plan, run, publish, report.
+"""The lane's CLI: tasks, plan, run, publish, report.
 
 ``run`` is the live gate: it refuses to touch the relay without ``--allow-live`` plus the
 relay credentials, because generation starts only after the coordinator releases the Ortet
-relay (DESIGN.md §7). ``plan``, ``report`` and ``publish`` never call a model.
+relay (DESIGN.md §7; Phase 2b released it, BRIEF.md 2026-11-24). ``tasks``, ``plan``,
+``report`` and ``publish`` never call a model.
 """
 
 import argparse
@@ -18,11 +19,18 @@ from pathlib import Path
 
 import fsspec
 from rigging.filesystem.factory import open_url
+from rigging.secrets import require_secret
 from taskcompendium.models import TaskSpec
 
 from experiments.post_training.task_curation.balanced_reasoning.bands import Band
+from experiments.post_training.task_curation.balanced_reasoning.catalog import (
+    CENSUS_ROOT,
+    LEDGER_ROOT,
+    build_tasks_manifest,
+    read_census_entries,
+)
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import (
-    DEFAULT_LEDGER,
+    SOLVER_ALL,
     read_ledger_attempts,
     tally_attempts,
 )
@@ -49,8 +57,8 @@ from experiments.post_training.task_curation.balanced_reasoning.store import (
 logger = logging.getLogger(__name__)
 
 GATE_MESSAGE = (
-    "Generation is gated: the Ortet relay stays with the tool-conversion lane until the "
-    "coordinator releases it. Pass --allow-live with relay credentials only after that release."
+    "Generation is gated: pass --allow-live only after the coordinator has released the Ortet "
+    "relay to this lane (Phase 2b, BRIEF.md 2026-11-24), with GLM_BASE_URL or GLM_RELAY_JOB set."
 )
 
 
@@ -97,8 +105,7 @@ def quota_from_arguments(arguments: argparse.Namespace) -> Quota:
 
 def command_plan(args: argparse.Namespace) -> int:
     candidates = read_candidate_tasks(args.tasks)
-    ledger_root = DEFAULT_LEDGER if args.difficulty_ledger is None else args.difficulty_ledger
-    difficulty = tally_attempts(read_ledger_attempts(ledger_root), solver=args.solver)
+    difficulty = tally_attempts(read_ledger_attempts(args.ledger), solver=args.solver)
     selected, census = select_tasks(candidates, difficulty, quota_from_arguments(args))
     digest_value = write_selection(f"{args.output.rstrip('/')}/selection.json", selected, census)
     print(f"PLAN selected={len(selected)} digest={digest_value}")
@@ -106,13 +113,29 @@ def command_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_tasks(args: argparse.Namespace) -> int:
+    """Build the verified-task manifest: ledger difficulty joined to census TaskSpecs."""
+    difficulty = tally_attempts(read_ledger_attempts(args.ledger), solver=args.solver)
+    entries = read_census_entries(args.census_root)
+    receipt = build_tasks_manifest(
+        difficulty,
+        entries,
+        args.output,
+        min_attempts=args.min_attempts,
+    )
+    print(json.dumps(receipt, indent=2, sort_keys=True))
+    return 0
+
+
 def command_run(args: argparse.Namespace) -> int:
-    token = os.environ.get("GLM_API_KEY")
-    base_url = os.environ.get("GLM_BASE_URL")
-    relay_job = os.environ.get("GLM_RELAY_JOB")
-    if not args.allow_live or not token or bool(base_url) == bool(relay_job):
+    if not args.allow_live:
         print(GATE_MESSAGE, file=sys.stderr)
         return 2
+    # Fail fast on a missing or empty credential: the fleet's "Illegal header value
+    # b'Bearer '" failure was an empty api-key file reaching the wire.
+    token = require_secret("GLM_API_KEY")
+    base_url = os.environ.get("GLM_BASE_URL")
+    relay_job = os.environ.get("GLM_RELAY_JOB")
     digest_value, selected, _ = read_selection(args.selection)
     logger.info("RUN selection=%s tasks=%d", digest_value, len(selected))
     policy = lane_policy(
@@ -188,16 +211,29 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--tasks", required=True, help="JSONL of verified tasks: task_id, source_id, task_sha256, domain, task_path"
     )
-    plan.add_argument(
-        "--difficulty-ledger", default=None, help="Atlas difficulty ledger root; defaults to the production ledger"
-    )
+    plan.add_argument("--ledger", default=LEDGER_ROOT, help="Atlas difficulty ledger root")
     plan.add_argument("--output", required=True, help="Run root for selection.json")
-    plan.add_argument("--solver", default="hosted", help="Solver family to band by")
+    plan.add_argument(
+        "--solver",
+        default=SOLVER_ALL,
+        help="Solver family to band by; 'all' pools every pinned solver (the measured ledger "
+        "carries ~1 hosted attempt per task, which cannot band)",
+    )
     plan.add_argument("--easy-quota", type=int, default=None)
     plan.add_argument("--medium-quota", type=int, default=None)
     plan.add_argument("--hard-quota", type=int, default=None)
     plan.add_argument("--unsolved-quota", type=int, default=None)
     plan.set_defaults(handler=command_plan)
+
+    tasks = commands.add_parser("tasks", help="build the verified-task manifest (no model calls)")
+    tasks.add_argument("--ledger", default=LEDGER_ROOT, help="Atlas difficulty ledger root")
+    tasks.add_argument("--census-root", default=CENSUS_ROOT, help="Retained-census release root")
+    tasks.add_argument("--output", required=True, help="Output prefix for tasks.jsonl and task specs")
+    tasks.add_argument("--solver", default=SOLVER_ALL, help="Solver family to tally difficulty under")
+    tasks.add_argument(
+        "--min-attempts", type=int, default=1, help="Drop ledger tasks scored on fewer attempts than this"
+    )
+    tasks.set_defaults(handler=command_tasks)
 
     run = commands.add_parser("run", help="generate and verify traces for a selection (gated)")
     run.add_argument("--selection", required=True)

@@ -162,7 +162,7 @@ def test_plan_command_bands_from_a_local_ledger(tmp_path: Path, capsys: pytest.C
             "plan",
             "--tasks",
             str(tasks),
-            "--difficulty-ledger",
+            "--ledger",
             str(tmp_path / "ledger"),
             "--output",
             str(tmp_path / "run"),

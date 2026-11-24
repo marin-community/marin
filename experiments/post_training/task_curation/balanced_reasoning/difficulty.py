@@ -30,6 +30,9 @@ SCORED_OUTCOME = "scored"
 SOLVER_HOSTED = "hosted"
 """The ``atlas-difficulty-v3`` solver whose family the generator belongs to (GLM-5.3)."""
 
+SOLVER_ALL = "all"
+"""Pool every pinned solver's attempts per task (the fallback ladder's sparsity basis)."""
+
 
 def url_protocol(url: str) -> str:
     """The fsspec protocol of a storage URL; local paths are ``file``."""
@@ -116,12 +119,17 @@ def tally_attempts(
 
     A task's rate is ``solved / scored`` over its distinct scored attempts under ``solver``;
     an attempt solves the task when its reward reaches ``reward_pass``. Rows of other outcomes
-    (infrastructure, cost, escalations) never count as scored.
+    (infrastructure, cost, escalations) never count as scored. ``solver="all"`` pools every
+    pinned solver's attempts per task — the fallback ladder's basis where the hosted solver's
+    own attempts are too sparse to band with (one wave attempt per task is a coin flip).
     """
+    pooled = solver == SOLVER_ALL
     scored: dict[tuple[str, str], dict[str, float | None]] = {}
     identities: dict[tuple[str, str], tuple[str, str | None]] = {}
     for attempt in attempts:
-        if attempt.solver != solver or attempt.outcome != SCORED_OUTCOME:
+        if not pooled and attempt.solver != solver:
+            continue
+        if attempt.outcome != SCORED_OUTCOME:
             continue
         key = (attempt.source_id, attempt.task_sha256)
         by_attempt = scored.setdefault(key, {})
@@ -142,6 +150,6 @@ def tally_attempts(
             task_id=task_id or task_sha256,
             solve_rate=solved / len(by_attempt),
             scored=len(by_attempt),
-            basis=f"ledger:{solver}",
+            basis="ledger:pooled" if pooled else f"ledger:{solver}",
         )
     return tasks
