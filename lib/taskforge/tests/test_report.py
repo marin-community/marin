@@ -108,7 +108,7 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
             Record(i, 1000000 - age + offset, event, opened.get(i), attempts.get(i), answers.get(i), billed.get(i))
             for i, (offset, event) in enumerate(data, 1)
         )
-        sink = CheckpointSink(tmp_path / "work", str(directory))
+        sink = CheckpointSink(str(directory))
         sink.claim(None)
         await sink.local.write(records[:1])
         await asyncio.to_thread(sink._publish, Status(), None)
@@ -136,7 +136,7 @@ async def test_report_counts_each_bought_solver_trial_once_by_outcome(tmp_path: 
     round_ = ValidationResult("d", (solved, cut), (), ())
     added = (TrialResult(2, GradeResult(Outcome.GRADED, 0.0)), TrialResult(3, None, Cause.HELD, "refused"))
     record = ValidationResult("d", (solved, cut, *added), (), (), confirms=0)
-    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
+    sink = CheckpointSink(str(tmp_path / "root"))
     sink.claim(None)
     await sink.local.write((Record(1, time.time(), StageCompleted(Stage.REVIEW, "", "Done")),))
     workpiece = Workpiece("w", proposal, evidence=(round_, record), terminal=Terminal.ACCEPTED)
@@ -184,7 +184,7 @@ async def test_a_launch_under_a_profile_already_paid_adds_no_reported_tokens(
         history = ctx._log.records
         root = tmp_path / f"launch-{launch}"
         (root / "workpiece").mkdir(parents=True)
-        sink = CheckpointSink(tmp_path / f"work-{launch}", str(root / "workpiece"))
+        sink = CheckpointSink(str(root / "workpiece"))
         sink.claim(None)
         await sink.local.write(history)
         await sink.finish(Status(terminal=Terminal.HELD), Workpiece("w", proposal, terminal=Terminal.HELD))
@@ -203,7 +203,7 @@ async def test_report_names_format_1_roots_and_counts_a_claimed_empty_root_as_ru
         (tmp_path / name / artefact).write_text("{}")
     with pytest.raises(ValueError, match=f"2 journal format 1 roots .*{tmp_path / 'old'}, {tmp_path / 'parts'}"):
         await report(str(tmp_path))
-    CheckpointSink(tmp_path / "work", str(tmp_path / "claimed")).claim(None)
+    CheckpointSink(str(tmp_path / "claimed")).claim(None)
     lines = await report(str(tmp_path), 1)
     assert f"skipped journal_format=1 count=2 roots={tmp_path / 'old'}, {tmp_path / 'parts'}" in lines
     assert "workpieces=1 since_hours=1" in lines and "terminal=running count=1" in lines
@@ -214,11 +214,11 @@ async def test_a_freshly_reclaimed_root_counts_as_running_in_a_short_window(
 ) -> None:
     """A held root resumed now is running now, though its newest event is a day old."""
     destination = str(tmp_path / "reclaimed")
-    first = CheckpointSink(tmp_path / "work", destination)
+    first = CheckpointSink(destination)
     first.claim(None)
     await first.local.write((Record(1, time.time() - 86400, Note("yesterday")),))
     await first.finish(Status(terminal=Terminal.HELD), Workpiece("reclaimed", proposal, terminal=Terminal.HELD))
-    CheckpointSink(tmp_path / "work", destination).claim(read_journal(destination))
+    CheckpointSink(destination).claim(read_journal(destination))
     lines = await report(str(tmp_path), 1)
     assert "workpieces=1 since_hours=1" in lines and "terminal=running count=1" in lines
     assert "tokens role=author prompt=0 cached=0 completion=0" in lines
@@ -228,7 +228,7 @@ async def test_a_freshly_reclaimed_root_counts_as_running_in_a_short_window(
 async def test_a_root_in_another_journal_format_is_named_and_the_report_completes(
     tmp_path: Path, proposal: TaskProposal
 ) -> None:
-    current = CheckpointSink(tmp_path / "work", str(tmp_path / "current"))
+    current = CheckpointSink(str(tmp_path / "current"))
     current.claim(None)
     await current.finish(Status(terminal=Terminal.HELD), Workpiece("current", proposal, terminal=Terminal.HELD))
     plant_root(tmp_path / "n6", N6_MODIFY_HELD)
@@ -246,7 +246,7 @@ async def test_overlapping_scopes_charge_each_call_to_the_role_its_scope_bills(
     tmp_path: Path, proposal: TaskProposal
 ) -> None:
     (tmp_path / "root").mkdir()
-    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
+    sink = CheckpointSink(str(tmp_path / "root"))
     sink.claim(None)
     ctx = Context(log=EventLog(sink=sink))
     judging, answered = asyncio.Event(), asyncio.Event()

@@ -82,7 +82,7 @@ from taskforge.effects.issues import (
     Transient,
     UnsupportedFormat,
 )
-from taskforge.effects.log import EventLog, JsonlSink, Opened, Record, Status, decode, fold
+from taskforge.effects.log import BufferSink, EventLog, Opened, Record, Status, decode, fold
 from taskforge.harness.protocol import Stopped, StopReason
 from taskforge.llm.client import AttemptFailed, AttemptOutcome, ModelClient, Progress, Provider, Segment
 from taskforge.llm.glm_provider import EndpointSource, FixedEndpoint, GlmEndpoint, GlmProvider, Pool
@@ -285,8 +285,8 @@ async def test_workflow_accepts_and_records_stage_sequence(proposal: TaskProposa
     assert sorted(engine.started)[:2] == ["arithmetic:0:0", "arithmetic:1:0"] and len(engine.started) == 7
 
 
-async def test_crash_resume_replays_commands_without_repeating_inference(proposal: TaskProposal, tmp_path: Path) -> None:
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+async def test_crash_resume_replays_commands_without_repeating_inference(proposal: TaskProposal) -> None:
+    sink = BufferSink()
     first = EventLog(sink=sink)
     broken = resources(Envs(fail=True), script())
     assert (await run_workpiece(proposal, config(), broken, first, install=install)).terminal == Terminal.HELD
@@ -498,14 +498,14 @@ async def test_a_workpiece_runs_end_to_end_on_a_caller_provider_and_profile(prop
     ("change", "calls"), [("none", 0), ("output-limit", len(script()) + 2), ("formatter", len(script()) + 2)]
 )
 async def test_a_journal_replays_model_calls_only_under_the_profile_that_recorded_them(
-    proposal: TaskProposal, tmp_path: Path, change: str, calls: int
+    proposal: TaskProposal, change: str, calls: int
 ) -> None:
     profile = {
         "none": GLM_5_3,
         "output-limit": replace(GLM_5_3, name="glm-5.3/output-4", max_output_tokens=4),
         "formatter": replace(GLM_5_3, name="glm-5.3/spaced", replay_arguments=lambda arguments: f" {arguments}"),
     }[change]
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    sink = BufferSink()
     assert (await run_on(proposal, caller_providers(), {}, EventLog(sink=sink))).terminal == Terminal.ACCEPTED
     providers = caller_providers()
     log = EventLog(replay_from=local_records(sink), sink=sink)
@@ -532,7 +532,6 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         proposals=str(source),
         policy=str(overlay),
         output=str(tmp_path / "out"),
-        work_dir=str(tmp_path / "work"),
         resume_held=False,  # and no probe: an in-process caller built before the flag existed
         concurrency=2,
         buckets=4096,
@@ -592,9 +591,8 @@ async def test_driver_persists_programming_failure_then_reraises(
     assert published(destination).head.status.terminal is Terminal.HELD
     assert published(destination).events()
 
-    # An Iris retry has a fresh local directory, but must not rerun this held workpiece.
+    # An Iris retry must not rerun this held workpiece.
     head = (destination / HEAD).read_bytes()
-    args.work_dir = str(tmp_path / "retry-work")
     await driver.one(args)
     assert (destination / HEAD).read_bytes() == head
 
@@ -634,14 +632,12 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
     monkeypatch.setattr(CheckpointSink, "finish", final_publish)
     destination = tmp_path / "out" / driver.proposal_key(args.proposals)
     assert published(destination).head.status.terminal is None
-    args.work_dir = str(tmp_path / "second")
     await driver.one(args)
     assert published_workpiece(destination).terminal == Terminal.ACCEPTED
     assert isinstance(first.inference, FakeInference) and len(first.inference.requests) == 2
     assert isinstance(second.inference, FakeInference) and len(second.inference.requests) == len(script()) - 2
     head = (destination / HEAD).read_bytes()
     # Even with no resources left to construct, another fresh attempt exits successfully.
-    args.work_dir = str(tmp_path / "third")
     await driver.one(args)
     assert (destination / HEAD).read_bytes() == head
 
@@ -735,11 +731,9 @@ async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trial
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     assert published_workpiece(destination).terminal is Terminal.HELD
     head = (destination / HEAD).read_bytes()
-    driver_args.work_dir += "-skip"
     await driver.one(driver_args)
     assert (destination / HEAD).read_bytes() == head
     driver_args.resume_held = True
-    driver_args.work_dir += "-resume"
     await driver.one(driver_args)
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert isinstance(second.inference, FakeInference) and not second.inference.requests
@@ -816,32 +810,6 @@ async def test_driver_fails_closed_on_another_journal_format_without_touching_it
     assert tree(destination) == before
 
 
-async def test_drivers_sharing_a_work_directory_publish_only_their_own_history(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A fresh root starts from its own empty history, whatever another run left in the shared work directory."""
-    built = [resources(Envs(), script()), resources(Envs(), script())]
-    attempts = iter(built)
-
-    @asynccontextmanager
-    async def fake_runtime(
-        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
-    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-        yield build_config(policy, {}), next(attempts)
-
-    monkeypatch.setattr(driver, "runtime", fake_runtime)
-    identity = driver.proposal_key(driver_args.proposals)
-    await driver.one(driver_args)
-    first = history(Path(driver_args.output) / identity)
-    driver_args.output += "-second"
-    await driver.one(driver_args)
-    second = history(Path(driver_args.output) / identity)
-    assert published_workpiece(Path(driver_args.output) / identity).terminal is Terminal.ACCEPTED
-    assert [record.event for record in second] == [record.event for record in first]
-    assert [record.sequence for record in second] == list(range(1, len(first) + 1))
-    assert isinstance(built[1].inference, FakeInference) and len(built[1].inference.requests) == len(script())
-
-
 def corrupt(line: bytes, corruption: str, sequence: int) -> bytes:
     row = json.loads(line)
     if corruption == "torn tail":
@@ -885,7 +853,6 @@ async def test_resume_decodes_published_history_before_claiming_and_leaves_it_un
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
     driver_args.resume_held = True
-    driver_args.work_dir += "-resume"
     with pytest.raises(LogFailure):
         await driver.one(driver_args)
     assert tree(destination) == before
@@ -1342,7 +1309,6 @@ async def test_a_recoverable_error_on_a_count_triggered_chunk_loses_no_paid_work
     assert [record.sequence for record in history(destination)] == list(range(1, len(history(destination)) + 1))
     # The failed chunk, then only the final chunk and workpiece: no count-triggered retry per later event.
     assert len(calls) == 3
-    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
     await driver.one(driver_args)
     assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
 
@@ -1372,7 +1338,6 @@ async def test_a_short_head_read_at_a_count_triggered_checkpoint_loses_no_paid_w
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert [record.sequence for record in history(destination)] == list(range(1, len(history(destination)) + 1))
-    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
     await driver.one(driver_args)
     assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
 
@@ -1405,7 +1370,6 @@ async def test_a_short_chunk_read_on_resume_is_retried_and_repeats_no_paid_work(
         return open_url(url, mode)
 
     monkeypatch.setattr(checkpoint, "open_url", short_first_chunk)
-    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
     await driver.one(driver_args)
     assert opened[0] == opened[1]
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED
@@ -1464,7 +1428,6 @@ async def test_a_transient_error_in_final_publication_retries_without_repeating_
     assert [record.sequence for record in history(destination)] == list(range(1, len(history(destination)) + 1))
     # A lost swap is redone; an applied one is recognised from the observed head and not swapped again.
     assert len(finals) == {"workpiece": 0, "head-lost": 2, "head-applied": 1}[fault]
-    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
     await driver.one(driver_args)
     assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
 
@@ -1507,7 +1470,6 @@ async def test_an_inconclusive_conditional_write_is_decided_by_reading_the_targe
     assert fired == [fault]
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert [record.sequence for record in history(destination)] == list(range(1, len(history(destination)) + 1))
-    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
     await driver.one(driver_args)
     assert executions(first) == (len(script()), 2) and executions(relaunch) == (0, 0)
 
@@ -1558,7 +1520,6 @@ async def test_a_final_publication_that_keeps_failing_exits_and_a_relaunch_resum
     head = published(destination).head
     assert (head.status, head.workpiece, head.chunks) == (Status(), None, ())
     monkeypatch.setattr(checkpoint, "_put", put)
-    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
     await driver.one(driver_args)
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert executions(first) == executions(relaunch) == (len(script()), 2)
@@ -1570,19 +1531,19 @@ async def test_cancellation_while_the_terminal_event_is_written_leaves_a_resumab
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     reached, release, draining = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    write, drain = JsonlSink.write, Context.drain
+    write, drain = BufferSink.write, Context.drain
 
-    async def paused(sink: JsonlSink, records: Sequence[Record]) -> None:
+    async def paused(sink: BufferSink, records: Sequence[Record]) -> None:
+        await write(sink, records)
         if any(isinstance(r.event, StageCompleted) and r.event.terminal is Terminal.ACCEPTED for r in records):
             reached.set()
             await release.wait()
-        await write(sink, records)
 
     async def root_drain(ctx: Context) -> None:
         draining.set()
         await drain(ctx)
 
-    monkeypatch.setattr(JsonlSink, "write", paused)
+    monkeypatch.setattr(BufferSink, "write", paused)
     monkeypatch.setattr(Context, "drain", root_drain)
     first, relaunch = resources(Envs(), script()), resources(Envs(), script())
     serve(monkeypatch, first, relaunch)
@@ -1596,8 +1557,7 @@ async def test_cancellation_while_the_terminal_event_is_written_leaves_a_resumab
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     assert published(destination).head.status == Status()
     assert fold([record.event for record in history(destination)]).terminal is Terminal.ACCEPTED
-    monkeypatch.setattr(JsonlSink, "write", write)
-    driver_args.work_dir = str(Path(driver_args.work_dir).parent / "relaunch")
+    monkeypatch.setattr(BufferSink, "write", write)
     await driver.one(driver_args)
     accepted = published_workpiece(destination)
     assert published(destination).head.status.terminal is accepted.terminal is Terminal.ACCEPTED
@@ -1608,9 +1568,9 @@ async def test_cancellation_while_the_terminal_event_is_written_leaves_a_resumab
 class TakenOverWhileBlocked(FakeInference):
     """On the third call another writer takes the root; the call then blocks like a long model call."""
 
-    def __init__(self, completions: Sequence[Completion], destination: Path, workdir: Path) -> None:
+    def __init__(self, completions: Sequence[Completion], destination: Path, writers: list[CheckpointSink]) -> None:
         super().__init__(completions)
-        self.destination, self.workdir = destination, workdir
+        self.destination, self.writers = destination, writers
         self.successor: CheckpointSink | None = None
         self.history: tuple[Record, ...] = ()
         self.cancelled = False
@@ -1618,10 +1578,10 @@ class TakenOverWhileBlocked(FakeInference):
     @override
     async def complete(self, request: InferenceRequest) -> Completion:
         if len(self.requests) == 2:
-            (stale,) = self.workdir.glob("*.jsonl")
-            while published(self.destination).head.size < stale.stat().st_size:
+            (stale,) = [writer.local for writer in self.writers if writer.destination == str(self.destination)]
+            while published(self.destination).head.size < stale.offset + len(stale.data):
                 await asyncio.sleep(0.01)  # Take over only once the old writer has nothing pending.
-            self.successor = CheckpointSink(self.workdir, str(self.destination))
+            self.successor = CheckpointSink(str(self.destination))
             self.history = self.successor.claim(published(self.destination))
             try:
                 await asyncio.Event().wait()
@@ -1631,15 +1591,27 @@ class TakenOverWhileBlocked(FakeInference):
         return await super().complete(request)
 
 
+def writers(monkeypatch: pytest.MonkeyPatch) -> list[CheckpointSink]:
+    """Every checkpoint writer the driver builds from now on."""
+    built: list[CheckpointSink] = []
+
+    def build(destination: str) -> CheckpointSink:
+        built.append(CheckpointSink(destination))
+        return built[-1]
+
+    monkeypatch.setattr(driver, "CheckpointSink", build)
+    return built
+
+
 async def test_a_writer_blocked_with_nothing_pending_stops_within_a_tick_of_a_takeover(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A relaunch sharing the work directory takes the head; the idle old driver is cancelled and publishes nothing."""
+    """A relaunch takes the head; the idle old driver is cancelled and publishes nothing."""
     monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
     monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 0.01)
     identity = driver.proposal_key(driver_args.proposals)
     destination = Path(driver_args.output) / identity
-    inference = TakenOverWhileBlocked(script(), destination, Path(driver_args.work_dir) / identity)
+    inference = TakenOverWhileBlocked(script(), destination, writers(monkeypatch))
     first = replace(resources(Envs(), ()), inference=inference)
 
     @asynccontextmanager
@@ -1655,8 +1627,8 @@ async def test_a_writer_blocked_with_nothing_pending_stops_within_a_tick_of_a_ta
     journal = published(destination)
     assert inference.successor is not None and journal.head.writer == inference.successor.writer
     assert (journal.head.status, journal.head.workpiece) == (Status(), None)
-    # The successor's private stream is exactly the committed history, and it resumes from all of it.
-    assert Path(inference.successor.local.path).read_bytes() == journal.events()
+    # The successor holds nothing unpublished and resumes from all of the committed history.
+    assert (inference.successor.local.offset, inference.successor.local.data) == (journal.head.size, b"")
     assert inference.history == decode(journal.events())
 
 
@@ -1674,7 +1646,7 @@ async def test_a_cleanup_error_after_a_takeover_stays_a_failure_and_appends_noth
     monkeypatch.setattr(checkpoint, "CHECKPOINT_SECONDS", 0.01)
     identity = driver.proposal_key(driver_args.proposals)
     destination = Path(driver_args.output) / identity
-    inference = TakenOverWhileBlocked(script(), destination, Path(driver_args.work_dir) / identity)
+    inference = TakenOverWhileBlocked(script(), destination, writers(monkeypatch))
     first = replace(resources(Envs(), ()), inference=inference)
 
     @asynccontextmanager
@@ -1828,8 +1800,8 @@ async def test_parent_summary_separates_superseded_and_corrupt_children_from_goo
     head = Head(checkpoint.JOURNAL_FORMAT, "earlier", (name,), len(torn), Status(), None, 0.0)
     (roots["corrupt"] / HEAD).write_bytes(HEAD_JSON.dump_json(head))
     corrupt = tree(roots["corrupt"])
-    workdir = Path(driver_args.work_dir) / driver.proposal_key(str(paths["superseded"]))
-    taken = replace(resources(Envs(), ()), inference=TakenOverWhileBlocked(script(), roots["superseded"], workdir))
+    inference = TakenOverWhileBlocked(script(), roots["superseded"], writers(monkeypatch))
+    taken = replace(resources(Envs(), ()), inference=inference)
     built = iter((resources(Envs(), script()), taken))
 
     @asynccontextmanager
@@ -1928,7 +1900,6 @@ async def test_root_recorded_with_previous_author_prompt_resumes_through_a_promp
     resumed = ResolvedTurnGuard(script()[2:], first.inference.requests[:2])
     built.append(replace(resources(Envs(), ()), inference=resumed))
     driver_args.resume_held = True
-    driver_args.work_dir += "-resume"
     if not pin_prompt:
         with pytest.raises(AssertionError, match="already-resolved"):
             await driver.one(driver_args)
@@ -1995,7 +1966,7 @@ async def held_after_stamp(
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     assert published_workpiece(destination).terminal is Terminal.HELD
     assert isinstance(first.inference, FakeInference)
-    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    driver_args.resume_held = True
     return first.inference.requests[:-1]  # the last request raised the hold
 
 
@@ -2093,7 +2064,7 @@ async def test_resume_with_completed_solver_siblings_repeats_no_trial_or_model_c
     resumed.inference.served = {event_digest(request) for request in first.inference.requests}
     assert isinstance(first.rollouts.engine, SolverEngine)
     assert sorted(first.rollouts.engine.started)[0].endswith(":0:0")
-    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    driver_args.resume_held = True
     await driver.one(driver_args)
     wp = published_workpiece(destination)
     assert not resumed.inference.repeated
@@ -2305,7 +2276,7 @@ async def test_an_earlier_format_root_needs_migration_before_claim_and_stays_unt
     with pytest.raises(LogFailure, match=f"has journal format {found}, not {checkpoint.JOURNAL_FORMAT}") as raised:
         await driver.one(driver_args)
     assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
-    assert tree(destination) == before and not Path(driver_args.work_dir).exists()
+    assert tree(destination) == before
 
 
 FORMAT_10_HELD = Path(__file__).parent / "fixtures" / "format10-author-held-root.json.gz"
@@ -2453,22 +2424,21 @@ async def test_a_cancelled_run_keeps_its_last_stage_state_under_a_running_head(
     assert workpiece.round == 1 and workpiece.submission is not None and workpiece.submission.notes == "revised notes"
 
 
-# Regression: a disk-full error persisting the final review held the run from the initial
-# workpiece; the journal had Submitted, Validated and Decided, the snapshot no task and no evidence.
+# Regression: a failure persisting the final review (a full disk under the local spool) held the run from the
+# initial workpiece; the journal had Submitted, Validated and Decided, the snapshot no task and no evidence.
 async def test_a_recovered_storage_failure_publishes_the_last_workpiece_it_reached(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    write, failed = JsonlSink._write, []
+    write, failed = BufferSink.write, []
 
-    def full_once(sink: JsonlSink, records: Sequence[Record]) -> None:
+    async def fail_once(sink: BufferSink, records: Sequence[Record]) -> None:
         reviewed = any(isinstance(r.event, StageCompleted) and r.event.stage is Stage.REVIEW for r in records)
         if reviewed and not failed:
-            failed.append(OSError(errno.ENOSPC, "No space left on device"))
+            failed.append(LogFailure("Cannot encode the event stream"))
             raise failed[-1]
-        write(sink, records)
+        await write(sink, records)
 
-    monkeypatch.setattr(JsonlSink, "_write", full_once)
-    monkeypatch.setattr(driver, "EventLog", partial(EventLog, attempts=1))
+    monkeypatch.setattr(BufferSink, "write", fail_once)
     serve(monkeypatch, resources(Envs(), script()))
     await driver.one(driver_args)
     workpiece = published_workpiece(Path(driver_args.output) / driver.proposal_key(driver_args.proposals))
@@ -2587,7 +2557,7 @@ async def held_after_polls(
     held = FakeInference((*polling_script(len(contents))[: len(contents)], Hold("relay unavailable")))
     serve(monkeypatch, replace(resources(ProducerEnvs(STATUS, contents), ()), inference=held))
     await driver.one(driver_args)
-    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    driver_args.resume_held = True
     return held.requests[:-1]
 
 
@@ -2754,7 +2724,7 @@ async def test_a_resumed_author_that_leaves_its_recorded_session_holds_without_n
         assert not envs.created[0].files  # held before the hydration write
     assert sum(isinstance(r.event, StageCompleted) and r.event.terminal is Terminal.HELD for r in history(destination))
     # The divergent request stays unanswered, and the held journal stays claimable for an explicit resume.
-    assert CheckpointSink(Path(driver_args.work_dir) / "claim", str(destination)).claim(published(destination))
+    assert CheckpointSink(str(destination)).claim(published(destination))
 
 
 ROLE = "cat /fixture/role"
@@ -2875,7 +2845,7 @@ async def test_each_adversary_replays_its_own_machine_history_whatever_its_sibli
         role_inference={"solve_review": CleanReviewer(), "adversary": adversary},
     )
     serve(monkeypatch, resumed)
-    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    driver_args.resume_held = True
     await driver.one(driver_args)
     assert published_workpiece(destination).terminal is Terminal.ACCEPTED
     assert executions(resumed) == (0, 0) and len(adversary.requests) == 2  # only the two report turns are new
@@ -2905,7 +2875,7 @@ async def test_a_resumed_submit_never_accepts_bytes_the_sandbox_does_not_hold(
         envs = ProducerEnvs(TASK, (), draft=MALFORMED)
     resumed = replace(resources(envs, ()), inference=ServedOnce((script()[3], Hold("stop")), held.requests[:-1]))
     serve(monkeypatch, resumed)
-    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    driver_args.resume_held = True
     await driver.one(driver_args)
     workpiece = published_workpiece(destination)
     assert workpiece.terminal is Terminal.HELD and workpiece.submission is None
@@ -2972,7 +2942,7 @@ async def test_a_recorded_command_that_cannot_be_verified_on_resume_is_never_wea
         role_inference={"solve_review": CleanReviewer(), "adversary": adversary},
     )
     serve(monkeypatch, resumed)
-    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    driver_args.resume_held = True
     await driver.one(driver_args)
     workpiece = published_workpiece(destination)
     assert executions(resumed) == (0, 0) and envs.exhausted == 0
@@ -3022,7 +2992,7 @@ async def test_a_corrupt_transfer_archive_restarts_the_stage_instead_of_becoming
         served = ServedOnce(drifting_script()[3:], inference.requests[:-1])
         resumed = replace(resources(DriftingEnvs(2), ()), inference=served)
         serve(monkeypatch, resumed)
-        driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+        driver_args.resume_held = True
         await driver.one(driver_args)
         assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.repeated
         assert executions(resumed) == (len(drifting_script()) - 3, 2)
@@ -3045,7 +3015,7 @@ REOPENED = (*ANSWERED, replace(OPENED, sequence=4))
 
 def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes:
     """``records`` as a writer encodes them, with each (row, field, value) change applied to the encoded row."""
-    sink, rows = JsonlSink("unused"), []
+    sink, rows = BufferSink(), []
     for record in records:
         rows.append(json.loads(sink._line(record)))
     for row, name, value in changes:
@@ -3164,13 +3134,11 @@ async def test_a_resolution_relabelled_reexecute_is_refused_before_any_model_cal
     assert tree(destination) == before and executions(resumed) == (0, 0)
 
 
-async def test_claim_takes_a_journal_held_on_a_divergent_unanswered_request(
-    driver_args: Namespace, tmp_path: Path
-) -> None:
+async def test_claim_takes_a_journal_held_on_a_divergent_unanswered_request(driver_args: Namespace) -> None:
     """A resumed attempt that issued another request than was recorded leaves it unanswered and holds; it stays valid."""
     held = (*REOPENED, Record(5, 0.0, RunCommand("ls", 5), attempt=4))
     destination = plant(driver_args, lines(held), checkpoint.JOURNAL_FORMAT)
-    sink = CheckpointSink(tmp_path / "claim", str(destination))
+    sink = CheckpointSink(str(destination))
     assert rows(sink.claim(published(destination))) == rows(held)
     assert published(destination).head.writer == sink.writer
 
@@ -3429,7 +3397,7 @@ async def test_unstageable_hydration_archive_holds_as_infrastructure_and_resumes
     assert held.terminal is Terminal.HELD and "Permission denied" in str(held.decisions[-1])
     assert "bug:" not in str(held.decisions[-1]) and executions(first) == (0, 0)
     assert not [r for r in history(destination) if isinstance(r.event, Failed)]
-    driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+    driver_args.resume_held = True
     healthy = HydrationEnvs(tmp_path / "healthy")
     resumed = resources(healthy, drafting_script())
     serve(monkeypatch, resumed, workspace=REFERENCE)
@@ -3458,7 +3426,7 @@ async def test_hydration_failure_on_a_caller_path_stays_the_callers_and_repeats(
         assert workpiece.terminal is Terminal.HELD and "bug:" in str(workpiece.decisions[-1])
         assert "Unreproducible" not in str(workpiece.decisions[-1]) and executions(attempt_resources) == (0, 0)
         assert not [r for r in history(destination) if isinstance(r.event, Failed)]
-        driver_args.resume_held, driver_args.work_dir = True, driver_args.work_dir + "-resume"
+        driver_args.resume_held = True
 
 
 OUTAGE = DecisionModelUnavailable("clef@fixture-1 answered no read for 900s; last HTTP 503: clef_unavailable")

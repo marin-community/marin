@@ -30,7 +30,7 @@ import traceback
 from collections import Counter
 from dataclasses import dataclass, replace
 from functools import partial
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 import httpx
@@ -171,7 +171,7 @@ async def one(args: argparse.Namespace, controller_url: str | None = None) -> in
     if status.finished or (held and not enter):
         logging.info("SKIP %s: published terminal=%s", identity, status.terminal)
         return 0
-    checkpoints = CheckpointSink(Path(args.work_dir) / identity, destination)
+    checkpoints = CheckpointSink(destination)
     previous = await asyncio.to_thread(checkpoints.claim, journal)
     replaces = replaced_refusals(previous, args.resume_held)
     log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade, replaces=replaces)
@@ -269,7 +269,7 @@ async def run(args: argparse.Namespace) -> None:
                 command += ["--die-with-parent", str(lifeline)]
                 command += [
                     item
-                    for name in ("output", "policy", "work_dir", "glm_base_url", "glm_relay_job")
+                    for name in ("output", "policy", "glm_base_url", "glm_relay_job")
                     if getattr(args, name) is not None
                     for item in (f"--{name.replace('_', '-')}", getattr(args, name))
                 ]
@@ -358,7 +358,6 @@ def cli() -> argparse.ArgumentParser:
         command.add_argument("--proposals", required=True)
         command.add_argument("--output", required=True)
         command.add_argument("--policy", required=True)
-        command.add_argument("--work-dir", default="forge-work")
         gateway = command.add_mutually_exclusive_group(required=True)
         gateway.add_argument("--glm-relay-job", type=relay_job, help="The Iris relay job that resolves the GLM gateway")
         gateway.add_argument("--glm-base-url", type=base_url, help=f"A direct GLM gateway endpoint ending in {API_ROOT}")

@@ -13,13 +13,12 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.proposal_fakes import sample_proposal
 from lib.taskforge.tests.resources.inference_fakes import Backend, provider_completion
 from lib.taskforge.tests.test_end_to_end import Envs, config, resources
 
 from taskforge.coordinator import run_workpiece
-from taskforge.effects.log import EventLog, JsonlSink, Record
+from taskforge.effects.log import BufferSink, EventLog, Record, decode
 from taskforge.llm.client import ContextExhausted
 from taskforge.model.review import Abandon
 from taskforge.resources.inference import GlmInference
@@ -33,13 +32,16 @@ def driver_log(previous: Sequence[Record], *, resume: bool) -> EventLog:
 
 
 async def main(mode: str, directory: Path) -> None:
-    sink = JsonlSink(str(directory / "events.jsonl"))
+    sink, journal = BufferSink(), directory / "events.jsonl"
     if mode == "record":
         backend, log = Backend((ContextExhausted("maximum context length exceeded", ()),)), EventLog(sink=sink)
     else:
-        backend, log = Backend((provider_completion(),)), driver_log(local_records(sink), resume=mode == "resume")
+        previous = decode(journal.read_bytes())
+        backend, log = Backend((provider_completion(),)), driver_log(previous, resume=mode == "resume")
     live = replace(resources(Envs(), ()), inference=GlmInference(backend, "provider"))
     wp = await run_workpiece(sample_proposal(), config(), live, log, install=install)
+    if mode == "record":
+        journal.write_bytes(sink.data)
     (stop,) = wp.decisions
     assert isinstance(stop, Abandon)
     print(f"{mode}: {wp.terminal}, {stop.reasons}, {len(backend.calls)} provider call(s)")

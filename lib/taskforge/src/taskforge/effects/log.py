@@ -4,13 +4,11 @@
 import asyncio
 import base64
 import json
-import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from itertools import islice
-from pathlib import Path
 from typing import Any, NamedTuple, Protocol, cast, override
 
 from pydantic import TypeAdapter
@@ -217,20 +215,26 @@ def decode(data: bytes, first_seen: dict[str, int] | None = None) -> tuple[Recor
     return tuple(decoded)
 
 
-@dataclass(frozen=True, slots=True)
-class JsonlSink(Sink):
-    """The local single-writer stream: fsynced appends that tolerate a torn tail and retried batches.
+@dataclass(slots=True)
+class BufferSink(Sink):
+    """The encoded stream in memory from stream byte ``offset``: all of it, or a checkpoint's unpublished suffix."""
 
-    A driver never reads it back: a writer starts it from the published stream and publishes from it.
-    """
-
-    path: str
-    _known: dict[str, int] = field(default_factory=dict, init=False, repr=False, compare=False)
+    data: bytearray = field(default_factory=bytearray)
+    offset: int = 0
+    last: int = 0
+    _known: dict[str, int] = field(default_factory=dict, repr=False)
+    """Each event digest's first sequence, for the references of later rows."""
 
     @override
     async def write(self, records: Sequence[Record]) -> None:
         try:
-            await asyncio.to_thread(self._write, records)
+            for record in records:
+                if record.sequence <= self.last:
+                    continue  # a retried batch
+                if record.sequence != self.last + 1:
+                    raise LogFailure("Cannot append a gap in the event stream")
+                self.data += self._line(record)
+                self.last = record.sequence
         except (TypeError, ValueError, KeyError) as error:
             raise LogFailure("Cannot encode the event stream") from error
 
@@ -240,42 +244,16 @@ class JsonlSink(Sink):
         row["event"] = _encode(record.event, record.sequence, self._known)
         return (json.dumps(row, sort_keys=True, allow_nan=True, default=asdict) + "\n").encode()
 
-    def _write(self, records: Sequence[Record]) -> None:
-        path = Path(self.path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a+b") as output:
-            end = output.seek(0, os.SEEK_END)
-            tail = b""
-            position = end
-            while position and tail.count(b"\n") < 2:
-                chunk = min(position, 8192)
-                position -= chunk
-                output.seek(position)
-                tail = output.read(chunk) + tail
-            complete = tail.rfind(b"\n")
-            output.truncate(position + complete + 1)
-            row = json.loads(tail[:complete].split(b"\n")[-1]) if complete >= 0 else {"sequence": 0}
-            last = row["sequence"]
-            if records and records[-1].sequence < last:
-                raise LogFailure("Append batch predates the stream tail")
-            for record in records:
-                if record.sequence == last and json.loads(self._line(record)) != row:
-                    raise LogFailure("Append batch conflicts with the stream tail")
-                if record.sequence <= last:
-                    continue
-                if record.sequence != last + 1:
-                    raise LogFailure("Cannot append a gap in the event stream")
-                output.write(self._line(record))
-                last = record.sequence
-            output.flush()
-            os.fsync(output.fileno())
-
     def start(self, data: bytes) -> tuple[Record, ...]:
-        """Begin this new stream as exactly ``data``, a complete published stream, and return its records."""
+        """Continue after ``data``, a complete published stream, holding none of it; return its records."""
         records = decode(data, self._known)
-        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        Path(self.path).write_bytes(data)
+        self.offset, self.last = len(data), len(records)
         return records
+
+    def drop(self, size: int) -> None:
+        """Forget the bytes before stream byte ``size``, which a head names."""
+        del self.data[: size - self.offset]
+        self.offset = size
 
 
 type Key = tuple[str, tuple[Fingerprint, ...]]

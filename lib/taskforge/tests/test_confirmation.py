@@ -55,7 +55,7 @@ from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, advance, apply_decision
 from taskforge.effects.context import Context
 from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, ScopeEntered, ScopeExited, StageCompleted
 from taskforge.effects.issues import ContextExceeded, DecisionModelUnavailable
-from taskforge.effects.log import Billing, EventLog, JsonlSink, Record, Status, decode, fold
+from taskforge.effects.log import Billing, BufferSink, EventLog, Record, Status, decode, fold
 from taskforge.harness.protocol import Stopped, StopReason, Submitted, ToolResult
 from taskforge.harness.tools.evidence import (
     TRIAL,
@@ -234,7 +234,7 @@ async def run(
     engine: Trials,
     reviewer: Reviewer,
     config: TaskforgeConfig | None = None,
-    sink: JsonlSink | None = None,
+    sink: BufferSink | None = None,
 ) -> tuple[Workpiece, EventLog]:
     log = EventLog(sink=sink)
     wp = await run_workpiece(proposal, config or setup(), bundle(engine, reviewer), log, install=install)
@@ -279,8 +279,8 @@ async def test_a_first_run_buys_three_validation_solves_then_five_more_and_one_f
     assert (final.missing, final.notes, wp.accepted_with) == ((), (), None)
 
 
-async def test_a_partial_resume_replays_seven_solves_and_buys_the_eighth(proposal: TaskProposal, tmp_path: Path) -> None:
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+async def test_a_partial_resume_replays_seven_solves_and_buys_the_eighth(proposal: TaskProposal) -> None:
+    sink = BufferSink()
     first, reviewer = Trials(restart=frozenset({(5, 1)})), Reviewer()
     held, _ = await run(proposal, first, reviewer, sink=sink)
     assert held.terminal is Terminal.HELD and len(reviewer.finals_seen) == 0
@@ -294,8 +294,8 @@ async def test_a_partial_resume_replays_seven_solves_and_buys_the_eighth(proposa
     assert isinstance(live.inference, FakeInference) and not live.inference.requests
 
 
-async def test_a_full_resume_repeats_nothing(proposal: TaskProposal, tmp_path: Path) -> None:
-    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+async def test_a_full_resume_repeats_nothing(proposal: TaskProposal) -> None:
+    sink = BufferSink()
     done, _ = await run(proposal, Trials(), Reviewer(), sink=sink)
     engine, reviewer = Trials(), Reviewer()
     live = bundle(engine, reviewer, ())
@@ -707,7 +707,7 @@ async def test_confirmation_usage_is_reported_under_its_own_phase_once(tmp_path:
         (StageCompleted(Stage.REVIEW, "", "Decided", terminal=Terminal.ACCEPTED), None),
     )
     records = tuple(Record(i, time.time(), event, billed=payer) for i, (event, payer) in enumerate(events, 1))
-    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
+    sink = CheckpointSink(str(tmp_path / "root"))
     sink.claim(None)
     await sink.local.write(records)
     await sink.finish(Status(terminal=Terminal.ACCEPTED), Workpiece("w", proposal, terminal=Terminal.ACCEPTED))
@@ -1201,9 +1201,9 @@ async def test_a_finding_the_round_review_repeats_is_one_numbered_item_declined_
 # Regression: a provider's context refusal of the author's revision was raised
 # past the effect, so a cold resume asked again; when the provider then answered, the restored round's response became
 # a revision and the run bought a second confirmation (16 solves, not 8).
-async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskProposal, tmp_path: Path) -> None:
+async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskProposal) -> None:
     refused = ContextExceeded("maximum context length exceeded")  # as the inference resource raises it
-    sink, engine = JsonlSink(str(tmp_path / "events.jsonl")), Trials()
+    sink, engine = BufferSink(), Trials()
     author = FakeInference((*script(), *script()[:3], refused))
     live = replace(bundle(engine, Reviewer(rounds=[[found(1)]]), ()), inference=author)
     done = await run_workpiece(proposal, setup(), live, EventLog(sink=sink), install=install)
@@ -1369,7 +1369,7 @@ async def billed_root(
     if root is None:
         root = directory / "root"
         root.mkdir(parents=True)
-    sink = CheckpointSink(directory / "work", str(root))
+    sink = CheckpointSink(str(root))
     log = EventLog(sink=sink, replay_from=sink.claim(read_journal(str(root))))
     async with sink.running():
         wp = await run_workpiece(proposal, setup(**BILLED), live or billed_bundle(), log, install=install)
@@ -1488,7 +1488,7 @@ async def test_each_review_builds_its_evidence_index_and_digests_it_once(
 # the explicit resume bought that slot again; its replacement solved, so the accepted evidence showed no time limit.
 @pytest.mark.parametrize("answered", [True, False], ids=["answer before the cutoff", "no answer before it"])
 async def test_a_limited_slot_whose_grade_failed_is_a_settled_loss_and_replays(
-    proposal: TaskProposal, tmp_path: Path, answered: bool
+    proposal: TaskProposal, answered: bool
 ) -> None:
     broken = GradeResult(Outcome.INFRA_ERROR, None, "verifier unreachable", failure=GradingFailure.EXECUTION)
 
@@ -1499,7 +1499,7 @@ async def test_a_limited_slot_whose_grade_failed_is_a_settled_loss_and_replays(
             silent=frozenset() if answered else frozenset({(1, 0)}),
         )
 
-    first, sink = engine(), JsonlSink(str(tmp_path / "events.jsonl"))
+    first, sink = engine(), BufferSink()
     wp, _ = await run(proposal, first, Reviewer(), sink=sink)
     assert wp.terminal is Terminal.ACCEPTED and first.runs.count((1, 0)) == 1 and len(first.runs) == 8
     [limited] = [t for t in wp.evidence[-1].solver if t.trial == 1]

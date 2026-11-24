@@ -28,7 +28,6 @@ from botocore.exceptions import (
     EndpointConnectionError,
     IncompleteReadError,
 )
-from lib.taskforge.tests.effect_fakes import local_records
 from rigging.filesystem.conditional_object import ConditionalObject, S3ConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from s3fs.errors import translate_boto_error
@@ -37,7 +36,7 @@ from taskforge import checkpoint
 from taskforge.checkpoint import HEAD, HEAD_JSON, CheckpointSink, Journal, is_transient_storage_error, read_journal
 from taskforge.effects.events import Note, StageCompleted
 from taskforge.effects.issues import CorruptJournal, PublicationFailed, Superseded
-from taskforge.effects.log import EventLog, Status, decode
+from taskforge.effects.log import BufferSink, EventLog, Status, decode
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal, Workpiece
@@ -55,7 +54,7 @@ def s3_error(code: str, status: int) -> ClientError:
 
 
 def claimed(tmp_path: Path) -> CheckpointSink:
-    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "published"))
+    sink = CheckpointSink(str(tmp_path / "published"))
     sink.claim(read_journal(sink.destination))
     return sink
 
@@ -86,7 +85,7 @@ async def test_partial_checkpoint_on_event_count_or_timer(
         assert await asyncio.to_thread(uploaded.wait, 2)
     published = journal(destination)
     assert (published.head.status, published.head.workpiece, published.head.published_at) == (Status(), None, 123.0)
-    assert published.events() == Path(sink.local.path).read_bytes()
+    assert decode(published.events()) == log.records
 
 
 async def test_cancelled_checkpoint_drains_upload_before_final_publication(
@@ -153,9 +152,10 @@ async def test_transient_timer_upload_failure_keeps_the_timer_and_republishes_fr
         await log.record(StageCompleted(Stage.VALIDATE, "", "ready"))
         assert await asyncio.to_thread(published.wait, 2)
         await log.record(StageCompleted(Stage.REVIEW, "", "accept"))
-    assert local_records(sink.local) == log.records
     await sink._upload(Status(), None)
-    assert decode(journal(Path(sink.destination)).events()) == log.records
+    uninterrupted = BufferSink()
+    await uninterrupted.write(log.records)
+    assert journal(Path(sink.destination)).events() == uninterrupted.data
 
 
 @pytest.mark.parametrize("by_count", [True, False])
@@ -222,7 +222,7 @@ async def test_two_writers_claiming_the_same_head_cannot_both_proceed(tmp_path: 
     await EventLog(sink=first).record(Note("first"))
     await first._upload(Status(), None)
     seen = journal(Path(first.destination))
-    contenders = [CheckpointSink(tmp_path / "work", first.destination) for _ in range(2)]
+    contenders = [CheckpointSink(first.destination) for _ in range(2)]
     contenders[0].claim(seen)
     with pytest.raises(Superseded):
         contenders[1].claim(seen)
@@ -237,7 +237,7 @@ async def test_a_superseded_writer_stops_and_cannot_publish_status_or_chunks(
     log = EventLog(sink=stale)
     await log.record(Note("before takeover"))
     await stale._upload(Status(), None)
-    successor = CheckpointSink(tmp_path / "work", stale.destination)
+    successor = CheckpointSink(stale.destination)
     successor.claim(journal(Path(stale.destination)))
     await log.record(Note("after takeover"))
     # The timer finds the head taken, cancels the running block and raises from it.
@@ -351,7 +351,7 @@ def is_head(key: str, n: int, nth: int) -> bool:
     ids=["412-after-applied-claim", "412-after-applied-checkpoint", "409-on-first-chunk", "409-on-head-swap"],
 )
 async def test_an_inconclusive_conditional_put_through_the_sdk_keeps_the_sole_writer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str, chosen: Callable[[str, int], bool]
+    monkeypatch: pytest.MonkeyPatch, fault: str, chosen: Callable[[str, int], bool]
 ) -> None:
     server = S3Server(fault, chosen)
     client = botocore.session.get_session().create_client(
@@ -365,7 +365,7 @@ async def test_an_inconclusive_conditional_put_through_the_sdk_keeps_the_sole_wr
     client.meta.events.register("before-send.s3", cast(Any, server))
     monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _endpoint: client))
     monkeypatch.setattr(checkpoint, "FINAL_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0))
-    sink = CheckpointSink(tmp_path / "work", "s3://bucket/root")
+    sink = CheckpointSink("s3://bucket/root")
     sink.claim(None)
     log = EventLog(sink=sink)
     await log.record(Note("first"))
@@ -374,8 +374,8 @@ async def test_an_inconclusive_conditional_put_through_the_sdk_keeps_the_sole_wr
         await sink._upload(Status(), None)
     assert server.fired and sink.stopped is None
     head = HEAD_JSON.validate_json(server.objects["/root/" + HEAD])
-    assert head.writer == sink.writer and head.size == Path(sink.local.path).stat().st_size
-    assert b"".join(server.objects[f"/root/chunks/{name}"] for name in head.chunks) == Path(sink.local.path).read_bytes()
+    assert head.writer == sink.writer and head.size == sink.local.offset + len(sink.local.data)
+    assert decode(b"".join(server.objects[f"/root/chunks/{name}"] for name in head.chunks)) == log.records
 
 
 async def test_a_late_chunk_put_cannot_overwrite_committed_history(
@@ -399,19 +399,6 @@ async def test_a_late_chunk_put_cannot_overwrite_committed_history(
     await log.record(Note("second"))
     await sink._upload(Status(), None)
     put(*delayed[0])
-    assert decode(journal(Path(sink.destination)).events()) == log.records
-
-
-async def test_torn_local_tail_is_not_published(tmp_path: Path) -> None:
-    sink = claimed(tmp_path)
-    log = EventLog(sink=sink)
-    await log.record(Note("complete"))
-    with Path(sink.local.path).open("ab") as output:
-        output.write(b'{"sequence": 2, "wall')
-    await sink._upload(Status(), None)
-    assert [record.event for record in decode(journal(Path(sink.destination)).events())] == [Note("complete")]
-    await log.record(Note("next"))
-    await sink._upload(Status(), None)
     assert decode(journal(Path(sink.destination)).events()) == log.records
 
 
@@ -515,7 +502,7 @@ async def test_damaged_committed_objects_read_as_corrupt_naming_the_path(
     with pytest.raises(CorruptJournal, match=re.escape(str(damaged))):
         resumed = journal(destination)
         resumed.workpiece()
-        CheckpointSink(tmp_path / "resume", str(destination)).claim(resumed)
+        CheckpointSink(str(destination)).claim(resumed)
     assert {path: path.read_bytes() for path in destination.rglob("*") if path.is_file()} == before
 
 

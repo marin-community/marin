@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Annotated, override
 
 from pydantic import Field, TypeAdapter
@@ -29,7 +29,7 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFailed, Superseded, UnsupportedFormat
-from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
+from taskforge.effects.log import BufferSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 from taskforge.stages.classify import commitments
 
@@ -243,7 +243,7 @@ def read_journal(destination: str) -> Journal | None:
 
 
 async def _drained(work: Coroutine[object, object, None]) -> None:
-    """Run ``work`` to the end even when cancelled, then re-raise: a publishing thread or an fsync cannot stop midway."""
+    """Run ``work`` to the end even when cancelled, then re-raise: a publishing thread cannot stop midway."""
     task = asyncio.create_task(work)
     try:
         await asyncio.shield(task)
@@ -253,11 +253,11 @@ async def _drained(work: Coroutine[object, object, None]) -> None:
 
 
 class CheckpointSink(Sink):
-    """Append to this writer's private local stream; publish its new complete lines after 25 events or 60 seconds."""
+    """Hold the stream's unpublished suffix in memory; publish it after 25 events or 60 seconds."""
 
-    def __init__(self, workdir: Path, destination: str) -> None:
+    def __init__(self, destination: str) -> None:
         self.writer = uuid.uuid4().hex
-        self.local, self.destination = JsonlSink(str(workdir / f"{self.writer}.jsonl")), destination
+        self.local, self.destination = BufferSink(), destination
         self.head = conditional_object(prefix_join(destination, HEAD))
         self.pending = 0
         self.deferred = False  # After a transient failure the timer retries, not every later event.
@@ -299,11 +299,8 @@ class CheckpointSink(Sink):
         current = self.head.read()
         if current is None or (head := HEAD_JSON.validate_json(current.data)).writer != self.writer:
             raise Superseded(f"{self.destination}/{HEAD} is owned by another writer, not {self.writer}")
-        with Path(self.local.path).open("rb") as source:
-            source.seek(head.size)
-            events = source.read()
-        # A torn last line is not yet part of the stream; the local sink truncates it on the next append.
-        events = events[: events.rfind(b"\n") + 1]
+        self.local.drop(head.size)  # Named by this writer's head, even by a swap whose acknowledgment was lost.
+        events = bytes(self.local.data)
         if events:
             chunk = _put(prefix_join(self.destination, "chunks"), ".jsonl", events)
             head = replace(head, chunks=(*head.chunks, chunk), size=head.size + len(events))
@@ -328,7 +325,7 @@ class CheckpointSink(Sink):
         async with self.lock:
             if self.stopped is not None:
                 raise self.stopped
-            await _drained(self.local.write(records))
+            await self.local.write(records)
             self.pending += len(records)
             if self.pending >= CHECKPOINT_EVENTS and not self.deferred:
                 await self._upload(Status(), None)

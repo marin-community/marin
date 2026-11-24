@@ -51,7 +51,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, ScopeEntered, StageCompleted
 from taskforge.effects.issues import Hold, LogFailure
-from taskforge.effects.log import EventLog, JsonlSink, Record
+from taskforge.effects.log import BufferSink, EventLog, Record
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Tool
 from taskforge.llm.glm_provider import EndpointSource
@@ -232,7 +232,6 @@ class Driver:
 
         self.monkeypatch.setattr(driver, "runtime", runtime)
         self.monkeypatch.setattr(driver, "run_workpiece", run_workpiece)
-        self.args.work_dir += "-next"  # a cold process: no local stream of an earlier launch
         return await driver.one(self.args)
 
     def rows(self) -> tuple[Record, ...]:
@@ -248,7 +247,6 @@ def launches(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyP
         proposals=str(source),
         policy=str(tmp_path / "policy.json"),
         output=str(tmp_path / "out"),
-        work_dir=str(tmp_path / "work"),
         resume_held=False,
         concurrency=2,
         buckets=4096,
@@ -327,9 +325,7 @@ async def test_a_cold_launch_keeps_the_retry_a_control_outage_bought(launches: D
     assert len({c.visit for c in commits}) == len(commits) == 2  # the two validation visits, each committed once
 
 
-async def test_a_trial_without_a_transcript_stays_absent_beside_a_newer_resolution_of_its_slot(
-    launches: Driver, tmp_path: Path
-) -> None:
+async def test_a_trial_without_a_transcript_stays_absent_beside_a_newer_resolution_of_its_slot(launches: Driver) -> None:
     """Slot (1, 0) ran out of output twice: a scored failure with no transcript. A later resolution of the same key,
     planted after the hold, must not become the transcript the final review reads."""
     first = launch(Paid(exhausted={(1, 0)}, outage={(2, 1)}))
@@ -347,10 +343,10 @@ async def test_a_trial_without_a_transcript_stays_absent_beside_a_newer_resoluti
     intruder = replace(solved.request, trial=1)
     said = GradedRollout(Rollout("x", (transcript("INTRUDER answers 12"),), "stop"), GradeResult(Outcome.GRADED, 1.0))
     planted = (log.append(intruder), log.append(Resolved(intruder, solved.fingerprints, said)))
-    sink = JsonlSink(str(tmp_path / "planted.jsonl"))
-    sink.start(published_events(launches.root))
+    sink, events = BufferSink(), published_events(launches.root)
+    sink.start(events)
     await sink.write(planted)
-    republish(launches.root, (tmp_path / "planted.jsonl").read_bytes())
+    republish(launches.root, events + sink.data)
     second = launch(Paid())
     assert await launches.run(second) == 0
     wp = published_workpiece(launches.root)

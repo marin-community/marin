@@ -27,7 +27,7 @@ from verifyit.spec import NumericSpec
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
 from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Transient
-from taskforge.effects.log import EventLog, JsonlSink, Opened
+from taskforge.effects.log import BufferSink, EventLog, Opened
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import (
     Returned,
@@ -219,9 +219,9 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
     ids=["search", "fetch", "unknown", "shell"],
 )
 async def test_tool_output_spill_slices_and_persisted_replay(
-    tmp_path: Path, name: str, args: dict[str, object], original: str | None
+    name: str, args: dict[str, object], original: str | None
 ) -> None:
-    sink = JsonlSink(str(tmp_path / "outputs.jsonl"))
+    sink = BufferSink()
     ctx = Context(log=EventLog(sink=sink))
     env = environment(ctx)
     async with opened(ctx, env):
@@ -335,7 +335,7 @@ async def test_grading_machine_exhaustion_is_grade_tool_feedback_and_the_session
 # reloaded from the journal showed 3 and 4, so the author's next request changed and a cold resume paid for a recorded
 # turn. The grade tool renders the numbers one way either side of a resume.
 @pytest.mark.parametrize("level", [4.0, 4, 3.5])
-async def test_a_decision_model_grade_renders_identically_after_a_cold_resume(tmp_path: Path, level: float) -> None:
+async def test_a_decision_model_grade_renders_identically_after_a_cold_resume(level: float) -> None:
     async def graded(event: GradeCandidate) -> GradeResult:
         read = {"model": "clef-test", "level": level, "cut": 3.0}
         return GradeResult(Outcome.GRADED, 1.0, detail={"decision_model": read})
@@ -351,7 +351,7 @@ async def test_a_decision_model_grade_renders_identically_after_a_cold_resume(tm
     }
     script = (call("shell", {"command": "task"}, "1"), call("grade", {"reply": "12"}, "2"))
     harness = AgenticHarness(1000, LLMPolicy(), "continue", 20000, replay_arguments)
-    sink = JsonlSink(str(tmp_path / "author.jsonl"))
+    sink = BufferSink()
     live = FakeInference((*script, call("finish", {"reason": "done"}, "3")))
     results, cold = [], FakeInference(())
     for ctx, handler, client in ((Context(log=EventLog(sink=sink)), graded, live), (None, unpaid, cold)):
@@ -405,7 +405,7 @@ async def test_empty_turns_nudge_until_finish_or_three_consecutive_failures(fail
 
 
 @pytest.mark.parametrize("recovers", [True, False])
-async def test_reasoning_only_length_retries_unchanged_conversation_and_replays(tmp_path: Path, recovers: bool) -> None:
+async def test_reasoning_only_length_retries_unchanged_conversation_and_replays(recovers: bool) -> None:
     failed = Completion(
         "",
         finish_reason=FinishReason.LENGTH,
@@ -413,7 +413,7 @@ async def test_reasoning_only_length_retries_unchanged_conversation_and_replays(
         reasoning="repeated reasoning",
     )
     client = FakeInference((failed, call("finish", {"reason": "done"}, "finish") if recovers else failed))
-    sink = JsonlSink(str(tmp_path / "session.jsonl"))
+    sink = BufferSink()
     ctx = Context(log=EventLog(sink=sink))
     initial = Conversation((Message(Role.USER, "build"),), ())
     harness = AgenticHarness(262144, LLMPolicy(), "use tools", 20000, replay_arguments)
@@ -660,8 +660,8 @@ async def test_web_rejections_distinguish_author_errors_from_service_errors(stat
 DRAFT = ("/workspace/task.json", "/workspace/controls.json")
 
 
-async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(tmp_path: Path) -> None:
-    sink = JsonlSink(str(tmp_path / "draft.jsonl"))
+async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay() -> None:
+    sink = BufferSink()
     log = EventLog(sink=sink)
     ctx = Context(log=log)
     env = environment(ctx)
