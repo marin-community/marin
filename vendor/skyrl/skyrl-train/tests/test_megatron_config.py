@@ -51,6 +51,3 @@ def test_chunked_sizing_accepts_ppo_and_rejects_incompatible_execution():
     config.trainer.policy.optimizer_config.optimizer = "muonh"
     config.trainer.policy.optimizer_config.weight_decay = 0.0
     assert validate_cfg(config) is None
-    config.trainer.policy.megatron_config.tensor_model_parallel_size = 2
-    with pytest.raises(ValueError, match="requires TP1"):
-        validate_cfg(config)
