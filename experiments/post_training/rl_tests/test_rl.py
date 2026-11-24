@@ -96,7 +96,7 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
     initializer = f"{name}@{version}"
     write_published_artifact(tmp_path, name, version, Artifact, source=str(tmp_path / name / version))
     for preset in table.presets:
-        arguments = ["--preset", preset.name, "--version", preset.revision, "--plan"]
+        arguments = ["--preset", preset.name, "--version", preset.revision]
         if preset.tasks_input == "required":
             arguments += ["--tasks", SELECTION_IDENTITY]
         if preset.name == "eval-short":
@@ -107,8 +107,12 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
             capture.setattr(gate, "compose_configs", collect_plan)
             result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
         assert result.exit_code == 0, (preset.name, result.output, result.exception)
+        status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+        if preset.gated:
+            pin = table.control_pins[preset.control_preset]
+            assert status["control_pin"]["commit"] == pin.commit
+            assert status["control_pin"]["revision"] == pin.revision
         if preset.name == "eval-short":
-            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
             assert status["inputs"]["model"].partition(":")[0] == initializer
             assert status["updates"] == 0 and status["guards"] == []
         elif preset.name in ("speed-short", "data-short"):
@@ -119,16 +123,20 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
     gate.compose_configs(launch_paths, validate_driver=True)
 
 
-def test_plan_rejects_gated_preset_without_control_pin(selection):
-    table = snowball_model.SNOWBALL
-    preset = next(preset for preset in table.presets if preset.gated)
-    arguments = ["--preset", preset.name, "--version", preset.revision]
-    if preset.tasks_input == "required":
-        arguments += ["--tasks", SELECTION_IDENTITY]
-    unpinned = replace(table, control_pins={})
-    result = CliRunner().invoke(snowball.command(unpinned, argv=tuple(arguments)), arguments)
-    assert result.exit_code == 4 and "no control pin" in result.output, (result.output, result.exception)
-    assert "--control --replicates" in result.output
+@pytest.mark.parametrize(("mode", "exit_code"), [("--plan", 0), ("--run", 4)])
+def test_missing_control_pin(selection, mode, exit_code):
+    table = replace(snowball_model.SNOWBALL, control_pins={})
+    preset = table.by_name["learning-medium"]
+    args = ["--preset", preset.name, "--version", preset.revision, mode]
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(args)), args)
+    assert result.exit_code == exit_code, (result.output, result.exception)
+    if mode == "--plan":
+        status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+        assert len(status["runs"]) == 1
+        assert status["control_pin_error"].startswith(f"no control pin for {preset.name}")
+    else:
+        assert f"no control pin for {preset.name}" in result.output
+        assert "--control --replicates" in result.output
 
 
 @pytest.mark.parametrize(
@@ -1293,15 +1301,6 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         result = CliRunner().invoke(snowball.rl_publication.command(table), saved_attempt)
         assert result.exit_code == 0, (result.output, result.exception)
         assert publications[-1].status == "failed"
-
-
-def test_plan_reports_missing_control_pin(selection):
-    table = replace(snowball_model.SNOWBALL, control_pins={})
-    args = ["--preset", "learning-medium", "--version", "dev", "--plan"]
-    result = CliRunner().invoke(snowball.command(table, argv=tuple(args)), args)
-    assert result.exit_code == 0, (result.output, result.exception)
-    assert "\nruns:" in result.stdout
-    assert "\ncontrol_pin_error: no control pin for learning-medium" in result.stdout
 
 
 @pytest.mark.parametrize("fault", ["untracked", "dirty"])
