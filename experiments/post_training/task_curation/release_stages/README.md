@@ -141,6 +141,14 @@ compose verification — never synthetic fixtures). Each slice seals a write-onc
 `PreflightReceipt` under `<release_root>/preflight/<node>/`, binding the landed
 repo sha and the slice-input digests.
 
+Receipts are write-once and bind the landed source sha: a receipt whose repo sha
+or slice inputs no longer match is STALE, and a stale receipt is never
+overwritten. The documented rerun procedure is a FRESH RELEASE PREFIX — update
+the plan's `release_root` (bump the numeric suffix), which moves the lazy-graph
+identities and the receipt root together, then rerun. This is the same
+fix-bump-retry discipline the release artifacts themselves follow
+(RELEASE.md: each attempt gets a new artifacts directory).
+
 Slices available before any write-mode upstream receipt exists: `declarations`,
 `census_inputs`, `census`, `corpus_assembly`, `embed`, `admission_check`,
 `history_staging`, `identity_backend_compose`, `qc_browse_plan`, `package_preview`.
