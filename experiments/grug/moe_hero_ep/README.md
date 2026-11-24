@@ -47,8 +47,10 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
 `--checkpoint-path` and resumes from the newest complete checkpoint.
 
-For a native SFT memory gate, `launch_diagnostics --native-config <resolved.json>
---native-config-sha256 <sha256> --run-id <fresh-name> --num-steps <initializer-step+2>`
+For a native SFT memory gate, run `uv run python -m
+experiments.grug.moe_hero_ep.launch_diagnostics --native-config <resolved.json>
+--native-config-sha256 <sha256> --run-id <fresh-name> --num-steps <absolute-stop-step>
+--version <version> --run`. Set the absolute stop step to the initializer's step plus two.
 uses the pinned model, data cursor, optimizer schedule, batch accumulation and fleet unchanged.
 Only the fresh tracker identity, one-to-three-update stop, disabled eval/checkpoint writes and
 memory instrumentation differ. The diagnostic restores only the recorded initializer, writes
