@@ -12,12 +12,14 @@ from verifyit.grade import GradingInfraError, InvalidTask, Reward, infra_error, 
 from verifyit.modes.grade_judge import judge_reply
 from verifyit.spec import JudgeSpec, parse_spec
 
+PASS_RATE = "pass_rate"
+RUBRIC_POINTS = "rubric_points"
 VERDICT_PREFIX = "VERDICT:"
 
 
 def _research_score(points: Decimal, **detail: Any) -> Reward:
     passed = float(points >= 7)
-    return scored(passed, **detail, metrics={"pass_rate": passed, "rubric_points": float(points)})
+    return scored(passed, **detail, metrics={PASS_RATE: passed, RUBRIC_POINTS: float(points)})
 
 
 def grade_research(judge: JudgeSpec, response: str) -> Reward:

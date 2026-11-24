@@ -32,7 +32,6 @@ from taskcompendium.runtime.resources import resource_bytes
 _ASSETS = Path(__file__).with_name("assets")
 _RESEARCH_FILES = grade_script(Path(__file__).with_name("scorers") / "frontierscience.py")
 RESEARCH_SCORER_REVISION = hashlib.sha256(resource_bytes(_RESEARCH_FILES[0])).hexdigest()[:16]
-JUDGE_MODEL = "openai/gpt-oss-120b"
 _OLYMPIAD_PROMPT = (_ASSETS / "frontierscience_olympiad_judge.txt").read_text(encoding="utf-8").rstrip("\n")
 _RESEARCH_PROMPT = (_ASSETS / "frontierscience_research_judge.txt").read_text(encoding="utf-8").rstrip("\n")
 
@@ -44,7 +43,6 @@ def convert_olympiad(row: RawRow, _context: ConversionContext) -> TaskSpec:
         rubric="labels",
         question=problem,
         references=(row.data["answer"],),
-        model=JUDGE_MODEL,
         reasoning_effort="high",
         prompt_template=_OLYMPIAD_PROMPT,
         exact_gate=False,
@@ -61,7 +59,6 @@ def convert_research(row: RawRow, context: ConversionContext) -> TaskSpec:
     spec = JudgeSpec(
         question=problem,
         references=(row.data["answer"],),
-        model=JUDGE_MODEL,
         reasoning_effort="high",
         prompt_template=_RESEARCH_PROMPT,
         max_completion_tokens=32768,

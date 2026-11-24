@@ -21,6 +21,7 @@ from taskcompendium.importers.evalchemy.frontierscience import (
     convert_research,
     frontierscience_item,
 )
+from taskcompendium.importers.evalchemy.scorers.frontierscience import PASS_RATE, RUBRIC_POINTS
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
@@ -32,21 +33,21 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 SOURCE_REVISION = "25ed67db7da8f4591484e764008ff585544f5a30"
 RESEARCH_METRICS = (
-    Metric(name="pass_rate", kind=MetricKind.BINARY, higher_is_better=True),
-    Metric(name="rubric_points", kind=MetricKind.CONTINUOUS, higher_is_better=True),
+    Metric(name=PASS_RATE, kind=MetricKind.BINARY, higher_is_better=True),
+    Metric(name=RUBRIC_POINTS, kind=MetricKind.CONTINUOUS, higher_is_better=True),
 )
 
 
 def sources(output_fit: OutputFit = OutputFit.REQUIRE) -> list[RlDataSource[EvaluationCorpusRecipe]]:
     result = []
-    for track, count, convert, metrics, version, grader in (
-        ("olympiad", 100, convert_olympiad, (Metrics.ACCURACY,), "2026.11.19", None),
-        ("research", 60, convert_research, RESEARCH_METRICS, "2026.11.24.1", JUDGE_GRADER),
+    version = "2026.11.24.2"
+    if output_fit is OutputFit.SHRINK:
+        version += "-remaining-context"
+    for track, count, convert, metrics, scorer_revision, grader in (
+        ("olympiad", 100, convert_olympiad, (Metrics.ACCURACY,), None, None),
+        ("research", 60, convert_research, RESEARCH_METRICS, RESEARCH_SCORER_REVISION, JUDGE_GRADER),
     ):
-        if output_fit is OutputFit.SHRINK:
-            version += "-remaining-context"
         name = f"frontierscience-{track}"
-        recipe_version = f"{version}-{RESEARCH_SCORER_REVISION}" if track == "research" else version
         result.append(
             RlDataSource(
                 info=SourceInfo(
@@ -64,7 +65,7 @@ def sources(output_fit: OutputFit = OutputFit.REQUIRE) -> list[RlDataSource[Eval
                             "openai/frontierscience", SOURCE_REVISION, (f"{track}/test.jsonl",), SourceFormat.JSONL
                         ),
                         convert=convert,
-                        version=recipe_version,
+                        version=f"{version}-{scorer_revision}" if scorer_revision else version,
                         grader=grader,
                         intended_use=IntendedUse.EVAL,
                     ),
