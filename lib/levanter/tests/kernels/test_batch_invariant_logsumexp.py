@@ -8,6 +8,7 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.kernels.logsumexp import batch_invariant_log_softmax, batch_invariant_logsumexp
+from levanter.testing.devices import use_test_devices
 
 # Actual TPUv4 predictor logits from the two-layer Snowball first-token STOP
 # counterexample. Ordinary logsumexp shifted all 23 logprobs by one FP32 ULP
@@ -42,6 +43,7 @@ STOP_LOGITS = np.array(
 )
 
 
+@pytest.mark.tpu
 def test_stop_logprobs_match_across_row_counts_and_positions():
     normalize = jax.jit(batch_invariant_log_softmax)
     expected = np.asarray(normalize(jnp.asarray(STOP_LOGITS)))
@@ -80,6 +82,18 @@ def test_normalizer_gathers_vocabulary_and_preserves_row_sharding():
         np.testing.assert_array_equal(np.asarray(actual).view(np.uint32), reference.view(np.uint32))
         normalizers = jax.jit(batch_invariant_logsumexp)(logits)
         assert normalizers.sharding.spec == P("data")
+
+
+@pytest.mark.multidevice
+def test_normalizer_preserves_auto_row_sharding():
+    with use_test_devices(2) as devices:
+        mesh = Mesh(devices, ("data",), axis_types=(AxisType.Auto,))
+        values = np.random.default_rng(1).normal(size=(32, 128)).astype(np.float32)
+        with jax.set_mesh(mesh):
+            logits = jax.device_put(values, NamedSharding(mesh, P("data", None)))
+            actual = jax.jit(batch_invariant_logsumexp)(logits)
+        assert actual.sharding.spec == P("data")
+        np.testing.assert_allclose(actual, jax.nn.logsumexp(jnp.asarray(values), axis=-1), rtol=1e-5)
 
 
 def test_logprobs_with_masked_vocabulary_match_reference():

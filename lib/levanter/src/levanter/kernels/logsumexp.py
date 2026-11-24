@@ -8,7 +8,7 @@ import math
 import jax
 import jax.numpy as jnp
 from jax.custom_batching import custom_vmap
-from jax.sharding import NamedSharding, PartitionSpec as P, reshard
+from jax.sharding import AxisType, NamedSharding, PartitionSpec as P, reshard
 
 _ROW_TILE = 8
 
@@ -34,7 +34,11 @@ def _local_logsumexp(logits: jax.Array) -> jax.Array:
 def _mapped_logsumexp(logits: jax.Array) -> jax.Array:
     logits = logits.astype(jnp.float32)
     sharding = logits.sharding if not isinstance(logits, jax.core.Tracer) else jax.typeof(logits).sharding
-    if isinstance(sharding, NamedSharding) and not sharding.mesh.empty:
+    if isinstance(sharding, NamedSharding) and AxisType.Auto in sharding.mesh.axis_types:
+        # Auto axes are absent from a traced PartitionSpec. Let the compiler
+        # partition the reduction instead of declaring the input replicated.
+        normalizers = accurate_logsumexp(logits)
+    elif isinstance(sharding, NamedSharding) and not sharding.mesh.empty:
         spec = tuple(sharding.spec) + (None,) * (logits.ndim - len(sharding.spec))
         local_spec = P(*spec[:-1], None)
         normalizers = jax.shard_map(
@@ -61,9 +65,9 @@ def _logsumexp_vmap(_axis_size, in_batched, logits):
 def batch_invariant_logsumexp(logits: jax.Array) -> jax.Array:
     """Reduce the final vocabulary axis using the same FP32 schedule for every row.
 
-    The reduction order is independent of the leading dimensions. The
-    differentiable result preserves leading-axis sharding and accepts masked
-    negative infinities in the vocabulary.
+    Explicit meshes use a fixed reduction order independent of the leading
+    dimensions and preserve leading-axis sharding. Auto meshes delegate
+    partitioning to JAX. Both accept masked negative infinities in the vocabulary.
     """
     return _mapped_logsumexp(logits)
 
