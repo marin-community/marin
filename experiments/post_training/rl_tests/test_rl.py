@@ -592,13 +592,18 @@ def test_published_init_binds_export_tokenizer(
     )
 
 
-def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_path):
+def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_path, mochi_sft_presets):
     preset = MOCHI.by_name["train-long-3rack"]
     (step,) = snowball.build_experiment(preset, table=MOCHI).runs
     path = tmp_path / "mochi.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
 
     (config,) = gate.compose_configs([str(path)], validate_driver=True)
+    producer = mochi_sft_presets["periodic"].model()
+    assert producer.relative_path is not None
+    export = StoragePath(producer.step.path("s3://marin-us-east-02a/marin")) / producer.relative_path
+    assert config["inputs"]["model"]["uri"] == str(export)
+
     (source,) = config["inputs"]["validation_data"]
     held_out = recipe.selection_artifact(preset.held_out_tasks)
     assert (source["uri"], source["relative_path"]) == (held_out.path(), VALIDATION_FILENAME)
