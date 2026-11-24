@@ -15,6 +15,7 @@ from finestore.rl.curation import (
     OversightLevel,
     QualifiedSourceDeclaration,
     SourceUse,
+    TaskFormat,
     require_typed_status_fields,
 )
 from finestore.rl.difficulty import DIFFICULTY_GAPS
@@ -634,35 +635,49 @@ def test_eval_only_benchmarks_carry_only_their_defect_claims():
 
 @pytest.mark.data_integration
 def test_superseded_sources_are_deprecated_with_resolvable_replacements():
-    """Ruling 2026-11-23: superseded sources are Deprecated, never Excluded."""
-    replacements = {"TaskTrove:laion__swesmith-oracle-filtered-v2", "TaskTrove:smartie-swesmith-admitted"}
+    """Ruling 2026-11-23: superseded sources are Deprecated, never Excluded.
+
+    Ruling 2026-11-24 adds calibforge-shared-v2: its data is already served as
+    the rebuilt TaskSpec variant, so the Harbor population is superseded.
+    """
+    replacements = {
+        "TaskTrove:laion__swesmith-oracle-filtered-v2",
+        "TaskTrove:smartie-swesmith-admitted",
+        "TaskTrove:smartie-calibforge-shared-v2",
+    }
     declared = all_sources()
     for source_id in replacements:
         source = declared[source_id]
         assert source.status is SourceStatus.DEPRECATED, source_id
-        assert source.declaration.exclusion_claims == (), source_id
-        replacement = source.declaration.replacement_source_id
-        assert replacement == "TaskTrove:swesmith-verifier-repaired-v5", source_id
+        assert source.declaration.exclusion_claims == [], source_id
+    assert declared["TaskTrove:smartie-swesmith-admitted"].declaration.replacement_source_id == (
+        "TaskTrove:swesmith-verifier-repaired-v5"
+    )
+    assert declared["TaskTrove:smartie-calibforge-shared-v2"].declaration.replacement_source_id == (
+        "TaskTrove:smartie-calibforge-rebuilt-v1"
+    )
+    for source_id in replacements:
+        replacement = declared[source_id].declaration.replacement_source_id
         assert replacement in declared, source_id
 
 
 @pytest.mark.data_integration
-def test_harbor_snapshot_budget_source_is_excluded_pending_conversion():
-    """Ruling 2026-11-24: TaskSpec-only admission supersedes the repair queue for Harbor rows.
+def test_harbor_calibforge_population_is_superseded_by_its_rebuilt_taskspec_variant():
+    """Ruling 2026-11-24: the shared-v2 Harbor cohort is superseded, not re-converted.
 
-    The CalibForge shared cohort is a Harbor population: TaskSpec-only admission
-    refuses it with NOT_TASKSPEC_CONVERTED beside its outstanding lexical claim,
-    and the convert -> census -> controls -> lexical -> SAMPLE QA -> admission
-    chain is what re-admits it. The snapshot-budget repair stage was the
-    2026-11-23 queue for the same source; the conversion requirement replaces
-    that queue because the rebuilt population must be a TaskSpec population.
+    Its data is already served as the rebuilt TaskSpec variant
+    (TaskTrove:smartie-calibforge-rebuilt-v1, Available at its retained pin), so
+    the Harbor population is Deprecated with the typed replacement link and
+    carries no exclusion claims. The lexical claim it owed is the rebuilt
+    variant's own current-pin evidence now.
     """
     source = all_sources()["TaskTrove:smartie-calibforge-shared-v2"]
-    assert source.status is SourceStatus.EXCLUDED
-    assert {claim.reason for claim in source.declaration.exclusion_claims} == {
-        ExclusionReason.LEXICAL_REMEDIATION_REQUIRED,
-        ExclusionReason.NOT_TASKSPEC_CONVERTED,
-    }
+    assert source.status is SourceStatus.DEPRECATED
+    assert source.declaration.exclusion_claims == []
+    assert source.declaration.replacement_source_id == "TaskTrove:smartie-calibforge-rebuilt-v1"
+    replacement = all_sources()["TaskTrove:smartie-calibforge-rebuilt-v1"]
+    assert replacement.status is SourceStatus.AVAILABLE
+    assert replacement.info.task_format is TaskFormat.TASKSPEC
 
 
 @pytest.mark.data_integration

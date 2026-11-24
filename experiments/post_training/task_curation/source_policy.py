@@ -25,4 +25,8 @@ CROSSCODE_EVAL_REASON = (
 SUPERSEDED_REPLACEMENTS: dict[str, str] = {
     "TaskTrove:laion__swesmith-oracle-filtered-v2": "TaskTrove:swesmith-verifier-repaired-v5",
     "TaskTrove:smartie-swesmith-admitted": "TaskTrove:swesmith-verifier-repaired-v5",
+    # Ruling 2026-11-24: the shared-v2 Harbor cohort's data is already served as
+    # the rebuilt TaskSpec variant; the Harbor population is superseded, not
+    # re-converted.
+    "TaskTrove:smartie-calibforge-shared-v2": "TaskTrove:smartie-calibforge-rebuilt-v1",
 }
