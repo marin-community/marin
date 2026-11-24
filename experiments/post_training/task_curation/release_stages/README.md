@@ -8,6 +8,18 @@ sealed receipts the pipeline itself writes are the only things that ever appear
 there). See `DESIGN.md` for the design note and `INVENTORY.md` (written to the
 retired-scripts directory by `inventory.py`) for the retirement mapping.
 
+## Operating credentials and repository-relative pins
+
+The preflight and run modes read the release prefix on object storage, so the
+operating environment must carry the storage credentials the repository's
+storage layer resolves (the operator's secrets environment: `CW_KEY_ID` /
+`CW_KEY_SECRET` for the CoreWeave buckets). Credentials are infrastructure
+access, not pipeline configuration — nothing outside the repository supplies
+any pipeline input.
+
+Repository-relative pins (for example the registry index under `plans/`) resolve
+from the checkout root: run `atlas-release` from the checkout.
+
 ## The release plan document
 
 Everything release-specific lives in one typed JSON document — the release plan.

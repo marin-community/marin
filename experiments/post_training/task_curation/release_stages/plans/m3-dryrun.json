@@ -67,7 +67,7 @@
     },
     "registry_index": {
       "sha256": "30e75c00e7837f1d31837b7b62acede7fe2f131e5331cc510ed391f6e3e416c7",
-      "uri": "/Users/benfeuer/Documents/experiments/active/atlas-release-pipeline/plans/registry-index.json"
+      "uri": "experiments/post_training/task_curation/release_stages/plans/registry-index.json"
     },
     "source_counts": {
       "sha256": "73afceacae585208a2ccb7aac34465c7170a209ba0b8243080e89db8d014794e",
