@@ -471,24 +471,28 @@ def recorded_runs(selection, tmp_path, monkeypatch, request, native_receipt_conf
                 deps=step.deps,
             )
             rendered = step.build_config(context).launch_config_yaml
-            attempt_id = yaml.safe_load(rendered)["run"]["attempt_id"]
-            # Share fixture receipts across cases that differ only in their isolated paths or attempt ID.
-            locations = (
+            launch = yaml.safe_load(rendered)
+            # Keep the paths and derived identities of each test's local artifacts in its receipt.
+            substitutions = [
                 (str(source_root), "<fixture-output>"),
                 (str(tmp_path), "<fixture-root>"),
-                (attempt_id, "<fixture-attempt>"),
-            )
+                (launch["run"]["attempt_id"], "<fixture-attempt>"),
+            ]
+            for field in ("train_data", "validation_data"):
+                for index, artifact in enumerate(launch["inputs"][field]):
+                    if artifact["uri"].startswith(f"{tmp_path}/"):
+                        substitutions.append((artifact["identity"], f"<fixture-{field}-{index}>"))
             normalized = rendered
-            for old, token in locations:
+            for old, token in substitutions:
                 normalized = normalized.replace(old, token)
             if normalized not in native_receipt_configs:
                 document.write_text(rendered)
                 encoded = json.dumps(gate.compose_configs([str(document)])[0])
-                for old, token in locations:
+                for old, token in substitutions:
                     encoded = encoded.replace(old, token)
                 native_receipt_configs[normalized] = encoded
             encoded = native_receipt_configs[normalized]
-            for old, token in locations:
+            for old, token in substitutions:
                 encoded = encoded.replace(token, old)
             config = json.loads(encoded)
             templates[key] = (source_root, config)

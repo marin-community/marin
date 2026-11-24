@@ -101,7 +101,8 @@ def edit_metrics(root, edit):
     write_metrics(root, metrics)
 
 
-def test_compare_leave_one_out_writes_the_printed_report(recorded_runs):
+def test_compare_leave_one_out_writes_the_printed_report(recorded_runs, monkeypatch):
+    cache_native_compositions(monkeypatch)
     controls(recorded_runs, "speed-medium")
     report = compare("speed-medium", "--leave-out", "r0")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
@@ -251,7 +252,8 @@ def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
 
 
 @pytest.mark.parametrize("preset", ["speed-short", "learning-medium"])
-def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset):
+def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset, monkeypatch):
+    cache_native_compositions(monkeypatch)
     controls(recorded_runs, preset)
     root = recorded_runs(preset, "users/test/current-generation", speed=101)
     if preset == "speed-short":
