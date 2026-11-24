@@ -27,7 +27,7 @@ def _diagnostic_tail(value: object, limit: int) -> str | None:
 def attempt_receipt(
     attempt_id: str, spec: TaskRolloutSpec, result: TrainingRollout, *, task_digest: str | None = None
 ) -> AttemptReceipt | None:
-    """Project the result's setup and verifier evidence without retaining the trajectory."""
+    """Project setup and verifier evidence for an agentic task; return None for other tasks."""
     task = spec.task
     if "agentic" not in task.tags:
         return None

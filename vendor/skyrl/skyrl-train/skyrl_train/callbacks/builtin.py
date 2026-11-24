@@ -70,6 +70,8 @@ from .types import (
     HF_MODEL_SAVE_CALLBACK_TYPE,
 )
 
+POOLED_VERIFIER_SCORE_METRIC = "eval/all/avg_verifier_score"
+
 # Registry mapping callback type names to classes
 # This enables YAML-based callback configuration
 CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {"reference_likelihood": ReferenceLikelihoodCallback}
@@ -218,7 +220,7 @@ class BestCheckpointCallback(TrainerCallback):
         initial_model_uri: str,
         expected_tasks: int,
         minimum_scored_tasks: int,
-        selection_metric: str = "eval/all/avg_verifier_score",
+        selection_metric: str = POOLED_VERIFIER_SCORE_METRIC,
         save_after_fraction: float = 0.0,
         preservation_max_drop: dict[str, float] | None = None,
     ):
@@ -316,7 +318,10 @@ def pool_checkpoint_scores(metrics: Dict[str, float], policy: PooledCheckpointEv
             eligible = False
             logger.warning(
                 "Insufficient checkpoint evaluation coverage for {}: {} scored, {} attempted, {} expected",
-                prefix, included, tried, coverage.expected_tasks,
+                prefix,
+                included,
+                tried,
+                coverage.expected_tasks,
             )
         attempted += tried
         scored += included
@@ -327,9 +332,9 @@ def pool_checkpoint_scores(metrics: Dict[str, float], policy: PooledCheckpointEv
     metrics["eval/all/num_scored"] = scored
     metrics["eval/all/verifier_score_coverage"] = scored / attempted if attempted else 0.0
     if scored:
-        metrics["eval/all/avg_verifier_score"] = math.fsum(reward_sums) / scored
+        metrics[POOLED_VERIFIER_SCORE_METRIC] = math.fsum(reward_sums) / scored
     else:
-        metrics.pop("eval/all/avg_verifier_score", None)
+        metrics.pop(POOLED_VERIFIER_SCORE_METRIC, None)
 
 
 @register_callback("evaluation")

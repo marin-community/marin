@@ -319,7 +319,7 @@ async def test_unconfirmed_cleanup_keeps_a_transient_startup_failure_terminal(wo
     finally:
         with pytest.raises(ExceptionGroup) as shutdown:
             await worker.shutdown()
-    assert shutdown.value.exceptions[0].exceptions[0] is close_error
+    assert shutdown.value.subgroup(lambda error: error is close_error) is not None
     assert factory.creations == 1
     assert waits == []
     assert not result.steps

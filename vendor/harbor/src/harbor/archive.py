@@ -66,6 +66,7 @@ def _is_terminal_failure(result: TrialResult) -> bool:
 
 
 def _attempt_is_archivable(reader: ReadView, prefix: str) -> bool:
+    """Accept finished failures without completion, or attempts whose completion matches stored evidence."""
     metadata = reader.blob_metadata(f"{prefix}/result.json")
     if metadata is None or "trajectory_present" not in metadata:
         return False
