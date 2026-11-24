@@ -19,6 +19,8 @@ _VERSION = "2026.11.24"
 _SEED = 20261124
 _HOLDOUT_MODULUS = 20
 _OUTPUT_BATCH_ROWS = 256
+_TRAIN = "train"
+_VALIDATION = "validation"
 _NEMOTRON = "gs://marin-us-central2/normalized-chat/nemotron_sft_v3"
 
 
@@ -56,7 +58,9 @@ _SOURCES = (
 )
 
 
-def _sample_source(source: str, rows_per_shard: int, max_shards: int, rng: Random) -> list[dict]:
+def _sample_splits(source: str, rows_per_shard: int, max_shards: int, rng: Random) -> dict[str, list[dict]]:
+    from dupekit import hash_xxh3_128  # noqa: PLC0415 - Datakit extra
+
     shards = sorted((StoragePath(source) / "outputs/main" / "*.parquet").glob(), key=str)
     examples = []
     for shard in rng.sample(shards, min(max_shards, len(shards))):
@@ -74,37 +78,35 @@ def _sample_source(source: str, rows_per_shard: int, max_shards: int, rng: Rando
                 if not remaining:
                     break
     rng.shuffle(examples)
-    return examples
+    splits: dict[str, list[dict]] = {_TRAIN: [], _VALIDATION: []}
+    for row in examples:
+        user = next(message for message in row["messages"] if message["role"] == "user")
+        prompt = "\n".join(part["text"] for part in user["content"])
+        split = _VALIDATION if hash_xxh3_128(prompt.encode()) % _HOLDOUT_MODULUS == 0 else _TRAIN
+        splits[split].append(row)
+    for split, rows in splits.items():
+        if not rows:
+            raise ValueError(f"No {split} rows from {source}")
+    return splits
 
 
-def _distributed_rows(rows: list[dict]) -> Iterator[tuple[float, dict]]:
+def _rows_by_position(rows: list[dict]) -> Iterator[tuple[float, dict]]:
     for index, row in enumerate(rows):
         yield (index + 0.5) / len(rows), row
 
 
 def _write_mix(*, output: str, sources: tuple[tuple[str, str, int], ...], seed: int, max_shards: int = 4) -> None:
-    from dupekit import hash_xxh3_128  # noqa: PLC0415 - Datakit extra
     from marin.datakit.chat_normalize import CHAT_SCHEMA  # noqa: PLC0415 - Datakit extra
 
     root = StoragePath(output)
-    components: dict[str, list[list[dict]]] = {"train": [], "validation": []}
-    for name, source, rows in sources:
-        splits: dict[str, list[dict]] = {split: [] for split in components}
-        for row in _sample_source(source, rows, max_shards, Random(f"{seed}:{name}")):
-            user = next(message for message in row["messages"] if message["role"] == "user")
-            prompt = "\n".join(part["text"] for part in user["content"])
-            split = "validation" if hash_xxh3_128(prompt.encode()) % _HOLDOUT_MODULUS == 0 else "train"
-            splits[split].append(row)
-        for split, examples in splits.items():
-            if not examples:
-                raise ValueError(f"No {split} rows from {source}")
-            components[split].append(examples)
-
-    for split, source_rows in components.items():
+    source_splits = [
+        _sample_splits(source, rows, max_shards, Random(f"{seed}:{name}")) for name, source, rows in sources
+    ]
+    for split in (_TRAIN, _VALIDATION):
         directory = root / split
         directory.mkdirs()
         # Place each source's rows evenly across the split, including when a shard is too short to fill its quota.
-        mixed = merge(*map(_distributed_rows, source_rows), key=itemgetter(0))
+        mixed = merge(*(_rows_by_position(splits[split]) for splits in source_splits), key=itemgetter(0))
         with (directory / "mix.parquet").open("wb") as stream, pq.ParquetWriter(stream, CHAT_SCHEMA) as writer:
             for batch in batched((row for _, row in mixed), _OUTPUT_BATCH_ROWS):
                 writer.write_table(pa.Table.from_pylist(batch, schema=CHAT_SCHEMA))
