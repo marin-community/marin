@@ -4,11 +4,12 @@
 """Embed assigned corpus shards on one GPU inside the pinned dense-embedding runtime.
 
 Documents embed whole (empty passage prefix) with last-token pooling and left
-padding, following the pinned encoder's documented usage. Shards process in
-length-sorted batches to bound padding waste, and vectors return to original
-row order before writing. This module must stay importable without the Marin
-workspace: the embedding runtime venv only carries torch, transformers,
-pyarrow and numpy.
+padding, following the pinned encoder's documented usage. Each shard is
+processed in fixed document-order chunks so preempted attempts resume from the
+last completed chunk on any node. Shards process in length-sorted batches to
+bound padding waste, and vectors return to original row order before writing.
+This module must stay importable without the Marin workspace: the embedding
+runtime venv only carries torch, transformers, pyarrow and numpy.
 """
 
 import argparse
@@ -27,6 +28,8 @@ from transformers import AutoModel, AutoTokenizer
 from experiments.post_training.task_curation.datasets.openresearcher.dense_contract import EMBEDDING_DIM
 
 logger = logging.getLogger(__name__)
+
+CHUNK_DOCS = 6_400
 
 
 def sha256_file(path: Path) -> str:
@@ -52,61 +55,119 @@ def normalize_rows(vectors: np.ndarray) -> np.ndarray:
     return vectors / np.maximum(norms, 1e-12)
 
 
-def embed_shard(
+def shard_rows(shard: Path) -> int:
+    with pq.ParquetFile(shard) as parquet:
+        return parquet.metadata.num_rows
+
+
+def read_rows(shard: Path, start: int, end: int) -> tuple[list[str], list[str]]:
+    """Read one half-open row range of a corpus shard in corpus order."""
+    docids: list[str] = []
+    texts: list[str] = []
+    position = 0
+    with pq.ParquetFile(shard) as parquet:
+        for batch in parquet.iter_batches(batch_size=1024, columns=["docid", "text"]):
+            rows = batch.to_pylist()
+            overlap_start = max(start - position, 0)
+            overlap_end = min(end - position, len(rows))
+            if overlap_end > overlap_start:
+                docids.extend(row["docid"] for row in rows[overlap_start:overlap_end])
+                texts.extend(row["text"] for row in rows[overlap_start:overlap_end])
+            position += len(rows)
+            if position >= end:
+                break
+    return docids, texts
+
+
+def write_part(
+    output: Path,
+    shard: Path,
+    chunk: int,
+    docids: list[str],
+    vectors: np.ndarray,
+) -> dict:
+    stem = shard.stem
+    vectors_path = output / "vectors" / f"{stem}-chunk-{chunk:04d}.f16"
+    docids_path = output / "docids" / f"{stem}-chunk-{chunk:04d}.parquet"
+    vectors_path.parent.mkdir(parents=True, exist_ok=True)
+    docids_path.parent.mkdir(parents=True, exist_ok=True)
+    vectors.tofile(vectors_path)
+    table = pa.Table.from_arrays([pa.array(docids)], names=["docid"])
+    with docids_path.open("wb") as writer:
+        pq.write_table(table, writer, compression="zstd")
+    entry = {
+        "shard": shard.name,
+        "chunk": chunk,
+        "vectors": vectors_path.name,
+        "docids": docids_path.name,
+        "documents": len(docids),
+        "vectors_sha256": sha256_file(vectors_path),
+        "vectors_bytes": vectors_path.stat().st_size,
+        "docids_sha256": sha256_file(docids_path),
+    }
+    receipts = output / "part-receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    (receipts / f"{stem}-chunk-{chunk:04d}.json").write_text(json.dumps(entry))
+    return entry
+
+
+def adopt_part(output: Path, vectors_path: Path, docids_path: Path, documents: int) -> dict | None:
+    """Adopt a completed part pair from a previous attempt on this node."""
+    if not (vectors_path.exists() and docids_path.exists()):
+        return None
+    with pq.ParquetFile(docids_path) as existing:
+        docid_rows = existing.metadata.num_rows
+    expected_bytes = docid_rows * EMBEDDING_DIM * 2
+    if docid_rows != documents or vectors_path.stat().st_size != expected_bytes:
+        return None
+    return {
+        "vectors_sha256": sha256_file(vectors_path),
+        "vectors_bytes": vectors_path.stat().st_size,
+        "docids_sha256": sha256_file(docids_path),
+    }
+
+
+def embed_chunk(
     model: torch.nn.Module,
     tokenizer,
     shard: Path,
-    vectors_path: Path,
-    docids_path: Path,
+    chunk: int,
+    output: Path,
     batch_size: int,
     max_tokens: int,
 ) -> dict:
-    """Stream one corpus shard, writing raw fp16 vectors and the ordered docids.
-
-    Completed parts are resumed after preemption: an existing pair whose sizes
-    and row counts agree is adopted instead of recomputed, and the manifest
-    digests are recomputed from the bytes on disk.
-    """
-    vectors_path.parent.mkdir(parents=True, exist_ok=True)
-    docids_path.parent.mkdir(parents=True, exist_ok=True)
-    if vectors_path.exists() and docids_path.exists():
-        with pq.ParquetFile(docids_path) as existing:
-            docid_rows = existing.metadata.num_rows
-        expected_bytes = docid_rows * EMBEDDING_DIM * 2
-        if docid_rows > 0 and vectors_path.stat().st_size == expected_bytes:
-            logger.info("Resuming %s: adopting %d embedded documents", shard.name, docid_rows)
-            entry = {
-                "shard": shard.name,
-                "vectors": vectors_path.name,
-                "docids": docids_path.name,
-                "documents": docid_rows,
-                "vectors_sha256": sha256_file(vectors_path),
-                "vectors_bytes": vectors_path.stat().st_size,
-                "docids_sha256": sha256_file(docids_path),
-            }
-            receipts = vectors_path.parent.parent / "part-receipts"
-            receipts.mkdir(parents=True, exist_ok=True)
-            (receipts / (Path(shard).stem + ".json")).write_text(json.dumps(entry))
-            return entry
-        if vectors_path.exists():
-            vectors_path.unlink()
-        if docids_path.exists():
-            docids_path.unlink()
-    docids: list[str] = []
-    texts: list[str] = []
-    with pq.ParquetFile(shard) as parquet:
-        for batch in parquet.iter_batches(batch_size=batch_size, columns=["docid", "text"]):
-            for row in batch.to_pylist():
-                docids.append(row["docid"])
-                texts.append(row["text"])
-    documents = len(docids)
+    """Embed rows [chunk*CHUNK_DOCS, ...) of one shard, resuming completed chunks."""
+    total_rows = shard_rows(shard)
+    start = chunk * CHUNK_DOCS
+    end = min(start + CHUNK_DOCS, total_rows)
+    if start >= total_rows:
+        raise ValueError(f"Chunk {chunk} of {shard.name} is outside the corpus shard")
+    stem = shard.stem
+    vectors_path = output / "vectors" / f"{stem}-chunk-{chunk:04d}.f16"
+    docids_path = output / "docids" / f"{stem}-chunk-{chunk:04d}.parquet"
+    adopted = adopt_part(output, vectors_path, docids_path, end - start)
+    if adopted is not None:
+        logger.info("Resuming %s chunk %d: adopting %d embedded documents", shard.name, chunk, end - start)
+        entry = {
+            "shard": shard.name,
+            "chunk": chunk,
+            "vectors": vectors_path.name,
+            "docids": docids_path.name,
+            "documents": end - start,
+            **adopted,
+        }
+        receipts = output / "part-receipts"
+        receipts.mkdir(parents=True, exist_ok=True)
+        (receipts / f"{stem}-chunk-{chunk:04d}.json").write_text(json.dumps(entry))
+        return entry
+    docids, texts = read_rows(shard, start, end)
     # Length-sorted batches minimize padding waste; vectors scatter back to the
     # corpus row order before writing so the docid mapping never changes.
-    order = sorted(range(documents), key=lambda index: len(texts[index]))
-    vectors = np.empty((documents, model.config.hidden_size), dtype=np.float16)
+    order = sorted(range(len(docids)), key=lambda index: len(texts[index]))
+    vectors = np.empty((len(docids), model.config.hidden_size), dtype=np.float16)
     embedded = 0
-    for start in range(0, documents, batch_size):
-        rows = order[start : start + batch_size]
+    for batch_start in range(0, len(docids), batch_size):
+        rows = order[batch_start : batch_start + batch_size]
         encoded = tokenizer(
             [texts[row] for row in rows],
             padding=True,
@@ -119,24 +180,9 @@ def embed_shard(
         vectors[rows] = normalize_rows(hidden.to(torch.float32).cpu().numpy()).astype(np.float16)
         embedded += len(rows)
         if embedded % (batch_size * 100) < len(rows):
-            logger.info("Embedded %s: %d/%d documents", shard.name, embedded, documents)
-    vectors.tofile(vectors_path)
-    table = pa.Table.from_arrays([pa.array(docids)], names=["docid"])
-    with docids_path.open("wb") as writer:
-        pq.write_table(table, writer, compression="zstd")
-    entry = {
-        "shard": shard.name,
-        "vectors": vectors_path.name,
-        "docids": docids_path.name,
-        "documents": documents,
-        "vectors_sha256": sha256_file(vectors_path),
-        "vectors_bytes": vectors_path.stat().st_size,
-        "docids_sha256": sha256_file(docids_path),
-    }
-    # The per-part receipt lets the orchestrator upload and resume this part
-    # independently of the rest of the worker's assignment.
-    (vectors_path.parent.parent / "part-receipts").mkdir(parents=True, exist_ok=True)
-    (vectors_path.parent.parent / "part-receipts" / (Path(shard).stem + ".json")).write_text(json.dumps(entry))
+            logger.info("Embedded %s chunk %d: %d/%d documents", shard.name, chunk, embedded, len(docids))
+    entry = write_part(output, shard, chunk, docids, vectors)
+    logger.info("Embedded %s chunk %d: %d documents", shard.name, chunk, entry["documents"])
     return entry
 
 
@@ -163,19 +209,13 @@ def main() -> None:
         )
     entries = []
     for shard in plan["shards"]:
-        entry = embed_shard(
-            model,
-            tokenizer,
-            Path(shard),
-            output / "vectors" / (Path(shard).stem + ".f16"),
-            output / "docids" / (Path(shard).stem + ".parquet"),
-            args.batch_size,
-            plan["max_tokens"],
-        )
-        entries.append(entry)
-        logger.info("Embedded shard %s: %d documents", entry["shard"], entry["documents"])
+        shard_path = Path(shard)
+        total_rows = shard_rows(shard_path)
+        for chunk in range((total_rows + CHUNK_DOCS - 1) // CHUNK_DOCS):
+            entries.append(embed_chunk(model, tokenizer, shard_path, chunk, output, args.batch_size, plan["max_tokens"]))
     (output / f"worker-manifest-{plan['worker']}.json").write_text(json.dumps(entries, indent=2) + "\n")
-    torch.cuda.empty_cache()
+    if device == "cuda":
+        torch.cuda.empty_cache()
     sys.stdout.write(json.dumps({"worker": plan["worker"], "entries": len(entries)}) + "\n")
 
 

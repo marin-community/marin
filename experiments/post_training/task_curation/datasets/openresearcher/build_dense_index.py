@@ -124,34 +124,47 @@ def build_index(config: DenseIndexConfig) -> DenseIndex:
     staged = RegionalInputs.model_validate_json(pinned_document(config.stage_receipt_uri, config.stage_receipt_sha256))
     embedding, manifest = stage_embedding(config, Path(config.workdir))
     work = Path(config.workdir)
-    manifest.sort(key=lambda entry: entry["shard"])
+    manifest.sort(key=lambda entry: (entry["shard"], entry["chunk"]))
+    by_shard: dict[str, list[dict]] = {}
+    for entry in manifest:
+        by_shard.setdefault(entry["shard"], []).append(entry)
+    for shard_entries in by_shard.values():
+        if sorted(entry["chunk"] for entry in shard_entries) != list(range(len(shard_entries))):
+            raise ValueError(f"Chunk coverage is not contiguous for {shard_entries[0]['shard']}")
     index = faiss.IndexFlatIP(EMBEDDING_DIM)
     ordered_docids: list[str] = []
-    for entry in manifest:
-        vectors = np.fromfile(entry["local_vectors"], dtype=np.float16).reshape(-1, EMBEDDING_DIM).astype(np.float32)
-        docids = pq.read_table(entry["local_docids"], columns=["docid"]).column("docid").to_pylist()
-        expected = corpus_docids(staged, entry["shard"])
-        if docids != expected:
-            raise ValueError(f"Dense docid order differs from the approved corpus shard: {entry['shard']}")
-        if len(vectors) != len(docids):
-            raise ValueError(f"Vector rows disagree with docid rows: {entry['shard']}")
-        index.add(vectors)
-        ordered_docids.extend(docids)
-        logger.info("Added %s: %d rows (total %d)", entry["shard"], len(vectors), index.ntotal)
+    shard_prefixes: dict[str, int] = {}
+    for shard_name in sorted(by_shard):
+        shard_entries = by_shard[shard_name]
+        expected = corpus_docids(staged, shard_name)
+        shard_docids: list[str] = []
+        for entry in shard_entries:
+            vectors = np.fromfile(entry["local_vectors"], dtype=np.float16).reshape(-1, EMBEDDING_DIM).astype(np.float32)
+            docids = pq.read_table(entry["local_docids"], columns=["docid"]).column("docid").to_pylist()
+            if len(vectors) != len(docids):
+                raise ValueError(f"Vector rows disagree with docid rows: {entry['shard']} chunk {entry['chunk']}")
+            index.add(vectors)
+            shard_docids.extend(docids)
+        if shard_docids != expected:
+            raise ValueError(f"Dense docid order differs from the approved corpus shard: {shard_name}")
+        shard_prefixes[shard_name] = len(ordered_docids)
+        ordered_docids.extend(shard_docids)
+        logger.info("Added %s: %d rows (total %d)", shard_name, len(shard_docids), index.ntotal)
     if index.ntotal != EXPECTED_DOCUMENTS or len(ordered_docids) != EXPECTED_DOCUMENTS:
         raise ValueError("Dense index row count differs from the approved corpus")
-    prefixes = {}
-    consumed = 0
-    for entry in manifest:
-        prefixes[entry["shard"]] = consumed
-        consumed += entry["documents"]
+    chunk_offsets: list[tuple[dict, int]] = []
+    for shard_name in sorted(by_shard):
+        consumed = shard_prefixes[shard_name]
+        for entry in by_shard[shard_name]:
+            chunk_offsets.append((entry, consumed))
+            consumed += entry["documents"]
     for number in range(0, EXPECTED_DOCUMENTS, SPOT_CHECK_STRIDE):
-        entry = next(
-            item for item in manifest if prefixes[item["shard"]] <= number < prefixes[item["shard"]] + item["documents"]
+        entry, global_start = next(
+            offset for offset in chunk_offsets if offset[1] <= number < offset[1] + offset[0]["documents"]
         )
         reconstructed = np.empty(EMBEDDING_DIM, dtype=np.float32)
         index.reconstruct(number, reconstructed)
-        local_row = number - prefixes[entry["shard"]]
+        local_row = number - global_start
         stored = np.fromfile(
             entry["local_vectors"], dtype=np.float16, count=EMBEDDING_DIM, offset=local_row * EMBEDDING_DIM * 2
         )

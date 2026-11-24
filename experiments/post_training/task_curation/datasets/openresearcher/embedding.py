@@ -160,16 +160,26 @@ def visible_gpus(embed_python: str) -> int:
 
 
 def verify_entries(entries: list[dict], shards: list[Path], expected_documents: int = EXPECTED_DOCUMENTS) -> int:
-    """Require one manifest entry per corpus shard, with internally consistent digests."""
-    expected = sorted(shard.name for shard in shards)
-    if sorted(entry["shard"] for entry in entries) != expected:
+    """Require one manifest entry per corpus-shard chunk, with consistent digests.
+
+    Chunk coverage must be contiguous from zero within every shard, so the
+    dense index can concatenate chunk vectors in corpus order.
+    """
+    by_shard: dict[str, list[dict]] = {}
+    for entry in entries:
+        by_shard.setdefault(entry["shard"], []).append(entry)
+    if sorted(by_shard) != sorted(shard.name for shard in shards):
         raise ValueError("Embedding produced a different shard set than the approved corpus")
     total = 0
-    for entry in entries:
-        rows = entry["vectors_bytes"] // (EMBEDDING_DIM * 2)
-        if rows != entry["documents"] or rows <= 0:
-            raise ValueError(f"Vector shard row count disagrees with its manifest: {entry['vectors']}")
-        total += entry["documents"]
+    for shard_name, shard_entries in by_shard.items():
+        chunk_indices = sorted(entry["chunk"] for entry in shard_entries)
+        if chunk_indices != list(range(len(chunk_indices))):
+            raise ValueError(f"Chunk coverage is not contiguous for {shard_name}: {chunk_indices}")
+        for entry in shard_entries:
+            rows = entry["vectors_bytes"] // (EMBEDDING_DIM * 2)
+            if rows != entry["documents"] or rows <= 0:
+                raise ValueError(f"Vector chunk row count disagrees with its manifest: {entry['vectors']}")
+            total += entry["documents"]
     if total != expected_documents:
         raise ValueError(f"Corpus contains {total} embedded documents; expected {expected_documents}")
     return total
@@ -322,7 +332,7 @@ def run_workers(
     entries = []
     for worker in range(len(workers)):
         entries.extend(json.loads((staged_output / f"worker-manifest-{worker}.json").read_text()))
-    entries.sort(key=lambda entry: entry["shard"])
+    entries.sort(key=lambda entry: (entry["shard"], entry["chunk"]))
     total = verify_entries(entries, shards, expected_documents)
     logger.info("Embedded %d documents; verifying regional uploads", total)
     manifest = json.dumps(entries, indent=2) + "\n"
