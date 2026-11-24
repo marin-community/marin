@@ -34,10 +34,7 @@ from taskforge.model.workpiece import WORKPIECE, Workpiece
 from taskforge.stages.classify import commitments
 
 JOURNAL_FORMAT = 15
-"""Format 15 checks judge settings when the author grades or submits a draft; a format-14 author could grade a draft
-that now returns a tool error, so its replay could diverge from its recorded sandbox operations. Formats 8 through 14
-decode for the usage report only: each records rows or words requests otherwise than format 15, so a writer that
-resumed one would buy calls or decisions its recorded history refuses. The README keeps each format's change."""
+"""Format 15 checks author judge settings at grade and submit. Replaying a format-14 draft can change the next action."""
 READABLE = frozenset({8, 9, 10, 11, 12, 13, 14, JOURNAL_FORMAT})
 """The head formats whose rows this code decodes, for the usage report; a writer claims only ``JOURNAL_FORMAT``."""
 FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "workpiece.json"})
@@ -270,6 +267,7 @@ class CheckpointSink(Sink):
                 return  # A retried final swap whose lost acknowledgment had in fact been applied.
             head = replace(head, workpiece=name)
         self._swap(replace(head, status=status, published_at=time.time()), current.version)
+        self.local.drop(head.size)
 
     def _stop(self, error: LogFailure) -> None:
         if self.stopped is None:

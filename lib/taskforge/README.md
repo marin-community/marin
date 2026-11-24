@@ -131,8 +131,7 @@ Readers follow only the chunks the head names. A root in any other journal forma
 format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), format 2 (sandbox rows
 replayed by content, without owners) and format 3 (adversary findings with an expected reward band, not a
 defect direction with observed and deserved grades), format 4 (trials hydrated without a detail, a too-easy
-baseline in place of a digest-bound fallback; format 5 places a round over its scored solver slots and holds a slot
-without one), format 5 and format 6 (no solve-review: its acceptances name no
+baseline in place of a digest-bound fallback), format 5 and format 6 (no solve-review: its acceptances name no
 missing evidence although none ran, and a resumed format-6 round would buy a review its recorded history lacks),
 format 7 (no confirmation step: its acceptances end at the validation round and name no missing confirmation, and a
 resumed format-7 round would buy one its history lacks),
@@ -157,8 +156,8 @@ adds the `schema.author_reference` row (below), which a format-10 reader cannot 
 root as another format. Format 10 adds a row's `billed` field, outside the event, naming the role that
 paid for a physical cached resolution; a format-9 reader refuses a format-10 root as another format. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its
 decision-model grade, below), which a format-8 reader cannot decode; at 9 that reader refuses the root as another
-format, untouched, instead of reporting it corrupt. Such roots are converted once by a separate migration, or rebuilt. Format 5 covers two writers that its
-header cannot tell apart: one whose readers cannot decode a `decision_model.read` row, and one that could write
+format, untouched, instead of reporting it corrupt. Such roots are converted once by a separate migration, or rebuilt. Format 5 places a round over its scored solver slots and holds a slot
+without one; it covers two writers that its header cannot tell apart: one whose readers cannot decode a `decision_model.read` row, and one that could write
 `decision_model.read` rows but had no `effect.invalidated` row (the marker
 naming the refused slot result an operator-authorised replacement supersedes); a bare request row in either cannot
 establish an operator's intent. Format 6 refuses both alike, and a reader of the first kind refuses a format-6 root

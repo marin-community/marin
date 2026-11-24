@@ -246,8 +246,10 @@ class BufferSink(Sink):
 
     def start(self, data: bytes) -> tuple[Record, ...]:
         """Continue after ``data``, a complete published stream, holding none of it; return its records."""
-        records = decode(data, self._known)
-        self.offset, self.last = len(data), len(records)
+        known: dict[str, int] = {}
+        records = decode(data, known)
+        self.data.clear()
+        self.offset, self.last, self._known = len(data), len(records), known
         return records
 
     def drop(self, size: int) -> None:

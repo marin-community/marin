@@ -128,6 +128,26 @@ async def test_checkpoints_publish_immutable_chunks_of_only_new_bytes(tmp_path: 
     assert decode(journal(Path(sink.destination)).events()) == log.records
 
 
+async def test_reclaim_discards_the_unpublished_suffix_and_its_digest_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 2)
+    sink = claimed(tmp_path)
+    log = EventLog(sink=sink)
+    await log.record(Note("published first"))
+    await log.record(Note("published second"))
+    discarded = Note("from the abandoned suffix")
+    await log.record(discarded)
+
+    destination = Path(sink.destination)
+    resumed = EventLog(sink=sink, replay_from=sink.claim(journal(destination)))
+    await resumed.record(Note("replacement"))
+    await resumed.record(discarded)  # its former occurrence was never published
+    await sink._upload(Status(), None)
+    assert decode(journal(destination).events()) == resumed.records
+    assert not sink.local.data
+
+
 async def test_transient_timer_upload_failure_keeps_the_timer_and_republishes_from_the_head(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
