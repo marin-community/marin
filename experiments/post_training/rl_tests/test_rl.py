@@ -60,6 +60,10 @@ from experiments.post_training.task_curation.selection import FULL_VALIDATION_FI
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 
+EVALUATION_CALLBACK = "evaluation"
+BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
+HF_MODEL_SAVE_CALLBACK = "hf_model_save"
+
 
 def printed_status(output):
     # CliRunner merges stderr into result.output; status is on result.stdout.
@@ -112,17 +116,29 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
     for name in ("speed-short", "data-short", "eval-short"):
         assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
 
-    learning = configs["learning-medium"]
+
+def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    paths = []
+    for name in ("speed-short", "learning-medium"):
+        (step,) = snowball.build_experiment(table.by_name[name], table=table).runs
+        path = tmp_path / f"{name}.yaml"
+        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        paths.append(str(path))
+
+    speed_config, learning_config = gate.compose_configs(paths)
     for name, sources in (
-        ("speed-short", configs["speed-short"]["inputs"]["evaluation_data"]["eval_lite"]),
-        ("learning-medium", learning["inputs"]["validation_data"]),
+        ("speed-short", speed_config["inputs"]["evaluation_data"]["eval_lite"]),
+        ("learning-medium", learning_config["inputs"]["validation_data"]),
     ):
         (source,) = sources
         held_out = recipe.selection_artifact(table.by_name[name].held_out_tasks)
         assert (source["uri"], source["relative_path"]) == (held_out.path(), FULL_VALIDATION_FILENAME)
 
-    callbacks = [row["type"] for row in learning["skyrl"]["trainer"]["callbacks"]]
-    assert callbacks.index("evaluation") < callbacks.index("best_checkpoint") < callbacks.index("hf_model_save")
+    # Best-checkpoint selection consumes evaluation metrics before the export callback runs.
+    callbacks = [row["type"] for row in learning_config["skyrl"]["trainer"]["callbacks"]]
+    evaluation = callbacks.index(EVALUATION_CALLBACK)
+    assert evaluation < callbacks.index(BEST_CHECKPOINT_CALLBACK) < callbacks.index(HF_MODEL_SAVE_CALLBACK)
 
 
 def test_plan_rejects_gated_preset_without_control_pin(selection):
@@ -588,8 +604,8 @@ def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_
     assert (source["uri"], source["relative_path"]) == (held_out.path(), VALIDATION_FILENAME)
     assert not config["run"]["export_hf"]
     callbacks = {row["type"] for row in config["skyrl"]["trainer"]["callbacks"]}
-    assert "evaluation" in callbacks
-    assert callbacks.isdisjoint({"checkpoint", "best_checkpoint", "hf_model_save"})
+    assert EVALUATION_CALLBACK in callbacks
+    assert callbacks.isdisjoint({"checkpoint", BEST_CHECKPOINT_CALLBACK, HF_MODEL_SAVE_CALLBACK})
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
