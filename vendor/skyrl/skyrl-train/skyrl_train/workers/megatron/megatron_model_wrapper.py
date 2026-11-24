@@ -195,8 +195,7 @@ class MegatronModelWrapper:
         if packed_seq_params is not None:
             logprobs = unpack_packed_token_values(logprobs, packed_seq_params, attention_mask)
             entropy = unpack_packed_token_values(entropy, packed_seq_params, attention_mask)
-            # A packed sequence's last token predicts its first token only to keep the
-            # kernel rectangular. The existing scoring path excludes that circular target.
+            # Match the packed scoring path, which excludes each row's last attended token.
             for row in range(attention_mask.shape[0]):
                 positions = attention_mask[row].nonzero(as_tuple=False).flatten()
                 if positions.numel():
