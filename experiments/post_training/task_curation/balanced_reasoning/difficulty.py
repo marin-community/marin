@@ -102,8 +102,10 @@ def read_ledger_attempts(ledger_root: str = DEFAULT_LEDGER) -> Iterator[LedgerAt
     rows_prefix = prefix_join(ledger_root, "rows")
     logger.info("Reading difficulty evidence from %s", rows_prefix)
     filesystem = fsspec.filesystem(url_protocol(ledger_root))
+    # s3fs globs return bucket-key paths without the scheme; open them on the same
+    # filesystem so keys stay remote instead of falling through to local paths.
     for path in sorted(filesystem.glob(f"{rows_prefix}/**/*.jsonl")):
-        with open_url(path, "rt") as source:
+        with filesystem.open(path, "rt") as source:
             for line in source:
                 if line.strip():
                     yield parse_ledger_row(json.loads(line))
