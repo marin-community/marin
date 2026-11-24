@@ -3,11 +3,13 @@
 # marin revision from GitHub, then run the cohort conversion release module (license
 # gates -> strict row conversion -> private TaskSpec release + per-task receipts).
 #
+# The conversion scratch stays on the pod: the private Hugging Face release is the
+# durable artifact, and the job log carries the result JSON.
+#
 # Args:
 #   $1 = the landed marin revision (fetched as a GitHub archive tarball)
 #   $2 = the cohort source id (e.g. TaskTrove:laion__exp_rpt_ghactions-v3)
-#   $3 = the conversion output root (object storage)
-#   $4 = the artifact version (the release repo suffix)
+#   $3 = the artifact version (the release repo suffix)
 # Env:
 #   WORKDIR = the scratch directory (default /workspace)
 set -euo pipefail
@@ -16,8 +18,7 @@ trap 'echo "COHORT-CONVERSION FAILED: line $LINENO: $BASH_COMMAND" >&2' ERR
 
 REVISION="${1:?landed marin revision}"
 SOURCE_ID="${2:?cohort source id}"
-OUTPUT_ROOT="${3:?conversion output root}"
-VERSION="${4:?artifact version}"
+VERSION="${3:?artifact version}"
 WORKDIR="${WORKDIR:-/workspace}"
 
 mkdir -p "$WORKDIR"
@@ -30,6 +31,9 @@ test -f "marin-$REVISION/experiments/post_training/task_curation/harbor_cohort_r
   || { echo "cohort conversion: the extracted tree is missing the release module" >&2; exit 1; }
 cd "marin-$REVISION"
 
+SLUG=$(printf '%s' "$SOURCE_ID" | sed -e 's/^[^:]*://' -e 's#[/@]#-#g' | tr '[:upper:]' '[:lower:]')
+OUTPUT_ROOT="$WORKDIR/cohort-conversion/$SLUG"
+
 # The module resolves the cohort pin, its license receipt and the publication gates
 # from the landed declarations; the conversion is strict and publishes only when the
 # whole population converts.
@@ -40,3 +44,4 @@ uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m \
   --artifact-version "$VERSION" \
   --report "$OUTPUT_ROOT/conversion-result.json" \
   --run
+cat "$OUTPUT_ROOT/conversion-result.json"
