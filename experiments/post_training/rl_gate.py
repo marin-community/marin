@@ -299,7 +299,9 @@ def _check_protocols(runs: Sequence[RunMeasurements], controls: Sequence[RunMeas
         raise InvalidComparison("evaluation protocol differs")
 
 
-def _shared_task_fraction(name: str, shared: set[str], control_labels: Sequence[Mapping[str, TaskStrata]]) -> Invariant:
+def _require_shared_overlap(
+    name: str, shared: set[str], control_labels: Sequence[Mapping[str, TaskStrata]]
+) -> Invariant:
     minimum = 1.0
     for labels in control_labels:
         families: dict[str, set[str]] = {}
@@ -361,7 +363,7 @@ def _align_evaluation(
     labels = [_task_labels(run.held_out_answers[name].final) for run in cohort]
     sets = [set(tasks) for tasks in labels]
     shared = set.intersection(*sets)
-    coverage = _shared_task_fraction(name, shared, labels[n_runs:])
+    coverage = _require_shared_overlap(name, shared, labels[n_runs:])
     gain = shared.copy()
     if evaluation.at_start:
         for member in cohort:

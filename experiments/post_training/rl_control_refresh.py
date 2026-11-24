@@ -62,18 +62,15 @@ def plan_refresh(table: ModelPresets) -> list[ControlRefresh]:
             (config,) = rl_gate._compose_plans(preset, (RunInputs(preset_name=preset.name),))
             expected = RecordedLaunch.from_document(config, attempt=config["run"]["attempt_id"])
             current_tasks = signature(expected, preset)
-            try:
-                for index in range(previous.replicates):
-                    output = rl_gate.control_path(preset, previous, index, table=table)
-                    receipt = read_stored_skyrl_attempt(output)
-                    if receipt is None or receipt.native.result.state != "succeeded":
-                        stale = True
-                        break
-                    if signature(read_recorded_launch(receipt), preset) != current_tasks:
-                        stale = True
-                        break
-            except FileNotFoundError:
-                stale = True
+            for index in range(previous.replicates):
+                output = rl_gate.control_path(preset, previous, index, table=table)
+                receipt = read_stored_skyrl_attempt(output)
+                if receipt is None or receipt.native.result.state != "succeeded":
+                    stale = True
+                    break
+                if signature(read_recorded_launch(receipt), preset) != current_tasks:
+                    stale = True
+                    break
         if stale:
             current = ControlPin(preset.name, provenance.base_commit, preset.revision, previous.replicates)
             planned.append(ControlRefresh(preset, previous, current))
@@ -147,6 +144,23 @@ def _write_pins(path: Path, table: ModelPresets) -> None:
     path.write_bytes(source[:begin] + f"{{\n{entries}\n    }}".encode() + source[end:])
 
 
+def _ensure_pin_branch(table: ModelPresets, branch: str, title: str, published: str | None) -> None:
+    path = Path("experiments/post_training/snowball_rl.py")
+    _write_pins(path, table)
+    subprocess.run(["uvx", "black@25.9.0", str(path)], check=True)
+    if published is None:
+        subprocess.run(["git", "switch", "-c", branch], check=True)
+        subprocess.run(["git", "add", "--", str(path)], check=True)
+        subprocess.run(["git", "commit", "-m", title], check=True)
+        subprocess.run(["gh", "auth", "setup-git"], check=True)
+        subprocess.run(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], check=True)
+    else:
+        subprocess.run(["git", "fetch", "origin", published], check=True)
+        saved = subprocess.check_output(["git", "show", f"{published}:{path}"])
+        if saved != path.read_bytes():
+            raise ValueError(f"control pin branch {branch} has different content")
+
+
 def _submit_pin_pr(
     table: ModelPresets,
     reports: Sequence[tuple[ControlRefresh, str]],
@@ -163,20 +177,7 @@ def _submit_pin_pr(
             raise ValueError(f"missing stored control link {report_path}")
         result = f"{report.verdict} ({report.effect})" if report.effect else f"{report.verdict}: {report.reason}"
         body.append(f"- `{item.preset.name}` at `{item.current.revision}` has a {result} link at `{report_path}`.")
-    path = Path("experiments/post_training/snowball_rl.py")
-    _write_pins(path, table)
-    subprocess.run(["uvx", "black@25.9.0", str(path)], check=True)
-    if published is None:
-        subprocess.run(["git", "switch", "-c", branch], check=True)
-        subprocess.run(["git", "add", "--", str(path)], check=True)
-        subprocess.run(["git", "commit", "-m", title], check=True)
-        subprocess.run(["gh", "auth", "setup-git"], check=True)
-        subprocess.run(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], check=True)
-    else:
-        subprocess.run(["git", "fetch", "origin", published], check=True)
-        saved = subprocess.check_output(["git", "show", f"{published}:{path}"])
-        if saved != path.read_bytes():
-            raise ValueError(f"control pin branch {branch} has different content")
+    _ensure_pin_branch(table, branch, title, published)
     with TemporaryDirectory(prefix="rl-control-pin-pr-") as directory:
         body_path = Path(directory) / "body.md"
         body_path.write_text(body[0] + "\n\n" + "\n".join(body[1:]) + "\n")
@@ -211,17 +212,24 @@ def _configured_bot() -> str:
     return bot
 
 
+def _remote_pin_head(branch: str) -> str | None:
+    existing = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "--heads", "origin", f"refs/heads/{branch}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if existing.returncode == 0:
+        return existing.stdout.split()[0]
+    if existing.returncode != 2:
+        existing.check_returncode()
+    return None
+
+
 def _refresh_controls(planned: Sequence[ControlRefresh], *, pull: int, bot: str) -> None:
     if not planned:
         subprocess.run(
-            [
-                "gh",
-                "pr",
-                "comment",
-                str(pull),
-                "--body",
-                "🤖 All RL controls match this merge. No refresh is needed.",
-            ],
+            ["gh", "pr", "comment", str(pull), "--body", "🤖 All RL controls match this merge. No refresh is needed."],
             check=True,
         )
         return
@@ -229,23 +237,14 @@ def _refresh_controls(planned: Sequence[ControlRefresh], *, pull: int, bot: str)
         raise ValueError("control collection requires Together grader credentials")
     source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     branch = f"rl-controls/{source}"
-    existing = subprocess.run(
-        ["git", "ls-remote", "--exit-code", "--heads", "origin", f"refs/heads/{branch}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    published = None
-    if existing.returncode == 0:
-        published = existing.stdout.split()[0]
+    published = _remote_pin_head(branch)
+    if published is not None:
         count = subprocess.check_output(
             ["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number", "--jq", "length"], text=True
         )
         if int(count):
             print(f"Control pin branch {branch} already has a pull request.")
             return
-    elif existing.returncode != 2:
-        existing.check_returncode()
     subprocess.run(["git", "config", "user.name", bot], check=True)
     subprocess.run(["git", "config", "user.email", f"{bot}@users.noreply.github.com"], check=True)
     table, reports = qualify_refresh(planned, SNOWBALL, entry_module="experiments.post_training.snowball_rl")
