@@ -89,16 +89,15 @@ def _unfingerprintable(o: object, why: str) -> str:
     )
 
 
-def default_fields_omitted_from_fingerprint(config: object) -> set[str]:
-    """Return the names of opt-in dataclass fields that have their default value."""
+def fingerprint_omitted_fields(config: object) -> set[str]:
+    """Return fields that hold their explicitly marked legacy value."""
     if not dataclasses.is_dataclass(config) or isinstance(config, type):
         raise TypeError("Expected a dataclass configuration")
     return {
         field.name
         for field in dataclasses.fields(config)
-        if field.metadata.get("fingerprint_omit_default")
-        and field.default is not dataclasses.MISSING
-        and getattr(config, field.name) == field.default
+        if "fingerprint_omit_value" in field.metadata
+        and getattr(config, field.name) == field.metadata["fingerprint_omit_value"]
     }
 
 
@@ -111,7 +110,7 @@ class _FingerprintEncoder(json.JSONEncoder):
 
     def default(self, o):
         if dataclasses.is_dataclass(o) and not isinstance(o, type):
-            omitted = default_fields_omitted_from_fingerprint(o)
+            omitted = fingerprint_omitted_fields(o)
             return {field.name: getattr(o, field.name) for field in dataclasses.fields(o) if field.name not in omitted}
         if isinstance(o, Enum):
             return o.value
@@ -179,9 +178,9 @@ def _canonical_key(o: object) -> str:
 def canonical_json(config: object) -> str:
     """Encode configuration deterministically for hashing.
 
-    A dataclass field with ``fingerprint_omit_default`` metadata may introduce
-    an opt-in setting without changing existing fingerprints. Use a constant,
-    equality-comparable default that preserves existing behavior.
+    Set ``fingerprint_omit_value`` in a new dataclass field's metadata to the
+    constant value that preserves the pre-field behavior. Keep that value
+    fixed when changing the field's default.
     """
     return json.dumps(config, sort_keys=True, cls=_FingerprintEncoder)
 
