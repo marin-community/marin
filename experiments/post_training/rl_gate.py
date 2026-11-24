@@ -673,8 +673,6 @@ def _native_command_json(operation: str, command: list[str], *, env: dict[str, s
 
 def _native_json(operation: str, *args: str, timeout: int = 120):
     env = skyrl_cpu_environment()
-    for key in ("PYTHONIOENCODING", "PYTHONOPTIMIZE"):
-        env.pop(key, None)
     venv = recipe.REPO_ROOT / SKYRL_PROJECT / ".venv"
     interpreter = venv / "bin" / "python"
     # Sync the frozen project and verify its interpreter within the preparation deadline.

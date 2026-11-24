@@ -115,15 +115,13 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(coordinator))
     monkeypatch.setenv("VIRTUAL_ENV", str(coordinator))
     monkeypatch.setenv("PATH", str(coordinator / "bin"), prepend=os.pathsep)
-    monkeypatch.setenv("PYTHONIOENCODING", "utf-16")
-    monkeypatch.setenv("PYTHONOPTIMIZE", "1")
 
     local = table.by_name["speed-short"]
     region = replace(local, recipe=replace(local.recipe, layout=replace(local.recipe.layout, cluster="cw-rno2a")))
     defaults = RunInputs(preset_name=local.name)
     compose = gate.compose_configs
     with monkeypatch.context() as batch:
-        # Validate the CLI documents in the same native process as the paired defaults.
+        # Batch CLI documents with the paired defaults to avoid a second native process.
         batch.setattr(gate, "compose_configs", lambda paths: compose([*paths, *launch_paths], validate_driver=True))
         first, second, *_ = gate._compose_plans(((region, defaults), (local, defaults)))
     assert [first["iris"]["cluster"], second["iris"]["cluster"]] == ["cw-rno2a", local.recipe.layout.cluster]

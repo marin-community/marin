@@ -723,7 +723,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         cache_native_compositions(monkeypatch)
         secret = "sk-fixture-abcdefghijklmnopqrstuvwxyz"
         run_native = gate._run_native_process
-        for diagnostic in ("timeout", "last-phase", "empty", "whitespace", "oserror", "bootstrap"):
+        for diagnostic in ("timeout", "last-phase", "empty", "invalid-json", "whitespace", "oserror", "bootstrap"):
             with monkeypatch.context() as unavailable:
                 unavailable.setattr(
                     Provenance,
@@ -751,7 +751,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                             raise FileNotFoundError("native composer executable missing")
                         if diagnostic == "whitespace":
                             raise subprocess.CalledProcessError(1, command, "", "\n")
-                        return ""
+                        return "not JSON" if diagnostic == "invalid-json" else ""
                     return run_native(command, *args, **kwargs)
 
                 unavailable.setattr(gate, "_run_native_process", unavailable_defaults)
@@ -764,9 +764,11 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     assert "Import native modules" in report["reason"]
                     assert "Interrupted with [REDACTED]" in report["reason"] and secret not in report["reason"]
                 if diagnostic == "last-phase":
-                    assert (
-                        "Read native schema defaults" in report["reason"] and "Earlier warning" not in report["reason"]
-                    )
+                    assert report["reason"].endswith(". Read native schema defaults timed out after 120 s")
+                if diagnostic == "empty":
+                    assert report["reason"].endswith("Read native schema defaults returned no output")
+                if diagnostic == "invalid-json":
+                    assert report["reason"].endswith("Read native schema defaults returned invalid JSON")
                 if diagnostic == "bootstrap":
                     assert "Prepare SkyRL CPU environment" in report["reason"]
                     assert "timed out after 300 s" in report["reason"]
