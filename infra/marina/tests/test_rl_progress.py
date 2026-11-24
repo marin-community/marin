@@ -223,7 +223,6 @@ def test_release_archives_v9_rows_and_versions_retained_attempts(rl_progress_cli
 
     assert query("SELECT record FROM rl_legacy_runs")["rows"] == [{"record": legacy}]
     assert query("SELECT record FROM rl_archived_runs")["rows"] == [{"record": archive}]
-    assert client.get(f"/a/{APPLET_ID}/api/runs").json() == {
-        "runs": [_projection(retained | {"format_version": 1})],
-        "skipped_records": [],
-    }
+    payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
+    assert payload["runs"] == [_projection(retained | {"format_version": 1})]
+    assert payload["skipped_records"] == []

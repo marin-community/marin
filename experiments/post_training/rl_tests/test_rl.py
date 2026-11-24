@@ -1275,7 +1275,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     client.submit.side_effect = native_prepared
     client.job.return_value.state_only.side_effect = state
     arguments = ["--preset", preset.name, "--version", preset.revision, "--run"]
-    result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments), entry_module=__name__), arguments)
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments), entry_module=f"experiments.post_training.{model}_rl"), arguments)
     assert result.exit_code == 0, (result.output, result.exception)
     grafana_link = next(
         line.strip().removeprefix("run: ") for line in reversed(result.output.splitlines()) if "grafana.oa.dev" in line
