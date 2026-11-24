@@ -20,11 +20,11 @@ def causal_short_conv(
         cu_seqlens: Cumulative global padded lengths of the packed documents, ``[documents + 1]``,
             starting at zero and covering ``x.shape[0] * cp_size`` positions. Document lengths are
             unchecked: each must be positive and divisible by twice the CP size (by one without CP).
-            None means the whole local sequence is one document.
+            None means one global document per batch column, partitioned across CP ranks.
         cp_group: Context group. Each document uses the two-chunk zigzag layout.
 
-    Every chunk gets the ``tap - 1`` tokens that precede it in its document, zeros before the
-    document's start, from one halo exchange for the whole call.
+    Each chunk uses the preceding ``tap - 1`` tokens in its document, with zeros before the
+    document's start. CP ranks exchange halos once per call when the kernel has multiple taps.
     """
     cp_size = 1 if cp_group is None else dist.get_world_size(cp_group)
     cp_rank = 0 if cp_group is None else dist.get_rank(cp_group)
