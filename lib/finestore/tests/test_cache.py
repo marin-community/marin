@@ -55,13 +55,13 @@ _CACHE_PROCESS = textwrap.dedent(
     commit_started = threading.Event()
     release_commit = threading.Event()
 
-    def commit(store, rows):
+    def commit(store, rows, **options):
         commit_started.set()
         if mode == "stall":
             threading.Event().wait()
         else:
             release_commit.wait()
-        return real_commit(store, rows)
+        return real_commit(store, rows, **options)
 
     DataStore._commit_transaction = commit
     PersistentKvCache.at(root).store("kernel", b"object-code")

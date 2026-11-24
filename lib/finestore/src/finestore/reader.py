@@ -32,6 +32,7 @@ from finestore.commit import ArchiveSnapshot, read_snapshot
 from finestore.layout import (
     BlobColumns,
     BlobTables,
+    CommitInfo,
     CommitToken,
     FineStoreLayout,
     KeyRange,
@@ -918,6 +919,13 @@ class ReadView(_ReadOperations):
     def token(self) -> CommitToken | None:
         """The HEAD version that selected this view, or ``None`` for an empty archive."""
         return self._snapshot.token
+
+    @property
+    def commit_info(self) -> CommitInfo | None:
+        """Who published this view's commit and why, or ``None`` when that commit recorded neither."""
+        manifest = self._snapshot.manifest
+        info = manifest.commit_info
+        return info if info is not None and info.sequence == manifest.sequence else None
 
     def primary_key(self, table: str) -> tuple[str, ...]:
         return self._meta(table).primary_key
