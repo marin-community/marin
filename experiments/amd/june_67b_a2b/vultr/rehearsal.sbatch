@@ -7,7 +7,7 @@
 # Submit from the checkout root:
 #   sbatch -A openathena-ihodes -N2 -t 2:30:00 -J snowball-e2e -o logs/e2e/%x-%j.out \
 #     experiments/amd/june_67b_a2b/vultr/rehearsal.sbatch
-# PHASES (default "K D C R") picks phases; TAG names the runs (default: the job id).
+# PHASES (default "K D C R") picks phases; TAG names the runs (default: the job id); C_RUN renames the cooldown run.
 set -uo pipefail
 cd "$SLURM_SUBMIT_DIR" || exit 1
 ROOT=$PWD
@@ -86,7 +86,7 @@ kill_after_checkpoint() {
 
 K=e2e-$TAG-K
 D=e2e-$TAG-D
-C=e2e-$TAG-C
+C=${C_RUN:-e2e-$TAG-C}
 R=e2e-$TAG-R
 status=0
 for phase in $PHASES; do

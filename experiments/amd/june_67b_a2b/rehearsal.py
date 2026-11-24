@@ -30,6 +30,7 @@ import math
 import os
 from datetime import timedelta
 
+import jax
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -376,6 +377,14 @@ def main() -> None:
     config = PHASES[args.phase](args)
     logger.info("phase %s run %s optimizer %s", args.phase, args.run_id, config.optimizer)
     _run_grug_local(config)
+    for device in jax.local_devices():
+        stats = device.memory_stats() or {}
+        logger.info(
+            "device %s peak memory %.1f GiB of %.1f GiB",
+            device.id,
+            stats.get("peak_bytes_in_use", 0) / 2**30,
+            stats.get("bytes_limit", 0) / 2**30,
+        )
 
 
 if __name__ == "__main__":
