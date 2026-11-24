@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Source: Forge marin-forge-passes, lib/forge/src/forge/harness/tools/solve_review.py (behaviour and tool text).
-
 """The solve-review's evidence: one index over recorded solver trials, their grades and the task's files.
 
 Each tool is an ordered, bounded view of the index that emits no effect, so a replayed review makes no call, and no
