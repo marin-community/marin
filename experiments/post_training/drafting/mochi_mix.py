@@ -1,17 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Freeze the bounded chat mixes for Mochi offline distillation."""
+"""Sample and interleave the chat mixes for Mochi offline distillation."""
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from itertools import islice
+from heapq import merge
+from itertools import batched
+from operator import itemgetter
+from random import Random
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-_VERSION = "2026.11.22"
+_VERSION = "2026.11.24"
+_SEED = 20261124
+_HOLDOUT_MODULUS = 20
+_OUTPUT_BATCH_ROWS = 256
 _NEMOTRON = "gs://marin-us-central2/normalized-chat/nemotron_sft_v3"
 
 
@@ -49,28 +56,58 @@ _SOURCES = (
 )
 
 
-def _write_mix(*, output: str, sources: tuple[tuple[str, str, int], ...], max_shards: int = 4) -> None:
+def _sample_source(source: str, rows_per_shard: int, max_shards: int, rng: Random) -> list[dict]:
+    shards = sorted((StoragePath(source) / "outputs/main" / "*.parquet").glob(), key=str)
+    examples = []
+    for shard in rng.sample(shards, min(max_shards, len(shards))):
+        with shard.open("rb") as stream:
+            parquet = pq.ParquetFile(stream)
+            groups = list(range(parquet.num_row_groups))
+            rng.shuffle(groups)
+            remaining = rows_per_shard
+            for group in groups:
+                table = parquet.read_row_group(group)
+                count = min(remaining, table.num_rows)
+                indices = rng.sample(range(table.num_rows), count)
+                examples.extend(table.take(indices).to_pylist())
+                remaining -= count
+                if not remaining:
+                    break
+    rng.shuffle(examples)
+    return examples
+
+
+def _distributed_rows(rows: list[dict]) -> Iterator[tuple[float, dict]]:
+    for index, row in enumerate(rows):
+        yield (index + 0.5) / len(rows), row
+
+
+def _write_mix(*, output: str, sources: tuple[tuple[str, str, int], ...], seed: int, max_shards: int = 4) -> None:
     from dupekit import hash_xxh3_128  # noqa: PLC0415 - Datakit extra
     from marin.datakit.chat_normalize import CHAT_SCHEMA  # noqa: PLC0415 - Datakit extra
-    from marin.datakit.download.rollout_transforms import load_parquet_batched  # noqa: PLC0415 - Datakit extra
 
     root = StoragePath(output)
+    components: dict[str, list[list[dict]]] = {"train": [], "validation": []}
     for name, source, rows in sources:
-        shards = sorted((StoragePath(source) / "outputs/main" / "*.parquet").glob(), key=str)
-        splits: dict[str, list[dict]] = {"train": [], "validation": []}
-        for shard in shards[:max_shards]:
-            for row in islice(load_parquet_batched(str(shard)), rows):
-                user = next(message for message in row["messages"] if message["role"] == "user")
-                prompt = "\n".join(part["text"] for part in user["content"])
-                split = "validation" if hash_xxh3_128(prompt.encode()) % 20 == 0 else "train"
-                splits[split].append(row)
+        splits: dict[str, list[dict]] = {split: [] for split in components}
+        for row in _sample_source(source, rows, max_shards, Random(f"{seed}:{name}")):
+            user = next(message for message in row["messages"] if message["role"] == "user")
+            prompt = "\n".join(part["text"] for part in user["content"])
+            split = "validation" if hash_xxh3_128(prompt.encode()) % _HOLDOUT_MODULUS == 0 else "train"
+            splits[split].append(row)
         for split, examples in splits.items():
             if not examples:
                 raise ValueError(f"No {split} rows from {source}")
-            directory = root / split
-            directory.mkdirs()
-            with (directory / f"{name}.parquet").open("wb") as stream:
-                pq.write_table(pa.Table.from_pylist(examples, schema=CHAT_SCHEMA), stream)
+            components[split].append(examples)
+
+    for split, source_rows in components.items():
+        directory = root / split
+        directory.mkdirs()
+        # Place each source's rows evenly across the split, including when a shard is too short to fill its quota.
+        mixed = merge(*map(_distributed_rows, source_rows), key=itemgetter(0))
+        with (directory / "mix.parquet").open("wb") as stream, pq.ParquetWriter(stream, CHAT_SCHEMA) as writer:
+            for batch in batched((row for _, row in mixed), _OUTPUT_BATCH_ROWS):
+                writer.write_table(pa.Table.from_pylist(batch, schema=CHAT_SCHEMA))
 
 
 def _source_inputs(rows_per_shard: tuple[int, ...]) -> tuple[tuple[str, ArtifactStep, int], ...]:
@@ -93,6 +130,7 @@ def smoke_mix() -> ArtifactStep:
         version=_VERSION,
         output=OUT,
         sources=_source_inputs(tuple(source.smoke_rows_per_shard for source in _SOURCES)),
+        seed=_SEED,
     )
 
 
@@ -101,8 +139,9 @@ def scaled_mix() -> ArtifactStep:
     return apply(
         "dspark/mixes/mochi-agentic-50m",
         _write_mix,
-        version="2026.11.23",
+        version=_VERSION,
         output=OUT,
         sources=_source_inputs(tuple(source.scaled_rows_per_shard for source in _SOURCES)),
+        seed=_SEED,
         max_shards=13,
     )

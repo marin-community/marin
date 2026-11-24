@@ -80,8 +80,10 @@ tokenizer pinned by the Mochi SFT recipe. The default three-step config uses a
 small sample of Nemotron tool calls, Nemotron reasoning-off instruction turns,
 and AgentTrove conversations. The first user prompt assigns each conversation
 to one split. Tool definitions and observations reach the teacher as context,
-and the template supervises assistant replies and tool calls. The selected
-archive shards and split are versioned by the artifact runner.
+and the template supervises assistant replies and tool calls. The mix samples
+shards, row groups, and rows with a fixed seed. Each split interleaves sources
+in proportion to their sampled conversation counts, using up to 256 tool-call,
+256 instruction, and 128 AgentTrove conversations per selected shard.
 [Mochi export record](https://github.com/marin-community/marin/issues/8089#issuecomment-6841382920)
 
 ```bash
@@ -129,9 +131,11 @@ and training budget as the default and publishes a separate artifact.
 
 ## Scale the Mochi mix to about 50M input tokens
 
-`mochi-agentic-50m` samples more rows from the same three Datakit archives
-with the same prompt-group split. It trains the 521M draft for one packed
-epoch capped at 15,000 steps. Prepare on a CPU in `us-central2`, where the
+`mochi-agentic-50m` samples up to 2,560 tool-call, 1,536 instruction, and 384
+AgentTrove conversations per selected shard. These quotas are in rows, so the
+token share also depends on conversation length. The mix uses the same
+prompt-group holdout and interleaves both splits. It trains the 521M draft
+for one packed epoch capped at 15,000 steps. Prepare on a CPU in `us-central2`, where the
 original Nemotron shards live. The CPU job writes the sampled mix and
 prepared Arrow data to the training region.
 
