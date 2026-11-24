@@ -14,7 +14,9 @@ error is below 1% of the target's magnitude, or zero. The source uses ``0.01 * t
 satisfies for a negative target. Its LLM extraction fallback, number-word parsing and refusal retry are
 omitted, so a response without an answer tag scores zero. ``convert_to_number``'s pint parsing is
 replaced by arithmetic for the forms ``NUMBER_PATTERN`` matches: ``N^E``, ``N x B^E`` and ``eE``. The
-source's pattern matches the literal text ``\\u00d7``; this one matches the U+00D7 multiplication sign.
+source's pattern matches the literal text ``\\u00d7``; this one matches the U+00D7 multiplication sign,
+reads a U+2212 or en-dash minus sign directly before a digit as ``-``, and accepts space-separated letters, which
+the prompt allows and which the source's regex leaves to its LLM extractor.
 """
 
 import math
@@ -24,7 +26,7 @@ from verifyit.adapters.completion import final_text
 from verifyit.grade import Reward, scored
 
 MULTIPLE_CHOICE_ANSWER = re.compile(
-    r"(?:\[ANSWER\]|\[ANS\]|<ANS>|<ANSWER>|<ans>)\s*([A-Z](?:,\s*[A-Z])*)\s*(?:\..*?|,.*?)?"
+    r"(?:\[ANSWER\]|\[ANS\]|<ANS>|<ANSWER>|<ans>)\s*([A-Z](?:(?:\s*,\s*|\s+)[A-Z](?![A-Za-z]))*)\s*(?:\..*?|,.*?)?"
     r"(?:\[/?ANSWER\]|\[/ANS\]|</ANS>|</ANSWER>|</ans>)",
     re.DOTALL,
 )
@@ -35,6 +37,7 @@ NUMBER_PATTERN = re.compile(
 )
 POWER_FORM = re.compile(r"([+-]?)([0-9]*\.?[0-9]+)\s?(?:\^([-+]?[0-9]+))?(?:\*\s?([0-9]+)\^([-+]?[0-9]+))?")
 BARE_EXPONENT = re.compile(r"e[0-9]+")
+UNICODE_MINUS = re.compile(r"[\u2212\u2013](?=[0-9.])")
 RELATIVE_TOLERANCE = 0.01
 
 
@@ -73,7 +76,8 @@ def numeric_answer(text: str) -> tuple[str | None, float | None]:
     tag = NUMERIC_ANSWER.search(text)
     if tag is None:
         return None, None
-    number = next((match.group(0) for match in NUMBER_PATTERN.finditer(tag.group(0)) if match.group(0)), None)
+    answer = UNICODE_MINUS.sub("-", tag.group(0))
+    number = next((match.group(0) for match in NUMBER_PATTERN.finditer(answer) if match.group(0)), None)
     value = None if number is None else number_value(number)
     return tag.group(0), value if value is not None and math.isfinite(value) else None
 
