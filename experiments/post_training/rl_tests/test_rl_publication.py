@@ -374,12 +374,17 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             AttemptSummary.model_validate_json(json.dumps(returned_row), strict=True), "http://localhost"
         )
     monkeypatch.setattr("marina.client.marina_request", request)
+    expected_metrics = {
+        "eval_lite/family_mean": "objective",
+        "eval_lite/family_mean/gain_per_gpu_hour": "objective",
+        "policy/entropy": "guard",
+        relative_key: "requirement",
+        "eval_lite/family/small/mean": "slice",
+        "eval_lite/family/large/mean": "slice",
+    }
     expected = report.model_dump(mode="json", include={"verdict", "effect", "reason", "invariants"}) | {
         "comparisons": [
-            row.model_dump(mode="json")
-            for row in report.comparisons
-            if row.role in ("objective", "guard", "requirement")
-            or (row.role == "slice" and "/family/" in row.metric and row.metric.endswith("/mean"))
+            row.model_dump(mode="json") for row in report.comparisons if expected_metrics.get(row.metric) == row.role
         ],
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
@@ -387,14 +392,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         "control_revision": pin.revision,
     }
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
-    assert {(item["metric"], item["role"]) for item in rows["native-0"]["gate_result"]["comparisons"]} == {
-        ("eval_lite/family_mean", "objective"),
-        ("eval_lite/family_mean/gain_per_gpu_hour", "objective"),
-        ("policy/entropy", "guard"),
-        (relative_key, "requirement"),
-        ("eval_lite/family/small/mean", "slice"),
-        ("eval_lite/family/large/mean", "slice"),
-    }
+    assert {item["metric"]: item["role"] for item in rows["native-0"]["gate_result"]["comparisons"]} == expected_metrics
 
     run_ids = ("eval-initial-policy", "eval-terminal-policy")
     for index in range(2):

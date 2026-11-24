@@ -643,6 +643,7 @@ def _submit_from_launcher(
         "coordinator_job_id": str(job),
         "iris_url": job.dashboard_url(_IRIS_DASHBOARD_URL),
         "submitted_at": submitted_at,
+        "base_preset_revision": index.base_preset_revision,
         "runs": submitted,
     }
     _print_status(result)
