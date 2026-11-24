@@ -70,7 +70,7 @@ from marin.evaluation.runner import (
     run_evaluation_steps,
 )
 from marin.evaluation.serving_config import resolved_serve_config
-from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, DAYTONA_TARGET, JUDGE_API_KEY
+from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, JUDGE_API_KEY
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.inference.iris import RemoteInferenceSession
@@ -172,7 +172,7 @@ class LaunchSpec:
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
-    task_evidence: TaskEvidence = TaskEvidence.EMBEDDED
+    task_evidence: TaskEvidence | None = None
     retry_unscored_harbor_trials: bool = False
     version: str | None = None
     description: str | None = None
@@ -277,7 +277,7 @@ def _resolve_definitions(
     limit: int | None,
     seed: int | None,
     default_seed: int | None,
-    task_evidence: TaskEvidence,
+    task_evidence: TaskEvidence | None,
     retry_unscored_harbor_trials: bool,
     judge_model: ModelConfig | None,
     task_machine_backend: TaskMachineBackend | None,
@@ -310,9 +310,6 @@ def _resolve_definitions(
                 (urlsplit(definition.run.judge_endpoint).hostname,) if definition.run.judge_endpoint is not None else ()
             )
             if settings.task_machine is not None and settings.task_machine.backend is TaskMachineBackend.DAYTONA:
-                # The worker reads the target from the forwarded launch environment; fail before serving.
-                if not os.environ.get(DAYTONA_TARGET):
-                    raise ValueError(f"{name} runs Daytona task machines, which require {DAYTONA_TARGET}")
                 secret_env[DAYTONA_API_KEY] = DAYTONA_SECRET_ENV[DAYTONA_API_KEY]
                 egress_allow = (*egress_allow, *DAYTONA_EGRESS)
             resolved.append(
@@ -407,7 +404,7 @@ def build_evaluation_batch(
     model = spec.model
     requested_definitions = _evaluation_definitions(spec)
     has_curated_definitions = any(isinstance(definition, EvaluationSelection) for _, definition in requested_definitions)
-    if spec.task_evidence is not TaskEvidence.EMBEDDED and not has_curated_definitions:
+    if spec.task_evidence is not None and not has_curated_definitions:
         raise ValueError("--task-evidence applies only to curated evaluations")
     if spec.version in RUNTIME_COMMITS and has_curated_definitions:
         raise ValueError(

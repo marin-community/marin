@@ -181,6 +181,45 @@ def test_launcher_refuses_invalid_driver_settings(
     assert reason in result["reason"]
 
 
+@pytest.mark.parametrize(
+    ("num_workers", "static_preferences", "exit_code"),
+    [(5, False, 4), (4, False, 0), (5, True, 0)],
+    ids=["overbooked", "fits", "static-preferences"],
+)
+def test_plan_checks_pinned_workers_against_driver_cpu_request(
+    selection, preset_table, monkeypatch, num_workers, static_preferences, exit_code
+):
+    client, _ = fake_iris(monkeypatch, "rollout-worker-capacity")
+    preset = snowball_model.SNOWBALL.by_name["train-long"]
+    settings = (
+        f"trajectory_runner.rollout_workers.num_workers={num_workers}",
+        "trajectory_runner.rollout_workers.cpus_per_worker=8",
+    )
+    if static_preferences:
+        settings += (
+            "environment.env_class=preference_pair",
+            "trainer.evaluation_runner=training",
+            "generator.weight_sync_transport=broadcast",
+            "trainer.rollout_buffer.max_staleness_steps=0",
+        )
+    layout = replace(preset.recipe.layout, host_cpu=32)
+    if static_preferences:
+        layout = replace(
+            layout,
+            workload=replace(
+                layout.workload, plan=replace(layout.workload.plan, colocate_all=True, num_inference_engines=4)
+            ),
+        )
+    config = preset.recipe.config.with_settings(settings)
+    table = preset_table(replace(preset, recipe=replace(preset.recipe, layout=layout, config=config)))
+
+    arguments = ["--preset", preset.name, "--version", preset.revision, "--plan"]
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
+
+    assert result.exit_code == exit_code, (result.output, result.exception)
+    client.submit.assert_not_called()
+
+
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
@@ -573,6 +612,9 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.19.1": "371233d9",
             "2026.11.20.1": "8f532da2",
             "2026.11.20.3": "dc52613e",
+            "2026.11.22.1": "31d3c06f",
+            "2026.11.22.2": "dce24258",
+            "2026.11.22.3": "74aaaaf9",
         },
         "data-short": {
             "2026.11.13.1": "7d9a590f",
@@ -580,6 +622,8 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.19.1": "cb07d91c",
             "2026.11.20.1": "a379319d",
             "2026.11.20.3": "d4749482",
+            "2026.11.22.2": "43b4c17c",
+            "2026.11.22.3": "fac45152",
         },
         "speed-medium": {
             "2026.11.12.1": "e75349ff",
@@ -587,6 +631,9 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.19.1": "f8281b9d",
             "2026.11.20.1": "8b7e47c8",
             "2026.11.20.3": "dbc38bdf",
+            "2026.11.22.1": "eded19d9",
+            "2026.11.22.2": "3d5693c0",
+            "2026.11.22.3": "f4c0a7fb",
         },
         "learning-medium": {
             "2026.11.12.1": "ba638a12",
@@ -596,6 +643,8 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.2": "b3044b9b",
             "2026.11.20.3": "ce8666ce",
             "2026.11.20.4": "36e0cfd0",
+            "2026.11.22.2": "cf281241",
+            "2026.11.22.3": "84355781",
         },
         "data-medium": {
             "2026.11.12.1": "ba638a12",
@@ -605,6 +654,8 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.2": "b3044b9b",
             "2026.11.20.3": "ce8666ce",
             "2026.11.20.4": "36e0cfd0",
+            "2026.11.22.2": "cf281241",
+            "2026.11.22.3": "84355781",
         },
         "speed-long": {
             "2026.11.11.1": "cd0a5f4e",
@@ -612,6 +663,8 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.19.1": "9edc7b70",
             "2026.11.20.1": "3d1fe22d",
             "2026.11.20.3": "87feb546",
+            "2026.11.22.2": "0d2cff7d",
+            "2026.11.22.3": "0e0786a5",
         },
         "train-long": {
             "2026.11.11.1": "4945b701",
@@ -621,24 +674,41 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.2": "412d0576",
             "2026.11.20.3": "40c0256e",
             "2026.11.20.4": "7826cc5a",
+            "2026.11.22.2": "8f00501f",
+            "2026.11.22.3": "9d29b026",
         },
         "train-long-harbor": {
             "2026.11.20.5": "e1f1635a",
             "2026.11.20.6": "76baa3fb",
             "2026.11.20.7": "9ceb90cb",
+            "2026.11.22.2": "965dcf45",
+            "2026.11.22.3": "68fab3ae",
         },
         "train-medium-agentic": {
             "2026.11.19.1": "756f58ef",
             "2026.11.20.1": "b557a4f0",
             "2026.11.20.4": "f76d6b51",
             "2026.11.20.5": "aa36f9de",
+            "2026.11.22.2": "09cc792c",
+            "2026.11.22.3": "18aa725e",
         },
-        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f"},
-        "train-medium-tools": {"2026.11.20.1": "45b0a101"},
+        "train-long-agentic": {
+            "2026.11.20.4": "7123c960",
+            "2026.11.20.5": "0043357f",
+            "2026.11.22.2": "f793a47f",
+            "2026.11.22.3": "2b5bba63",
+        },
+        "train-medium-tools": {
+            "2026.11.20.1": "45b0a101",
+            "2026.11.22.2": "5b4d7a2e",
+            "2026.11.22.3": "7085ba81",
+        },
         "eval-short": {
             "2026.11.19.1": "8144570a",
             "2026.11.20.1": "fad362ca",
             "2026.11.20.3": "85b0359d",
+            "2026.11.22.2": "655b38d2",
+            "2026.11.22.3": "93f043cb",
         },
     }
     configs = assert_revisioned_native_configs(
@@ -710,6 +780,34 @@ def _assert_mochi_preset_documents(revisions, configs):
     served = gate._config_values(documents["train-long-3rack"]["skyrl"])
     for path, value in gate._config_values(yaml.safe_load(fragment)).items():
         assert served[path] == value, path
+
+
+def test_speed_short_opt_out_preserves_other_generator_settings_and_inputs(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["speed-short"]
+    [default_run] = snowball.build_experiment(preset, table=table).runs
+    [plain_run] = snowball.build_experiment(preset, table=table, settings=("generator.speculative_decoding=null",)).runs
+    default = yaml.safe_load(materialized_config(default_run, str(tmp_path)).launch_config_yaml)
+    plain = yaml.safe_load(materialized_config(plain_run, str(tmp_path)).launch_config_yaml)
+
+    assert default_run.name != plain_run.name
+    assert default["skyrl"]["generator"].pop("speculative_decoding")["method"] == "dspark"
+    assert plain["skyrl"]["generator"].pop("speculative_decoding", None) is None
+    assert default["skyrl"]["generator"] == plain["skyrl"]["generator"]
+    assert default["inputs"] == plain["inputs"]
+
+
+def test_snowball_omits_default_draft_for_an_alternate_initializer(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["eval-short"]
+    initializer = ArtifactHfModel(
+        ArtifactStep.adopt("tests/alternate-initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint),
+        relative_path="",
+    )
+    [alternate] = snowball.build_experiment(preset, table=table, init=initializer).runs
+    config = yaml.safe_load(materialized_config(alternate, str(tmp_path)).launch_config_yaml)
+
+    assert config["skyrl"]["generator"].get("speculative_decoding") is None
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):

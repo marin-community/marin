@@ -46,6 +46,7 @@ DEPENDENCIES = {
     "nupa": ("nupa.py", "nupa_preparation.py"),
     "jee": ("jee.py", "amc.py"),
     "harness_generation": ("harness_generation.py", "minerva.py", "amc.py"),
+    "arc_agi": ("arc_agi.py",),
     "ifeval": ("instructions.py", "instruction_spec.py"),
     "ifbench": ("instructions.py", "instruction_spec.py"),
 }

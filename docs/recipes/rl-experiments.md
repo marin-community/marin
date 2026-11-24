@@ -14,10 +14,10 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it | Ran on GPU |
 |---|---|---|---|---| --- |
-| `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers, 14–17 min and about 2 H100-hours | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. | CPU plan only |
+| `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers. 11m42s and 1.56 H100-hours in the four-proposal comparison. | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
 | `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. | CPU plan only |
 | `eval-short` | Published model scores | 8 H100s. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. | Ran as written |
-| `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. Wall time and cost are unmeasured. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | CPU plan only |
+| `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. 20m12s and 13.47 H100-hours in the four-proposal comparison. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
 | `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | CPU plan only |
 | `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Shares the `learning-medium` gate and controls. | Train on a `--tasks` selection after it passes the short screen. | CPU plan only |
 | `speed-long` | Sustained asynchronous update time and policy agreement | 40 H100s, 20 updates, 45–75 min and 30–50 H100-hours | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. | CPU plan only |
@@ -151,6 +151,9 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-short --ve
 ```
 
 Plans and host-side submissions run the native driver checks on CPU before Iris submission.
+The rollout worker count times its CPUs per worker must fit the driver task's Iris CPU request.
+Static preference training with `trainer.evaluation_runner=training` skips this check because it starts
+no inference rollout pool.
 A plan without `--require` uses the declared control pin. With `--require`, planning also validates the pin
 and checks that control r0 recorded the requested metric. Gated execution and comparison require the pin's revision to match
 the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
@@ -244,6 +247,17 @@ are refused locally.
 Placement, data bindings, retention, evaluation and measurement settings belong to the preset.
 Learning and train-long can change task sampling, optimizer, schedule and batch shape.
 Data presets require `--tasks` and refuse `--set`.
+
+Snowball generation and disaggregated training presets using the pinned 09.21 Datakit initializer
+load the frozen Dr. Doom DSpark draft.
+DSpark uses probabilistic drafting and standard verification. Use
+`--set generator.speculative_decoding=null` for plain decoding on presets that accept settings.
+Snowball uses four proposals. The `speed-short` burst preset uses a 0.80 vLLM GPU memory
+fraction. The other presets use 0.75.
+To compare another draft against the same policy, set `generator.speculative_decoding.model` to a
+JSON object with `source_uri` and `source_identity`. For `hf://` sources, use the full Hub commit SHA.
+With an alternate initializer, set the complete `generator.speculative_decoding` block to use its
+compatible draft. Online draft training remains EAGLE3-only.
 
 Set `TASK_SELECTION` to a published `NAME@VERSION`. Custom selections must use the default development panel (`recipe.heldout`)
 and record the complete frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.
