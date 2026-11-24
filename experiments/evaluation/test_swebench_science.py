@@ -131,10 +131,10 @@ def test_native_collect_includes_committed_and_untracked_candidate_changes(tmp_p
     assert (repo / "new.bin").read_bytes() == b"\x00candidate\xff"
 
 
-def test_nested_huggingface_selection_stages_only_requested_tasks(tmp_path, monkeypatch):
+def test_nested_huggingface_repository_stages_packages_under_root(tmp_path, monkeypatch):
     repository = tmp_path / "repository"
-    for name in ("task_001", "task_002", "task_003"):
-        directory = repository / "tasks" / name
+    for name in ("tasks/task_001", "tasks/task_002", "other/task_003"):
+        directory = repository / name
         directory.mkdir(parents=True)
         (directory / "task.toml").write_text(name)
     monkeypatch.setattr(packages_module, "snapshot_download", lambda *_args, **_kwargs: str(repository))
@@ -144,14 +144,5 @@ def test_nested_huggingface_selection_stages_only_requested_tasks(tmp_path, monk
         swebench_science.REVISION,
         StoragePath(str(output)),
         root="tasks",
-        selected=frozenset({"task_001", "task_002"}),
     )
     assert sorted(path.name for path in (output / "tasks").iterdir()) == ["task_001.tar.gz", "task_002.tar.gz"]
-    with pytest.raises(ValueError, match="task_004"):
-        stage_repository_packages(
-            "org/fixture",
-            swebench_science.REVISION,
-            StoragePath(str(tmp_path / "missing")),
-            root="tasks",
-            selected=frozenset({"task_004"}),
-        )
