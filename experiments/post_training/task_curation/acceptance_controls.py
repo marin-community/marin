@@ -118,9 +118,20 @@ def _docker_build_source(task: TaskSpec, workdir: Path) -> DockerfileSource | No
 
 async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
     """The negative control: the recorded bug state, graded by the converted grader."""
+    import os  # noqa: PLC0415
+
+    from shellbox.backends.daytona.connection import (  # noqa: PLC0415
+        DEFAULT_DAYTONA_API_URL,
+        DaytonaConnection,
+    )
     from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
 
-    factory = DaytonaMachineFactory()
+    connection = DaytonaConnection(
+        api_key=os.environ["DAYTONA_API_KEY"],
+        api_url=os.environ.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
+        target=os.environ.get("DAYTONA_TARGET", "us"),
+    )
+    factory = DaytonaMachineFactory(client_factory=connection.client_factory())
     runtime = _runtime(task, allow_network=True)
     with TemporaryDirectory(prefix="acceptance-") as directory:
         workdir = Path(directory)
