@@ -124,6 +124,35 @@ Submission requires explicit user approval. After approval, run the same command
 with `--run` from an Iris CPU coordinator on 08a at PRODUCTION priority. Native
 Grug dispatches the 128 GB200 allocation; no separate GPU launcher or smoke is used.
 
+The fresh-optimizer reference is
+`/karan/mochi-sft-bankadam-fresh-r10-128-8h-u1000-step393491-20261123`.
+Its [resolved record](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-08a%2Fmarin%2Fusers%2Fbenfeuer%2Fmochi-sft-preparation%2Fbankadam128-20261124%2Freference-dafc25df.json)
+(SHA256 `dafc25df2728ba470e2d82496c552e701d7d449cb7bdded8b2db3b73dfc6ab9e`)
+preserves batch 32 without accumulation, replica size 1, EP16/CP4 and the two-rack data axis. A `MochiWeightsInitializer` loads only
+base parameters and pending router biases, starts at update zero with fresh
+moments, then applies the recorded expert placement and chat-token reseeding.
+The reference batch, replica/data mesh, packing and optimizer stay fixed.
+`muonh_param_ndims: [2, 3]` routes stacked 4D expert banks to Adam; other matrix
+groups keep MuonH. The linear tail is `round(3400 / 34000 * updates)`;
+the five-update warmup and minimum LR ratio 0.1 are retained. The common 20-hour clock still applies.
+
+Measure packing capacity for that reference before binding the one-epoch ceiling.
+The regional CPU `sft_epoch_capacity` command accepts `--lookahead 0` for
+sequential packing; a positive value selects bounded lookahead. Both the packing
+cap and lookahead must match the round, and the capacity receipt must cover all
+sealed components. For a hash-pinned `data.json` and permanent receipt root:
+
+```bash
+uv run python -m experiments.post_training.long_loop.sft_epoch_capacity \
+  --data "$DATA_URI" --sha256 "$DATA_SHA" --output-prefix "$RECEIPT_ROOT" \
+  --sequence-length 262144 --packing-cap 262144 --lookahead 0 --run
+```
+
+Run this CPU artifact in the data region. Bind its receipt and
+`sft.packing: {cap: 262144, lookahead: null}` in the round. The weights-only
+preflight verifies the existing regional initializer metadata without requiring
+or reading its optimizer payload.
+
 ## Exp6
 
 [`rounds/exp6.yaml`](rounds/exp6.yaml) binds sealed V9 and the published Exp5 RL

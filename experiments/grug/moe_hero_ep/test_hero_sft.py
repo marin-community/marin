@@ -20,7 +20,7 @@ import pytest
 from fray.types import ResourceConfig
 from jax.sharding import AxisType, Mesh, NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
-from levanter.checkpoint import CheckpointerConfig, load_checkpoint_metadata
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint_metadata, save_checkpoint
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
@@ -62,6 +62,7 @@ from experiments.grug.moe_hero_ep.train import (
     build_train_loader,
     grug_trainer_mesh_config,
     initial_state,
+    initialize_hero_sft_weights,
     permute_experts,
     reseed_special_token_columns,
     scale_special_token_updates,
@@ -716,3 +717,29 @@ def test_restore_places_only_the_source_and_trusts_only_a_matching_record(tmp_pa
             _place_restored_experts(state, placement, loaded_checkpoint=other_save)
         with pytest.raises(ValueError, match="this run uses no expert placement"):
             _place_restored_experts(state, None, loaded_checkpoint=placed_save)
+
+
+def test_initialize_hero_sft_weights_keeps_fresh_optimizer(tmp_path):
+    config = _tiny_config()
+    mesh = _one_device_mesh()
+    checkpoint = str(tmp_path / "step-393491")
+    placement = dataclasses.replace(_placement([[2, 0, 3, 1], [1, 3, 0, 2]]), source_checkpoint=checkpoint)
+    pretrained = _trained_state(config, _optimizer(), mesh)
+    bank_config = GrugMoeMuonHConfig(muonh_param_ndims=(2, 3), use_syrk=False)
+    with jax.set_mesh(mesh):
+        save_checkpoint(pretrained, step=393491, checkpoint_path=checkpoint, is_temporary=False)
+        fresh = initial_state(config, optimizer=bank_config.build(20), mp=_FP32, key=jax.random.key(8), ema_beta=None)
+        initialized = initialize_hero_sft_weights(fresh, checkpoint, mesh=mesh, placement=placement)
+
+    order = np.asarray(placement.order)
+    layers = np.arange(config.num_layers)[:, None]
+
+    def bank(params):
+        return params.stacked_blocks.stacked.mlp.expert_mlp.w_gate
+
+    np.testing.assert_array_equal(bank(initialized.params), np.asarray(bank(pretrained.params))[layers, order])
+    np.testing.assert_array_equal(initialized.pending_qb_betas, np.asarray(pretrained.pending_qb_betas)[layers, order])
+    np.testing.assert_array_equal(initialized.params.output_proj, pretrained.params.output_proj)
+    assert int(initialized.step) == 0
+    _assert_trees_close(initialized.opt_state, fresh.opt_state)
+    assert bank(bank_config.create_mask(initialized.params)) == "adam"

@@ -30,7 +30,9 @@ from experiments.post_training.long_loop.run_spec import FilePin, read_pin
 from experiments.post_training.long_loop.sft_epoch import packing_code_sha256
 
 
-def measure_capacity(*, output: str, data_pin: FilePin, sequence_length: int, packing_cap: int, lookahead: int) -> None:
+def measure_capacity(
+    *, output: str, data_pin: FilePin, sequence_length: int, packing_cap: int, lookahead: int | None
+) -> None:
     """Read document offsets and native pack indices, without token bodies or training."""
     configure_coreweave_s3()
     if credentials := s3_credentials(StoreType.COREWEAVE):
@@ -111,7 +113,9 @@ def measure_capacity(*, output: str, data_pin: FilePin, sequence_length: int, pa
 @click.option("--output-prefix", required=True)
 @click.option("--sequence-length", type=int, default=262144)
 @click.option("--packing-cap", type=int, default=256)
-@click.option("--lookahead", type=int, default=128)
+@click.option(
+    "--lookahead", type=click.IntRange(min=0), default=128, help="Packing lookahead; 0 selects sequential packing."
+)
 @build_options
 def main(
     data: str, sha256: str, output_prefix: str, sequence_length: int, packing_cap: int, lookahead: int
@@ -135,7 +139,7 @@ def main(
         data_pin=FilePin(data, sha256),
         sequence_length=sequence_length,
         packing_cap=packing_cap,
-        lookahead=lookahead,
+        lookahead=lookahead or None,
     )
 
 

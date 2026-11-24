@@ -46,7 +46,7 @@ def source_loss_metadata(path: str, sha256: str) -> dict[str, SourceLossMetadata
 
 
 def prepared_supervision_data(
-    data: LmDataConfig, sources: dict[str, SourceLossMetadata], *, packing_cap: int, lookahead: int
+    data: LmDataConfig, sources: dict[str, SourceLossMetadata], *, packing_cap: int, lookahead: int | None
 ) -> LmDataConfig:
     """Bind every source's precomputed prediction weights and bounded packing policy."""
     if set(data.components) != set(sources):

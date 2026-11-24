@@ -40,6 +40,7 @@ from experiments.post_training.long_loop.mochi_sft import (
     MochiSftInitializer,
     MochiSftRound,
     MochiSftSchedule,
+    MochiWeightsInitializer,
     bind_mochi_sft_config,
 )
 from experiments.post_training.long_loop.round_runner import RoundSft, load_round
@@ -344,3 +345,75 @@ def test_native_hero_restore_starts_the_new_epoch_and_scales_its_lr_tail(epoch_i
     actual_exposure = step_exposure(recipe, recipe["sft_capacity"]["sources"], updates)
     assert actual_exposure["full_sft_coverage"]
     assert set(config.evaluation_data.components) == {"val"}
+
+
+def test_fresh_bankadam_round_preserves_batch_mesh_optimizer_and_weights_only_init(epoch_inputs):
+    recipe, _, pin = epoch_inputs
+    recipe["data"]["tokenizer"] = "gpt2"
+    baseline = GrugRunConfig(
+        model=GrugModelConfig(vocab_size=64, max_seq_len=16, num_layers=1, num_experts=192),
+        data=LmDataConfig(tokenizer="gpt2"),
+        optimizer=GrugMoeMuonHConfig(
+            learning_rate=1.4030739143362721e-5,
+            adam_lr=3.2378366391493846e-6,
+            muonh_param_ndims=(2, 3),
+            warmup=5,
+            decay=3400,
+            lr_schedule="linear",
+            min_lr_ratio=0.1,
+        ),
+        resources=ResourceConfig(device=GpuConfig("GB200", count=4), replicas=32),
+        trainer=GrugTrainerConfig(
+            trainer=TrainerConfig(train_batch_size=32, num_train_steps=34000, initialize_from="base"),
+            save_checkpoints=True,
+            offload_opt_state=True,
+            router_bias_mode=RouterBiasMode.FROZEN,
+            expert_axis_size=16,
+            context_axis_size=4,
+            replica_axis_size=1,
+            special_tokens=SpecialTokenInit((5,), (1,), 0, 5.656854249492381),
+            expert_placement=ExpertPlacement("base", 16, 12, (tuple(range(192)),), "fixture"),
+        ),
+        eval=None,
+        stop_after_steps=1000,
+    )
+    reference = {"config": draccus.encode(baseline)}
+    reference["config"]["trainer"]["trainer"]["mp"] = {
+        "param_dtype": {"__dtype__": "float32"},
+        "compute_dtype": {"__dtype__": "bfloat16"},
+        "output_dtype": {"__dtype__": "bfloat16"},
+    }
+    budget = TrainingBudgetConfig(SFT_TRAINING_DURATION, SFT_FINALIZATION_RESERVE, SFT_UPDATE_RESERVE)
+    spec = MochiSftRound(
+        1,
+        "mochi_sft",
+        "mochi/sft",
+        "2026.11.24.128",
+        "mochi-bankadam",
+        "cw-us-east-08a",
+        StorageConfig("s3://marin-us-east-08a/new", "s3://marin-us-east-08a/tmp"),
+        pin,
+        pin,
+        pin,
+        MochiWeightsInitializer("base", "0" * 64, 393491),
+        MochiSftControls(128, 32, None, MochiSftSchedule(2100, 5, 210), MixtureEpochs(), pin, budget, 72000),
+    )
+    actual = bind_mochi_sft_config(spec, reference, recipe["data"], updates=20000, output="s3://marin-us-east-08a/new")
+    assert actual.optimizer == replace(baseline.optimizer, decay=210)
+    assert actual.trainer.replica_axis_size == 1
+    assert actual.trainer.microbatch_size is None
+    assert actual.trainer.data_seed is None
+    assert actual.trainer.expert_placement == baseline.trainer.expert_placement
+    assert actual.model == baseline.model
+    assert actual.trainer.offload_opt_state
+    assert actual.trainer.trainer.train_batch_size == 32
+    assert actual.trainer.trainer.initialize_from == "base"
+    assert actual.trainer.trainer.load_checkpoint_path is None
+    assert actual.trainer.trainer.load_checkpoint is None
+    assert not actual.trainer.trainer.allow_nondivisible_batch_size
+    assert actual.trainer.trainer.num_train_steps == actual.stop_after_steps == 2100
+    assert actual.eval is None
+    assert actual.trainer.trainer.tracker == baseline.trainer.trainer.tracker
+    lr = actual.optimizer.lr_scheduler(2100)
+    assert float(lr(1890)) == pytest.approx(baseline.optimizer.learning_rate)
+    assert float(lr(2100)) == pytest.approx(baseline.optimizer.learning_rate * 0.1)

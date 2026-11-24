@@ -73,6 +73,7 @@ from rigging.timing import Duration
 
 from experiments.grug.checkpointing import (
     checkpoint_stores_master,
+    init_weights_only_from_checkpoint,
     restore_grug_state_and_source,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -415,6 +416,15 @@ class GrugTrainerConfig:
             raise ValueError("GC interval must be positive")
         if self.special_tokens is not None and self.master_param_mode != MasterParamMode.DEVICE:
             raise ValueError("special-token reseeding supports only MasterParamMode.DEVICE")
+        if self.trainer.initialize_from is not None:
+            if self.master_param_mode != MasterParamMode.DEVICE:
+                raise ValueError("weights-only initialization requires device FP32 parameters")
+            if (
+                self.trainer.load_checkpoint is not None
+                or self.trainer.load_checkpoint_path is not None
+                or self.trainer.allow_partial_checkpoint
+            ):
+                raise ValueError("weights-only initialization requires strict optional resume from the run's own paths")
         if self.microbatch_size is not None:
             if self.microbatch_size <= 0 or not isinstance(self.trainer.train_batch_size, int):
                 raise ValueError("Microbatch accumulation requires a positive size and constant logical batch")
@@ -1491,6 +1501,24 @@ def _place_restored_experts(
     return placed
 
 
+def initialize_hero_sft_weights(
+    state: GrugTrainState, checkpoint: str, *, mesh: Mesh, placement: ExpertPlacement | None
+) -> GrugTrainState:
+    """Load base weights and pending router bias while retaining fresh optimizer moments."""
+    state = init_weights_only_from_checkpoint(
+        state,
+        checkpoint,
+        mesh=mesh,
+        allow_partial=False,
+        additional_weight_fields=("pending_qb_betas",),
+    )
+    if placement is None:
+        return state
+    # Zero moments need no permutation, while model experts must match the reference placement.
+    placed = _place_restored_experts(dataclasses.replace(state, opt_state=()), placement, loaded_checkpoint=checkpoint)
+    return dataclasses.replace(placed, opt_state=state.opt_state)
+
+
 def _count_expert_leaves(tree, num_experts: int) -> int:
     return sum(
         _expert_axis(path, leaf, num_experts) is not None
@@ -1622,6 +1650,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = _init_state(model_key)
         if loaded_checkpoint is not None and not restored_nothing:
             state = _place_restored_experts(state, expert_placement, loaded_checkpoint=loaded_checkpoint)
+        elif loaded_checkpoint is None and trainer.initialize_from is not None:
+            state = dataclasses.replace(state, params=restore_template_from(state.params))
+            state = initialize_hero_sft_weights(state, trainer.initialize_from, mesh=mesh, placement=expert_placement)
         special_tokens = config.trainer.special_tokens
         # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
         if special_tokens is not None and int(state.step) == special_tokens.start_step:

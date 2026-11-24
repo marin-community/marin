@@ -174,11 +174,13 @@ def bind_sft_stopping(recipe: dict, stopping: SftStopping, capacity_pin: FilePin
     return plan.steps
 
 
-def step_exposure(recipe: dict, sources: dict, updates: int) -> dict:
+def step_exposure(recipe: dict, sources: dict, updates: int, *, data_key: jax.Array | None = None) -> dict:
     """Reconstruct the seed-specific integer source slots for an explicit step limit."""
     data = recipe["data"]
     schedule = BatchSchedule(recipe["batch_size"])
-    mix_key, _ = jax.random.split(jax.random.PRNGKey(recipe["data_seed"]))
+    if data_key is None:
+        data_key = jax.random.PRNGKey(recipe["data_seed"])
+    mix_key, _ = jax.random.split(data_key)
     weights = data["train_weights"]
     if isinstance(weights, list):
         weights = rescale_mixture_schedule_for_batch_schedule(weights, schedule)

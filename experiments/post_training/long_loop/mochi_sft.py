@@ -7,11 +7,12 @@ import copy
 import hashlib
 import json
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 
 import draccus
+import jax
 from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.training_budget import TrainingBudgetConfig
@@ -37,15 +38,22 @@ class MochiSftSchedule:
 
 
 @dataclass(frozen=True)
+class MochiSftPacking:
+    cap: int = 256
+    lookahead: int | None = 128
+
+
+@dataclass(frozen=True)
 class MochiSftControls:
     gpu_count: int
     batch_size: int
-    microbatch_size: int
+    microbatch_size: int | None
     schedule: MochiSftSchedule
     stopping: SftStopping
     epoch_capacity: FilePin
     training_budget: TrainingBudgetConfig
     task_timeout_seconds: int
+    packing: MochiSftPacking = field(default_factory=MochiSftPacking)
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,17 @@ class MochiSftInitializer:
     destination: str
     copy_manifest: str
     metadata_sha256: str
+
+
+@dataclass(frozen=True)
+class MochiWeightsInitializer:
+    source: str
+    metadata_sha256: str
+    step: int
+
+    @property
+    def destination(self) -> str:
+        return self.source
 
 
 @dataclass(frozen=True)
@@ -68,7 +87,7 @@ class MochiSftRound:
     hero_reference: FilePin
     data_release: FilePin
     data_seal: FilePin
-    initializer: MochiSftInitializer
+    initializer: MochiSftInitializer | MochiWeightsInitializer
     sft: MochiSftControls
 
 
@@ -99,7 +118,12 @@ def run_mochi_sft(run: NativeMochiSftRun) -> None:
     metadata = StoragePath(prefix_join(completed["checkpoint"], "metadata.json")).read_bytes()
     if json.loads(metadata)["step"] != completed["final_step"] or json.loads(metadata)["is_temporary"]:
         raise ValueError("Native SFT final checkpoint is not permanently committed")
-    exposure = step_exposure(run.receipt["exposure_recipe"], run.receipt["epoch"]["components"], updates)
+    data_key, _ = jax.random.split(jax.random.PRNGKey(run.config.trainer.trainer.seed))
+    if run.config.trainer.data_seed is not None:
+        data_key = jax.random.PRNGKey(run.config.trainer.data_seed)
+    exposure = step_exposure(
+        run.receipt["exposure_recipe"], run.receipt["epoch"]["components"], updates, data_key=data_key
+    )
     (root / "actual-exposure.json").write_text(json.dumps(exposure, indent=2))
     (root / "selected.json").write_text(
         json.dumps(
@@ -150,25 +174,34 @@ def bind_mochi_sft_config(
     if data["tokenizer"] != reference["config"]["data"]["tokenizer"]:
         raise ValueError("Sealed mixture and hero SFT use different tokenizers")
     controls = spec.sft
-    if controls.gpu_count != 128 or controls.batch_size != 176 or controls.microbatch_size != 32:
-        raise ValueError("This hero round requires 128 GB200 and a logical batch of 176 in 32-wide rounds")
+    baseline = reference["config"]
+    fresh = isinstance(spec.initializer, MochiWeightsInitializer)
+    if controls.gpu_count != 128:
+        raise ValueError("This Mochi round requires 128 GB200")
+    if fresh:
+        if controls.batch_size != baseline["trainer"]["trainer"][
+            "train_batch_size"
+        ] or controls.microbatch_size != baseline["trainer"].get("microbatch_size"):
+            raise ValueError("Fresh-optimizer SFT must preserve the reference batch and accumulation")
+    elif controls.batch_size != 176 or controls.microbatch_size != 32:
+        raise ValueError("Restored hero SFT requires a logical batch of 176 in 32-wide rounds")
     if controls.training_budget.duration != SFT_TRAINING_DURATION:
         raise ValueError("Mochi SFT must use the canonical 20-hour duration")
     if controls.task_timeout_seconds != int(SFT_TRAINING_DURATION.total_seconds()):
         raise ValueError("SFT dispatch timeout differs from its execution budget")
-    baseline = reference["config"]
     start = baseline["trainer"]["special_tokens"]["start_step"]
-    hero_updates = baseline["stop_after_steps"] - start
+    horizon = baseline["trainer"]["trainer"]["num_train_steps"] if fresh else baseline["stop_after_steps"]
+    hero_updates = horizon - start
     schedule = controls.schedule
     if not 0 < schedule.updates <= updates:
         raise ValueError("Mochi SFT step target must fit within the planned SFT epoch")
     hero_optimizer = baseline["optimizer"]
-    expected_warmup = round(hero_optimizer["warmup"] * schedule.updates / hero_updates)
+    expected_warmup = (
+        hero_optimizer["warmup"] if fresh else round(hero_optimizer["warmup"] * schedule.updates / hero_updates)
+    )
     expected_decay = round(hero_optimizer["decay"] * schedule.updates / hero_updates)
     if (schedule.warmup_steps, schedule.decay_steps) != (expected_warmup, expected_decay):
         raise ValueError("Mochi SFT warmup and decay must scale the hero's SFT-step fractions")
-    if expected_warmup != 0:
-        raise ValueError("The native restored hero schedule requires its zero-warmup reference")
     updates = schedule.updates
     raw["optimizer"].update(warmup=schedule.warmup_steps, decay=schedule.decay_steps)
     raw["stop_after_steps"] = start + updates
@@ -176,15 +209,17 @@ def bind_mochi_sft_config(
     raw["resources"]["target_cluster"] = None  # The canonical coordinator is already on 08a.
     raw["resources"]["excluded_nvlink_domains"] = ["dh1-r136-us-east-08a"]
     grug = raw["trainer"]
-    grug["replica_axis_size"] = controls.gpu_count // 64
+    if not fresh:
+        grug["replica_axis_size"] = controls.gpu_count // 64
     grug["microbatch_size"] = controls.microbatch_size
-    grug["data_seed"] = 0
+    if not fresh:
+        grug["data_seed"] = 0
     grug["expert_placement"]["source_checkpoint"] = spec.initializer.destination
     trainer = grug["trainer"]
     trainer.update(
         id=f"{spec.slug}-{spec.version}",
         train_batch_size=controls.batch_size,
-        allow_nondivisible_batch_size=True,
+        allow_nondivisible_batch_size=baseline["trainer"]["trainer"]["allow_nondivisible_batch_size"] if fresh else True,
         num_train_steps=start + updates,
         training_budget=draccus.encode(controls.training_budget),
         native_telemetry_root=prefix_join(output, "telemetry"),
@@ -193,33 +228,41 @@ def bind_mochi_sft_config(
     raw["data"]["mixture_start_step"] = start
     permanent = prefix_join(output, "checkpoints")
     temporary = prefix_join(spec.storage.temporary_prefix, f"ttl=3d/{spec.slug}/{spec.version}/checkpoints")
-    trainer["load_checkpoint_path"] = [permanent, temporary, spec.initializer.destination]
+    if fresh:
+        if trainer["initialize_from"] != spec.initializer.source:
+            raise ValueError("Fresh-optimizer SFT initializer differs from its reference")
+        # The normal checkpointer roots handle own-run resume; the base is weights-only.
+        trainer["load_checkpoint_path"] = None
+    else:
+        trainer["load_checkpoint_path"] = [permanent, temporary, spec.initializer.destination]
     trainer["checkpointer"].update(base_path=permanent, temporary_base_path=temporary)
-    trainer["tracker"].update(
-        name=trainer["id"],
-        id=None,
-        group=spec.slug,
-        replicate_path=output,
-        tags=[tag for tag in trainer["tracker"]["tags"] if tag not in {"full-ab-2026.09.29", "racks-11"}]
-        + ["exp3-v5", "racks-2"],
-    )
+    if not fresh:
+        trainer["tracker"].update(
+            name=trainer["id"],
+            id=None,
+            group=spec.slug,
+            replicate_path=output,
+            tags=[tag for tag in trainer["tracker"]["tags"] if tag not in {"full-ab-2026.09.29", "racks-11"}]
+            + ["exp3-v5", "racks-2"],
+        )
     # Keep the hero's validation corpus separate from the sealed V5 training catalog and its reservations.
-    old_data = baseline["data"]
-    trained = {name for _, weights in old_data["train_weights"] for name, weight in weights.items() if weight > 0}
-    raw["evaluation_data"] = _native_config_values(
-        {
-            **old_data,
-            "components": {name: value for name, value in old_data["components"].items() if name not in trained},
-            "train_weights": None,
-            "mixture_start_step": None,
-        }
-    )
-    raw["eval"]["eval_batch_size"] = controls.microbatch_size
+    if not fresh:
+        old_data = baseline["data"]
+        trained = {name for _, weights in old_data["train_weights"] for name, weight in weights.items() if weight > 0}
+        raw["evaluation_data"] = _native_config_values(
+            {
+                **old_data,
+                "components": {name: value for name, value in old_data["components"].items() if name not in trained},
+                "train_weights": None,
+                "mixture_start_step": None,
+            }
+        )
+        raw["eval"]["eval_batch_size"] = controls.microbatch_size
     config = draccus.decode(GrugRunConfig, raw)
     batch_axes = validated_batch_axis_size(
         device_count=config.resources.chip_count(),
         dp_racks=grug["replica_axis_size"],
-        batch_size=controls.microbatch_size,
+        batch_size=controls.microbatch_size or controls.batch_size,
         context_axis_size=grug["context_axis_size"],
         expert_axis_size=grug["expert_axis_size"],
     )
@@ -253,40 +296,61 @@ def resolve_mochi_sft(spec: MochiSftRound) -> ResolvedMochiSft:
     if {"uri": spec.data_release.path, "sha256": spec.data_release.sha256} != seal["publisher_manifest"]:
         raise ValueError("V5 publisher manifest is not the sealed publisher")
     read_pin(spec.data_release, Path.cwd())
-    copy_bytes = StoragePath(spec.initializer.copy_manifest).read_bytes()
-    copied = json.loads(copy_bytes)
-    if copied["source"] != spec.initializer.source or copied["destination"] != spec.initializer.destination:
-        raise ValueError("Initializer copy receipt names another checkpoint")
-    if copied["total_bytes"] <= 0 or len(copied["files"]) != copied["total_files"]:
-        raise ValueError("Initializer copy receipt has no complete payload inventory")
-    fs, root = filesystem_for(spec.initializer.destination)
-    actual = fs.find(root, detail=True)
-    expected = {prefix_join(root, entry["path"]): entry["size"] for entry in copied["files"]}
-    if len(expected) != copied["total_files"] or sum(expected.values()) != copied["total_bytes"]:
-        raise ValueError("Initializer copy inventory is inconsistent")
-    actual.pop(prefix_join(root, ".verified-copy-manifest.json"), None)
-    if set(actual) != set(expected) or any(actual[path]["size"] != size for path, size in expected.items()):
-        raise ValueError("Staged initializer is missing or changed since verified copy")
+    initializer_receipt = {}
+    if isinstance(spec.initializer, MochiSftInitializer):
+        copy_bytes = StoragePath(spec.initializer.copy_manifest).read_bytes()
+        copied = json.loads(copy_bytes)
+        if copied["source"] != spec.initializer.source or copied["destination"] != spec.initializer.destination:
+            raise ValueError("Initializer copy receipt names another checkpoint")
+        if copied["total_bytes"] <= 0 or len(copied["files"]) != copied["total_files"]:
+            raise ValueError("Initializer copy receipt has no complete payload inventory")
+        fs, root = filesystem_for(spec.initializer.destination)
+        actual = fs.find(root, detail=True)
+        expected = {prefix_join(root, entry["path"]): entry["size"] for entry in copied["files"]}
+        if len(expected) != copied["total_files"] or sum(expected.values()) != copied["total_bytes"]:
+            raise ValueError("Initializer copy inventory is inconsistent")
+        actual.pop(prefix_join(root, ".verified-copy-manifest.json"), None)
+        if set(actual) != set(expected) or any(actual[path]["size"] != size for path, size in expected.items()):
+            raise ValueError("Staged initializer is missing or changed since verified copy")
+        initializer_receipt = {
+            "initializer_bytes": copied["total_bytes"],
+            "initializer_copy_sha256": hashlib.sha256(copy_bytes).hexdigest(),
+        }
+    elif not spec.initializer.source.startswith("s3://marin-us-east-08a/"):
+        raise ValueError("Weights-only initializer must already be in us-east-08a")
     metadata = StoragePath(prefix_join(spec.initializer.destination, "metadata.json")).read_bytes()
     if hashlib.sha256(metadata).hexdigest() != spec.initializer.metadata_sha256:
         raise ValueError("Staged initializer metadata changed")
-    if json.loads(metadata)["step"] != reference["config"]["trainer"]["special_tokens"]["start_step"]:
+    expected_step = (
+        spec.initializer.step
+        if isinstance(spec.initializer, MochiWeightsInitializer)
+        else reference["config"]["trainer"]["special_tokens"]["start_step"]
+    )
+    if json.loads(metadata)["step"] != expected_step:
         raise ValueError("Initializer step differs from the hero SFT start")
     data = native_sft_data(release.data)
+    if isinstance(spec.initializer, MochiWeightsInitializer):
+        reference_tokenizer = reference["config"]["data"]["tokenizer"]
+        if data["tokenizer"] != reference_tokenizer:
+            if (StoragePath(data["tokenizer"]) / "tokenizer.json").read_bytes() != (
+                StoragePath(reference_tokenizer) / "tokenizer.json"
+            ).read_bytes():
+                raise ValueError("Regional reference tokenizer differs from the sealed mixture tokenizer")
+            data["tokenizer"] = reference_tokenizer
     recipe = {
         "data": data,
         "seq_len": reference["config"]["model"]["max_seq_len"],
         "batch_size": spec.sft.batch_size,
-        "packing_cap": 256,
-        "pack_lookahead_window": 128,
+        "packing_cap": spec.sft.packing.cap,
+        "pack_lookahead_window": spec.sft.packing.lookahead,
     }
     bind_sft_stopping(recipe, spec.sft.stopping, spec.sft.epoch_capacity)
     source_pin = release.artifacts["source_loss.json"]
     prepared = prepared_supervision_data(
         draccus.decode(LmDataConfig, recipe["data"]),
         source_loss_metadata(source_pin.uri, source_pin.sha256),
-        packing_cap=256,
-        lookahead=128,
+        packing_cap=spec.sft.packing.cap,
+        lookahead=spec.sft.packing.lookahead,
     )
     vocabulary = len(prepared.the_tokenizer)
     if vocabulary != reference["config"]["model"]["vocab_size"]:
@@ -298,12 +362,16 @@ def resolve_mochi_sft(spec: MochiSftRound) -> ResolvedMochiSft:
         "round": draccus.encode(spec),
         "epoch": recipe["sft_exposure"],
         "schedule": draccus.encode(spec.sft.schedule),
-        "initializer_bytes": copied["total_bytes"],
-        "initializer_copy_sha256": hashlib.sha256(copy_bytes).hexdigest(),
+        **initializer_receipt,
+        "initializer_metadata_sha256": hashlib.sha256(metadata).hexdigest(),
+        "initializer_mode": "weights_only" if isinstance(spec.initializer, MochiWeightsInitializer) else "full_state",
         "logical_batch": spec.sft.batch_size,
-        "physical_batch": math.ceil(spec.sft.batch_size / spec.sft.microbatch_size) * spec.sft.microbatch_size,
-        "microbatches": math.ceil(spec.sft.batch_size / spec.sft.microbatch_size),
-        "packing": {"cap": 256, "lookahead": 128},
+        "physical_batch": (
+            math.ceil(spec.sft.batch_size / (spec.sft.microbatch_size or spec.sft.batch_size))
+            * (spec.sft.microbatch_size or spec.sft.batch_size)
+        ),
+        "microbatches": math.ceil(spec.sft.batch_size / (spec.sft.microbatch_size or spec.sft.batch_size)),
+        "packing": draccus.encode(spec.sft.packing),
         "vocabulary": vocabulary,
     }
     receipt["exposure_recipe"] = {

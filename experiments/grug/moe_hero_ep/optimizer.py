@@ -229,8 +229,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     gate_router_weight_decay: float = 0.0
     expert_normalization: ExpertNormalization = ExpertNormalization.ALL_EXPERTS
     schedule_extension: ScheduleExtension | None = None
+    # A leading layer axis makes stacked expert banks 4D; excluding 4 routes them to AdamH.
+    muonh_param_ndims: tuple[int, ...] = (2, 3, 4)
 
     def __post_init__(self):
+        if not set(self.muonh_param_ndims) <= {2, 3, 4}:
+            raise ValueError(f"muonh_param_ndims must be a subset of (2, 3, 4), got {self.muonh_param_ndims}")
         extension = self.schedule_extension
         if extension is not None and extension.final_lr_ratio > self.min_lr_ratio:
             raise ValueError(
@@ -322,7 +326,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # (route to Adam) while expert matrices become 4D and other matmuls 3D (route to MuonH).
             if path_lower.endswith(".weight"):
                 return "adam"
-            if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
+            if hasattr(param, "ndim") and param.ndim in self.muonh_param_ndims:
                 return "muonh"
             return "adam"
 
