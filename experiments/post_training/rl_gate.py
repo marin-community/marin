@@ -685,12 +685,15 @@ def _native_json(operation: str, *args: str, timeout: int = 120):
     return _native_command_json(operation, [str(interpreter), "-I", *args], env=env, timeout=timeout)
 
 
+def _native_config(operation: str, *args: str):
+    checkout = recipe.REPO_ROOT / SKYRL_PROJECT
+    return _native_json(operation, "-m", _NATIVE_CONFIG_MODULE, "--checkout", str(checkout), *args)
+
+
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
     options = ["--validate-driver"] if validate_driver else []
-    return _native_json(
-        "Compose native launch configurations", "-m", _NATIVE_CONFIG_MODULE, "compose", *options, "--", *paths
-    )
+    return _native_config("Compose native launch configurations", "compose", *options, "--", *paths)
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:
@@ -742,9 +745,7 @@ def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
 
 @lru_cache(maxsize=16)
 def _schema_defaults(source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    return _native_json(
-        "Read native schema defaults", "-m", _NATIVE_CONFIG_MODULE, "schema-defaults", json.dumps(dict(groups))
-    )
+    return _native_config("Read native schema defaults", "schema-defaults", json.dumps(dict(groups)))
 
 
 def _check_control_config(

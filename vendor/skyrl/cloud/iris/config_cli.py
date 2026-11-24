@@ -6,6 +6,7 @@
 import argparse
 import json
 import logging
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__spec__.name if __spec__ else __name__)
@@ -13,9 +14,15 @@ logger = logging.getLogger(__spec__.name if __spec__ else __name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--checkout",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+        help="checkout that supplies native modules",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     compose = commands.add_parser("compose", help="compose native launch documents")
-    compose.add_argument("paths", nargs="+", type=Path)
+    compose.add_argument("paths", nargs="*")
     compose.add_argument("--validate-driver", action="store_true")
     schema = commands.add_parser("schema-defaults", help="read native defaults for a set of configuration groups")
     schema.add_argument("groups_json", metavar="groups-json")
@@ -30,8 +37,8 @@ def main() -> None:
     import skyrl_train
     from cloud.iris import launch_config, rl_config_translation
 
-    checkout = Path(__file__).resolve().parents[2]
-    for module in (launch_config, rl_config_translation, skyrl_train, marinskyrl):
+    checkout = args.checkout.resolve()
+    for module in (sys.modules[__name__], launch_config, rl_config_translation, skyrl_train, marinskyrl):
         if module.__file__ is None or not Path(module.__file__).resolve().is_relative_to(checkout):
             raise RuntimeError(f"{module.__name__} loaded from outside the vendor SkyRL checkout")
 
