@@ -229,15 +229,19 @@ def _sandbox_argv(
     mounts: Iterable[Mount],
     network: NetworkPolicy,
 ) -> list[str]:
-    """The bwrap invocation that runs a program over ``root`` with the system directories and ``mounts``.
+    """The bwrap invocation that runs the machine's keeper program over ``root``.
 
     The system directories are read-only, or, with ``layers``, overlaid by the machine's layer of each.
     The program runs without capabilities; as root, bwrap needs no user namespace for its own.
+    ``--as-pid-1`` makes the program itself the guest PID namespace's init instead of a
+    re-exec'd bwrap: the machine's lifecycle keeper must be PID 1, because shared grading
+    quiesces kill every process outside their ancestry except PID 1, and a keeper below
+    PID 1 dies with them, closing the machine mid-grading.
     """
     argv = [str(bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try"]
     if network == NetworkPolicy.DENY:
         argv.append("--unshare-net")
-    argv += ["--new-session", "--die-with-parent", "--cap-drop", "ALL"]
+    argv += ["--as-pid-1", "--new-session", "--die-with-parent", "--cap-drop", "ALL"]
     argv += ["--bind", str(root), "/"]
     overlaid = () if layers is None else _overlaid_directories()
     for path in SYSTEM_DIRECTORIES:
@@ -533,6 +537,7 @@ class LocalMachine:
                 "--unshare-pid",
                 "--unshare-uts",
                 "--unshare-cgroup-try",
+                "--as-pid-1",
                 "--new-session",
                 "--die-with-parent",
                 "--cap-drop",
@@ -600,6 +605,9 @@ class LocalMachine:
                 self._environment["PATH"],
                 "/bin/sh",
                 "-c",
+                # The sleeper becomes the guest PID namespace's PID 1 (--as-pid-1),
+                # so quiesces that spare PID 1 spare the machine's lifecycle. Keep
+                # the payload argv stable: graders spare it by this exact argv too.
                 'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
             ]
             prefix = () if peer is None else peer._network_namespaces
