@@ -23,6 +23,7 @@ from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
 from megatron.core.transformer.enums import AttnBackend
 from omegaconf import OmegaConf
+from rigging.filesystem.storage_path import prefix_join
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.io import io
 from skyrl_train.telemetry import record_event
@@ -578,7 +579,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             logprob_chunk_size=OmegaConf.select(
                 self.cfg, "trainer.policy.megatron_config.logprob_chunk_size", default=None
             ),
-            output_projection_chunk_size=self.cfg.trainer.policy.megatron_config.output_projection_chunk_size,
+            output_projection_chunk_size=self.cfg.trainer.policy.megatron_config.get("output_projection_chunk_size"),
         )
         self._maybe_install_router_replay("policy")
 
@@ -626,7 +627,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         tracker_states = copy.deepcopy(rng_tracker.get_states())
         modes = [(module, module.training) for chunk in self.actor_module for module in chunk.modules()]
         reports = []
-        destination = f"{self.cfg.trainer.export_path}/trainer-sizing/rank-{self._rank}.json"
+        destination = prefix_join(self.cfg.trainer.export_path, f"trainer-sizing/rank-{self._rank}.json")
 
         def publish():
             report = {"rank": self._rank, "max_seq_len": maximum, "measurements": reports}

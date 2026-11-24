@@ -38,16 +38,6 @@ empty_cuda_cache: true
 
 logprob_chunk_size: 1024
 
-# Bound the projection itself, not only softmax temporaries. Requires TP1 PPO.
-output_projection_chunk_size: null
-
-# Always also profiles trainer.algorithm.max_seq_len. Runs before initial policy publication.
-memory_profile:
-  enabled: false
-  max_sequence_length: null
-  valid_token_counts: []
-  minimum_headroom_fraction: 0.1
-
 # dp_reshardable avoids a CPU optimizer gather when the checkpoint keeps the same
 # tensor/pipeline/context/expert geometry. Loading reads the format from the checkpoint.
 optimizer_checkpoint_sharding_type: fully_reshardable

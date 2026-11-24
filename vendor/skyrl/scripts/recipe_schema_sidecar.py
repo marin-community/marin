@@ -206,6 +206,8 @@ OPEN = frozenset(
 UNDECLARED = MappingProxyType(
     {
         "trainer.policy.megatron_config.optimizer_config_kwargs.store_param_remainders": ("bool", Ellipsis),
+        "trainer.policy.megatron_config.output_projection_chunk_size": ("PositiveInt | None", Ellipsis),
+        "trainer.policy.megatron_config.memory_profile": ("TrainerMemoryProfile", Ellipsis),
         "teachers": ("SectionMap[Teacher]", Ellipsis),
         "teacher_routing": ("SectionMap[TeacherRouting]", Ellipsis),
         "data.kind": ('Literal["tasks", "parquet"]', "tasks"),

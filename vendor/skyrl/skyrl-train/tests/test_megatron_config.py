@@ -3,6 +3,7 @@
 import sys
 
 import pytest
+from omegaconf import open_dict
 
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.config.driver_validation import validate_cfg
@@ -26,10 +27,14 @@ def test_chunked_sizing_accepts_ppo_and_rejects_incompatible_execution():
     config.trainer.policy.model.path = "Qwen/Qwen3-0.6B"
     config.trainer.logger = "console"
     megatron = config.trainer.policy.megatron_config
-    megatron.output_projection_chunk_size = 1024
-    megatron.memory_profile.enabled = True
-    megatron.memory_profile.max_sequence_length = 1024
-    megatron.memory_profile.valid_token_counts = [512]
+    with open_dict(megatron):
+        megatron.output_projection_chunk_size = 1024
+        megatron.memory_profile = {
+            "enabled": True,
+            "max_sequence_length": 1024,
+            "valid_token_counts": [512],
+            "minimum_headroom_fraction": 0.1,
+        }
     assert validate_cfg(config) is None
 
     megatron.tensor_model_parallel_size = 2
