@@ -52,6 +52,7 @@ def convert_research(row: RawRow, _context: ConversionContext) -> TaskSpec:
         max_completion_tokens=32768,
         request_timeout=300,
         exact_gate=False,
+        # Pass blank finals to VerifyIt so the local grader records both Research metrics at zero.
         empty_output=EmptyOutputPolicy.GRADE,
     )
     task = answer_task(row, prompt=problem, spec=spec, evidence=row.data)
