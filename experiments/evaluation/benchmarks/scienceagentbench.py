@@ -18,6 +18,7 @@ from taskcompendium.importers.scienceagentbench import (
     ANNOTATION_FILE,
     ANNOTATION_REVISION,
     VERIFIED_SOURCE,
+    WORKING_DIRECTORY,
     KnowledgeCondition,
     VerifiedAnnotation,
     dataset_files,
@@ -25,7 +26,7 @@ from taskcompendium.importers.scienceagentbench import (
     read_verified_annotations,
     scienceagentbench_task,
 )
-from taskcompendium.importers.scienceagentbench_assets.visual_judge import MODEL, VENICE_MODEL
+from taskcompendium.importers.scienceagentbench_assets.visual_judge import COMPLETIONS, MODEL, VENICE_MODEL
 from taskcompendium.importers.scienceagentbench_grading import deterministic_grader, papyrus_grader, visual_grader
 from taskcompendium.models import (
     CommandSemantics,
@@ -94,6 +95,10 @@ test_dir = ~/OGGM/tests
 has_internet = False
 """
 
+AGENT_TIMEOUT = 3600
+VERIFIER_TIMEOUT = 1800
+REPLAY_TIMEOUT = 900
+
 AGENT = AgentEpisode(
     harness=PiAgent(version="0.87.0", setup_timeout=360),
     max_input_tokens=65536,
@@ -101,8 +106,8 @@ AGENT = AgentEpisode(
         max_turns=None,
         max_total_tokens=None,
         model_turn_timeout=600,
-        total_turn_timeout=3600,
-        verifier_timeout=1800,
+        total_turn_timeout=AGENT_TIMEOUT,
+        verifier_timeout=VERIFIER_TIMEOUT,
         attempt_timeout=14400,
     ),
 )
@@ -173,7 +178,7 @@ def convert(
     actor = EnvironmentRequirements(
         docker_build=software_image(actor_dir),
         command_semantics=CommandSemantics.LINUX_PROCESS,
-        working_directory="/testbed",
+        working_directory=WORKING_DIRECTORY,
         setup_commands=tuple(
             f"printf '%s\\n' {shlex.quote(f'{file.sha256}  /testbed/{file.member}')} | sha256sum -c -" for file in inputs
         ),
@@ -202,7 +207,7 @@ def convert(
         grader = EnvironmentRequirements(
             docker_build=software_image(VISUAL),
             capabilities=("network",),
-            working_directory="/testbed",
+            working_directory=WORKING_DIRECTORY,
             command_semantics=CommandSemantics.LINUX_PROCESS,
         )
         package = visual_grader(
@@ -212,8 +217,8 @@ def convert(
             evaluator_program=b"import gpt4_visual_judge\n" + loader,
             environment=grader,
             replay_environment=actor,
-            replay_timeout=900,
-            verifier_timeout=1800,
+            replay_timeout=REPLAY_TIMEOUT,
+            verifier_timeout=VERIFIER_TIMEOUT,
         )
     else:
         grader = actor.model_copy(
@@ -227,7 +232,11 @@ def convert(
         if annotation.instance_id == 22:
             _, gold = private_files
             package = papyrus_grader(
-                environment=grader, replay_environment=actor, gold_rows=gold, replay_timeout=900, verifier_timeout=1800
+                environment=grader,
+                replay_environment=actor,
+                gold_rows=gold,
+                replay_timeout=REPLAY_TIMEOUT,
+                verifier_timeout=VERIFIER_TIMEOUT,
             )
             private_files = ()
         else:
@@ -236,8 +245,8 @@ def convert(
                 environment=grader,
                 replay_environment=actor,
                 evaluator_program=loader,
-                replay_timeout=900,
-                verifier_timeout=1800,
+                replay_timeout=REPLAY_TIMEOUT,
+                verifier_timeout=VERIFIER_TIMEOUT,
             )
     task = scienceagentbench_task(
         annotation,
@@ -255,7 +264,7 @@ def convert(
             "labels": {
                 **task.labels,
                 "instance_id": str(annotation.instance_id),
-                "max_judge_calls": str(3 * len(published.gold) if published.visual else 0),
+                "max_judge_calls": str(COMPLETIONS * len(published.gold) if published.visual else 0),
             },
             "resources": task.resources.model_copy(
                 update={"worker": worker, "verifier": task.resources.verifier + private_files}
@@ -273,8 +282,8 @@ def item(task: TaskSpec) -> EvaluationItem:
                 cpus=2,
                 memory_mb=8192,
                 storage_mb=10240,
-                agent_timeout=3600,
-                verifier_timeout=1800,
+                agent_timeout=AGENT_TIMEOUT,
+                verifier_timeout=VERIFIER_TIMEOUT,
             ),
         }
     )

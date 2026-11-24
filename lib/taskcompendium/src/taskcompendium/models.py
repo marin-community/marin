@@ -1143,7 +1143,7 @@ def _upgraded_grader(grader: dict[str, Any]) -> dict[str, Any]:
 
 
 def upgrade_task_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Upgrade 0.30 and both pre-merge 0.31 grader layouts to explicit placement with optional replay."""
+    """Upgrade 0.30 and 0.31 graders while preserving any explicit placement and replay settings."""
     if payload.get("schema_version") not in (UPGRADABLE_SCHEMA_VERSION, "0.31"):
         return payload
     grader = payload.get("grader")

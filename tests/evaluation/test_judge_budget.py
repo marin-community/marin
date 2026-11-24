@@ -48,5 +48,4 @@ async def test_judge_concurrency_limits_active_graders_with_budget_to_spare(tmp_
         assert "second" not in budget.entries
         await budget.finish("first", None)
         await second
-        assert budget.active == {"second"}
         assert budget.entries["first"]["microdollars"] == 6

@@ -2,7 +2,7 @@ evaluations:
   scienceagentbench-verified-visual-knowledge-off:
     benchmark: scienceagentbench-verified-visual-knowledge-off
     protocol: pi
-    run:
+    run: &paired_run
       concurrency: 4
       metered_judge_concurrency: 1
       max_attempts_per_trial: 11
@@ -26,24 +26,4 @@ evaluations:
   scienceagentbench-verified-visual-knowledge-on:
     benchmark: scienceagentbench-verified-visual-knowledge-on
     protocol: pi
-    run:
-      concurrency: 4
-      metered_judge_concurrency: 1
-      max_attempts_per_trial: 11
-      max_tokens: 16384
-      task_machine:
-        backend: daytona
-        image_build: snapshot
-        storage_mb: 10240
-      judge:
-        budget:
-          max_calls: 216
-          max_microdollars: 6250000
-          microdollars_per_call: 29000
-        deployment: openrouter/venice/fp8
-        models:
-          qwen/qwen3-vl-235b-a22b-instruct: qwen/qwen3-vl-235b-a22b-instruct@venice/fp8
-        default_model: qwen/qwen3-vl-235b-a22b-instruct
-      judge_endpoint: https://openrouter.ai/api/v1
-      judge_api_key:
-      - env:OPENROUTER_API_KEY
+    run: *paired_run
