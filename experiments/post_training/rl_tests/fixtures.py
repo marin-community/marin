@@ -99,6 +99,13 @@ def shrink_recorded_panel(binding: str) -> None:
     write_json(summary_path, summary)
 
 
+def small_learning_trial(preset: presets.Preset) -> presets.Preset:
+    """Exercise the initial and terminal scores with three recorded updates."""
+    assert preset.held_out_tasks is not None
+    shrink_recorded_panel(preset.held_out_tasks)
+    return replace(preset, updates=3, measured=range(1, 4))
+
+
 def cache_native_compositions(monkeypatch) -> None:
     """Reuse successful compositions of equivalent launch documents within one test."""
     compose_configs = gate.compose_configs

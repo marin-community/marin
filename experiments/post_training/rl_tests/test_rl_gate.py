@@ -55,6 +55,7 @@ from experiments.post_training.rl_tests.fixtures import (
     fake_s3,
     fake_s3_checkpoint,
     shrink_recorded_panel,
+    small_learning_trial,
     write_metrics,
     write_receipt,
     write_skyrl_run_record,
@@ -596,6 +597,9 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
 )
 def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorded_runs, tmp_path, monkeypatch, case):
     preset = snowball_model.SNOWBALL.by_name["speed-medium" if case == "missing-guard" else "learning-medium"]
+    if preset.name == "learning-medium":
+        preset = small_learning_trial(preset)
+        preset_table(preset)
     setting = "trainer.policy.optimizer_config.lr=2e-6"
     settings = (
         ()
@@ -637,7 +641,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             )
             initializer = SkyRLPolicyModel(ArtifactStep.adopt(name, version, str(root), kind=SkyRLRun))
         inputs = inputs.model_copy(update={"init": recipe.stored_initializer(initializer, preset=preset)})
-    control_roots = controls(recorded_runs, preset.name)
     if case == "zero-spread":
         pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
         control_roots = [
@@ -646,6 +649,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             )
             for index in range(pin.replicates)
         ]
+    else:
+        control_roots = controls(recorded_runs, preset.name)
     if case in ("stale-default", "omitted-current-nondefault"):
         changed = setting if case == "stale-default" else 'generator.chat_template_kwargs={"enable_thinking":false}'
         preset = replace(preset, recipe=replace(preset.recipe, config=preset.recipe.config.with_settings((changed,))))

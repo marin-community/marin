@@ -50,6 +50,7 @@ from experiments.post_training.rl_tests.fixtures import (
     fake_s3_checkpoint,
     replace_evaluations,
     shrink_recorded_panel,
+    small_learning_trial,
     write_artifact_record,
     write_published_artifact,
     write_receipt,
@@ -837,6 +838,8 @@ def test_submission_exit_codes_and_publication_retries(
         cache_native_compositions(monkeypatch)
     preset_name = "data-short" if case == "data-short" else "learning-medium" if publication_case else "speed-medium"
     preset = snowball_model.SNOWBALL.by_name[preset_name]
+    if preset_name == "learning-medium":
+        preset = small_learning_trial(preset)
     if case == "child":
         model = "s3://marin-test/models/child-model"
         preset = replace(
