@@ -128,11 +128,10 @@ class PromptLoader:
     A prompt whose group missed the staleness window is regenerated at most ``max_stale_retries`` times in a row;
     after that it waits until the prompt order offers it again.
 
-    A prompt whose last ``max_unusable_groups`` groups were all unusable, for example because its grader failed on
-    every sample, is quarantined for ``QUARANTINE_STEPS`` completed batches. Quarantine keeps enough prompts for one
-    batch, or enough in each family for every open batch when batches specify groups per family. When that minimum
-    keeps a failing prompt in rotation, its rejection can trigger an early retry for a non-live quarantined prompt
-    in the same pool.
+    After ``max_unusable_groups`` unusable groups in a row, a prompt can enter quarantine for
+    ``QUARANTINE_STEPS`` completed batches. Quarantine keeps enough eligible prompts for one batch, or enough in each
+    family for every open batch when batches specify groups per family. When that minimum keeps a failing prompt in
+    rotation, its rejection can trigger an early retry for a non-live quarantined prompt in the same pool.
     A usable group ends quarantine early. Retry counts and quarantine restart empty when a run resumes.
 
     The sequence never ends; the trainer decides when to stop.
@@ -261,7 +260,6 @@ class PromptLoader:
     def retry(self, prompt: dict) -> None:
         """Queue a stale prompt when it has retries left and is outside quarantine."""
         uid = prompt["uid"]
-        # A stale early retry stays quarantined until another offer or the cooldown ends.
         if uid in self._quarantined:
             return
         count = self._stale_retries.pop(uid, 0)

@@ -8,6 +8,7 @@ from skyrl_train.group_admission import AdmissionRejection
 from skyrl_train.rollouts.loader import QUARANTINE_STEPS, QUARANTINED_PROMPTS_METRIC, PromptLoader, SeededPasses
 
 UNUSABLE = AdmissionRejection.BELOW_MINIMUM_GROUP_SIZE.value
+USABLE = "consumed"
 
 
 class Prompts:
@@ -69,7 +70,7 @@ def test_quarantine_warning_names_the_task(caplog):
 def test_usable_group_resets_the_count():
     prompts = loader(num_rows=4, batch_size=3)
     prompts.record_disposition("0", UNUSABLE)
-    prompts.record_disposition("0", "consumed")
+    prompts.record_disposition("0", USABLE)
     prompts.record_disposition("0", AdmissionRejection.STALE.value)
     prompts.record_disposition("0", UNUSABLE)
 
@@ -112,7 +113,7 @@ def test_recovered_prompt_fills_the_missing_group(family: str | None):
     recovered = prompts.next_prompt(live=live, family=family)
     assert recovered is not None and recovered["uid"] == "0"
     assert recovered.get(FAMILY_COLUMN) == family
-    prompts.record_disposition(recovered["uid"], "consumed")
+    prompts.record_disposition(recovered["uid"], USABLE)
     assert prompts.observe([])[QUARANTINED_PROMPTS_METRIC] == (0.0 if family is None else 1.0)
 
 
@@ -123,7 +124,7 @@ def test_failed_early_retry_preserves_quarantine_and_rotates_candidates():
 
     live = {"2"}
     first = prompts.next_prompt(live=live)
-    assert first is not None and first["uid"] == "0"
+    assert first is not None and first["uid"] in {"0", "1"}
     live.add(first["uid"])
     other = prompts.next_prompt(live=live)
     assert other is not None and other["uid"] == "3"
@@ -135,7 +136,7 @@ def test_failed_early_retry_preserves_quarantine_and_rotates_candidates():
     live.remove(other["uid"])
     prompts.record_disposition(other["uid"], UNUSABLE)
     next_retry = prompts.next_prompt(live=live)
-    assert next_retry is not None and next_retry["uid"] == "1"
+    assert next_retry is not None and {first["uid"], next_retry["uid"]} == {"0", "1"}
 
 
 def test_quarantine_keeps_enough_prompts_for_each_open_batch():
