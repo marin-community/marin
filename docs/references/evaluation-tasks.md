@@ -213,11 +213,10 @@ The episode's limits replace the run's turn, token, model, agent, verifier, and 
 limits; the run still supplies `tool_turn_timeout` and `cleanup_timeout`. Machine
 settings are part of the run identity, so changing the backend requires a new result
 root. The worker builds factories for the `local`, `docker`, and `daytona` backends that
-the task and verifier machines select, and rejects others. The CLI reads the Daytona
-eval account's key from `DAYTONA_EVAL_API_KEY` (or `--daytona-api-key-env`).
-It passes the key to the Iris worker as `DAYTONA_API_KEY` and installs
-`marin-core`'s `daytona` extra. Shellbox supplies the API URL and target.
-Harness names resolve through
+the task and verifier machines select, and rejects others. Daytona uses the eval
+account: the CLI reads its key from `DAYTONA_EVAL_API_KEY` (or `--daytona-api-key-env`),
+then passes the key to the Iris worker as `DAYTONA_API_KEY`
+and installs `marin-core`'s `daytona` extra. Harness names resolve through
 `marin.evaluation.task_worker.episode_harnesses`; library callers pass their own
 `harnesses` mapping to `run_evaluation`.
 
@@ -264,6 +263,53 @@ Source grading programs and private tests are packaged with their pinned grader
 environment. Source program builders prepare tests and apply the benchmark
 execution timer. A completion receipt distinguishes finished tests from an early
 process exit. Shellbox provides the sandbox and bounds the whole grader command. Verifyit remains the shared scoring and verdict layer.
+
+## Trivial-reply floor
+
+A benchmark's trivial-reply floor is the score its graders give to replies that
+ignore the task. A grader can credit such a reply: one word satisfies
+instruction constraints that only restrict the reply, and `0` matches numeric
+answers of zero. `experiments.evaluation.trivial_replies` passes each reply to
+`run_evaluation` in place of the model, so cohort selection, prompt variants,
+response selection, grading, and grading retries are those of a model run.
+
+| Reply | Text |
+| --- | --- |
+| `empty` | the empty string |
+| `word` | `hello` |
+| `zero` | `0` |
+| `abstain` | `I don't know.` |
+| `echo` | the request's last user message |
+| `json_empty`, `json_word`, `json_abstain`, `json_echo` | the plain reply of that name as a JSON string |
+
+```bash
+uv run --package marin-core --group test python \
+  -m experiments.evaluation.trivial_replies \
+  --dataset "$CORPUS_ROOT" \
+  --config run-config.json \
+  --output scratch/trivial-replies
+```
+
+`--config` is the run configuration of the model run to compare with. Its
+tokenizer, context window, token budgets, and source limit select the cohort
+and prompts of that run. The command replaces the model identity with
+`trivial-reply/<reply>` and drops the judge, and writes each reply's archive to
+`<output>/<reply>`, which resumes like any result root. It runs on the host, as
+`task_driver --local` does, so graders that need a machine need Shellbox's
+bubblewrap backend. The driver refuses corpora scored by likelihood and corpora
+graded by a judge.
+
+`--reply` selects replies and repeats; the default is the five plain replies.
+A JSON-value answer format parses the whole reply as one JSON value, so a plain
+reply other than `0` is a malformed submission there, as it is for a model. The
+JSON replies show what the grader gives the same text as a JSON string. A reply
+is not cut at the output budget or at stop sequences, and its attempts record
+zero tokens.
+
+The command prints a Markdown table with each benchmark's primary metric per
+reply, reduced by `benchmark_scores` in `evalrecords.rollout_results`, which
+`score_curated_record` also uses. A pass/fail metric is followed by the trials
+that passed over the trials scored, and any other metric by the trials scored.
 
 ## Published corpus and raw results
 

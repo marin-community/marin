@@ -636,7 +636,6 @@ def agent_selection(tmp_path, agent_source, monkeypatch) -> Path:
         **{benchmark.name: benchmark for benchmark in fixed_benchmarks([agent_source])},
     }
     monkeypatch.setattr("experiments.evaluation.curated.evaluation_benchmarks", lambda: catalog)
-    monkeypatch.delenv("DAYTONA_TARGET", raising=False)
     path = tmp_path / "agent.yaml"
     path.write_text("evaluations:\n  terminal-agent:\n    benchmark: terminal-agent\n")
     return path

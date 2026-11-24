@@ -359,6 +359,25 @@ def test_attribute_value_normalizes_at_construction():
     assert AttributeValue(1.5).value == 1.5
 
 
+def test_nvlink_domain_constraint_preserves_label_case_on_the_wire():
+    """Kubernetes compares node-affinity values byte-exactly against node labels.
+
+    CoreWeave writes `ds.coreweave.com/nvlink.domain` uppercase
+    (`DH1-136-US-EAST-08A` on cw-us-east-08a), so the wire must carry the
+    supplied spelling while Iris-side matching stays case-insensitive.
+    """
+    c = Constraint.create(key="nvlink.domain", op=ConstraintOp.NE, value="DH1-136-US-EAST-08A")
+    assert c.values[0].value == "dh1-136-us-east-08a"
+    assert c.to_proto().value.string_value == "DH1-136-US-EAST-08A"
+
+    restored = Constraint.from_proto(c.to_proto())
+    assert restored.label_value == "DH1-136-US-EAST-08A"
+    assert restored.to_proto().value.string_value == "DH1-136-US-EAST-08A"
+    # Iris-side evaluation remains case-insensitive: the labeled node is excluded.
+    assert not evaluate_constraint(AttributeValue("DH1-136-US-EAST-08A"), restored)
+    assert evaluate_constraint(AttributeValue("DH1-137-US-EAST-08A"), restored)
+
+
 def test_constraint_rejects_invalid_arity():
     with pytest.raises(ValueError, match="EQ requires"):
         Constraint(key="region", op=ConstraintOp.EQ, values=())

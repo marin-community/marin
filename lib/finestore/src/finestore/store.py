@@ -22,9 +22,11 @@ from rigging import telemetry
 from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock, lease_refresh
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import prefix_join
+from rigging.provenance import launch_user
 from rigging.timing import ExponentialBackoff
 
 from finestore.commit import (
+    Attribution,
     ClearSeal,
     CommitConflict,
     CommitCoordinator,
@@ -101,6 +103,17 @@ class PrimaryKeyConflict(ValueError):
 
 class TransactionTooLarge(ValueError):
     """A transaction exceeded its configured in-memory byte limit."""
+
+
+def _attribution(author: str | None, message: str | None) -> Attribution | None:
+    if message is None:
+        if author is not None:
+            raise ValueError("a commit author needs a message")
+        return None
+    author = author or launch_user()
+    if not author:
+        raise ValueError("no commit author given and none resolves from the launch; pass author=")
+    return Attribution(author=author, message=message)
 
 
 def _row_digest(row: Mapping[str, object]) -> bytes:
@@ -347,18 +360,30 @@ class DataStore:
         """Pin a snapshot using one HEAD read."""
         return ReadView(self.root)
 
-    def transaction(self, *, max_bytes: int | None = None, base: ReadView | None = None) -> Transaction:
-        """Create a transaction with an Arrow buffer budget and an optional pinned base."""
+    def transaction(
+        self,
+        *,
+        max_bytes: int | None = None,
+        base: ReadView | None = None,
+        message: str | None = None,
+        author: str | None = None,
+    ) -> Transaction:
+        """Create a transaction with an Arrow buffer budget and an optional pinned base.
+
+        With a ``message``, the commit this transaction publishes records it as ``commit_info``,
+        together with ``author``, the commit's sequence and its publication time. ``author``
+        defaults to the launching user (``rigging.provenance.launch_user``).
+        """
         self.raise_if_failed()
         transaction_limit = self._max_buffer_bytes if max_bytes is None else max_bytes
         if transaction_limit <= 0:
             raise ValueError("max_bytes must be positive")
-        return Transaction(self, max_bytes=transaction_limit, base=base)
+        return Transaction(self, max_bytes=transaction_limit, base=base, attribution=_attribution(author, message))
 
-    def unbounded_transaction(self) -> Transaction:
-        """Create a transaction without an Arrow buffer byte limit."""
+    def unbounded_transaction(self, *, message: str | None = None, author: str | None = None) -> Transaction:
+        """Create a transaction without an Arrow buffer byte limit; ``message`` and ``author`` as for ``transaction``."""
         self.raise_if_failed()
-        return Transaction(self, max_bytes=None)
+        return Transaction(self, max_bytes=None, attribution=_attribution(author, message))
 
     def flush(self) -> CommitToken | None:
         """Commit all buffers with one HEAD update, or return ``None`` when empty."""
@@ -670,7 +695,14 @@ class _PublishedTable:
 class Transaction:
     """An isolated set of table changes and writes published through one commit token."""
 
-    def __init__(self, store: DataStore, *, max_bytes: int | None, base: ReadView | None = None) -> None:
+    def __init__(
+        self,
+        store: DataStore,
+        *,
+        max_bytes: int | None,
+        attribution: Attribution | None,
+        base: ReadView | None = None,
+    ) -> None:
         if base is not None and base.root != store.root:
             raise ValueError("transaction base must come from the same archive")
         self._store = store
@@ -680,6 +712,7 @@ class Transaction:
         self._dependencies: set[str] = set()
         self._staging_id: str | None = None
         self._objects: dict[str, bytes] = {}
+        self._attribution = attribution
         self._max_bytes = max_bytes
         self._buffer_bytes = 0
         self._closed = False
@@ -787,7 +820,7 @@ class Transaction:
         self._require_open()
         self._dependencies.update(tables)
 
-    def _ddl_delta(self, rows: dict[str, list[ArrowRow]]) -> CommitDelta:
+    def _commit_delta(self, rows: dict[str, list[ArrowRow]]) -> CommitDelta:
         resets = set()
         creations = {}
         moves = {}
@@ -806,6 +839,7 @@ class Transaction:
             table_creations=creations,
             table_moves=moves,
             expected_contents={name: self._base.table_content_version(name) for name in resets | self._dependencies},
+            attribution=self._attribution,
         )
 
     def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
@@ -833,7 +867,7 @@ class Transaction:
                 raise RuntimeError("transaction closed without committing")
             return self.token
         rows = {name: pending for name, pending in self._rows.items() if self._can_append(name)}
-        self.token = self._store._commit_transaction(rows, self._ddl_delta(rows))
+        self.token = self._store._commit_transaction(rows, self._commit_delta(rows))
         self._closed = True
         return self.token
 

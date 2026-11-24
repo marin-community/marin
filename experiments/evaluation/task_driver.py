@@ -20,6 +20,7 @@ from marin.evaluation.task_worker import (
     SOLVER_API_KEY,
     SOLVER_ENDPOINT,
     WORKER_TIMEOUT,
+    daytona_connection,
     execute_with_retries,
     execution_config,
     machine_backends,
@@ -32,7 +33,6 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from rigging.timing import Duration
-from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.machine import Backend
 from verifyit.modes.grade_judge import JudgeConnection
 
@@ -49,7 +49,6 @@ def submit_evaluation(
     resources: ResourceSpec,
     timeout: int,
     secrets: dict[str, str],
-    env_vars: dict[str, str] | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> Job:
     """Submit a disposable privileged CPU worker; Shellbox contains every grader command."""
@@ -62,7 +61,7 @@ def submit_evaluation(
         entrypoint=Entrypoint.from_callable(run_worker, datasets, output, config, max_attempts),
         name=name,
         resources=resources,
-        environment=EnvironmentSpec(setup_scripts=(worker_setup_script(config),), secrets=secrets, env_vars=env_vars),
+        environment=EnvironmentSpec(setup_scripts=(worker_setup_script(config),), secrets=secrets),
         egress_allow=worker_egress(config),
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         timeout=Duration.from_seconds(timeout),
@@ -118,7 +117,7 @@ def main() -> None:
     api_key = require_secret(arguments.api_key_env)
     daytona = None
     if Backend.DAYTONA in machine_backends(execution_config(config)):
-        daytona = DaytonaConnection(api_key=require_secret(arguments.daytona_api_key_env))
+        daytona = daytona_connection(require_secret(arguments.daytona_api_key_env))
         # Reject an incomplete account before any worker starts.
         daytona.client_factory()
     if arguments.local:

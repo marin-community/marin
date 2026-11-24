@@ -30,6 +30,14 @@ with DataStore.open("gs://bucket/purchases", writer_id="worker-0") as store:
     token = transaction.token
 ```
 
+`store.transaction(message=...)`, and the same argument to
+`store.unbounded_transaction()`, records why a change was made and who made it. The
+manifest of the commit the transaction publishes holds them as `commit_info`, with that
+commit's sequence and publication time, and `ReadView.commit_info` returns the record of
+the pinned commit. `author=` defaults to the user who launched the process, as
+`rigging.provenance.launch_user()` resolves it, so a remote Iris worker records the
+submitting user. FineStore stores the author as given and does not verify it.
+
 Appends to registered tables and named object writes retain their Arrow buffers
 in memory. Each appended table produces one level-zero Parquet shard. FineStore
 writes every shard and an immutable full manifest before it conditionally advances
@@ -316,13 +324,15 @@ archive retention or reader leases; it is outside the current API.
 Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
 sequence. A manifest names every active shard, its writer and compaction generation,
 row, sequence, and primary-key bounds, byte size, SHA-256 digest, each table's metadata
-object, the current maintainer epoch, and optional seal state. Writers compute shard
-integrity metadata while streaming Parquet, so it does not require another object-store
-read.
+object, the current maintainer epoch, optional seal state, and the `commit_info` of an
+attributed transaction. Writers compute shard integrity metadata while streaming
+Parquet, so it does not require another object-store read.
 
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
-commit. A manifest can also name `required_features`; readers reject features they do
-not implement before exposing a view. This lets future optional metadata remain
+commit. Such a writer copies its parent's `commit_info` into the commits it publishes;
+the record names the sequence of the commit it describes, so readers ignore the copy.
+A manifest can also name `required_features`; readers reject features they do not
+implement before exposing a view. This lets future optional metadata remain
 additive while mandatory semantics fail closed without forcing unrelated archives to
 change their format version.
 
