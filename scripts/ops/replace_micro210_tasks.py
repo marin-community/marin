@@ -38,6 +38,7 @@ from experiments.evaluation.micro210_gate import HARBOR_BENCHMARKS
 from experiments.evaluation.micro210_replacements import (
     BROKEN_TASKS,
     REPLACEMENT_SEED,
+    TB2_IMAGE_TAG,
     CandidateRow,
     humanevalplus_candidate,
     ot_tblite_candidate,
@@ -153,8 +154,23 @@ def _family_pool(benchmark: str) -> list[str]:
         return sorted({name.split("/")[0] for name in files if "/" in name and not name.startswith(".")})
     if benchmark == "tb2-recovery":
         entries = _github_json("https://api.github.com/repos/harbor-framework/terminal-bench-1/contents/original-tasks")
-        return sorted(entry["name"] for entry in entries)
+        return sorted(entry["name"] for entry in entries if _tb2_image_exists(entry["name"]))
     raise ValueError(f"No replacement pool for benchmark {benchmark!r}")
+
+
+def _tb2_image_exists(source_task_id: str) -> bool:
+    """Skip candidates whose prebuilt registry image was never published."""
+    request = urllib.request.Request(
+        f"https://hub.docker.com/v2/repositories/alexgshaw/{source_task_id}/tags/?page_size=100"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            tags = [tag["name"] for tag in json.loads(response.read()).get("results", [])]
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return False
+        raise
+    return TB2_IMAGE_TAG in tags
 
 
 def _ot_tblite_package(source_task_id: str) -> dict[str, bytes]:
