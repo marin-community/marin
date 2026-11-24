@@ -36,6 +36,11 @@ from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.mochi_assets import (
+    MOCHI_STEP_400407_EXPORT,
+    MOCHI_TOKENIZER_REVISION,
+    MOCHI_TOKENIZER_URI,
+)
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
@@ -598,11 +603,9 @@ def test_mochi_three_rack_launch_configures_evaluation_without_model_exports(sel
 
     (config,) = gate.compose_configs([str(path)], validate_driver=True)
     model = config["inputs"]["model"]
-    assert model["uri"] == (
-        "s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1"
-    )
-    assert model["tokenizer_uri"] == "marin-community/marin-tokenizer-tools"
-    assert model["tokenizer_revision"] == "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09"
+    assert model["uri"] == MOCHI_STEP_400407_EXPORT
+    assert model["tokenizer_uri"] == MOCHI_TOKENIZER_URI
+    assert model["tokenizer_revision"] == MOCHI_TOKENIZER_REVISION
 
     (source,) = config["inputs"]["validation_data"]
     held_out = recipe.selection_artifact(preset.held_out_tasks)

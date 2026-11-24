@@ -205,6 +205,7 @@ def _stage_data(prepared: str, scratch: Path, sample: Sample) -> tuple[Dataset, 
 
 def _cache_rows(url: str, dataset: Dataset, hidden_states: StoragePath, recipe: DraftRecipe) -> None:
     def cache_row(row_index: int) -> tuple[int, float]:
+        """Cache a row and return the prompt token count and upload duration in seconds."""
         ids = dataset[row_index]["input_ids"]
         response = requests.post(
             f"{url}/completions",
