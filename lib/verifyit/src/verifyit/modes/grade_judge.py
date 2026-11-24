@@ -14,8 +14,8 @@ JSON verdict per reference, and the task scores 1 only when every one is correct
 All rubrics can sit behind ``constraints``, deterministic IFEval checks that must all pass first.
 
 The judge is any OpenAI-compatible chat endpoint, configured through ``VERIFYIT_JUDGE_BASE_URL``,
-``VERIFYIT_JUDGE_API_KEY`` and ``VERIFYIT_JUDGE_MODEL`` (``spec.model`` wins when set). A runner
-without a configured endpoint returns an infrastructure failure.
+``VERIFYIT_JUDGE_API_KEY`` and ``VERIFYIT_JUDGE_MODEL`` (``spec.model`` wins when set), or a
+``JudgeConnection`` callback. A runner without a configured endpoint returns an infrastructure failure.
 """
 
 import json
@@ -29,6 +29,7 @@ import string
 import time
 import unicodedata
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -128,6 +129,41 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class JudgeMessage:
+    role: str
+    content: str
+
+
+@dataclass(frozen=True)
+class JudgeRequest:
+    """One greedy (temperature 0) judge sample; an empty ``reasoning_effort`` leaves the effort to the model."""
+
+    model: str
+    messages: tuple[JudgeMessage, ...]
+    max_output_tokens: int
+    reasoning_effort: str
+
+
+@dataclass(frozen=True)
+class JudgeCompletion:
+    """The reply and its chat ``finish_reason``.
+
+    Strict chat retries ``length`` at the larger budget and fails any other finish but ``stop``; content-policy
+    chat keeps the text under any finish; both read a finish as an endpoint would. Responses treats every finish
+    but ``stop`` as an incomplete response that may be retried, unlike an endpoint, which retries only a
+    ``max_output_tokens`` cut and fails any other incomplete status.
+    """
+
+    text: str
+    finish_reason: str
+    completion_tokens: int | None = None
+
+
+JudgeCallback = Callable[[JudgeRequest], JudgeCompletion]
+"""Answers each judge sample in order from the grading thread: one per checklist criterion, pairwise game and retry."""
+
+
+@dataclass(frozen=True)
 class JudgeConnection:
     """Per-call endpoint credentials, kept outside serialized task specifications.
 
@@ -138,8 +174,11 @@ class JudgeConnection:
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
-    transport: Any = field(default=None, kw_only=True, repr=False, compare=False)
-    """Optional in-process HTTP transport; runtime-only, like the endpoint credentials."""
+    callback: Any = field(default=None, kw_only=True, repr=False, compare=False)
+    """A ``JudgeCallback``; runtime-only, like the credentials."""
+
+
+_Client = openai.OpenAI | JudgeCallback
 
 
 @dataclass(frozen=True)
@@ -218,6 +257,7 @@ def judge_reply(spec: JudgeSpec, messages: list[ChatCompletionMessageParam]) -> 
     if spec.api != "chat_completions" or spec.completion_policy is not JudgeCompletionPolicy.COMPLETED_TEXT:
         raise InvalidTask("judge_reply needs the chat_completions API and the completed_text policy")
     client, model = _client(spec, None)
+    assert isinstance(client, openai.OpenAI)
     try:
         with client:
             completion = _label_completion(
@@ -291,7 +331,7 @@ def grade_judge_candidate(
     if connection is None and runtime is None:
         raise RuntimeError("remote judge grading requires an explicit endpoint selection")
     client, model = _client(spec, connection)
-    with client:
+    with client if isinstance(client, openai.OpenAI) else nullcontext():
         if spec.rubric == RUBRIC_REFERENCE:
             return _judge_reference(spec, validated.references, candidate, client, model)
         if spec.rubric == RUBRIC_LABELS:
@@ -323,9 +363,7 @@ def _answer_text(
     return text.strip().removesuffix("<|eot_id|>").strip()
 
 
-def _judge_labels(
-    spec: JudgeSpec, reference: str, context: str, candidate: str, client: openai.OpenAI, model: str
-) -> Reward:
+def _judge_labels(spec: JudgeSpec, reference: str, context: str, candidate: str, client: _Client, model: str) -> Reward:
     fields = {"question": spec.question, "reference": reference, "candidate": candidate, "context": context}
     messages = _judge_messages(spec, fields)
     labels = _case_normalized(spec, spec.label_scores)
@@ -377,7 +415,7 @@ def _judge_messages(spec: JudgeSpec, fields: dict[str, str]) -> list[ChatComplet
 
 def _judged_answer(
     spec: JudgeSpec,
-    client: openai.OpenAI,
+    client: _Client,
     model: str,
     messages: list[ChatCompletionMessageParam],
     *,
@@ -414,7 +452,7 @@ def _judged_answer(
     raise RuntimeError("judge exhausted completion budgets")
 
 
-def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
+def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: _Client, model: str) -> Reward:
     """Judge both orders; the reward is the candidate's weighted share of games won, ties counting half."""
     labels = _case_normalized(spec, spec.label_scores)
     weights = _case_normalized(spec, spec.label_weights)
@@ -451,9 +489,7 @@ def _judge_pairwise(spec: JudgeSpec, baseline: str, candidate: str, client: open
     )
 
 
-def _judge_answers(
-    spec: JudgeSpec, references: tuple[str, ...], candidate: str, client: openai.OpenAI, model: str
-) -> Reward:
+def _judge_answers(spec: JudgeSpec, references: tuple[str, ...], candidate: str, client: _Client, model: str) -> Reward:
     listed = "\n".join(f"{index}. {reference}" for index, reference in enumerate(references))
     messages = _judge_messages(spec, {"question": spec.question, "references": listed, "candidate": candidate})
     reply, detail = _judged_answer(spec, client, model, messages, attempt_detail={}, temperature=None)
@@ -513,8 +549,21 @@ def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
 
 
 def _label_completion(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int, temperature: float | None
+    spec: JudgeSpec, client: _Client, model: str, messages: list, budget: int, temperature: float | None
 ) -> _LabelCompletion:
+    if not isinstance(client, openai.OpenAI):
+        reply = client(_request(spec, model, messages, budget, temperature))
+        finish = reply.finish_reason
+        if spec.api == "responses":
+            # Unlike an endpoint's, every unfinished callback reply is retryable as incomplete, without its partial text.
+            if finish != "stop":
+                return _LabelCompletion("", True, None, None, "incomplete")
+            return _LabelCompletion(_completed_text(finish, reply.text), False, None, None, "completed")
+        if spec.completion_policy is JudgeCompletionPolicy.CONTENT:
+            return _LabelCompletion(reply.text, False, None, None, finish)
+        if finish == "length":
+            return _LabelCompletion(reply.text, True, None, None, finish)
+        return _LabelCompletion(_completed_text(finish, reply.text), False, None, None, finish)
     if spec.api == "chat_completions":
         result = _chat_result(spec, client, model, messages, budget, temperature)
         response, attempts, request = result.response, result.transport_attempts, result.request
@@ -553,7 +602,7 @@ def _label_completion(
                 usage=response.usage.model_dump(mode="json") if response.usage else None,
             )
         return _LabelCompletion(
-            _completed_text(choice),
+            _completed_text(choice.finish_reason, choice.message.content),
             False,
             response.model,
             response.id,
@@ -721,7 +770,7 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai.OpenAI, str]:
+def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[_Client, str]:
     base_url = connection.base_url.strip() if connection else os.environ.get(BASE_URL_ENV, "").strip()
     fallback = (
         connection.default_model
@@ -729,23 +778,21 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
         else os.environ.get(MODEL_ENV, "")
     )
     model = spec.model.strip() or fallback.strip()
-    if not base_url:
+    callback = connection.callback if connection is not None else None
+    if not base_url and callback is None:
         raise InvalidTask(f"no judge endpoint: set {BASE_URL_ENV}")
     if not model:
         raise InvalidTask(f"no judge model: set {MODEL_ENV} or the spec's model field")
-    http_client = None
-    if connection is not None and connection.transport is not None:
-        # Only an in-process host transport needs httpx; staged grader runtimes need not ship it.
-        import httpx  # noqa: PLC0415
-
-        http_client = httpx.Client(transport=connection.transport)
+    if callback is not None:
+        if not callable(callback):
+            raise TypeError(f"Judge callback must be callable, got {type(callback).__name__}")
+        return cast(JudgeCallback, callback), model
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
     return (
         openai.OpenAI(
             base_url=base_url,
             api_key=(connection.api_key if connection else os.environ.get(API_KEY_ENV) or "unused"),
             max_retries=0,
-            http_client=http_client,
         ),
         model,
     )
@@ -756,7 +803,7 @@ def _question(spec: JudgeSpec) -> str:
 
 
 def _judge_reference(
-    spec: JudgeSpec, references: tuple[str, ...], candidate: str, client: openai.OpenAI, model: str
+    spec: JudgeSpec, references: tuple[str, ...], candidate: str, client: _Client, model: str
 ) -> Reward:
     prompt = REFERENCE_PROMPT.format(
         question=_question(spec),
@@ -768,7 +815,7 @@ def _judge_reference(
 
 
 def _judge_checklist(
-    spec: JudgeSpec, criteria: tuple[str, ...], context: str, candidate: str, client: openai.OpenAI, model: str
+    spec: JudgeSpec, criteria: tuple[str, ...], context: str, candidate: str, client: _Client, model: str
 ) -> Reward:
     context_block = f"\nReference context (not the candidate):\n{context.strip()}\n" if context.strip() else ""
     results = []
@@ -795,28 +842,21 @@ def _judge_checklist(
 
 
 def _ask(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, *, allowed_scores: tuple[float, ...]
+    spec: JudgeSpec, client: _Client, model: str, prompt: str, *, allowed_scores: tuple[float, ...]
 ) -> _ScoreResult:
     """Parse a final SCORE, retrying truncated replies with the larger budget."""
     attempts: list[_CompletionAttempt] = []
     budgets = _completion_budgets(spec)
     for attempt in range(1, spec.parse_attempts + 1):
         for index, budget in enumerate(budgets):
-            response = _complete(spec, client, model, prompt, budget)
-            choice = _completion_choice(response)
-            attempts.append(
-                _CompletionAttempt(
-                    finish_reason=choice.finish_reason,
-                    completion_tokens=response.usage.completion_tokens if response.usage else None,
-                    response=response.model_dump(mode="json"),
-                )
-            )
-            if choice.finish_reason == "length":
+            completion, content = _complete(spec, client, model, prompt, budget)
+            attempts.append(completion)
+            if completion.finish_reason == "length":
                 if index + 1 < len(budgets):
                     continue
                 raise GradingInfraError("judge completion is incomplete", **_attempt_detail(attempts))
             try:
-                reply = _completed_text(choice)
+                reply = _completed_text(completion.finish_reason, content)
             except RuntimeError as error:
                 raise GradingInfraError(str(error), **_attempt_detail(attempts)) from error
             score = _score(reply, allowed_scores)
@@ -846,10 +886,28 @@ def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
     return (spec.max_completion_tokens,)
 
 
-def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, budget: int) -> ChatCompletion:
-    return _chat_result(
-        spec, client, model, [{"role": "user", "content": prompt}], budget, temperature=spec.temperature
-    ).response
+def _complete(
+    spec: JudgeSpec, client: _Client, model: str, prompt: str, budget: int
+) -> tuple[_CompletionAttempt, str | None]:
+    messages: list[ChatCompletionMessageParam] = [{"role": "user", "content": prompt}]
+    if not isinstance(client, openai.OpenAI):
+        reply = client(_request(spec, model, messages, budget, spec.temperature))
+        return _CompletionAttempt(reply.finish_reason, reply.completion_tokens, asdict(reply)), reply.text
+    response = _chat_result(spec, client, model, messages, budget, temperature=spec.temperature).response
+    choice = _completion_choice(response)
+    tokens = response.usage.completion_tokens if response.usage else None
+    return _CompletionAttempt(choice.finish_reason, tokens, response.model_dump(mode="json")), choice.message.content
+
+
+def _request(
+    spec: JudgeSpec, model: str, messages: list[ChatCompletionMessageParam], budget: int, temperature: float | None
+) -> JudgeRequest:
+    if temperature != 0.0:  # a JudgeRequest is one greedy sample, so another temperature would be dropped
+        raise InvalidTask(f"a judge callback samples at temperature 0; the {spec.rubric} rubric needs {temperature}")
+    if spec.chat_template_kwargs:  # a JudgeRequest carries no chat template arguments, so they would be dropped
+        raise InvalidTask("a judge callback takes no chat_template_kwargs")
+    turns = tuple(JudgeMessage(message["role"], cast(str, message["content"])) for message in messages)
+    return JudgeRequest(model, turns, budget, spec.reasoning_effort)
 
 
 def _chat_result(
@@ -886,9 +944,8 @@ def _completion_choice(response: ChatCompletion):
     return choice
 
 
-def _completed_text(choice) -> str:
-    content = choice.message.content
-    if choice.finish_reason != "stop" or not isinstance(content, str) or not content.strip():
+def _completed_text(finish_reason: str | None, content: str | None) -> str:
+    if finish_reason != "stop" or not isinstance(content, str) or not content.strip():
         raise RuntimeError("judge completion is incomplete or has no text")
     return content
 
