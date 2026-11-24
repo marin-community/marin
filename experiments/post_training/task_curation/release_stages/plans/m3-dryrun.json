@@ -25,7 +25,7 @@
   "package_output_root": "/Users/benfeuer/Documents/experiments/active/atlas-release-pipeline/m3-dryrun/package",
   "pins": {
     "backend_survey": {
-      "sha256": "20ad068eb7f4f42a81577a975c95285dbe1c8e4da6ee5c826259d1516c11e66e",
+      "sha256": "d41ba3caf0a2148c1601f00fb8e6e1e434259a58013e39b0b04f462bf44f0f47",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v19/backend-validation/backend-survey.json"
     },
     "backend_validation_receipt": {
