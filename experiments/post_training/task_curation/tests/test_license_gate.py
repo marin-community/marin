@@ -14,15 +14,22 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from experiments.post_training.task_curation import driver
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.license_binding import BANNED_SOURCES_ISSUE
+from experiments.post_training.task_curation.license_binding import (
+    BANNED_SOURCES_ISSUE,
+    LICENSE_RECEIPT_INDEX,
+    append_license_receipt,
+    bind_license_receipt,
+)
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.pipeline import process_rows
+from experiments.post_training.task_curation.source import SourceOrigin
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, with_license
 from experiments.post_training.task_curation.tests.numbers_pipeline import NUMBERS_DATASET, number_source
 from infra.marina.apps.rl_data_catalog.server import licensing
 from infra.marina.apps.rl_data_catalog.server.admission import require_catalog_declaration, require_declaration_admission
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence
 
 
@@ -114,6 +121,64 @@ def test_scoped_exception_is_preserved_and_cannot_override_a_ban():
             "train",
             ban=None,
         )
+
+
+def test_source_rename_carries_its_license_receipt(tmp_path):
+    """A rename rebinds the reviewed receipt to the canonical identity.
+
+    The registry accepts only canonical receipt identities at its write boundary,
+    the catalog layer binds by the canonical id, and the re-keyed receipt keeps
+    the same evidence bytes: a rename never needs a new license judgment.
+    """
+    historical_id = "MarinSkyRL:nemotron_if"
+    canonical_id = canonical_source_id(historical_id)
+    assert canonical_id == "Nemotron:nemotron_if"
+
+    receipt = fixture_license(historical_id, NUMBERS_DATASET.name, NUMBERS_DATASET.revision)
+    # The registry write boundary refuses a receipt whose identity is not canonical,
+    # so a registry row can never keep a pre-rename id.
+    with pytest.raises(ValueError, match="License registry key differs from the receipt source identity"):
+        append_license_receipt(LICENSE_RECEIPT_INDEX, receipt, message="test: refuse the pre-rename identity")
+
+    # The maintained rebind re-points only the receipt identity; decisions follow it.
+    renamed = LicenseReceipt.model_validate_json(
+        receipt.model_copy(
+            update={
+                "source_id": canonical_id,
+                "decisions": [
+                    decision.model_copy(update={"source_id": canonical_source_id(decision.source_id)})
+                    for decision in receipt.decisions
+                ],
+            }
+        ).model_dump_json()
+    )
+    assert renamed.evidence == receipt.evidence
+
+    input_path = tmp_path / "input.txt"
+    input_path.write_text("1\n2\n")
+    source = number_source(input_path)
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            id=canonical_id,
+            origin=SourceOrigin("Nemotron"),
+            upstream_dataset="nemotron_if",
+            upstream_name="nemotron_if",
+            title=None,
+        ),
+    )
+    # A registry row still keyed by the pre-rename id no longer binds the renamed
+    # identity, and the gate fails closed on the missing evidence.
+    stale_registry = {historical_id: receipt}
+    assert bind_license_receipt(source, stale_registry.get(source.info.id)).info.license_receipt is None
+    with pytest.raises(ValueError, match="License evidence is missing"):
+        bind_license_receipt(source, stale_registry.get(source.info.id)).require_license()
+    # The re-keyed canonical row binds the same evidence; the rename carries its license.
+    bound = bind_license_receipt(source, {canonical_id: renamed}.get(source.info.id))
+    assert bound.info.license_receipt is not None
+    assert bound.info.license_receipt.evidence == receipt.evidence
+    bound.require_license()
 
 
 def test_license_gate_precedes_recipe_validation_and_ingestion(tmp_path, monkeypatch):
