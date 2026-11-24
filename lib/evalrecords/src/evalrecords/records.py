@@ -501,11 +501,16 @@ class CuratedSettings(BaseModel):
 
 # Request scheduling and how much of each task an attempt saves; neither changes a score.
 NON_SCORING_SETTINGS = frozenset({"concurrency", "task_evidence"})
+# The launcher's request deadline bounds retryable infrastructure failures, not scored token or turn budgets.
+NON_SCORING_DEADLINES = frozenset({"model_turn_timeout", "total_turn_timeout", "attempt_timeout"})
 
 
 def scoring_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
     """Keep settings that affect scores and define a run's identity."""
-    return {key: value for key, value in settings.items() if key not in NON_SCORING_SETTINGS}
+    scoring = {key: value for key, value in settings.items() if key not in NON_SCORING_SETTINGS}
+    if "limits" in scoring:
+        scoring["limits"] = {key: value for key, value in scoring["limits"].items() if key not in NON_SCORING_DEADLINES}
+    return scoring
 
 
 class CuratedAgentRef(BaseModel):

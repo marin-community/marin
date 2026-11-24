@@ -224,27 +224,33 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "update", [{"source_limit": 1}, {"task_machine": machine_runtime(backend="shellsim")}], ids=["selection", "backend"]
-)
-async def test_driver_resume_rejects_a_different_selection_or_machine_backend(
-    tmp_path, published_corpora, run_config, update
+@pytest.mark.parametrize("changed_setting", ["selection", "backend", "turn_budget", "token_budget"])
+async def test_driver_resume_rejects_different_scoring_settings(
+    tmp_path, published_corpora, run_config, changed_setting
 ):
     async def model(_request):
         return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
 
     output = str(tmp_path / "results")
     await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
+    updates = {
+        "selection": {"source_limit": 1},
+        "backend": {"task_machine": machine_runtime(backend="shellsim")},
+        "turn_budget": {"limits": run_config.limits.model_copy(update={"max_turns": 2})},
+        "token_budget": {"limits": run_config.limits.model_copy(update={"max_total_tokens": 128})},
+    }
     with pytest.raises(ValueError, match="Resume requires"):
         await run_evaluation(
-            published_corpora, output, run_config.model_copy(update=update), model, machine_factories={}
+            published_corpora,
+            output,
+            run_config.model_copy(update=updates[changed_setting]),
+            model,
+            machine_factories={},
         )
 
 
 @pytest.mark.asyncio
-async def test_driver_resumes_partial_archive_after_request_concurrency_and_task_evidence_change(
-    tmp_path, published_corpora, run_config
-):
+async def test_driver_resumes_partial_archive_after_operational_settings_change(tmp_path, published_corpora, run_config):
     calls = 0
     recovered = False
 
@@ -268,7 +274,15 @@ async def test_driver_resumes_partial_archive_after_request_concurrency_and_task
     await run_evaluation(
         published_corpora,
         output,
-        run_config.model_copy(update={"concurrency": 3, "task_evidence": TaskEvidence.REFERENCE}),
+        run_config.model_copy(
+            update={
+                "concurrency": 3,
+                "task_evidence": TaskEvidence.REFERENCE,
+                "limits": run_config.limits.model_copy(
+                    update={"model_turn_timeout": 60, "total_turn_timeout": 60, "attempt_timeout": 90}
+                ),
+            }
+        ),
         model,
         machine_factories={},
     )

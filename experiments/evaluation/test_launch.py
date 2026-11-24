@@ -376,7 +376,7 @@ def test_relaunch_changed_request_concurrency_and_task_evidence_preserves_identi
     StepRunner().run(build_evaluation_steps(before, execute))
     executed.clear()
 
-    model = replace(model, evaluation_num_concurrent=64)
+    model = replace(model, evaluation_num_concurrent=64, evaluation_request_timeout=21600)
     tuned = replace(model.serve, max_num_batched_tokens=8192, max_num_seqs=128, gpu_memory_utilization=0.9)
     config.write_text("evaluations:\n  custom:\n    benchmark: gsm8k\n    run:\n      concurrency: 16\n")
     bounded = load_evaluations(config)[0]
@@ -445,6 +445,24 @@ def _pipeline_spec(tmp_path):
         cache_key="caller-owned-immutable-artifact",
         version="2026.10.19",
     )
+
+
+@pytest.mark.parametrize("request_timeout", [1800, 21600])
+def test_relaunch_matches_records_without_a_request_deadline(tmp_path, request_timeout):
+    spec = replace(_pipeline_spec(tmp_path), cache_key=None, run_id="legacy-record")
+    before = prepare_evaluation_batch(spec)
+    identity = replace(before.evaluations[0].identity, output_dir=str(tmp_path / "saved-results"))
+    record_path = Path(_record(before, identity, RunStatus.INFRA_FAILED, "timed out", {}, {}, {}))
+    record = json.loads(record_path.read_text())
+    record["model"]["config"].pop("evaluation_request_timeout")
+    record_path.write_text(json.dumps(record))
+
+    after = prepare_evaluation_batch(
+        replace(spec, model=replace(spec.model, evaluation_request_timeout=request_timeout))
+    )
+
+    assert after.evaluations[0].identity.run_id == identity.run_id
+    assert after.evaluations[0].identity.output_dir == identity.output_dir
 
 
 def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, monkeypatch):

@@ -215,7 +215,10 @@ class ModelConfig:
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     evaluation_num_concurrent: int | None = None
-    evaluation_request_timeout: float = EVALUATION_REQUEST_TIMEOUT_SECONDS
+    evaluation_request_timeout: float = field(
+        default=EVALUATION_REQUEST_TIMEOUT_SECONDS,
+        metadata={"fingerprint_omit_value": EVALUATION_REQUEST_TIMEOUT_SECONDS},
+    )
 
     def __post_init__(self) -> None:
         if "/" in self.name:

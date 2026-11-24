@@ -18,7 +18,7 @@ def test_post_training_evaluation_identities_stay_pinned(monkeypatch):
     )
 
     assert [(step.name, step.version, step.fingerprint()) for step in steps] == [
-        ("evals/iceball-micro/gsm8k-smoke-aime24-smoke", "2026.10.26", "2eb886bc"),
-        ("evals/skyrl-port-smoke/gsm8k-smoke", "2026.10.26", "a03541b6"),
-        ("evals/alice-curriculum-rl-naive-smoke/gsm8k-smoke", "2026.10.26", "3019655e"),
+        ("evals/iceball-micro/gsm8k-smoke-aime24-smoke", "2026.10.26", "967d2ef0"),
+        ("evals/skyrl-port-smoke/gsm8k-smoke", "2026.10.26", "e09084ca"),
+        ("evals/alice-curriculum-rl-naive-smoke/gsm8k-smoke", "2026.10.26", "5eff4441"),
     ]

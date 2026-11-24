@@ -124,8 +124,16 @@ def _model_identity(model: ModelRef) -> dict:
         mode="json",
         exclude={
             "config_digest": True,
-            "config": {"serve": _SERVE_THROUGHPUT_FIELDS, "evaluation_num_concurrent": True},
-            "source_config": {"serve": _SERVE_THROUGHPUT_FIELDS, "evaluation_num_concurrent": True},
+            "config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
+            "source_config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
         },
     )
 

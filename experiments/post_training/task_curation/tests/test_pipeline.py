@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+import requests
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -512,6 +513,34 @@ def test_url_download_stages_the_file_only_when_its_digest_matches(tmp_path, ser
     with pytest.raises(ValueError, match="SHA-256"):
         download_source(DownloadRequest(bad, str(tmp_path / "bad")), campaign=CampaignRuntime())
     assert not (tmp_path / "bad" / "rows.jsonl").exists()
+
+
+def test_url_download_times_out_when_the_response_body_stalls(tmp_path, monkeypatch):
+    release = threading.Event()
+    (tmp_path / "rows.jsonl").write_bytes(b"data")
+
+    class StalledBody(SimpleHTTPRequestHandler):
+        def copyfile(self, source, outputfile):
+            release.wait()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(StalledBody, directory=str(tmp_path)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(pipeline_module, "URL_TIMEOUT", 0.1)
+    source = UrlSource(
+        f"http://127.0.0.1:{server.server_address[1]}/rows.jsonl",
+        hashlib.sha256(b"data").hexdigest(),
+        "rows.jsonl",
+        SourceFormat.JSONL,
+    )
+    try:
+        with pytest.raises((requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+            download_source(DownloadRequest(source, str(tmp_path / "download")), campaign=CampaignRuntime())
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def convert_judge_fixture(row, context):
