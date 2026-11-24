@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from dataclasses import asdict, fields, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -19,7 +19,7 @@ import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
-from marin.evaluation.eval_env import DAYTONA_TARGET_ENV
+from marin.evaluation.eval_env import DAYTONA_EVAL_API_KEY_ENV, DAYTONA_TARGET_ENV
 from marin.execution.artifact import (
     RECORD_FILENAME,
     Artifact,
@@ -56,6 +56,15 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training import rl_presets as presets
+from experiments.post_training.rl_checkpoint_eval import (
+    CHECKPOINT_DAYTONA_TTL,
+    CHECKPOINT_HARNESS,
+    CHECKPOINT_HARNESS_OPTIONS,
+    CHECKPOINT_PROFILE,
+    CHECKPOINT_REPLY_TOKENS,
+    CHECKPOINT_TASKS_FILENAME,
+    checkpoint_tasks,
+)
 from experiments.post_training.rl_presets import Evaluation, HfInitializer, PolicyInitializer, Preset, StoredInitializer
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.selection import (
@@ -65,6 +74,7 @@ from experiments.post_training.task_curation.selection import (
     TASK_SPEC_COLUMN,
     GraderKind,
 )
+from experiments.post_training.task_curation.swesmith_training import SWESMITH_DATASET, native_swesmith_selection
 
 REPO_ROOT = find_project_root(Path(__file__))
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
@@ -217,9 +227,6 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
     if preset.gated:
         owned_keys |= _GATED_KEYS
     owners = {
-        "Harbor evaluation requires generator.enable_http_endpoint": (
-            preset.harbor is not None and generator.get("enable_http_endpoint") is False
-        ),
         "use the preset's declared owned keys": any(has(path) for path in owned_keys),
         "network transport is fixed by the preset recipe": any(
             key.startswith("NCCL_") for key in values.get("extra_env", {})
@@ -455,8 +462,6 @@ def _training_config(
             presets.validate_agentic_recipe(config)
         except ValueError as error:
             raise click.BadParameter(str(error)) from error
-    if preset.harbor is not None:
-        config = config.merge(RecipePatch(generator=sections.Generator(enable_http_endpoint=True)))
     return config
 
 
@@ -496,15 +501,18 @@ def run_spec(
     default, selection = task_selections(preset, tasks)
     summary = selection_summary(selection)
     _refuse_judged(summary, "train")
-    harness_by_dataset = get_path(authored, "environment.task_sessions.task_spec.harness_by_dataset")
-    harnesses = harness_by_dataset if isinstance(harness_by_dataset, Mapping) else {}
-    if missing_harnesses := sorted(
-        dataset for dataset in summary.get("harness_graded_datasets", ()) if harnesses.get(dataset) != "harbor_trial"
-    ):
-        raise click.BadParameter(
-            f"training datasets with harness graders require harbor_trial in harness_by_dataset: "
-            f"{', '.join(missing_harnesses)}"
-        )
+    training_selection = selection
+    if legacy_datasets := set(summary.get("harness_graded_datasets", ())):
+        if unsupported := legacy_datasets - {SWESMITH_DATASET}:
+            raise click.BadParameter(
+                f"Unsupported training datasets with harness graders: {', '.join(sorted(unsupported))}"
+            )
+        settings_path = "environment.task_sessions.task_spec"
+        harness = get_path(authored, f"{settings_path}.harness_by_dataset.{SWESMITH_DATASET}")
+        machine = get_path(authored, f"{settings_path}.task_machine_by_dataset.{SWESMITH_DATASET}")
+        if harness != "pi" or machine is MISSING:
+            raise click.BadParameter("SWESmith training requires the Pi harness and a task machine")
+        training_selection = native_swesmith_selection(selection)
     chosen = preset.evaluations
     if preset.batch_mix is not None:
         assert isinstance(workload, presets.Training)
@@ -561,6 +569,33 @@ def run_spec(
                 n_samples_per_prompt=evaluation.answers,
                 schedule=workload.additional_schedule,
             )
+    if preset.checkpoint_evaluation:
+        budget = config.context_budget
+        assert budget is not None
+        if CHECKPOINT_REPLY_TOKENS >= budget.effective_serving_window_tokens:
+            raise click.BadParameter("Checkpoint reply tokens must leave room for input in the serving window")
+        daytona = {
+            "eval_api_key_env": DAYTONA_EVAL_API_KEY_ENV,
+            "eval_ttl_minutes": CHECKPOINT_DAYTONA_TTL,
+            "eval_image_build": "declarative",
+        }
+        if get_path(authored, "environment.task_sessions.daytona.api_key_env") is MISSING:
+            daytona.update(api_key_env=DAYTONA_EVAL_API_KEY_ENV, ttl_minutes=CHECKPOINT_DAYTONA_TTL)
+        config = config.merge(
+            RecipePatch(
+                environment=sections.Environment(
+                    task_sessions={
+                        "daytona": daytona,
+                        "agent_harnesses": {CHECKPOINT_HARNESS: CHECKPOINT_HARNESS_OPTIONS},
+                    }
+                )
+            )
+        )
+        for cohort in preset.checkpoint_evaluation:
+            evaluation_data.append(
+                (cohort.name, (ArtifactDataSource(checkpoint_tasks(cohort), relative_path=CHECKPOINT_TASKS_FILENAME),))
+            )
+            profiles[cohort.name] = CHECKPOINT_PROFILE
     config = config.merge(
         RecipePatch(
             trainer=sections.Trainer(
@@ -581,7 +616,7 @@ def run_spec(
         config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config.to_skyrl()).to_skyrl(), sort_keys=False),
         model=model,
         model_name=model_name,
-        train_data=workload.training_data(selection),
+        train_data=workload.training_data(training_selection),
         validation_data=validation_data,
         evaluation_data=tuple(evaluation_data),
         topology=SkyRLTopology(
@@ -627,9 +662,7 @@ def run_step(
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
-    if preset.harbor is not None:
-        required_env += (preset.harbor.daytona_api_key_env, DAYTONA_TARGET_ENV)
-    elif get_path(config, "terminal_bench.installed_agent") is not MISSING:
+    if preset.checkpoint_evaluation or get_path(config, "environment.task_sessions.agent_harnesses.pi") is not MISSING:
         required_env += (DAYTONA_TARGET_ENV,)
     required_env += tuple(_recipe_env(config))
     return skyrl_step(

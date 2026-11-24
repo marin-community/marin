@@ -18,6 +18,7 @@ from verifyit.reasoning_markup import ReasoningViolation
 
 GRADING_SECONDS_METRIC = "timing/grading"
 SETUP_SECONDS_METRIC = "timing/setup"
+SETUP_COMPLETED_METRIC = "setup_completed"
 TASK_TIMING_KEYS = (GRADING_SECONDS_METRIC, SETUP_SECONDS_METRIC)
 
 LENGTH_STOP_REASON = "length"

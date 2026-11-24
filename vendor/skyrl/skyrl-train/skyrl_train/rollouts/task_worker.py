@@ -7,20 +7,24 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
-from typing import Any, Protocol
+from functools import partial
+from typing import Any
 from uuid import uuid4
 
 from jinja2 import TemplateError
 from daytona import DaytonaError
+from finestore.rl.task_health import AttemptReceipt
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
-from shellbox.machine import Backend, Machine, MachineFactory
+from rigging.task_errors import ErrorCategory, error_category
+from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
-from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
+from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
 from verifyit.modes.grade_judge import JudgeConnection
+from rolloutengine.agents.model_relay import PromptTokenizationError
 from rolloutengine.harness.core import Harness
-from rolloutengine.harness.external import AgentHarness
+from rolloutengine.machines import MachineSetupError
 from rolloutengine.models import (
     GenerationLimitReached,
     ContextRejected,
@@ -32,15 +36,14 @@ from rolloutengine.models import (
     RolloutContractError,
     RolloutFailure,
     RolloutOperation,
-    Prompt,
     TaskRolloutSpec,
 )
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
 from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
+from marinskyrl.agent_harnesses import AgentHarnessSettings, TaskAgentHarnesses
 from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_train.config.utils import generation_context_limit
-from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
 from skyrl_gym.task_records import fold_grades, skipped_grade
 from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
@@ -50,17 +53,10 @@ from skyrl_train.inference_engines.inference_engine_client import InferenceEngin
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter, write_trajectory_batch
 from skyrl_train.rollouts.group_grading import GROUP_GRADERS, GroupGrader, grade_groups
-from skyrl_train.rollouts.harbor_tasks import (
-    HARBOR_MACHINE_BACKEND,
-    HARBOR_EVAL_MACHINE_BACKEND,
-    HarborTaskSettings,
-    harbor_grading_failure,
-    shape_harbor_rollouts,
-)
-from skyrl_train.rollouts.harbor_settings import EnvironmentType
 from skyrl_train.rollouts.machines import OwnedMachineFactory, TaskMachineError
 from skyrl_train.rollouts.workers import WorkerShard, detached_config
 from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propagate_data_sources
+from skyrl_train.rollouts.task_health import attempt_receipt, write_attempt_receipts
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
@@ -84,6 +80,7 @@ from skyrl_train.rollouts.training_record import (
     training_rollout,
 )
 from skyrl_train.task_error_handling import ErrorHandlingConfig
+from skyrl_train.task_errors import ERROR_CATEGORIES
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -115,26 +112,21 @@ DAYTONA_RATE_LIMIT_HEADERS = frozenset(
 ) | {"retry-after"}
 
 
-class InstalledAgentWorker(Protocol):
-    async def startup(self) -> None: ...
-
-    async def shutdown(self) -> None: ...
-
-    def original_harness(
-        self, lowered: TaskRolloutSpec, session_id: str, settings: HarborTaskSettings, phase: str
-    ) -> Harness: ...
-
-    async def run(
-        self,
-        machine: Machine | None,
-        complete: Callable[[Prompt], Awaitable[ModelTurn]],
-        *,
-        lowered: TaskRolloutSpec,
-        session_id: str,
-    ) -> None: ...
+AGENT_RETRY_BACKOFF = 1.0
 
 
-SKYRL_AGENT_HARNESS = "skyrl_agent"
+async def _tokenize(
+    inference: InferenceEngineClient, template_kwargs: Mapping[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Count agent prompt tokens with the same serving actors that produce sampled tokens."""
+    body = {**payload, "model": inference.model_name}
+    if "messages" in body and template_kwargs:
+        body["chat_template_kwargs"] = {**template_kwargs, **body.get("chat_template_kwargs", {})}
+    result = await inference.tokenize({"json": body, "headers": {}})
+    if "error" in result:
+        code = result["error"].get("code")
+        raise PromptTokenizationError(code if type(code) is int else None)
+    return result
 
 
 async def _model_turn(
@@ -238,6 +230,15 @@ def _failed_rollout(
         raise error
     exception_type = type(error).__name__
     diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
+    if isinstance(error, MachineSetupError):
+        diagnostics.update(
+            setup_exit_code=error.exit_code,
+            setup_reason=error.reason.value,
+            setup_stdout=redact_string(error.stdout),
+            setup_stderr=redact_string(error.stderr),
+        )
+    if isinstance(error, PromptTokenizationError):
+        diagnostics["status_code"] = error.status_code
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
         diagnostics["cause_error_type"] = type(error.__cause__).__name__
         diagnostics["machine_operation"] = error.operation.value
@@ -281,12 +282,12 @@ def _failed_rollout(
     elif isinstance(error, TemplateError):
         exception_type = "TemplateError"
         diagnostics["cause_error_type"] = type(error).__name__
-    elif isinstance(error, TaskMachineError):
-        exception_type = "TaskMachineError"
     elif isinstance(error, ContextWindowExceeded):
         exception_type = "ContextLengthExceededError"
         diagnostics["error_category"] = "context_overflow"
-    elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE}:
+    elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE} and not isinstance(
+        error, (TaskMachineError, PromptTokenizationError)
+    ):
         exception_type = VERIFIER_RUNTIME_ERROR
         diagnostics.setdefault("cause_error_type", type(error).__name__)
     elif isinstance(error, ModelServerError):
@@ -333,6 +334,33 @@ def _failed_rollout(
     )
 
 
+def _confirmed_agent_result(result: TrainingRollout) -> TrainingRollout:
+    if not result.grade.diagnostics.get("cleanup_errors"):
+        return result
+    grade = replace(
+        result.grade,
+        status=Outcome.INFRA_ERROR,
+        reward=None,
+        passed=None,
+        error="Could not confirm agent task cleanup",
+        failure=GradingFailure.EXECUTION,
+    )
+    failure = result.failure or RolloutFailure("TaskMachineError", {"machine_operation": "close"})
+    return replace(result, grade=grade, failure=failure)
+
+
+def _retryable_agent_attempt(result: TrainingRollout) -> bool:
+    failure = result.failure
+    if failure is None or result.grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}:
+        return False
+    if result.grade.diagnostics.get("cleanup_errors") or failure.diagnostics.get("setup_exit_code"):
+        return False
+    status = failure.diagnostics.get("provider_status_code", failure.diagnostics.get("status_code"))
+    if isinstance(status, int):
+        return status in (409, 429) or 500 <= status < 600
+    return error_category(failure.exception_type, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
+
+
 @dataclass(frozen=True)
 class RemoteJudgeSettings:
     base_url: str
@@ -353,16 +381,16 @@ class TaskRolloutWorker:
         model_client: ModelClient,
         factories: Mapping[str, MachineFactory],
         max_verifier_workers: int = 0,
-        harbor: HarborTaskSettings | None = None,
         concurrent_tasks: int | None = None,
-        concurrent_harbor_tasks: int | None = None,
         retry_wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
         group_graders: Mapping[str, GroupGrader] = GROUP_GRADERS,
         sessions: Mapping[str, EpisodeFactory] | None = None,
         *,
         shutdown_timeout: float,
-        installed_agents: InstalledAgentWorker | None = None,
+        concurrent_training_machine_tasks: int | None = None,
+        agents: TaskAgentHarnesses | None = None,
         judge_connection: JudgeConnection | None = None,
+        task_health_export: str | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
@@ -372,24 +400,18 @@ class TaskRolloutWorker:
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
-        self.harbor = harbor
-        self.installed_agents = installed_agents
+        self.agents = agents
+        self.task_health_export = task_health_export
         self.retry_wait = retry_wait
         self.group_graders = group_graders
         self.task_slots = asyncio.Semaphore(concurrent_tasks) if concurrent_tasks is not None else nullcontext()
-        self.harbor_task_slots = (
-            nullcontext()
-            if harbor is None
-            else asyncio.Semaphore(
-                harbor.concurrent_trials if concurrent_harbor_tasks is None else concurrent_harbor_tasks
-            )
+        self.training_machine_slots = (
+            asyncio.Semaphore(concurrent_training_machine_tasks)
+            if concurrent_training_machine_tasks is not None
+            else nullcontext()
         )
         self.error_handling = ErrorHandlingConfig.from_mapping(trajectory_runner_cfg.get("error_handling", {}))
-        self.projection = replace(
-            projection,
-            error_handling=self.error_handling,
-            harbor_error_handling=None if harbor is None else harbor.error_handling,
-        )
+        self.projection = replace(projection, error_handling=self.error_handling)
         self.verifier_executor = (
             ThreadPoolExecutor(max_workers=max_verifier_workers, thread_name_prefix="task-verifier")
             if max_verifier_workers > 0
@@ -415,9 +437,9 @@ class TaskRolloutWorker:
         finally:
             self.active_requests.discard(task)
 
-    def _configured_task_and_harnesses(
-        self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
-    ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
+    def _harnesses(self, lowered: TaskRolloutSpec, agents: Mapping[str, Harness]) -> dict[str, Harness]:
+        if lowered.harness in agents:
+            return {lowered.harness: agents[lowered.harness]}
         harnesses = episode_harnesses(lowered, self.sessions)
         if lowered.harness == ASSISTANT_PREFIX_HARNESS and lowered.task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
             # The assistant-prefix transport records no reasoning violation, so rejection would never fire.
@@ -426,79 +448,22 @@ class TaskRolloutWorker:
             harnesses[lowered.harness] = AssistantPrefixHarness()
         elif is_shell_harness(lowered.harness):
             harnesses[lowered.harness] = shell_harness(lowered.harness)
-        if lowered.harness == HARBOR_TRIAL_SESSION:
-            if harbor is None or self.installed_agents is None:
-                raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
-            engine_requirements = lowered.task.environment_requirements.model_copy(
-                update={"setup_commands": (), "working_directory": None}
-            )
-            if engine_requirements != EnvironmentRequirements():
-                raise ValueError(
-                    "Declare environment requirements in the Harbor package; "
-                    "TaskSpec overrides support only setup_commands and their working_directory"
-                )
-            harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
-            # The bound Harbor trial retains and executes the original setup.
-            # The recording engine must not provision a second task machine for it.
-            engine_task = lowered.task.model_copy(
-                update={"environment_requirements": engine_requirements}
-            )
-            # Harbor owns the phase deadlines and must still run its verifier
-            # after an agent timeout. The outer attempt deadline covers the full trial.
-            lowered = lowered.model_copy(
-                update={
-                    "task": engine_task,
-                    "limits": lowered.limits.model_copy(
-                        update={
-                            "model_turn_timeout": None,
-                            "tool_turn_timeout": None,
-                            "total_turn_timeout": None,
-                        }
-                    ),
-                }
-            )
-        elif harbor is not None and self.installed_agents is not None:
-            if not is_shell_harness(lowered.harness):
-                raise ValueError("SkyRL agents require a Shellbox task grader")
-            lowered = lowered.model_copy(update={"harness": SKYRL_AGENT_HARNESS})
-
-            async def agent(context, complete):
-                await self.installed_agents.run(context.machine, complete, lowered=lowered, session_id=session_id)
-
-            harnesses[SKYRL_AGENT_HARNESS] = AgentHarness(agent)
-        return lowered, harnesses
+        return harnesses
 
     async def generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
         with self._active_request():
             return await self._generate(request)
 
     async def _generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
-        lowered_tasks = [row.spec for row in request.rows]
+        lowered_tasks = [row.spec.model_copy(update={"judge_connection": self.judge_connection}) for row in request.rows]
         group_graders = [row.group_grader for row in request.rows]
         metadata = request.batch_metadata
         phase = "train" if metadata is None else metadata.training_phase
-        harbor_settings = [self.harbor if "harbor" in item.task.tags else None for item in lowered_tasks]
-        policies = [self.error_handling if harbor is None else harbor.error_handling for harbor in harbor_settings]
-        lowered_tasks = [
-            item if harbor is None else harbor.configured_spec(item, phase=phase)
-            for item, harbor in zip(lowered_tasks, harbor_settings, strict=True)
-        ]
         trajectory_ids = request.trajectory_ids
         session_ids = [
             trajectory_ids[index].to_string() if trajectory_ids is not None else uuid4().hex
             for index in range(len(lowered_tasks))
         ]
-        selected_harnesses: list[Mapping[str, Harness]] = []
-        for index, lowered in enumerate(lowered_tasks):
-            lowered, harnesses = self._configured_task_and_harnesses(
-                lowered, harbor_settings[index], session_ids[index], phase
-            )
-            lowered_tasks[index] = lowered.model_copy(update={"judge_connection": self.judge_connection})
-            selected_harnesses.append(harnesses)
-        engines = [RolloutEngine(self.factories, harnesses) for harnesses in selected_harnesses]
-        for engine, lowered in zip(engines, lowered_tasks, strict=True):
-            engine.check(lowered)
-        tasks = [item.task for item in lowered_tasks]
         sampling = get_sampling_params_for_backend(
             self.trajectory_runner_cfg.backend, self.trajectory_runner_cfg.sampling_params
         )
@@ -506,11 +471,19 @@ class TaskRolloutWorker:
         require_logprobs = logprobs_requested(request, self.trajectory_runner_cfg)
         max_input_length = int(self.trajectory_runner_cfg.max_input_length)
         max_context_length = generation_context_limit(self.trajectory_runner_cfg)
+        agents = {} if self.agents is None else self.agents.bind(max_context_length, int(sampling["max_tokens"]))
+        engines = [RolloutEngine(self.factories, self._harnesses(spec, agents)) for spec in lowered_tasks]
+        for engine, lowered in zip(engines, lowered_tasks, strict=True):
+            engine.check(lowered)
+        tasks = [item.task for item in lowered_tasks]
+        evidence: list[AttemptReceipt] = []
 
         async def run(index, lowered):
             task = lowered.task
-            harbor = harbor_settings[index]
             session_id = session_ids[index]
+            attempt_id = session_id
+            external_agent = lowered.harness in agents
+            identity = request.rows[index].metadata.evaluation_identity
 
             async def model(request):
                 try:
@@ -519,9 +492,9 @@ class TaskRolloutWorker:
                         request,
                         sampling_params=sampling,
                         max_context_length=max_context_length,
-                        max_prompt_length=max_input_length,
+                        max_prompt_length=None if external_agent else max_input_length,
                         chat_template_kwargs=self.chat_template_kwargs,
-                        session_id=session_id,
+                        session_id=attempt_id,
                     )
                 except (GenerationLimitReached, ContextLengthExceededError) as error:
                     raise ContextRejected(
@@ -531,12 +504,14 @@ class TaskRolloutWorker:
                     ) from error
 
             engine = engines[index]
-            harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
             retries = 0
+            machine_slots = (
+                self.training_machine_slots if phase == "train" and lowered.task_machine is not None else nullcontext()
+            )
             while True:
                 try:
-                    async with harbor_slots, self.task_slots:
-                        result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
+                    async with machine_slots, self.task_slots:
+                        result = training_rollout(await engine.run_task(lowered, model, run_id=attempt_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
                 if task.reasoning_markup == ReasoningMarkupPolicy.REJECT:
@@ -552,20 +527,28 @@ class TaskRolloutWorker:
                     result = replace(
                         result, grade=skipped_grade(task.grader.reason, diagnostics=result.grade.diagnostics)
                     )
-                if harbor is None:
+                if not external_agent:
                     return result
-                result = harbor_grading_failure(result)
-                delay = harbor.retry_delay(result.failure, retries)
-                if delay is None:
+                result = _confirmed_agent_result(result)
+                if self.task_health_export is not None and phase == "train":
+                    if receipt := attempt_receipt(
+                        attempt_id, lowered, result, task_digest=None if identity is None else identity.task_digest
+                    ):
+                        evidence.append(receipt)
+                if retries or not _retryable_agent_attempt(result):
                     return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
-                logger.info("Task {} retry {} after {} seconds", task.id, retries + 1, delay)
+                logger.info("Retrying task {} after an infrastructure failure", task.id)
                 with rollout_wait("retry_backoff"):
-                    await self.retry_wait(delay)
+                    await self.retry_wait(AGENT_RETRY_BACKOFF)
                 retries += 1
+                attempt_id = f"{session_id}:retry-{retries}"
 
         with rollout_phase("collect"):
             async with asyncio.TaskGroup() as group:
                 pending = [group.create_task(run(index, item)) for index, item in enumerate(lowered_tasks)]
+            if evidence:
+                assert self.task_health_export is not None
+                await asyncio.to_thread(write_attempt_receipts, self.task_health_export, evidence)
             rollouts = await grade_groups(
                 tasks,
                 group_graders,
@@ -575,18 +558,9 @@ class TaskRolloutWorker:
                 else [task.id for task in tasks],
                 self.group_graders,
                 phase,
-                policies,
+                [self.error_handling] * len(tasks),
                 logprobs_required=require_logprobs,
             )
-            if self.harbor is not None:
-                rollouts = shape_harbor_rollouts(
-                    rollouts,
-                    request,
-                    self.harbor,
-                    int(self.trajectory_runner_cfg.sampling_params.max_generate_length),
-                    self.projection.tokenizer,
-                    harbor_tasks=[harbor is not None for harbor in harbor_settings],
-                )
         return rollouts
 
     async def run(self, input_batch: TaskRequestBatch) -> TrajectoryBatch:
@@ -605,8 +579,7 @@ class TaskRolloutWorker:
         self.trajectory_sink = sink
 
     async def startup(self) -> None:
-        if self.installed_agents is not None:
-            await self.installed_agents.startup()
+        pass
 
     async def shutdown(self) -> None:
         """Cancel rollouts and release their machines before actor termination."""
@@ -631,8 +604,6 @@ class TaskRolloutWorker:
         finally:
             if self.verifier_executor is not None:
                 self.verifier_executor.shutdown(wait=False, cancel_futures=True)
-            if self.installed_agents is not None:
-                await self.installed_agents.shutdown()
         if failures:
             raise ExceptionGroup("Task worker shutdown failed", failures)
 
@@ -654,7 +625,6 @@ class TaskRolloutWorkerSpec:
     config: DictConfig
     engines: list[InferenceEngineInterface]
     sessions: dict[str, EpisodeFactory] = field(default_factory=dict)
-    harbor_config: DictConfig | None = None
 
     @classmethod
     def from_config(
@@ -662,61 +632,31 @@ class TaskRolloutWorkerSpec:
         config,
         engines,
         *,
-        harbor_config: DictConfig | None = None,
         sessions: Mapping[str, EpisodeFactory] | None = None,
     ):
         return cls(
             detached_config(config),
             list(engines),
             {} if sessions is None else dict(sessions),
-            None if harbor_config is None else detached_config(harbor_config),
         )
 
     def build(self, tokenizer, shard: WorkerShard) -> TaskRolloutWorker:
-        judge_config = self.config.environment.task_sessions.get("remote_judge")
+        task_sessions = self.config.environment.task_sessions
+        judge_config = task_sessions.get("remote_judge")
         judge = None if judge_config is None else RemoteJudgeSettings(**dict(judge_config)).connection()
-        harbor = None if self.harbor_config is None else HarborTaskSettings.from_config(self.harbor_config)
         runner_config = self.config.generator
         client_config = OmegaConf.merge(self.config, {"generator": {"enable_http_endpoint": False}})
         inference = InferenceEngineClient(self.engines, tokenizer, client_config)
         client = DirectModelClient(inference)
-        installed_agents = None
-        if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
-            # Full Harbor is an optional dependency for installed-agent runs.
-            from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
-            from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
-            from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
-
-            settings = InstalledAgentSettings.model_validate(
-                OmegaConf.to_container(self.harbor_config.installed_agent, resolve=True)
+        agents = None
+        if configured_agents := task_sessions.get("agent_harnesses"):
+            agents = TaskAgentHarnesses(
+                AgentHarnessSettings.model_validate(OmegaConf.to_container(configured_agents, resolve=True)),
+                inference.model_name,
+                partial(_tokenize, inference, dict(runner_config.get("chat_template_kwargs", {}))),
             )
-            assert harbor is not None
-            daytona_options = harbor.environment.kwargs
-            daytona_connection = DaytonaConnection(
-                api_key=os.environ.get(daytona_options.get("api_key_env") or "DAYTONA_API_KEY"),
-                api_url=os.environ.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
-                target=os.environ.get("DAYTONA_TARGET"),
-            )
-            installed_agents = InstalledAgentRuntime(
-                settings,
-                AgentInferenceBackend(
-                    inference.model_name, generation_context_limit(runner_config), inference.tokenize, tokenizer
-                ),
-                int(runner_config.sampling_params.max_generate_length),
-                daytona_connection=daytona_connection,
-                eval_daytona_connection=replace(
-                    daytona_connection,
-                    api_key=os.environ.get(daytona_options.get("eval_api_key_env") or "DAYTONA_API_KEY"),
-                ),
-            )
-        factories = task_machine_factories(self.config.environment.task_sessions)
-        if harbor is not None:
-            if harbor.environment.type != EnvironmentType.DOCKER:
-                factories[HARBOR_MACHINE_BACKEND] = harbor.machine_factory()
-                if harbor.environment.kwargs.get("eval_api_key_env"):
-                    factories[HARBOR_EVAL_MACHINE_BACKEND] = harbor.machine_factory(phase="eval")
-            elif Backend.DOCKER in factories:
-                factories[HARBOR_MACHINE_BACKEND] = factories[Backend.DOCKER]
+        factories = task_machine_factories(task_sessions)
+        machine_task_limit = self.config.trajectory_runner.get("max_concurrent_training_machine_tasks")
         return TaskRolloutWorker(
             runner_config,
             (
@@ -726,12 +666,12 @@ class TaskRolloutWorkerSpec:
             ),
             client,
             factories,
-            max_verifier_workers=int(self.config.environment.task_sessions.max_verifier_workers),
-            harbor=harbor,
+            max_verifier_workers=int(task_sessions.max_verifier_workers),
             concurrent_tasks=int(self.config.trajectory_runner.max_concurrent_tasks),
-            concurrent_harbor_tasks=None if harbor is None else max(1, harbor.concurrent_trials // shard.count),
             sessions=self.sessions,
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
-            installed_agents=installed_agents,
+            concurrent_training_machine_tasks=None if machine_task_limit is None else max(1, machine_task_limit // shard.count),
+            agents=agents,
             judge_connection=judge,
+            task_health_export=str(self.config.trainer.export_path) if agents is not None else None,
         )

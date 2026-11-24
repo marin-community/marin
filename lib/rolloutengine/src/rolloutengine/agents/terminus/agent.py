@@ -10,7 +10,7 @@ asks it to confirm. Near the context limit, or when the model rejects a request 
 subagents to summarize its work and continues from their handoff.
 
 The harness records every request, including the summarization subagents', so each counts toward
-``RolloutLimits.max_turns``. The rollout limits end the loop; the agent has no turn cap of its own.
+``RolloutLimits.max_turns``. A launch can also cap main-loop turns independently of model requests.
 """
 
 import asyncio
@@ -105,10 +105,15 @@ class TerminusOptions:
     tmux_pane_width: int = 160
     tmux_pane_height: int = 40
     batch_turn_execs: bool = True
+    max_main_turns: int | None = None
+    setup_timeout: float | None = None
+    """Bound terminal startup separately and start the turn budget once the terminal is ready."""
 
     def __post_init__(self) -> None:
         if self.max_input_tokens < 1 or self.max_output_tokens < 1:
             raise ValueError("Terminus token limits must be positive")
+        if self.max_main_turns is not None and self.max_main_turns < 1:
+            raise ValueError("Terminus main turn limit must be positive")
 
     @property
     def context_limit(self) -> int:
@@ -146,7 +151,10 @@ async def run_terminus(options: TerminusOptions, context: HarnessContext, comple
         pane_width=options.tmux_pane_width,
         pane_height=options.tmux_pane_height,
     )
-    await session.start()
+    async with asyncio.timeout(options.setup_timeout):
+        await session.start()
+    if options.setup_timeout is not None:
+        context.begin_turn_budget()
     # Ending the session kills the jobs the agent started in it, such as a server that the tests check, so it
     # ends after grading, as in Harbor.
     context.cleanup.push_after_grading("terminus_tmux", session.close)
@@ -242,6 +250,7 @@ class Terminus2:
         self._context_window_manager = ContextWindowManager(self._llm)
         self._session = session
         self._pending_completion = False
+        self._max_main_turns = options.max_main_turns
         self._batch_turn_execs = options.batch_turn_execs
         self._session_alive_hint: bool | None = None
         self._llm_call_kwargs: dict[str, Any] = {"max_tokens": options.max_output_tokens}
@@ -938,7 +947,8 @@ so ask everything you need to know."""
     async def _run_agent_loop(self, initial_prompt: str, chat: Chat, original_instruction: str) -> None:
         prompt = initial_prompt
 
-        for _episode in itertools.count():
+        episodes = itertools.count() if self._max_main_turns is None else range(self._max_main_turns)
+        for _episode in episodes:
             session_alive = self._session_alive_hint
             self._session_alive_hint = None
             if session_alive is None:

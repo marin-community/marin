@@ -64,6 +64,7 @@ from marinskyrl.remote_io import filesystem_and_path
 from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.runtime_options import WeightSyncTransport
 from marinskyrl.task_sources import DirectoryDataSource, data_source
+from marinskyrl.agent_harnesses import AgentHarnessSettings
 
 DEFAULT_DRAFT_MODEL_CACHE_TTL_DAYS = 14
 
@@ -346,12 +347,7 @@ def validate_launch_driver_config(config: DictConfig) -> None:
     if entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
         validate_generation_driver_config(config.skyrl, check_runtime_resources=False)
     else:
-        operation = (
-            EntrypointOperation.GENERATE
-            if entrypoint == RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE]
-            else EntrypointOperation.TRAIN
-        )
-        validate_driver_config(config.skyrl, operation, check_runtime_resources=False)
+        validate_driver_config(config.skyrl, EntrypointOperation.TRAIN, check_runtime_resources=False)
 
 
 def hugging_face_models(config: DictConfig) -> tuple[TeacherModelSpec, ...]:
@@ -490,12 +486,14 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         validate_objective(config.skyrl)
         validate_hf_export_config(config.skyrl)
         validate_groups_per_family(config.skyrl)
+        task_sessions = skyrl.get("environment", {}).get("task_sessions", {})
+        AgentHarnessSettings.model_validate(task_sessions.get("agent_harnesses", {}))
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
     checkpoint = raw["inputs"]["starting_checkpoint"]
     if checkpoint is not None:
-        if entrypoint in (RL_ENTRYPOINTS[RLEntrypoint.GENERATE], RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE]):
+        if entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
             raise ValueError(
                 "Generation cannot restore inputs.starting_checkpoint; inputs.model requires a Hugging Face model."
             )

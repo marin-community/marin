@@ -64,6 +64,18 @@ async def test_terminus_out_of_context_ends_its_attempt_with_the_turns_it_comple
     assert [len(conversation.steps) for conversation in rollout.conversations] == [1]
 
 
+async def test_terminus_main_turn_limit_keeps_the_last_command():
+    recorded = REPLAY["context_rejection"]
+    model = ReplayEndpoint(recorded["model"])
+    machine = replay_machine(recorded["machine"])
+
+    rollout = await terminus_rollout(recorded, model, machine, max_main_turns=1)
+
+    assert without_stream(model.requests) == recorded_requests(recorded["model"])[:1]
+    assert [len(conversation.steps) for conversation in rollout.conversations] == [1]
+    assert any("send-keys" in command.get("command", "") for command in machine.commands)
+
+
 async def test_terminus_reply_cut_after_its_context_summary_ends_its_attempt():
     recorded = REPLAY["context_rejection"]
     exchanges = json.loads(json.dumps(recorded["model"]))

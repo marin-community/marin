@@ -18,6 +18,7 @@ import taskcompendium.runtime.grading as grading_runtime
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.http_service import HttpResponse, serve_http
 from shellbox.image import DockerfileSource
 from shellbox.machine import (
     Backend,
@@ -80,7 +81,7 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness, LengthStopPolicy
 from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.harness.step import StepHarness
-from rolloutengine.machines import _machine_spec, task_machine
+from rolloutengine.machines import MachineSetupError, _machine_spec, task_machine
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
     AttemptEnded,
@@ -2473,6 +2474,92 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
     assert closed.is_set()
 
 
+@pytest.mark.parametrize("relay", ["ready", "failed", "unsupported"])
+async def test_task_machine_user_is_used_for_the_relay_and_not_the_verifier(relay):
+    relay_commands = []
+    verifier_users = []
+
+    class Session:
+        stderr = b""
+
+        def __init__(self):
+            self.ready = False
+            self.closed = asyncio.Event()
+
+        async def read(self, max_bytes=65536):
+            if self.ready:
+                await self.closed.wait()
+                return b""
+            self.ready = True
+            return b'{"type":"ready"}\n'
+
+        async def close(self):
+            self.closed.set()
+
+    class Machine:
+        async def run(self, command):
+            if command.argv == ("sh", "/tests/grade.sh"):
+                verifier_users.append(command.user)
+                return Result(0, b"1\n", b"", False, False, ExitReason.EXITED)
+            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+
+        async def upload(self, source, target):
+            pass
+
+        async def download(self, source, target):
+            raise NotImplementedError
+
+        async def close(self):
+            pass
+
+    class ProcessMachine(Machine):
+        async def open_process(self, command):
+            relay_commands.append(command)
+            if relay == "failed":
+                raise ValueError("Relay startup failed")
+            return Session()
+
+    class Factory(DockerMachineFactory):
+        async def create(self, spec):
+            return Machine() if relay == "unsupported" else ProcessMachine()
+
+    class Episode:
+        def __init__(self, context):
+            self.machine = context.machine
+
+        async def prepare(self):
+            async def handler(request):
+                return HttpResponse(200, b"{}")
+
+            async with asyncio.TaskGroup() as group:
+                service = serve_http(self.machine, handler, port=9000, task_group=group)
+                if relay == "ready":
+                    async with service as base_url:
+                        assert base_url == "http://127.0.0.1:9000"
+                else:
+                    error = ValueError if relay == "failed" else UnsupportedMachineSpec
+                    with pytest.raises(error, match=r"Relay startup failed|require persistent process sessions"):
+                        async with service:
+                            pytest.fail("An unavailable relay started")
+            return Prompt(({"role": "user", "content": "Run the task."},), {})
+
+        async def advance(self, turn):
+            return Transition(done=True)
+
+        async def close(self):
+            pass
+
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]),
+        {"local": Factory()},
+        harnesses={"fixture": StepHarness(Episode)},
+    ).run_task(rollout_spec(agent_machine_task(b"echo 1"), machine=machine_runtime(user="learner"), harness="fixture"))
+
+    assert [command.user for command in relay_commands] == ([] if relay == "unsupported" else ["learner"])
+    assert verifier_users == [None]
+    assert record.grade.reward == 1.0
+
+
 async def test_a_failed_setup_command_names_itself_and_keeps_its_output_tail():
     """A setup command that exits non-zero fails the start with the command and its output in the error."""
     stderr = b"mkdir: cannot create directory '/opt/gen': Read-only file system\n"
@@ -2506,7 +2593,10 @@ async def test_a_failed_setup_command_names_itself_and_keeps_its_output_tail():
 
     assert caught.value.operation == RolloutOperation.START
     cause = caught.value.__cause__
-    assert isinstance(cause, RuntimeError)
+    assert isinstance(cause, MachineSetupError)
+    assert cause.exit_code == 1
+    assert cause.stdout == "made /workspace"
+    assert cause.stderr == stderr.decode().strip()
     assert str(cause) == (
         "Environment setup command failed: exited, exit=1; command: 'mkdir -p /workspace /opt/gen'; "
         "stdout: 'made /workspace'; stderr: \"mkdir: cannot create directory '/opt/gen': Read-only file system\""

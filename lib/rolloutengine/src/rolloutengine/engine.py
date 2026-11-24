@@ -23,6 +23,7 @@ from rolloutengine.harness.core import Harness, HarnessContext
 from rolloutengine.machines import _prepare_machine
 from rolloutengine.models import (
     GRADING_SECONDS_METRIC,
+    SETUP_COMPLETED_METRIC,
     SETUP_SECONDS_METRIC,
     AttemptEnded,
     AttemptStarted,
@@ -72,7 +73,7 @@ class _Attempt:
     grade: GradeResult
     outputs: dict[str, bytes]
     verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None
-    setup_seconds: float = 0.0
+    setup_seconds: float | None = None
     grading_seconds: float | None = None
 
 
@@ -151,6 +152,8 @@ class RolloutEngine:
             events.cancel()
         rollout = attempt.recorder.rollout(run_id, attempt.outputs)
         metrics = {**rollout.metrics, **delivery}
+        if spec.task_machine is not None:
+            metrics[SETUP_COMPLETED_METRIC] = float(attempt.setup_seconds is not None)
         grade = attempt.grade
         if attempt.cleanup.errors:
             cleanup_errors = [asdict(error) for error in attempt.cleanup.errors]
@@ -162,7 +165,7 @@ class RolloutEngine:
             and grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
         ):
             metrics[GRADING_SECONDS_METRIC] = attempt.grading_seconds - grade.verifier_setup_seconds
-            metrics[SETUP_SECONDS_METRIC] = attempt.setup_seconds + grade.verifier_setup_seconds
+            metrics[SETUP_SECONDS_METRIC] = (attempt.setup_seconds or 0.0) + grade.verifier_setup_seconds
         rollout = replace(rollout, metrics=metrics)
         if failure is None:
             return GradedRollout(rollout, grade)
@@ -209,12 +212,11 @@ class RolloutEngine:
         stopped = AsyncExitStack()
         await resources.enter_async_context(stopped)
         cleanup = _CleanupScope(stopped, released, attempt.cleanup)
-        context = HarnessContext(task, spec.limits, machine, events, cleanup, attempt.run_id)
         recorder = attempt.recorder
+        context = HarnessContext(task, spec.limits, machine, events, cleanup, attempt.run_id, recorder.begin_turn_budget)
         failure = await _run_harness(attempt.harness, context, recorder, attempt_deadline=deadline)
-        # As Harbor cancels its agent before verifying, the agent stops before output capture and grading, so that
-        # it cannot change the task machine while it is graded. What the agent left running, such as a service in
-        # its terminal, stays for the grader; the released closes run with the machines, after grading.
+        # Stop the agent before it can race output capture or grading. Services it left on the task machine
+        # stay available to the grader until the machine is released.
         await stopped.aclose()
         if failure is None and not recorder.has_response and task.answer_type in CONVERSATION_ANSWERS:
             attempt.grade = GradeResult(Outcome.UNAVAILABLE, None, recorder.no_response_reason)

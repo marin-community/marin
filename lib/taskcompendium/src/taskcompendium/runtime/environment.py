@@ -3,6 +3,7 @@
 
 """Validate selected machines and prepare their required software without acquiring them."""
 
+import hashlib
 import re
 from collections.abc import Mapping
 from dataclasses import replace
@@ -16,10 +17,20 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.local import local_runtime
 
 _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
+
+
+def environment_identity(requirements: EnvironmentRequirements) -> tuple[str | None, str | None]:
+    """Identify the image and the ordered setup commands in an attempt receipt."""
+    image = requirements.docker_image
+    if requirements.docker_build is not None:
+        image = "build:sha256:" + canonical_sha256(requirements.docker_build.model_dump(mode="json"))
+    setup = " ".join(hashlib.sha256(command.encode()).hexdigest() for command in requirements.setup_commands)
+    return image, setup or None
 
 
 def setup_user(backend: Backend) -> str | None:

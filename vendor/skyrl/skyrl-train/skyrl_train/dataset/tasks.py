@@ -34,7 +34,6 @@ from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count, dataset_num_proc
 from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
-from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
 from finestore.rl.strata import SelectionManifest, TaskEvaluationIdentity, TaskStrata, read_selection_manifest
@@ -96,11 +95,7 @@ class TaskDataset(PromptDataset):
         inputs = []
         for _, environment, extras, uid in rows:
             lowered = TaskRolloutSpec.model_validate_json(extras[TASK_ROLLOUT_COLUMN])
-            if (
-                isinstance(lowered.task.grader, NoGrader)
-                and lowered.harness != HARBOR_TRIAL_SESSION
-                and {"extras", "config"} <= lowered.task.grader.contract.keys()
-            ):
+            if isinstance(lowered.task.grader, NoGrader) and {"extras", "config"} <= lowered.task.grader.contract.keys():
                 extras = {**session_parameters(lowered.task).extras, **extras}
             extra_info = extras.get("extra_info") or {}
             ultra = extra_info.get("nemotron_ultra")

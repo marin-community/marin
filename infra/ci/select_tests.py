@@ -217,7 +217,6 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "skyrl-wheel": (
         "lib/skyrlrecipe/",
         "vendor/skyrl/",
-        "vendor/harbor/",
         "lib/finelog/",
         "lib/finestore/",
         "lib/iris/",

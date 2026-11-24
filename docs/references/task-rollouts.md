@@ -123,19 +123,10 @@ The default workdir is the image's workdir, or `/workspace` for the built-in fil
 An explicit `working_directory` overrides that selection.
 
 Machine setup commands run as trusted root before task operations.
-`MachineRuntimeSpec.user` supplies the default user for harness commands.
+`MachineRuntimeSpec.user` supplies the default user for harness commands and persistent processes.
 When the execution user is set, the task machine runs an execution-user probe after root setup and before model inference.
-An explicit command user overrides that default.
-The verifier machine uses its own configured default user.
-
-Original Harbor trials run each `setup_commands` entry as root with `sh`, after
-environment staging and before agent installation. An entry's nonzero exit status
-fails the trial; output stays separate from model traces, and setup uses the
-configured installed-agent `setup_timeout` while counting toward the whole
-trial's time limit.
-For these trials, the Harbor task package defines the image, environment variables
-and agent user. TaskSpec may add `setup_commands` and their setup-only
-`working_directory`; other TaskSpec machine-environment overrides are rejected.
+An explicit command user overrides that default. A grader in the agent's machine runs as
+trusted root. A separate verifier machine uses its own configured default user.
 
 ## SkyRL reply text
 
@@ -209,8 +200,7 @@ Harnesses declare `context_recovery`: `NEVER` stops or fails the attempt using t
 permits recovery, and `AFTER_TURN` permits it after a completed model turn anywhere in the attempt.
 Model adapters report context refusals by raising `ContextRejected(original_error, message)`; when recovery
 is permitted, the session raises `ContextWindowExceeded` without recording the refused request, spending a
-model turn or resetting cumulative limits or attempt deadlines. SkyRL's native agent harness uses `ALWAYS`,
-and full Harbor trials use `AFTER_TURN`.
+model turn or resetting cumulative limits or attempt deadlines. The shared `AgentHarness` uses `ALWAYS`.
 
 The session applies these rules:
 
@@ -334,7 +324,8 @@ Harbor's Terminus-2 agent on the task machine. The task context must be one user
 Harbor's prompts, JSON and XML response formats, tmux keystroke handling, 10,000-byte terminal output limit,
 completion confirmation, and summarization near the context limit or after a context rejection. Its requests go
 through `complete`, so the rollout records each one, including the summarization requests; all of them count
-toward `max_turns`. After a reply cut by its output limit, the agent asks again in a new conversation.
+toward `RolloutLimits.max_turns`. Set `TerminusOptions.max_main_turns` to cap terminal interaction turns
+independently of summary requests. After a reply cut by its output limit, the agent asks again in a new conversation.
 
 ```python
 from rolloutengine.agents.terminus.agent import TerminusOptions, TerminusParser, terminus_harness
@@ -349,8 +340,9 @@ engine = RolloutEngine(machine_factories, {"terminus-2": terminus_harness(option
 limits, and each main request asks for `max_output_tokens`. The context limit is `max_input_tokens`, or the
 served `max_model_len` less 8 tokens when that is smaller. Harbor counts prompt tokens with the server's
 `/tokenize` route; the lifted agent counts the chat through its last answered prompt with the prompt tokens that
-the model reported, and estimates the messages after it at three characters per token. Serve it with
-`ChatModel` under `TraceMode.MESSAGES`, so that context-length rejections reach the agent.
+the model reported, and estimates the messages after it at three characters per token. An explicit
+`setup_timeout` bounds tmux startup and starts the agent turn deadline when tmux is ready. The offline
+evaluator records messages. SkyRL runs the same harness through its exact-token model callable.
 
 ### Pi
 

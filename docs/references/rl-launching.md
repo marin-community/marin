@@ -92,16 +92,18 @@ uv run --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpo
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
-The nested runtime uses the checkout's RolloutEngine for task execution and model requests.
-Harbor tasks use Shellbox. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
-See [task rollouts](task-rollouts.md) for task execution and backend limits.
+SkyRL runs prepared TaskSpecs through RolloutEngine and Shellbox. It supplies the serving engine's
+sampled token IDs and log probabilities to the same session for shell, Pi, and Terminus-2 tasks.
+The launch recipe binds agent settings, machine resources, and separately scoped training and
+checkpoint evaluation Daytona credentials. See [task rollouts](task-rollouts.md) for execution
+and backend limits.
 
 The launcher runs the vendored uv version through `uv tool run`, then starts
 SkyRL's frozen CPU environment with `uv run --project vendor/skyrl`. Both uv
 selections prefer a compatible system interpreter over cached managed builds,
 matching Iris task setup. SkyRL has its own lock and is excluded from Marin's
 workspace. The child discards the parent's Python environment selection. SkyRL
-installs Marin libraries and Harbor from editable paths in the checkout.
+installs the Marin libraries from editable paths in the checkout.
 Marin calls SkyRL through the executable.
 
 Iris submits the Marin repository through its standard workspace bundle.
