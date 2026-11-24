@@ -62,6 +62,7 @@ from experiments.post_training.rl_measurements import (
 APPLET_ID = tomllib.loads(
     (Path(__file__).resolve().parents[2] / "infra/marina/apps/rl_progress/applet.toml").read_text()
 )["applet_id"]
+ISSUE_FILENAME = "issue.json"
 logger = logging.getLogger(__name__)
 
 
@@ -324,13 +325,13 @@ def _check_issue(export_root: str, requested: int | None, reservation: Versioned
 
 def lineage_issue(export_root: str, requested: int | None = None) -> int | None:
     """Read the run's issue and verify a proposed value against stored assignments."""
-    assignment = conditional_object(str(StoragePath(export_root) / "issue.json"))
+    assignment = conditional_object(str(StoragePath(export_root) / ISSUE_FILENAME))
     return _check_issue(export_root, requested, assignment.read())
 
 
 def reserve_issue(export_root: str, requested: int | None) -> int | None:
     """Reserve the lineage issue once for all writers to the native output."""
-    assignment = conditional_object(str(StoragePath(export_root) / "issue.json"))
+    assignment = conditional_object(str(StoragePath(export_root) / ISSUE_FILENAME))
     reservation = assignment.read()
     assigned = _check_issue(export_root, requested, reservation)
     if assigned is not None and reservation is None:
@@ -456,7 +457,7 @@ def publish_runs(
     failed_coordinator: str | None = None,
     controls: Mapping[str, ControlReplicate] | None = None,
 ) -> PublicationOutcome:
-    """Rebuild and upsert each stored attempt, isolating publication failures."""
+    """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
     if evaldash_run_ids is not None and (len(outputs) != 1 or attempt_id is None):
         raise ValueError("EvalDash run IDs require exactly one output and its explicit attempt ID")
     if issue is not None and (len(outputs) != 1 or attempt_id is None):

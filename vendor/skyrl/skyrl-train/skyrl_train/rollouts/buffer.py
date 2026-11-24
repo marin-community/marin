@@ -380,7 +380,6 @@ class AdmittedRollout:
     sample_count: int
     response_tokens: int
     row_facts: RowFacts | None = None
-    grader_stats: GraderStats | None = None
 
 
 @dataclass(frozen=True)

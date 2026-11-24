@@ -651,7 +651,7 @@ def _follow_detached(module: str, watch: _PublicationWatch) -> str:
 
 def _watch_publication(
     watch: _PublicationWatch, table: presets.ModelPresets
-) -> tuple[JobState, rl_publication.PublicationOutcome]:
+) -> tuple[JobState, rl_publication.PublicationOutcome, str | None]:
     preset = table.by_name[watch.preset]
     published = set()
     deadline = time.monotonic() + preset.recipe.layout.coordinator_timeout_hours * 3600
@@ -668,6 +668,7 @@ def _watch_publication(
                     f"Timed out waiting for {watch.job}. Repeat the original command with --wait."
                 )
             time.sleep(_PUBLICATION_POLL_SECONDS)
+    gate_path = None
     try:
         gate_path = watch.gate.stored_path(watch.prefix) if watch.gate is not None else None
         publication = rl_publication.publish_runs(
@@ -684,14 +685,14 @@ def _watch_publication(
             errors=[str(error)],
             retry="Repeat the original command with --wait.",
         )
-    return state, publication
+    return state, publication, gate_path
 
 
 def _follow_command(table: presets.ModelPresets) -> click.Command:
     @click.command(cls=RLCommand)
     @click.argument("request_json")
     def follow(request_json: str) -> None:
-        state, result = _watch_publication(_PublicationWatch.model_validate_json(request_json), table)
+        state, result, _ = _watch_publication(_PublicationWatch.model_validate_json(request_json), table)
         click.echo(json.dumps(result.to_dict()))
         if state != JobState.SUCCEEDED or result.unserved_records:
             raise click.exceptions.Exit(1)
@@ -709,19 +710,16 @@ def _wait_for_run(
     has_following: bool,
 ) -> None:
     watch = _publication_watch(job, handles, preset, service_url)
-    parent_state, publication = _watch_publication(watch, table)
+    parent_state, publication, gate_path = _watch_publication(watch, table)
     coordinator_error = (
         f"coordinator {job} is {parent_state}; required verdict unavailable"
         if parent_state != JobState.SUCCEEDED
         else None
     )
     run = _from_handles(handles)
-    try:
-        run = replace(run, gate=rl_gate.completed_gate(run.gate))
-    except Exception:
-        if not publication.errors:
-            raise
-        run = replace(run, gate=None)
+    gate_required = run.gate is not None
+    gate_step = replace(run.gate, override_path=gate_path) if run.gate is not None and gate_path is not None else None
+    run = replace(run, gate=gate_step)
     snapshot = _status(
         run,
         preset,
@@ -737,13 +735,13 @@ def _wait_for_run(
         and all(row["state"] == JobState.SUCCEEDED for row in rows)
     ):
         snapshot["post_run_error"] = f"Coordinator {job} ended in state {parent_state}. RL has a committed result."
-    elif "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
+    elif "verdict" not in snapshot and (coordinator_error is not None or gate_required):
         snapshot["reason"] = coordinator_error or "required verdict unavailable"
     _print_status(snapshot)
     if _evaluation_failed(snapshot, preset):
         raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
     verdict = snapshot.get("verdict")
-    if verdict is None and run.gate is None and coordinator_error is None:
+    if verdict is None and not gate_required and coordinator_error is None:
         verdict = Verdict.PASS
     raise click.exceptions.Exit(EXIT_CODES[verdict])
 
