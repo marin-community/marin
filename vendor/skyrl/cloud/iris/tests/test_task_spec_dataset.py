@@ -87,7 +87,7 @@ def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path
     )
     reply = text_task("reply-task", source="mixed")
     shellsim, daytona = machine_runtime("shellsim"), machine_runtime("daytona")
-    loaded = _load(
+    inputs = _load(
         tmp_path,
         (simulated, linux, reply),
         task_machine_by_command_semantics={
@@ -95,6 +95,7 @@ def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path
             CommandSemantics.LINUX_PROCESS.value: daytona.model_dump(),
         },
     )
+    loaded = [item.spec for item in inputs]
     assert [spec.task_machine for spec in loaded] == [shellsim, daytona, None]
     for spec in loaded:
         validate_spec(spec, {"shellsim": ShellSimMachineFactory(), **FACTORIES})
