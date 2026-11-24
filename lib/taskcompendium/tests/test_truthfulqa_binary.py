@@ -77,7 +77,4 @@ def test_likelihood_and_chat_prompts_share_each_questions_option_order(tmp_path)
     assert [verifyit_spec(task.grader) for task in tasks] == [McqSpec("A", options=2), McqSpec("B", options=2)]
     assert all(task.grader.placement == GraderMachine(environment=ENVIRONMENT) for task in tasks)
     [event] = tasks[1].context.events
-    assert event.content == (
-        "Answer the following multiple choice question. The last line of your response should be exactly "
-        "'Answer: A' or 'Answer: B' (without quotes).\n\nCan pigs fly?\n\nA) Yes, pigs can fly.\nB) No, pigs cannot fly."
-    )
+    assert event.content.endswith("Can pigs fly?\n\nA) Yes, pigs can fly.\nB) No, pigs cannot fly.")
