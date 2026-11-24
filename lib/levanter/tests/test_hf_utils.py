@@ -1,9 +1,13 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
+import shutil
+from pathlib import Path
 
 import huggingface_hub
+import pytest
 from rigging.filesystem.storage_path import StoragePath
 from levanter.testing.helpers import skip_if_hf_model_not_accessible
 
@@ -27,6 +31,38 @@ def test_load_tokenizer_in_memory_fs():
     )
     tokenizer = load_tokenizer("memory://foo/")
     assert len(tokenizer) == 5027
+
+
+@pytest.mark.parametrize("trust_remote_code", [False, True])
+def test_load_tokenizer_uses_declared_backend_before_model_config(tmp_path, trust_remote_code):
+    shutil.copyfile(Path(__file__).with_name("gpt2_tokenizer.json"), tmp_path / "tokenizer.json")
+    (tmp_path / "tokenizer_config.json").write_text(
+        json.dumps(
+            {
+                "tokenizer_class": "TokenizersBackend",
+                "bos_token": "<|endoftext|>",
+                "eos_token": "<|endoftext|>",
+            }
+        )
+    )
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "beam",
+                "rope_parameters": {
+                    "sliding_attention": {"rope_type": "default", "rope_theta": 10000.0},
+                    "full_attention": None,
+                },
+                "layer_types": ["sliding_attention", "full_attention"],
+            }
+        )
+    )
+
+    tokenizer = load_tokenizer(str(tmp_path), trust_remote_code=trust_remote_code)
+    token_ids = tokenizer.encode("hello", add_special_tokens=False)
+    assert tokenizer.decode(token_ids) == "hello"
+    assert tokenizer.bos_token == "<|endoftext|>"
+    assert tokenizer.bos_token_id == tokenizer.eos_token_id
 
 
 def test_model_info_patch_for_fsspec_urls():
