@@ -766,6 +766,8 @@ class Generator(Section):
     unchanged."""
     backend: Literal["vllm"] = field("vllm")
     vllm_attention_backend: str | None = field(None)
+    vllm_compile_cache_root: str | None = field(None)
+    "Opt-in local directory for rank-isolated, non-AOT vLLM compile artifacts."
     weight_sync_backend: Literal["nccl", "gloo"] = field("nccl")
     weight_sync_pause: WeightSyncPause = Field(default_factory=WeightSyncPause)
     "vLLM pause policy during weight sync. abort ends in-flight streams; keep preserves them."

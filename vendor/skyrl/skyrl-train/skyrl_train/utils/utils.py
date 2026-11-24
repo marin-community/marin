@@ -24,6 +24,7 @@ from skyrl_train.env_vars import (
     DEBUG_ARTIFACT_DIR_ENV,
     DEBUG_MODE_ENV,
     VLLM_BATCH_INVARIANT_ENV,
+    VLLM_DISABLE_COMPILE_CACHE_ENV,
 )
 from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.process_diagnostics import initialize_process_diagnostics
@@ -412,11 +413,9 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
         # During weight transfer, we use IPC handles, which contains a `function` object and requires pickling.
         env_vars["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
-        # NOTE (sumanthrh): In vLLM >= 0.9.0, we've observed compilatiion failures with torch compile. removing the compilation directory and trying
-        # again does not fix the issue. Temporarily we disable compilation cache, which seems to fix the issue.
-        # This should not have any effect on performance - compilation will still happen, it's just not cached
-        # TODO (sumanthrh): remove this once vLLM fixes the issue
-        env_vars["VLLM_DISABLE_COMPILE_CACHE"] = "1"
+        # Keep the non-AOT path by default. Local rollout actors may opt in to
+        # rank-local disk caching with AOT explicitly held off.
+        env_vars[VLLM_DISABLE_COMPILE_CACHE_ENV] = "1"
 
         if not os.environ.get("VLLM_USE_V1", False):
             logger.info(

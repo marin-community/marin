@@ -568,6 +568,10 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
                 raise InvalidComparison(f"native resume binding differs from declared inputs: skyrl.runtime.{field}")
     if not runtime:
         config["skyrl"].pop("runtime", None)
+    generator = config["skyrl"]["generator"]
+    if generator.get("vllm_compile_cache_root") is None:
+        # An unset opt-in has the same behavior as a recorded config that predates it.
+        generator.pop("vllm_compile_cache_root", None)
     for section in ("trainer", "checkpoint_export"):
         export = config["skyrl"].get(section, {})
         if "hf_hub_private" in export and not export.get("hf_hub_repo_id"):

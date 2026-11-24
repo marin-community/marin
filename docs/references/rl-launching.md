@@ -151,6 +151,18 @@ the existing Hub cache path. Local and object-store inputs keep their loading pa
 context; run the [experiment entry point](#experiment-entry-point) with `--run`
 to start its CPU coordinator. A local launcher fails before downloading weights.
 
+### vLLM compile cache
+
+Set `generator.vllm_compile_cache_root` to an absolute path on a trusted local
+filesystem to opt in to caching for one dedicated local rollout replica with
+TP=PP=1 and DP=EP. SkyRL packs the replica on one host and gives each DP rank a
+separate compiler cache directory. It keeps vLLM's non-AOT compilation path
+and CUDA graph capture active.
+
+Reserve the directory for sequential starts of one compatible rollout and keep its
+absolute path stable. The files include executable code and can refer to other
+files by absolute path. Use a fresh directory to rebuild a damaged cache.
+
 The top-level sections name what they configure: `iris` owns allocation and routing, `ray` owns
 cluster bootstrap, `inputs` owns immutable model and data locators, `artifacts` owns durable and
 temporary outputs, and `skyrl` is the trainer's Hydra subtree. `launch_config` means the complete

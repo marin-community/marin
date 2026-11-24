@@ -221,6 +221,8 @@ def create_ray_wrapped_inference_engines_from_config(
         role,
         engine_init_kwargs=engine_init_kwargs,
     )
+    if (cache_root := cfg.generator.get("vllm_compile_cache_root")) is not None:
+        engine_kwargs["vllm_compile_cache_root"] = cache_root
     selectors = OmegaConf.select(cfg, "runtime.placement.engines", default=None)
     if selectors:
         engine_kwargs["node_label_selectors"] = [dict(selector) for selector in selectors]

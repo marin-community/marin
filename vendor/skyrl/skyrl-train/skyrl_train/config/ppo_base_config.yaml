@@ -354,6 +354,8 @@ generator:
   num_inference_engines: 1
   backend: "vllm"
   vllm_attention_backend: null
+  # Opt-in local directory for rank-isolated, non-AOT vLLM compile artifacts.
+  vllm_compile_cache_root: null
   weight_sync_backend: "nccl"
   # vLLM pause policy during weight sync. abort ends in-flight streams; keep preserves them.
   weight_sync_pause:
