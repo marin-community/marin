@@ -337,17 +337,27 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 
 ### Plan the nightly control refresh
 
-The workflow is scheduled for 04:43 UTC and resolves main's head at checkout. A manual run accepts one gated preset name. Both
-entry points run on CPU and report which cohorts have a changed revision or, for a preset that
-takes a training set at launch, a changed training-set digest. The workflow serializes runs and
-checks the current head once per run. Each check uses the latest defaults on main when it starts.
-Data-short compares the sampled training input recorded for screening. A changed sample binding
-qualifies the cohort even before the sample is materialized.
+The workflow checks main at 04:43 UTC and lists the cohorts that the gate would refuse today.
+It checks both model tables on CPU. A manual dispatch accepts a model and an optional gated
+preset. A missing pin, a changed revision, or a difference between the current and recorded
+configuration schedules a refresh for the preset that owns the controls. An unavailable receipt
+or a composition error fails the check.
 
-The planner reports planned refreshes. Generating a cohort-link report currently requires a
-Python caller; the CLI does not run or publish it.
-Live collection and pin proposals require a decision on code-only changes, the pin PR merge
-policy and the bot account.
+To compare the current pinned controls with a previous cohort and attach the report to the
+current runs in Marina, run:
+
+```bash
+uv run python -m experiments.post_training.snowball_rl publish \
+  --preset learning-medium --link-from previous-pin.json
+```
+
+The JSON file holds the previous pin's `preset`, `commit`, `revision`, and ordered `members`.
+Each member is `[replicate, retry]`. Set `cluster` if the previous cohort ran in a different
+cluster from the preset default. The publisher reports the saved `link_report` path. When the
+recorded evaluation protocols differ, the history shows a protocol change at that link.
+
+The nightly workflow produces a plan. The live collection design also considers code changes
+along each preset's execution path and gives the pin update to a bot once CI passes.
 
 ## Change a preset's default
 
@@ -367,7 +377,7 @@ policy and the bot account.
    The compared-configuration hash includes actual execution memory and priority.
 4. The nightly workflow identifies changed defaults on main. Use the manual `--control` command
    for an explicitly authorized calibration.
-   Source, revision and replicate count live in `snowball_rl.SNOWBALL.control_pins`.
+   Source, revision and ordered members live in `snowball_rl.SNOWBALL.control_pins`.
 5. Validate newly collected control replicates with `snowball_rl compare --leave-out rN` for every replicate.
    Every leave-one-out verdict must PASS.
 
@@ -387,39 +397,6 @@ Evaluation identity includes stored TaskSpec content and the recorded request. A
 by task ID and count as scored only after successful verification without an exception or error treatment.
 Equal-family mean averages answers per task, tasks per family, then families. Slices use family, AAII
 category and agentic status. Task selection versions are immutable; follow the EvalLite reference to change one.
-
-To score earlier EvalLite versions, choose the run output, native attempt, evaluation name and
-checkpoint step. Set `version_roots` to the paths of the published selections you want to compare.
-The stored launch supplies the export root, evaluation prefix and expected answers per task.
-
-```python
-from finestore.rl.run_records import read_evaluations
-from finestore.rl.strata import read_selection_manifest
-from marin.rl.skyrl_records import read_stored_skyrl_attempts, recorded_launch
-from experiments.post_training.rl_measurements import evaluation_protocol, native_prefix
-from experiments.post_training.rl_scoring import score_eval_lite_version
-
-_, attempts = read_stored_skyrl_attempts(run_output)
-launch = recorded_launch(attempts[attempt_id])
-answers = evaluation_protocol(launch, evaluation_name)["n_samples_per_prompt"]
-rows = read_evaluations(
-    launch.export_root,
-    attempt_id=attempt_id,
-    evaluation=native_prefix(launch, evaluation_name),
-    step=step,
-)
-for root in version_roots:
-    selection = read_selection_manifest(root)
-    if selection is None:
-        raise ValueError(f"Missing selection manifest: {root}")
-    print(selection.definition.version, score_eval_lite_version(rows, selection, expected_answers=answers))
-```
-
-Use a preset's evaluation name, such as `eval_lite_100` for train-long. The primary evaluation is
-stored under `eval/`, and additional evaluations use `eval/<name>/`. The result reports scored tasks,
-missing verified answers and digest mismatches. A version has a score only when all of its active
-tasks have matching content and complete verified answers. Evaluate the full EvalLite pool to
-include tasks that were active in earlier versions.
 
 ## Telemetry and provenance
 

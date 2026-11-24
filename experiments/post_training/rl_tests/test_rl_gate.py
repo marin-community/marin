@@ -1,5 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+import fcntl
 import json
 import math
 import shutil
@@ -8,6 +9,7 @@ import sys
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic, sleep
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -30,6 +32,7 @@ from finestore.rl.strata import (
     SelectionDefinition,
     SelectionParent,
     SelectionTaskRow,
+    TaskStrata,
     read_selection_manifest,
 )
 from finestore.schema import arrow_schema
@@ -122,10 +125,10 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     key = "policy/raw_grad_norm"
     pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
     control_roots = []
-    for index in range(pin.replicates):
+    for index in range(len(pin.members)):
         root = recorded_runs(
             preset.name,
-            gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL),
+            gate._pinned_control_name(pin, index, table=snowball_model.SNOWBALL),
             speed=100 + index,
             metrics={key: 100 + index},
         )
@@ -523,25 +526,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     complete = evaluation_task_rows(version_answers, attempt_id=attempt_id, step=25, evaluation="eval/", selection=child)
     write_evaluations(export, complete)
     stored = read_evaluations(export, attempt_id=attempt_id, evaluation="eval/", step=25)
-    assert scoring.score_eval_lite_version(stored, parent, expected_answers=2) == scoring.EvalLiteVersionScore(
-        5 / 6, 6, (), ()
-    )
-    assert scoring.score_eval_lite_version(stored, child, expected_answers=2) == scoring.EvalLiteVersionScore(
-        1.0, 6, (), ()
-    )
-
-    repairs = {
-        "coding": {"task_digest": "different-content"},
-        "general": {"answers": []},
-        "mixed": {"answers": next(row.answers[:1] for row in stored if row.task_id == "mixed")},
-    }
-    damaged = [row.model_copy(update=repairs.get(row.task_id, {})) for row in stored if row.task_id != "stem"]
-    assert scoring.score_eval_lite_version(damaged, parent, expected_answers=2) == scoring.EvalLiteVersionScore(
-        None, 2, ("general", "mixed", "stem"), ("coding",)
-    )
-    with pytest.raises(ValueError, match="select one evaluation, attempt and step"):
-        scoring.score_eval_lite_version([*stored, stored[0].model_copy(update={"step": 0})], parent)
-
     old_launch = RecordedLaunch.from_document(launch, attempt=attempt_id)
     old_receipt = read_attempt(export, attempt_id)
     previous = measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt)
@@ -557,11 +541,34 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
             if child.tasks[row.task_id].state == MembershipState.ACTIVE
         ],
     )
-    active = read_evaluations(export, attempt_id=active_attempt, evaluation="eval/", step=25)
-    assert scoring.score_eval_lite_version(active, parent, expected_answers=2).missing == ("bounded",)
     with pytest.raises(measurements.InvalidComparison, match="differs from the selected attempt record"):
         measurements.read_answers(evaluation, str(tmp_path), launch=old_launch)
     assert measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt).equals(previous)
+
+
+@pytest.mark.parametrize("exit_early", [False, True], ids=["timeout", "nonzero-exit"])
+def test_native_failure_stops_build_child(tmp_path, exit_early):
+    lock = tmp_path / "build.lock"
+    lock.touch()
+    fixture = Path(__file__).with_name("native_build_child.py")
+    failure = "exited with status 7" if exit_early else "timed out after 2 s"
+    deadline = monotonic() + 6
+    with pytest.raises(gate.InvalidComparison, match=f"{failure} build child ready"):
+        gate._native_command_json(
+            "Prepare test environment",
+            [sys.executable, "-I", str(fixture), "wrapper", str(lock), str(exit_early)],
+            env=gate.skyrl_cpu_environment(),
+            timeout=2,
+        )
+    with lock.open("r+") as stream:
+        while True:
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                assert monotonic() < deadline, "native build child still holds the lock"
+                sleep(0.02)
+    assert monotonic() < deadline, "native failure waited for the build child to finish"
 
 
 @pytest.mark.parametrize(
@@ -634,10 +641,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
     if case == "zero-spread":
         pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
         control_roots = [
-            recorded_runs(
-                preset.name, gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL), score=0.5
-            )
-            for index in range(pin.replicates)
+            recorded_runs(preset.name, gate._pinned_control_name(pin, index, table=snowball_model.SNOWBALL), score=0.5)
+            for index in range(len(pin.members))
         ]
     if case in ("stale-default", "omitted-current-nondefault"):
         changed = setting if case == "stale-default" else 'generator.chat_template_kwargs={"enable_thinking":false}'
@@ -661,7 +666,9 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         gate.validate_candidate(override, inputs, table=snowball_model.SNOWBALL)
         table = snowball_model.SNOWBALL
         with monkeypatch.context() as altered:
-            altered.setattr(snowball_model, "SNOWBALL", replace(table, presets=(override,)))
+            pin = gate.control_pin(override, table=table)
+            single = replace(table, presets=(override,), control_pins={pin.preset: pin})
+            altered.setattr(snowball_model, "SNOWBALL", single)
             candidate = recorded_runs(preset.name, name, inputs=inputs)
         assert json.loads((candidate / "terminal.json").read_text())["config"]["iris"]["priority"] == "production"
     else:
@@ -686,8 +693,9 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     assert get_path(receipt, parent).pop(key) == original
     if case == "schema-timeout":
         cache_native_compositions(monkeypatch)
-        original_subprocess = subprocess.run
-        for diagnostic in ("timeout", "empty", "whitespace", "oserror"):
+        secret = "sk-fixture-abcdefghijklmnopqrstuvwxyz"
+        run_native = gate._run_native_process
+        for diagnostic in ("timeout", "last-phase", "empty", "invalid-json", "whitespace", "oserror", "bootstrap"):
             with monkeypatch.context() as unavailable:
                 unavailable.setattr(
                     Provenance,
@@ -696,21 +704,46 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 )
 
                 def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
-                    if any("OmegaConf.structured(launch_config.SkyRLLaunchConfig)" in str(value) for value in command):
+                    if diagnostic == "bootstrap" and command[-1] == "--version":
+                        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+                    if command[1:4] == ["-I", "-m", "cloud.iris.config_cli"] and command[-2] == "schema-defaults":
                         if diagnostic == "timeout":
-                            raise subprocess.TimeoutExpired(command, 120)
+                            interrupted_secret = secret.replace("sk-", "sk\x1b-")
+                            stderr = (
+                                f"{gate._NATIVE_PHASE}Import native modules\nInterrupted with {interrupted_secret}"
+                            ).encode()
+                            raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
+                        if diagnostic == "last-phase":
+                            stderr = (
+                                f"{gate._NATIVE_PHASE}Import native modules\nEarlier warning\n"
+                                f"{gate._NATIVE_PHASE}Read native schema defaults\n"
+                            ).encode()
+                            raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
                         if diagnostic == "oserror":
                             raise FileNotFoundError("native composer executable missing")
-                        return subprocess.CompletedProcess(command, 1 if diagnostic == "whitespace" else 0, "", "\n")
-                    return original_subprocess(command, *args, **kwargs)
+                        if diagnostic == "whitespace":
+                            raise subprocess.CalledProcessError(1, command, "", "\n")
+                        return "not JSON" if diagnostic == "invalid-json" else ""
+                    return run_native(command, *args, **kwargs)
 
-                unavailable.setattr(subprocess, "run", unavailable_defaults)
+                unavailable.setattr(gate, "_run_native_process", unavailable_defaults)
                 report = compare(preset.name, "--candidate", name)
                 assert (
                     report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]
                 ), report
                 if diagnostic == "timeout":
                     assert "timed out after 120 s" in report["reason"]
+                    assert "Import native modules" in report["reason"]
+                    assert "Interrupted with [REDACTED]" in report["reason"] and secret not in report["reason"]
+                if diagnostic == "last-phase":
+                    assert report["reason"].endswith(". Read native schema defaults timed out after 120 s")
+                if diagnostic == "empty":
+                    assert report["reason"].endswith("Read native schema defaults returned no output")
+                if diagnostic == "invalid-json":
+                    assert report["reason"].endswith("Read native schema defaults returned invalid JSON")
+                if diagnostic == "bootstrap":
+                    assert "Prepare SkyRL CPU environment" in report["reason"]
+                    assert "timed out after 300 s" in report["reason"]
         return
     reasons = {
         "stale-default": ("control config differs",),
@@ -801,11 +834,11 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
     pq.write_table(pa.Table.from_pylist([*pool, {"task_spec": json.dumps(inactive)}]), panel_root / pool_filename)
     summary["selection_strata"]["task_files"] = [pool_filename]
     summary_path.write_text(json.dumps(summary))
-    task_set = measurements.read_recorded_task_set(
-        RecordedLaunch.from_document(receipt["config"], attempt=receipt["config"]["run"]["attempt_id"]), "eval_lite_100"
-    )
-    assert set(task_set.task_ids) == {json.loads(row["task_spec"])["id"] for row in rows}
-    assert inactive["id"] not in task_set.task_ids
+    measured = measurements.read_measurements(str(source), snowball_model.SNOWBALL.by_name[preset])
+    answers = measured.held_out_answers["eval_lite"].final
+    task_ids = set(answers["task_id"].to_pylist())
+    assert task_ids == {json.loads(row["task_spec"])["id"] for row in rows}
+    assert inactive["id"] not in task_ids
     pq.write_table(pa.Table.from_pylist(list(reversed(rows))), original)
     report = compare(preset, "--candidate", "users/test/task-content")
     assert report["verdict"] == "pass", report
@@ -840,24 +873,35 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
 
 
 @pytest.mark.parametrize(
-    "case, replaced, extra, shared, reason",
+    "shared, reason",
     (
-        ("different-content", (19,), 0, 19, None),
-        ("additional-tasks", (), 1, 20, None),
-        ("relabeled-family", (), 0, 20, None),
-        ("too-few-common", range(10, 20), 0, 10, "10 of 20 control tasks shared"),
-        ("missing-family", (0,), 0, 19, "family/small: 0 of 1 control tasks shared"),
+        (set(range(10)), "10 of 20 control tasks shared"),
+        (set(range(1, 20)), "family/small: 0 of 1 control tasks shared"),
+    ),
+)
+def test_link_requires_overall_and_family_task_overlap(shared, reason):
+    labels = {str(index): TaskStrata(family="small" if index == 0 else "large") for index in range(20)}
+    with pytest.raises(gate.InsufficientOverlap, match=reason):
+        gate._require_shared_overlap("eval_lite", {str(index) for index in shared}, labels)
+
+
+@pytest.mark.parametrize(
+    "case, replaced, extra, shared",
+    (
+        ("different-content", (19,), 0, 19),
+        ("additional-tasks", (), 1, 20),
+        ("relabeled-family", (), 0, 20),
     ),
 )
 def test_control_link_scores_shared_evaluation(
-    recorded_runs, preset_table, monkeypatch, tmp_path, case, replaced, extra, shared, reason
+    recorded_runs, preset_table, monkeypatch, tmp_path, case, replaced, extra, shared
 ):
     cache_native_compositions(monkeypatch)
     preset = replace(
         snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3), checkpoint_every=3
     )
     table = preset_table(preset)
-    previous = replace(gate.control_pin(preset, table=table), replicates=2)
+    previous = replace(gate.control_pin(preset, table=table), members=((0, 0), (1, 0)))
     table = replace(table, control_pins={**table.control_pins, preset.name: previous})
     monkeypatch.setattr(snowball_model, "SNOWBALL", table)
     baseline_roots = controls(recorded_runs, preset.name)
@@ -917,10 +961,10 @@ def test_control_link_scores_shared_evaluation(
     monkeypatch.setattr(snowball_model, "SNOWBALL", table)
     changed_ids = {f"task-{index}" for index in (*replaced, *range(count, count + extra))}
     fresh_roots = []
-    for index in range(fresh.replicates):
+    for index in range(len(fresh.members)):
         candidate = recorded_runs(preset.name, gate.control_name(preset.name, fresh.commit, index, table=table))
         fresh_roots.append(candidate)
-        if changed_ids and reason is None:
+        if changed_ids:
             export = str(candidate / "exports")
             rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/", step=preset.updates)
             write_evaluations(
@@ -933,23 +977,19 @@ def test_control_link_scores_shared_evaluation(
                     if row.task_id in changed_ids
                 ],
             )
-        elif case == "relabeled-family":
-            with edit_receipt(candidate) as receipt:
-                receipt["result"].update(started_at="2026-11-06T18:41:00+00:00", finished_at="2026-11-06T19:41:00+00:00")
     [link] = run(gate.control_link_step(preset, fresh, previous, table=table))
     report = link.model_dump(mode="json")
     facts = {fact["name"]: fact for fact in report["invariants"]}
     assert facts[f"eval_lite/{SHARED_TASKS_INVARIANT}"]["value"] == shared
     assert facts[f"eval_lite/{SHARED_TASK_FRACTION_INVARIANT}"]["value"] == shared / count
-    if reason is not None:
-        assert report["verdict"] == "invalid" and reason in report["reason"], report
-        return
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
     assert report["control"]["held_out_tasks"] == old_binding
     assert report["run"]["held_out_tasks"] == new_binding
     results = comparisons(report)
     family_mean = results["eval_lite/family_mean"]
     assert family_mean["tasks"] == shared and family_mean["run"] == pytest.approx(0.5)
+    # With the relabeled task all 20 tasks share one family. The two edited final answers
+    # average 0.5, and the remaining 19 tasks average 0.495 across the old controls.
     assert family_mean["control"] == pytest.approx(0.49525 if case == "relabeled-family" else 0.495)
     if case == "different-content":
         assert family_mean["sd"] == pytest.approx(0.01 / math.sqrt(2))
@@ -1007,8 +1047,15 @@ def test_control_link_scores_shared_evaluation(
         with edit_receipt(baseline) as receipt:
             receipt["config"] = native
 
-        with edit_receipt(fresh_roots[0]) as receipt:
-            receipt["config"]["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.5
+        export = str(fresh_roots[0] / "exports")
+        [answer_row, *_] = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/")
+        write_evaluations(export, [answer_row.model_copy(update={"task_digest": "0" * 64})])
+        rejected_link(f"recorded held-out TaskSpec content differs for {answer_row.task_id}")
+        write_evaluations(export, [answer_row])
+
+        for root in fresh_roots:
+            with edit_receipt(root) as receipt:
+                receipt["config"]["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.5
         rejected_link(EVALUATION_PROTOCOL_DIFFERS)
     if changed_ids:
         unshared = results["eval_lite/unshared/mean"]

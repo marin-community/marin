@@ -3,7 +3,7 @@
 
 import json
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, materialized_config
-from rigging.config_discovery import find_project_root
+from marin.rl.skyrl import SKYRL_PROJECT, skyrl_cpu_command, skyrl_cpu_environment
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import rl_compose as recipe
@@ -47,11 +47,17 @@ def write_training_families(root: StoragePath, counts: Mapping[str, int]) -> Non
 
 
 def native_json(*uv_options: str):
-    def execute(script, paths):
-        source = str(find_project_root(Path(__file__)) / "vendor/skyrl")
-        program = gate._native_program(source, ("cloud.iris.launch_config", "skyrl_train"), script)
+    def execute(script: Path, arguments: Sequence[str]):
+        runner = recipe.REPO_ROOT / "experiments/post_training/rl_tests/native_script.py"
+        args = [str(runner), str(recipe.REPO_ROOT / SKYRL_PROJECT), str(script), *arguments]
+        timeout = 170
         try:
-            return gate._native_json(*uv_options, "python", "-c", program, *paths, timeout=170)
+            if uv_options:
+                command = skyrl_cpu_command(*uv_options, "python", "-I", *args)
+                return gate._native_command_json(
+                    "Run isolated native test program", command, env=skyrl_cpu_environment(), timeout=timeout
+                )
+            return gate._native_json("Run native test program", *args, timeout=timeout)
         except gate.InvalidComparison as error:
             cause = error.__cause__
             if isinstance(cause, subprocess.CalledProcessError) and cause.stderr:

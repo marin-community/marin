@@ -515,7 +515,18 @@ class ControlPin:
     preset: str
     commit: str
     revision: str
-    replicates: int
+    members: tuple[tuple[int, int], ...]  # Ordered (native replicate, retry) pairs.
+    cluster: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.members or any(min(member) < 0 for member in self.members):
+            raise ValueError("control pins need non-negative native replicate and retry pairs")
+        if len(set(self.members)) != len(self.members):
+            raise ValueError("each control pin member must name a distinct run")
+
+    @property
+    def initial_replicates(self) -> int:
+        return max(replicate for replicate, _ in self.members) + 1
 
 
 @dataclass(frozen=True)
@@ -532,6 +543,17 @@ class ModelPresets:
             if preset.name in names:
                 raise ValueError(f"Duplicate preset name {preset.name!r} for {self.model}")
             names.add(preset.name)
+        by_name = self.by_name
+        for preset in self.presets:
+            if preset.control_preset is None:
+                continue
+            owner = by_name.get(preset.control_preset)
+            if owner is None or owner.control_preset != owner.name or owner.revision != preset.revision:
+                raise ValueError(f"{preset.name} needs a control preset with the same revision")
+        for name, pin in self.control_pins.items():
+            owner = by_name.get(name)
+            if owner is None or name != pin.preset or owner.control_preset != name or owner.temporary_output:
+                raise ValueError(f"{name} cannot own a control pin without a gated, durable preset")
 
     @property
     def by_name(self) -> Mapping[str, Preset]:

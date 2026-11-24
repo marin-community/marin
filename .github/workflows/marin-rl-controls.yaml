@@ -5,14 +5,19 @@ on:
     - cron: '43 4 * * *'
   workflow_dispatch:
     inputs:
-      preset:
-        description: "Gated Snowball preset to inspect"
+      model:
+        description: "Model table to inspect"
         required: true
+        type: choice
+        options:
+          - snowball
+          - mochi
+      preset:
+        description: "Gated preset to inspect"
         type: string
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: marin-rl-controls
@@ -24,6 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      REQUESTED_MODEL: ${{ inputs.model }}
       REQUESTED_PRESET: ${{ inputs.preset }}
     steps:
       - uses: actions/checkout@v7
@@ -35,16 +41,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: google-github-actions/auth@v3
-        with:
-          project_id: hai-gcp-models
-          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
-          service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
-
-      - uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: hai-gcp-models
-
       - name: Plan refresh from main
         env:
           CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
@@ -52,6 +48,9 @@ jobs:
         run: |
           set -euo pipefail
           options=()
+          if [[ -n "$REQUESTED_MODEL" ]]; then
+            options+=(--model "$REQUESTED_MODEL")
+          fi
           if [[ -n "$REQUESTED_PRESET" ]]; then
             options+=(--preset "$REQUESTED_PRESET")
           fi

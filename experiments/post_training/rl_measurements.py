@@ -130,11 +130,6 @@ def native_prefix(launch: RecordedLaunch, name: str) -> str:
     return f"eval/{name}/" if name in launch.evaluation_data else "eval/"
 
 
-class RecordedTaskSet(NamedTuple):
-    task_ids: tuple[str, ...]
-    task_set_sha256: str
-
-
 def _task_specs(path: StoragePath) -> Iterator[tuple[str, str]]:
     fs, key = filesystem_for(str(path))
     with fs.open(key, "rb") as stream:
@@ -146,19 +141,9 @@ def _source_task_specs(sources: Sequence[RecordedSource]) -> list[tuple[str, str
     return [pair for source in sources for pair in _task_specs(StoragePath(source.uri) / source.relative_path)]
 
 
-def read_task_set(sources: Sequence[RecordedSource]) -> RecordedTaskSet:
-    """Read task IDs and a hash of the sorted raw TaskSpec strings."""
-    return _task_set(_source_task_specs(sources))
-
-
-def _task_set(pairs: Sequence[tuple[str, str]]) -> RecordedTaskSet:
+def _task_set_digest(pairs: Sequence[tuple[str, str]]) -> str:
     payload = json.dumps(sorted(pairs), separators=(",", ":"), ensure_ascii=False).encode()
-    return RecordedTaskSet(tuple(task_id for task_id, _ in pairs), hashlib.sha256(payload).hexdigest())
-
-
-def read_recorded_task_set(launch: RecordedLaunch, name: str) -> RecordedTaskSet:
-    """Read the task set bound to a recorded evaluation."""
-    return read_task_set(recorded_sources(launch, name))
+    return hashlib.sha256(payload).hexdigest()
 
 
 def held_out_identity(preset: presets.Preset, launch: RecordedLaunch) -> str | None:
@@ -412,7 +397,6 @@ class RunMeasurements:
     slices: dict[str, int]
     evaluation_identity: dict[str, tuple[str | None, dict]]
     held_out_answers: dict[str, HeldOutAnswers]
-    started_at: str | None
     gpu_hours: float | None
     engine: dict
     attempt_id: str
@@ -428,16 +412,19 @@ def _evaluation_values(final: pa.Table, initial: pa.Table) -> tuple[dict[str, fl
     return values, slices
 
 
+def project_answers(table: pa.Table, digests: set[str]) -> pa.Table:
+    """Select rows belonging to the given task digests."""
+    return table.filter(pc.is_in(table["task_digest"], value_set=pa.array(sorted(digests), type=pa.string())))
+
+
 def restrict_evaluation(
     run: RunMeasurements, name: str, digests: set[str], strata: Mapping[str, TaskStrata]
 ) -> RunMeasurements:
     """Recompute evaluation metrics on the selected digests with shared strata labels."""
     answers = run.held_out_answers[name]
 
-    selected_digests = pa.array(sorted(digests), type=pa.string())
-
     def project(table: pa.Table) -> pa.Table:
-        selected = table.filter(pc.is_in(table["task_digest"], value_set=selected_digests))
+        selected = project_answers(table, digests)
         labels = [strata[digest] for digest in selected["task_digest"].to_pylist()]
         for column in SLICE_COLUMNS:
             position = ANSWER_SCHEMA.get_field_index(column)
@@ -475,6 +462,17 @@ class EvaluationStatus(BaseModel):
     evaluation_error: str | None = None
 
 
+def recorded_preset(preset: presets.Preset, launch: RecordedLaunch) -> presets.Preset:
+    """Use the receipt's update budget and the part of the measured window it ran."""
+    updates = launch.max_steps if launch.max_steps is not None else preset.updates
+    if updates == preset.updates:
+        return preset
+    if not preset.gated:
+        return preset.with_updates(updates)
+    window = preset.measured
+    return replace(preset, updates=updates, measured=range(window.start, min(window.stop, updates + 1), window.step))
+
+
 def evaluation_status(
     path: str, preset: presets.Preset, attempt: AttemptRecord, launch: RecordedLaunch
 ) -> EvaluationStatus:
@@ -482,8 +480,7 @@ def evaluation_status(
     if not preset.evaluations or attempt.native.result.state != "succeeded":
         return EvaluationStatus()
     try:
-        effective = preset.with_updates(launch.max_steps if launch.max_steps is not None else preset.updates)
-        data = read_measurements(path, effective, attempt=attempt)
+        data = read_measurements(path, recorded_preset(preset, launch), attempt=attempt)
         return EvaluationStatus(
             evaluations=data.evaluations,
             evaluation_invariants=tuple(
@@ -611,7 +608,6 @@ def read_measurements(
         holds = workload.fixed_reply_holds(fixed, training, response_token_counts)
         invariants.append(Invariant(name="fixed_reply_tokens", value=holds, limit=True, comparator="==", holds=holds))
     values, slices = _evaluation_values(pa.concat_tables(scores), pa.concat_tables([scores[0], *initial_scores]))
-    result = terminal.native.result
     return RunMeasurements(
         config=terminal.native.config,
         recorded=launch,
@@ -624,13 +620,12 @@ def read_measurements(
         slices=slices,
         evaluation_identity={
             evaluation.name: (
-                _task_set(recorded_tasks[evaluation.name]).task_set_sha256 if evaluation.held_out else None,
+                _task_set_digest(recorded_tasks[evaluation.name]) if evaluation.held_out else None,
                 protocols[evaluation.name],
             )
             for evaluation in preset.evaluations
         },
         held_out_answers=held_out_answers,
-        started_at=result.started_at,
         gpu_hours=native_gpu_hours(terminal, launch),
         engine=tracking.get("engine", {}),
         attempt_id=terminal.attempt_id,

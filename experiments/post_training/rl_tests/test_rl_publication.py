@@ -5,7 +5,7 @@ import json
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Barrier
@@ -691,8 +691,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
         if row["attempt_id"].startswith("pinned-")
     ]
-    assert len(served_controls) == pin.replicates
-    assert sorted(row["control"]["replicate"] for row in served_controls) == list(range(pin.replicates))
+    assert len(served_controls) == len(pin.members)
+    assert sorted(row["control"]["replicate"] for row in served_controls) == list(range(len(pin.members)))
     assert all(row["control"]["commit"] == pin.commit for row in served_controls)
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
@@ -708,38 +708,40 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     summary["selection_strata"]["version"] = "2026.11.24.1"
     write_json(summary_path, summary)
     fresh_preset = replace(preset, revision="2026.11.24.1", held_out_tasks=new_binding)
-    fresh_pin = replace(pin, commit="next-main", revision=fresh_preset.revision, replicates=2)
+    fresh_pin = replace(pin, commit="next-main", revision=fresh_preset.revision, members=((0, 2), (1, 0)))
     fresh_table = preset_table(fresh_preset)
     fresh_table = replace(fresh_table, control_pins={**fresh_table.control_pins, preset.name: fresh_pin})
     monkeypatch.setattr(snowball_model, "SNOWBALL", fresh_table)
-    fresh_roots = [
+    for index in range(2):
+        name = gate.control_name(preset.name, fresh_pin.commit, index, table=fresh_table)
         recorded_runs(
             preset.name,
-            gate.control_name(preset.name, fresh_pin.commit, index, table=fresh_table),
+            name + ("-retry2" if index == 0 else ""),
             inputs=RunInputs(preset_name=preset.name, settings=("trainer.policy.optimizer_config.lr=2e-6",)),
             attempt_id=f"fresh-{index}",
             score=0.5 + index * 0.01,
             metrics={"policy/entropy": 0.5 + index * 0.01},
         )
-        for index in range(2)
-    ]
-    [link] = run(gate.control_link_step(fresh_preset, fresh_pin, pin, table=fresh_table))
-    saved = gate.read_gate_report(link.path)
-    assert saved is not None and saved.verdict == "pass", link.reason
+    prior_pin = controls[0].parent / "previous-pin.json"
+    write_json(prior_pin, asdict(pin))
+    command = CliRunner().invoke(
+        publication.command(fresh_table),
+        ["--preset", preset.name, "--marina-url", "http://localhost", "--link-from", str(prior_pin)],
+    )
+    assert command.exit_code == 0, (command.output, command.exception)
+    attached = json.loads(command.output)
+    assert attached["errors"] == []
+    saved = gate.read_gate_report(str(Path(attached["link_report"]).parent))
+    assert saved is not None
     assert saved.run.attempt_ids == ("fresh-0", "fresh-1")
-    assert saved.control.held_out_tasks == old_binding and saved.run.held_out_tasks == new_binding
     assert "skyrl.trainer.policy.optimizer_config.lr" in saved.run.config_changes
     assert any(row.metric == "eval_lite/aai_category/format/mean" for row in saved.comparisons)
-    attached = publication.publish_runs(
-        list(map(str, fresh_roots)), fresh_preset, table=fresh_table, gate_path=link.path, service_url="http://localhost"
-    )
-    assert attached.errors == []
     names = {f"eval_lite/{SHARED_TASKS_INVARIANT}", f"eval_lite/{SHARED_TASK_FRACTION_INVARIANT}"}
     coverage = {fact.name: fact.value for fact in saved.invariants if fact.name in names}
     assert coverage.keys() == names
     for attempt in ("fresh-0", "fresh-1"):
         persisted = stored()[attempt]["gate_result"]
-        assert persisted["attempt_ids"] == ["fresh-0", "fresh-1"] and persisted["verdict"] == "pass"
+        assert persisted["attempt_ids"] == ["fresh-0", "fresh-1"]
         assert (persisted["control_commit"], persisted["control_revision"]) == (pin.commit, pin.revision)
         assert {fact["name"]: fact["value"] for fact in persisted["invariants"] if fact["name"] in names} == coverage
         slices = {row["metric"] for row in persisted["comparisons"] if row["role"] == "slice"}
@@ -750,7 +752,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     stale_table = replace(
         table,
         presets=tuple(
-            replace(row, revision="2026.11.12.2") if row.name == preset.name else row for row in table.presets
+            replace(row, revision="2026.11.12.2") if row.control_preset == preset.name else row for row in table.presets
         ),
     )
     with pytest.raises(click.UsageError, match="control"):

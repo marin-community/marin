@@ -7,94 +7,53 @@ import argparse
 import json
 from collections.abc import Sequence
 
-from marin.rl.skyrl_records import RecordedLaunch, RecordedSource, read_stored_skyrl_attempt
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.provenance import Provenance
 
 from experiments.post_training import rl_compose, rl_gate
-from experiments.post_training.rl_measurements import RunInputs, read_recorded_launch, read_task_set, recorded_sources
-from experiments.post_training.rl_presets import ControlPin, Generation, ModelPresets, Preset
+from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.rl_measurements import RunInputs
+from experiments.post_training.rl_presets import ModelPresets
 from experiments.post_training.snowball_rl import SNOWBALL
 
 
 def plan_refresh(table: ModelPresets, preset_name: str | None = None) -> tuple[str, list[str]]:
-    """Return the source commit and control presets with changed revisions or launch training sets."""
+    """Return the clean source commit and control cohorts the gate would refuse."""
     provenance = Provenance.capture(rl_compose.REPO_ROOT)
     if provenance.dirty or not provenance.base_commit:
         raise ValueError("control refresh needs a clean source commit")
-
-    presets = table.by_name
-    pins = table.control_pins
+    gated = [preset for preset in table.presets if preset.control_preset is not None]
     if preset_name is not None:
-        selected = presets.get(preset_name)
-        name = selected.control_preset if selected is not None else None
-        if name is None or name not in pins:
-            raise ValueError(f"choose a gated preset with controls, got {preset_name!r}")
-        pins = {name: pins[name]}
+        gated = [preset for preset in gated if preset.name == preset_name]
+        if not gated:
+            raise ValueError(f"choose a gated preset, got {preset_name!r}")
 
-    for preset in presets.values():
+    planned = []
+    for preset in gated:
         owner = preset.control_preset
-        if owner is not None and owner in pins and preset.revision != presets[owner].revision:
-            raise ValueError(f"{preset.name} must share the {owner} revision to use its controls")
-
-    launch_selected = {preset.control_preset for preset in presets.values() if preset.tasks_input != "forbidden"}
-    digests: dict[tuple[tuple[str, str], ...], str] = {}
-
-    def digest(sources: Sequence[RecordedSource]) -> str:
-        paths = tuple(sorted((source.uri, source.relative_path) for source in sources))
-        if paths not in digests:
-            digests[paths] = read_task_set(sources).task_set_sha256
-        return digests[paths]
-
-    def training_changed(preset: Preset, previous: ControlPin) -> bool:
-        screening = isinstance(preset.recipe.layout.workload, Generation)
-
-        def inputs(launch: RecordedLaunch) -> list[RecordedSource]:
-            if not screening:
-                return launch.train_data
-            return [
-                source
-                for evaluation in preset.evaluations
-                if evaluation.source == "tasks"
-                for source in recorded_sources(launch, evaluation.name)
-            ]
-
-        config = rl_gate.validate_candidate(preset, RunInputs(preset_name=preset.name), table=table, control=True)
-        expected = RecordedLaunch.from_document(config, attempt=config["run"]["attempt_id"])
-        current = inputs(expected)
-        if not current:
-            raise ValueError(f"expected a task set for {preset.name}")
-        for index in range(previous.replicates):
-            output = rl_gate.control_path(preset, previous, index, table=table)
-            receipt = read_stored_skyrl_attempt(output)
-            if receipt is None or receipt.native.result.state != "succeeded":
-                raise ValueError(f"expected a successful pinned control receipt at {output}")
-            observed = inputs(read_recorded_launch(receipt))
-            if not observed:
-                raise ValueError(f"expected a task set in the pinned receipt at {output}")
-            # A screening sample is keyed by its input selection and seed. A new sample
-            # may not have been materialized yet.
-            if screening and [source.identity for source in observed] != [source.identity for source in current]:
-                return True
-            if digest(observed) != digest(current):
-                return True
-        return False
-
-    planned = [
-        name
-        for name, pin in pins.items()
-        if pin.revision != presets[name].revision or (name in launch_selected and training_changed(presets[name], pin))
-    ]
+        assert owner is not None
+        if owner in planned:
+            continue
+        try:
+            rl_gate.validate_candidate(preset, RunInputs(preset_name=preset.name), table=table)
+        except rl_gate.StaleControls:
+            planned.append(owner)
     return provenance.base_commit, planned
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    tables = {table.model: table for table in (SNOWBALL, MOCHI)}
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--preset", help="Plan the control cohort for one gated preset")
+    parser.add_argument("--model", choices=tuple(tables), help="Inspect a single model table")
+    parser.add_argument("--preset", help="Plan the control cohort for one gated preset in the named model")
     args = parser.parse_args(argv)
+    if args.preset is not None and args.model is None:
+        parser.error("--preset requires --model")
     configure_coreweave_s3()
-    commit, planned = plan_refresh(SNOWBALL, args.preset)
-    print(json.dumps({"commit": commit, "refresh": planned}))
+    selected = {args.model: tables[args.model]} if args.model is not None else tables
+    plans = {model: plan_refresh(table, args.preset) for model, table in selected.items()}
+    commit = next(iter(plans.values()))[0]
+    print(json.dumps({"commit": commit, "refresh": {model: cohorts for model, (_, cohorts) in plans.items()}}))
 
 
 if __name__ == "__main__":

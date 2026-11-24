@@ -268,12 +268,12 @@ def controls(write, name, **kwargs):
     return [
         write(
             name,
-            gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL),
+            gate._pinned_control_name(pin, index, table=snowball_model.SNOWBALL),
             speed=100 + index,
             score=0.49 + index * 0.01,
             **kwargs,
         )
-        for index in range(pin.replicates)
+        for index in range(len(pin.members))
     ]
 
 
@@ -281,7 +281,14 @@ def preset_table(monkeypatch):
     def select(preset):
         table = replace(
             snowball_model.SNOWBALL,
-            presets=tuple(preset if row.name == preset.name else row for row in snowball_model.SNOWBALL.presets),
+            presets=tuple(
+                (
+                    preset
+                    if row.name == preset.name
+                    else replace(row, revision=preset.revision) if row.control_preset == preset.name else row
+                )
+                for row in snowball_model.SNOWBALL.presets
+            ),
         )
         monkeypatch.setattr(snowball_model, "SNOWBALL", table)
         return table

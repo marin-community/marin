@@ -503,7 +503,7 @@ SNOWBALL = ModelPresets(
     presets=_PRESETS,
     namespace="snowball-rl",
     control_pins={
-        name: ControlPin(name, "648b5687f0", "2026.11.06.1", count)
+        name: ControlPin(name, "648b5687f0", "2026.11.06.1", tuple((index, 0) for index in range(count)))
         for name, count in (
             ("speed-short", 5),
             ("data-short", 4),
