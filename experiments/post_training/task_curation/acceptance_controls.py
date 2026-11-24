@@ -154,8 +154,9 @@ async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
                 task, factory, grading_spec, timeout=task.grader.timeout, task_machine=task_machine
             )
             if grade.status is not Outcome.GRADED:
-                # The on-machine post-mortem: the harness's own exit code and
-                # log directory state, for a typed failure report.
+                # The on-machine post-mortem: the harness's own exit code, the
+                # log directory state, and the artifact-download probe result,
+                # for a typed failure report.
                 probe = await task_machine.run(
                     Command(
                         (
@@ -163,7 +164,13 @@ async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
                             "-c",
                             "ls -la /logs/verifier 2>&1 | tail -6; "
                             "echo '--- exit-code:'; cat /logs/verifier/exit-code.txt 2>&1 | tail -1; "
-                            "echo '--- stdout tail:'; tail -3 /logs/verifier/test-stdout.txt 2>&1",
+                            "echo '--- stdout tail:'; tail -3 /logs/verifier/test-stdout.txt 2>&1; "
+                            "echo '--- reward probe:'; "
+                            'if [ -f /logs/verifier/reward.txt ]; then printf "reward.txt=file "; '
+                            "cat /logs/verifier/reward.txt; "
+                            'else printf "reward.txt=missing\\n"; fi; '
+                            'if [ -f /logs/verifier/reward.json ]; then printf "reward.json=file\\n"; '
+                            'else printf "reward.json=missing\\n"; fi',
                         ),
                         timeout=60.0,
                     )
