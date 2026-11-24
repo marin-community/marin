@@ -155,11 +155,6 @@ def worker_egress(config: EvaluationRunConfig) -> tuple[str, ...]:
     return DAYTONA_EGRESS if Backend.DAYTONA in machine_backends(config) else ()
 
 
-def daytona_connection(api_key: str) -> DaytonaConnection:
-    """The Daytona account for ``api_key``."""
-    return DaytonaConnection(api_key=api_key)
-
-
 def machine_factories(config: EvaluationRunConfig, daytona: DaytonaConnection | None) -> dict[str, MachineFactory]:
     """Construct the factory of each backend the run selects."""
     factories: dict[str, MachineFactory] = {}
@@ -252,7 +247,9 @@ def run_worker(datasets: tuple[str, ...], output: str, config: EvaluationRunConf
     judge_endpoint = get_secret(JUDGE_ENDPOINT)
     judge = JudgeConnection(judge_endpoint, require_secret(JUDGE_API_KEY)) if judge_endpoint else None
     daytona = (
-        daytona_connection(require_secret(DAYTONA_API_KEY)) if Backend.DAYTONA in machine_backends(config) else None
+        DaytonaConnection(api_key=require_secret(DAYTONA_API_KEY))
+        if Backend.DAYTONA in machine_backends(config)
+        else None
     )
     execute_with_retries(
         datasets,
