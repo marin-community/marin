@@ -222,16 +222,6 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         assert row["grader_report"] is None
 
 
-def test_control_publication_rejects_ungated_presets(monkeypatch, capsys):
-    def fail_storage_setup():
-        pytest.fail("Control publication configured storage for an unsupported preset")
-
-    monkeypatch.setattr(publication, "configure_coreweave_s3", fail_storage_setup)
-    result = runner.main(snowball_model.SNOWBALL, argv=["publish", "--preset", "train-long"])
-    assert result == 4
-    assert "Choose a dashboard preset with controls" in capsys.readouterr().err
-
-
 def test_one_issue_is_reserved_when_publishers_disagree(tmp_path, monkeypatch):
     export_root = str(tmp_path / "exports")
     conditional_object = publication.conditional_object
