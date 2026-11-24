@@ -1,0 +1,19 @@
+{
+  "name": "hublot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node sync-query-contract.mjs --check && vite build",
+    "sync-query-contract": "node sync-query-contract.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@xyflow/react": "12.11.1",
+    "echarts": "6.1.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "vite": "7.2.2"
+  }
+}

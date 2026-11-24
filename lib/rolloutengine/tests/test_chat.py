@@ -25,6 +25,7 @@ from rolloutengine.harness.assistant_prefix import AssistantPrefixHarness
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.models import (
+    ContextRejected,
     Continuation,
     GradedRolloutInterrupted,
     ModelRequest,
@@ -256,6 +257,39 @@ async def test_a_tool_call_that_fills_the_context_window_is_a_length_stop(contex
     async with model.client:
         turn = await model(ModelRequest(messages=({"role": "user", "content": "What is a?"},), options={}))
     assert turn.stop_reason == stop_reason
+
+
+VLLM_CONTEXT_REJECTION = {
+    "object": "error",
+    "message": "This model's maximum context length is 32768 tokens. However, your request has 40000 input tokens.",
+    "type": "BadRequestError",
+    "param": None,
+    "code": 400,
+}
+OPENAI_CONTEXT_REJECTION = {
+    "error": {"message": "Input too large.", "type": "invalid_request_error", "code": "context_length_exceeded"}
+}
+INVALID_REQUEST = {**VLLM_CONTEXT_REJECTION, "message": "temperature must be non-negative"}
+
+
+@pytest.mark.parametrize(
+    ("body", "rejected"),
+    [(VLLM_CONTEXT_REJECTION, True), (OPENAI_CONTEXT_REJECTION, True), (INVALID_REQUEST, False)],
+    ids=["vllm-message", "openai-code", "other-bad-request"],
+)
+async def test_a_context_length_rejection_is_a_context_rejection_and_other_bad_requests_fail(body, rejected):
+    client = openai.AsyncOpenAI(
+        api_key="test-key",
+        base_url="http://chat.test/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(400, json=body))),
+    )
+    request = ModelRequest(({"role": "user", "content": "What is a?"},), {})
+    async with client:
+        with pytest.raises(ContextRejected if rejected else openai.BadRequestError) as caught:
+            await ChatModel(client, "chat-model", max_tokens=1024)(request)
+    if rejected:
+        assert isinstance(caught.value.error, openai.BadRequestError)
 
 
 async def test_exact_chat_preserves_source_conversation_without_appending_submission_instructions():

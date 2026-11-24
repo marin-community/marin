@@ -11,6 +11,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     ExitCodeReward,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     ScriptGrader,
@@ -48,21 +49,23 @@ def swe_task(instance: SWEInstance, *, source: Source, environment: EnvironmentR
         }
     )
     grader = ScriptGrader(
-        collect=(
-            VerifierCommand(
-                argv=(
-                    "sh",
-                    "-c",
-                    f'mkdir -p "$(dirname "$1")" && git add -A && git diff --cached --binary {BASE_REF} > "$1"',
-                    "collect-patch",
-                    PATCH_PATH,
-                )
+        placement=GraderMachine(
+            environment=environment,
+            collect=(
+                VerifierCommand(
+                    argv=(
+                        "sh",
+                        "-c",
+                        f'mkdir -p "$(dirname "$1")" && git add -A && git diff --cached --binary {BASE_REF} > "$1"',
+                        "collect-patch",
+                        PATCH_PATH,
+                    )
+                ),
             ),
+            artifacts=(VerifierArtifact(source=PATCH_PATH, target=PATCH_PATH, kind=ArtifactKind.FILE),),
         ),
-        artifacts=(VerifierArtifact(source=PATCH_PATH, target=PATCH_PATH, kind=ArtifactKind.FILE),),
         argv=("sh", "-c", 'git apply --binary "$1" && bash "$2"', "evaluate-patch", PATCH_PATH, GRADER_PATH),
         cwd=environment.working_directory or "/",
-        environment=environment,
         answer_path=None,
         reward=ExitCodeReward(),
     )

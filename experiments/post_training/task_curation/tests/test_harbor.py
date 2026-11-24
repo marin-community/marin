@@ -25,6 +25,7 @@ from taskcompendium.models import (
     DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
+    GraderMachine,
     NoGrader,
     ResourceGroups,
     RewardFile,
@@ -206,7 +207,8 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
     if role == "actor":
         task = converted.model_copy(update={"environment_requirements": environment})
     else:
-        task = converted.model_copy(update={"grader": converted.grader.model_copy(update={"environment": environment})})
+        grader = converted.grader.model_copy(update={"placement": GraderMachine(environment=environment)})
+        task = converted.model_copy(update={"grader": grader})
     with pytest.raises(UnsupportedHarborTask, match="Docker build contexts"):
         harbor_record(
             {**row, "task_json": task.model_dump_json()},
@@ -234,8 +236,10 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
                 "grader": ScriptGrader(
                     argv=("bash", "/tests/test.sh"),
                     answer_path=None,
-                    environment=EnvironmentRequirements(
-                        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+                    placement=GraderMachine(
+                        environment=EnvironmentRequirements(
+                            command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+                        )
                     ),
                     reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format="number"),)),
                 ),
@@ -545,7 +549,7 @@ def test_harbor_source_image_supplies_grader_dependencies(
     environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE)
     task = original.model_copy(
         update={
-            "grader": verifyit_package(spec, environment=environment).grader,
+            "grader": verifyit_package(spec, placement=GraderMachine(environment=environment)).grader,
             "answer_type": AnswerType.FILE if isinstance(spec, PytestSpec) else AnswerType.TEXT,
             "output_paths": (f"/app/{answer_path}",),
             "resources": original.resources.model_copy(update={"verifier": resources}),
@@ -585,8 +589,10 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
             "grader": ScriptGrader(
                 argv=("python3", "/tests/grade.py"),
                 answer_path=None,
-                environment=EnvironmentRequirements(
-                    command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+                placement=GraderMachine(
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+                    )
                 ),
                 reward=StdoutReward(),
             ),
@@ -627,9 +633,11 @@ def repository_task(normalized_row) -> TaskSpec:
     grader = ScriptGrader(
         argv=("bash", "/tests/test.sh"),
         cwd="/testbed",
-        environment=environment,
+        placement=GraderMachine(
+            environment=environment,
+            artifacts=(VerifierArtifact(source="/testbed", target="/testbed", kind=ArtifactKind.DIRECTORY),),
+        ),
         answer_path=None,
-        artifacts=(VerifierArtifact(source="/testbed", target="/testbed", kind=ArtifactKind.DIRECTORY),),
         reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format="number"),)),
     )
     return task.model_copy(
@@ -769,7 +777,11 @@ print(float(answer == actor_dependency.expected))
     package = verifyit_package(
         ScriptSpec(path="check.py", workspace=str(workspace)),
         (inline_resource("check.py", checker),),
-        environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE),
+        placement=GraderMachine(
+            environment=EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+            )
+        ),
     )
     task = original.model_copy(
         update={

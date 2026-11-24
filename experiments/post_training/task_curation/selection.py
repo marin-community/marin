@@ -43,15 +43,16 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.evalchemy.assets.code_protocol import mbpp_example
 from taskcompendium.models import (
-    SCHEMA_VERSION,
+    UPGRADABLE_SCHEMA_VERSION,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
     NoGrader,
     ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
-    VerifyitGrader,
+    grader_environment,
     grades_in_process,
     grades_with_judge,
 )
@@ -310,7 +311,8 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
         if not isinstance(converted, NormalizedTask):
             raise ValueError(f"Native structure-closure import failed for {original['id']}: {converted}")
         return converted.task
-    task = TaskSpec.model_validate({**original, "schema_version": SCHEMA_VERSION})
+    # The pinned heldout graders keep the 0.30 shape, so they enter through the 0.30 upgrade.
+    task = TaskSpec.model_validate({**original, "schema_version": UPGRADABLE_SCHEMA_VERSION})
     if document["runtime"]["task_machine"] is not None:
         raise ValueError("Heldout source machine contract changed")
     if document["session"]["task_session"] != "shellbox" or document["session"]["max_turns"] != 1:
@@ -323,9 +325,10 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
             )
 
             raise ValueError(f"No admitted grader environment for {BLENDS[HELDOUT_BLEND][dataset].id}")
-        task = task.model_copy(
-            update={"grader": task.grader.model_copy(update={"environment": grader_environments[dataset]})}
-        )
+        placement = task.grader.placement
+        assert isinstance(placement, GraderMachine)
+        placement = placement.model_copy(update={"environment": grader_environments[dataset]})
+        task = task.model_copy(update={"grader": task.grader.model_copy(update={"placement": placement})})
     return task
 
 
@@ -531,7 +534,9 @@ def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, Envir
         task, _ = record
         if not isinstance(task.grader, ScriptGrader) or _grader_kind(task) != GraderKind.PACKAGE:
             raise ValueError(f"Admitted component needs a local script grader: {source.source_id}")
-        environments[components[source.source_id]] = task.grader.environment
+        environment = grader_environment(task.grader)
+        assert environment is not None
+        environments[components[source.source_id]] = environment
     return environments
 
 
@@ -542,9 +547,9 @@ def _grader_kind(task: TaskSpec) -> GraderKind:
         return GraderKind.REMOTE_JUDGE
     if grades_in_process(task.grader):
         return GraderKind.IN_PROCESS
-    if not isinstance(task.grader, ScriptGrader | VerifyitGrader) or task.grader.environment is None:
+    environment = grader_environment(task.grader)
+    if environment is None:
         raise ValueError(f"Task has no runnable grader: {task.id}")
-    environment = task.grader.environment
     return (
         GraderKind.PACKAGE
         if environment.packages_lock is not None or environment.package_spec is not None

@@ -25,10 +25,12 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.script_grader import GRADE_ARGV
 from taskcompendium.models import (
     DOCKER_IMAGE_PATTERN,
+    AgentMachine,
     AnswerType,
     ArtifactKind,
     CommandSemantics,
     FileReward,
+    GraderMachine,
     MissingArtifactPolicy,
     PlainText,
     ScriptGrader,
@@ -36,6 +38,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
     VerifyitGrader,
+    grader_environment,
     verifyit_answer_file,
     verifyit_spec,
 )
@@ -185,7 +188,7 @@ class _VerifierProgram:
     mode: str
     timeout: float
     env: dict[str, str]
-    cwd: str
+    cwd: str | None
     spec: Spec | None
 
 
@@ -200,8 +203,8 @@ def _environment_mode(task: TaskSpec) -> VerifierEnvironmentMode:
         and isinstance(grader, VerifyitGrader)
         and grader.mode == "stdio"
         and task.environment_requirements.docker_build is not None
-        and grader.environment is not None
-        and grader.environment.docker_build == task.environment_requirements.docker_build
+        and (grader_build := grader_environment(grader)) is not None
+        and grader_build.docker_build == task.environment_requirements.docker_build
     ):
         return VerifierEnvironmentMode.SHARED
     return VerifierEnvironmentMode.SEPARATE
@@ -212,6 +215,9 @@ def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentM
     grader = task.grader
     if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
         raise UnsupportedHarborTask("Harbor cannot preserve shell simulator semantics")
+    if isinstance(grader, ScriptGrader | VerifyitGrader) and isinstance(grader.placement, AgentMachine):
+        raise UnsupportedHarborTask("Graders placed in the agent's machine require dedicated Harbor lowering")
+    grader_build = grader_environment(grader)
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
     if repository_state:
         if (
@@ -219,10 +225,11 @@ def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentM
             or not isinstance(grader, ScriptGrader)
             or grader.argv != HARBOR_SCRIPT_ARGV
             or not isinstance(grader.reward, FileReward)
-            or len(grader.artifacts) != 1
+            or not isinstance(grader.placement, GraderMachine)
+            or len(grader.placement.artifacts) != 1
         ):
             raise UnsupportedHarborTask("Repository state requires git_repository and one explicit workspace artifact")
-        artifact = grader.artifacts[0]
+        artifact = grader.placement.artifacts[0]
         if (
             artifact.source != REPOSITORY_WORKSPACE
             or artifact.target != artifact.source
@@ -231,19 +238,14 @@ def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentM
             or artifact.missing != MissingArtifactPolicy.ERROR
             or grader.answer_path is not None
             or environment.docker_build is None
-            or grader.environment is None
-            or grader.environment.docker_build is None
+            or grader_build is None
+            or grader_build.docker_build is None
         ):
             raise UnsupportedHarborTask(
                 "Only required full /testbed repository capture with declared builds is supported"
             )
     elif environment_mode == VerifierEnvironmentMode.SEPARATE and (
-        environment.docker_build is not None
-        or (
-            isinstance(grader, ScriptGrader | VerifyitGrader)
-            and grader.environment is not None
-            and grader.environment.docker_build is not None
-        )
+        environment.docker_build is not None or (grader_build is not None and grader_build.docker_build is not None)
     ):
         raise UnsupportedHarborTask("Docker build contexts require a supported shared execution contract")
     if len(task.context.events) != 1 or not isinstance(task.context.events[0], TextMessage):
@@ -301,7 +303,10 @@ def _verifier_program(
         grader_env = {}
         grader_cwd = "/"
     elif isinstance(grader, ScriptGrader):
-        if grader.collect or (grader.artifacts and not repository_state):
+        placement = grader.placement
+        if isinstance(placement, GraderMachine) and (
+            placement.collect or (placement.artifacts and not repository_state)
+        ):
             raise UnsupportedHarborTask("Script collection hooks require dedicated Harbor lowering")
         if grader.argv == GRADE_ARGV and isinstance(grader.reward, StdoutReward):
             files.update(verifier_runtime())
@@ -330,7 +335,8 @@ def _verifier_program(
         mode, timeout, grader_env, grader_cwd = "script", grader.timeout, grader.env, grader.cwd
     else:
         raise UnsupportedHarborTask(f"Unsupported grader: {grader.kind}")
-    if grader.environment is None and environment_mode == VerifierEnvironmentMode.SEPARATE:
+    grader_build = grader_environment(grader)
+    if grader_build is None and environment_mode == VerifierEnvironmentMode.SEPARATE:
         if not isinstance(grader, VerifyitGrader) or grader.mode not in IN_PROCESS_FILE_MODES:
             raise UnsupportedHarborTask("In-process grader mode has no supported file-delivery lowering")
         if task.answer_type != AnswerType.TEXT or answer_path is None:
@@ -342,7 +348,7 @@ def _verifier_program(
             f"--answer {shlex.quote(answer_path)} --workspace {shlex.quote(DEFAULT_WORKSPACE)} "
             f"--logs-dir /logs/verifier --resources-manifest /{VERIFIER_RESOURCES_PATH}\n"
         ).encode()
-    elif grader.environment is not None and grader.environment.setup_commands:
+    elif grader_build is not None and grader_build.setup_commands:
         raise UnsupportedHarborTask("Verifier setup commands require an environment build")
     return _VerifierProgram(
         files=files,
@@ -403,6 +409,7 @@ def harbor_payload(
     _validate_harbor_task(task, environment_mode)
     environment = task.environment_requirements
     grader = task.grader
+    grader_build = grader_environment(grader)
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
     verifier = _verifier_program(task, grader_image, environment_mode)
     assert isinstance(grader, (ScriptGrader, VerifyitGrader))
@@ -483,7 +490,10 @@ def harbor_payload(
         if "tests/verifier.toml" in files:
             raise UnsupportedHarborTask("Repository verifier spec uses Harbor's reserved entrypoint")
         # Legacy shared execution retains the actor's installed dependencies and workspace.
-        files[TEST_SH] = f"#!/bin/bash\nset -euo pipefail\ncd {shlex.quote(verifier.cwd)}\n".encode() + files[TEST_SH]
+        if verifier.cwd is not None:
+            files[TEST_SH] = (
+                f"#!/bin/bash\nset -euo pipefail\ncd {shlex.quote(verifier.cwd)}\n".encode() + files[TEST_SH]
+            )
     if actor_build is not None:
         _validate_tasktrove_dockerfile(files)
     outputs = list(task.output_paths)
@@ -527,8 +537,8 @@ def harbor_payload(
             "timeout_sec": verifier.timeout,
             "env": verifier.env,
             "environment": {
-                "workdir": verifier.cwd,
-                "env": grader.environment.environment_variables if grader.environment is not None else {},
+                **({} if verifier.cwd is None else {"workdir": verifier.cwd}),
+                "env": grader_build.environment_variables if grader_build is not None else {},
             },
         },
         "artifacts": [{"source": path, "destination": path.removeprefix("/")} for path in dict.fromkeys(outputs)],
@@ -538,7 +548,7 @@ def harbor_payload(
         config["verifier"].pop("environment")
         config["artifacts"] = []
         config["verifier"]["env"] = {
-            **(grader.environment.environment_variables if grader.environment is not None else {}),
+            **(grader_build.environment_variables if grader_build is not None else {}),
             **verifier.env,
         }
         metadata["execution_policy"] = "tasktrove_shared"

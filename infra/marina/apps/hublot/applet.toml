@@ -1,0 +1,6 @@
+applet_id = "e07eabd8-dd92-408b-b6d7-82e0fdadccdc"
+name = "hublot"
+title = "Hublot"
+description = "Inspect reinforcement learning runs from Finelog. Follow rollout work, inference throughput, and trainer batch waits."
+python_entrypoint = "backend.app:create_api"
+build_command = "cd web && npm ci && npm run build"

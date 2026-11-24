@@ -7,7 +7,7 @@ import json
 
 from fray.local_backend import LocalClient
 from taskcompendium.evaluation.corpus import evaluation_cases
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, verifyit_spec
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, GraderMachine, verifyit_spec
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from verifyit.spec import McqExtraction, McqSpec
 from zephyr.context import ZephyrContext
@@ -67,4 +67,4 @@ def test_publication_renders_reference_prompt_with_discipline_and_difficulty_gro
         McqSpec("C", options=4, extraction=reference, option_texts=("4", "6", "7", "9")),
         McqSpec("A", options=5, extraction=reference, option_texts=("8", "3", "5", "7", "9")),
     ]
-    assert all(case.task.grader.environment is not None for case in cases)
+    assert all(case.task.grader.placement == GraderMachine(environment=environment) for case in cases)

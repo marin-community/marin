@@ -1,3 +1,7 @@
+# STATUS: this policy does not run, and no suite selects it.
+# Marin's Harbor trial driver rejects packages with a Compose file on Daytona, so every trial fails before
+# the agent starts. The curated benchmark lowers all 50 packages, but its tools need SEC EDGAR and
+# SerpAPI keys and it needs an OpenAI key for its judge; none is provisioned.
 n_concurrent_trials: 16
 retry:
   max_retries: 10

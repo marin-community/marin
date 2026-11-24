@@ -57,6 +57,7 @@ Both Mochi layouts restrict NCCL to the `ibp` InfiniBand rails. The long presets
 | --- | --- | --- | --- | --- |
 | `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | `h100x88`, 11 nodes × 8 H100s | Best eligible policy. | Ran with the v4 task selection, reduced batches and a bounded attempt |
 | `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | `h100x256`, 32 nodes × 8 H100s | Best eligible policy. | CPU plan only |
+| `train-medium-tools` | Ten updates on a `--tasks` selection of shell-tool tasks. | `p40`, 5 nodes × 8 H100s | None by default. | Ran three updates on a 164-task forge selection |
 
 When a trained step has the best eligible score, a successful waiting run keeps that native
 checkpoint and returns its HF export. When step zero wins, the result points to the starting HF
@@ -66,6 +67,9 @@ Detached launches use the trainer’s rolling checkpoint window.
 The 40-H100 `train-long` preset uses sample packing with two Megatron context ranks. The agentic
 presets use five context ranks. The `train-long-agentic` layout splits a 102,400-token request into
 20,480 packed token positions per rank. A full update at that length is unmeasured.
+
+`train-medium-tools` runs Linux tasks and image graders on Daytona sandboxes in the RL organization, so set
+`DAYTONA_RL_API_KEY`.
 
 ### Task selection and native resume
 

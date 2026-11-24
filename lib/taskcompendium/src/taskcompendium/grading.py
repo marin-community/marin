@@ -98,7 +98,9 @@ def answer_submission(task: TaskSpec, attempt: GradingAttempt) -> Submission:
     Raises ``SubmissionFailure`` when the attempt carries no valid submission.
     """
     if task.answer_type in CONVERSATION_ANSWERS:
-        submission = extract_submission(task.answer_format, attempt, context_length=len(task.context.events))
+        submission = extract_submission(
+            task.answer_format, attempt, answer_type=task.answer_type, context_length=len(task.context.events)
+        )
         if is_ejection(submission) and not any(tool.name == EJECT_CALL_NAME for tool in task.final_tools):
             raise SubmissionFailure("Ejection was not advertised for this task")
         return submission
@@ -106,7 +108,23 @@ def answer_submission(task: TaskSpec, attempt: GradingAttempt) -> Submission:
         if attempt.state is None:
             raise SubmissionFailure("State submission requires captured state")
         return attempt.state
+    if task.answer_type == AnswerType.FILE and len(task.output_paths) == 1:
+        return file_submission(task.output_paths[0], attempt)
     raise TypeError(f"A {task.answer_type} answer is not extracted from the attempt")
+
+
+def file_submission(path: str, attempt: GradingAttempt) -> TextSubmission:
+    """The text of the one captured answer file.
+
+    Raises ``SubmissionFailure`` when the agent left no file there or the file is not UTF-8 text.
+    """
+    content = attempt.files.get(path)
+    if content is None:
+        raise SubmissionFailure(f"No answer file at {path}")
+    try:
+        return TextSubmission(content.decode())
+    except UnicodeDecodeError as error:
+        raise SubmissionFailure(f"The answer file at {path} is not UTF-8 text") from error
 
 
 def terminal_grade(verifier: Spec, submission: Submission) -> GradeResult | None:
@@ -141,7 +159,7 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
 
 def gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spec | None) -> bool:
     """Whether a blank final text is a candidate under the verifier's explicit policy."""
-    if not isinstance(task.answer_format, PlainText):
+    if task.answer_type not in CONVERSATION_ANSWERS or not isinstance(task.answer_format, PlainText):
         return False
     if any(has_ejection(event) for event in attempt.conversation.events[len(task.context.events) :]):
         return False
@@ -159,8 +177,8 @@ def gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spec
 def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
     """Extract the task's submission and score it with its in-process verifyit mode."""
     grader = task.grader
-    if not isinstance(grader, VerifyitGrader) or grader.environment is not None:
-        raise TypeError(f"In-process grading requires a verifyit grader without an environment, not {grader.kind}")
+    if not isinstance(grader, VerifyitGrader) or grader.placement is not None:
+        raise TypeError(f"In-process grading requires a verifyit grader without a placement, not {grader.kind}")
     verifier = verifyit_spec(grader)
     if task.answer_type in CONVERSATION_ANSWERS:
         require_submission_compatibility(task)
@@ -192,7 +210,8 @@ def grade_remote_judge_answer(
     verifier = verifyit_spec(grader)
     if not isinstance(verifier, JudgeSpec):
         raise TypeError(f"Remote judge grading requires a judge verifier, not {grader.mode}")
-    require_submission_compatibility(task)
+    if task.answer_type in CONVERSATION_ANSWERS:
+        require_submission_compatibility(task)
     try:
         submission = answer_submission(task, attempt)
     except SubmissionFailure as error:

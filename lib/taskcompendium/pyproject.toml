@@ -15,6 +15,7 @@ dependencies = [
     # The runtime staging copies tomli's package directory for the 3.10 grader machines.
     "tomli>=2.0.1",
     "tomlkit>=0.13",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -59,8 +60,7 @@ disable-project-excludes-heuristics = true
 use-ignore-files = false
 project-includes = ["src/**/*.py"]
 project-excludes = [
-    # Canonical upstream instruction checkers; wrappers remain checked.
-    "src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    # Vendored IFBench instruction checkers; wrappers remain checked.
     "src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
 ]
 search-path = ["src", "../verifyit/src", "../rigging/src", "src/taskcompendium/importers/evalchemy/assets"]

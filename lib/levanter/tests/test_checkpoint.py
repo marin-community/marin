@@ -7,6 +7,8 @@ import io
 import json
 import os
 import pathlib
+import subprocess
+import sys
 import tempfile
 from contextlib import contextmanager
 from datetime import timedelta
@@ -42,7 +44,6 @@ from levanter.checkpoint import (
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
-    _collect_debug_checkpointer_state,
     load_checkpoint_metadata,
     discover_checkpoint_candidates,
     discover_latest_checkpoint,
@@ -50,9 +51,7 @@ from levanter.checkpoint import (
     latest_checkpoint_path,
     load_checkpoint,
     load_checkpoint_or_initialize,
-    register_debug_checkpointer_state_provider,
     save_checkpoint,
-    unregister_debug_checkpointer_state_provider,
 )
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
@@ -664,19 +663,6 @@ def test_debug_checkpoint_nonprimary_serialization_failure_omits_total_telemetry
     assert not any(record["name"] == "checkpoint_total_duration_seconds" for record in checkpoint_records)
 
 
-def test_debug_checkpointer_state_providers_register_and_unregister():
-    provider_name = "unit-test-provider"
-    provider = lambda: {"weight_transfer": {"bytes": 123}}
-
-    try:
-        register_debug_checkpointer_state_provider(provider_name, provider)
-        assert _collect_debug_checkpointer_state()[provider_name] == {"weight_transfer": {"bytes": 123}}
-    finally:
-        unregister_debug_checkpointer_state_provider(provider_name)
-
-    assert provider_name not in _collect_debug_checkpointer_state()
-
-
 def test_checkpointer_config_rejects_invalid_debug_tracemalloc_settings():
     with pytest.raises(AssertionError, match="checkpoint debug tracemalloc_frames must be positive"):
         CheckpointerConfig(debug=CheckpointDebugConfig(tracemalloc_frames=0))
@@ -957,6 +943,76 @@ def test_final_checkpoint_waits_for_pending_temporary_save_and_restores_complete
     restored = load_checkpoint(jax.tree.map(jnp.zeros_like, state), path)
     assert_trees_all_equal(restored, state)
     assert load_checkpoint_metadata(path)["is_temporary"] is False
+
+
+_FORCED_SAVE_CRASH_SCRIPT = """
+import builtins
+import os
+import sys
+
+import jax.numpy as jnp
+
+from levanter.checkpoint import Checkpointer, CheckpointRetention
+
+checkpoint_dir, restart = sys.argv[1], sys.argv[2] == "restart"
+state = {"model": jnp.arange(4.0)}
+checkpointer = Checkpointer(checkpoint_dir, None, [])
+if not restart:
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.on_step(tree=state, step=1)
+    checkpointer.wait_until_finished()
+
+original_open = builtins.open
+
+def crash_on_manifest_open(file, mode="r", *args, **kwargs):
+    handle = original_open(file, mode, *args, **kwargs)
+    path = os.fspath(file)
+    if "w" in mode and os.path.basename(os.path.dirname(path)) == "step-1":
+        if os.path.basename(path).startswith("manifest.json"):
+            os._exit(137)
+    return handle
+
+builtins.open = crash_on_manifest_open
+checkpointer.on_step(tree=state, step=1, force=True)
+checkpointer.wait_until_finished()
+"""
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_forced_checkpoint_save_preserves_latest_checkpoint(tmp_path, restart):
+    checkpoint_dir = tmp_path / "checkpoints"
+    state = {"model": jnp.arange(4.0)}
+    if restart:
+        checkpointer = Checkpointer(checkpoint_dir, None, [])
+        checkpointer.on_step(tree=state, step=1, force=True)
+        checkpointer.wait_until_finished()
+
+    result = subprocess.run(
+        [sys.executable, "-c", _FORCED_SAVE_CRASH_SCRIPT, str(checkpoint_dir), "restart" if restart else "default"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == (137 if restart else 0), result.stderr
+    path = latest_checkpoint_path(checkpoint_dir)
+    assert path == str(checkpoint_dir / "step-1")
+    restored = load_checkpoint(jax.tree.map(jnp.zeros_like, state), path)
+    assert_trees_all_equal(restored, state)
+    if not restart:
+        assert load_checkpoint_metadata(path)["is_temporary"] is False
+
+
+def test_fresh_checkpointer_force_saves_step_zero(tmp_path):
+    state = {"model": jnp.arange(4.0)}
+    checkpointer = Checkpointer(tmp_path, None, [])
+    checkpointer.on_step(tree=state, step=0, force=True)
+    checkpointer.wait_until_finished()
+
+    path = latest_checkpoint_path(tmp_path)
+    assert path == str(tmp_path / "step-0")
+    restored = load_checkpoint(jax.tree.map(jnp.zeros_like, state), path)
+    assert_trees_all_equal(restored, state)
 
 
 def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):
@@ -1280,3 +1336,179 @@ def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_p
     assert loaded["weights"].sharding == source_sharding
     np.testing.assert_array_equal(loaded["progress"]["step"], 7)
     assert loaded["unused"] is None
+
+
+def _run_temp_prune_with_fs_wrapper(tmp_path, monkeypatch, wrapper_factory):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        None,
+        [],
+        temporary_base_path=temporary_path,
+        keep_last_temporary_checkpoints=1,
+    )
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 1)
+    checkpointer.wait_until_finished()
+    step1_dir = temporary_path / "step-1"
+    before_files = sorted(str(p.relative_to(step1_dir)) for p in step1_dir.rglob("*") if p.is_file())
+    assert "metadata.json" in before_files
+
+    real_get_fs = checkpoint_module._get_fs_and_plain_path
+
+    def wrapped_get_fs(path, fs=None):
+        inner, plain = real_get_fs(path, fs=fs)
+        if str(path) == str(step1_dir):
+            return wrapper_factory(inner, step1_dir, temporary_path), plain
+        return inner, plain
+
+    monkeypatch.setattr(checkpoint_module, "_get_fs_and_plain_path", wrapped_get_fs)
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 2)
+    checkpointer.wait_until_finished()
+    return step1_dir, temporary_path, before_files
+
+
+def test_prune_removes_metadata_before_payload_so_interrupted_delete_is_skipped(tmp_path, monkeypatch):
+    observed_candidates_at_payload_rm: list[list[int]] = []
+
+    class InterruptedPayloadRmFs:
+        def __init__(self, inner, step1_dir, temporary_path):
+            self._inner = inner
+            self._step1_dir = step1_dir
+            self._temporary_path = temporary_path
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def rm(self, path, recursive=False):
+            if recursive:
+                assert not (self._step1_dir / "metadata.json").exists()
+                observed_candidates_at_payload_rm.append(
+                    [c.step for c in discover_checkpoint_candidates(self._temporary_path)]
+                )
+                raise OSError("simulated mid-delete failure")
+            return self._inner.rm(path, recursive=False)
+
+    step1_dir, temporary_path, _ = _run_temp_prune_with_fs_wrapper(tmp_path, monkeypatch, InterruptedPayloadRmFs)
+
+    assert observed_candidates_at_payload_rm == [[2]]
+    assert step1_dir.exists()
+    assert not (step1_dir / "metadata.json").exists()
+    assert [c.step for c in discover_checkpoint_candidates(temporary_path)] == [2]
+
+
+@pytest.mark.parametrize("failure_mode", ["raise", "silent_noop"])
+def test_prune_aborts_payload_removal_when_metadata_delete_fails(tmp_path, monkeypatch, failure_mode):
+    recursive_rm_called = False
+
+    class FailingMetadataRmFs:
+        def __init__(self, inner, _step1_dir, _temporary_path):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def rm(self, path, recursive=False):
+            nonlocal recursive_rm_called
+            if recursive:
+                recursive_rm_called = True
+                return self._inner.rm(path, recursive=True)
+            if failure_mode == "raise":
+                raise PermissionError("metadata delete denied")
+            return None
+
+    step1_dir, temporary_path, before_files = _run_temp_prune_with_fs_wrapper(
+        tmp_path, monkeypatch, FailingMetadataRmFs
+    )
+
+    assert not recursive_rm_called
+    after_files = sorted(str(p.relative_to(step1_dir)) for p in step1_dir.rglob("*") if p.is_file())
+    assert after_files == before_files
+    assert _get_checkpoint_steps(temporary_path) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "cp_url,plain_path",
+    [
+        ("s3://bucket/run/step-1", "bucket/run/step-1"),
+        ("gs://bucket/run/step-1", "bucket/run/step-1"),
+    ],
+)
+def test_prune_uses_delete_prefix_after_removing_object_store_metadata(tmp_path, monkeypatch, cp_url, plain_path):
+    events: list[tuple[str, str]] = []
+    metadata_path = os.path.join(plain_path, checkpoint_module.CHECKPOINT_METADATA_FILENAME)
+
+    class FakeObjectStoreFs:
+        def __init__(self):
+            self.metadata_present = True
+
+        def exists(self, path):
+            if path == metadata_path:
+                return self.metadata_present
+            return True
+
+        def rm(self, path, recursive=False):
+            assert not recursive, "object-store payload removal should delegate to delete_prefix"
+            events.append(("rm", path))
+            if path == metadata_path:
+                self.metadata_present = False
+
+        def invalidate_cache(self, path=None):
+            events.append(("invalidate_cache", path))
+
+    checkpointer = Checkpointer(tmp_path, None, [])
+    fake_fs = FakeObjectStoreFs()
+    monkeypatch.setattr(checkpoint_module, "_get_fs_and_plain_path", lambda path, fs=None: (fake_fs, plain_path))
+
+    def fake_delete_prefix(url):
+        assert not fake_fs.metadata_present, "metadata.json must be removed before delete_prefix runs"
+        events.append(("delete_prefix", url))
+
+    monkeypatch.setattr(checkpoint_module, "delete_prefix", fake_delete_prefix)
+
+    checkpointer._do_rm_checkpoint(cp_url)
+
+    assert events == [
+        ("rm", metadata_path),
+        ("delete_prefix", cp_url),
+        ("invalidate_cache", plain_path),
+    ]
+
+
+@pytest.mark.parametrize("failure_mode", ["raise", "silent_noop"])
+def test_prune_skips_delete_prefix_when_object_store_metadata_delete_fails(tmp_path, monkeypatch, failure_mode):
+    cp_url = "s3://bucket/run/step-1"
+    plain_path = "bucket/run/step-1"
+    metadata_path = os.path.join(plain_path, checkpoint_module.CHECKPOINT_METADATA_FILENAME)
+    delete_prefix_called = False
+
+    class FailingObjectStoreFs:
+        def exists(self, path):
+            return path in (metadata_path, plain_path)
+
+        def rm(self, path, recursive=False):
+            assert not recursive
+            if failure_mode == "raise":
+                raise PermissionError("metadata delete denied")
+
+        def invalidate_cache(self, path=None):
+            pass
+
+    checkpointer = Checkpointer(tmp_path, None, [])
+    monkeypatch.setattr(
+        checkpoint_module, "_get_fs_and_plain_path", lambda path, fs=None: (FailingObjectStoreFs(), plain_path)
+    )
+
+    def fake_delete_prefix(_url):
+        nonlocal delete_prefix_called
+        delete_prefix_called = True
+
+    monkeypatch.setattr(checkpoint_module, "delete_prefix", fake_delete_prefix)
+
+    checkpointer._do_rm_checkpoint(cp_url)
+
+    assert not delete_prefix_called
