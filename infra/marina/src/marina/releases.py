@@ -88,7 +88,6 @@ class ReleaseSource:
     tree: str
     inputs: dict[str, str] = field(default_factory=dict)
     branch: str = DEFAULT_RELEASE_BRANCH
-    """The declared release branch the commit is landed on; main for default releases."""
 
 
 class ReleaseState(StrEnum):

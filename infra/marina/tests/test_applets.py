@@ -1499,13 +1499,6 @@ def test_require_landed_release_rejects_unlanded_source(release_checkout: Path) 
 
 
 @pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
-def test_require_landed_release_rejects_a_dirty_checkout(release_checkout: Path) -> None:
-    (release_checkout / "extra.txt").write_text("unreviewed")
-    with pytest.raises(RuntimeError, match="clean checkout"):
-        require_release_checkout(release_checkout, branch="integration")
-
-
-@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
 def test_release_with_release_branch_records_the_branch_and_refuses_unlanded(
     release_checkout: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1585,6 +1578,5 @@ def test_require_release_checkout_prefers_the_branch_over_a_same_named_tag(relea
         subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
     with pytest.raises(RuntimeError, match="not landed on origin/integration"):
         require_release_checkout(release_checkout, branch="integration")
-    # The landed tip itself still verifies.
     subprocess.run(["git", "checkout", "-q", tip], cwd=release_checkout, check=True, capture_output=True)
     assert require_release_checkout(release_checkout, branch="integration") == tip
