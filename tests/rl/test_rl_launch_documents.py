@@ -38,7 +38,7 @@ def _render_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[s
     authored = {
         str(path.relative_to(root)) for path in (root / "experiments").rglob("*.py") if "SkyRLSpec(" in path.read_text()
     }
-    # The preset launcher tests cover the shared runner's documents.
+    # Launcher tests exercise the shared composer through Snowball presets and Mochi's three-rack preset.
     separate_owners = {"experiments/post_training/rl_compose.py"}
     assert authored <= producers | separate_owners, authored - producers - separate_owners
     return documents

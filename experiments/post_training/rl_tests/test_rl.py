@@ -60,10 +60,6 @@ from experiments.post_training.task_curation.selection import FULL_VALIDATION_FI
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 
-EVALUATION_CALLBACK = "evaluation"
-BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
-HF_MODEL_SAVE_CALLBACK = "hf_model_save"
-
 
 def printed_status(output):
     # CliRunner merges stderr into result.output; status is on result.stdout.
@@ -137,8 +133,8 @@ def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
 
     # Best-checkpoint selection consumes evaluation metrics before the export callback runs.
     callbacks = [row["type"] for row in learning_config["skyrl"]["trainer"]["callbacks"]]
-    evaluation = callbacks.index(EVALUATION_CALLBACK)
-    assert evaluation < callbacks.index(BEST_CHECKPOINT_CALLBACK) < callbacks.index(HF_MODEL_SAVE_CALLBACK)
+    evaluation = callbacks.index("evaluation")
+    assert evaluation < callbacks.index("best_checkpoint") < callbacks.index("hf_model_save")
 
 
 def test_plan_rejects_gated_preset_without_control_pin(selection):
@@ -609,8 +605,8 @@ def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_
     assert (source["uri"], source["relative_path"]) == (held_out.path(), VALIDATION_FILENAME)
     assert not config["run"]["export_hf"]
     callbacks = {row["type"] for row in config["skyrl"]["trainer"]["callbacks"]}
-    assert EVALUATION_CALLBACK in callbacks
-    assert callbacks.isdisjoint({"checkpoint", BEST_CHECKPOINT_CALLBACK, HF_MODEL_SAVE_CALLBACK})
+    assert "evaluation" in callbacks
+    assert callbacks.isdisjoint({"checkpoint", "best_checkpoint", "hf_model_save"})
 
     docs = (recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
     section = docs.split("## Mochi inference on GB200\n", 1)[1]
