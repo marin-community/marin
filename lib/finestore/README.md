@@ -46,8 +46,28 @@ A flush uploads each new shard, writes a manifest, and publishes it with one
 compare-and-swap of `HEAD`. A writer that loses the compare-and-swap rebases its change
 onto the new `HEAD` and retries with backoff. Every writer to a root shares its `HEAD`,
 so commits to one root are serialized; writers that need more aggregate commit
-throughput should write to separate roots. A flush raises `CommitConflict` only after
-losing the compare-and-swap for an hour.
+throughput should write to separate roots. A flush retries compare-and-swap conflicts
+for up to an hour.
+
+## Dropping and replacing tables
+
+`finestore.admin.drop_table(root, table)` drops the table version it resolves from
+`HEAD`. Pass `expected=view.table_version(table)` to drop the exact version
+used by an earlier operation such as a backup. If the table changes, the commit
+raises `CommitConflict`. A drop clears the seal when it removes an active table.
+
+`transaction.replace_table(name, rows, metadata=..., depends_on=...)` stages
+replacement shards in Arrow batches up to the store's buffer budget, except
+that a single row may exceed it. The replacement publishes with the other
+transaction writes. Pass `store.transaction(base=view)` to use the snapshot
+that supplied the input rows. The commit checks that the output table and its
+named dependencies still match that snapshot.
+
+A drop or replacement advances the table's incarnation. Append handles
+registered under an earlier incarnation fail with `CommitConflict`. A new
+store can register a fresh handle. Pinned reads retain their earlier view.
+Archives with an incarnation change require the `table-incarnations-v1` manifest
+feature, so older clients reject those archives.
 
 ## Reads
 

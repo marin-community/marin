@@ -209,9 +209,10 @@ def _replace_stale_samples(results_path: str) -> None:
     so it may replace a table outright where an lm-eval export refuses. Rows written under a narrower
     primary key would otherwise survive beside the new ones as duplicates.
     """
-    stored_version = ReadView(results_path).schema_version(ARCHIVE_SAMPLES_TABLE)
+    reader = ReadView(results_path)
+    stored_version = reader.schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is not None and stored_version != SCHEMA_VERSION:
-        preserve_and_replace_samples(results_path, stored_version)
+        preserve_and_replace_samples(reader, stored_version)
 
 
 def migrate_run(

@@ -29,6 +29,7 @@ SCHEMAS_DIR = "schemas"
 URI_SCHEME = "finestore"
 CHUNKED_BLOBS_FEATURE = "chunked-blobs-v1"
 CACHE_HISTORY_FLOOR_FEATURE = "cache-history-floor-v1"
+TABLE_INCARNATIONS_FEATURE = "table-incarnations-v1"
 
 
 class SystemColumns(StrEnum):
@@ -59,7 +60,9 @@ class BlobColumns(StrEnum):
 
 
 RESERVED_COLUMNS = frozenset(SystemColumns)
-SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset({CHUNKED_BLOBS_FEATURE, CACHE_HISTORY_FLOOR_FEATURE})
+SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset(
+    {CHUNKED_BLOBS_FEATURE, CACHE_HISTORY_FLOOR_FEATURE, TABLE_INCARNATIONS_FEATURE}
+)
 
 
 class FormatVersionError(ValueError):
@@ -211,6 +214,15 @@ class ManifestTable(_FormatModel):
     shards: tuple[Shard, ...] = ()
 
 
+@dataclass(frozen=True)
+class TableVersion:
+    """A table's incarnation and immutable file references in a snapshot."""
+
+    incarnation: int
+    metadata_path: str | None
+    shard_paths: tuple[str, ...]
+
+
 class Manifest(_FormatModel):
     """One immutable, complete archive snapshot."""
 
@@ -220,12 +232,22 @@ class Manifest(_FormatModel):
     sequence: int
     required_features: tuple[str, ...] = ()
     tables: dict[str, ManifestTable] = Field(default_factory=dict)
+    # Keep the last reset sequence even when a table is absent.
+    table_incarnations: dict[str, int] = Field(default_factory=dict)
     sealed: SealMarker | None = None
     # Advanced by each writer that acquires the maintenance lease. A compaction prepared under
     # an older epoch cannot be published after a takeover.
     maintainer_epoch: int = 0
     # Disposable-cache recovery invalidates these commits across descriptor and chunk tables.
     cache_history_floor: int = 0
+
+    def table_version(self, name: str) -> TableVersion:
+        table = self.tables.get(name)
+        return TableVersion(
+            incarnation=self.table_incarnations.get(name, 0),
+            metadata_path=table.metadata_path if table is not None else None,
+            shard_paths=tuple(shard.path for shard in table.shards) if table is not None else (),
+        )
 
 
 class HeadMetadata(_FormatModel):

@@ -19,6 +19,7 @@ from finestore.layout import (
     CACHE_HISTORY_FLOOR_FEATURE,
     FORMAT_VERSION,
     SUPPORTED_MANIFEST_FEATURES,
+    TABLE_INCARNATIONS_FEATURE,
     ArchiveMetadata,
     CommitToken,
     FineStoreLayout,
@@ -29,6 +30,7 @@ from finestore.layout import (
     SealMarker,
     Shard,
     TableMetadata,
+    TableVersion,
 )
 
 # A lost compare-and-swap means another writer published, so the retry delay only needs to
@@ -67,6 +69,7 @@ class TableAddition:
 
     metadata_path: str
     shards: tuple[Shard, ...]
+    incarnation: int
 
 
 @dataclass(frozen=True)
@@ -89,7 +92,9 @@ class CommitDelta:
     additions: dict[str, TableAddition] = field(default_factory=dict)
     replacements: dict[str, TableReplacement] = field(default_factory=dict)
     metadata_updates: dict[str, str] = field(default_factory=dict)
-    removals: frozenset[str] = frozenset()
+    reset_tables: frozenset[str] = frozenset()
+    expected_tables: dict[str, TableVersion] = field(default_factory=dict)
+    expected_incarnations: dict[str, int] | None = None
     required_features: frozenset[str] = frozenset()
     seal_update: SealMarker | ClearSeal | None = None
     # ``expected_epoch`` rejects the commit, without rebasing, once another maintainer has
@@ -207,9 +212,24 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
         )
     if delta.epoch_update is not None and delta.epoch_update <= base.maintainer_epoch:
         raise CommitConflict(f"maintenance epoch {base.maintainer_epoch} already passed {delta.epoch_update}")
+    if delta.expected_incarnations is not None and base.table_incarnations != delta.expected_incarnations:
+        raise CommitConflict("a table was dropped or replaced during sealing")
+    for name, expected in delta.expected_tables.items():
+        if base.table_version(name) != expected:
+            raise CommitConflict(f"table {name!r} changed since the expected snapshot")
+
     sequence = base.sequence + 1
     tables = dict(base.tables)
+    incarnations = dict(base.table_incarnations)
+    for name in delta.reset_tables:
+        tables.pop(name, None)
+        incarnations[name] = sequence
+
     for name, addition in delta.additions.items():
+        if base.table_incarnations.get(name, 0) != addition.incarnation:
+            raise CommitConflict(f"table {name!r} was dropped or replaced after the writer registered it")
+        if not addition.shards:
+            continue
         current = tables.get(name)
         if current is not None and current.metadata_path != addition.metadata_path:
             raise CommitConflict(f"table {name!r} was registered with different metadata")
@@ -244,11 +264,8 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
             raise CommitConflict(f"table {name!r} no longer exists")
         tables[name] = current.model_copy(update={"metadata_path": metadata_path})
 
-    for name in delta.removals:
-        tables.pop(name, None)
-
     sealed = base.sealed
-    if isinstance(delta.seal_update, ClearSeal):
+    if isinstance(delta.seal_update, ClearSeal) or delta.reset_tables.intersection(base.tables):
         sealed = None
     elif delta.seal_update is not None:
         sealed = delta.seal_update
@@ -256,6 +273,8 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
     required_features = set(base.required_features) | delta.required_features
     if history_floor:
         required_features.add(CACHE_HISTORY_FLOOR_FEATURE)
+    if incarnations:
+        required_features.add(TABLE_INCARNATIONS_FEATURE)
     return base.model_copy(
         update={
             "commit_id": uuid.uuid4().hex,
@@ -264,6 +283,7 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
             "required_features": tuple(sorted(required_features)),
             "cache_history_floor": history_floor,
             "tables": tables,
+            "table_incarnations": incarnations,
             "sealed": sealed,
             "maintainer_epoch": base.maintainer_epoch if delta.epoch_update is None else delta.epoch_update,
         }
@@ -309,10 +329,18 @@ class CommitCoordinator:
 
             def publish() -> CommitToken:
                 nonlocal current, refresh
+                refreshed = refresh
                 if refresh:
                     current = read_snapshot(self._layout)
                     refresh = False
-                manifest = _apply_delta(current.manifest, delta)
+                try:
+                    manifest = _apply_delta(current.manifest, delta)
+                except CommitConflict:
+                    if refreshed:
+                        raise
+                    # A precondition can fail on the cached manifest without reaching HEAD.
+                    current = read_snapshot(self._layout)
+                    manifest = _apply_delta(current.manifest, delta)
                 manifest_path = self._layout.manifest_path(manifest.commit_id)
                 StoragePath(manifest_path).write_text(manifest.model_dump_json(indent=2))
                 head = HeadMetadata(

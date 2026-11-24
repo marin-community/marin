@@ -39,6 +39,7 @@ from finestore.layout import (
     Shard,
     SystemColumns,
     TableMetadata,
+    TableVersion,
     parse_uri,
 )
 from finestore.merge import key_values, merge_sorted_runs, newest_indices, sorted_by_key
@@ -938,6 +939,10 @@ class ReadView(_ReadOperations):
     def table_names(self) -> tuple[str, ...]:
         """Return the table names selected by this view's manifest."""
         return tuple(sorted(self._snapshot.manifest.tables))
+
+    def table_version(self, table: str) -> TableVersion:
+        """Capture the table state for a conditional drop or replacement."""
+        return self._snapshot.manifest.table_version(table)
 
     def schema_version(self, table: str) -> int | None:
         """Return the table schema version, or ``None`` when it has no active shards."""

@@ -5,6 +5,7 @@
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from finestore.admin import drop_table
@@ -210,6 +211,29 @@ def test_rollouts_replace_same_count_source_shards_and_remove_old_conversations(
     completed = ReadView(root).token
     normalize_rollouts(root, writer_id="unchanged")
     assert ReadView(root).token == completed
+
+
+def test_failed_rollout_rebuild_keeps_previous_output(tmp_path):
+    root = str(tmp_path / "archive")
+    with EvaluationStore.open(root, writer_id="initial-source") as store:
+        store.add_sample(EvalSample(task="qa", doc_id="1", kind=SampleKind.GENERATION, output="old"))
+        store.seal()
+    normalize_rollouts(root, writer_id="initial-output")
+    published = ReadView(root)
+    source_paths = {shard.path for shard in published.list_shards(ARCHIVE_SAMPLES_TABLE)}
+
+    with EvaluationStore.open(root, writer_id="new-source") as store:
+        store.add_sample(EvalSample(task="qa", doc_id="2", kind=SampleKind.GENERATION, output="new"))
+    before_rebuild = ReadView(root)
+    (new_path,) = {shard.path for shard in before_rebuild.list_shards(ARCHIVE_SAMPLES_TABLE)} - source_paths
+    Path(new_path).unlink()
+
+    with pytest.raises(FileNotFoundError):
+        normalize_rollouts(root, writer_id="failing-output")
+
+    current = ReadView(root)
+    assert current.token == before_rebuild.token
+    assert list(current.iter_rows(ARCHIVE_ROLLOUTS_TABLE)) == list(published.iter_rows(ARCHIVE_ROLLOUTS_TABLE))
 
 
 def test_rollout_completion_survives_source_compaction(tmp_path):

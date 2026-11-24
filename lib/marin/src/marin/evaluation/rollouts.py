@@ -11,7 +11,6 @@ import itertools
 import json
 from collections.abc import Iterable, Iterator
 
-from finestore.admin import drop_table
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -28,6 +27,7 @@ from finestore.eval import (
     sample_from_archive_row,
 )
 from finestore.eval_rollouts import participant_type_for_role, rollout_records_from_sample
+from finestore.layout import TableMetadata
 from finestore.reader import ReadView
 from finestore.store import DataStore
 
@@ -132,21 +132,18 @@ def normalize_rollouts(root: str, *, writer_id: str) -> None:
         ),
         rollout_records_from_steps(_step_rows(reader)),
     )
-    # The evaluator owns its source tables and their conflict policy; register only our output.
     with DataStore.open(root, writer_id=writer_id) as store:
-        if ARCHIVE_ROLLOUTS_TABLE in reader.table_names():
-            drop_table(root, ARCHIVE_ROLLOUTS_TABLE)
-        table = store.table(
-            ARCHIVE_ROLLOUTS_TABLE,
-            schema=rollouts_schema(),
-            primary_key=ROLLOUTS_MERGE_KEY,
-            schema_version=ROLLOUT_SCHEMA_VERSION,
-        )
-        for record in records:
-            table.append(record.model_dump(mode="json"))
-        store.write_object(
-            _COMPLETE_OBJECT,
-            json.dumps(completion, sort_keys=True).encode(),
-            metadata={"content_type": "application/json"},
-        )
+        with store.transaction(base=reader) as transaction:
+            transaction.replace_table(
+                ARCHIVE_ROLLOUTS_TABLE,
+                (record.model_dump(mode="json") for record in records),
+                metadata=TableMetadata(primary_key=ROLLOUTS_MERGE_KEY, schema_version=ROLLOUT_SCHEMA_VERSION),
+                schema=rollouts_schema(),
+                depends_on=_SOURCE_TABLES,
+            )
+            transaction.write_object(
+                _COMPLETE_OBJECT,
+                json.dumps(completion, sort_keys=True).encode(),
+                metadata={"content_type": "application/json"},
+            )
         store.seal()

@@ -20,6 +20,7 @@ import pytest
 from botocore.exceptions import ClientError
 from finestore import shard_writer
 from finestore import store as store_module
+from finestore.admin import drop_table
 from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
 from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, _compact_shards, compact_table
 from finestore.layout import (
@@ -34,6 +35,7 @@ from finestore.layout import (
     HeadMetadata,
     KeyRange,
     OnConflict,
+    TableMetadata,
 )
 from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, FilterClause, ReadView, shard_may_contain
@@ -238,6 +240,90 @@ def test_seal_records_superseded_rows(archive_root):
     assert marker.superseded["samples"] == 1
 
 
+def test_drop_clears_current_seal_and_preserves_pinned_snapshot(archive_root):
+    with DataStore.open(archive_root) as store:
+        store.table("items", primary_key=("id",)).append({"id": 1})
+        store.seal()
+    pinned = ReadView(archive_root)
+
+    drop_table(archive_root, "items")
+
+    current = ReadView(archive_root)
+    assert current.point("items", id=1) is None
+    assert not current.is_sealed()
+    assert pinned.point("items", id=1)["id"] == 1
+    assert pinned.is_sealed()
+
+
+def test_drop_fences_buffered_writes_even_after_same_schema_recreation(archive_root):
+    with pytest.raises(CommitConflict):
+        with DataStore.open(archive_root, flush_interval=3600) as stale:
+            table = stale.table("items", primary_key=("id",))
+            table.append({"id": 1})
+            stale.flush()
+            table.append({"id": 2})
+
+            with DataStore.open(archive_root) as fresh:
+                drop_table(archive_root, "items")
+                with pytest.raises(CommitConflict):
+                    stale.flush()
+                assert ReadView(archive_root).table_names() == ()
+
+                fresh.table("items", primary_key=("id",)).append({"id": 3})
+                fresh.flush()
+                with pytest.raises(CommitConflict):
+                    stale.flush()
+                assert ReadView(archive_root).keys("items") == {(3,)}
+
+
+def test_table_replacement_publishes_all_staged_shards_with_transaction_objects(archive_root):
+    with DataStore.open(archive_root, max_buffer_bytes=256, flush_interval=3600) as store:
+        store.table("items", primary_key=("id",)).append({"id": 0})
+        store.write_object("completion", b"old")
+        store.flush()
+        pinned = store.read_view()
+
+        with store.transaction() as transaction:
+            transaction.replace_table(
+                "items",
+                ({"id": key, "payload": "p" * 128} for key in range(1, 4)),
+                metadata=TableMetadata(primary_key=("id",)),
+            )
+            transaction.write_object("completion", b"new")
+            assert store.read_view().token == pinned.token
+
+        current = store.read_view()
+        assert current.token == transaction.token
+        assert len(current.list_shards("items")) == 3
+        assert current.keys("items") == {(1,), (2,), (3,)}
+        assert current.read_blob("completion") == b"new"
+        assert pinned.keys("items") == {(0,)}
+        assert pinned.read_blob("completion") == b"old"
+
+
+def test_table_replacement_rejects_a_concurrent_source_append(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        store.table("derived", primary_key=("id",)).append({"id": 0})
+        source = store.table("source", primary_key=("id",))
+        source.append({"id": 1})
+        store.flush()
+
+        with pytest.raises(CommitConflict):
+            with store.transaction() as transaction:
+                transaction.replace_table(
+                    "derived",
+                    [{"id": 1}],
+                    metadata=TableMetadata(primary_key=("id",)),
+                    depends_on=("source",),
+                )
+                with DataStore.open(archive_root) as other:
+                    other.table("source", primary_key=("id",)).append({"id": 2})
+
+        reader = store.read_view()
+        assert reader.keys("source") == {(1,), (2,)}
+        assert reader.keys("derived") == {(0,)}
+
+
 def test_multi_writer_compose(archive_root):
     root = archive_root
     with DataStore.open(root, writer_id="worker-a") as a:
@@ -309,6 +395,7 @@ def test_arrow_byte_cap_requests_an_early_flush(tmp_path):
         writer_id="w1",
         layout=FineStoreLayout(str(tmp_path / "run")),
         metadata_path=str(tmp_path / "schema.json"),
+        incarnation=0,
         max_buffer_bytes=160,
         scheduler=scheduler,
         primary_key=("id",),
