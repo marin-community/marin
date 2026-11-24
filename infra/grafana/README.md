@@ -625,6 +625,9 @@ the next afternoon across spring daylight saving time. The
 describes sampling requirements and forecast limits.
 If Loom delivery fails, the bridge keeps returning an error so Grafana retries,
 but reports the failure only once in the alert thread until delivery recovers.
+The policy's five-minute group interval bounds each notification attempt; it
+does not impose a lifetime retry limit on a firing alert. The daily active
+window suppresses storage notifications outside 15:00–16:00 Pacific.
 
 `B200ClusterUnderutilized` uses the same route when a cluster's Ready GB200
 GPUs stay idle for 30 minutes; the thresholds are the constants in
