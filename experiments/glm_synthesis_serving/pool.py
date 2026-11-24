@@ -23,8 +23,10 @@ ENDPOINT_NAME = "/serve/glm-5-3-flash"
 CONTROLLER_PROXY_ORIGIN = "http://iris-controller-svc:10000"
 GPUS_PER_ENGINE = 4
 POOL_INSTANCES = 32
+VLLM_VERSION = "0.34.0"
+RUNAI_STREAMER_VERSION = "0.17.1"
 MAX_MODEL_LEN = 262_144
-MAX_NUM_SEQS = 16
+MAX_NUM_SEQS = 256
 MAX_NUM_BATCHED_TOKENS = 32_768
 GPU_MEMORY_UTILIZATION = 0.90
 GLM_PARSER = "glm47"
@@ -36,10 +38,12 @@ JOB_PREFIX = "glm-synthesis-serving"
 
 
 def engine() -> VllmEngineConfig:
-    """Use the pinned Marin CUDA vLLM fork with compilation and graphs enabled."""
+    """Use upstream's KPOOL fixes with compilation and graphs enabled."""
     return VllmEngineConfig(
         launcher=VllmLauncherType.CUDA,
-        source=VllmSource.MARIN_FORK,
+        source=VllmSource.UPSTREAM,
+        version=VLLM_VERSION,
+        extra_requirements=(f"runai-model-streamer[s3]=={RUNAI_STREAMER_VERSION}",),
         max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
         max_num_seqs=MAX_NUM_SEQS,
         startup_timeout_seconds=int(REQUEST_TIMEOUT_SECONDS),
