@@ -1,3 +1,15 @@
+# Shared run settings, referenced by the evaluations below.
+judges:
+  together: &together_judge
+    judge:
+      deployment: together
+      models:
+        openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
+      default_model: openai/gpt-oss-120b
+    judge_endpoint: https://api.together.xyz/v1
+    judge_api_key:
+    - env:TOGETHER_API_KEY
+    - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
 evaluations:
   aime24-smoke:
     benchmark: aime24
@@ -5,85 +17,43 @@ evaluations:
       limit: 2
   financebench:
     benchmark: financebench
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *together_judge
   facts-grounding-v2:
     benchmark: facts-grounding-v2
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *together_judge
   simpleqa-verified:
     benchmark: simpleqa-verified
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *together_judge
   simpleqa-verified-thinking:
     benchmark: simpleqa-verified-thinking
-    run:
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *together_judge
+  multichallenge:
+    benchmark: multichallenge
+    run: *together_judge
   econevals-dwa:
     benchmark: econevals-synthetic-dwa
-    run: &econevals_judge
-      judge:
-        deployment: together
-        models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
-      judge_endpoint: https://api.together.xyz/v1
-      judge_api_key:
-      - env:TOGETHER_API_KEY
-      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+    run: *together_judge
   econevals-occupation:
     benchmark: econevals-synthetic-occupation
-    run: *econevals_judge
+    run: *together_judge
   econevals-dwa-o3:
     benchmark: econevals-synthetic-dwa-o3
-    run: *econevals_judge
+    run: *together_judge
   econevals-occupation-o3:
     benchmark: econevals-synthetic-occupation-o3
-    run: *econevals_judge
+    run: *together_judge
   econevals-dwa-sampled:
     benchmark: econevals-synthetic-dwa-sampled
-    run: *econevals_judge
+    run: *together_judge
   econevals-occupation-sampled:
     benchmark: econevals-synthetic-occupation-sampled
-    run: *econevals_judge
+    run: *together_judge
   econevals-dwa-sampled-o3:
     benchmark: econevals-synthetic-dwa-sampled-o3
-    run: *econevals_judge
+    run: *together_judge
   econevals-occupation-sampled-o3:
     benchmark: econevals-synthetic-occupation-sampled-o3
-    run: *econevals_judge
+    run: *together_judge
   gsm8k-0shot:
     benchmark: gsm8k
     num_fewshot: 0
@@ -107,12 +77,15 @@ evaluations:
     protocol: deterministic
   olympiadbench:
     benchmark: olympiadbench
+    run: *together_judge
+  physics-verified:
+    benchmark: physics-verified
     run:
       judge:
         deployment: together
         models:
-          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
-        default_model: openai/gpt-oss-120b
+          zai-org/GLM-5.3-Flash: provider-managed:zai-org/GLM-5.3-Flash
+        default_model: zai-org/GLM-5.3-Flash
       judge_endpoint: https://api.together.xyz/v1
       judge_api_key:
       - env:TOGETHER_API_KEY
@@ -339,4 +312,4 @@ suites:
   - bfcl
   - aider
   - medagentbench
-  # financeagent and ot-tblite do not run; see their entries in experiments/evaluation/evals.py.
+  # The standalone financeagent and ot-tblite recipes in benchmarks/agentic.py are outside this suite.

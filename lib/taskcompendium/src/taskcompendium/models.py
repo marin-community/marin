@@ -28,8 +28,8 @@ from shellbox.machine import PackageSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
-from verifyit.modes.extract import extract_boxed
-from verifyit.modes.grade_judge import validate_judge_spec
+from verifyit.judge_contract import validate_judge_spec
+from verifyit.modes.extract import extract_boxed, unwrap_enclosing_fence
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
@@ -41,8 +41,8 @@ from verifyit.spec import (
     ScriptSpec,
     Spec,
     StdioSpec,
-    judge_table_with_candidate_steps,
     spec_from_table,
+    upgrade_judge_table,
 )
 
 SCHEMA_VERSION = "0.31"
@@ -676,9 +676,8 @@ def verifyit_answer_file(spec: Spec) -> str | None:
 class VerifyitGrader(BaseModel):
     """A verifyit mode and its configuration table, without the ``mode`` key.
 
-    Without a placement the mode must be one verifyit grades in process, against the answer
-    extracted from the conversation. With a placement, the verifyit command grades in that
-    machine, with verifier resources under ``/tests``.
+    Without a placement, verifyit grades the captured answer in process. With a placement,
+    the verifyit command grades in that machine with verifier resources under ``/tests``.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -749,7 +748,10 @@ class ScriptGrader(BaseModel):
     @model_validator(mode="after")
     def validate_grader(self) -> "ScriptGrader":
         if self.judge is not None:
-            validate_judge_spec(self.judge)
+            try:
+                validate_judge_spec(self.judge)
+            except InvalidTask as error:
+                raise ValueError(str(error)) from error
         if self.cwd is not None:
             normalized_absolute_path(self.cwd)
         normalized_absolute_path(self.conversation_path)
@@ -887,8 +889,8 @@ class BaseAnswerFormat(BaseModel, ABC):
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
 
     @abstractmethod
-    def extract(self, attempt: GradingAttempt) -> Submission:
-        """Read the agent's submission without access to expected values."""
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> Submission:
+        """Read the agent's submission for its answer type without access to expected values."""
 
 
 class PlainText(BaseAnswerFormat):
@@ -897,7 +899,7 @@ class PlainText(BaseAnswerFormat):
     kind: Literal["plain_text"] = "plain_text"
     submission_types = (TextSubmission,)
 
-    def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> TextSubmission:
         return TextSubmission(_text_answer(attempt.conversation.events[-1]))
 
 
@@ -907,7 +909,7 @@ class Boxed(BaseAnswerFormat):
     kind: Literal["boxed"] = "boxed"
     submission_types = (TextSubmission,)
 
-    def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> TextSubmission:
         text = _text_answer(attempt.conversation.events[-1])
         boxed = extract_boxed(text)
         return TextSubmission(text if boxed is None else boxed)
@@ -918,17 +920,25 @@ ANSWER_FIELD = "answer"
 
 
 class JsonAnswer(BaseAnswerFormat):
-    """The string ``answer`` field of a JSON object in the final assistant message."""
+    """The string ``answer`` field of a JSON object, or a number for number tasks."""
 
     kind: Literal["json_answer"] = "json_answer"
     submission_types = (TextSubmission,)
 
-    def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> TextSubmission:
         try:
-            value = decode_json_value(_text_answer(attempt.conversation.events[-1]))
+            content = unwrap_enclosing_fence(_text_answer(attempt.conversation.events[-1]))
+            value = decode_json_value(content)
         except ValueError as error:
             raise SubmissionFailure("JSON submission is malformed") from error
         answer = value.get(ANSWER_FIELD) if isinstance(value, dict) else None
+        if answer_type == AnswerType.NUMBER and isinstance(answer, int | float) and not isinstance(answer, bool):
+            # Preserve the JSON lexeme so binary float rounding cannot change exact numeric grading.
+            literal_value = json.loads(content, parse_int=str, parse_float=str)
+            assert isinstance(literal_value, dict)
+            literal = literal_value[ANSWER_FIELD]
+            assert isinstance(literal, str)
+            return TextSubmission(literal)
         if not isinstance(answer, str) or not answer.strip():
             raise SubmissionFailure("JSON submission requires a nonempty string answer")
         return TextSubmission(answer)
@@ -943,9 +953,11 @@ class JsonValueAnswer(BaseAnswerFormat):
     def supports(self, answer_type: AnswerType) -> bool:
         return answer_type == AnswerType.JSON
 
-    def extract(self, attempt: GradingAttempt) -> JsonSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> JsonSubmission:
         try:
-            return JsonSubmission(decode_json_value(_text_answer(attempt.conversation.events[-1])))
+            return JsonSubmission(
+                decode_json_value(unwrap_enclosing_fence(_text_answer(attempt.conversation.events[-1])))
+            )
         except ValueError as error:
             raise SubmissionFailure("JSON value submission is malformed") from error
 
@@ -956,7 +968,7 @@ class AnswerCall(BaseAnswerFormat):
     kind: Literal["answer_call"] = "answer_call"
     submission_types = (TextSubmission,)
 
-    def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> TextSubmission:
         response = attempt.conversation.events[-1]
         if (
             not isinstance(response, AssistantToolCalls)
@@ -1019,7 +1031,7 @@ class FinalAction(BaseAnswerFormat):
                 call.object_arguments()
         return response
 
-    def extract(self, attempt: GradingAttempt) -> ActionSubmission:
+    def extract(self, attempt: GradingAttempt, answer_type: AnswerType) -> ActionSubmission:
         return ActionSubmission(self.validate_final_message(attempt.conversation.events[-1]))
 
 
@@ -1032,7 +1044,7 @@ def _upgraded_grader(grader: dict[str, Any]) -> dict[str, Any]:
     grader = dict(grader)
     if grader.get("kind") == "script":
         if isinstance(grader.get("judge"), dict):
-            grader["judge"] = judge_table_with_candidate_steps(grader["judge"])
+            grader["judge"] = upgrade_judge_table(grader["judge"])
         if "environment" in grader:
             grader["placement"] = {
                 "kind": "grader_machine",
@@ -1042,7 +1054,7 @@ def _upgraded_grader(grader: dict[str, Any]) -> dict[str, Any]:
             }
     elif grader.get("kind") == "verifyit":
         if grader.get("mode") == "judge" and isinstance(grader.get("parameters"), dict):
-            grader["parameters"] = judge_table_with_candidate_steps(grader["parameters"])
+            grader["parameters"] = upgrade_judge_table(grader["parameters"])
         environment = grader.pop("environment", None)
         grader["placement"] = None if environment is None else {"kind": "grader_machine", "environment": environment}
     return grader
@@ -1055,8 +1067,8 @@ def upgrade_task_payload(payload: dict[str, Any]) -> dict[str, Any]:
     ``environment``, ``collect`` and ``artifacts``; the upgrade moves them into a ``GraderMachine``
     placement, and a verifyit grader without an environment keeps grading in process. Its judge
     specs, a verifyit judge's parameters and a script grader's ``judge``, carried
-    ``strip_candidate_reasoning_blocks``; the upgrade replaces it with the equivalent
-    ``candidate_steps``.
+    ``strip_candidate_reasoning_blocks`` and top-level ``temperature``. The upgrade moves them
+    into ``candidate_steps`` and ``sampling``.
     """
     if payload.get("schema_version") != UPGRADABLE_SCHEMA_VERSION:
         return payload

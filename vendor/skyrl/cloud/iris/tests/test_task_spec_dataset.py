@@ -31,7 +31,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource
-from tests.cpu.task_specs import SHELL_ENVIRONMENT, machine_runtime, text_task
+from tests.cpu.task_specs import NATIVE_ENVIRONMENT, SHELL_ENVIRONMENT, machine_runtime, text_task
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
@@ -75,6 +75,28 @@ def test_a_dataset_machine_attaches_only_to_rows_that_need_one(tmp_path: Path):
     assert [spec.task_machine for spec in loaded] == [runtime, runtime, None]
     for spec in (loaded[0], loaded[2]):
         validate_spec(spec, {"shellsim": ShellSimMachineFactory()})
+
+
+def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path):
+    simulated = text_task("simulated-task", source="mixed").model_copy(
+        update={"environment_requirements": SHELL_ENVIRONMENT}
+    )
+    linux = text_task("linux-task", source="mixed").model_copy(
+        update={"environment_requirements": NATIVE_ENVIRONMENT}
+    )
+    reply = text_task("reply-task", source="mixed")
+    shellsim, daytona = machine_runtime("shellsim"), machine_runtime("daytona")
+    loaded = _load(
+        tmp_path,
+        (simulated, linux, reply),
+        task_machine_by_command_semantics={
+            CommandSemantics.SHELL_SIMULATOR.value: shellsim.model_dump(),
+            CommandSemantics.LINUX_PROCESS.value: daytona.model_dump(),
+        },
+    )
+    assert [spec.task_machine for spec in loaded] == [shellsim, daytona, None]
+    for spec in loaded:
+        validate_spec(spec, {"shellsim": ShellSimMachineFactory(), **FACTORIES})
 
 
 def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp_path: Path):

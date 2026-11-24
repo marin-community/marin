@@ -6,11 +6,11 @@
 import asyncio
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
 
-from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
+from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory, MachineSpec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import CONVERSATION_ANSWERS
 from taskcompendium.runtime.output_capture import captured_output_files
@@ -71,6 +71,7 @@ class _Attempt:
     events: _EventDelivery
     grade: GradeResult
     outputs: dict[str, bytes]
+    verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None
     setup_seconds: float = 0.0
     grading_seconds: float | None = None
 
@@ -102,14 +103,23 @@ class RolloutEngine:
             raise ValueError(f"Unknown harness: {spec.harness!r}")
         self.harnesses[spec.harness].check(spec.task, spec.limits)
 
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+    async def run_task(
+        self,
+        spec: TaskRolloutSpec,
+        model: Model,
+        *,
+        run_id: str | None = None,
+        verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None,
+    ) -> GradedRollout:
         """Run and grade one attempt of ``spec`` with ``model``. Release its resources outside the attempt deadline.
 
         The events of the attempt and ``Rollout.run_id`` carry ``run_id``, a new random ID unless the caller gives
-        one. A spec runs many attempts, so the ID is an argument of the attempt, not a field of the spec. Queued
+        one. A spec runs many attempts, so the ID is an argument of the attempt, not a field of the spec. A given ID
+        must be new for each call, a retry included, because ``(run_id, index)`` identifies an event. Queued
         events go to the observer within the cleanup deadline after the attempt releases its resources, and
         ``Rollout.metrics`` counts the events that the observer did not receive. An attempt that fails raises
         ``GradedRolloutInterrupted`` with the rollout so far and its grade.
+        ``verifier``, if supplied, acquires the verifier machine from the prepared spec; the caller owns its cleanup.
         """
         self.check(spec)
         harness = self.harnesses[spec.harness]
@@ -124,16 +134,18 @@ class RolloutEngine:
             events,
             GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),
             {},
+            verifier,
         )
         started = time.monotonic()
         try:
-            events.emit(AttemptStarted())
+            events.emit(AttemptStarted(spec.harness, spec.trace, spec.task.source.dataset))
             failure = await self._attempt(attempt)
             duration = time.monotonic() - started
+            turns, total_tokens = attempt.recorder.turns, attempt.recorder.spent_tokens
             if failure is None:
-                events.emit(AttemptEnded(attempt.recorder.stop_reason, None, None, duration))
+                events.emit(AttemptEnded(attempt.recorder.stop_reason, None, None, duration, turns, total_tokens))
             else:
-                events.emit(AttemptEnded(None, failure[0], repr(failure[1]), duration))
+                events.emit(AttemptEnded(None, failure[0], repr(failure[1]), duration, turns, total_tokens))
             delivery = await events.close(spec.limits.cleanup_timeout)
         finally:
             events.cancel()
@@ -238,6 +250,7 @@ class RolloutEngine:
                     attempt.cleanup,
                     resources,
                     stop_reason=recorder.stop_reason,
+                    verifier=attempt.verifier,
                 )
         except TimeoutError as error:
             attempt.grade = GradeResult(

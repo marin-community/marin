@@ -28,12 +28,13 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCORERS = Path(__file__).parent / "scorers"
 DEPENDENCIES = {
-    "gsm8k_cot": ("math.py", "minerva.py", "amc.py"),
-    "minerva_math": ("math.py", "minerva.py", "amc.py"),
+    "genomeqa": ("genomeqa.py",),
+    "gsm8k_cot": ("math.py", "minerva.py", "amc.py", "relations.py"),
+    "minerva_math": ("math.py", "minerva.py", "amc.py", "relations.py"),
     "bbh_cot": ("choices.py",),
-    "boxed_math": ("math.py", "amc.py", "minerva.py"),
+    "boxed_math": ("math.py", "amc.py", "minerva.py", "relations.py"),
     "amc": ("amc.py",),
-    "olympiad": ("olympiad.py", "minerva.py"),
+    "olympiad": ("olympiad.py", "minerva.py", "relations.py"),
     "facts_grounding": ("facts_grounding.py",),
     "gpqa": ("choices.py",),
     "mmlu_pro": ("choices.py",),
@@ -53,7 +54,7 @@ DEPENDENCIES = {
 @cache
 def scorer_files(scorer: str) -> tuple[TaskResource, ...]:
     paths = ["__init__.py", "main.py", "lm-evaluation-harness-MIT.txt", *DEPENDENCIES[scorer]]
-    if scorer in {"ifeval", "ifbench"}:
+    if scorer == "ifbench":
         paths.extend(
             str(path.relative_to(SCORERS))
             for path in sorted((SCORERS / scorer).rglob("*"))

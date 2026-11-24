@@ -26,6 +26,58 @@ flowchart LR
     G --> R[Typed grade result]
 ```
 
+## Protected shared graders
+
+The native Harbor package adapters in `taskcompendium.harbor` prepare new,
+versioned tasks for grading in the actor's container. `shared_package.harden_shared_swe`
+protects Verifyit pytest graders and source-declared native language runners.
+`shared_source.harden_shared_source` preserves the original Scale-SWE,
+SWE-Lego, or SWE-rebench source scorer behind the same UID boundary. Callers
+supply the original package files and an explicit `SharedDependencyState`.
+These helpers do not import dataset declarations or the Atlas trial executor.
+Harbor runs the declared initialization command before actor access. The source
+adapter authorizes Git access to the declared workspace during that setup,
+because its build layer has already assigned the workspace to the actor UID.
+Use a Harbor build with task schema 1.3 support. Private bootstrap inputs are stored in a
+root-only image directory. Harbor applies the declared actor UID before actor
+commands. A runner that ignores initialization cannot read those inputs as the actor. Different
+private inputs produce different image contexts; generated images must stay private.
+
+Bootstrap saves private verifier files and a trusted test reference in a
+root-owned directory. The actor runs as UID 10001 and cannot read that private
+material. Grading stops actor processes, restores the reference, runs tests as
+UID 10002, and writes the final report as root. Product files and permitted
+dependencies stay mutable. The published integrity contract records dependency
+changes, startup hooks, and known gaps; it does not promise isolation from all
+candidate-produced output or interpreter startup hooks.
+
+Prime source adapters grant dependency writes only to each task Python's
+purelib and platlib directories. The root control interpreter and standard
+library stay read-only to the actor. Bootstrap rejects a control runtime or
+ancestor that the actor can modify.
+
+`shared_reference.harden_shared_swe_reference` compiles a previously captured
+trusted reference into a new package. The reference binds the source package,
+image context, controller, and declared actor environment. Keep source tests,
+patches, and captured references private; publish a new dataset version and
+qualify its original oracle and NoP controls after any adapter change.
+
+Portable package regressions run with the normal affected-test runner.
+`tests/test_shared_pytest.py`, `tests/test_shared_source.py`, and
+`tests/test_shared_native.py` also execute real Linux UID transitions. Run them
+only inside an isolated Linux container as root, with pytest, pytest-json-report,
+pip, setuptools, and each selected native toolchain installed. These suites use
+the `docker` marker and run in the dedicated `shared-grader-unit` CPU workflow.
+Invoke their explicit file paths with `-m docker -o addopts=--import-mode=importlib`
+to run that isolated matrix, and run native
+projects only when their declared tools are installed. `--shared-source-python`
+selects a pytest-capable source interpreter; `--shared-verifyit-source` selects
+a pinned legacy Verifyit source directory for the single-manifest regression.
+The suite uses synthetic patches and tests and includes actor read-denial checks.
+
+RST and Multi-SWE retain a root actor and require a separate Harbor entry point
+for grading-time private delivery. Their adapters are outside this package path.
+
 ## Evaluation corpora
 
 `taskcompendium.evaluation.spec` defines `EvaluationProtocol` (schema version 3),
@@ -99,7 +151,7 @@ A text task uses `answer_type=text`. `PlainText`, `Boxed`, `JsonAnswer`, and `An
 
 ### Numeric answers
 
-A numeric task uses `answer_type=number` and can use the same answer formats as text. Expected values are required numeric literal strings, preserving integers, decimals and fractions exactly. Absolute and relative tolerances are required finite nonnegative floats. The `numeric` mode reads the last boxed answer, or exactly one numeric literal from the last nonempty line when no box is present. Surrounding prose, including negation, is ignored. Missing, malformed, or ambiguous numeric output is `submission_failure`; a valid wrong number is `graded` with reward `0.0`.
+A numeric task uses `answer_type=number` and can use the same answer formats as text. `JsonAnswer` accepts a finite JSON number in its `answer` field and passes its string form to the grader. Expected values are required numeric literal strings, preserving integers, decimals and fractions exactly. Absolute and relative tolerances are required finite nonnegative floats. The `numeric` mode reads the last boxed answer, or exactly one numeric literal from the last nonempty line when no box is present. Surrounding prose, including negation, is ignored. Missing, malformed, or ambiguous numeric output is `submission_failure`; a valid wrong number is `graded` with reward `0.0`.
 
 `taskcompendium.grading.grade_result` maps verifyit rewards to `GradeResult` the same way for in-process grading and for the verdict the verifyit command writes in a grading machine. Malformed numeric text is `submission_failure` with reward `0.0` in both.
 
@@ -111,9 +163,9 @@ For text and numeric tasks, the `AnswerCall` format adds `submit_answer(answer: 
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Acquiring these results requires an actor runtime. These tasks still declare an `answer_format`, but grading does not read it. `file` and `workspace_state` answers require a grader with a placement. In-process grading uses supplied evidence; the optional TaskCompendium episode runtime captures declared output files. The `structured_exact` mode compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`); booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types.
+`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Acquiring these results requires an actor runtime. These tasks still declare an `answer_format`, but grading does not read it. `file` and `workspace_state` answers require a grader with a placement. In-process grading uses supplied evidence. The TaskCompendium shell runtime captures declared output files. The `structured_exact` mode compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`). Booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types.
 
-`answer_type=json` is a JSON answer from the model, independent of environment state. `JsonValueAnswer` parses the complete final chat text into a `JsonSubmission` for `structured_exact`. `StateSubmission` is evidence acquired from an environment by its runtime. `structured_exact` accepts either. The `JsonAnswer` format instead unwraps an `answer` string for text or numeric tasks. Both formats reject duplicate keys at every nesting level and nonfinite numbers. Tool-call arguments are decoded before entering the conversation evidence. Runtimes own provider-response decoding and may report malformed tool-call arguments as a structural submission failure with reward `0.0`. Both historical and final calls contain typed argument objects.
+`answer_type=json` is a JSON answer from the model, independent of environment state. `JsonValueAnswer` parses the complete final chat text into a `JsonSubmission` for `structured_exact`. `StateSubmission` is evidence acquired from an environment by its runtime. `structured_exact` accepts either. The `JsonAnswer` format instead unwraps an `answer` string for text or numeric tasks, or a JSON number for numeric tasks. Both JSON formats accept one Markdown code fence enclosing the whole reply and reject extra prose, duplicate keys at every nesting level, and nonfinite numbers. Tool-call arguments are decoded before entering the conversation evidence. Runtimes own provider-response decoding and may report malformed tool-call arguments as a structural submission failure with reward `0.0`. Both historical and final calls contain typed argument objects.
 
 Public expectations belong in `context`: for example, the columns a CSV must contain or the behavior a repaired project must provide. The grader checks those expectations. The answer format chooses how the result is delivered and extracted. `answer_type` identifies the answer’s semantic kind.
 
@@ -359,7 +411,7 @@ A grader scores one acquired answer. Comparative scoring across several attempts
 | --- | --- | --- | --- |
 | `PlainText` | `plain_text` | The whole final message | `text`, `number` |
 | `Boxed` | `boxed` | The content of the last `\boxed{...}`, else the whole final message | `text`, `number` |
-| `JsonAnswer` | `json_answer` | The nonempty string `answer` field of a JSON object | `text`, `number` |
+| `JsonAnswer` | `json_answer` | The nonempty string `answer` field of a JSON object, or a JSON number for a `number` task | `text`, `number` |
 | `JsonValueAnswer` | `json_value` | The whole final message as one JSON value | `json` |
 | `AnswerCall` | `answer_call` | The `answer` argument of one `submit_answer` call | `text`, `number` |
 | `FinalAction` | `final_action` | The final message: calls to `final_tools`, or text | `native_action` |
@@ -400,9 +452,7 @@ unadvertised ejections, and continuation after ejection are `submission_failure`
 `0.0`. Completed ejection calls in the source conversation are historical input.
 
 `answer_submission` dispatches ejection before the normal answer-format extractor, without
-passing expected answers or solvability labels into extraction. The episode runtime preserves
-the terminal call and stops before executing it or any other call in its batch. Runtime
-failures remain infrastructure errors without a reward.
+passing expected answers or solvability labels into extraction.
 
 Generate paired missing-information, contradictory-constraint, and guideline examples as
 serialized TaskSpecs:

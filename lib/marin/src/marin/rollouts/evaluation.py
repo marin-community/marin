@@ -7,6 +7,7 @@ import asyncio
 import dataclasses
 import json
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from types import MappingProxyType
 from typing import Any
@@ -34,7 +35,7 @@ from finestore.eval import (
 from finestore.eval_rollouts import rollout_records_from_sample
 from finestore.reader import ReadView
 from finestore.schema import arrow_schema
-from finestore.store import DataStore
+from finestore.store import DataStore, Transaction
 from openai import APIError, APIStatusError
 from pydantic import BaseModel, ConfigDict, Field
 from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
@@ -369,8 +370,38 @@ def episode_limits(run: RolloutLimits, operation: AgentEpisode, inputs: EpisodeI
     return run.model_copy(update=operation.limits_for(inputs).model_dump())
 
 
-def _save_attempt(
-    store: DataStore,
+@dataclasses.dataclass(frozen=True)
+class _EvaluationWriter:
+    """Serialize durable writes while model calls and sandbox commands keep running."""
+
+    store: DataStore
+    executor: ThreadPoolExecutor
+
+    async def _run(self, operation: Callable[[], object]) -> None:
+        pending = asyncio.get_running_loop().run_in_executor(self.executor, operation)
+        try:
+            await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            # A queued write can carry terminal evidence from a completed attempt.
+            await asyncio.shield(pending)
+            raise
+
+    async def commit(self, write: Callable[[Transaction], object]) -> None:
+        def commit_transaction() -> None:
+            with self.store.transaction() as transaction:
+                write(transaction)
+
+        await self._run(commit_transaction)
+
+    async def append_rows(self, table: str, rows: list[dict]) -> None:
+        await self.commit(lambda transaction: transaction.table(table).extend(rows))
+
+    async def seal(self) -> None:
+        await self._run(self.store.seal)
+
+
+async def _save_attempt(
+    writer: _EvaluationWriter,
     attempt: Attempt,
     sample: EvalSample,
     raw: dict,
@@ -391,19 +422,22 @@ def _save_attempt(
             "completion_tokens": completion_tokens,
         }
     )
-    with store.transaction() as transaction:
+
+    def write(transaction: Transaction) -> None:
         transaction.table(ATTEMPTS_TABLE).add(terminal.model_dump(mode="json"))
         transaction.table(ARCHIVE_SAMPLES_TABLE).add(sample_to_archive_row(sample, trial_id=trial_id))
         for record in rollout_records_from_sample(sample, trial_id=trial_id):
             transaction.table(ARCHIVE_ROLLOUTS_TABLE).add(record.model_dump(mode="json"))
         transaction.write_object(blob, json.dumps(raw, allow_nan=False).encode())
 
+    await writer.commit(write)
+
 
 async def _score_likelihood(
     case: EvaluationCase,
     protocol: EvaluationProtocol,
     scorer: LikelihoodScorer,
-    store: DataStore,
+    writer: _EvaluationWriter,
     attempt: Attempt,
     timeout: float | None,
     evidence: TaskEvidence,
@@ -488,8 +522,8 @@ async def _score_likelihood(
     )
     usage = [result.usage for result in results]
     known_usage = outcome is Outcome.GRADED and all(value is not None for value in usage)
-    _save_attempt(
-        store,
+    await _save_attempt(
+        writer,
         attempt,
         sample,
         raw,
@@ -508,7 +542,7 @@ async def _score_rollout(
     protocol: EvaluationProtocol,
     config: EvaluationRunConfig,
     model: Model,
-    store: DataStore,
+    writer: _EvaluationWriter,
     attempt: Attempt,
     max_tokens: int,
     *,
@@ -611,6 +645,7 @@ async def _score_rollout(
         "item": case.item.model_dump(mode="json"),
         "grade": dataclasses.asdict(grade),
         "conversations": [dataclasses.asdict(conversation) for conversation in rollout.conversations],
+        "rollout_metrics": rollout.metrics,
         "stop_reason": rollout.stop_reason,
         "failure": dataclasses.asdict(rollout.failure) if rollout.failure else None,
         "failure_evidence": failure_evidence,
@@ -628,8 +663,8 @@ async def _score_rollout(
     )
     if retry_turn is not None:
         prompt_tokens = completion_tokens = 0
-    _save_attempt(
-        store,
+    await _save_attempt(
+        writer,
         attempt,
         sample,
         raw,
@@ -739,7 +774,12 @@ async def run_evaluation(
         and canonical_sha256({**previous_run, "config": scoring_settings(previous_run["config"])}) != identity
     ):
         raise ValueError("Resume requires the identical model, corpora, protocol, selection and run settings")
-    with DataStore.open(output) as store:
+    # Join the executor before closing the store, including after cancellation.
+    with (
+        DataStore.open(output) as store,
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="evaluation-writer") as executor,
+    ):
+        writer = _EvaluationWriter(store, executor)
         EvaluationStore(store)
         store.table(
             ATTEMPTS_TABLE,
@@ -755,8 +795,9 @@ async def run_evaluation(
         )
         reader = store.read_view()
         latest = _latest_attempts(reader)
-        with store.transaction() as transaction:
-            transaction.write_object(RUN_OBJECT, json.dumps(run, allow_nan=False).encode())
+        await writer.commit(
+            lambda transaction: transaction.write_object(RUN_OBJECT, json.dumps(run, allow_nan=False).encode())
+        )
 
         queue: asyncio.Queue[tuple[EvaluationCase, EvaluationProtocol, Selection, int, int, ModelTurn | None] | None] = (
             asyncio.Queue(maxsize=config.concurrency * 2)
@@ -784,8 +825,7 @@ async def run_evaluation(
                 ):
                     records.append(decision.record.model_dump(mode="json"))
                     if len(records) >= 500 or decision.case is not None:
-                        with store.transaction() as transaction:
-                            transaction.table(SELECTIONS_TABLE).extend(records)
+                        await writer.append_rows(SELECTIONS_TABLE, records)
                         records = []
                     case = decision.case
                     if case is None:
@@ -822,8 +862,7 @@ async def run_evaluation(
                             )
                         )
                 if records:
-                    with store.transaction() as transaction:
-                        transaction.table(SELECTIONS_TABLE).extend(records)
+                    await writer.append_rows(SELECTIONS_TABLE, records)
                 if not selected:
                     raise ValueError(f"No evaluation rows are eligible under this run: {protocol.benchmark}")
             for _ in range(config.concurrency):
@@ -849,12 +888,11 @@ async def run_evaluation(
                     prompt_tokens=None,
                     completion_tokens=None,
                 )
-                with store.transaction() as transaction:
-                    transaction.table(ATTEMPTS_TABLE).add(attempt.model_dump(mode="json"))
+                await writer.append_rows(ATTEMPTS_TABLE, [attempt.model_dump(mode="json")])
                 if isinstance(case.item.operation, ChoiceLikelihood | ContinuationLikelihood):
                     assert likelihood is not None
                     outcome = await _score_likelihood(
-                        case, protocol, likelihood, store, attempt, config.limits.attempt_timeout, config.task_evidence
+                        case, protocol, likelihood, writer, attempt, config.limits.attempt_timeout, config.task_evidence
                     )
                     failures += outcome is Outcome.INFRA_ERROR
                     continue
@@ -865,7 +903,7 @@ async def run_evaluation(
                     protocol,
                     config,
                     transport,
-                    store,
+                    writer,
                     attempt,
                     selection.max_tokens,
                     machine_factories=machine_factories,
@@ -883,4 +921,4 @@ async def run_evaluation(
             raise EvaluationInfrastructureError(
                 f"{failures} evaluation attempts failed; their raw evidence is saved for resume"
             )
-        store.seal()
+        await writer.seal()

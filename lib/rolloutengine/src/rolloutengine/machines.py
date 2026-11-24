@@ -5,7 +5,7 @@
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -204,6 +204,7 @@ class _AttemptMachineFactory:
     factories: Mapping[str, MachineFactory]
     cleanup: _Cleanup
     owned: AsyncExitStack
+    verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None
 
     @property
     def backend(self) -> Backend:
@@ -214,6 +215,8 @@ class _AttemptMachineFactory:
 
     async def create(self, spec: MachineSpec) -> Machine:
         async with asyncio.timeout(self.runtime.startup_timeout):
+            if self.verifier is not None:
+                return _OwnedMachine(await self.verifier(spec))
             machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
         return _OwnedMachine(machine)
 

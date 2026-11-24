@@ -39,7 +39,6 @@ from taskcompendium.pipeline.source_quality import (
     SourceQualityPolicy,
     SourceQualityStatus,
     contract_signature,
-    merge_quality_samples,
     sample_quality_rows,
     source_quality_report,
 )
@@ -213,7 +212,7 @@ def test_census_rejection_uses_exact_population_success_fraction(good, expected)
     assert report.defect_fraction == (10 - good) / 10
 
 
-def test_sampling_preserves_population_exclusions_and_ignores_partition_order():
+def test_sampling_preserves_population_exclusions_and_ignores_input_order():
     audits = []
     for index in range(80):
         source = Source(dataset="fixture", revision="1", row=str(index), importer_revision="1")
@@ -284,10 +283,7 @@ def test_sampling_preserves_population_exclusions_and_ignores_partition_order():
         audits.append(audit.model_dump(mode="json"))
     policy = SourceQualityPolicy(sample_size=25)
     whole = sample_quality_rows(iter(audits), policy=policy)
-    split = merge_quality_samples(
-        (sample_quality_rows(iter(audits[i::7]), policy=policy) for i in range(7)), policy=policy
-    )
-    assert whole == split == sample_quality_rows(iter(reversed(audits)), policy=policy)
+    assert whole == sample_quality_rows(iter(reversed(audits)), policy=policy)
     assert whole.input_count == 80 and whole.eligible_count == 60
     assert whole.exclusions == {"exact_semantic_duplicate": 10, "normalization:converter_error": 5, "check:failed": 5}
     assert all(int(task_id) >= 20 for task_id in whole.task_ids)

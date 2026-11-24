@@ -98,7 +98,9 @@ def answer_submission(task: TaskSpec, attempt: GradingAttempt) -> Submission:
     Raises ``SubmissionFailure`` when the attempt carries no valid submission.
     """
     if task.answer_type in CONVERSATION_ANSWERS:
-        submission = extract_submission(task.answer_format, attempt, context_length=len(task.context.events))
+        submission = extract_submission(
+            task.answer_format, attempt, answer_type=task.answer_type, context_length=len(task.context.events)
+        )
         if is_ejection(submission) and not any(tool.name == EJECT_CALL_NAME for tool in task.final_tools):
             raise SubmissionFailure("Ejection was not advertised for this task")
         return submission

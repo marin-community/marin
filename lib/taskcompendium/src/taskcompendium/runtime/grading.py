@@ -117,13 +117,17 @@ def _captured_files(task: TaskSpec, attempt: GradingAttempt, paths: tuple[str, .
     return [StagedFile(path, data) for path, data in selected.items()]
 
 
-async def _run_checked(machine: Machine, command: Command, failure: str) -> None:
+async def _run_checked(machine: Machine, command: Command, failure: str, *, authored: bool = False) -> None:
     result = await machine.run(command)
     if result.reason == ExitReason.TIMED_OUT:
         raise _StepFailed(_infra_error(f"{failure}: timed out", GradingFailure.TIMEOUT, _diagnostics(result)))
     if result.exit_code != 0:
         raise _StepFailed(
-            _infra_error(f"{failure}: exit={result.exit_code}", GradingFailure.EXECUTION, _diagnostics(result))
+            _infra_error(
+                f"{failure}: exit={result.exit_code}",
+                _grader_failure(result) if authored else GradingFailure.EXECUTION,
+                _diagnostics(result),
+            )
         )
 
 
@@ -268,6 +272,13 @@ def _diagnostics(result: Result) -> dict[str, Any]:
     }
 
 
+def _grader_failure(result: Result) -> GradingFailure:
+    """Only an ordinary nonzero exit of an authored command establishes an authored process failure."""
+    if result.reason is ExitReason.EXITED and result.exit_code is not None and 0 < result.exit_code < 128:
+        return GradingFailure.GRADER_EXIT
+    return GradingFailure.EXECUTION
+
+
 def _infra_error(message: str, failure: GradingFailure, diagnostics: dict[str, Any]) -> GradeResult:
     return GradeResult(Outcome.INFRA_ERROR, None, message, diagnostics=diagnostics, failure=failure)
 
@@ -354,16 +365,16 @@ async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float,
         passed = result.reason == ExitReason.EXITED and result.exit_code == 0
         return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
     if result.reason == ExitReason.TIMED_OUT:
-        return _infra_error("Grader command timed out", GradingFailure.TIMEOUT, diagnostics)
+        return _infra_error("Grader command timed out", GradingFailure.GRADER_TIMEOUT, diagnostics)
     if isinstance(grader.reward, FileReward):
         if result.exit_code != 0 and any(file.format is RewardFileFormat.VERDICT_JSON for file in grader.reward.files):
             return _infra_error(
-                f"Grader command failed: {result.reason}, exit={result.exit_code}", GradingFailure.EXECUTION, diagnostics
+                f"Grader command failed: {result.reason}, exit={result.exit_code}", _grader_failure(result), diagnostics
             )
         return await _file_reward(machine, grader.reward, timeout, diagnostics)
     if result.exit_code != 0:
         return _infra_error(
-            f"Grader command failed: {result.reason}, exit={result.exit_code}", GradingFailure.EXECUTION, diagnostics
+            f"Grader command failed: {result.reason}, exit={result.exit_code}", _grader_failure(result), diagnostics
         )
     lines = [line.strip() for line in result.stdout.decode(errors="replace").splitlines() if line.strip()]
     try:
@@ -399,11 +410,11 @@ async def _verifyit_reward(
     )
     diagnostics = _diagnostics(result)
     if result.reason == ExitReason.TIMED_OUT:
-        return _infra_error("Verifier command timed out", GradingFailure.TIMEOUT, diagnostics)
+        return _infra_error("Verifier command timed out", GradingFailure.GRADER_TIMEOUT, diagnostics)
     if result.exit_code != 0:
         return _infra_error(
             f"Verifier command failed (exit_code={result.exit_code}): {diagnostics['stderr']}",
-            GradingFailure.EXECUTION,
+            _grader_failure(result),
             diagnostics,
         )
     with TemporaryDirectory(prefix="taskcompendium-verdict-") as directory:
@@ -673,6 +684,7 @@ async def _grade_staged(
                     user=ROOT,
                 ),
                 "Cannot collect grading inputs",
+                authored=True,
             )
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
             root = Path(directory)

@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
+import yaml
 from finestore.reader import ReadView
 from finestore.rl.run_records import (
     EVALUATIONS_TABLE,
@@ -80,6 +81,33 @@ NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_t
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
+
+
+def cache_native_compositions(monkeypatch) -> None:
+    """Reuse successful compositions of equivalent launch documents within one test."""
+    compose_configs = gate.compose_configs
+    cached = {}
+    # Attempt IDs also appear in derived fields such as the Iris job name.
+    attempt_placeholder = "<generated-attempt-id>"
+
+    def compose(paths, *, validate_driver=False):
+        documents = [Path(path).read_text() for path in paths]
+        attempts = [yaml.safe_load(document)["run"]["attempt_id"] for document in documents]
+        key = validate_driver, tuple(
+            document.replace(attempt, attempt_placeholder) for document, attempt in zip(documents, attempts, strict=True)
+        )
+        if key not in cached:
+            configs = compose_configs(paths, validate_driver=validate_driver)
+            cached[key] = [
+                json.dumps(config).replace(attempt, attempt_placeholder)
+                for config, attempt in zip(configs, attempts, strict=True)
+            ]
+        return [
+            json.loads(config.replace(attempt_placeholder, attempt))
+            for config, attempt in zip(cached[key], attempts, strict=True)
+        ]
+
+    monkeypatch.setattr(gate, "compose_configs", compose)
 
 
 def fake_s3(monkeypatch, *paths: str) -> None:

@@ -394,6 +394,13 @@ def test_task_json_rejects_prior_schema_version(specification):
         TaskSpec.model_validate_json(json.dumps(payload))
 
 
+@pytest.mark.parametrize("judge", [JudgeSpec(), JudgeSpec(references=(" ",)), JudgeSpec(rubric="checklist")])
+def test_invalid_script_judge_is_schema_feedback(judge):
+    # Full S 20261108 d01.discrete.graph-analysis/06: InvalidTask escaped Pydantic and held the author.
+    with pytest.raises(ValidationError, match="needs non-empty"):
+        ScriptGrader(argv=("true",), placement=GraderMachine(environment=GRADING_ENVIRONMENT), judge=judge)
+
+
 TASK_SPEC_0_30 = Path(__file__).parent / "fixtures" / "task_spec_0_30.json"
 """Tasks serialized by schema 0.30 models, one per grader shape."""
 
@@ -428,7 +435,10 @@ def test_schema_0_30_judge_candidate_flag_upgrades_to_steps_that_grade_the_same(
     payloads = {payload["id"]: payload for payload in json.loads(TASK_SPEC_0_30.read_text())}
     upgraded = TaskSpec.model_validate(payloads["judge-in-process"])
     current_judge = JudgeSpec(
-        references=("Mars",), question="Which planet is red?", candidate_steps=(StripReasoningBlocks(),)
+        references=("Mars",),
+        question="Which planet is red?",
+        candidate_steps=(StripReasoningBlocks(),),
+        transport_attempts=1,
     )
     current = upgraded.model_copy(update={"grader": verifyit_package(current_judge).grader})
     script = TaskSpec.model_validate(payloads["script-judge"]).grader

@@ -19,6 +19,10 @@ from verifyit.spec import Constraint, JudgeSpec, parse_spec
 def score(scorer: str, config: dict[str, Any], response: str, judge: JudgeSpec | None = None) -> Reward:
     """Grade ``response`` with the named source scorer; judged scorers require ``judge``."""
     # Scorers load only the dependencies of the selected dataset's environment.
+    if scorer == "genomeqa":
+        from .genomeqa import grade_genomeqa
+
+        return grade_genomeqa(config["expected"], config["options"], config["cell_weight"], response)
     if scorer == "gsm8k_cot":
         from .math import grade_gsm8k_cot
 

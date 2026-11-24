@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Inline resources used by the optional episode runtime."""
+"""Build inline task resources."""
 
 import base64
 import os

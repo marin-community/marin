@@ -15,8 +15,6 @@ import json
 from dataclasses import dataclass, field, fields
 from typing import Any, Literal, get_origin
 
-import tomli_w
-
 from verifyit.closure_scoring import ClosureFormat
 from verifyit.compat import StrEnum, tomllib
 from verifyit.json_comparison import JsonValue, NumericTypePolicy
@@ -316,8 +314,9 @@ class GotestSpec:
 RUBRIC_REFERENCE = "reference"
 RUBRIC_CHECKLIST = "checklist"
 RUBRIC_LABELS = "labels"
+RUBRIC_ANSWERS = "answers"
 RUBRIC_PAIRWISE = "pairwise"
-RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_PAIRWISE})
+RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS, RUBRIC_ANSWERS, RUBRIC_PAIRWISE})
 
 
 class JudgeCompletionPolicy(StrEnum):
@@ -358,7 +357,7 @@ CANDIDATE_STEP_TYPES: dict[str, type[CandidateStep]] = {
 
 @dataclass(frozen=True)
 class JudgeSamplingParams:
-    """Sampling options sent with each Chat Completions judge request; ``None`` members are not sent."""
+    """Sampling options for judge requests. A ``None`` member is omitted."""
 
     temperature: float | None = None
 
@@ -376,7 +375,9 @@ class JudgeSpec:
     question per entry of ``criteria`` and scores the fraction answered yes; ``context`` names a
     file under the tests directory (a conversation transcript, say) shown to the judge alongside
     the answer. Rubric ``labels`` reads a verdict label from the reply, as ``label_scan`` selects,
-    and scores it with ``label_scores``.
+    and scores it with ``label_scores``. Rubric ``answers`` asks for one JSON verdict per entry of
+    ``references`` in a single call and scores 1 when every reference is matched. Its detail
+    records the matched fraction as ``partial_credit``.
 
     Rubric ``pairwise`` compares the answer with the single baseline in ``references`` twice, once
     in each position, as Arena-Hard does. ``prompt_template`` places the two answers with
@@ -385,9 +386,8 @@ class JudgeSpec:
     ``label_weights`` repeats it as several games (Arena-Hard counts a decisive verdict three times).
 
     ``system_role`` is the role of the ``system_prompt`` message, ``system`` or ``developer``.
-    ``response_format`` is sent with each Chat Completions label request. ``sampling`` holds the
-    options sent with each Chat Completions request; ``sampling = {}`` sends none, so the endpoint's
-    defaults apply. Responses API requests send no sampling options.
+    ``response_format`` is sent with each Chat Completions label request. An empty ``sampling`` table
+    uses the endpoint defaults. The ``answers`` rubric always uses the endpoint sampling defaults.
     """
 
     references: tuple[str, ...] = ()
@@ -399,7 +399,7 @@ class JudgeSpec:
     model: str = ""
     exact_gate: bool = True
     request_timeout: float = 120.0
-    transport_attempts: int = field(default=1, kw_only=True)
+    transport_attempts: int = field(default=3, kw_only=True)
     transport_budget: float = field(default=180.0, kw_only=True)
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
@@ -419,7 +419,11 @@ class JudgeSpec:
     label_field: str = ""
     label_case: str = "sensitive"
     api: str = "chat_completions"
-    system_role: str = field(default="system", kw_only=True)
+    context_char_limit: int = field(default=60_000, kw_only=True)
+    max_turns: int = field(default=1, kw_only=True)
+    parse_attempts: int = field(default=2, kw_only=True)
+    chat_template_kwargs: dict[str, str] = field(default_factory=dict, kw_only=True)
+    system_role: Literal["system", "developer"] = field(default="system", kw_only=True)
     response_format: dict[str, Any] = field(default_factory=dict, kw_only=True)
     sampling: JudgeSamplingParams = field(default_factory=lambda: JudgeSamplingParams(temperature=0.0), kw_only=True)
     verdict_patterns: tuple[str, ...] = field(default=(), kw_only=True)
@@ -618,21 +622,24 @@ def _step_from_table(name: str, table: Any) -> CandidateStep:
     return step_type(**table)
 
 
-def judge_table_with_candidate_steps(table: dict[str, Any]) -> dict[str, Any]:
-    """Map a judge table's ``strip_candidate_reasoning_blocks`` to the equivalent ``candidate_steps``.
-
-    Judge specs rendered before candidate steps existed carry this key.
-    """
-    if "strip_candidate_reasoning_blocks" not in table:
+def upgrade_judge_table(table: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade candidate preprocessing and sampling in previously serialized judges."""
+    if "strip_candidate_reasoning_blocks" not in table and "temperature" not in table:
         return table
-    if "candidate_steps" in table:
-        raise ValueError("judge spec sets both strip_candidate_reasoning_blocks and candidate_steps")
     table = dict(table)
-    strip = table.pop("strip_candidate_reasoning_blocks")
-    if type(strip) is not bool:
-        raise ValueError("field 'strip_candidate_reasoning_blocks' expects bool")
-    if strip:
-        table["candidate_steps"] = [{"kind": "strip_reasoning_blocks"}]
+    if "strip_candidate_reasoning_blocks" in table:
+        if "candidate_steps" in table:
+            raise ValueError("judge spec sets both strip_candidate_reasoning_blocks and candidate_steps")
+        strip = table.pop("strip_candidate_reasoning_blocks")
+        if type(strip) is not bool:
+            raise ValueError("field 'strip_candidate_reasoning_blocks' expects bool")
+        if strip:
+            table["candidate_steps"] = [{"kind": "strip_reasoning_blocks"}]
+    if "temperature" in table:
+        if "sampling" in table:
+            raise ValueError("judge spec sets both temperature and sampling")
+        temperature = table.pop("temperature")
+        table["sampling"] = {} if temperature is None or temperature == "API default" else {"temperature": temperature}
     return table
 
 
@@ -651,7 +658,7 @@ def spec_from_table(table: dict[str, Any]) -> Spec:
         raise ValueError("verifier spec has no mode")
     mode = Mode(table["mode"])
     if mode is Mode.JUDGE:
-        table = judge_table_with_candidate_steps(table)
+        table = upgrade_judge_table(table)
     spec_type = MODE_DESCRIPTORS[mode].spec_type
     declared = {f.name: f for f in fields(spec_type)}
     unknown = sorted(set(table) - set(declared) - {"mode"})
@@ -709,4 +716,8 @@ def render_spec(spec: Spec) -> str:
         ]
     if isinstance(spec, StructuredExactSpec):
         table["expected"] = json.dumps(spec.expected, allow_nan=False)
+    # Rendering is host-side staging; the grader machine never imports this, so the
+    # writer dependency stays off the machine's interpreter.
+    import tomli_w  # noqa: PLC0415
+
     return tomli_w.dumps(table)

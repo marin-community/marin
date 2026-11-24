@@ -882,7 +882,7 @@ def test_daytona_machine_its_owner_closed_rejects_commands_as_misuse(tmp_path):
 
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
 @pytest.mark.requires_host_setsid
-def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_path, interruption):
+def test_daytona_user_probe_interruption_preserves_the_machine(tmp_path, interruption):
     entered = asyncio.Event()
 
     class BlockedProbe(LocalProcess):
@@ -913,15 +913,55 @@ def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_p
                 pending.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await pending
-                assert client.closed and client.deleted
             else:
                 result = await asyncio.wait_for(pending, timeout=0.5)
                 assert result.reason is ExitReason.TIMED_OUT
-                following = await machine.run(Command(("printf", "ready")))
-                assert (following.exit_code, following.stdout) == (0, b"ready")
-                assert not client.deleted
+            following = await machine.run(Command(("printf", "ready")))
+            assert (following.exit_code, following.stdout) == (0, b"ready")
+            assert not client.closed and not client.deleted
         finally:
             await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_cancellation_during_upload_removes_staged_command_and_preserves_machine(tmp_path):
+    async def scenario():
+        uploading = asyncio.Event()
+
+        class BlockedUpload(LocalFiles):
+            staged: Path | None = None
+
+            async def upload_file_stream(self, data: bytes, target: str) -> None:
+                await super().upload_file_stream(data, target)
+                if self.staged is None:
+                    self.staged = Path(target).parent
+                    uploading.set()
+                    await asyncio.Future()
+
+        client = LocalDaytona()
+        files = BlockedUpload()
+        client.sandbox.fs = files
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            pending = asyncio.create_task(machine.run(Command(("sh", "-c", "touch cancelled-command"))))
+            await asyncio.wait_for(uploading.wait(), timeout=5)
+            assert files.staged is not None and (files.staged / "command.sh").is_file()
+            pending.cancel("agent deadline")
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await pending
+            assert caught.value.args == ("agent deadline",)
+            assert not files.staged.exists()
+            graded = await machine.run(Command(("sh", "-c", "test ! -e cancelled-command && printf 1.0")))
+            assert (graded.exit_code, graded.stdout) == (0, b"1.0")
+            assert not client.closed and not client.deleted
+        finally:
+            await machine.close()
+            if files.staged is not None and files.staged.exists():
+                shutil.rmtree(files.staged)
 
     asyncio.run(scenario())
 

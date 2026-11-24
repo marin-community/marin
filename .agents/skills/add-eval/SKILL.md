@@ -1,6 +1,6 @@
 ---
 name: add-eval
-description: Add or change a non-agentic benchmark in Marin's curated evaluation catalog, then validate it through tests, a local corpus build, a reference comparison, and a small-model smoke run. Use for new likelihood, generation, or LLM-judged benchmarks and for prompt, scorer, or protocol changes to existing ones; Harbor agentic benchmarks are out of scope.
+description: Add or change a non-agentic benchmark in Marin's curated evaluation catalog, then validate it through tests, a local corpus build, a reference comparison, and a small-model smoke run. Use for likelihood, generation, and LLM-judged benchmarks. Agent episodes use the curated agent benchmark guide.
 ---
 
 # Add a curated evaluation
@@ -32,8 +32,10 @@ evidence and stopping rules an agent needs.
    that the requester did not provide.
 
 Stop and report when the source is gated or licensed in a way that forbids
-evaluation use, or when the reference requires tools or multi-turn
-interaction (that is a Harbor benchmark).
+evaluation use. A fixed multi-turn conversation can be the context for a
+generation task, as in `experiments/evaluation/benchmarks/multichallenge.py`.
+If each attempt needs a live agent loop, use the curated TaskSpec and
+RolloutEngine path described in the [evaluation task reference](../../../docs/references/evaluation-tasks.md).
 
 ## Implement
 
@@ -57,14 +59,15 @@ Run every step; each produces evidence for the PR.
 
 1. **Tests.** Prompt rendering against a prompt copied from the reference's
    output, and scorer cases for correct, incorrect, unparseable and ambiguous
-   answers. Run the affected tests and `./infra/pre-commit.py --fix` on the
-   changed files.
+   answers. Run the affected tests and `./infra/pre-commit.py --changed-files --fix`.
 2. **Local corpus build.** Build the full population with the curation driver
    and compare every compiled request character by character with the
    reference's rendering of the same rows.
-3. **Smoke.** Dry-run, then launch with `--model qwen3-0.6b --limit 50
-   --version dev`, adding `--platform gpu --accelerator H100x1
-   --federated_cluster cw-us-east-02a` when CoreWeave keys are available.
+3. **Smoke.** Run `uv run python -m experiments.evaluation.cli launch` with
+   `--model qwen3-0.6b --evals <key> --limit 50 --version dev --dry-run`.
+   Use `--evaluation-config` when the selection needs a separate run settings
+   file. Remove `--dry-run` to submit. For CoreWeave, add `--platform gpu
+   --accelerator H100x1 --federated_cluster cw-us-east-02a`.
    Follow `use-iris` for job monitoring with a bounded wait. Confirm with
    `cli scores` that every selected item is scored and no infrastructure
    errors remain.

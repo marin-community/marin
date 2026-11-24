@@ -65,6 +65,10 @@ When a box is present, its entire content must be a numeric literal, optionally 
 Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
 `2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
 
+Default math references must parse as one whole LaTeX expression. Each member of a LIST
+reference must parse separately. A partial parse makes the task invalid; TaskCompendium rejects
+such a row during conversion as `invalid_reference`.
+
 Scalar `MathSpec` contracts may set `positive_symbols = ["a_1", "a_2"]` when the public problem
 explicitly states those symbols are positive. If ordinary comparison fails, the grader checks
 whether the parsed scalar expressions simplify to exactly the same value under those assumptions.
@@ -98,6 +102,12 @@ imports. A healthy baseline makes the failed task run a scored startup error; an
 baseline remains an infrastructure error. The task's original import paths and tests still
 run unchanged, so a candidate named after a standard-library module is graded as submitted.
 
+VerifyIT itself requires Python 3.10 or newer. A `pytest` task may use a Python 3.9 or
+newer subprocess with pytest and pytest-json-report installed in that interpreter.
+Startup errors retain their available traceback and module provenance: editable
+candidate failures score zero, while failures in protected code or with unknown
+provenance remain unscored.
+
 The mode modules expose direct candidate graders for callers holding extracted values.
 `aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;
 invalid tasks and infrastructure errors discard partial credit. The judge and Reasoning Gym modes
@@ -111,8 +121,7 @@ execution, dispatch, and dependency pins; installing this package does not enabl
 Verifyit's own attribution category, which determines whether an incomplete attempt can be scored.
 
 `json_comparison.json_values_equal` compares decoded JSON values with strict types and an optional
-float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
-repeated records and rejecting unexpected errors.
+float tolerance.
 
 `structure_closure` classifies partial JSON, delimited JSON, paired markers, and required code
 fences. `closure_scoring` compares a completed outer region with a known reference and reports
@@ -170,6 +179,8 @@ The rubric decides how the prepared answer is scored:
   model call. Otherwise `system_prompt` and `prompt_template` are filled with `{question}`,
   `{reference}` (the single entry of `references`) and `{candidate}`, and the score is the
   `label_scores` entry for the label the judge replies with.
+- `answers` requests one JSON verdict per reference in a single reply. It scores 1 when every
+  reference is matched and reports the fraction matched as `detail.partial_credit`.
 - `pairwise`: ports Arena-Hard's comparison with the single baseline answer in `references`. The
   judge receives two requests, with the baseline as assistant A and then as assistant B;
   `prompt_template` places the answers with `{answer_a}` and `{answer_b}`. Each reply's verdict is
@@ -196,19 +207,23 @@ The request options are:
 
 - `system_role` sends `system_prompt` as a `system` (default) or `developer` message.
 - `response_format` is sent with each `labels` request over Chat Completions.
-- `sampling` is a table of options sent with each Chat Completions request. The default is
-  `sampling = { temperature = 0.0 }`; `sampling = {}` sends none, so the endpoint's defaults apply.
-  `temperature` is the only member.
-- `api = "responses"` sends the `labels` rubric through the Responses API instead. Responses
-  requests carry no sampling options, so `sampling` does not apply.
+- `sampling` sets the judge request's temperature. It defaults to `{ temperature = 0.0 }`.
+  An empty table uses the endpoint defaults, as the `answers` rubric always does.
+- `api = "responses"` sends the `labels` rubric through the Responses API.
 - `reasoning_effort`, when set, is sent with each request.
 
-`max_completion_tokens` sets the initial request budget of every rubric (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger
+`max_completion_tokens` sets the initial request budget of every rubric (default `8192`).
+A positive `incomplete_retry_tokens` must exceed it and permits one larger
 request when a reply ends with `finish_reason="length"`. Reference verdicts record `attempt_count`
 and `attempts` in `detail`; checklist verdicts record them under each entry in `detail.criteria`.
 Each attempt contains `finish_reason` and `completion_tokens` (`null` when the endpoint omits
 usage). An exhausted retry remains `infra_error`, with the available attempt diagnostics in
 `detail`.
+
+For each model reply, the judge allows up to three API attempts (one request plus two retries)
+for transient HTTP or connection failures and shares a 180-second budget across them, including
+retry delays. Set `transport_attempts` and `transport_budget` (seconds) to change those limits.
+`parse_attempts` limits requests for another reply after a malformed score or label.
 
 ## Install and use
 

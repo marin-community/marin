@@ -202,7 +202,7 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 60
-      maxConcurrent: 8
+      maxConcurrent: 16
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-review/AGENTS.md
@@ -224,7 +224,7 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 60
-      maxConcurrent: 8
+      maxConcurrent: 16
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-holistic-review/AGENTS.md
@@ -246,7 +246,7 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 60
-      maxConcurrent: 4
+      maxConcurrent: 8
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/agentic-lint/AGENTS.md
@@ -328,7 +328,7 @@ config:
         - marin-community/marin
       allowedTools: []
       mcpAccess: *builtinMcpAccess
-    ops:
+    ops: &opsProfile
       agent: codex
       description: Coordinate Grafana alerts and delegate incident triage for Marin
       model: *codexModel
@@ -339,7 +339,7 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 3600
+      idleArchiveSeconds: 1800
       maxConcurrent: 4
       turnBudget: 100
       prelude: weaver
@@ -350,6 +350,12 @@ config:
         - marin-community/marin
       allowedTools: []
       mcpAccess: *builtinMcpAccess
+    ops-investigation:
+      <<: *opsProfile
+      description: Investigate one Marin infrastructure incident and report its outcome
+      idleArchiveSeconds: 900
+      maxConcurrent: 8
+      instructionsFile: profiles/ops-investigation/AGENTS.md
     # Scheduled reports run `uv run` scripts that call Iris and Google APIs. A Codex profile cannot:
     # its sandbox makes the uv cache read-only and permits network access only to Loom.
     ops-report:
@@ -569,7 +575,7 @@ config:
       promptFile: watches/goals.md
       slackChannels: []
     # Marin Belay's trigger: a cheap check every 10 minutes; a session runs only when the Belay app has queued
-    # events, then drains the queue before it exits. Sessions claim work only while dispatch is on in the app.
+    # events, then processes its claimed batch and exits. Sessions claim work only while dispatch is on in the app.
     belay:
       enabled: true
       every: 10m
@@ -578,6 +584,16 @@ config:
       repo: marin-community/marin
       promptFile: watches/belay.md
       slackChannels: []
+    pr-review-reminders:
+      enabled: true
+      cron: "0 10 * * 1-5"
+      timezone: America/Los_Angeles
+      runTimeoutSeconds: 1800
+      profile: ops-report
+      repo: marin-community/marin
+      promptFile: watches/pr-review-reminders.md
+      slackChannels:
+        - C0AHF5KV11Q  # marin-eng
     # Lists long-running Iris root jobs in a Google Sheet and cancels the ones their owners marked Kill.
     old-iris-jobs:
       enabled: true

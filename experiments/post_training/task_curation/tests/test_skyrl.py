@@ -309,31 +309,40 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
     assert grader_config(task)["test_cases"] == [{"input": "1 2\n", "output": "3\n", "testtype": "stdin"}]
 
 
-@pytest.mark.parametrize(
-    ("name", "constraints"),
-    [
-        ("nemotron_if", [{"func_name": "validate_lowercase"}]),
-        ("rlvr_ifeval", [{"func_name": "validate_no_commas"}]),
-    ],
-)
-def test_ifeval_task_gives_the_scorer_skyrl_constraints(name, constraints):
-    task = converted_task(RECIPES[name], ROWS[name])
+def test_rlvr_ifeval_task_gives_verifyit_normalized_constraints():
+    task = converted_task(RECIPES["rlvr_ifeval"], ROWS["rlvr_ifeval"])
     assert isinstance(task.grader, ScriptGrader)
-    assert grader_environment(task.grader) == fixture_context(RECIPES[name]).grader_environment
-    assert grader_config(task)["constraints"] == constraints
+    assert grader_environment(task.grader) == fixture_context(RECIPES["rlvr_ifeval"]).grader_environment
+    assert grader_config(task)["constraints"] == [{"name": "punctuation:no_comma", "params": {}}]
 
 
-def test_nemotron_repeat_prompt_constraint_receives_the_instruction():
+@pytest.mark.parametrize("as_list", [False, True])
+def test_rlvr_ifeval_converter_rejects_response_language(as_list):
+    descriptor = {"func_name": "validate_response_language", "language": "de"}
+    ground_truth = [descriptor, {"func_name": "validate_no_commas"}] if as_list else descriptor
+    row = {**ROWS["rlvr_ifeval"], "ground_truth": json.dumps(ground_truth)}
+    result = convert_row(RECIPES["rlvr_ifeval"], row)
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.UNSUPPORTED, "unsupported_ifeval_constraint")
+
+
+def test_nemotron_task_gives_verifyit_the_ifeval_instructions_without_null_arguments():
     row = {
         **ROWS["nemotron_if"],
         "args": {
-            "instruction_id_list": ["combination:repeat_prompt"],
-            "instruction_kwargs": [{"prompt_to_repeat": "Write a haiku about rain."}],
+            "instruction_id_list": ["length_constraints:number_paragraphs", "keywords:letter_frequency"],
+            "instruction_kwargs": [
+                {"num_paragraphs": 2, "keywords": None},
+                {"letter": "q", "let_frequency": 3, "let_relation": "at least"},
+            ],
         },
     }
     task = converted_task(RECIPES["nemotron_if"], row)
-    (constraint,) = grader_config(task)["constraints"]
-    assert constraint == {"func_name": "validate_repeat_prompt", "original_prompt": row["input"][0]["content"]}
+    assert isinstance(task.grader, ScriptGrader)
+    assert grader_config(task)["constraints"] == [
+        {"name": "length_constraints:number_paragraphs", "params": {"num_paragraphs": 2}},
+        {"name": "keywords:letter_frequency", "params": {"letter": "q", "let_frequency": 3, "let_relation": "at least"}},
+    ]
 
 
 @pytest.mark.parametrize("name", sorted(PREFERENCE_SOURCES))
@@ -419,11 +428,18 @@ REJECTIONS = [
     ),
     ("hendrycks_math", {"solution": "The answer is 5."}, ImportFailureKind.UNSUPPORTED, "missing_final_answer"),
     ("gpqa", {"Incorrect Answer 3": " Neutron "}, ImportFailureKind.SOURCE_DEFECT, "duplicate_options"),
-    (
-        "nemotron_if",
-        {"args": {"instruction_id_list": ["unknown:instruction"], "instruction_kwargs": [{}]}},
-        ImportFailureKind.UNSUPPORTED,
-        "unsupported_ifeval_constraint",
+    *(
+        (
+            "nemotron_if",
+            {"args": {"instruction_id_list": [name], "instruction_kwargs": [arguments]}},
+            ImportFailureKind.UNSUPPORTED,
+            "unsupported_ifeval_constraint",
+        )
+        for name, arguments in (
+            ("unknown:instruction", {}),
+            ("length_constraints:number_words", {"num_words": None, "relation": "at least"}),
+            ("keywords:forbidden_words", {"forbidden_words": []}),
+        )
     ),
     (
         "hh_helpful_base",

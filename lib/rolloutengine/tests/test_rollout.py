@@ -7,6 +7,7 @@ import asyncio
 import json
 import pickle
 import tarfile
+import time
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -73,6 +74,7 @@ from verifyit.spec import (
 )
 
 import rolloutengine.engine as engine_runtime
+import rolloutengine.event_delivery as event_delivery_runtime
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness, LengthStopPolicy
@@ -2783,7 +2785,7 @@ def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
     """Payloads through the first turn of a rollout whose first response writes the answer file."""
     observation = model.requests[1].messages[-1]
     return [
-        AttemptStarted(),
+        AttemptStarted(SHELL, TraceMode.EXACT_TOKENS, "fixture"),
         MachineReady(0.0),
         ConversationStarted(model.requests[0].messages, model.requests[0].options, 0.0),
         ModelTurnCompleted(0, model.requests[1].messages[-2], "stop", 2, 1, None, {}, 0.0),
@@ -2795,25 +2797,33 @@ def shell_turn_payloads(model: ReplayModel) -> list[RolloutEventPayload]:
 async def test_observer_receives_ordered_events_for_a_multi_turn_shell_rollout():
     observer = RecordingObserver()
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+    started = time.time()
     record = await engine(model, {"local": FixtureImageFactory()}, observer=observer).run_task(
         rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()), run_id="arithmetic/3"
     )
+    finished = time.time()
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert observer.payloads() == [
         *shell_turn_payloads(model),
         ModelTurnCompleted(1, record.rollout.conversations[-1].messages[-1], "stop", 5, 1, None, {}, 0.0),
         TransitionCompleted(1, True, (), 0.0),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
-        AttemptEnded("stop", None, None, 0.0),
+        AttemptEnded("stop", None, None, 0.0, 2, 9),
     ]
-    assert asdict(observer.events[-1]) == {
+    assert [event.index for event in observer.events] == list(range(len(observer.events)))
+    assert all(started <= event.emitted_at <= finished for event in observer.events)
+    assert asdict(replace(observer.events[-1], emitted_at=0.0)) == {
         "run_id": "arithmetic/3",
         "task_id": "arithmetic",
+        "index": len(observer.events) - 1,
+        "emitted_at": 0.0,
         "payload": {
             "stop_reason": "stop",
             "operation": None,
             "error": None,
             "duration": observer.events[-1].payload.duration,
+            "turns": 2,
+            "total_tokens": 9,
             "type": RolloutEventType.ATTEMPT_ENDED,
         },
     }
@@ -2838,8 +2848,54 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
     assert observer.payloads() == [
         *shell_turn_payloads(model),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
-        AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0),
+        AttemptEnded(None, RolloutOperation.MODEL, repr(ConnectionError("inference server unavailable")), 0.0, 1, 3),
     ]
+
+
+async def test_dropped_events_leave_index_gaps_and_delivered_events_keep_their_emit_time(monkeypatch):
+    monkeypatch.setattr(event_delivery_runtime, "EVENT_QUEUE_CAPACITY", 4)
+    gate = asyncio.Event()
+    room = asyncio.Event()
+    opened_at = []
+
+    class GatedObserver(RecordingObserver):
+        async def on_event(self, event: RolloutEvent) -> None:
+            await gate.wait()
+            await super().on_event(event)
+            if isinstance(event.payload, ToolCallCompleted):
+                room.set()
+
+    class Burst:
+        context_recovery = ContextRecovery.NEVER
+
+        def check(self, task, limits):
+            pass
+
+        async def run(self, context, session):
+            # No await separates the emits, so the blocked observer takes none of them and the queue overflows.
+            for call in range(10):
+                context.events.emit(ToolCallCompleted(f"burst-{call}", "burst", 0, False, 0.0))
+            opened_at.append(time.time())
+            gate.set()
+            # The first delivered burst event leaves a place in the queue, so this event is not dropped.
+            await room.wait()
+            context.events.emit(ToolCallCompleted("after", "burst", 0, False, 0.0))
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+
+    observer = GatedObserver()
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": Burst()}, observer=observer
+    ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
+
+    *burst, after = [event for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
+    call_ids = [event.payload.call_id for event in observer.events if isinstance(event.payload, ToolCallCompleted)]
+    indexes = [event.index for event in observer.events]
+    missing = set(range(after.index)) - set(indexes)
+    assert indexes == sorted(indexes)
+    assert call_ids == [*(f"burst-{call}" for call in range(len(burst))), "after"]
+    assert 0 < len(missing) == 10 - len(burst) <= record.rollout.metrics["observer_dropped_events"]
+    # The observer received the burst after the gate opened, and each event has the time of its emit.
+    assert all(event.emitted_at <= opened_at[0] for event in burst)
 
 
 async def test_attempts_without_a_run_id_keep_their_events_apart():
@@ -4227,3 +4283,44 @@ async def test_context_rejection_allows_a_shorter_request_without_ending_the_att
     assert len(replay.requests) == 2
     assert len(result.rollout.conversations) == (2 if compact else 1)
     assert all("Oversized tool output" not in str(record.messages) for record in result.rollout.conversations)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_supplied_verifier_remains_caller_owned(fails):
+    task = file_task()
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
+    factory = RecordingShellSimFactory()
+    borrowed = []
+
+    async def acquire(prepared):
+        assert prepared.workdir == "/workspace"
+        assert prepared.env["TASKCOMPENDIUM_STOP_REASON"] == "stop"
+        machine = await FixtureImageFactory().create(prepared)
+        borrowed.append(machine)
+        if fails:
+
+            async def fail(command):
+                raise RuntimeError("borrowed verifier interrupted")
+
+            machine.run = fail
+        return machine
+
+    runner = engine(model, {"local": factory}).engine
+    spec = rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    try:
+        if fails:
+            with pytest.raises(GradedRolloutInterrupted):
+                await runner.run_task(spec, model.complete, verifier=acquire)
+        else:
+            assert (await runner.run_task(spec, model.complete, verifier=acquire)).grade.reward == 1
+        assert len(factory.machines) == len(borrowed) == 1
+        with pytest.raises(RuntimeError):
+            await factory.machines[0].run(Command(("true",)))
+        # Unlike the task machine, the supplied verifier still accepts file operations.
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "proof"
+            source.write_text("caller owns cleanup")
+            await borrowed[0].upload(source, "/tmp/proof")
+    finally:
+        for machine in borrowed:
+            await machine.close()

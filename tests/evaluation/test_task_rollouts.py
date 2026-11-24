@@ -596,6 +596,8 @@ def convert_judged_row(row, _context):
         references=("2",),
         model=row.data.get("model", ""),
         rubric="labels",
+        transport_attempts=1,
+        parse_attempts=1,
         exact_gate=False,
         prompt_template="Reference: {reference}\nCandidate: {candidate}",
         label_scores={"A": 1, "B": 0},

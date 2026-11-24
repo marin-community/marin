@@ -67,7 +67,7 @@ class _Handler(BaseHTTPRequestHandler):
         usage = {}
         if server.usage_tokens:
             index = min(len(server.prompts) - 1, len(server.usage_tokens) - 1)
-            usage = {"usage": {"completion_tokens": server.usage_tokens[index]}}
+            usage = {"usage": {"completion_tokens": server.usage_tokens[index], "prompt_tokens": 123}}
         body = json.dumps(
             {
                 "id": "chatcmpl-fake",
@@ -248,6 +248,17 @@ def test_unparseable_reply_is_retried_once_then_masks_candidate(tmp_path, fake_j
     assert len(fake_judge.prompts) == 2
 
 
+@pytest.mark.parametrize("rubric", ["reference", "checklist"])
+def test_default_transport_recovers_from_transient_failure(tmp_path, fake_judge, rubric):
+    fake_judge.http_statuses = [503, 200]
+    fake_judge.retry_after = "0"
+    fake_judge.replies = ["SCORE: 1"]
+    spec = JudgeSpec(rubric=rubric, references=(REFERENCE,), criteria=("Be correct",), exact_gate=False)
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "candidate"))
+    assert (reward.status, reward.reward) == (Status.SCORED, 1)
+    assert len(fake_judge.requests) == 2
+
+
 def test_second_attempt_is_accepted(tmp_path, fake_judge):
     fake_judge.replies = ["I cannot grade this.", "Matches the reference.\nSCORE: 1"]
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
@@ -282,6 +293,8 @@ def test_reference_retries_truncation_with_budget_and_records_attempts(tmp_path,
         {"finish_reason": "length", "completion_tokens": 1024},
         {"finish_reason": "stop", "completion_tokens": 1600},
     ]
+    assert [reply["usage"]["prompt_tokens"] for reply in reward.detail["judge_responses"]] == [123, 123]
+    assert reward.detail["judge_responses"][-1]["choices"][0]["message"]["content"] == "SCORE: 0.5"
 
 
 def test_reference_exhausted_truncation_is_unscored_with_attempts(tmp_path, fake_judge):
@@ -360,6 +373,11 @@ def test_checklist_records_attempts_per_criterion(tmp_path, fake_judge):
         ],
         [{"finish_reason": "stop", "completion_tokens": 100}],
     ]
+    assert [
+        reply["usage"]["prompt_tokens"]
+        for criterion in reward.detail["criteria"]
+        for reply in criterion["judge_responses"]
+    ] == [123, 123, 123]
 
 
 def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(tmp_path, fake_judge):
@@ -379,12 +397,15 @@ def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(t
 
 
 def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):
-    context = "é" * (grade_judge.CONTEXT_LIMIT - 4) + "TAIL" + "excluded"
+    context_limit = 24
+    context = "é" * (context_limit - 4) + "TAIL" + "excluded"
     (tmp_path / "conversation.txt").write_text(context)
     fake_judge.replies = ["SCORE: 1"]
-    spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt")
+    spec = JudgeSpec(
+        rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt", context_char_limit=context_limit
+    )
     grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "1. 2. 3."))
-    assert context[: grade_judge.CONTEXT_LIMIT] in fake_judge.prompts[0]
+    assert context[:context_limit] in fake_judge.prompts[0]
     assert "excluded" not in fake_judge.prompts[0]
 
 
@@ -487,6 +508,8 @@ def test_malformed_final_judge_labels_never_award_reward(tmp_path, fake_judge, r
 def _label_spec(**overrides) -> JudgeSpec:
     values = dict(
         rubric="labels",
+        transport_attempts=1,
+        parse_attempts=1,
         references=("reference answer",),
         question="trusted question",
         system_prompt="Compare {reference} against {candidate} for {question}.",
@@ -525,6 +548,29 @@ def test_configured_judge_labels_on_real_http_boundary(tmp_path, fake_judge, rep
         {"role": "system", "content": "Compare reference answer against candidate {reference} for trusted question."},
         {"role": "user", "content": "A: reference answer\nB: candidate {reference}"},
     ]
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+def test_label_parse_retry_preserves_context_and_attempt_diagnostics(fake_judge, finish_reason):
+    fake_judge.replies = ["unclear", "[[A=B]]"]
+    fake_judge.finish_reasons = ["stop", finish_reason]
+    spec = _label_spec(parse_attempts=2, system_prompt="Context: {context}")
+    if finish_reason == "length":
+        with pytest.raises(GradingInfraError) as raised:
+            grade_judge.grade_judge_candidate(spec, "candidate", context="trusted context")
+        detail = raised.value.detail
+    else:
+        result = grade_judge.grade_judge_candidate(spec, "candidate", context="trusted context")
+        assert result.reward == 1
+        detail = result.detail
+    assert detail["parse_attempt"] == 2
+    assert detail["previous_parse_attempts"] == [{"attempt": 1, "completion": "unclear"}]
+    assert [request["messages"] for request in fake_judge.requests] == [
+        [
+            {"role": "system", "content": "Context: trusted context"},
+            {"role": "user", "content": "A: reference answer\nB: candidate"},
+        ]
+    ] * 2
 
 
 @pytest.mark.parametrize(
@@ -831,68 +877,6 @@ def test_direct_candidate_provider_failure_never_returns_a_score(fake_judge):
         grade_judge.grade_judge_candidate(spec, "wrong")
 
 
-def test_paired_ordinal_matches_source_ties_and_circular_mean():
-    edges = [(0, 1), (1, 2), (2, 0)]
-    ratings = [
-        dict(left=0, right=1, score_left=1, score_right=1, ranking=1),
-        dict(left=1, right=2, score_left=5, score_right=5, ranking=6),
-        dict(left=2, right=0, score_left=4, score_right=2, ranking=3.5),
-    ]
-    # Independent source arithmetic: equal ratings receive +/- (3.5-ranking).
-    expected_raw = [(3.5 + 2) / 2, (-1.5 + 2.5) / 2, (7.5 + 4) / 2]
-    verdicts = grade_judge.grade_paired_ordinal(3, edges, ratings)
-    assert [v.detail["raw_score"] for v in verdicts] == pytest.approx(expected_raw)
-    assert [v.reward for v in verdicts] == pytest.approx([(raw + 1.5) / 9 for raw in expected_raw])
-    assert all(v.status is Status.SCORED for v in verdicts)
-    # Opposite directed edges are distinct, including the source's size-two circle.
-    pair = grade_judge.grade_paired_ordinal(
-        2, [(0, 1), (1, 0)], [ratings[0], dict(left=1, right=0, score_left=1, score_right=1, ranking=3.5)]
-    )
-    assert [v.detail["raw_score"] for v in pair] == pytest.approx([2.25, -0.25])
-    assert [v.reward for v in pair] == pytest.approx([3.75 / 9, 1.25 / 9])
-
-
-@pytest.mark.parametrize("fault", ["missing", "duplicate", "self", "bool", "nonfinite", "range"])
-def test_paired_ordinal_invalidates_whole_provider_cohort(fault):
-    ratings = [
-        dict(left=0, right=1, score_left=5, score_right=4, ranking=1),
-        dict(left=1, right=0, score_left=5, score_right=4, ranking=1),
-    ]
-    if fault == "missing":
-        ratings.pop()
-    elif fault == "duplicate":
-        ratings[1] = dict(ratings[0])
-    elif fault == "self":
-        ratings[1]["right"] = 1
-    elif fault == "bool":
-        ratings[1]["left"] = True
-    elif fault == "nonfinite":
-        ratings[1]["score_left"] = float("nan")
-    else:
-        ratings[1]["ranking"] = 7
-    with pytest.raises(RuntimeError, match="protocol"):
-        grade_judge.grade_paired_ordinal(2, [(0, 1), (1, 0)], ratings)
-
-
-@pytest.mark.parametrize("size,edges", [(1, [(0, 0)]), (2, [(0, 0)]), (2, [(0, 1), (0, 1)]), (3, [(0, 1)])])
-def test_paired_ordinal_rejects_invalid_trusted_graph_before_provider(size, edges):
-    with pytest.raises(InvalidTask):
-        grade_judge.grade_paired_ordinal(size, edges, None)
-
-
-def test_paired_ordinal_rejects_overflowing_derived_bounds():
-    with pytest.raises(InvalidTask, match="derived"):
-        grade_judge.grade_paired_ordinal(2, [(0, 1)], None, ranking_bounds=(-1e308, 1e308))
-
-
-def test_paired_ordinal_json_integer_indices_and_huge_trusted_bounds():
-    ratings = [dict(left=0.0, right=1.0, score_left=3, score_right=3, ranking=3.5)]
-    verdicts = grade_judge.grade_paired_ordinal(2, [(0, 1)], ratings)
-    assert [v.detail["raw_score"] for v in verdicts] == [3, 3]
-    with pytest.raises(InvalidTask, match="bounds"):
-        grade_judge.grade_paired_ordinal(2, [(0, 1)], ratings, rating_bounds=(1, 10**400))
-
-
 @pytest.mark.parametrize(
     "reply,reward,status",
     [
@@ -924,6 +908,8 @@ def test_responses_whole_labels_preserve_source_request_and_reject_prose(tmp_pat
         label_scores={"CORRECT": 1, "INCORRECT": 0},
         max_completion_tokens=1024,
         reasoning_effort="low",
+        sampling=JudgeSamplingParams(),
+        parse_attempts=1,
     )
     path = tmp_path / "verifier.toml"
     path.write_text(render_spec(spec))
@@ -1147,6 +1133,57 @@ def test_missing_runtime_keeps_exact_gate_and_blocks_environment_endpoint(fake_j
     assert fake_judge.prompts == []
 
 
+def _answers_spec() -> JudgeSpec:
+    return JudgeSpec(
+        rubric="answers",
+        question="Find (a) the period and (b) the energy.",
+        references=("label (a): T = 2\\pi\\sqrt{l/g}", "label (b): E = 3 \\text{ J}"),
+        prompt_template="[question]: {question}\n[response]: {candidate}\n[reference_answers]:\n{references}",
+        exact_gate=False,
+    )
+
+
+def _verdicts(*correct: str, confidence: str = "80") -> str:
+    answers = [{"index": i, "label": "x", "extracted_final_answer": "y", "correct": c} for i, c in enumerate(correct)]
+    return json.dumps({"answers": answers, "confidence": confidence})
+
+
+@pytest.mark.parametrize(
+    ("reply", "reward", "partial", "status"),
+    [
+        (_verdicts("yes", "yes"), 1.0, 1.0, Status.SCORED),
+        (_verdicts("yes", "no"), 0.0, 0.5, Status.SCORED),
+        ("```json\n" + _verdicts("YES", "yes", confidence="90%") + "\n```", 1.0, 1.0, Status.SCORED),
+        (_verdicts("yes", "yes", confidence="Infinity"), 1.0, 1.0, Status.SCORED),
+        (_verdicts("yes"), 0.0, None, Status.INFRA_ERROR),
+        (_verdicts("yes", "maybe"), 0.0, None, Status.INFRA_ERROR),
+        ("Both answers are correct.", 0.0, None, Status.INFRA_ERROR),
+    ],
+)
+def test_answers_judge_scores_strictly_with_one_verdict_per_reference(
+    tmp_path, fake_judge, reply, reward, partial, status
+):
+    fake_judge.replies = [reply]
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(_answers_spec()))
+    result = run(spec_path, _workspace(tmp_path, "Answers:\n(a) T = 2\\pi\\sqrt{l/g}\n(b) 3 J"))
+    assert (result.status, result.reward) == (status, reward)
+    if status is Status.SCORED:
+        assert result.detail["partial_credit"] == partial
+        assert [answer["correct"] for answer in result.detail["answers"]] == [True, partial == 1.0]
+    assert "temperature" not in fake_judge.requests[0]
+    assert fake_judge.requests[0]["messages"] == [
+        {
+            "role": "user",
+            "content": (
+                "[question]: Find (a) the period and (b) the energy.\n"
+                "[response]: Answers:\n(a) T = 2\\pi\\sqrt{l/g}\n(b) 3 J\n"
+                "[reference_answers]:\n0. label (a): T = 2\\pi\\sqrt{l/g}\n1. label (b): E = 3 \\text{ J}"
+            ),
+        }
+    ]
+
+
 BOOLEAN_FORMAT = {
     "type": "json_schema",
     "json_schema": {
@@ -1254,13 +1291,10 @@ def test_candidate_steps_rewrite_the_answer_in_order_before_the_prompt(tmp_path,
     assert fake_judge.prompts == [f"A: reference answer\nB: {judged}"]
 
 
-@pytest.mark.parametrize(
-    "sampling,sent",
-    [(JudgeSamplingParams(temperature=0.0), {"temperature": 0.0}), (JudgeSamplingParams(), {})],
-)
-def test_judge_sampling_round_trips_through_toml_and_sends_only_set_members(tmp_path, fake_judge, sampling, sent):
+@pytest.mark.parametrize("temperature", [0.0, 0.7, None])
+def test_judge_sampling_round_trips_through_toml_and_sends_only_set_members(tmp_path, fake_judge, temperature):
     fake_judge.replies = ["[[A=B]]"]
-    spec = _label_spec(sampling=sampling)
+    spec = _label_spec(sampling=JudgeSamplingParams(temperature=temperature))
     spec_path = tmp_path / "verifier.toml"
     spec_path.write_text(render_spec(spec))
 
@@ -1269,15 +1303,23 @@ def test_judge_sampling_round_trips_through_toml_and_sends_only_set_members(tmp_
     assert parse_spec(spec_path.read_text()) == spec
     assert result.status is Status.SCORED
     [request] = fake_judge.requests
-    assert {key: request[key] for key in ("temperature",) if key in request} == sent
+    if temperature is None:
+        assert "temperature" not in request
+    else:
+        assert request["temperature"] == temperature
 
 
-@pytest.mark.parametrize("strip", [True, False])
-def test_judge_toml_with_the_legacy_candidate_flag_parses_to_its_candidate_steps(strip):
-    current = _label_spec(candidate_steps=(StripReasoningBlocks(),) if strip else ())
+@pytest.mark.parametrize("strip,temperature,expected", [(True, 0.7, 0.7), (False, "API default", None)])
+def test_legacy_judge_toml_preserves_candidate_preprocessing_and_sampling(strip, temperature, expected):
+    current = _label_spec(
+        candidate_steps=(StripReasoningBlocks(),) if strip else (),
+        sampling=JudgeSamplingParams(temperature=expected),
+    )
     legacy = spec_to_table(current)
     del legacy["candidate_steps"]
+    del legacy["sampling"]
     legacy["strip_candidate_reasoning_blocks"] = strip
+    legacy["temperature"] = temperature
 
     assert parse_spec(tomli_w.dumps(legacy)) == current
 

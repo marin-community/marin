@@ -132,6 +132,6 @@ def package_rows(path: StoragePath, _context: ConversionContext) -> Iterator[dic
 
 
 def extract_package(archive: bytes, destination: Path) -> None:
-    """Unpack a package archive into ``destination``, refusing links and paths outside it."""
+    """Unpack a package archive without allowing files or links outside ``destination``."""
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as package:
         package.extractall(destination, filter="data")

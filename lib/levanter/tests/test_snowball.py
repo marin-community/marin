@@ -46,6 +46,8 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
+from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
@@ -490,6 +492,59 @@ def test_snowball_fp32_activations_cover_every_sigmoid():
     assert off["fp32"] == 1, "flag off: only the router combine sigmoid is FP32"
     router = [(path, dtype) for (path, dtype) in off["dtypes_by_path"] if dtype == "float32"]
     assert router and all("scan" in path and "cond" not in path and "shard_map" not in path for path, _ in router)
+
+
+@pytest.mark.parametrize("model_axis_size,expert_axis_size", [(1, 1), (2, 1), (1, 2)])
+def test_snowball_paged_generation_matches_full_forward(model_axis_size, expert_axis_size):
+    cfg = _tiny_config(num_layers=2, sliding_window=3)
+    with use_cpu_devices(model_axis_size * expert_axis_size):
+        mesh = compact_grug_mesh(model_axis_size=model_axis_size, expert_axis_size=expert_axis_size)
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(17))
+            engine = InferenceEngine.from_model_with_config(
+                model,
+                tokenizer=None,
+                config=InferenceEngineConfig(
+                    max_seq_len=16,
+                    max_pages=16,
+                    max_rounds=2,
+                    page_size=2,
+                    compute_dtype=jnp.float32,
+                    max_seqs=4,
+                    max_queued_tokens=8,
+                    max_seqs_in_prefill=4,
+                    max_prefill_size=12,
+                ),
+            )
+            prompts = [[2, 7, 4, 9, 6], [18, 7, 3]]
+            num_new_tokens = 4
+            requests = [
+                Request(
+                    prompt_tokens=prompt,
+                    request_id=i,
+                    decode_params=replace(
+                        SeqDecodingParams.default(),
+                        max_num_tokens=jnp.asarray(len(prompt) + num_new_tokens, dtype=jnp.int32),
+                    ),
+                    n_generations=1,
+                )
+                for i, prompt in enumerate(prompts)
+            ]
+            result = engine.generate(requests)
+            assert result.logprobs is not None
+            for prompt, generated, scores in zip(prompts, result.tokens, result.logprobs, strict=True):
+                assert len(generated) == num_new_tokens
+                full_tokens = prompt + generated
+                # The teacher-forced forward uses one copy per batch shard.
+                token_rows = jnp.broadcast_to(jnp.asarray(full_tokens), (expert_axis_size, len(full_tokens)))
+                logits = model(hax.named(token_rows, ("batch", "position"))).array
+                next_logits = logits[0, len(prompt) - 1 : -1]
+                expected = jnp.argmax(next_logits, axis=-1)
+                np.testing.assert_array_equal(generated, expected)
+                logprobs = jax.nn.log_softmax(next_logits, axis=-1)
+                np.testing.assert_allclose(
+                    scores, logprobs[jnp.arange(num_new_tokens), expected], atol=1e-5, rtol=1e-5
+                )
 
 
 def test_snowball_forward_shapes_and_finite():
