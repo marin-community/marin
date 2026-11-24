@@ -15,12 +15,16 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Mapping
 
 import fsspec
+from iris.cluster.client import get_job_info
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import require_secret
+from shellbox.machine import MachineFactory
 from taskcompendium.models import TaskSpec
+from taskforge.policy import Policy
 
 from experiments.post_training.task_curation.balanced_reasoning.bands import Band
 from experiments.post_training.task_curation.balanced_reasoning.catalog import (
@@ -42,6 +46,8 @@ from experiments.post_training.task_curation.balanced_reasoning.lane import (
     write_workdir_text,
 )
 from experiments.post_training.task_curation.balanced_reasoning.runtime import (
+    LANE_GENERATOR_MODEL,
+    lane_factories,
     lane_policy,
     lane_runtime,
     relay_or_fixed_source,
@@ -109,6 +115,17 @@ def quota_from_arguments(arguments: argparse.Namespace) -> Quota:
     return Quota(per_band)
 
 
+def manifest_machines() -> tuple[Policy | None, Mapping[str, MachineFactory] | None]:
+    """The lowering pre-check inputs when running inside an Iris job; ``None`` off-cluster."""
+    try:
+        if get_job_info() is None:
+            return None, None
+    except Exception:
+        return None, None
+    policy = lane_policy({})
+    return policy, lane_factories(policy)
+
+
 def command_plan(args: argparse.Namespace) -> int:
     candidates = read_candidate_tasks(args.tasks)
     difficulty = tally_attempts(read_ledger_attempts(args.ledger), solver=args.solver)
@@ -123,11 +140,14 @@ def command_tasks(args: argparse.Namespace) -> int:
     """Build the verified-task manifest: ledger difficulty joined to census TaskSpecs."""
     difficulty = tally_attempts(read_ledger_attempts(args.ledger), solver=args.solver)
     entries = read_census_entries(args.census_root)
+    policy, factories = manifest_machines()
     receipt = build_tasks_manifest(
         difficulty,
         entries,
         args.output,
         min_attempts=args.min_attempts,
+        policy=policy,
+        factories=factories,
     )
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0
@@ -149,6 +169,7 @@ def command_run(args: argparse.Namespace) -> int:
             "provider.pool": args.pool,
             "sampling.temperature": args.temperature,
             "sampling.max_continuations": 0,
+            "author.model": LANE_GENERATOR_MODEL,
         }
     )
     source = relay_or_fixed_source(base_url, relay_job, token, pool=args.pool)

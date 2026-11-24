@@ -137,7 +137,13 @@ def test_build_tasks_manifest_joins_census_to_ledger(tmp_path: Path) -> None:
     }
     receipt = build_tasks_manifest(difficulty, [entry], str(tmp_path / "out"))
     assert receipt["rows"] == 1
-    assert receipt["skipped"] == {"no_ledger_task": 0, "no_grader": 0, "no_user_turn": 0, "spec_invalid": 0}
+    assert receipt["skipped"] == {
+        "no_ledger_task": 0,
+        "no_grader": 0,
+        "no_user_turn": 0,
+        "spec_invalid": 0,
+        "not_lowerable": 0,
+    }
     rows = manifest_rows(str(tmp_path / "out" / "tasks.jsonl"))
     assert len(rows) == 1
     row = rows[0]

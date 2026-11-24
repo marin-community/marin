@@ -18,6 +18,7 @@ against the census releases without staging populations locally.
 
 import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
@@ -25,7 +26,10 @@ from typing import Any
 import fsspec
 import pyarrow.parquet as pq
 from rigging.filesystem.factory import open_url
+from shellbox.machine import MachineFactory
 from taskcompendium.models import TaskSpec
+from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings
+from taskforge.policy import Policy
 
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import (
     TaskDifficulty,
@@ -159,13 +163,16 @@ def build_tasks_manifest(
     output_prefix: str,
     *,
     min_attempts: int = 1,
+    policy: Policy | None = None,
+    factories: Mapping[str, MachineFactory] | None = None,
 ) -> dict:
     """Materialize census TaskSpecs for ledger-covered tasks and write the manifest bundle.
 
     Writes ``<output_prefix>/tasks/<task_id>.json`` per task plus ``<output_prefix>/tasks.jsonl``
     (one :class:`ManifestRow` document per line) and returns the build receipt. Tasks without
-    a usable grader, without a user turn, or whose census release lacks their task_id are
-    skipped and counted in the receipt.
+    a usable grader, without a user turn, without a lowering against the lane's machine
+    factories (pass ``policy`` and ``factories`` from inside an Iris job to pre-check), or
+    whose census release lacks their task_id are skipped and counted in the receipt.
     """
     wanted_by_source: dict[str, dict[str, str]] = {}
     for (source_id, task_sha256), difficulty in ledger_difficulty.items():
@@ -178,7 +185,7 @@ def build_tasks_manifest(
     tasks_prefix = f"{output_prefix.rstrip('/')}/{TASKS_DIRECTORY}"
 
     rows: list[ManifestRow] = []
-    skipped = {"no_ledger_task": 0, "no_grader": 0, "no_user_turn": 0, "spec_invalid": 0}
+    skipped = {"no_ledger_task": 0, "no_grader": 0, "no_user_turn": 0, "spec_invalid": 0, "not_lowerable": 0}
     for entry in entries:
         wanted = wanted_by_source.get(entry.source_id)
         if not wanted:
@@ -202,6 +209,13 @@ def build_tasks_manifest(
             if not any(getattr(event, "role", None) == "user" for event in task.context.events):
                 skipped["no_user_turn"] += 1
                 continue
+            if policy is not None and factories is not None:
+                try:
+                    lower_with_settings(task, lowering_settings(policy), factories)
+                except InvalidTaskSpec as error:
+                    logger.warning("SKIP %s: not lowerable on the lane's machines: %s", task_id, error)
+                    skipped["not_lowerable"] += 1
+                    continue
             spec_path = f"{tasks_prefix}/{task_id}.json"
             payload = task.model_dump_json(indent=2, by_alias=True) + "\n"
             with open_url(spec_path, "wt") as sink:

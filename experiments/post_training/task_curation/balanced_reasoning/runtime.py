@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 _GENERATOR_ROLE = "author"
 """The role slot the generator occupies in the resources bundle; the lane has no author."""
 
+LANE_GENERATOR_MODEL = "glm-5.3"
+"""The generator the lane samples: the Ortet relay's GLM-5.3. The taskforge defaults pin
+``author.model`` to deepseek-v4.1-flash for authoring workpieces; the lane overrides it."""
+
 
 def lane_policy(overlay: Mapping[str, object]) -> Policy:
     """The taskforge defaults overlaid with the lane's keys (bulk pool, lane sampling)."""
