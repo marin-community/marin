@@ -5,6 +5,7 @@
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -18,7 +19,7 @@ from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.external_dependencies import VLLM_GPU_RELEASE
-from marin.inference.config import ObjectStoreLoadMode, RemoteInferenceConfig, VllmEngineConfig
+from marin.inference.config import BrokerConfig, ObjectStoreLoadMode, RemoteInferenceConfig, VllmEngineConfig
 from marin.inference.iris import remote_inference
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -36,6 +37,8 @@ POOL_GPU_TYPE = "GB200"
 HEALTH_INTERVAL = 30
 WARM_CONCURRENCY = 128
 WARM_OUTPUT_TOKENS = 256
+POOL_FAILURE_RETRIES = 3
+POOL_PREEMPTION_RETRIES = 10
 
 
 @dataclass(frozen=True)
@@ -132,8 +135,11 @@ def pool_config(solver: Solver) -> RemoteInferenceConfig:
     return replace(
         config,
         engine=replace(config.engine, gpu_release=VLLM_GPU_RELEASE, startup_timeout_seconds=7200),
+        broker=BrokerConfig(max_retries_failure=POOL_FAILURE_RETRIES, max_retries_preemption=POOL_PREEMPTION_RETRIES),
         iris=replace(
             config.iris,
+            max_retries_failure=POOL_FAILURE_RETRIES,
+            max_retries_preemption=POOL_PREEMPTION_RETRIES,
             worker_timeout=JOB_TIMEOUT,
             worker_resources=replace(config.iris.worker_resources, target_cluster=None, regions=None),
             endpoint_ready_timeout_seconds=7200,
@@ -179,6 +185,28 @@ async def warm_throughput(
     }
 
 
+def publish_pool_receipt(registry: str, solver: Solver, receipt: dict) -> None:
+    """Retain ready generations before replacing the active solver endpoint."""
+    target = StoragePath(registry) / f"{solver.value}.json"
+    encoded = json.dumps(receipt, sort_keys=True) + "\n"
+    versions = [encoded]
+    if target.exists():
+        previous = target.read_text()
+        previous_receipt = json.loads(previous)
+        for field in ("solver", "model", "revision"):
+            if previous_receipt[field] != receipt[field]:
+                raise ValueError(f"Cannot replace solver pool with a different {field}")
+        versions.insert(0, previous)
+    history = target.parent / "history" / solver.value
+    history.mkdirs()
+    for version in versions:
+        digest = hashlib.sha256(version.encode()).hexdigest()
+        (history / f"{digest}.json").write_text(version)
+    # S3 publishes each complete object on close; readers retain the previous
+    # ready endpoint until this replacement succeeds.
+    target.write_text(encoded)
+
+
 def run_pool(solver: Solver, registry: str) -> None:
     configure_coreweave_s3()
     shape = ENGINE_SHAPES[solver]
@@ -206,11 +234,7 @@ def run_pool(solver: Solver, registry: str) -> None:
             "vllm_gpu_release": asdict(VLLM_GPU_RELEASE),
             "ready_at": datetime.now(UTC).isoformat(),
         }
-        target = StoragePath(registry) / f"{solver.value}.json"
-        if target.exists():
-            raise FileExistsError(target)
-        target.parent.mkdirs()
-        target.write_text(json.dumps(receipt, sort_keys=True) + "\n")
+        publish_pool_receipt(registry, solver, receipt)
         LOGGER.info("DIFFICULTY_ENGINE_READY %s", json.dumps(receipt, sort_keys=True))
         while True:
             session.check_alive()

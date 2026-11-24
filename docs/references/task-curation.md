@@ -2900,6 +2900,12 @@ HTTP overhead. The CPU-only hosted benchmark uses 32 concurrent requests and
 reports provider output throughput without a GPU denominator. The registry stores the actual geometry, pinned model, endpoint
 name, engine job IDs and warm measurement.
 
+Self-hosted pools replace their active solver receipt after each successful
+warm-up, retaining both the previous and new receipts under
+`history/<solver>/<sha256>.json`. A replacement must preserve the model and
+revision. Workers and brokers allow three failure retries and ten preemption
+retries; submit the CPU owner with a positive failure retry budget too.
+
 Choose one fresh registry URI for a generation. Launch each self-hosted solver
 root against that same URI, with a unique job name:
 
@@ -2907,7 +2913,7 @@ root against that same URI, with a unique job name:
 uv run iris --cluster=marin job run \
   --job-name atlas-difficulty-engines-small-GENERATION \
   --target-cluster=cw-us-east-08a --cpu 4 --memory 16GB --disk 64GB \
-  --priority interactive --timeout 259200 --max-retries 0 --no-wait \
+  --priority interactive --timeout 259200 --max-retries 3 --no-wait \
   --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
   --secret HF_TOKEN env:HF_TOKEN -- python -m \
   experiments.post_training.task_curation.difficulty.engine_pool \
