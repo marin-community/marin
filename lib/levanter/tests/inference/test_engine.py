@@ -147,3 +147,34 @@ def test_generate_admits_waiting_requests_with_reused_pages():
 
     assert result.tokens == [[3] * length for length in output_lengths]
     assert result.total_generated == sum(output_lengths)
+
+
+def test_generate_waits_for_kv_pages_when_a_slot_is_free():
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        engine = InferenceEngine.from_model_with_config(
+            model=DummyModel(vocab_size=10),  # type: ignore
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=3,
+                page_size=4,
+                max_rounds=1,
+                max_seqs=2,
+                max_seqs_in_prefill=2,
+                max_queued_tokens=4,
+                max_prefill_size=6,
+            ),
+        )
+        requests = [
+            Request(
+                prompt,
+                request_id=i,
+                decode_params=replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(len(prompt) + length)),
+                n_generations=1,
+            )
+            for i, (prompt, length) in enumerate([([1, 2, 4, 5, 6], 3), ([1], 1), ([1, 2, 4, 5, 6], 1)])
+        ]
+        result = engine.generate(requests)
+
+    assert result.tokens == [[3, 3, 3], [3], [3]]

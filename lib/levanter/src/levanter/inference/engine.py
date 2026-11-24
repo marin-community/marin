@@ -939,6 +939,12 @@ class InferenceEngine:
         self.gen_state, outputs = new_state
         return outputs
 
+    @staticmethod
+    def _prefill_page_count(request: Request, page_size: int) -> int:
+        full_pages, tail = divmod(len(request.prompt_tokens), page_size)
+        # Clones share full prompt pages and copy any partial last page.
+        return full_pages + request.n_generations * bool(tail)
+
     def _prefill_prompts(
         self,
         requests: Sequence[Request],
@@ -950,6 +956,10 @@ class InferenceEngine:
         max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
         max_seq_len = decode_state.tokens.axis_size("position")
         max_slots = decode_state.max_seqs
+        page_table = decode_state.page_table
+        free_pages = page_table.num_pages
+        if len(self.free_slots) < max_slots:
+            free_pages = int(jnp.count_nonzero(page_table.page_ref_counts.array == 0))
 
         queue_tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
         queue_slot_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
@@ -997,6 +1007,11 @@ class InferenceEngine:
                         "Increase max_seqs_in_prefill or reduce n_generations."
                     )
                 break
+
+            prompt_pages = self._prefill_page_count(request, page_table.page_size)
+            if prompt_pages > free_pages:
+                break
+            free_pages -= prompt_pages
 
             requested_slot = self.free_slots.pop()
             slot_id = int(requested_slot)
@@ -1108,8 +1123,12 @@ class InferenceEngine:
         if any(request.n_generations < 1 for request in requests):
             raise ValueError("Every request must ask for at least one generation")
 
+        page_table = self.gen_state.decode_state.page_table
+        if any(self._prefill_page_count(request, page_table.page_size) > page_table.num_pages for request in requests):
+            raise ValueError("A prompt and its clones must fit within the KV page table")
+
         max_needed = max(int(r.n_generations) for r in requests)
-        if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
+        if max_needed > page_table.max_seqs:
             raise ValueError(
                 f"Total sequences needed ({max_needed}) exceeds max_seqs ({self.gen_state.decode_state.page_table.max_seqs})."
                 "Decompose your request into smaller batches or increase max_seqs when building the service."
