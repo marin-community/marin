@@ -15,6 +15,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
+from taskforge.effects.log import Opened
 from taskforge.harness.protocol import Returned, Stopped, StopReason
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from taskforge.lowering import (
@@ -61,24 +62,33 @@ async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt
         try:
             result = await ctx.emit(SolverRollout(spec, trial, attempt))
         except* OutputBudgetExhausted:
-            await ctx.emit(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
+            ctx.notify(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
         if result is not None:
             return TrialResult(trial, result.grade, trial_cause(result, spec.task))
     return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
 
 
 async def adversary_result(
-    ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources, spec: TaskRolloutSpec, name: str
+    ctx: Context,
+    workpiece: Workpiece,
+    config: TaskforgeConfig,
+    resources: Resources,
+    spec: TaskRolloutSpec,
+    name: str,
+    occurrence: int,
 ) -> AdversaryResult:
+    """One roster entry, ``occurrence`` among entries with its name; each search is its own environment owner."""
+    visit = f"validate/{workpiece.round}/{len(workpiece.evidence)}"
     for retry in range(2):
         result = None
         try:
-            result = await run_adversary(ctx, workpiece, config, resources, spec, name)
+            owner = f"{visit}/adversary:{name}/{occurrence}/{retry}"
+            result = await run_adversary(ctx, workpiece, config, resources, spec, name, owner)
         except* Hold as error:
             result = AdversaryResult(name, AdversaryStatus.FAILED, (), failure_reasons(error))
         if result is not None:
             return result
-        await ctx.emit(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
+        ctx.notify(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
     return exhausted(name, SearchLimit.OUTPUT_BUDGET)
 
 
@@ -125,7 +135,13 @@ async def reproduced(
 
 
 async def run_adversary(
-    ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources, spec: TaskRolloutSpec, name: str
+    ctx: Context,
+    workpiece: Workpiece,
+    config: TaskforgeConfig,
+    resources: Resources,
+    spec: TaskRolloutSpec,
+    name: str,
+    owner: str,
 ) -> AdversaryResult | None:
     """One adversary search and the reproduction of its claims; ``None`` when the search ran out of output."""
     requested = (
@@ -139,7 +155,7 @@ async def run_adversary(
     files = (*spec.task.resources.all, *spec.task.resources.worker)
     env = await resources.envs.create(host_requirements(requested))
     try:
-        async with ctx.scope(f"adversary:{name}"):
+        async with ctx.scope(f"adversary:{name}", Opened(owner, env.fingerprint().digest)):
             install_env(ctx, env)
             task_json = spec.task.model_dump_json().encode()
             await ctx.emit(
@@ -204,7 +220,7 @@ async def run_adversary(
             status = AdversaryStatus.FAILED if reasons else AdversaryStatus.REPORTED
             return AdversaryResult(name, status, tuple(finding for finding, _ in results), reasons)
     finally:
-        await close_resource(env.close, ctx.emit)
+        await close_resource(env.close, ctx.notify)
 
 
 async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Validated:
@@ -231,6 +247,7 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
         raise ValueError("Validation needs at least one solver trial")
     async with ctx.scope("validate"):
         ctx.observe(Resolved, grader_infra_unavailable)
+        roster = config.policy.setting("adversary.roster", tuple)
         async with asyncio.TaskGroup() as group:
             controls = [
                 group.create_task(control_result(ctx, spec, index, control))
@@ -238,8 +255,10 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
             ]
             solver = [group.create_task(solver_result(ctx, spec, trial, len(workpiece.evidence))) for trial in range(k)]
             adversary = [
-                group.create_task(adversary_result(ctx, workpiece, config, resources, spec, name))
-                for name in config.policy.setting("adversary.roster", tuple)
+                group.create_task(
+                    adversary_result(ctx, workpiece, config, resources, spec, name, roster[:i].count(name))
+                )
+                for i, name in enumerate(roster)
             ]
         return Validated(
             ValidationResult(

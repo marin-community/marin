@@ -498,7 +498,7 @@ def tamper(destination: Path, case: str) -> Path:
         case "truncated head":
             (destination / HEAD).write_bytes((destination / HEAD).read_bytes()[:-3])
         case _:
-            (destination / HEAD).write_text(json.dumps({"format": 2, "writer": "w"}))
+            (destination / HEAD).write_text(json.dumps({"format": checkpoint.JOURNAL_FORMAT, "writer": "w"}))
     return destination / HEAD
 
 

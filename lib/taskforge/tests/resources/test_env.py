@@ -4,10 +4,13 @@
 import errno
 import os
 import re
+import tarfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path, PurePosixPath
+from tarfile import AbsoluteLinkError, TarInfo
 from typing import override
+from uuid import uuid4
 
 import pytest
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv
@@ -146,23 +149,19 @@ async def create_env(request: pytest.FixtureRequest) -> AsyncIterator[Callable[[
         await env.close()
 
 
-async def test_environment_writes_binary_files_and_fingerprints_command_history(
+async def test_environment_writes_binary_files_and_runs_commands_under_its_definition(
     create_env: Callable[[], Awaitable[Env]],
 ) -> None:
     original = await create_env()
     initial = original.fingerprint()
     path = PurePosixPath("/workspace/binary")
     data = b"\x00\xff\nquoted ' bytes"
-    await original.write(path, data)
-    after_write = original.fingerprint()
-    assert after_write != initial
-    assert await original.read(path) == data
-    assert original.fingerprint() == after_write
-    command = RunCommand(COMMAND, 5)
-    result = await original.run(command.cmd, timeout=command.timeout)
+    await write_file(WriteFile(path, data), original, notify=Notes())
+    assert await read_file(ReadFile(path), original, notify=Notes()) == data
+    result = await run_command(RunCommand(COMMAND, 5), original, notify=Notes())
     assert (result.exit_code, result.stdout, result.stderr) == (7, "hello", "err")
     assert await original.read(OUTPUT) == b"changed"
-    assert original.fingerprint() != after_write
+    assert original.fingerprint() == initial
     await original.close()
     with pytest.raises(Restart):
         await original.run(COMMAND, timeout=5)
@@ -183,16 +182,14 @@ async def test_environment_writes_binary_files_and_fingerprints_command_history(
         (CommandOutcomeUnknown("reply lost"), Restart),
     ],
 )
-async def test_shellbox_failure_preserves_unresolved_history(
+async def test_shellbox_failure_is_classified_as_its_decision(
     failure: RuntimeError | TimeoutError, decision: type[Exception]
 ) -> None:
     machine = MemoryMachine()
     machine.failure = failure
     env = ShellboxEnv(machine, "image", AsyncExitStack())
-    before = env.fingerprint()
     with pytest.raises(decision):
         await env.run(COMMAND, timeout=5)
-    assert env.fingerprint() == before
 
 
 async def test_shellbox_unexpected_runtime_error_propagates_without_reclassification() -> None:
@@ -217,7 +214,6 @@ async def test_missing_file_is_tool_feedback_without_retry(operation: str, failu
     machine = MemoryMachine()
     machine.failure = failure
     env = ShellboxEnv(machine, "image", AsyncExitStack())
-    before = env.fingerprint()
     with pytest.raises(FileNotFoundError) as caught:
         if operation == "read":
             await read_file(ReadFile(OUTPUT), env, notify=Notes())
@@ -229,7 +225,17 @@ async def test_missing_file_is_tool_feedback_without_retry(operation: str, failu
     if operation != "run":
         assert caught.value.filename == str(OUTPUT)
     assert machine.calls == 1
-    assert env.fingerprint() == before
+
+
+# Review 2026-11-20: a corrupt directory-transfer archive reached the model as a handled file error, unrecorded.
+@pytest.mark.parametrize("failure", [tarfile.ReadError("not a gzip file"), AbsoluteLinkError(TarInfo("/etc/passwd"))])
+async def test_an_archive_the_backend_cannot_unpack_restarts_the_stage(failure: tarfile.TarError) -> None:
+    machine = MemoryMachine()
+    machine.failure = failure
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
+    with pytest.raises(Restart, match=r"env\.read_file transfer failed") as caught:
+        await read_file(ReadFile(OUTPUT), env, notify=Notes())
+    assert caught.value.__cause__ is failure and machine.calls == 1
 
 
 async def test_cpu_exhaustion_holds_with_reason_without_retry() -> None:
@@ -493,7 +499,7 @@ def _sandbox(root: Path, faults: Sequence[Injection] = ()) -> tuple[ShellboxEnv,
     return ShellboxEnv(local_iris_machine(root, controller), "image", AsyncExitStack(), str(root)), controller
 
 
-async def _write(env: Env, count: int, notify: Callable[[Event[None]], object]) -> None:
+async def _write(env: Env, count: int, notify: Callable[[Event[None]], None]) -> None:
     """Write the first ``count`` files as the write tool (one file) or stage hydration (several) does."""
     if count == 1:
         await write_file(WriteFile(*FILES[0]), env, notify=notify)
@@ -636,3 +642,19 @@ async def test_broken_guest_helpers_hold_with_their_cause_in_one_bounded_probe(
     assert len(controller.scripts) == 1
     if expected is Hold:
         assert isinstance(caught.value.__cause__, GuestHelperFailed)
+
+
+# Review 2026-11-21: Taskforge's own hydration archive is not the caller's file; a guest that
+# cannot unpack it holds with the helper's cause instead of failing as a bug, and leaves no scratch behind.
+async def test_hydration_archive_the_guest_cannot_unpack_holds_with_its_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name = uuid4()
+    monkeypatch.setattr(env_module, "uuid4", lambda: name)
+    occupied = Path(f"/tmp/forge-hydration-{name.hex}")
+    occupied.write_bytes(b"")  # the extraction directory's name is taken by a file
+    env = ShellboxEnv(local_iris_machine(tmp_path, LocalController()), "image", AsyncExitStack(), str(tmp_path))
+    with pytest.raises(Hold, match="Could not unpack hydration archive") as caught:
+        await write_files(WriteFiles(FILES), env, notify=Notes())
+    assert isinstance(caught.value.__cause__, GuestHelperFailed) and not list(tmp_path.iterdir())
+    assert not occupied.exists() and not occupied.with_suffix(".tar").exists()

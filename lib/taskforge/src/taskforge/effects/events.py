@@ -10,6 +10,7 @@ occurrence. The kind, never the Python module or class name, is the recorded ``t
 the replay digest, so classes may move or be renamed freely. Changing a kind breaks every journal that recorded it.
 """
 
+import errno
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from types import get_original_bases
@@ -29,6 +30,9 @@ from taskforge.model.content_hash import (
 )
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
+
+ENVIRONMENT = "env"
+"""The sandbox area: the kind prefix of every re-executed sandbox request and the resource that fingerprints it."""
 
 
 class ReplayPolicy(StrEnum):
@@ -114,6 +118,34 @@ class Retrying(Event[None]):
     request: Event[object]
     attempt: int
     cause: str
+
+
+@dataclass(frozen=True, slots=True)
+class Failed(Event[None]):
+    """A re-executed request's handled failure: the ``OSError`` its caller saw, by errno name and text."""
+
+    kind = "effect.failed"
+    category: str
+    message: str
+
+    def error(self) -> OSError:
+        error = OSError(self.message)
+        error.errno = getattr(errno, self.category, None)
+        return error
+
+
+HANDLED_FAILURE = OSError
+"""The one caller-visible, recoverable failure of a re-executed request: recorded as ``Failed`` and handed to the
+model as tool feedback. Argument and JSON validation errors are no effects; transfer and machine failures are issues."""
+
+
+UNNUMBERED = "OSError"
+FAILURE_CATEGORIES = frozenset({*errno.errorcode.values(), UNNUMBERED})
+"""Every category ``failure`` records: an errno name, or ``UNNUMBERED`` for an error without a known errno."""
+
+
+def failure(error: OSError) -> Failed:
+    return Failed(errno.errorcode.get(error.errno or 0, UNNUMBERED), str(error))
 
 
 @dataclass(frozen=True, slots=True)

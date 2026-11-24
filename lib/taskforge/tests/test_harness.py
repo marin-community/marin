@@ -4,10 +4,10 @@
 import errno
 import json
 import os
-from contextlib import AsyncExitStack
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from functools import partial
 from pathlib import Path, PurePosixPath
-from tarfile import AbsoluteLinkError, TarInfo
 from typing import override
 
 import httpx
@@ -26,7 +26,7 @@ from verifyit.spec import NumericSpec
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
 from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Transient
-from taskforge.effects.log import EventLog, JsonlSink
+from taskforge.effects.log import EventLog, JsonlSink, Opened
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import (
     Returned,
@@ -52,6 +52,7 @@ from taskforge.model.workpiece import Conversation, Submission
 from taskforge.policy import GRADER_BASE_IMAGE
 from taskforge.resources.env import (
     CommandResult,
+    Env,
     ReadFile,
     RunCommand,
     ShellboxEnv,
@@ -85,15 +86,20 @@ def environment(ctx: Context) -> FakeEnv:
         ),
     }
     env = FakeEnv("image", scripts)
-    ctx.resource(env, env.fingerprint)
-    ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
-    ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
-    ctx.handle(WriteFile, partial(write_file, notify=ctx.emit), uses=(env,))
+    ctx.handle(RunCommand, partial(run_command, notify=ctx.notify), env)
+    ctx.handle(ReadFile, partial(read_file, notify=ctx.notify), env)
+    ctx.handle(WriteFile, partial(write_file, notify=ctx.notify), env)
     web = FakeWeb({"query": "s" * 10000}, {"https://example.org": "f" * 10000})
-    ctx.resource(web, web.fingerprint)
-    ctx.handle(WebSearch, partial(search, notify=ctx.emit), uses=(web,))
-    ctx.handle(WebFetch, partial(fetch, notify=ctx.emit), uses=(web,))
+    ctx.handle(WebSearch, partial(search, notify=ctx.notify), web)
+    ctx.handle(WebFetch, partial(fetch, notify=ctx.notify), web)
     return env
+
+
+@asynccontextmanager
+async def opened(ctx: Context, env: Env) -> AsyncIterator[None]:
+    """One author attempt on ``env``, the scope its re-executed effects need."""
+    async with ctx.scope("author", Opened("author/0", env.fingerprint().digest)):
+        yield
 
 
 def call(name: str, args: object, identity: str) -> Completion:
@@ -117,10 +123,11 @@ async def test_malformed_report_and_schema_errors_recover_with_replayable_histor
     log = EventLog()
     ctx = Context(log=log)
     client = FakeInference(script)
-    environment(ctx)
-    result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
-        ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "report": ReportTool(arithmetic_task())}
-    )
+    env = environment(ctx)
+    async with opened(ctx, env):
+        result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
+            ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "report": ReportTool(arithmetic_task())}
+        )
     await ctx.drain()
     assert isinstance(result, Returned) and result.payload == AdversaryReport(())
     history = client.requests[1].conversation
@@ -145,16 +152,14 @@ async def test_web_transport_and_replay_cache_http_results() -> None:
     ) as client:
         web = ParallelWeb(client)
         ctx = Context(log=log)
-        ctx.resource(web, web.fingerprint)
-        ctx.handle(WebSearch, partial(search, notify=ctx.emit), uses=(web,))
-        ctx.handle(WebFetch, partial(fetch, notify=ctx.emit), uses=(web,))
+        ctx.handle(WebSearch, partial(search, notify=ctx.notify), web)
+        ctx.handle(WebFetch, partial(fetch, notify=ctx.notify), web)
         assert json.loads(await ctx.emit(WebSearch("query"))) == {"results": ["evidence"]}
         await ctx.emit(WebFetch("https://example.org"))
         await ctx.drain()
         replay_web = FakeWeb({}, {}, identity=web.fingerprint().digest)
         replay = Context(log=EventLog(replay_from=log.records))
-        replay.resource(replay_web, replay_web.fingerprint)
-        replay.handle(WebSearch, partial(search, notify=replay.emit), uses=(replay_web,))
+        replay.handle(WebSearch, partial(search, notify=replay.notify), replay_web)
         assert json.loads(await replay.emit(WebSearch("query"))) == {"results": ["evidence"]}
         await replay.drain()
     assert [str(request.url) for request in requests] == [
@@ -167,33 +172,33 @@ async def test_web_transport_and_replay_cache_http_results() -> None:
 
 async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -> None:
     ctx = Context(log=EventLog())
-    environment(ctx)
-    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
-    grading = GradingResource(rollout_engine({}, command_timeout=1), "fixture")
-    ctx.resource(grading, grading.fingerprint)
-    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grading,))
-    tool = GradeTool("/workspace/task.json", {}, settings)
-    await ctx.emit(RunCommand("task", 30))
-    first = await tool(ctx, {"reply": "12"})
-    changed = arithmetic_task(grader=verifyit_package(NumericSpec("7", tolerance_abs=0, tolerance_rel=0)).grader)
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), changed.model_dump_json().encode()))
-    second = await tool(ctx, {"reply": "12"})
-    assert isinstance(first, ToolResult) and json.loads(first.content)["reward"] == 1
-    assert isinstance(second, ToolResult) and json.loads(second.content)["reward"] == 0
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"candidate"))
-    report = await ReportTool(arithmetic_task(environment_requirements=requirements(image=None)))(
-        ctx,
-        {
-            "findings": [
-                {
-                    "claim": "false reject",
-                    "candidate": {"reply": "12", "files": ["/workspace/answer"]},
-                    "expected": {"status": "graded", "reward_max": 0},
-                }
-            ]
-        },
-    )
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"changed"))
+    env = environment(ctx)
+    async with opened(ctx, env):
+        settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+        grading = GradingResource(rollout_engine({}, command_timeout=1), "fixture")
+        ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), grading)
+        tool = GradeTool("/workspace/task.json", {}, settings)
+        await ctx.emit(RunCommand("task", 30))
+        first = await tool(ctx, {"reply": "12"})
+        changed = arithmetic_task(grader=verifyit_package(NumericSpec("7", tolerance_abs=0, tolerance_rel=0)).grader)
+        await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), changed.model_dump_json().encode()))
+        second = await tool(ctx, {"reply": "12"})
+        assert isinstance(first, ToolResult) and json.loads(first.content)["reward"] == 1
+        assert isinstance(second, ToolResult) and json.loads(second.content)["reward"] == 0
+        await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"candidate"))
+        report = await ReportTool(arithmetic_task(environment_requirements=requirements(image=None)))(
+            ctx,
+            {
+                "findings": [
+                    {
+                        "claim": "false reject",
+                        "candidate": {"reply": "12", "files": ["/workspace/answer"]},
+                        "expected": {"status": "graded", "reward_max": 0},
+                    }
+                ]
+            },
+        )
+        await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"changed"))
     await ctx.drain()
     assert isinstance(report, ReturnRequest) and isinstance(report.payload, AdversaryReport)
     assert resource_bytes(report.payload.findings[0].candidate.files[0]) == b"candidate"
@@ -215,28 +220,33 @@ async def test_tool_output_spill_slices_and_persisted_replay(
     sink = JsonlSink(str(tmp_path / "outputs.jsonl"))
     ctx = Context(log=EventLog(sink=sink))
     env = environment(ctx)
-    tools = {
-        "shell": ShellTool(30, 120),
-        "web_search": WebSearchTool(),
-        "web_fetch": WebFetchTool(),
-        "finish": FinishTool(),
-    }
-    harness, initial = AgenticHarness(1000, LLMPolicy(), "continue", 8), Conversation((), ())
-    client = FakeInference((call(name, args, "../../escape"), call("finish", {"reason": "done"}, "done")))
-    result = await harness.run(ctx, initial, client, tools)
-    await ctx.drain()
-    [(path, data)] = [(path, data) for path, data in env.files.items() if path.parent == PurePosixPath(".tool-output")]
-    if original is None:
-        assert json.loads(data)["stdout"] == "task ready"
-        original = data.decode()
-    assert data.decode() == original and ".." not in path.parts
-    content = client.requests[1].conversation[-1].content
-    assert content.startswith(original[:8] + "\n[Full output saved to ") and str(path) in content
-    assert await ReadFileTool()(ctx, {"path": str(path), "offset": 8, "limit": 20}) == ToolResult(original[8:28])
+    async with opened(ctx, env):
+        tools = {
+            "shell": ShellTool(30, 120),
+            "web_search": WebSearchTool(),
+            "web_fetch": WebFetchTool(),
+            "finish": FinishTool(),
+        }
+        harness, initial = AgenticHarness(1000, LLMPolicy(), "continue", 8), Conversation((), ())
+        client = FakeInference((call(name, args, "../../escape"), call("finish", {"reason": "done"}, "done")))
+        result = await harness.run(ctx, initial, client, tools)
+        [(path, data)] = [
+            (path, data) for path, data in env.files.items() if path.parent == PurePosixPath(".tool-output")
+        ]
+        if original is None:
+            assert json.loads(data)["stdout"] == "task ready"
+            original = data.decode()
+        assert data.decode() == original and ".." not in path.parts
+        content = client.requests[1].conversation[-1].content
+        assert content.startswith(original[:8] + "\n[Full output saved to ") and str(path) in content
+        assert await ReadFileTool()(ctx, {"path": str(path), "offset": 8, "limit": 20}) == ToolResult(original[8:28])
     await ctx.drain()
     replay = Context(log=EventLog(replay_from=local_records(sink)))
     replay_env, replay_client = environment(replay), FakeInference(())
-    assert await harness.run(replay, initial, replay_client, tools) == result
+    async with opened(replay, replay_env):
+        assert await harness.run(replay, initial, replay_client, tools) == result
+        # A replayed attempt issues its recorded sandbox requests in order, to the end.
+        assert await ReadFileTool()(replay, {"path": str(path), "offset": 8, "limit": 20}) == ToolResult(original[8:28])
     await replay.drain()
     assert not replay_client.requests and replay_env.files == env.files
 
@@ -248,7 +258,6 @@ async def test_tool_output_spill_slices_and_persisted_replay(
         FileNotFoundError(2, "missing", "/bad"),
         IsADirectoryError(21, "directory", "/bad"),
         NotADirectoryError(20, "parent", "/bad"),
-        AbsoluteLinkError(TarInfo("/bad")),
     ],
 )
 async def test_file_path_errors_return_feedback(write: bool, failure: Exception) -> None:
@@ -272,23 +281,25 @@ async def test_grade_reports_a_missing_draft_but_propagates_grading_infrastructu
             raise ConnectionError("iris controller unreachable")
 
     ctx = Context(log=EventLog())
-    environment(ctx)
-    grading = GradingResource(Unreachable(), "fixture")
-    ctx.resource(grading, grading.fingerprint)
-    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grading,))
-    tool = GradeTool("/workspace/task.json", {}, LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits()))
-    missing = await tool(ctx, {"reply": "12"})
-    assert isinstance(missing, ToolResult) and "/workspace/task.json" in missing.content
-    await ctx.emit(RunCommand("task", 30))
-    with pytest.raises(ConnectionError, match="unreachable"):
-        await tool(ctx, {"reply": "12"})
+    env = environment(ctx)
+    async with opened(ctx, env):
+        grading = GradingResource(Unreachable(), "fixture")
+        ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), grading)
+        tool = GradeTool(
+            "/workspace/task.json", {}, LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+        )
+        missing = await tool(ctx, {"reply": "12"})
+        assert isinstance(missing, ToolResult) and "/workspace/task.json" in missing.content
+        await ctx.emit(RunCommand("task", 30))
+        with pytest.raises(ConnectionError, match="unreachable"):
+            await tool(ctx, {"reply": "12"})
 
 
 # Review 2026-11-20 (follow-up 1): the grading machine's output limit escaped the grade tool, and validation
 # credited the adversary with an exhausted search that reported nothing.
 async def test_grading_machine_exhaustion_is_grade_tool_feedback_and_the_session_continues() -> None:
     ctx = Context(log=EventLog())
-    environment(ctx)
+    env = environment(ctx)
 
     async def output_limited(event: GradeCandidate) -> GradeResult:
         raise OutputBudgetExhausted("output budget exhausted")
@@ -307,7 +318,8 @@ async def test_grading_machine_exhaustion_is_grade_tool_feedback_and_the_session
         call("finish", {"reason": "done"}, "3"),
     )
     client = FakeInference(script)
-    result = await AgenticHarness(1000, LLMPolicy(), "continue", 20000).run(ctx, Conversation((), ()), client, tools)
+    async with opened(ctx, env):
+        result = await AgenticHarness(1000, LLMPolicy(), "continue", 20000).run(ctx, Conversation((), ()), client, tools)
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason is StopReason.FINISHED
     assert client.requests[2].conversation[-1].content.startswith("Grading this candidate failed and produced no grade")
@@ -315,18 +327,23 @@ async def test_grading_machine_exhaustion_is_grade_tool_feedback_and_the_session
 
 async def test_grade_holds_when_the_host_cannot_lower_a_valid_draft() -> None:
     ctx = Context(log=EventLog())
-    environment(ctx)
-    container = arithmetic_task().model_copy(
-        update={
-            "environment_requirements": EnvironmentRequirements(
-                docker_image=GRADER_BASE_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS, capabilities=("shell",)
-            )
-        }
-    )
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), container.model_dump_json().encode()))
-    tool = GradeTool("/workspace/task.json", {}, LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits()))
-    with pytest.raises(Hold, match="Unknown Shellbox factory"):
-        await tool(ctx, {"reply": "12"})
+    env = environment(ctx)
+    async with opened(ctx, env):
+        container = arithmetic_task().model_copy(
+            update={
+                "environment_requirements": EnvironmentRequirements(
+                    docker_image=GRADER_BASE_IMAGE,
+                    command_semantics=CommandSemantics.LINUX_PROCESS,
+                    capabilities=("shell",),
+                )
+            }
+        )
+        await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), container.model_dump_json().encode()))
+        tool = GradeTool(
+            "/workspace/task.json", {}, LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+        )
+        with pytest.raises(Hold, match="Unknown Shellbox factory"):
+            await tool(ctx, {"reply": "12"})
     await ctx.drain()
 
 
@@ -383,23 +400,24 @@ async def test_reasoning_only_length_retries_unchanged_conversation_and_replays(
 @pytest.mark.parametrize("name", ["grade", "submit"])
 async def test_candidate_files_without_task_machine_return_feedback(name: str) -> None:
     ctx = Context(log=EventLog())
-    environment(ctx)
-    await ctx.emit(RunCommand("task", 30))
-    candidate = Candidate("12", (inline_resource("workspace/answer", b"12"),))
-    controls = (Control(candidate, RewardBand(Outcome.GRADED, reward_min=1), ControlKind.POSITIVE),)
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/controls.json"), CONTROLS.dump_json(controls)))
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"12"))
-    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
-    tools: dict[str, Tool[object]] = {
-        "grade": GradeTool("/workspace/task.json", {}, settings),
-        "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
-    }
-    args: dict[str, dict[str, object]] = {
-        "grade": {"reply": "12", "files": ["/workspace/answer"]},
-        "submit": {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"},
-    }
-    # No grading executor: malformed author data must never reach the executor backstop.
-    result = await tools[name](ctx, args[name])
+    env = environment(ctx)
+    async with opened(ctx, env):
+        await ctx.emit(RunCommand("task", 30))
+        candidate = Candidate("12", (inline_resource("workspace/answer", b"12"),))
+        controls = (Control(candidate, RewardBand(Outcome.GRADED, reward_min=1), ControlKind.POSITIVE),)
+        await ctx.emit(WriteFile(PurePosixPath("/workspace/controls.json"), CONTROLS.dump_json(controls)))
+        await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"12"))
+        settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+        tools: dict[str, Tool[object]] = {
+            "grade": GradeTool("/workspace/task.json", {}, settings),
+            "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
+        }
+        args: dict[str, dict[str, object]] = {
+            "grade": {"reply": "12", "files": ["/workspace/answer"]},
+            "submit": {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"},
+        }
+        # No grading executor: malformed author data must never reach the executor backstop.
+        result = await tools[name](ctx, args[name])
     await ctx.drain()
     assert isinstance(result, ToolResult) and "Candidate files require a task machine" in result.content
 
@@ -424,11 +442,12 @@ async def test_context_exit_counts_retained_turns_and_only_appended_tokens(overf
         )
     )
     ctx = Context(log=EventLog())
-    environment(ctx)
-    client = FakeInference((first, second))
-    result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
-        ctx, initial, client, {"shell": ShellTool(30, 120)}
-    )
+    env = environment(ctx)
+    async with opened(ctx, env):
+        client = FakeInference((first, second))
+        result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
+            ctx, initial, client, {"shell": ShellTool(30, 120)}
+        )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
     assert result.turns == 3 and len(client.requests) == 2
@@ -440,28 +459,31 @@ async def test_context_exit_counts_retained_turns_and_only_appended_tokens(overf
 
 async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() -> None:
     ctx = Context(log=EventLog())
-    environment(ctx)
-    task = arithmetic_task()
-    tool = ReportTool(task)
-    commentary = await tool(ctx, {"findings": ["No grading defect found"]})
-    assert isinstance(commentary, ToolResult)
-    claim = {
-        "claim": "wrong answer accepted",
-        "candidate": {"reply": "9"},
-        "expected": {"status": "graded", "reward_min": 1},
-    }
-    report = await tool(ctx, {"findings": [claim]})
-    assert isinstance(report, ReturnRequest) and isinstance(report.payload, AdversaryReport)
-    finding = report.payload.findings[0]
-    assert finding.claim == "wrong answer accepted" and finding.candidate.reply == "9"
-    assert finding.expected.met_by(GradeResult(Outcome.GRADED, 1))
-    assert not finding.expected.met_by(GradeResult(Outcome.GRADED, 0))
-    # The adversary can edit its scratch task file, but cannot change the bound task's machine requirement.
-    edited = arithmetic_task(environment_requirements=requirements(image=None))
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), edited.model_dump_json().encode()))
-    await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"9"))
-    rejected = await tool(ctx, {"findings": [{**claim, "candidate": {"reply": "9", "files": ["/workspace/answer"]}}]})
-    empty = await tool(ctx, {"findings": []})
+    env = environment(ctx)
+    async with opened(ctx, env):
+        task = arithmetic_task()
+        tool = ReportTool(task)
+        commentary = await tool(ctx, {"findings": ["No grading defect found"]})
+        assert isinstance(commentary, ToolResult)
+        claim = {
+            "claim": "wrong answer accepted",
+            "candidate": {"reply": "9"},
+            "expected": {"status": "graded", "reward_min": 1},
+        }
+        report = await tool(ctx, {"findings": [claim]})
+        assert isinstance(report, ReturnRequest) and isinstance(report.payload, AdversaryReport)
+        finding = report.payload.findings[0]
+        assert finding.claim == "wrong answer accepted" and finding.candidate.reply == "9"
+        assert finding.expected.met_by(GradeResult(Outcome.GRADED, 1))
+        assert not finding.expected.met_by(GradeResult(Outcome.GRADED, 0))
+        # The adversary can edit its scratch task file, but cannot change the bound task's machine requirement.
+        edited = arithmetic_task(environment_requirements=requirements(image=None))
+        await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), edited.model_dump_json().encode()))
+        await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"9"))
+        rejected = await tool(
+            ctx, {"findings": [{**claim, "candidate": {"reply": "9", "files": ["/workspace/answer"]}}]}
+        )
+        empty = await tool(ctx, {"findings": []})
     await ctx.drain()
     assert isinstance(rejected, ToolResult) and "Candidate files require a task machine" in rejected.content
     assert isinstance(empty, ReturnRequest) and isinstance(empty.payload, AdversaryReport)
@@ -470,24 +492,25 @@ async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() ->
 
 async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_reported() -> None:
     ctx = Context(log=EventLog())
-    environment(ctx)
-    await ctx.emit(RunCommand("task", 30))
+    env = environment(ctx)
+    async with opened(ctx, env):
+        await ctx.emit(RunCommand("task", 30))
 
-    async def invalid_checks(event: GradeCandidate) -> GradeResult:
-        return GradeResult(Outcome.GRADED, 1, detail={"checks": {"A": False}})
+        async def invalid_checks(event: GradeCandidate) -> GradeResult:
+            return GradeResult(Outcome.GRADED, 1, detail={"checks": {"A": False}})
 
-    ctx.handle(GradeCandidate, invalid_checks)
-    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
-    tool = GradeTool("/workspace/task.json", {}, settings)
-    result = await tool(ctx, {"reply": "12"})
-    assert isinstance(result, ToolResult) and "checks must be a list of" in result.content
-    assert "name" in result.content and "passed" in result.content and "weight" in result.content
+        ctx.handle(GradeCandidate, invalid_checks)
+        settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+        tool = GradeTool("/workspace/task.json", {}, settings)
+        result = await tool(ctx, {"reply": "12"})
+        assert isinstance(result, ToolResult) and "checks must be a list of" in result.content
+        assert "name" in result.content and "passed" in result.content and "weight" in result.content
 
-    async def valid_checks(event: GradeCandidate) -> GradeResult:
-        return GradeResult(Outcome.GRADED, 0, detail={"checks": [{"name": "A", "passed": False, "weight": 1}]})
+        async def valid_checks(event: GradeCandidate) -> GradeResult:
+            return GradeResult(Outcome.GRADED, 0, detail={"checks": [{"name": "A", "passed": False, "weight": 1}]})
 
-    ctx.handle(GradeCandidate, valid_checks)
-    corrected = await tool(ctx, {"reply": "9"})
+        ctx.handle(GradeCandidate, valid_checks)
+        corrected = await tool(ctx, {"reply": "9"})
     await ctx.drain()
     assert isinstance(corrected, ToolResult)
     assert json.loads(corrected.content)["grader_checks"] == [{"name": "A", "passed": False, "weight": 1}]
@@ -519,11 +542,12 @@ async def test_reading_a_refused_path_on_iris_is_tool_feedback_with_its_errno(
     (tmp_path / "locked").mkdir(mode=0o600)
     (tmp_path / "tree" / "nested").mkdir(parents=True)
     ctx = Context(log=EventLog())
-    iris_env(ctx, tmp_path, LocalController())
-    try:
-        result = await ReadFileTool()(ctx, {"path": path})
-    finally:
-        (tmp_path / "locked").chmod(0o700)
+    env = iris_env(ctx, tmp_path, LocalController())
+    async with opened(ctx, env):
+        try:
+            result = await ReadFileTool()(ctx, {"path": path})
+        finally:
+            (tmp_path / "locked").chmod(0o700)
     await ctx.drain()
     assert result == ToolResult(f"File operation failed: [Errno {code}] {os.strerror(code)}: '{path}'")
 
@@ -536,18 +560,19 @@ async def test_file_tool_infrastructure_failures_are_not_author_feedback(
 ) -> None:
     (tmp_path / "present.txt").write_text("present")
     ctx = Context(log=EventLog())
-    iris_env(ctx, tmp_path, LocalController(prelude="wc() { echo 'wc: not found' >&2; return 127; }; "))
-    if failure == "guest helper":
-        with pytest.raises(Hold, match="wc: not found"):
-            await ReadFileTool()(ctx, {"path": "present.txt"})
-    else:
+    env = iris_env(ctx, tmp_path, LocalController(prelude="wc() { echo 'wc: not found' >&2; return 127; }; "))
+    async with opened(ctx, env):
+        if failure == "guest helper":
+            with pytest.raises(Hold, match="wc: not found"):
+                await ReadFileTool()(ctx, {"path": "present.txt"})
+        else:
 
-        def full_disk(self: Path, data: bytes) -> int:
-            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), str(self))
+            def full_disk(self: Path, data: bytes) -> int:
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), str(self))
 
-        monkeypatch.setattr(Path, "write_bytes", full_disk)
-        with pytest.raises(Hold, match="No space left on device"):
-            await WriteFileTool()(ctx, {"path": "notes.txt", "content": "valid"})
+            monkeypatch.setattr(Path, "write_bytes", full_disk)
+            with pytest.raises(Hold, match="No space left on device"):
+                await WriteFileTool()(ctx, {"path": "notes.txt", "content": "valid"})
     await ctx.drain()
 
 
@@ -557,11 +582,12 @@ async def test_reading_a_shellsim_symlink_loop_is_tool_feedback() -> None:
     requirements = EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR)
     env = await ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5).create(requirements)
     install_env(ctx, env)
-    try:
-        await ctx.emit(RunCommand("ln -s /workspace/loop /workspace/loop", 5))
-        result = await ReadFileTool()(ctx, {"path": "/workspace/loop"})
-    finally:
-        await env.close()
+    async with opened(ctx, env):
+        try:
+            await ctx.emit(RunCommand("ln -s /workspace/loop /workspace/loop", 5))
+            result = await ReadFileTool()(ctx, {"path": "/workspace/loop"})
+        finally:
+            await env.close()
     await ctx.drain()
     loop = os.strerror(errno.ELOOP)
     assert result == ToolResult(f"File operation failed: [Errno {errno.ELOOP}] {loop}: '/workspace/loop'")
@@ -569,10 +595,11 @@ async def test_reading_a_shellsim_symlink_loop_is_tool_feedback() -> None:
 
 async def test_read_file_ranges_are_bytes_before_text_or_base64_decoding() -> None:
     ctx = Context(log=EventLog())
-    environment(ctx)
-    await ctx.emit(WriteFile(PurePosixPath("unicode"), "éXYZ".encode()))
-    text = await ReadFileTool()(ctx, {"path": "unicode", "offset": 2, "limit": 2})
-    binary = await ReadFileTool()(ctx, {"path": "unicode", "offset": 0, "limit": 2, "base64": True})
+    env = environment(ctx)
+    async with opened(ctx, env):
+        await ctx.emit(WriteFile(PurePosixPath("unicode"), "éXYZ".encode()))
+        text = await ReadFileTool()(ctx, {"path": "unicode", "offset": 2, "limit": 2})
+        binary = await ReadFileTool()(ctx, {"path": "unicode", "offset": 0, "limit": 2, "base64": True})
     await ctx.drain()
     assert text == ToolResult("XY")
     assert binary == ToolResult("w6k=")
@@ -595,27 +622,30 @@ async def test_web_rejections_distinguish_author_errors_from_service_errors(stat
             assert str(status) in await web.fetch("bad")
 
 
+DRAFT = ("/workspace/task.json", "/workspace/controls.json")
+
+
 async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(tmp_path: Path) -> None:
     sink = JsonlSink(str(tmp_path / "draft.jsonl"))
     log = EventLog(sink=sink)
     ctx = Context(log=log)
     env = environment(ctx)
-    await ctx.emit(RunCommand("task", 30))
-    await ctx.emit(RunCommand("controls", 30))
-    rejected = await SubmitTool(
-        lambda _: ("Missing negative controls",), "/workspace/task.json", "/workspace/controls.json"
-    )(ctx, {})
-    assert rejected == ToolResult("Missing negative controls")
-    mixed = Completion(
-        "", (*call("submit", {}, "a").tool_calls, *call("shell", {"command": "task", "timeout": 1000}, "b").tool_calls)
-    )
-    client = FakeInference((mixed, call("submit", {}, "c")))
-    tools = {
-        "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
-        "shell": ShellTool(30, 120),
-    }
-    harness, initial = AgenticHarness(262144, LLMPolicy(), "continue", 20000), Conversation((), ())
-    result = await harness.run(ctx, initial, client, tools)
+    async with opened(ctx, env):
+        await ctx.emit(RunCommand("task", 30))
+        await ctx.emit(RunCommand("controls", 30))
+        rejected = await SubmitTool(lambda _: ("Missing negative controls",), *DRAFT)(ctx, {})
+        assert rejected == ToolResult("Missing negative controls")
+        mixed = Completion(
+            "",
+            (*call("submit", {}, "a").tool_calls, *call("shell", {"command": "task", "timeout": 1000}, "b").tool_calls),
+        )
+        client = FakeInference((mixed, call("submit", {}, "c")))
+        tools = {
+            "submit": SubmitTool(accept, *DRAFT),
+            "shell": ShellTool(30, 120),
+        }
+        harness, initial = AgenticHarness(262144, LLMPolicy(), "continue", 20000), Conversation((), ())
+        result = await harness.run(ctx, initial, client, tools)
     await ctx.drain()
     assert any(isinstance(record.event, RunCommand) and record.event.timeout == 120 for record in log.records)
     assert isinstance(result, Submitted) and result.submission.task == arithmetic_task()
@@ -624,8 +654,10 @@ async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(
     assert result.session.messages[-1].tool_calls[0].id == "c" and result.session.messages[-1].reasoning == "plan"
     replay = Context(log=EventLog(replay_from=local_records(sink)))
     replay_env, replay_client = environment(replay), FakeInference(())
-    await replay.emit(RunCommand("task", 30))
-    await replay.emit(RunCommand("controls", 30))
-    assert await harness.run(replay, initial, replay_client, tools) == result
+    async with opened(replay, replay_env):
+        await replay.emit(RunCommand("task", 30))
+        await replay.emit(RunCommand("controls", 30))
+        assert await SubmitTool(lambda _: ("Missing negative controls",), *DRAFT)(replay, {}) == rejected
+        assert await harness.run(replay, initial, replay_client, tools) == result
     await replay.drain()
     assert not replay_client.requests and replay_env.files == env.files

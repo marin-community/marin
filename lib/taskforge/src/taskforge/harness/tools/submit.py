@@ -9,8 +9,9 @@ from typing import override
 from taskcompendium.models import TaskSpec
 
 from taskforge.effects.context import Context
+from taskforge.effects.events import HANDLED_FAILURE
 from taskforge.harness.protocol import SubmitRequest, ToolResult
-from taskforge.harness.tools.base import FILE_ERRORS, ValidatedTool
+from taskforge.harness.tools.base import ValidatedTool
 from taskforge.lowering import check_candidates
 from taskforge.model.controls import CONTROLS
 from taskforge.model.workpiece import Submission
@@ -39,7 +40,7 @@ class SubmitTool(ValidatedTool[SubmitArgs]):
             task = TaskSpec.model_validate_json(await ctx.emit(ReadFile(PurePosixPath(self.task_path))))
             controls = CONTROLS.validate_json(await ctx.emit(ReadFile(PurePosixPath(self.controls_path))))
             check_candidates(task, tuple(control.candidate for control in controls))
-        except (ValueError, *FILE_ERRORS) as error:
+        except (ValueError, HANDLED_FAILURE) as error:
             return ToolResult(f"Invalid draft: {error}")
         submission = Submission(task, controls, args.notes)
         findings = self.gate(submission)

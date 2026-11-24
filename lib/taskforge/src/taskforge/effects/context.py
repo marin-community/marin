@@ -2,193 +2,168 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import cast
+from typing import Protocol, cast
 
-from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Resolved, ScopeEntered, ScopeExited
-from taskforge.effects.issues import Hold, LogFailure
-from taskforge.effects.log import EventLog, Missing
+from taskforge.effects.events import HANDLED_FAILURE, Event, Fingerprint, Resolved, ScopeEntered, ScopeExited, failure
+from taskforge.effects.issues import Restart, Unreproducible
+from taskforge.effects.log import Attempt, EventLog, Missing, Opened, Record, cached
 
-type Executor[E: Event[object], T] = Callable[..., Awaitable[T]]
+type Executor = Callable[..., Awaitable[object]]
 type Observer[E: Event[object]] = Callable[[E], Awaitable[None]]
 
 
-@dataclass(frozen=True, slots=True)
-class _Observer:
-    etype: type[Event[object]]
-    fn: Observer[Event[object]]
-    raises: type[BaseException]
-
-
-@dataclass(frozen=True, slots=True)
-class _Pending:
-    task: asyncio.Future[None]
-    raises: type[BaseException]
+class Resource(Protocol):
+    def fingerprint(self) -> Fingerprint: ...
 
 
 @dataclass(frozen=True, slots=True)
 class _Handler:
     etype: type[Event[object]]
-    fn: Executor[Event[object], object]
-    uses: tuple[object, ...]
+    fn: Executor
+    resource: Resource | None
 
 
 class _Scope:
     def __init__(self) -> None:
         self.handlers: tuple[_Handler, ...] = ()
-        self.observers: tuple[_Observer, ...] = ()
-        self.resources: tuple[tuple[object, Callable[[], Fingerprint]], ...] = ()
-        self.pending: tuple[_Pending, ...] = ()
-        self.effects: tuple[Handle[object], ...] = ()
+        self.observers: tuple[tuple[type[Event[object]], Observer[Event[object]]], ...] = ()
+        self.observed: list[asyncio.Future[None]] = []
+        """Observer runs this scope's events started; their failures are the scope's issues."""
+        self.attempt: Attempt | None = None
+
+    def take(self) -> list[asyncio.Future[None]]:
+        runs, self.observed = self.observed, []
+        return runs
 
 
-@dataclass(frozen=True, slots=True)
-class Handle[T]:
-    event: Event[T]
-    _task: asyncio.Task[T]
-    _consumed: asyncio.Event
-
-    def __await__(self) -> Generator[object, None, T]:
-        self._consumed.set()
-        return self._task.__await__()
+async def _join(take: Callable[[], list[asyncio.Future[None]]], *, propagate: bool = True) -> None:
+    """Join the runs ``take`` hands over until it hands over none, including runs they start; raise their failures."""
+    errors = []
+    while runs := take():
+        errors += [result for result in await asyncio.gather(*runs, return_exceptions=True) if result is not None]
+    if errors and propagate:
+        raise BaseExceptionGroup("Effect observer issues", errors)
 
 
 class Context:
-    """Execute effects in task-local scopes and own their observer lifetimes."""
+    """Execute effects in task-local scopes, record every event, and own observer lifetimes.
 
-    def __init__(self, *, log: EventLog, defer: tuple[type[BaseException], ...] = (LogFailure,)) -> None:
+    Observer failures are their scope's issues, raised by ``check`` or when it exits cleanly. Recording failures are
+    deferred to ``drain``.
+    """
+
+    def __init__(self, *, log: EventLog) -> None:
         self._log = log
-        self._defer = defer
         self._root = _Scope()
+        self._recording: list[asyncio.Future[None]] = []
         self._chain: ContextVar[tuple[_Scope, ...]] = ContextVar("forge_scopes", default=(self._root,))
 
-    def resource(self, obj: object, fingerprint: Callable[[], Fingerprint]) -> None:
-        self._chain.get()[-1].resources += ((obj, fingerprint),)
+    def handle(self, etype: type[Event[object]], fn: Executor, resource: Resource | None = None) -> None:
+        """Execute ``etype`` here as ``fn(event, resource)``, replayed under the resource's fingerprint.
 
-    def handle[E: Event[object], T](self, etype: type[E], fn: Executor[E, T], uses: tuple[object, ...] = ()) -> None:
-        self._chain.get()[-1].handlers += (_Handler(etype, fn, uses),)
+        An inner scope's handler wins. A re-executed resource's executor also receives ``recorded=``, the outcome at
+        this request's position in the innermost opened scope's history (a result, ``Failed`` or ``Missing``), and
+        returns what the caller sees; a ``HANDLED_FAILURE`` it raises is recorded as ``Failed``.
+        """
+        self._chain.get()[-1].handlers += (_Handler(etype, fn, resource),)
 
-    def observe[E: Event[object]](self, etype: type[E], fn: Observer[E], raises: type[BaseException] = Hold) -> None:
-        self._chain.get()[-1].observers += (_Observer(etype, cast(Observer[Event[object]], fn), raises),)
+    def observe[E: Event[object]](self, etype: type[E], fn: Observer[E]) -> None:
+        self._chain.get()[-1].observers += ((etype, cast(Observer[Event[object]], fn)),)
 
-    def _notify(self, event: Event[object], chain: tuple[_Scope, ...]) -> None:
-        owner = chain[-1]
-        owner.pending += (_Pending(asyncio.create_task(self._log.record(event)), LogFailure),)
+    def notify(self, event: Event[None]) -> None:
+        """Record a diagnostic and start its observers without waiting for either."""
+        self._publish(self._log.append(event), self._chain.get())
+
+    def _publish(self, record: Record, chain: tuple[_Scope, ...]) -> Record:
+        # The log numbered and indexed the record at dispatch. A task that publishes as it starts appends its own run
+        # first, so each run is appended to the live list once it exists.
+        recording = asyncio.Task(self._log.persist(), loop=asyncio.get_running_loop(), eager_start=True)
+        self._recording.append(recording)
         for scope in chain:
-            for observer in scope.observers:
-                if isinstance(event, observer.etype):
-                    owner.pending += (_Pending(asyncio.ensure_future(observer.fn(event)), observer.raises),)
+            for etype, observer in scope.observers:
+                if isinstance(record.event, etype):
+                    run = asyncio.ensure_future(observer(record.event))
+                    chain[-1].observed.append(run)
+        return record
 
-    def emit[T](self, event: Event[T]) -> Handle[T]:
+    async def emit[T](self, event: Event[T]) -> T:
         chain = self._chain.get()
-        handler = next(
-            (
-                handler
-                for scope in reversed(chain)
-                for handler in reversed(scope.handlers)
-                if isinstance(event, handler.etype)
-            ),
-            None,
-        )
-        fingerprints: tuple[Fingerprint, ...] = ()
-        if handler is not None:
-            for resource in handler.uses:
-                fingerprint = next(
-                    (fn for scope in reversed(chain) for obj, fn in reversed(scope.resources) if obj is resource), None
-                )
-                if fingerprint is None:
-                    raise RuntimeError("Executor uses an unregistered resource")
-                fingerprints += (fingerprint(),)
-        self._notify(event, chain)
-        task = asyncio.create_task(self._execute(event, handler, fingerprints, chain))
-        handle = Handle(event, task, asyncio.Event())
-        chain[-1].effects += (cast(Handle[object], handle),)
-        return handle
-
-    async def _execute[T](
-        self, event: Event[T], handler: _Handler | None, fingerprints: tuple[Fingerprint, ...], chain: tuple[_Scope, ...]
-    ) -> T:
+        handler = next((h for s in reversed(chain) for h in reversed(s.handlers) if isinstance(event, h.etype)), None)
+        uses = () if handler is None or handler.resource is None else (handler.resource,)
+        fingerprints = tuple(resource.fingerprint() for resource in uses)
+        if handler is not None and not cached(fingerprints):
+            attempt = next((scope.attempt for scope in reversed(chain) if scope.attempt is not None), None)
+            if attempt is None:
+                raise RuntimeError(f"{type(event).__qualname__} is re-executed outside an opened environment scope")
+            request = self._publish(self._log.append(event, attempt=attempt.sequence), chain).sequence
+            try:
+                value = await handler.fn(event, *uses, recorded=self._log.recorded(request))
+            except HANDLED_FAILURE as error:
+                self._publish(self._log.append(failure(error), answers=request), chain)
+                raise
+            self._publish(self._log.append(Resolved(event, fingerprints, value), answers=request), chain)
+            return cast(T, value)
+        self._publish(self._log.append(event), chain)
         if handler is None:
             if event.result_type is not type(None):
                 raise RuntimeError(f"No executor for {type(event).__qualname__}")
             return cast(T, None)
         value = self._log.lookup(event, fingerprints)
-        replayed = not isinstance(value, Missing) and all(fp.replay == ReplayPolicy.CACHE for fp in fingerprints)
+        replayed = not isinstance(value, Missing)
         if not replayed:
-            value = await handler.fn(event, *handler.uses)
+            value = await handler.fn(event, *uses)
         result = cast(T, value)
-        self._notify(Resolved(event, fingerprints, result, replayed), chain)
+        self._publish(self._log.append(Resolved(event, fingerprints, result, replayed)), chain)
         return result
 
-    async def _check(self, owner: _Scope, types: tuple[type[BaseException], ...]) -> None:
-        errors: tuple[BaseException, ...] = ()
-        while selected := tuple(
-            p for p in owner.pending if (issubclass(p.raises, types) if types else not issubclass(p.raises, self._defer))
-        ):
-            owner.pending = tuple(p for p in owner.pending if p not in selected)
-            results = await asyncio.gather(*(p.task for p in selected), return_exceptions=True)
-            errors += tuple(result for result in results if isinstance(result, BaseException))
-        if errors:
-            raise BaseExceptionGroup("Effect observer issues", errors)
-
-    async def check(self, *types: type[BaseException]) -> None:
-        await self._check(self._chain.get()[-1], types)
-
-    async def _settle(self, owner: _Scope) -> None:
-        while effects := owner.effects:
-            owner.effects = ()
-            results = await asyncio.gather(*(effect._task for effect in effects), return_exceptions=True)
-            errors = tuple(
-                result
-                for effect, result in zip(effects, results, strict=True)
-                if isinstance(result, BaseException) and not effect._consumed.is_set()
-            )
-            if errors:
-                raise BaseExceptionGroup("Unawaited effect failures", errors)
-
-    async def _join(self, owner: _Scope, types: tuple[type[BaseException], ...] = (), *, check: bool = True) -> None:
-        while owner.effects or any(
-            issubclass(p.raises, types) if types else not issubclass(p.raises, self._defer) for p in owner.pending
-        ):
-            if check:
-                await self._settle(owner)
-                await self._check(owner, types)
-            else:
-                effects, owner.effects = owner.effects, ()
-                pending = tuple(p for p in owner.pending if not issubclass(p.raises, self._defer))
-                owner.pending = tuple(p for p in owner.pending if issubclass(p.raises, self._defer))
-                await asyncio.gather(*(e._task for e in effects), *(p.task for p in pending), return_exceptions=True)
+    async def check(self) -> None:
+        """Raise the failures of the observers this scope's events have started."""
+        await _join(self._chain.get()[-1].take)
 
     @asynccontextmanager
-    async def scope(self, name: str) -> AsyncIterator[None]:
+    async def scope(self, name: str, opens: Opened | None = None) -> AsyncIterator[None]:
+        """A task-local scope; with ``opens``, one physical attempt at that environment owner, whose clean exit before
+        the owner's recorded history ends is ``Unreproducible``, and with a recorded outcome still unverified a
+        ``Restart``."""
         owner = _Scope()
         chain = (*self._chain.get(), owner)
+        entered = self._log.append(ScopeEntered(name), opened=opens)
+        owner.attempt = None if opens is None else self._log.attempt(entered.sequence)
         token = self._chain.set(chain)
-        self._notify(ScopeEntered(name), chain)
         failed = True
         try:
+            self._publish(entered, chain)  # its observers start in this scope's context
             yield
-            await self._join(owner)
+            await _join(owner.take)
+            if (attempt := owner.attempt) is not None:
+                # A recorded outcome left unverified is no frontier: reconstruct the owner again on a fresh machine.
+                if attempt.unanswered is not None and not isinstance(self._log.recorded(attempt.unanswered), Missing):
+                    raise Restart(f"{attempt.owner} left its recorded request {attempt.unanswered} unverified")
+                if attempt.position < len(attempt.history):
+                    raise Unreproducible(f"{attempt.owner} returned before its recorded history ended")
             failed = False
         finally:
-            # Exceptional exits join owned work without inspecting observer issues.
-            if failed:
-                for task in (
-                    *(effect._task for effect in owner.effects),
-                    *(p.task for p in owner.pending if not issubclass(p.raises, self._defer)),
-                ):
-                    task.cancel()
-            self._notify(ScopeExited(name, failed), chain)
             try:
-                await self._join(owner, check=not failed)
+                # An exceptional exit cancels its observers and joins them without inspecting their issues.
+                if failed:
+                    for run in owner.observed:
+                        run.cancel()
+                self._publish(self._log.append(ScopeExited(name, failed)), chain)
+                await _join(owner.take, propagate=not failed)
             finally:
-                self._root.pending += tuple(p for p in owner.pending if issubclass(p.raises, self._defer))
                 self._chain.reset(token)
 
     async def drain(self) -> None:
+        """Join every recording and root observer; raise their failures, deferred until now."""
         if self._chain.get() != (self._root,):
             raise RuntimeError("Drain is only valid outside active scopes")
-        await self._join(self._root, (BaseException,))
+
+        def take() -> list[asyncio.Future[None]]:
+            runs, self._recording = [*self._root.take(), *self._recording], []
+            return runs
+
+        await _join(take)

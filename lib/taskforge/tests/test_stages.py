@@ -266,9 +266,9 @@ async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept
     async def output_limited(event: GradeCandidate, grading: GradingResource) -> GradeResult:
         if event.candidate.reply == "13":
             raise OutputBudgetExhausted("output budget exhausted")
-        return await grade(event, grading, notify=ctx.emit)
+        return await grade(event, grading, notify=ctx.notify)
 
-    ctx.handle(GradeCandidate, output_limited, uses=(bundle.grading,))
+    ctx.handle(GradeCandidate, output_limited, bundle.grading)
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
     (adversary,) = evidence.adversary
@@ -311,9 +311,9 @@ async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_acc
     async def output_limited(event: GradeCandidate, grading: GradingResource) -> GradeResult:
         if event.candidate.reply == "13":
             raise OutputBudgetExhausted("output budget exhausted")
-        return await grade(event, grading, notify=ctx.emit)
+        return await grade(event, grading, notify=ctx.notify)
 
-    ctx.handle(GradeCandidate, output_limited, uses=(bundle.grading,))
+    ctx.handle(GradeCandidate, output_limited, bundle.grading)
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
     assert client.requests[1].conversation[-1].content.startswith("Grading this candidate failed")
@@ -339,9 +339,9 @@ async def test_observed_grader_outage_on_one_claim_keeps_both_claims_and_the_sib
     async def outage(event: GradeCandidate, grading: GradingResource) -> GradeResult:
         if event.candidate.reply == "13":
             return GradeResult(Outcome.INFRA_ERROR, None, "grader machine lost", failure=GradingFailure.EXECUTION)
-        return await grade(event, grading, notify=ctx.emit)
+        return await grade(event, grading, notify=ctx.notify)
 
-    ctx.handle(GradeCandidate, outage, uses=(bundle.grading,))
+    ctx.handle(GradeCandidate, outage, bundle.grading)
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
     (adversary,) = evidence.adversary
@@ -419,8 +419,7 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
         ),
         "broken",
     )
-    ctx.resource(grader, grader.fingerprint)
-    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grader,))
+    ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), grader)
     if cause is Cause.GRADER_INFRA:
         with pytest.raises(ExceptionGroup) as caught:
             await validate(ctx, workpiece, setup, bundle)
@@ -450,7 +449,7 @@ async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Wor
     setup = adversary_config(harness)
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
-    await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(task), "finder")
+    await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(task), "finder", 0)
     await ctx.drain()
     assert harness.session is not None
     prompt = harness.session.messages[-1].content
@@ -545,7 +544,7 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
         harness = RecordingHarness(outcome)
         harness.run = run
         setup = replace(config(), adversaries={"finder": harness}, tools={"finder": {}})
-        result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
+        result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder", 0)
         if failures == 2:
             assert (result.status, result.limit, result.findings) == (
                 AdversaryStatus.EXHAUSTED,
@@ -773,7 +772,7 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
     )
     ctx = Context(log=EventLog())
     bundle = replace(resources(ctx), role_inference={"adversary": client})
-    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
+    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder", 0)
     assert (result.status, result.limit, result.findings) == (AdversaryStatus.EXHAUSTED, SearchLimit.CONTEXT_WINDOW, ())
     (note,) = result.reasons
     assert "ran out" in note and "context window" in note

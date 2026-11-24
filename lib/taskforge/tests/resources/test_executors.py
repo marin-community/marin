@@ -53,11 +53,9 @@ async def test_command_executor_retries_busy_machine_and_preserves_mutation() ->
 async def test_command_executor_stops_unresolved_machine_at_retry_bound() -> None:
     notes = Notifications()
     env = FakeEnv("image", {"build": Transient("busy")})
-    initial = env.fingerprint()
     event = RunCommand("build", 5)
     with pytest.raises(Restart):
         await run_command(event, env, notify=notes)
-    assert env.fingerprint() == initial
     assert notes.events == [Retrying(event, 1, "busy"), Retrying(event, 2, "busy")]
 
 

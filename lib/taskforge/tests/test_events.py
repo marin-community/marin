@@ -3,6 +3,7 @@
 
 import math
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 import pytest
 from taskcompendium.identity import canonical_sha256
@@ -11,6 +12,7 @@ from taskforge import wiring
 from taskforge.effects.events import (
     EVENT_TYPES,
     Event,
+    Failed,
     Fingerprint,
     Note,
     ReplayPolicy,
@@ -22,7 +24,7 @@ from taskforge.effects.events import (
     digest,
     event_digest,
 )
-from taskforge.effects.log import decode
+from taskforge.effects.log import Opened, decode
 from taskforge.harness.events import ToolInvoked, ToolReturned
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import json_value
@@ -36,6 +38,7 @@ from taskforge.resources.rollouts import SolverRollout
 from taskforge.resources.web import WebFetch, WebSearch
 
 KINDS: dict[str, type[Event[object]]] = {
+    "effect.failed": Failed,
     "effect.note": Note,
     "effect.resolved": Resolved,
     "effect.retrying": Retrying,
@@ -58,13 +61,18 @@ KINDS: dict[str, type[Event[object]]] = {
 """Recorded journals name events by these kinds; a class may move or be renamed, but its kind may not change."""
 
 RECORDED = b"""\
-{"event": {"payload": {"name": "author"}, "type": "scope.entered"}, "sequence": 1, "wall_time": 0.0}
+{"event": {"payload": {"name": "author"}, "type": "scope.entered"}, "opened": {"definition": "image", \
+"owner": "author/0"}, "sequence": 1, "wall_time": 0.0}
 {"event": {"payload": {"msg": "hello"}, "type": "effect.note"}, "sequence": 2, "wall_time": 0.0}
 {"event": {"payload": {"fingerprints": [{"digest": "uuid4-v1", "replay": "cache", "resource": "ids"}], \
 "replayed": false, "request": {"__forge_event__": {"payload": {"key": "author"}, "type": "ids.new_id"}}, \
 "value": "abc"}, "type": "effect.resolved"}, "sequence": 3, "wall_time": 0.0}
 {"event": {"payload": {"config_digest": "config", "exit": "Submitted", "round": 1, "stage": "author", \
 "terminal": null}, "type": "stage.completed"}, "sequence": 4, "wall_time": 0.0}
+{"attempt": 1, "event": {"payload": {"limit": null, "offset": 0, "path": "missing"}, "type": "env.read_file"}, \
+"sequence": 5, "wall_time": 0.0}
+{"answers": 5, "event": {"payload": {"category": "ENOENT", "message": "[Errno 2] No such file or directory: \
+'missing'"}, "type": "effect.failed"}, "sequence": 6, "wall_time": 0.0}
 """
 """Journal lines written by this format, frozen."""
 
@@ -75,7 +83,23 @@ def test_recorded_kinds_decoders_and_replay_digests_are_pinned() -> None:
     ids = (Fingerprint("ids", "uuid4-v1", ReplayPolicy.CACHE),)
     resolved = Resolved(NewId("author"), ids, "abc")
     stage = StageCompleted(Stage.AUTHOR, "config", "Submitted", 1)
-    assert [record.event for record in decode(RECORDED)] == [ScopeEntered("author"), Note("hello"), resolved, stage]
+    failed = Failed("ENOENT", "[Errno 2] No such file or directory: 'missing'")
+    records = decode(RECORDED)
+    assert [record.event for record in records] == [
+        ScopeEntered("author"),
+        Note("hello"),
+        resolved,
+        stage,
+        ReadFile(PurePosixPath("missing")),
+        failed,
+    ]
+    envelopes = [(record.opened, record.attempt, record.answers) for record in records]
+    assert envelopes == [
+        (Opened("author/0", "image"), None, None),
+        *[(None, None, None)] * 3,
+        (None, 1, None),
+        (None, None, 5),
+    ]
     request = InferenceRequest((Message(Role.USER, "hi"),), (), LLMPolicy())
     assert {
         "stage": event_digest(StageCompleted(Stage.AUTHOR, "config", "submitted", 1)),

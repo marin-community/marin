@@ -12,6 +12,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
+from taskforge.effects.log import Opened
 from taskforge.lowering import host_requirements, lowering_settings, requirements
 from taskforge.model.controls import CONTROLS
 from taskforge.model.llm import Message, Role
@@ -86,11 +87,10 @@ def sandbox_limits(policy: Policy) -> str:
 
 
 def install_env(ctx: Context, env: Env) -> None:
-    ctx.resource(env, env.fingerprint)
-    ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
-    ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
-    ctx.handle(WriteFile, partial(write_file, notify=ctx.emit), uses=(env,))
-    ctx.handle(WriteFiles, partial(write_files, notify=ctx.emit), uses=(env,))
+    ctx.handle(RunCommand, partial(run_command, notify=ctx.notify), env)
+    ctx.handle(ReadFile, partial(read_file, notify=ctx.notify), env)
+    ctx.handle(WriteFile, partial(write_file, notify=ctx.notify), env)
+    ctx.handle(WriteFiles, partial(write_files, notify=ctx.notify), env)
 
 
 async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Exit:
@@ -103,7 +103,8 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
     )
     env = await resources.envs.create(host_requirements(requested))
     try:
-        async with ctx.scope("author"):
+        # A round has one author visit, which a stage restart reconstructs on its fresh machine.
+        async with ctx.scope("author", Opened(f"author/{workpiece.round}", env.fingerprint().digest)):
             install_env(ctx, env)
             files = (*config.workspace.static, *config.workspace.rendered(workpiece, policy))
             writes = [(PurePosixPath("/", file.path), resource_bytes(file)) for file in files]
@@ -140,4 +141,4 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
             )
             return await config.author.run(ctx, session, resources.inference_for("author"), tools)
     finally:
-        await close_resource(env.close, ctx.emit)
+        await close_resource(env.close, ctx.notify)

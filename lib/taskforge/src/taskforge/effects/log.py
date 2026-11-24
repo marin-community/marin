@@ -7,26 +7,31 @@ import json
 import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 from itertools import islice
 from pathlib import Path
-from typing import Any, Protocol, cast, override
+from typing import Any, NamedTuple, Protocol, cast, override
 
 from pydantic import TypeAdapter
 
 from taskforge.effects.events import (
     BYTES_TAG,
+    ENVIRONMENT,
     EVENT_TYPES,
+    FAILURE_CATEGORIES,
     MAPPING_TAG,
     Event,
+    Failed,
     Fingerprint,
+    ReplayPolicy,
     Resolved,
     Retrying,
+    ScopeEntered,
     StageCompleted,
     event_digest,
     json_value,
 )
-from taskforge.effects.issues import LogFailure
+from taskforge.effects.issues import LogFailure, Unreproducible
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 
@@ -36,11 +41,76 @@ class Missing:
     """A replay miss, distinct from a resolved None."""
 
 
+type Outcome[T] = T | Failed | Missing
+"""What a re-executed request's position recorded: its result, its handled failure, or nothing yet."""
+
+
+@dataclass(frozen=True, slots=True)
+class Opened:
+    """An environment-open row's envelope: the logical owner its physical attempt reconstructs, and its sandbox."""
+
+    owner: str
+    definition: str
+
+
 @dataclass(frozen=True, slots=True)
 class Record:
+    """A journal row. Its envelope, outside the event's identity, links sandbox rows: ``opened`` on an environment-open
+    row, whose sequence names the attempt; ``attempt`` on a request, naming that row; ``answers`` on an outcome."""
+
     sequence: int
     wall_time: float
     event: Event[object]
+    opened: Opened | None = None
+    attempt: int | None = None
+    answers: int | None = None
+
+
+ENVELOPE = ("opened", "attempt", "answers")
+
+
+@dataclass(frozen=True, slots=True)
+class _Row:
+    """A journal line, strictly typed; its event is decoded separately."""
+
+    sequence: int
+    wall_time: float
+    event: dict[str, Any]
+    opened: Opened | None = None
+    attempt: int | None = None
+    answers: int | None = None
+
+
+ROW = TypeAdapter(_Row)
+
+
+def _sandbox(event: Event[object]) -> bool:
+    return event.kind.startswith(f"{ENVIRONMENT}.")
+
+
+def _outcome(event: Event[object]) -> bool:
+    if isinstance(event, Failed):
+        return event.category in FAILURE_CATEGORIES
+    shape = [(fp.resource, fp.replay) for fp in event.fingerprints] if isinstance(event, Resolved) else []
+    return isinstance(event, Resolved) and _sandbox(event.request) and shape == [(ENVIRONMENT, ReplayPolicy.REEXECUTE)]
+
+
+def _plain(event: Event[object]) -> bool:
+    if isinstance(event, Resolved):
+        return not _sandbox(event.request) and cached(event.fingerprints)
+    return not (_sandbox(event) or isinstance(event, Failed))
+
+
+ROLES: Mapping[str | None, Callable[[Event[object]], bool]] = {
+    "opened": lambda event: isinstance(event, ScopeEntered),
+    "attempt": _sandbox,
+    "answers": _outcome,
+    None: _plain,
+}
+"""The events each row role may carry, by its one envelope field: an environment-open row enters a scope; a request is
+a re-executed sandbox event; its outcome resolves it under the one environment fingerprint the sandbox writer emits, or
+fails it with a supported category; a plain row is any other event or a cached resolution of a non-sandbox request.
+Cached, paid results thus stay outside every owner's history, and every resolution replays under its recorded role."""
 
 
 class Sink(Protocol):
@@ -109,13 +179,16 @@ def decode(data: bytes, first_seen: dict[str, int] | None = None) -> tuple[Recor
         known: dict[str, Event[object]] = {}
         decoded = []
         for line in data.splitlines():
-            row = json.loads(line)
+            row = ROW.validate_json(line, strict=True)
             before = len(known)
-            event = _decode(row["event"], known)
+            event = _decode(row.event, known)
             if first_seen is not None:
                 # Digests first decoded in this row are the newest insertions; earlier ones are never revisited.
-                first_seen.update((key, row["sequence"]) for key in islice(reversed(known), len(known) - before))
-            decoded.append(Record(row["sequence"], row["wall_time"], event))
+                first_seen.update((key, row.sequence) for key in islice(reversed(known), len(known) - before))
+            roles = [name for name in ENVELOPE if getattr(row, name) is not None]
+            if len(roles) > 1 or not ROLES[roles[0] if roles else None](event):
+                raise LogFailure(f"Row {row.sequence} carries {event.kind} as a {'/'.join(roles) or 'plain'} row")
+            decoded.append(Record(row.sequence, row.wall_time, event, row.opened, row.attempt, row.answers))
     except (TypeError, ValueError, KeyError) as error:
         raise LogFailure("Cannot decode the event stream") from error
     if any(record.sequence != index for index, record in enumerate(decoded, 1)):
@@ -141,18 +214,10 @@ class JsonlSink(Sink):
             raise LogFailure("Cannot encode the event stream") from error
 
     def _line(self, record: Record) -> bytes:
-        return (
-            json.dumps(
-                {
-                    "sequence": record.sequence,
-                    "wall_time": record.wall_time,
-                    "event": _encode(record.event, record.sequence, self._known),
-                },
-                sort_keys=True,
-                allow_nan=True,
-            )
-            + "\n"
-        ).encode()
+        row = {name: value for name in ENVELOPE if (value := getattr(record, name)) is not None}
+        row.update(sequence=record.sequence, wall_time=record.wall_time)
+        row["event"] = _encode(record.event, record.sequence, self._known)
+        return (json.dumps(row, sort_keys=True, allow_nan=True, default=asdict) + "\n").encode()
 
     def _write(self, records: Sequence[Record]) -> None:
         path = Path(self.path)
@@ -192,8 +257,85 @@ class JsonlSink(Sink):
         return records
 
 
+type Key = tuple[str, tuple[Fingerprint, ...]]
+
+
+def cached(fingerprints: tuple[Fingerprint, ...]) -> bool:
+    return all(fp.replay == ReplayPolicy.CACHE for fp in fingerprints)
+
+
+class Step(NamedTuple):
+    request: str
+    outcome: object  # a result or ``Failed``; ``Missing`` at a frontier, a request whose outcome is unknown
+
+
+@dataclass(slots=True)
+class Attempt:
+    """One physical machine reconstructing an owner from an immutable view of the steps established before it."""
+
+    sequence: int
+    owner: str
+    history: tuple[Step, ...]
+    position: int = 0
+    unanswered: int | None = None
+
+
+class Owners:
+    """Each logical owner's established steps: the longest prefix that its attempts, recorded or live, verified."""
+
+    def __init__(self, records: Sequence[Record] = ()) -> None:
+        self.definitions: dict[str, str] = {}
+        self.steps: dict[str, list[Step]] = {}
+        self.attempts: dict[int, Attempt] = {}
+        self.requests: dict[int, tuple[Attempt, int, str]] = {}
+        for record in records:
+            self.add(record)
+
+    def add(self, record: Record) -> None:
+        """Place ``record`` in its owner's history; a request's position is its dispatch order in its attempt.
+
+        Raises:
+            LogFailure: the row breaks owner references, request/outcome pairing, its sandbox definition, an outcome
+                its owner established, or one-request-at-a-time continuity.
+        """
+        event = record.event
+        if record.opened is not None:
+            owner, definition = record.opened.owner, record.opened.definition
+            if self.definitions.setdefault(owner, definition) != definition:
+                raise LogFailure(f"Row {record.sequence} reopens {owner} on another sandbox definition")
+            self.attempts[record.sequence] = Attempt(record.sequence, owner, tuple(self.steps.setdefault(owner, [])))
+        elif record.attempt is not None:
+            attempt = self.attempts.get(record.attempt)
+            if attempt is None or attempt.unanswered is not None:
+                raise LogFailure(f"Row {record.sequence} names no attempt {record.attempt} ready for a request")
+            steps = self.steps[attempt.owner]
+            if attempt.position == len(steps):
+                steps.append(Step(event_digest(event), Missing()))
+            self.requests[record.sequence] = (attempt, attempt.position, event_digest(event))
+            attempt.position, attempt.unanswered = attempt.position + 1, record.sequence
+        elif record.answers is not None:
+            attempt, position, request = self.requests.get(record.answers, (None, 0, ""))
+            if attempt is None or attempt.unanswered != record.answers:
+                raise LogFailure(f"Row {record.sequence} answers no unanswered request {record.answers}")
+            definition = self.definitions[attempt.owner]
+            if isinstance(event, Resolved) and (
+                event_digest(event.request) != request or any(fp.digest != definition for fp in event.fingerprints)
+            ):
+                raise LogFailure(f"Row {record.sequence} resolves another request or sandbox than {record.answers}")
+            attempt.unanswered = None
+            steps, step = self.steps[attempt.owner], Step(request, event.value if isinstance(event, Resolved) else event)
+            if steps[position] == (request, Missing()):  # a frontier gets its outcome
+                steps[position] = step
+            elif steps[position] != step:
+                raise LogFailure(f"Row {record.sequence} contradicts {attempt.owner}'s established step {position}")
+
+
 class EventLog:
-    """Replay source and ordered stream; retain records even when persistence fails."""
+    """Replay source and ordered stream; retain records even when persistence fails.
+
+    A cached effect replays the last result recorded for its key, in any launch. A re-executed effect replays by
+    position: its owner's established history says what the request at each position was and how it ended.
+    """
 
     def __init__(
         self,
@@ -209,11 +351,12 @@ class EventLog:
         self._replayable = replayable
         self._records = list(replay_from)
         self._pending: list[Record] = []
-        self._index: dict[tuple[str, tuple[Fingerprint, ...]], object] = {
+        self._index: dict[Key, object] = {
             (event_digest(record.event.request), record.event.fingerprints): record.event.value
             for record in replay_from
-            if isinstance(record.event, Resolved) and replayable(record.event)
+            if isinstance(record.event, Resolved) and cached(record.event.fingerprints) and replayable(record.event)
         }
+        self._owners = Owners(replay_from)
         self._attempts = attempts
         self._lock = asyncio.Lock()
 
@@ -221,18 +364,38 @@ class EventLog:
     def records(self) -> tuple[Record, ...]:
         return tuple(self._records)
 
-    async def record(self, event: Event[object]) -> None:
+    def append(
+        self,
+        event: Event[object],
+        *,
+        opened: Opened | None = None,
+        attempt: int | None = None,
+        answers: int | None = None,
+    ) -> Record:
+        """Number and place ``event`` at dispatch, for ``persist`` to write; an owner reopened on another sandbox
+        definition is ``Unreproducible``."""
         try:
             json.dumps(_encode(event), sort_keys=True, allow_nan=True)
         except (TypeError, ValueError) as error:
             raise LogFailure("Cannot encode the event") from error
-        record = Record(len(self._records) + 1, time.time(), event)
+        if opened is not None and self._owners.definitions.get(opened.owner, opened.definition) != opened.definition:
+            raise Unreproducible(f"{opened.owner} was recorded on another sandbox definition")
+        record = Record(len(self._records) + 1, time.time(), event, opened, attempt, answers)
+        self._owners.add(record)
         self._records.append(record)
-        if isinstance(event, Resolved) and self._replayable(event):
+        if isinstance(event, Resolved) and cached(event.fingerprints) and self._replayable(event):
             self._index[event_digest(event.request), event.fingerprints] = event.value
+        if self._sink is not None:
+            self._pending.append(record)
+        return record
+
+    async def record(self, event: Event[object]) -> None:
+        self.append(event)
+        await self.persist()
+
+    async def persist(self) -> None:
         if self._sink is None:
             return
-        self._pending.append(record)
         async with self._lock:
             batch = tuple(self._pending)
             if not batch:
@@ -249,7 +412,21 @@ class EventLog:
             raise LogFailure("Persistence requires at least one attempt")
 
     def lookup[T](self, event: Event[T], fingerprints: tuple[Fingerprint, ...]) -> T | Missing:
+        """The cached result to replay for ``event``."""
         return cast(T | Missing, self._index.get((event_digest(event), fingerprints), Missing()))
+
+    def attempt(self, sequence: int) -> Attempt:
+        return self._owners.attempts[sequence]
+
+    def recorded(self, request: int) -> object:
+        """The outcome recorded at request row ``request``'s position, ``Missing`` at a frontier or beyond; another
+        request recorded there is ``Unreproducible``."""
+        attempt, position, digest = self._owners.requests[request]
+        if position >= len(attempt.history):
+            return Missing()
+        if attempt.history[position].request != digest:
+            raise Unreproducible(f"{attempt.owner} issued another request at position {position} than was recorded")
+        return attempt.history[position].outcome
 
 
 @dataclass(frozen=True, slots=True)

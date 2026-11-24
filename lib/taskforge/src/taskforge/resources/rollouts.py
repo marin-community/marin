@@ -17,7 +17,7 @@ from shellbox.machine import (
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy
 from taskforge.effects.issues import OutputBudgetExhausted, Restart, Transient, describe_exception
-from taskforge.resources.execution import Notify, has_cause, retry_effect
+from taskforge.resources.execution import Notify, retry_effect
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,22 +34,22 @@ class Engine(Protocol):
 
 def interruption(error: RolloutInterrupted) -> Transient | Restart:
     """Retry startup and confirmed pre-command websocket setup failures."""
-    causes: list[str] = []
-    seen = {id(error)}
-    cause = error.__cause__
-    while cause is not None and id(cause) not in seen:
-        seen.add(id(cause))
-        causes.append(describe_exception(cause))
-        cause = cause.__cause__
-    detail = ": " + " <- ".join(causes)[:300] if causes else ""
+    chain: list[BaseException] = [error]
+    while (cause := chain[-1].__cause__) is not None and all(cause is not seen for seen in chain):
+        chain.append(cause)
+    detail = ": " + " <- ".join(map(describe_exception, chain[1:]))[:300] if chain[1:] else ""
     message = f"Rollout interrupted during {error.operation}{detail}"
-    if error.operation is RolloutOperation.ADVANCE and has_cause(error, MachineOutputLimitExceeded):
+
+    def caused(*kinds: type[BaseException]) -> bool:
+        return any(isinstance(cause, kinds) for cause in chain)
+
+    if error.operation is RolloutOperation.ADVANCE and caused(MachineOutputLimitExceeded):
         return OutputBudgetExhausted("output budget exhausted")
-    if has_cause(error, MachineCancelled) or has_cause(error, MachineUnavailable):
+    if caused(MachineCancelled, MachineUnavailable):
         return Transient(message)
-    if has_cause(error, MachineTerminated):
+    if caused(MachineTerminated):
         return Restart(message)
-    retryable = error.operation == RolloutOperation.START or has_cause(error, ExecSetupFailed)
+    retryable = error.operation == RolloutOperation.START or caused(ExecSetupFailed)
     return Transient(message) if retryable else Restart(message)
 
 

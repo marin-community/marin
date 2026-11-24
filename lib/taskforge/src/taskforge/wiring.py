@@ -110,7 +110,7 @@ def install(ctx: Context, resources: Resources) -> None:
     async def cleanup_notes(event: Resolved[object]) -> None:
         value = event.value.grade if isinstance(event.value, GradedRollout) else event.value
         if isinstance(value, GradeResult) and value.diagnostics.get("cleanup_errors"):
-            await ctx.emit(Note(f"Cleanup failed: {value.diagnostics['cleanup_errors']}"))
+            ctx.notify(Note(f"Cleanup failed: {value.diagnostics['cleanup_errors']}"))
 
     rollouts, grading = resources.rollouts, resources.grading
     if (judge := resources.role_inference.get("judge")) is not None:
@@ -122,17 +122,16 @@ def install(ctx: Context, resources: Resources) -> None:
         )
     ctx.observe(Resolved, cleanup_notes)
     if resources.verifiers is not None:
-        resources.verifiers.notify = ctx.emit
+        resources.verifiers.notify = ctx.notify
     for event, execute, resource in (
-        (InferenceRequest, partial(complete, notify=ctx.emit), resources.inference_for("author")),
-        (SolverRollout, partial(run_rollout, notify=ctx.emit), rollouts),
-        (GradeCandidate, partial(grade, notify=ctx.emit), grading),
+        (InferenceRequest, partial(complete, notify=ctx.notify), resources.inference_for("author")),
+        (SolverRollout, partial(run_rollout, notify=ctx.notify), rollouts),
+        (GradeCandidate, partial(grade, notify=ctx.notify), grading),
         (NewId, new_id, resources.ids),
-        (WebSearch, partial(search, notify=ctx.emit), resources.web),
-        (WebFetch, partial(fetch, notify=ctx.emit), resources.web),
+        (WebSearch, partial(search, notify=ctx.notify), resources.web),
+        (WebFetch, partial(fetch, notify=ctx.notify), resources.web),
     ):
-        ctx.resource(resource, resource.fingerprint)
-        ctx.handle(event, execute, uses=(resource,))
+        ctx.handle(event, execute, resource)
 
 
 @dataclass(frozen=True, slots=True)

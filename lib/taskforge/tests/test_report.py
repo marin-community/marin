@@ -12,8 +12,18 @@ from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.checkpoint import CheckpointSink, read_journal
-from taskforge.effects.events import Event, Note, Resolved, ScopeEntered, ScopeExited, StageCompleted
-from taskforge.effects.log import Record, Status
+from taskforge.effects.events import (
+    ENVIRONMENT,
+    Event,
+    Fingerprint,
+    Note,
+    ReplayPolicy,
+    Resolved,
+    ScopeEntered,
+    ScopeExited,
+    StageCompleted,
+)
+from taskforge.effects.log import Opened, Record, Status
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import Completion, Usage
@@ -59,6 +69,8 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
     conversation = ConversationRecord((), (), (), (), None, (RolloutStep(turn, Transition(True), 0, ()),))
     result = GradedRollout(Rollout("r", (conversation,), "stop"), GradeResult(Outcome.GRADED, 1.0))
     spec = lower_with_settings(arithmetic_task(), lowering_settings(load_policy(DEFAULTS_DIR)), {})
+    sandbox = (Fingerprint(ENVIRONMENT, "definition", ReplayPolicy.REEXECUTE),)
+    opened, attempts, answers = {3: Opened("author/0", "definition")}, {7: 3, 9: 3}, {8: 7, 10: 9}  # sandbox rows
     events: list[tuple[float, Event[object]]] = [
         (-2, ScopeEntered("judge")),  # An interrupted previous process left this scope open.
         (-1, ScopeEntered("workpiece")),
@@ -66,8 +78,10 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
         (10, Resolved(inference, (), completion)),
         (11, Resolved(inference, (), completion, replayed=True)),
         (20, ScopeExited("author", False)),
-        (21, Resolved(RunCommand("true", 30), (), CommandResult(0, "", "", 1, False))),
-        (24, Resolved(WriteFile(PurePosixPath("x"), b"x"), (), None)),
+        (21, RunCommand("true", 30)),
+        (21, Resolved(RunCommand("true", 30), sandbox, CommandResult(0, "", "", 1, False))),
+        (21, WriteFile(PurePosixPath("x"), b"x")),
+        (24, Resolved(WriteFile(PurePosixPath("x"), b"x"), sandbox, None)),
         (25, ScopeEntered("adversary:a")),
         (30, Resolved(replace(inference, sample=1), (), completion)),
         (31, ScopeExited("adversary:a", False)),
@@ -85,7 +99,10 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
         directory.mkdir()
         decisions = (Abandon(reasons),) if terminal is Terminal.ABANDONED else (Incomplete(reasons),)
         data = events if name == "accepted" else [(0, StageCompleted(Stage.REVIEW, "", "Done", terminal=terminal))]
-        records = tuple(Record(i, 1000000 - age + offset, event) for i, (offset, event) in enumerate(data, 1))
+        records = tuple(
+            Record(i, 1000000 - age + offset, event, opened.get(i), attempts.get(i), answers.get(i))
+            for i, (offset, event) in enumerate(data, 1)
+        )
         sink = CheckpointSink(tmp_path / "work", str(directory))
         sink.claim(None)
         await sink.local.write(records[:1])

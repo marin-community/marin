@@ -62,8 +62,7 @@ class JudgeEngine:
             event = InferenceRequest(messages, (), sampling, sample=sample)
             sample += 1
             async with self.ctx.scope("judge"):
-                self.ctx.resource(self.client, self.client.fingerprint)
-                self.ctx.handle(InferenceRequest, partial(complete, notify=self.ctx.emit), uses=(self.client,))
+                self.ctx.handle(InferenceRequest, partial(complete, notify=self.ctx.notify), self.client)
                 result = await self.ctx.emit(event)
             common = {"id": "forge-judge", "model": payload["model"], "created": 0}
             if responses:
