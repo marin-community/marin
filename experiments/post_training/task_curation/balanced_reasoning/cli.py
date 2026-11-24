@@ -34,8 +34,13 @@ from experiments.post_training.task_curation.balanced_reasoning.difficulty impor
     SOLVER_ALL,
     read_ledger_attempts,
     tally_attempts,
+    url_protocol,
 )
-from experiments.post_training.task_curation.balanced_reasoning.lane import run_selected_task
+from experiments.post_training.task_curation.balanced_reasoning.lane import (
+    KIND_GRACEFUL,
+    RESOLUTION_UNSOLVED,
+    run_selected_task,
+)
 from experiments.post_training.task_curation.balanced_reasoning.runtime import (
     lane_policy,
     lane_runtime,
@@ -186,21 +191,101 @@ def command_publish(args: argparse.Namespace) -> int:
 
 
 def command_report(args: argparse.Namespace) -> int:
-    """Token and resolution totals over a run root, by band -- the pilot's cost meter."""
-    root = Path(args.run_root) / "tasks"
-    totals: dict[str, dict[str, int]] = {}
-    for attempt_path in sorted(root.glob("*/attempt.json")):
-        document = json.loads(attempt_path.read_text())
-        bucket = totals.setdefault(
-            document["band"],
-            {"tasks": 0, "prompt_tokens": 0, "completion_tokens": 0, "attempts": 0},
+    """The pilot's cost meter: tokens, latency, retries, resolutions and solve rates by band."""
+    filesystem = fsspec.filesystem(url_protocol(args.run_root))
+    root = f"{args.run_root.rstrip('/')}/tasks"
+    bands: dict[str, dict[str, float]] = {}
+    resolutions: dict[str, int] = {}
+    graceful_forms: dict[str, int] = {}
+    solve_by_band: dict[str, dict[str, int]] = {}
+    retry_markers: dict[str, int] = {}
+    completions = 0
+    completions_with_retries = 0
+
+    def bucket(name: str) -> dict[str, float]:
+        return bands.setdefault(
+            name,
+            {
+                "tasks": 0,
+                "attempts": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "reasoning_tokens": 0,
+                "decode_seconds": 0.0,
+                "wall_seconds": 0.0,
+            },
         )
-        bucket["tasks"] += 1
-        bucket["attempts"] += len(document["attempts"])
+
+    for attempt_path in sorted(filesystem.glob(f"{root}/*/attempt.json")):
+        with fsspec.open(attempt_path, "rt") as source:
+            document = json.load(source)
+        name = document["band"]
+        stats = bucket(name)
+        stats["tasks"] += 1
+        stats["attempts"] += len(document["attempts"])
         for attempt in document["attempts"]:
-            bucket["prompt_tokens"] += attempt["prompt_tokens"]
-            bucket["completion_tokens"] += attempt["completion_tokens"]
-    print(json.dumps(totals, indent=2, sort_keys=True))
+            stats["prompt_tokens"] += attempt["prompt_tokens"]
+            stats["completion_tokens"] += attempt["completion_tokens"]
+            stats["reasoning_tokens"] += attempt.get("reasoning_tokens") or 0
+        resolutions[document["resolution_kind"]] = resolutions.get(document["resolution_kind"], 0) + 1
+        task_solve = solve_by_band.setdefault(name, {"solved": 0, "tasks": 0})
+        task_solve["tasks"] += 1
+        if document["selected_index"] is not None and document["resolution_kind"] != RESOLUTION_UNSOLVED:
+            task_solve["solved"] += 1
+        for attempt in document["attempts"]:
+            if attempt.get("kind") == KIND_GRACEFUL and attempt.get("graceful_resolution"):
+                graceful_forms[attempt["graceful_resolution"]] = graceful_forms.get(attempt["graceful_resolution"], 0) + 1
+
+        events_path = attempt_path.replace("attempt.json", "events.jsonl")
+        try:
+            with fsspec.open(events_path, "rt") as source:
+                for line in source:
+                    record = json.loads(line)
+                    event = record.get("event") or {}
+                    if not str(event.get("type", "")).endswith("Resolved"):
+                        continue
+                    value = (event.get("payload") or {}).get("value")
+                    if not isinstance(value, dict) or "usage" not in value:
+                        continue
+                    completions += 1
+                    retries = value.get("retries") or []
+                    if retries:
+                        completions_with_retries += 1
+                    for marker in retries:
+                        outcome = str(marker).split(":", 1)[0]
+                        retry_markers[outcome] = retry_markers.get(outcome, 0) + 1
+                    usage = value["usage"]
+                    stats["decode_seconds"] += float(value.get("decode_time") or 0.0)
+                    stats["wall_seconds"] += float(value.get("wall_time") or 0.0)
+                    # Usage already counted from attempt.json; the event log adds latency + retries only.
+                    del usage
+        except FileNotFoundError:
+            continue
+
+    for name, stats in bands.items():
+        tokens = stats["completion_tokens"]
+        stats["decode_tok_per_s"] = round(tokens / stats["decode_seconds"], 1) if stats["decode_seconds"] else 0.0
+        stats["solve_rate"] = (
+            round(solve_by_band[name]["solved"] / solve_by_band[name]["tasks"], 3) if solve_by_band[name]["tasks"] else 0.0
+        )
+    graceful_passes = graceful_forms.get("graceful_best_effort", 0) + graceful_forms.get("graceful_uncertain", 0)
+    graceful_attempts = sum(graceful_forms.values())
+    report = {
+        "bands": bands,
+        "resolutions": resolutions,
+        "solve_by_band": solve_by_band,
+        "graceful": {
+            "forms": graceful_forms,
+            "attempts": graceful_attempts,
+            "form_pass_rate": round(graceful_passes / graceful_attempts, 3) if graceful_attempts else None,
+        },
+        "transport": {
+            "completions": completions,
+            "completions_with_retries": completions_with_retries,
+            "retry_markers": retry_markers,
+        },
+    }
+    print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 

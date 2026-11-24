@@ -228,3 +228,61 @@ def test_check_credentials_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GLM_BULK_TOKEN", "")
     with pytest.raises(SystemExit, match="GLM_BULK_TOKEN"):
         check_credentials()
+
+
+def test_report_aggregates_bands_resolutions_and_transport(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    from experiments.post_training.task_curation.balanced_reasoning.cli import build_parser
+
+    task_dir = tmp_path / "tasks" / "t1"
+    task_dir.mkdir(parents=True)
+    (task_dir / "attempt.json").write_text(
+        json.dumps(
+            {
+                "band": "easy",
+                "resolution_kind": "solved_shortest",
+                "selected_index": 0,
+                "attempts": [
+                    {
+                        "kind": "solve",
+                        "prompt_tokens": 100,
+                        "completion_tokens": 900,
+                        "reasoning_tokens": 700,
+                    }
+                ],
+            }
+        )
+    )
+    (task_dir / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "sequence": 1,
+                "wall_time": 1.0,
+                "event": {
+                    "type": "taskforge.effects.events.Resolved",
+                    "payload": {
+                        "request": {},
+                        "fingerprints": [],
+                        "value": {
+                            "usage": {"prompt_tokens": 100, "completion_tokens": 900},
+                            "decode_time": 30.0,
+                            "wall_time": 45.0,
+                            "retries": ["transport_error:None"],
+                        },
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
+    parser = build_parser()
+    args = parser.parse_args(["report", "--run-root", str(tmp_path)])
+    assert args.handler(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    band = report["bands"]["easy"]
+    assert band["tasks"] == 1 and band["completion_tokens"] == 900
+    assert band["decode_tok_per_s"] == 30.0
+    assert band["solve_rate"] == 1.0
+    assert report["resolutions"] == {"solved_shortest": 1}
+    assert report["transport"]["retry_markers"] == {"transport_error": 1}
+    assert report["transport"]["completions_with_retries"] == 1
+    assert report["graceful"]["form_pass_rate"] is None
