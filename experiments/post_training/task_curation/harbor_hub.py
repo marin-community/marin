@@ -166,7 +166,7 @@ def _download_task(session: requests.Session, ref: str, task: _TaskArchive, outp
 
 
 def acquire_release(release: str, output: StoragePath, selected: Sequence[str]) -> None:
-    """Cache original task archives after verifying their native content hashes."""
+    """Cache task archives, checking new downloads against Hub content hashes."""
     with requests.Session() as session:
         session.headers["apikey"] = REGISTRY_KEY
         refs = _release_archives(session, release)

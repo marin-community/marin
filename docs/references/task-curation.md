@@ -496,8 +496,10 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 
 `HarborHubSource(name, revision, read)` acquires a complete release pinned by
 `sha256:...`. It caches the original task archives as
-`tasks/<task-reference-hash>.tar.gz`, verifies their native content hashes against
-the public Hub records, and records the task references in `release.json`.
+`tasks/<task-reference-hash>.tar.gz` and records task references in `release.json`.
+New downloads hash every regular archive member and compare the digest with the
+public Hub record. Cached archives are reused without rehashing. Archives with
+files outside Harbor's hashed task paths fail the check.
 The recipe's `read(StoragePath, ConversionContext)` yields rows from each archive,
 using the same custom-reader interface as HF sources. Acquisition does not
 convert task files or impose a package size cutoff. Dataset-level scoring files
