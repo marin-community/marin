@@ -50,9 +50,12 @@ class _FakeHub:
         return io.BytesIO(self.contents[filename])
 
 
-def _serve_repo(monkeypatch, hub: _FakeHub, sizes: dict[str, bytes] | None = None) -> None:
-    """List *sizes* (default: the hub's contents) as the repo tree and serve files from *hub*."""
-    listed = hub.contents if sizes is None else sizes
+def _serve_repo(monkeypatch, hub: _FakeHub, listed_contents: dict[str, bytes] | None = None) -> None:
+    """List *listed_contents* (default: the hub's) as the repo tree and serve files from *hub*.
+
+    Each listed file's size is the length of its listed bytes, which may differ from what *hub* serves.
+    """
+    listed = hub.contents if listed_contents is None else listed_contents
     monkeypatch.setattr(
         model_cache,
         "list_repo_tree",
@@ -217,7 +220,7 @@ def test_cache_hf_model_rejects_truncated_stream_before_completion(tmp_path, mon
     contents = b"valid weights"
     cache_path = str(tmp_path / "cache" / "model")
     hub = _FakeHub({"model.safetensors": contents[:-1]}, revision="a" * 40)
-    _serve_repo(monkeypatch, hub, sizes={"model.safetensors": contents})
+    _serve_repo(monkeypatch, hub, listed_contents={"model.safetensors": contents})
 
     with pytest.raises(OSError, match="wrong size"):
         cache_hf_model(cache_path, "org/model", revision="a" * 40)
