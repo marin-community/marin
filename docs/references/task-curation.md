@@ -296,7 +296,9 @@ To change the Snowball training tasks, copy `recipes/snowball-100k.json` under a
 name or version and run a FULL [campaign](#run-a-campaign) with `--selection` set to
 that recipe. Repeat `--source` for each recipe source, using its invocation name from
 [`runnable_sources()`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py):
-recipe ID `MarinSkyRL:eurus2_code` is `--source eurus2_code`. To select again from a
+recipe ID `MarinSkyRL:eurus2_code` is `--source eurus2_code`. A recipe's historical
+source IDs resolve through the alias table, so older recipes select the renamed
+sources without edits. To select again from a
 finished campaign, pass its `corpus.json` with `--corpus` as shown in
 [Final task selection](#final-task-selection). Check the source and family counts in
 `summary.json` before training.

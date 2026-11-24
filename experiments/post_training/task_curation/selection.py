@@ -64,6 +64,7 @@ from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 SELECTION_PREFIX = "rl-data/task-selection"
 SELECTION_INPUT_PREFIX = "rl-data/selection-inputs"
@@ -778,8 +779,25 @@ def _resolved(
     )
 
 
+def _canonical_ids(sources: dict[str, str]) -> dict[str, str]:
+    """Resolve historical recipe source keys to generated identities, refusing a silent collapse."""
+    canonical: dict[str, str] = {}
+    for key, family in sources.items():
+        resolved = canonical_source_id(key)
+        if resolved in canonical:
+            raise ValueError(f"Selection sources collapse onto one identity: {resolved}")
+        canonical[resolved] = family
+    return canonical
+
+
 def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecipe) -> ArtifactStep[Artifact]:
     """Bind admitted sources and fixed evaluation exclusions to a versioned training selection."""
+    limits = (
+        {canonical_source_id(source_id): limit for source_id, limit in recipe.source_limits.items()}
+        if recipe.source_limits is not None
+        else None
+    )
+    recipe = recipe.model_copy(update={"sources": _canonical_ids(recipe.sources), "source_limits": limits})
     missing = recipe.sources.keys() - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")

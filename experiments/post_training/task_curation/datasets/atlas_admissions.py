@@ -143,7 +143,7 @@ RECORDS = (
         tags=("eval", "source:evalchemy", "benchmark", "family:short-answer", "task:gsm8k"),
         count=1319,
         daytona_snapshot_count=0,
-        intended_use=IntendedUse.TRAIN,
+        intended_use=IntendedUse.EVAL,
         task_format=TaskFormat.TASKCOMPENDIUM,
     ),
     # Evalchemy:mmlu-smoke
@@ -164,7 +164,7 @@ RECORDS = (
         tags=("eval", "source:evalchemy", "single-turn", "benchmark", "family:likelihood", "task:mmlu_abstract_algebra"),
         count=100,
         daytona_snapshot_count=0,
-        intended_use=IntendedUse.TRAIN,
+        intended_use=IntendedUse.EVAL,
         task_format=TaskFormat.TASKCOMPENDIUM,
     ),
     # FWeindel:validated-tasks/fineenvs_v2
@@ -747,7 +747,7 @@ RECORDS = (
         count=500,
         daytona_snapshot_count=1,
         oracle_validation=OracleValidation.EXECUTED,
-        intended_use=IntendedUse.TRAIN,
+        intended_use=IntendedUse.EVAL,
         task_format=TaskFormat.TASKCOMPENDIUM,
     ),
     # TaskTrove:tasktrove-knowledge-openqa-qa
@@ -1170,7 +1170,7 @@ RECORDS = (
         count=220,
         daytona_snapshot_count=0,
         oracle_validation=OracleValidation.VERIFIER_EXECUTED,
-        intended_use=IntendedUse.TRAIN,
+        intended_use=IntendedUse.EVAL,
         task_format=TaskFormat.TASKCOMPENDIUM,
     ),
     # pafitis:hardmath@rhs
