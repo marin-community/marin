@@ -47,7 +47,7 @@ PRIVATE_CONTENT = re.compile(
 
 
 def is_public_weight_name(name: str) -> bool:
-    return re.fullmatch(r"model(?:-[0-9]{5}-of-[0-9]{5})?\.safetensors", name) is not None
+    return re.fullmatch(r"model(?:-[0-9]{5}(?:-of-[0-9]{5})?)?\.safetensors", name) is not None
 
 
 def audit_public_bytes(name: str, content: bytes) -> None:
@@ -244,6 +244,14 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
     ]
     if any(name.startswith(".cache/") or name.endswith(".distcp") for _, name in sources):
         raise ValueError("HF export source contains cache or native optimizer payloads")
+    selected_names = {name for _, name in sources}
+    if "model.safetensors.index.json" in selected_names:
+        index = json.loads((StoragePath(config.source) / "model.safetensors.index.json").read_bytes())
+        indexed_shards = set(index["weight_map"].values())
+        if not indexed_shards or any(not is_public_weight_name(name) for name in indexed_shards):
+            raise ValueError("HF model index contains no supported weight shards")
+        if missing := indexed_shards - selected_names:
+            raise ValueError(f"HF model index references missing weight shards: {sorted(missing)}")
     with durable_event_log(
         timing_destination, config.repo_id, "hf_upload", "upload", local_directory=str(root.parent)
     ) as log:
