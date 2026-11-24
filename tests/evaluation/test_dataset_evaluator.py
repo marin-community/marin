@@ -17,10 +17,11 @@ from evalrecords.records import (
 )
 from marin.evaluation.dataset_evaluator import DatasetEvaluator, runtime_config
 from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ServeConfig
-from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, DaytonaConnection, machine_factories
+from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, machine_factories
 from marin.inference.types import InferenceBackendState
 from openai import OpenAI
 from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
+from shellbox.backends.daytona.connection import DaytonaConnection
 
 SERVED_CONTEXT = 4096
 MODEL = ModelConfig(
@@ -111,7 +112,7 @@ def test_agent_worker_runs_planned_task_machines_with_daytona_credentials_only_f
     evaluator = DatasetEvaluator(("s3://corpora/agent",), model, settings, agent=AGENT)
     daytona = backend is TaskMachineBackend.DAYTONA
     # The launcher grants the eval-org key only to Daytona evaluations.
-    env_vars = {"DAYTONA_TARGET": "us", **({DAYTONA_API_KEY: "eval-org-key"} if daytona else {})}
+    env_vars = {"SETTING": "configured", **({DAYTONA_API_KEY: "eval-org-key"} if daytona else {})}
 
     evaluator(SESSION, "s3://results/agent", env_vars, backend_state=lambda: InferenceBackendState.READY)
 
@@ -120,7 +121,7 @@ def test_agent_worker_runs_planned_task_machines_with_daytona_credentials_only_f
     assert (task_machine.backend, task_machine.cpus, task_machine.memory_mb) == (backend, 2, 4096)
     environment = submitted["environment"]
     assert (environment.secrets.get(DAYTONA_API_KEY) == "eval-org-key") is daytona
-    assert environment.env_vars == {"DAYTONA_TARGET": "us"}
+    assert environment.env_vars == {"SETTING": "configured"}
     assert (tuple(submitted["egress_allow"]) == DAYTONA_EGRESS) is daytona
     assert ("daytona" in environment.setup_scripts[0]) is daytona
 
@@ -132,9 +133,7 @@ def test_daytona_task_machines_get_images_as_the_settings_select(created, image_
     settings = CuratedSettings(task_machine=TaskMachineSettings(image_build=image_build))
 
     config = runtime_config(MODEL, settings, SESSION)
-    factories = machine_factories(
-        config, DaytonaConnection(api_key="eval-org-key", api_url="https://daytona", target="us")
-    )
+    factories = machine_factories(config, DaytonaConnection(api_key="eval-org-key"))
 
     assert factories["daytona"].image_build is daytona_machine.DaytonaImageBuild(image_build.value)
 
@@ -149,7 +148,7 @@ def test_agent_worker_receives_task_secrets_as_secrets_its_run_may_resolve(creat
     evaluator(
         SESSION,
         "s3://results/agent",
-        {"SEC_EDGAR_API_KEY": "edgar-key", "DAYTONA_TARGET": "us"},
+        {"SEC_EDGAR_API_KEY": "edgar-key", "SETTING": "configured"},
         backend_state=lambda: InferenceBackendState.READY,
     )
 
@@ -157,7 +156,7 @@ def test_agent_worker_receives_task_secrets_as_secrets_its_run_may_resolve(creat
     assert args[2].task_secrets == ("SEC_EDGAR_API_KEY",)
     environment = submitted["environment"]
     assert environment.secrets["SEC_EDGAR_API_KEY"] == "edgar-key"
-    assert environment.env_vars == {"DAYTONA_TARGET": "us"}
+    assert environment.env_vars == {"SETTING": "configured"}
 
 
 def test_agent_worker_rejects_a_server_window_other_than_the_planned_one(created, submitted):

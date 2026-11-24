@@ -3,8 +3,8 @@
 import os
 import shutil
 
-from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import DaytonaImageBuild, DaytonaMachineFactory
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
@@ -14,13 +14,9 @@ from skyrlrecipe.declared import DAYTONA_EVAL_BACKEND
 
 
 def _daytona_factory(api_key: str, ttl: int, image_build: DaytonaImageBuild) -> DaytonaMachineFactory:
-    if not api_key:
-        raise ValueError("Daytona requires a nonempty API key")
-
-    def client() -> AsyncDaytona:
-        return AsyncDaytona(DaytonaConfig(api_key=api_key))
-
-    return DaytonaMachineFactory(client_factory=client, ttl_minutes=ttl, image_build=image_build)
+    return DaytonaMachineFactory(
+        client_factory=DaytonaConnection(api_key=api_key).client_factory(), ttl_minutes=ttl, image_build=image_build
+    )
 
 
 def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactory]:

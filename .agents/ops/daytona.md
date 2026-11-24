@@ -100,15 +100,13 @@ to the SDK's ambient account selection:
 ```bash
 # RL account used by training.
 : "${DAYTONA_RL_API_KEY:?Load the dedicated RL key through the configured secret provider}"
-export DAYTONA_TARGET="<the configured target>"
 
 uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
   --api-key-env DAYTONA_RL_API_KEY inventory
 ```
 
 Pass `--api-key-env DAYTONA_EVAL_API_KEY` to inventory or purge the eval account
-used for validation builds. `--target` overrides `DAYTONA_TARGET`. `--api-url`
-overrides `DAYTONA_API_URL`.
+used for validation builds.
 
 Read the account's current quota and inventory before submission. Snapshot quota
 and live sandbox capacity are separate limits. A successful GPU allocation proves

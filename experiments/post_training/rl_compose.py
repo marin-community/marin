@@ -19,7 +19,7 @@ import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
-from marin.evaluation.eval_env import DAYTONA_EVAL_API_KEY_ENV, DAYTONA_TARGET_ENV
+from marin.evaluation.eval_env import DAYTONA_EVAL_API_KEY_ENV
 from marin.execution.artifact import (
     RECORD_FILENAME,
     Artifact,
@@ -504,6 +504,16 @@ def run_spec(
 ) -> SkyRLSpec:
     """Build the complete default recipe with explicit candidate inputs and settings."""
     config = _training_config(preset, settings)
+    if config.environment.env_class != "preference_pair" or config.trainer.evaluation_runner != "training":
+        workers = config.trajectory_runner.rollout_workers
+        required_cpus = workers.num_workers * workers.cpus_per_worker
+        driver_cpus = preset.recipe.layout.host_cpu
+        if required_cpus > driver_cpus:
+            raise click.BadParameter(
+                f"trajectory_runner.rollout_workers requests {required_cpus} CPUs "
+                f"({workers.num_workers} workers x {workers.cpus_per_worker}); "
+                f"the driver task's Iris CPU request is {driver_cpus}."
+            )
     explicit = override_document(settings)
     authored = config.to_skyrl()
     batch_changes = {
@@ -664,8 +674,6 @@ def run_step(
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
-    if preset.checkpoint_evaluation or get_path(config, "environment.task_sessions.agent_harnesses.pi") is not MISSING:
-        required_env += (DAYTONA_TARGET_ENV,)
     required_env += tuple(_recipe_env(config))
     return skyrl_step(
         spec,

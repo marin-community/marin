@@ -14,7 +14,8 @@ Validate and submit the cache gate first:
 
 After the cache gate passes model serving startup, submit the remaining 23
 benchmarks. The 17 nonagentic benchmarks share one model server, and the six
-agentic benchmarks share another. The agentic suite needs `DAYTONA_TARGET`.
+agentic benchmarks share another. The agentic suite needs the per-account
+`DAYTONA_EVAL_API_KEY` credential; the hosted API and US target are fixed.
 
 ```bash
 ./launch.sh --phase remaining
