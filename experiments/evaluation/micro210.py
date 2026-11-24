@@ -39,6 +39,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from transformers import AutoTokenizer
 
+from experiments.evaluation import micro210_policy
 from experiments.evaluation.judge_config import JudgeConfig
 from experiments.evaluation.micro210_policy import (
     MODEL_IDENTITY_PREFIX,
@@ -48,6 +49,7 @@ from experiments.evaluation.micro210_policy import (
     Micro210Model,
     Micro210Route,
     micro210_evaluation,
+    read_micro210_policy,
     runtime_policy_config,
 )
 from experiments.evaluation.micro210_subset import Micro210Selection, Micro210Subset, prepare_subset, validate_subset
@@ -422,6 +424,18 @@ def micro210_artifact_step(
     return replace(configured, expected_fingerprint=configured.fingerprint())
 
 
+def route_override(cluster: str) -> Micro210Route:
+    """The policy's route re-targeted to one cluster; the protocol stays frozen."""
+    policy_route = Micro210Route.from_policy_execution(
+        read_micro210_policy(micro210_policy.POLICY_REFERENCE)["evaluation"]["execution"]
+    )
+    return replace(
+        policy_route,
+        cluster_config=f"lib/iris/config/{cluster}.yaml",
+        target_cluster=cluster,
+    )
+
+
 @click.command(help=__doc__)
 @click.option("--model-uri", required=True)
 @click.option("--model-manifest-sha256", required=True)
@@ -434,6 +448,11 @@ def micro210_artifact_step(
 @click.option("--tokenizer-uri", required=True)
 @click.option("--tokenizer-revision", required=True)
 @click.option("--name", required=True)
+@click.option(
+    "--route-cluster",
+    default=None,
+    help="Run on this cluster (lib/iris/config/<cluster>.yaml) instead of the policy's route.",
+)
 @click.option(
     "--serving-profile", type=click.Choice([profile.value for profile in ServingProfileName]), default="policy"
 )
@@ -449,12 +468,17 @@ def main(
     tokenizer_uri: str,
     tokenizer_revision: str,
     name: str,
+    route_cluster: str | None,
     benchmark: tuple[str, ...],
     row_index: tuple[int, ...],
     serving_profile: str,
 ) -> ArtifactStep:
     configure_coreweave_s3()
     model = Micro210Model(model_uri, MODEL_IDENTITY_PREFIX + model_manifest_sha256, tokenizer_uri, tokenizer_revision)
+    route = None
+    if route_cluster is not None:
+        # The per-model route rides on the binding; the protocol stays frozen.
+        route = route_override(route_cluster)
     return micro210_step(
         model,
         name=name,
@@ -462,6 +486,7 @@ def main(
         subset=Micro210Subset(tuple(sorted(benchmark)), tuple(sorted(row_index))) if benchmark or row_index else None,
         serving_profile=ServingProfileName(serving_profile),
         model_manifest_filename=model_manifest_filename,
+        route=route,
     )
 
 

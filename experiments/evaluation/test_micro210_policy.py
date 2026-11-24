@@ -31,6 +31,7 @@ from experiments.evaluation.micro210 import (
     PREPARED_INPUTS_VERSION,
     ServingProfileName,
     micro210_step,
+    route_override,
     run_micro210,
     validate_judge_availability,
 )
@@ -565,3 +566,13 @@ def test_injected_judge_field_is_rejected_before_worker_allocation(tmp_path, mon
     launch["skyrl"]["terminal_bench"]["installed_agent"]["judge_model"] = "zai-org/GLM-5.3-Flash"
     with pytest.raises(ValueError, match="judge_model"):
         validate_launch(yaml.safe_dump(launch), tmp_path / "preflight")
+
+
+def test_route_override_retargets_one_cluster(policy_reference):
+    """--route-cluster moves the execution cluster and nothing else about the route."""
+    policy_route = Micro210Route.from_policy_execution(read_micro210_policy(policy_reference)["evaluation"]["execution"])
+    override = route_override("cw-us-east-02a")
+    assert override.target_cluster == "cw-us-east-02a"
+    assert override.cluster_config == "lib/iris/config/cw-us-east-02a.yaml"
+    assert override.parent_cluster_config == policy_route.parent_cluster_config
+    assert override.container_profile == policy_route.container_profile
