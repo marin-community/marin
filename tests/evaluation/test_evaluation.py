@@ -650,8 +650,9 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
     assert succeeded.provenance.eval_runtime == "test-runtime"
     assert succeeded.model.config is not None
     expected_config = json.loads(json.dumps(asdict(batch.model)))
-    # An unset NCCL setting is omitted from records so that earlier records keep their config digests.
+    # Omit unset serving options that would otherwise change earlier record digests.
     del expected_config["serve"]["vllm_use_nccl_symm_mem"]
+    del expected_config["serve"]["levanter_expert_parallel_size"]
     assert succeeded.model.config.model_dump(mode="json") == expected_config
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
     assert {(row.run_id, row.status) for row in catalog_rows} == {
