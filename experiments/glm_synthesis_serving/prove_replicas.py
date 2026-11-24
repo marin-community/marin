@@ -22,7 +22,7 @@ from experiments.glm_synthesis_serving import pool, warmup_bench
 
 SOURCE_ROOT = "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization"
 SOURCE_FLEETS = (("ortet-24-20261112", 24), ("h100-eight-20261105", 8))
-SOURCE_START = 1795463520  # Conversion-active window: 2026-11-23 19:52–22:52 UTC.
+SOURCE_START = 1795463520  # Conversion-active window: 2026-11-23 19:52-22:52 UTC.
 SOURCE_END = SOURCE_START + 10800
 CAPABILITY_HOURS = 168
 
@@ -195,9 +195,7 @@ def main() -> None:
     async def sustain() -> list[dict]:
         async def bench(target: Target) -> dict:
             started = time.monotonic()
-            stats = await warmup_bench.run_load(
-                target.base_url, args.concurrency, args.duration, "high", target.token
-            )
+            stats = await warmup_bench.run_load(target.base_url, args.concurrency, args.duration, "high", target.token)
             return {"endpoint": target.endpoint, **stats.summary(time.monotonic() - started, pool.GPUS_PER_ENGINE)}
 
         return await asyncio.gather(*(bench(target) for target in targets))
