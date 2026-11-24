@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import hashlib
+
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
@@ -11,13 +13,16 @@ import pytest
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 
+pytestmark = pytest.mark.tpu
+
 
 @pytest.fixture(autouse=True)
 def require_tpu_v4(request):
     if jax.default_backend() != "tpu":
         pytest.skip("Pallas fixed-schedule tests require an actual TPU runtime")
     devices = jax.devices()
-    assert devices and "tpu v4" in devices[0].device_kind.lower()
+    if not devices or "tpu v4" not in devices[0].device_kind.lower():
+        pytest.skip("fixed-schedule linear arithmetic is qualified on TPUv4")
     if "four_device" not in request.node.name:
         if len(devices) != 1 or len(jax.local_devices()) != 1:
             pytest.skip("the historical single-device cases require one visible TPUv4 device")
