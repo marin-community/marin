@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import LaunchActivity from '@/components/runs/LaunchActivity.vue'
 import RunCatalogTable from '@/components/runs/RunCatalogTable.vue'
 import ModelName from '@/components/shared/ModelName.vue'
 import SearchSelect from '@/components/shared/SearchSelect.vue'
 import { useApi } from '@/composables/useApi'
+import { useCatalogQuery } from '@/composables/useCatalogQuery'
 import { onViewRefresh } from '@/composables/useRefresh'
 import type { CatalogFacets, CatalogPage, LaunchRow, RunRow } from '@/types/api'
 
 const DEFAULT_RESULT_LIMIT = 50
-const MAX_RESULT_LIMIT = 1000
 const SEARCH_DELAY = 300
 
 const FACETS = [
@@ -24,23 +23,7 @@ const FACETS = [
 
 type View = 'launches' | 'runs'
 
-const route = useRoute()
-const router = useRouter()
-
-function queryValue(key: string): string {
-  const value = route.query[key]
-  return typeof value === 'string' ? value : ''
-}
-
-function updateQuery(values: Record<string, string>, replace = false) {
-  const query = { ...route.query }
-  for (const [key, value] of Object.entries(values)) {
-    if (value) query[key] = value
-    else delete query[key]
-  }
-  const location = { name: 'runs', query }
-  return replace ? router.replace(location) : router.push(location)
-}
+const { queryValue, pushQuery, replaceQuery, offset, changePage, correctOffset } = useCatalogQuery()
 
 const group = computed(() => queryValue('group'))
 const view = computed<View>(() => queryValue('view') === 'runs' || group.value ? 'runs' : 'launches')
@@ -49,7 +32,7 @@ const pluralUnit = computed(() => view.value === 'launches' ? 'launches' : 'runs
 
 function setView(value: View) {
   if (value === view.value) return
-  void updateQuery({ view: value, group: '', offset: '' })
+  void pushQuery({ view: value, group: '', offset: '' })
 }
 
 const query = computed(() => queryValue('q'))
@@ -66,7 +49,7 @@ onUnmounted(() => window.clearTimeout(searchTimer))
 function submitSearch() {
   window.clearTimeout(searchTimer)
   const value = search.value.trim()
-  if (value !== query.value) void updateQuery({ q: value, offset: '' }, true)
+  if (value !== query.value) void replaceQuery({ q: value, offset: '' })
 }
 
 function setSearch(event: Event) {
@@ -94,17 +77,17 @@ const facets = computed(() => FACETS.map((facet) => {
 const activeFacets = computed(() => facets.value.filter(({ value }) => value))
 
 function setFacet(key: string, value: string) {
-  void updateQuery({ [key]: value, offset: '' })
+  void pushQuery({ [key]: value, offset: '' })
 }
 
 function clearFilters() {
-  void updateQuery({ ...Object.fromEntries(FACETS.map(({ key }) => [key, ''])), offset: '' })
+  void pushQuery({ ...Object.fromEntries(FACETS.map(({ key }) => [key, ''])), offset: '' })
 }
 
 function resetSearch() {
   window.clearTimeout(searchTimer)
   search.value = ''
-  void updateQuery({
+  void pushQuery({
     ...Object.fromEntries(FACETS.map(({ key }) => [key, ''])),
     q: '',
     group: '',
@@ -126,35 +109,27 @@ function launchLocation(groupId: string) {
   }
 }
 
-const limit = computed(() => {
+const requestedLimit = computed(() => {
   const value = Number(limitQuery.value)
-  return Number.isInteger(value) && value >= 1 && value <= MAX_RESULT_LIMIT ? value : DEFAULT_RESULT_LIMIT
-})
-const offset = computed(() => {
-  const value = Number(queryValue('offset'))
-  return Number.isSafeInteger(value) && value >= 0 ? value : 0
+  return Number.isSafeInteger(value) && value >= 1 ? value : DEFAULT_RESULT_LIMIT
 })
 const filtered = computed(() => query.value || group.value || activeFacets.value.length > 0)
 
 function setLimit(event: Event) {
   const input = event.target as HTMLInputElement
   const value = input.valueAsNumber
-  if (!input.validity.valid || !Number.isInteger(value)) {
+  if (!input.validity.valid || !Number.isSafeInteger(value)) {
     input.value = String(limit.value)
     return
   }
-  void updateQuery({ limit: String(value), offset: '' })
-}
-
-function changePage(value: number) {
-  void updateQuery({ offset: value > 0 ? String(value) : '' })
+  void pushQuery({ limit: String(value), offset: '' })
 }
 
 const catalogPath = computed(() => {
   const params = new URLSearchParams({
     view: view.value,
     offset: String(offset.value),
-    limit: String(limit.value),
+    limit: String(requestedLimit.value),
   })
   if (query.value) params.set('q', query.value)
   if (group.value) params.set('group', group.value)
@@ -171,13 +146,9 @@ onViewRefresh(() => {
   if (filtersOpen.value && !facetsLoading.value) void refreshFacets()
 })
 
-watch(catalog, (page) => {
-  if (page && offset.value > 0 && offset.value >= page.total) {
-    const lastOffset = Math.floor(Math.max(0, page.total - 1) / limit.value) * limit.value
-    void updateQuery({ offset: lastOffset ? String(lastOffset) : '' }, true)
-  }
-})
+watch(catalog, correctOffset)
 
+const limit = computed(() => catalog.value?.limit ?? requestedLimit.value)
 const total = computed(() => catalog.value?.total ?? 0)
 const launchRows = computed(() =>
   (catalog.value?.rows ?? []).filter((row): row is LaunchRow => !('run_id' in row)),
@@ -236,6 +207,17 @@ const resultLabel = computed(() => {
             <span class="filter-chevron" aria-hidden="true"></span>
           </button>
         </div>
+        <div class="catalog-summary">
+          <p class="result-count" role="status">{{ resultLabel }}</p>
+          <nav v-if="showPagination" class="catalog-pagination" aria-label="Result pages">
+            <button type="button" class="catalog-button" :disabled="loading || offset === 0" @click="changePage(offset - limit)">
+              <span aria-hidden="true">‹</span> Previous
+            </button>
+            <button type="button" class="catalog-button" :disabled="loading || !canGoForward" @click="changePage(offset + limit)">
+              Next <span aria-hidden="true">›</span>
+            </button>
+          </nav>
+        </div>
       </div>
 
       <section v-show="filtersOpen" id="run-filters" class="facet-panel" aria-label="Run filters">
@@ -267,7 +249,7 @@ const resultLabel = computed(() => {
           </template>
           <label class="facet-select">
             Result limit
-            <input :value="limit" type="number" min="1" :max="MAX_RESULT_LIMIT" @change="setLimit" />
+            <input :value="limit" type="number" min="1" @change="setLimit" />
           </label>
         </div>
       </section>
@@ -275,25 +257,13 @@ const resultLabel = computed(() => {
       <div v-if="group || activeFacets.length" class="active-filters" role="group" aria-label="Active filters">
         <div v-if="group" class="active-filter">
           <span><strong>Launch</strong> <span class="font-mono">{{ group }}</span></span>
-          <button type="button" aria-label="Clear launch filter" @click="updateQuery({ group: '', view: 'runs', offset: '' })">×</button>
+          <button type="button" aria-label="Clear launch filter" @click="pushQuery({ group: '', view: 'runs', offset: '' })">×</button>
         </div>
         <div v-for="facet in activeFacets" :key="facet.key" class="active-filter">
           <span><strong>{{ facet.label }}</strong> {{ facet.value }}</span>
           <button type="button" :aria-label="`Remove ${facet.label.toLowerCase()} filter`" @click="setFacet(facet.key, '')">×</button>
         </div>
         <button v-if="activeFacets.length > 1" type="button" class="text-action" @click="clearFilters">Clear filters</button>
-      </div>
-
-      <div class="catalog-summary">
-        <p class="result-count" role="status">{{ resultLabel }}</p>
-        <nav v-if="showPagination" class="catalog-pagination" aria-label="Result pages">
-          <button type="button" class="catalog-button" :disabled="loading || offset === 0" @click="changePage(offset - limit)">
-            <span aria-hidden="true">‹</span> Previous
-          </button>
-          <button type="button" class="catalog-button" :disabled="loading || !canGoForward" @click="changePage(offset + limit)">
-            Next <span aria-hidden="true">›</span>
-          </button>
-        </nav>
       </div>
 
       <div v-if="error" class="catalog-state" role="alert">
@@ -326,17 +296,8 @@ const resultLabel = computed(() => {
 </template>
 
 <style scoped>
-.runs-workspace {
-  padding-block: clamp(0.5rem, 2vw, 1.75rem);
-}
-
 h1 {
-  margin: 0 0 1.4rem;
-  color: var(--c-text);
-  font-size: clamp(1.75rem, 3vw, 2.5rem);
-  font-weight: 650;
-  letter-spacing: -0.045em;
-  line-height: 1.15;
+  margin: 0 0 0.72rem;
 }
 
 .catalog {
@@ -346,7 +307,6 @@ h1 {
   border-radius: 0.8rem;
 }
 
-.catalog-toolbar,
 .catalog-controls,
 .catalog-summary,
 .catalog-pagination {
@@ -355,13 +315,15 @@ h1 {
 }
 
 .catalog-toolbar {
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.9rem 1rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem 0.85rem;
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid var(--c-surface-border);
 }
 
 .catalog-controls {
-  flex: 1 1 28rem;
   justify-content: flex-end;
   gap: 0.5rem;
   min-width: 0;
@@ -498,7 +460,7 @@ h1 {
 
 .facet-panel {
   padding: 0.9rem 1rem 1rem;
-  border-top: 1px solid var(--c-surface-border-subtle);
+  border-bottom: 1px solid var(--c-surface-border-subtle);
   background: var(--c-surface-raised);
 }
 
@@ -552,7 +514,7 @@ h1 {
   align-items: center;
   flex-wrap: wrap;
   gap: 0.375rem 0.5rem;
-  border-top: 1px solid var(--c-surface-border-subtle);
+  border-bottom: 1px solid var(--c-surface-border-subtle);
   padding: 0.55rem 1rem;
 }
 
@@ -599,13 +561,9 @@ h1 {
 }
 
 .catalog-summary {
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-  min-height: 3rem;
-  padding: 0.45rem 1rem;
-  background: var(--c-surface);
-  border-block: 1px solid var(--c-surface-border);
+  justify-content: flex-end;
+  gap: 0.6rem;
+  white-space: nowrap;
 }
 
 .result-count {
@@ -644,8 +602,20 @@ h1 {
   min-height: 8rem;
 }
 
+@media (max-width: 960px) {
+  .catalog-toolbar {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .catalog-summary {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+  }
+}
+
 @media (max-width: 650px) {
   .catalog-toolbar {
+    display: flex;
     align-items: flex-start;
     flex-direction: column;
     gap: 0.625rem;
@@ -653,7 +623,10 @@ h1 {
 
   .catalog-controls {
     width: 100%;
-    flex-basis: auto;
+  }
+
+  .catalog-summary {
+    width: 100%;
   }
 
   .run-search {

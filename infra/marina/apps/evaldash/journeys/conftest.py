@@ -20,6 +20,24 @@ APP = "evaldash"
 SCALE_COHORT = "fixture-scale"
 
 
+def _ingest_fixture_records(database: DatabaseSpec, prefix: str) -> None:
+    engine = engine_for(database, APP)
+    try:
+        with engine.begin() as connection:
+            evaldash_app.migrate(connection)
+        ingestor = evaldash_app.PostgresIngestor(
+            engine,
+            (prefix,),
+            evaldash_app.DEFAULT_INGEST_INTERVAL,
+            evaldash_app.DEFAULT_REVALIDATE_AFTER,
+        )
+        # Another app's journeys may already have started Playwright's main-thread loop.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(asyncio.run, ingestor.run_once()).result()
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def seeded_records(marina_database: DatabaseSpec) -> Iterator[str]:
     with tempfile.TemporaryDirectory(prefix="evaldash-records-") as prefix, pytest.MonkeyPatch.context() as env:
@@ -28,21 +46,7 @@ def seeded_records(marina_database: DatabaseSpec) -> Iterator[str]:
         env.delenv(evaldash_app.INGEST_JOB_ENV, raising=False)
         fixtures.build_fixtures(prefix)
         fixtures.build_native_fixtures(prefix)
-        engine = engine_for(marina_database, APP)
-        try:
-            with engine.begin() as connection:
-                evaldash_app.migrate(connection)
-            ingestor = evaldash_app.PostgresIngestor(
-                engine,
-                (prefix,),
-                evaldash_app.DEFAULT_INGEST_INTERVAL,
-                evaldash_app.DEFAULT_REVALIDATE_AFTER,
-            )
-            # Another app's journeys may already have started Playwright's main-thread loop.
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                pool.submit(asyncio.run, ingestor.run_once()).result()
-        finally:
-            engine.dispose()
+        _ingest_fixture_records(marina_database, prefix)
         yield prefix
 
 

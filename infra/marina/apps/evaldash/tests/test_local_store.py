@@ -556,7 +556,7 @@ def test_catalog_searches_entire_snapshot_and_pages_ties(client, store, tmp_path
             page = client.get("/catalog", params={**params, "offset": offset}).json()
             assert page["total"] == 2
             assert [row[id_field] for row in page["rows"]] == [expected_id]
-        assert client.get("/catalog", params={**params, "offset": 2}).json() == {"rows": [], "total": 2}
+        assert client.get("/catalog", params={**params, "offset": 2}).json() == {"rows": [], "total": 2, "limit": 1}
 
 
 def test_catalog_returns_mixed_launch_summary_and_paged_members(client):

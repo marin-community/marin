@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { RUN_STATUS } from '@/types/api'
 
 const routes: RouteRecordRaw[] = [
   // Saved panel links carry their cohort or benchmark selection in the root URL.
@@ -33,7 +34,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/ReportDetailPage.vue'),
     props: true,
   },
-  { path: '/inspect', redirect: to => ({ name: 'runs', query: { ...to.query, view: 'runs', status: 'succeeded' } }) },
+  { path: '/inspect', redirect: to => ({ name: 'runs', query: { ...to.query, view: 'runs', status: RUN_STATUS.SUCCEEDED } }) },
   { path: '/debug', name: 'debug', component: () => import('@/pages/DebugPage.vue') },
 ]
 

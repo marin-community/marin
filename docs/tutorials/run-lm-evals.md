@@ -283,7 +283,7 @@ different protocols distinct in dashboard comparisons. See
 
 Open [EvalDash](https://marina.oa.dev/evaldash/) and paste the launch ID into
 **Search runs**. **Launches** groups evaluations that share a launch ID.
-Choose **View runs** to see each evaluation and its status. To find failures
+Open a launch title to see its evaluations and their status. To find failures
 across launches, open **All runs**, clear any launch or search filter, and set
 **Filters → Status** to `failed`. Copy the URL to share that search.
 
@@ -302,7 +302,8 @@ a review starting from one specific setting, find it in **Benchmarks**, then
 check the models and choose **Compare**.
 
 The example below uses a reproducible catalog of 100 models and 50 benchmark
-settings. Four models are selected. Choose **Fit to scores** to inspect small
+settings. Follow one model’s symbol down the overview to scan its scores.
+Choose a benchmark and **Fit to scores** to inspect small
 differences and their intervals. **Full scale** restores the full percentage
 axis for binary metrics. Open a source link to inspect the run behind an estimate.
 

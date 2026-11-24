@@ -9,9 +9,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from evalrecords.eval_stats import CohortMode
-from evalrecords.records import EvalRunRecord
+from evalrecords.records import EvalRunRecord, RunStatus
 
 from .metrics import build_run_facets, cohort_selection, display_status, is_archived_model
+
+
+@dataclass(frozen=True)
+class CatalogPage:
+    rows: list[dict]
+    total: int
+    limit: int
 
 
 @dataclass(frozen=True)
@@ -80,8 +87,8 @@ def _status_rollup(statuses: set[str]) -> str:
     """Collapse a launch's per-eval statuses without inventing an evaluator failure."""
     if len(statuses) == 1:
         return next(iter(statuses))
-    if "succeeded" not in statuses and "failed" in statuses:
-        return "failed"
+    if RunStatus.SUCCEEDED not in statuses and RunStatus.FAILED in statuses:
+        return RunStatus.FAILED
     return "mixed"
 
 
@@ -92,7 +99,7 @@ class Launch:
         self.members = members
         self.newest = members[0].record
         self.status = _status_rollup({run.status for run in members})
-        self.n_succeeded = sum(run.status == "succeeded" for run in members)
+        self.n_succeeded = sum(run.status == RunStatus.SUCCEEDED for run in members)
         self._shared_model_and_user = all(
             run.record.model.name == self.newest.model.name and run.record.user == self.newest.user for run in members
         )
@@ -219,7 +226,7 @@ class RunCatalog:
         include_archived: bool,
         offset: int,
         limit: int,
-    ) -> dict:
+    ) -> CatalogPage:
         mode, version = cohort_selection(cohort)
         matches = []
         for model, runs in self._by_model.items():
@@ -233,4 +240,4 @@ class RunCatalog:
             if runs:
                 matches.append(_ModelActivity(model, runs, archived))
         matches.sort(key=lambda match: (match.runs[0].record.created_at, match.model), reverse=True)
-        return {"rows": [match.row() for match in matches[offset : offset + limit]], "total": len(matches)}
+        return CatalogPage([match.row() for match in matches[offset : offset + limit]], len(matches), limit)

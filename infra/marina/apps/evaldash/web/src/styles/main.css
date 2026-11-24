@@ -93,13 +93,13 @@ body { background: var(--c-page); }
 .review-page {
   max-width: 90rem;
   margin-inline: auto;
-  padding: clamp(1rem, 2.5vw, 2.25rem) clamp(1rem, 3.5vw, 3.5rem);
+  padding: 1rem clamp(1rem, 2.5vw, 2.25rem);
   font-family: "Noto Sans Variable", system-ui, sans-serif;
   color: var(--c-text);
   font-variant-numeric: tabular-nums;
 }
 .review-page h1 {
-  font: 650 clamp(1.75rem, 2.8vw, 2.375rem)/1.16 "Noto Sans Variable", system-ui, sans-serif;
+  font: 650 clamp(1.65rem, 2.4vw, 2rem)/1.16 "Noto Sans Variable", system-ui, sans-serif;
   letter-spacing: -.04em;
   overflow-wrap: anywhere;
 }
@@ -114,7 +114,7 @@ body { background: var(--c-page); }
   box-sizing: border-box;
   max-width: 90rem;
   margin: auto;
-  padding-inline: clamp(1rem, 3.5vw, 3.5rem);
+  padding-inline: clamp(1rem, 2.5vw, 2.25rem);
 }
 #app .marina-app-nav > a {
   padding-block: .6rem;
@@ -137,4 +137,20 @@ body { background: var(--c-page); }
 .tools-menu a:hover { background: var(--c-accent-subtle); }
 @media (max-width: 23rem) {
   #app .marina-app-nav { gap: .55rem; padding-inline: .65rem; }
+}
+
+@media (min-width: 48rem) {
+  #app .marina-bar {
+    display: flex;
+    align-items: stretch;
+    padding-inline: max(clamp(1rem, 2.5vw, 2.25rem), calc((100% - 90rem) / 2 + 2.25rem));
+  }
+  #app .marina-title-row, #app .marina-app-nav { margin: 0; padding-inline: 0; max-width: none; }
+  #app .marina-title-row { gap: .55rem; padding-block: .2rem; }
+  #app .marina-app-nav { flex: 1; align-items: stretch; margin-left: 2rem; }
+  #app .marina-app-nav > a { display: flex; align-items: center; }
+}
+@media (max-width: 47.99rem) {
+  #app .marina-title-row { padding-block: .1rem; }
+  .review-page { padding-block: .75rem; }
 }

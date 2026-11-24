@@ -7,7 +7,7 @@
  */
 import { onMounted, watch } from 'vue'
 import { useApi } from '@/composables/useApi'
-import { formatDuration, formatMillis, protoTimestampMillis } from '@/utils/formatting'
+import { formatDuration, formatMillis, irisJobUrl, protoTimestampMillis } from '@/utils/formatting'
 import type { JobsResponse } from '@/types/api'
 
 const props = defineProps<{ runId: string }>()
@@ -16,10 +16,6 @@ const { data, loading, error, refresh } = useApi<JobsResponse>(() => `api/runs/$
 
 onMounted(refresh)
 watch(() => props.runId, refresh)
-
-function irisJobUrl(path: string): string {
-  return `https://iris.oa.dev/#/job/${encodeURIComponent(path)}`
-}
 
 function stateName(state: string): string {
   return state.replace(/^(JOB|TASK)_STATE_/, '').toLowerCase()

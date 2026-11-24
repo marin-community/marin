@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink } from 'vue-router'
 import ModelName from '@/components/shared/ModelName.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import { useApi } from '@/composables/useApi'
+import { useCatalogQuery } from '@/composables/useCatalogQuery'
 import { onViewRefresh } from '@/composables/useRefresh'
 import type { ModelCatalogPage } from '@/types/api'
 import { formatTimestamp } from '@/utils/formatting'
@@ -13,37 +14,17 @@ const PAGE_SIZE = 24
 const SEARCH_DELAY = 300
 const numberFormat = new Intl.NumberFormat()
 
-const route = useRoute()
-const router = useRouter()
-
-function queryValue(key: string) {
-  const value = route.query[key]
-  return typeof value === 'string' ? value : ''
-}
-
-function updateQuery(values: Record<string, string>, replace = false) {
-  const query = { ...route.query }
-  for (const [key, value] of Object.entries(values)) {
-    if (value) query[key] = value
-    else delete query[key]
-  }
-  const location = { name: 'models', query }
-  return replace ? router.replace(location) : router.push(location)
-}
+const { queryValue, pushQuery, replaceQuery, offset, changePage, correctOffset } = useCatalogQuery()
 
 const query = computed(() => queryValue('q'))
 const cohort = computed(() => queryValue('cohort'))
 const cohortLabel = computed(() => cohort.value === UNVERSIONED_COHORT ? 'Unversioned' : cohort.value)
 const showArchived = computed(() => queryValue('include_archived') === '1')
-const offset = computed(() => {
-  const value = Number(queryValue('offset'))
-  return Number.isSafeInteger(value) && value >= 0 ? value : 0
-})
 
 const search = ref(query.value)
 function submitSearch() {
   const value = search.value.trim()
-  if (value !== query.value) void updateQuery({ q: value, offset: '' }, true)
+  if (value !== query.value) void replaceQuery({ q: value, offset: '' })
 }
 
 watch(query, (value) => {
@@ -54,10 +35,6 @@ watch(search, (value, _, onCleanup) => {
   const timer = window.setTimeout(submitSearch, SEARCH_DELAY)
   onCleanup(() => window.clearTimeout(timer))
 })
-
-function changePage(value: number) {
-  void updateQuery({ offset: value > 0 ? String(value) : '' })
-}
 
 const catalogPath = computed(() => {
   const params = new URLSearchParams()
@@ -74,14 +51,10 @@ watch(catalogPath, () => {
   void refresh()
 }, { immediate: true })
 onViewRefresh(refresh)
-watch(data, (page) => {
-  if (page && offset.value > 0 && offset.value >= page.total) {
-    const lastOffset = Math.floor(Math.max(0, page.total - 1) / PAGE_SIZE) * PAGE_SIZE
-    void updateQuery({ offset: lastOffset ? String(lastOffset) : '' }, true)
-  }
-})
+watch(data, correctOffset)
 
-const hasNext = computed(() => offset.value + PAGE_SIZE < (data.value?.total ?? 0))
+const limit = computed(() => data.value?.limit ?? PAGE_SIZE)
+const hasNext = computed(() => offset.value + limit.value < (data.value?.total ?? 0))
 const showPagination = computed((previous: boolean | undefined) =>
   offset.value > 0 || (data.value ? hasNext.value : previous ?? false),
 )
@@ -114,7 +87,7 @@ const resultLabel = computed(() => {
           <input
             :checked="showArchived"
             type="checkbox"
-            @change="updateQuery({ include_archived: ($event.target as HTMLInputElement).checked ? '1' : '', offset: '' })"
+            @change="pushQuery({ include_archived: ($event.target as HTMLInputElement).checked ? '1' : '', offset: '' })"
           />
           Show archived
         </label>
@@ -123,26 +96,25 @@ const resultLabel = computed(() => {
           type="button"
           class="directory-button"
           aria-label="Clear cohort filter"
-          @click="updateQuery({ cohort: '', offset: '' })"
+          @click="pushQuery({ cohort: '', offset: '' })"
         >{{ cohortLabel }} <span aria-hidden="true">×</span></button>
-      </div>
-
-      <div class="directory-summary">
-        <p role="status">{{ resultLabel }}</p>
-        <nav v-if="showPagination" aria-label="Model pages">
-          <button
-            type="button"
-            class="directory-button"
-            :disabled="loading || offset === 0"
-            @click="changePage(offset - PAGE_SIZE)"
-          >‹ Previous</button>
-          <button
-            type="button"
-            class="directory-button"
-            :disabled="loading || !hasNext"
-            @click="changePage(offset + PAGE_SIZE)"
-          >Next ›</button>
-        </nav>
+        <div class="directory-summary">
+          <p role="status">{{ resultLabel }}</p>
+          <nav v-if="showPagination" aria-label="Model pages">
+            <button
+              type="button"
+              class="directory-button"
+              :disabled="loading || offset === 0"
+              @click="changePage(offset - limit)"
+            >‹ Previous</button>
+            <button
+              type="button"
+              class="directory-button"
+              :disabled="loading || !hasNext"
+              @click="changePage(offset + limit)"
+            >Next ›</button>
+          </nav>
+        </div>
       </div>
 
       <div v-if="error" role="alert" class="directory-error">
@@ -186,12 +158,8 @@ const resultLabel = computed(() => {
 </template>
 
 <style scoped>
-.models-directory {
-  padding-block: clamp(0.5rem, 2vw, 1.75rem);
-}
-
 h1 {
-  margin-bottom: 1.4rem;
+  margin-bottom: .65rem;
 }
 
 .directory {
@@ -210,9 +178,9 @@ h1 {
   gap: 0.55rem;
 }
 
-.directory-controls,
-.directory-summary {
-  padding: 0.65rem 1rem;
+.directory-controls {
+  padding: .55rem .85rem;
+  border-bottom: 1px solid var(--c-surface-border);
   color: var(--c-text-secondary);
   font-size: 0.8125rem;
 }
@@ -246,8 +214,7 @@ h1 {
 
 .directory-summary {
   justify-content: space-between;
-  min-height: 2.9rem;
-  border-block: 1px solid var(--c-surface-border);
+  margin-inline-start: auto;
   font-variant-numeric: tabular-nums;
 }
 
@@ -282,7 +249,7 @@ h1 {
 
 .directory-table th,
 .directory-table td {
-  padding: 0.65rem 1rem;
+  padding: .4rem .85rem;
   text-align: start;
   vertical-align: top;
   overflow-wrap: anywhere;

@@ -11,12 +11,39 @@ const props = defineProps<{
   launchLocation: (group: string) => RouteLocationRaw
 }>()
 
-const dayFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'full' })
+const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
 const numberFormat = new Intl.NumberFormat()
 
+interface LaunchEntry {
+  row: LaunchRow
+  description: string
+  time: string
+  suffix?: string
+}
+
+const MINIMUM_ID_SUFFIX = 4
+
+function distinguishMatchingEntries(entries: LaunchEntry[]) {
+  const byAppearance = new Map<string, LaunchEntry[]>()
+  for (const entry of entries) {
+    const { row, description, time } = entry
+    const title = description || row.model_name || row.version || row.group_id
+    const key = JSON.stringify([title, row.model_name, row.version, row.user_name, row.accelerator, time, row.status, runCount(row)])
+    const matches = byAppearance.get(key) ?? []
+    if (!byAppearance.has(key)) byAppearance.set(key, matches)
+    matches.push(entry)
+  }
+  for (const matches of byAppearance.values()) {
+    if (matches.length < 2) continue
+    let length = MINIMUM_ID_SUFFIX
+    while (new Set(matches.map(({ row }) => row.group_id.slice(-length))).size < matches.length) length++
+    for (const entry of matches) entry.suffix = entry.row.group_id.slice(-length)
+  }
+}
+
 const dateGroups = computed(() => {
-  const groups = new Map<string, { row: LaunchRow; description: string; time: string }[]>()
+  const groups = new Map<string, LaunchEntry[]>()
   for (const row of props.rows) {
     const date = new Date(row.created_at)
     const valid = !Number.isNaN(date.getTime())
@@ -25,7 +52,10 @@ const dateGroups = computed(() => {
     if (!groups.has(day)) groups.set(day, items)
     items.push({ row, description: row.description?.trim() ?? '', time: valid ? timeFormat.format(date) : '' })
   }
-  return Array.from(groups, ([day, items]) => ({ day, items }))
+  return Array.from(groups, ([day, items]) => {
+    distinguishMatchingEntries(items)
+    return { day, items }
+  })
 })
 
 function runCount(row: LaunchRow) {
@@ -37,36 +67,45 @@ function runCount(row: LaunchRow) {
 
 <template>
   <div class="launch-activity" role="region" aria-label="Evaluation launches">
-    <section v-for="({ day, items }, index) in dateGroups" :key="day" :aria-labelledby="`launch-day-${index}`">
-      <h2 :id="`launch-day-${index}`" class="launch-day">{{ day }}</h2>
-      <ol class="launch-list" role="list" :aria-labelledby="`launch-day-${index}`">
-        <li v-for="{ row, description, time } in items" :key="row.group_id" class="launch-entry">
-          <time v-if="time" class="launch-time" :datetime="row.created_at" :title="formatTimestamp(row.created_at)">{{ time }}</time>
-          <div class="launch-identity">
-            <h3 class="launch-title">
-              <span v-if="description" :title="description">{{ description }}</span>
-              <ModelName v-else-if="row.model_name" :model="row.model_name" />
-              <span v-else>{{ row.version || row.group_id }}</span>
-            </h3>
-            <div v-if="description && row.model_name" class="launch-model">
-              <ModelName :model="row.model_name" />
-            </div>
-            <div v-if="row.version || row.user_name || row.accelerator" class="launch-scope">
-              <span v-if="row.version && (description || row.model_name)" :title="`Version ${row.version}`">{{ row.version }}</span>
-              <span v-if="row.user_name" :title="`Owner ${row.user_name}`">{{ row.user_name }}</span>
-              <span v-if="row.accelerator" :title="`Accelerator ${row.accelerator}`">{{ row.accelerator }}</span>
-            </div>
-          </div>
-          <div class="launch-outcome">
-            <StatusChip :status="row.status" />
-            <span class="launch-count">{{ runCount(row) }}</span>
-          </div>
+    <section
+      v-for="({ day, items }, dayIndex) in dateGroups"
+      :key="day"
+      class="launch-group"
+      :aria-labelledby="`launch-day-${dayIndex}`"
+    >
+      <h2 :id="`launch-day-${dayIndex}`" class="launch-day">{{ day }}</h2>
+      <ol class="launch-list" role="list" :aria-labelledby="`launch-day-${dayIndex}`">
+        <li v-for="({ row, description, time, suffix }, rowIndex) in items" :key="row.group_id" class="launch-entry">
           <RouterLink
             :to="launchLocation(row.group_id)"
             class="launch-link"
-            :aria-label="`View runs for ${row.model_name || row.version || row.group_id}`"
+            :aria-labelledby="`launch-title-${dayIndex}-${rowIndex}`"
             :title="row.group_id"
-          >View runs <span aria-hidden="true">→</span></RouterLink>
+          >
+            <time v-if="time" class="launch-time" :datetime="row.created_at" :title="formatTimestamp(row.created_at)">{{ time }}</time>
+            <div class="launch-identity">
+              <h3 :id="`launch-title-${dayIndex}-${rowIndex}`" class="launch-title">
+                <span v-if="description">{{ description }}</span>
+                <ModelName v-else-if="row.model_name" :model="row.model_name" />
+                <span v-else>{{ row.version || row.group_id }}</span>
+                <span v-if="suffix" class="launch-id">
+                  <code aria-hidden="true">#{{ suffix }}</code>
+                  <span class="sr-only">Launch ID {{ row.group_id }}</span>
+                </span>
+              </h3>
+              <div class="launch-scope">
+                <ModelName v-if="description && row.model_name" :model="row.model_name" />
+                <span v-if="row.version && (description || row.model_name)" :title="`Version ${row.version}`">{{ row.version }}</span>
+                <span v-if="row.user_name" :title="`Owner ${row.user_name}`">{{ row.user_name }}</span>
+                <span v-if="row.accelerator" :title="`Accelerator ${row.accelerator}`">{{ row.accelerator }}</span>
+              </div>
+            </div>
+            <div class="launch-outcome">
+              <StatusChip :status="row.status" />
+              <span>{{ runCount(row) }}</span>
+            </div>
+            <span class="launch-arrow" aria-hidden="true">→</span>
+          </RouterLink>
         </li>
       </ol>
     </section>
@@ -75,154 +114,134 @@ function runCount(row: LaunchRow) {
 
 <style scoped>
 .launch-activity {
+  padding-inline: clamp(0.65rem, 2vw, 1rem);
+}
+
+.launch-group {
   display: grid;
-  gap: 1.5rem;
-  padding: 1.2rem clamp(0.65rem, 2vw, 1.25rem) 1.4rem;
+  grid-template-columns: 9.75rem minmax(0, 1fr);
+  gap: 0.4rem;
+}
+
+.launch-group + .launch-group {
+  border-top: 1px solid var(--c-surface-border);
 }
 
 .launch-day {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 0.6rem;
+  padding-block-start: 0.9rem;
   color: var(--c-text-secondary);
   font-size: 0.82rem;
   font-weight: 650;
 }
 
-.launch-day::after {
-  content: '';
-  flex: 1;
-  border-top: 1px solid var(--c-surface-border);
+.launch-entry + .launch-entry {
+  border-top: 1px solid var(--c-surface-border-subtle);
 }
 
-.launch-list {
+.launch-link {
   display: grid;
-  gap: 0.5rem;
+  grid-template-areas: 'time identity outcome arrow';
+  grid-template-columns: 4.65rem minmax(0, 1fr) 12.5rem 1rem;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 2.75rem;
+  padding: 0.42rem 0.55rem;
 }
 
-.launch-entry {
-  display: grid;
-  grid-template-areas: 'when identity outcome action';
-  grid-template-columns: 5rem minmax(0, 1fr) minmax(7.5rem, auto) auto;
-  align-items: start;
-  gap: 0.85rem;
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--c-surface-border);
-  border-radius: 0.55rem;
-  background: color-mix(in srgb, var(--c-surface-raised) 35%, var(--c-surface));
+.launch-link:hover,
+.launch-link:focus-visible {
+  background: color-mix(in srgb, var(--c-accent) 6%, var(--c-surface));
 }
 
-.launch-entry:hover,
-.launch-entry:focus-within {
-  border-color: var(--c-accent-border);
+.launch-time,
+.launch-scope,
+.launch-outcome {
+  color: var(--c-text-secondary);
+  font-size: 0.8125rem;
 }
 
 .launch-time {
-  grid-area: when;
-  margin-top: 0.15rem;
-  color: var(--c-text-secondary);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
+  grid-area: time;
   white-space: nowrap;
 }
 
 .launch-identity {
+  display: flex;
   grid-area: identity;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.05rem 0.6rem;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
 .launch-title {
-  color: var(--c-text);
-  font-size: 1rem;
-  font-weight: 660;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem;
+  min-width: 0;
+  color: var(--c-accent);
+  font-size: 0.9375rem;
+  font-weight: 650;
   line-height: 1.35;
 }
 
-.launch-model {
-  margin-top: 0.2rem;
-  color: var(--c-text);
-  font-size: 0.85rem;
+.launch-id {
+  color: var(--c-text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.launch-link:hover .launch-title,
+.launch-link:focus-visible .launch-title {
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
 }
 
 .launch-scope {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.15rem 0.65rem;
-  margin-top: 0.25rem;
-  color: var(--c-text-secondary);
-  font-size: 0.75rem;
+  gap: 0.1rem 0.45rem;
 }
 
-.launch-scope span + span::before {
+.launch-scope > span + span::before {
   content: '·';
   display: inline-block;
-  margin-inline-end: 0.65rem;
+  margin-inline-end: 0.45rem;
   color: var(--c-text-muted);
 }
 
 .launch-outcome {
-  display: grid;
-  justify-items: start;
-  gap: 0.15rem;
+  display: flex;
   grid-area: outcome;
-}
-
-.launch-count {
-  color: var(--c-text-secondary);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.launch-link {
-  display: inline-flex;
-  grid-area: action;
   align-items: center;
-  gap: 0.35rem;
-  justify-self: end;
-  min-height: 2rem;
-  padding-inline: 0.55rem;
-  border: 1px solid var(--c-surface-border);
-  border-radius: 0.4rem;
-  background: var(--c-surface);
-  color: var(--c-accent);
-  font-size: 0.78rem;
-  font-weight: 650;
+  justify-content: space-between;
+  gap: 0.36rem;
   white-space: nowrap;
 }
 
-.launch-link:hover,
-.launch-link:focus-visible {
-  border-color: var(--c-accent-border);
-  background: var(--c-accent-subtle);
+.launch-arrow {
+  grid-area: arrow;
+  color: var(--c-accent);
+  text-align: end;
 }
 
-@media (max-width: 710px) {
-  .launch-entry {
-    grid-template-areas:
-      'when outcome'
-      'identity identity'
-      'action action';
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.45rem 0.7rem;
-    padding: 0.7rem 0.8rem;
+@media (max-width: 790px) {
+  .launch-group {
+    display: block;
   }
 
-  .launch-outcome {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.22rem 0.45rem;
-    justify-content: end;
+  .launch-day {
+    padding-block: 0.52rem 0.28rem;
   }
-}
 
-@media (pointer: coarse) {
   .launch-link {
-    min-height: 2.75rem;
+    grid-template-areas: 'identity identity arrow' 'time outcome arrow';
+    grid-template-columns: minmax(0, 1fr) auto 1rem;
+    gap: 0.28rem 0.5rem;
+    padding: 0.5rem 0.3rem;
   }
 }
 </style>

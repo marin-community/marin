@@ -73,7 +73,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import playground_reports, review, samples
-from .catalog import CatalogFilters, RunCatalog
+from .catalog import CatalogFilters, CatalogPage, RunCatalog
 from .db_migrations import apply_migrations
 from .metrics import (
     ALL_COHORTS,
@@ -507,21 +507,21 @@ class RecordStore:
             version=version,
             accelerator=accelerator,
         )
-        return self.catalog_runs(filters, 0, limit)["rows"]
+        return self.catalog_runs(filters, 0, limit).rows
 
-    def catalog_runs(self, filters: CatalogFilters, offset: int, limit: int) -> dict:
+    def catalog_runs(self, filters: CatalogFilters, offset: int, limit: int) -> CatalogPage:
         records, total = self._snapshot().catalog.run_page(filters, offset, limit)
-        return {"rows": [record_to_row(record) for record in records], "total": total}
+        return CatalogPage([record_to_row(record) for record in records], total, limit)
 
-    def catalog_launches(self, filters: CatalogFilters, offset: int, limit: int) -> dict:
+    def catalog_launches(self, filters: CatalogFilters, offset: int, limit: int) -> CatalogPage:
         launches = self._snapshot().catalog.matching_launches(filters)
         rows = [launch.row() for launch in launches[offset : offset + limit]]
-        return {"rows": rows, "total": len(launches)}
+        return CatalogPage(rows, len(launches), limit)
 
     def catalog_facets(self) -> dict:
         return {"run_facets": self._snapshot().catalog.facets()}
 
-    def catalog_models(self, query: str, cohort: str, *, include_archived: bool, offset: int, limit: int) -> dict:
+    def catalog_models(self, query: str, cohort: str, *, include_archived: bool, offset: int, limit: int) -> CatalogPage:
         return self._snapshot().catalog.model_page(
             query, cohort, self.archived_models(), include_archived=include_archived, offset=offset, limit=limit
         )
@@ -1161,7 +1161,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             return JSONResponse({"error": "view must be launches or runs"}, status_code=400)
         offset = _parse_int(params.get("offset"), default=0, low=0, high=sys.maxsize)
         limit = _parse_int(params.get("limit"), default=DEFAULT_CATALOG_LIMIT, low=1, high=MAX_RUNS_LIMIT)
-        return JSONResponse(await asyncio.to_thread(query, CatalogFilters.from_query(params), offset, limit))
+        page = await asyncio.to_thread(query, CatalogFilters.from_query(params), offset, limit)
+        return JSONResponse(asdict(page))
 
     @router.get("/catalog/facets")
     async def api_catalog_facets() -> JSONResponse:
@@ -1172,7 +1173,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         params = request.query_params
         offset = _parse_int(params.get("offset"), default=0, low=0, high=sys.maxsize)
         limit = _parse_int(params.get("limit"), default=DEFAULT_MODEL_CATALOG_LIMIT, low=1, high=MAX_RUNS_LIMIT)
-        payload = await asyncio.to_thread(
+        page = await asyncio.to_thread(
             store.catalog_models,
             params.get("q", "").strip().casefold(),
             params.get("cohort") or ALL_COHORTS,
@@ -1180,7 +1181,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             offset=offset,
             limit=limit,
         )
-        return JSONResponse(payload)
+        return JSONResponse(asdict(page))
 
     @router.get("/runs")
     async def api_runs(request: Request) -> JSONResponse:

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
-from typing import Any, cast
+from typing import TypedDict, cast
 
 from marina.journeys import Journey
 from playwright.sync_api import expect
@@ -11,8 +11,16 @@ MODELS_API = "/evaldash/api/catalog/models"
 COMPARE_MODELS_API = "/evaldash/api/comparison-models"
 
 
+class ComparisonModelChoices(TypedDict):
+    models: list[str]
+    default_cohort: str
+    verified_cohorts: list[str]
+    versions: list[str]
+
+
 def test_compare_picker_keeps_configurations_distinct_and_limits_selection(journey: Journey) -> None:
-    model_catalog = cast(dict[str, Any], journey.api(f"{COMPARE_MODELS_API}?cohort=2026.07.20&benchmarks=gsm8k"))
+    path = f"{COMPARE_MODELS_API}?cohort=2026.07.20&benchmarks=gsm8k"
+    model_catalog = cast(ComparisonModelChoices, journey.api(path))
     checkpoint = "open-athena/preview-snowball-checkpoint-" + "1234567890" * 8
     variants = [f"{checkpoint}@aaaaaaaaaaaa", f"{checkpoint}@bbbbbbbbbbbb"]
     model_catalog["models"].extend(variants)

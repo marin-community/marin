@@ -267,7 +267,6 @@ function toggleEval(name: string) {
 }
 const visibleTasks = computed(() => data.value?.panel ?? [])
 
-// Leading admitted score for each column.
 const best = computed(() => fleetBest(data.value?.rows ?? [], visibleTasks.value))
 
 // --- Ordering. Benchmark columns use compareCells: the score, then the lower bound. ---

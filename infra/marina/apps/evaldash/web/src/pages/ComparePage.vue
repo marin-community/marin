@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import BenchmarkFocus from '@/components/comparison/BenchmarkFocus.vue'
+import BenchmarkOverview from '@/components/comparison/BenchmarkOverview.vue'
 import ModelName from '@/components/shared/ModelName.vue'
 import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import SearchSelect from '@/components/shared/SearchSelect.vue'
@@ -9,7 +10,7 @@ import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta } from '@/types/api'
-import { formatMeasurement } from '@/utils/formatting'
+import { formatMeasurement, formatMeasurementInterval } from '@/utils/formatting'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cohortWarning } from '@/utils/panel'
 
 const PAGE_SIZE = 12
@@ -148,6 +149,10 @@ const benchmarkDetail = ref<HTMLElement | null>(null)
 
 function benchmarkLinkId(benchmark: string): string {
   return `compare-${encodeURIComponent(benchmark)}`
+}
+
+function benchmarkLocation(benchmark: string) {
+  return { id: benchmarkLinkId(benchmark), to: comparisonLocation({ focus: benchmark }) }
 }
 
 watch(focusName, async (next, previous) => {
@@ -296,21 +301,13 @@ const ranking = computed(() => selected.value
               </div>
             </div>
             <p v-if="rows.length && !sharedRows.length" class="index-note">No setting has scores for every selected model.</p>
-            <ul v-if="pageRows.length" class="benchmark-list" aria-label="Benchmark settings">
-              <li v-for="row in pageRows" :key="row.benchmark">
-                <RouterLink
-                  :id="benchmarkLinkId(row.benchmark)"
-                  :to="comparisonLocation({ focus: row.benchmark })"
-                  :aria-current="focusedRow?.benchmark === row.benchmark ? 'true' : undefined"
-                  :aria-description="modelCoverage(row) + ' of ' + selected.length + ' models scored'"
-                  class="benchmark-link"
-                >
-                  <span>{{ row.benchmark }}</span>
-                  <span class="benchmark-coverage" aria-hidden="true">{{ modelCoverage(row) }}/{{ selected.length }} scored</span>
-                  <span class="benchmark-chevron" aria-hidden="true">›</span>
-                </RouterLink>
-              </li>
-            </ul>
+            <BenchmarkOverview
+              v-if="pageRows.length"
+              :rows="pageRows"
+              :models="selected"
+              :active="focusedRow?.benchmark"
+              :location="benchmarkLocation"
+            />
             <p v-else class="index-note">{{ !rows.length ? 'No results in this selection.' : 'No settings match.' }}</p>
             <div class="results-range">
               <p role="status">
@@ -341,7 +338,7 @@ const ranking = computed(() => selected.value
           <ol>
             <li v-for="{ model, aggregate } in ranking" :key="model">
               <ModelName :model="model" />
-              <span class="tabular-nums">{{ formatMeasurement(aggregate.value, false) }} <span class="text-text-secondary">({{ formatMeasurement(aggregate.low, false) }}–{{ formatMeasurement(aggregate.high, false) }})</span></span>
+              <span class="tabular-nums">{{ formatMeasurement(aggregate.value, false) }} <span class="text-text-secondary">({{ formatMeasurementInterval(aggregate.low, aggregate.high, false) }})</span></span>
             </li>
           </ol>
         </details>
@@ -352,14 +349,10 @@ const ranking = computed(() => selected.value
 </template>
 
 <style scoped>
-.compare-workspace {
-  padding-block: clamp(0.5rem, 2vw, 1.75rem);
-}
-
 h1 {
-  margin: 0 0 1.25rem;
+  margin: 0 0 0.65rem;
   color: var(--c-text);
-  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  font-size: clamp(1.55rem, 2.5vw, 2rem);
   font-weight: 650;
   letter-spacing: -0.045em;
   line-height: 1.15;
@@ -377,8 +370,8 @@ h1 {
   display: flex;
   flex-wrap: wrap;
   align-items: start;
-  gap: 0.6rem 1.5rem;
-  padding: 0.65rem 1rem;
+  gap: 0.4rem 1rem;
+  padding: 0.4rem 0.75rem;
 }
 
 .model-edit {
@@ -500,19 +493,18 @@ h1 {
 }
 
 .text-link:hover,
-.benchmark-link:hover,
 .back-link:hover {
   text-decoration: underline;
   text-underline-offset: 0.16em;
 }
 
 .selection-warning {
-  padding: 0.4rem 1rem;
+  padding: 0.3rem 0.75rem;
   border-top: 1px solid var(--c-status-warning-border);
   border-radius: 0 0 0.75rem 0.75rem;
   color: var(--c-status-warning);
   background: var(--c-status-warning-bg);
-  font-size: 0.78rem;
+  font-size: 0.74rem;
 }
 
 .excluded-models,
@@ -522,13 +514,13 @@ h1 {
 }
 
 .comparison-results {
-  margin-top: 1rem;
+  margin-top: 0.7rem;
 }
 
 .benchmark-workspace {
   display: grid;
-  grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
-  gap: 1rem;
+  grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr);
+  gap: 0.75rem;
   align-items: start;
 }
 
@@ -540,20 +532,28 @@ h1 {
 }
 
 .index-controls {
-  display: grid;
-  gap: 0.6rem;
-  padding: 0.85rem 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  padding: 0.55rem 0.75rem 0.3rem;
 }
 
 .index-controls h2 {
-  font-size: 1.05rem;
+  font-size: 0.96rem;
   font-weight: 650;
+}
+
+.benchmark-search {
+  flex: 1 1 8.5rem;
+  min-width: 0;
 }
 
 .benchmark-search input {
   width: 100%;
-  min-height: 2.4rem;
-  font-size: 0.875rem;
+  min-height: 2.05rem;
+  padding-block: 0.3rem;
+  font-size: 0.8rem;
 }
 
 .scope-switch,
@@ -598,48 +598,6 @@ h1 {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.5rem;
-}
-
-.benchmark-list {
-  border-top: 1px solid var(--c-surface-border);
-}
-
-.benchmark-list li + li {
-  border-top: 1px solid var(--c-surface-border-subtle);
-}
-
-.benchmark-link {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  min-height: 2.6rem;
-  gap: 0.5rem;
-  padding: 0.4rem 1rem;
-  color: var(--c-text);
-  font-size: 0.8125rem;
-  overflow-wrap: anywhere;
-}
-
-.benchmark-link:hover {
-  background: var(--c-surface-raised);
-}
-
-.benchmark-link[aria-current='true'] {
-  box-shadow: inset 3px 0 var(--c-accent);
-  background: var(--c-accent-subtle);
-  color: var(--c-accent);
-  font-weight: 650;
-}
-
-.benchmark-coverage {
-  color: var(--c-text-secondary);
-  font: 0.7rem var(--mono);
-  white-space: nowrap;
-}
-
-.benchmark-chevron {
-  color: var(--c-accent);
-  font-size: 1rem;
 }
 
 .benchmark-detail {
@@ -708,6 +666,17 @@ h1 {
 
   .cohort-control select {
     max-width: min(35vw, 13rem);
+  }
+}
+
+@media (max-width: 550px) {
+  .index-controls {
+    justify-content: space-between;
+  }
+
+  .benchmark-search {
+    flex-basis: 100%;
+    order: 1;
   }
 }
 </style>

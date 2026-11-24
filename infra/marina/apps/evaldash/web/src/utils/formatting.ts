@@ -21,6 +21,10 @@ export function formatMeasurement(value: number, percent: boolean): string {
   return percent ? (100 * value).toFixed(1) : value.toFixed(3)
 }
 
+export function formatMeasurementInterval(low: number, high: number, percent: boolean): string {
+  return `${formatMeasurement(low, percent)}–${formatMeasurement(high, percent)}${percent ? '%' : ''}`
+}
+
 export function formatScore(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '—'
   // Accuracy-style metrics live in [0, 1]; show as a percentage. Anything else
@@ -44,6 +48,10 @@ export function objectStoreUrl(path: string | null | undefined): string | null {
 // The GitHub commit page for a marin git SHA, or null when absent.
 export function githubCommitUrl(sha: string | null | undefined): string | null {
   return sha ? `https://github.com/marin-community/marin/commit/${sha}` : null
+}
+
+export function irisJobUrl(path: string): string {
+  return `https://iris.oa.dev/#/job/${encodeURIComponent(path)}`
 }
 
 export function formatRelativeAge(iso: string | null | undefined): string {

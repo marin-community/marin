@@ -7,7 +7,7 @@ import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { isSmokeEval, MAX_COMPARE } from '@/constants'
 import type { Meta, Panel } from '@/types/api'
-import { formatMeasurement, isPercentMetric } from '@/utils/formatting'
+import { formatMeasurement, formatMeasurementInterval, isPercentMetric } from '@/utils/formatting'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, cohortWarning, scoredItemsLabel } from '@/utils/panel'
 import { compareCells } from '@/utils/ranking'
 
@@ -123,18 +123,18 @@ const selectedModels = computed(() => selected.value.filter(model => results.val
     </div>
     <p v-else-if="!ready">Unknown benchmark. Open the benchmark directory to choose a recorded setting.</p>
     <template v-else-if="data">
-      <div class="results-heading">
+      <div class="results-toolbar">
         <RouterLink v-if="selectedModels.length >= 2" class="compare-action" :to="{ name: 'compare', query: { benchmarks: benchmark, cohort, models: selectedModels.join(',') } }">
           Compare {{ selectedModels.length }} models
         </RouterLink>
         <span v-else-if="results.length > 1" class="text-sm text-text-secondary">Select 2–{{ MAX_COMPARE }} models to compare</span>
-      </div>
-      <div v-if="results.length > pageSize || modelFilter" class="model-tools">
-        <input v-model="modelFilter" type="search" aria-label="Find model" placeholder="Find a model…" />
+        <div v-if="results.length > pageSize || modelFilter" class="model-tools">
+          <input v-model="modelFilter" type="search" aria-label="Find model" placeholder="Find a model…" />
         <div>
           <button aria-label="Previous models" :disabled="page === 0" @click="page--">‹</button>
           <span>{{ matching.length ? page * pageSize + 1 : 0 }}–{{ page * pageSize + visible.length }} of {{ matching.length }} models</span>
           <button aria-label="Next models" :disabled="(page + 1) * pageSize >= matching.length" @click="page++">›</button>
+        </div>
         </div>
       </div>
       <div v-if="visible.length" class="results-scroll">
@@ -149,11 +149,21 @@ const selectedModels = computed(() => selected.value.filter(model => results.val
                   <RouterLink :to="{ name: 'model', params: { model }, query: { cohort } }">{{ model }}</RouterLink>
                 </div>
               </th>
-              <td data-label="Score" class="font-semibold">{{ formatMeasurement(cell.value, isPercentMetric(cell)) }}{{ isPercentMetric(cell) ? '%' : '' }}</td>
-              <td data-label="95% interval" :title="cell.interval_kind">{{ formatMeasurement(cell.low, isPercentMetric(cell)) }}–{{ formatMeasurement(cell.high, isPercentMetric(cell)) }}{{ isPercentMetric(cell) ? '%' : '' }}</td>
+              <td data-label="Score" class="font-semibold">
+                {{ formatMeasurement(cell.value, isPercentMetric(cell)) }}{{ isPercentMetric(cell) ? '%' : '' }}
+                <small class="mobile-interval">95% CI {{ formatMeasurementInterval(cell.low, cell.high, isPercentMetric(cell)) }}</small>
+              </td>
+              <td data-label="95% interval" :title="cell.interval_kind">{{ formatMeasurementInterval(cell.low, cell.high, isPercentMetric(cell)) }}</td>
               <td data-label="Graded items">{{ scoredItemsLabel(cell) }}<small>{{ cellCoverageLabel(cell) || 'Coverage unknown' }}</small></td>
               <td data-label="Cohort">{{ cell.version || UNVERSIONED_COHORT }}</td>
-              <td><RouterLink :to="{ name: 'run', params: { runId: cell.run_id } }" :aria-label="'Open run ' + cell.run_id">Open run →</RouterLink></td>
+              <td class="source-cell">
+                <RouterLink :to="{ name: 'run', params: { runId: cell.run_id } }" :aria-label="'Open run ' + cell.run_id">Open run →</RouterLink>
+                <details class="mobile-evidence">
+                  <summary :aria-label="'Measurement details for ' + model">Info</summary>
+                  <div>{{ cell.version || UNVERSIONED_COHORT }} · {{ scoredItemsLabel(cell) }} · {{ cellCoverageLabel(cell) || 'Coverage unknown' }}</div>
+                  <RouterLink :to="{ name: 'run', params: { runId: cell.run_id } }">Open source run →</RouterLink>
+                </details>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -173,13 +183,14 @@ const selectedModels = computed(() => selected.value.filter(model => results.val
 </template>
 
 <style scoped>
+.mobile-evidence, td .mobile-interval { display: none; }
 .library-back { display: inline-block; font-size: .85rem; margin-bottom: .5rem; }
 .setting-meta { margin-top: .4rem; color: var(--c-text-secondary); font-size: .9rem; }
 .cohort-choice { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; font-size: .82rem; }
 .cohort-choice select { width: min(16rem, 100%); min-width: 0; }
-.benchmark-directory { margin-top: 2rem; max-width: 68rem; }
+.benchmark-directory { margin-top: 1.25rem; max-width: 68rem; }
 .directory-count, .directory-section header span { color: var(--c-text-secondary); font-size: .83rem; }
-.directory-section { display: grid; grid-template-columns: minmax(8rem, 1fr) 3fr; gap: 1.25rem; padding: 1.1rem 0; border-top: 1px solid var(--c-surface-border); }
+.directory-section { display: grid; grid-template-columns: minmax(8rem, 1fr) 3fr; gap: 1.25rem; padding: .78rem 0; border-top: 1px solid var(--c-surface-border); }
 .directory-section:first-of-type { margin-top: .8rem; }
 .directory-section h3 { font-weight: 650; font-size: 1.05rem; }
 .directory-section > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: .65rem 1.1rem; font-size: .9rem; }
@@ -187,22 +198,22 @@ const selectedModels = computed(() => selected.value.filter(model => results.val
 .directory-section button { color: var(--c-text-secondary); text-decoration: underline; font-size: .8rem; }
 @media (max-width: 35rem) { .directory-section { grid-template-columns: 1fr; gap: .5rem; } }
 .benchmark-workspace { color: var(--c-text); }
-.workspace-heading, .results-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
-.workspace-heading { margin: .5rem 0 1.3rem; }
-h1 { font-size: clamp(1.8rem, 3vw, 2.4rem); font-weight: 650; letter-spacing: -.045em; line-height: 1.15; }
+.workspace-heading, .results-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+.workspace-heading { margin: 0 0 .65rem; }
+
 a { color: var(--c-accent); }
 a:hover { text-decoration: underline; }
 .selectors { display: grid; grid-template-columns: minmax(14rem, 28rem) minmax(14rem, 20rem); gap: 1rem; }
 .settings-note { margin-top: .9rem; color: var(--c-text-secondary); border-left: 3px solid var(--c-status-warning); padding: .2rem .7rem; font-size: .84rem; }
-.results-heading { margin: 2rem 0 .85rem; }
+.results-toolbar { gap: .4rem 1rem; margin: .65rem 0; }
 h2 { overflow-wrap: anywhere; font-size: 1.3rem; font-weight: 650; }
-.results-heading p, td small { color: var(--c-text-secondary); font-size: .8rem; }
+td small { color: var(--c-text-secondary); font-size: .8rem; }
 .compare-action { background: var(--c-accent); color: var(--c-surface); border-radius: .4rem; padding: .55rem .8rem; }
 .model-tools, .model-tools > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
-.model-tools { margin: .75rem 0; font-size: .85rem; }
+.model-tools { font-size: .85rem; }
 .results-scroll { border: 1px solid var(--c-surface-border); border-radius: .6rem; overflow: auto; background: var(--c-surface); }
 table { width: 100%; border-collapse: collapse; text-align: left; font-size: .9rem; font-variant-numeric: tabular-nums; }
-td, th { padding: .7rem 1rem; border-bottom: 1px solid var(--c-surface-border-subtle); }
+td, th { padding: .42rem .72rem; border-bottom: 1px solid var(--c-surface-border-subtle); }
 thead { background: var(--c-surface-raised); color: var(--c-text-secondary); font-size: .8rem; }
 tbody th { max-width: 24rem; overflow-wrap: anywhere; }
 td { white-space: nowrap; }
@@ -211,11 +222,20 @@ small { display: block; }
   .selectors { grid-template-columns: minmax(0, 1fr); }
   .results-scroll table, .results-scroll tbody { display: block; }
   thead { position: absolute; clip-path: inset(50%); height: 1px; width: 1px; overflow: hidden; }
-  tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: .65rem; gap: .55rem; }
+  .workspace-heading { align-items: center; }
+  .cohort-choice { max-width: 48%; gap: .25rem; }
+  .cohort-choice select { width: 100%; }
+  tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto 2.8rem; gap: .4rem; align-items: center; padding: .35rem .45rem; }
   tbody tr + tr { border-top: 1px solid var(--c-surface-border); }
   tbody th, td { padding: 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
-  tbody th { grid-column: 1 / -1; }
-  td[data-label]::before { content: attr(data-label); display: block; font-size: .72rem; color: var(--c-text-secondary); }
-
+  td[data-label="Score"] { text-align: right; }
+  td .mobile-interval { display: block; font-weight: 400; font-size: .7rem; }
+  td[data-label="95% interval"], td[data-label="Graded items"], td[data-label="Cohort"], .source-cell > a { display: none; }
+  .mobile-evidence { display: block; min-width: 0; color: var(--c-text-secondary); font-size: .8rem; }
+  .mobile-evidence summary { cursor: pointer; align-content: center; }
+  .source-cell:has(details[open]) { grid-column: 1 / -1; }
+  .model-tools { flex-wrap: nowrap; width: 100%; }
+  .model-tools input { width: 9rem; min-width: 4rem; flex: 1; }
+  .model-tools > div { flex-wrap: nowrap; }
 }
 </style>

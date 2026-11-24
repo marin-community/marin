@@ -14,7 +14,7 @@ import {
 } from '@/utils/formatting'
 import { UNVERSIONED_COHORT, isPartialCoverage, scoredItemsLabel } from '@/utils/panel'
 import { metricView, type MetricRow } from '@/utils/runMetrics'
-import { FLAG_NOTES, INTERVAL_KIND, type EvalRecord } from '@/types/api'
+import { FLAG_NOTES, INTERVAL_KIND, RUN_STATUS, type EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import JobsPanel from '@/components/runs/JobsPanel.vue'
 import LogsPanel from '@/components/runs/LogsPanel.vue'
@@ -130,14 +130,13 @@ async function copyPath() {
     <div v-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
 
     <div v-else-if="data" class="mt-3 space-y-5">
-      <!-- Identity: what this run is, at a glance -->
       <div class="space-y-1.5">
         <div class="flex items-center gap-3 flex-wrap">
           <h1 class="text-2xl font-semibold tracking-tight break-all">{{ data.run_id }}</h1>
           <span class="text-xs text-text-muted">Eval</span><StatusChip :status="data.status" />
           <template v-if="data.step_status">
             <span class="text-xs text-text-muted">Step</span>
-            <StatusChip :status="data.step_status === 'SUCCESS' ? 'succeeded' : data.step_status.toLowerCase()" />
+            <StatusChip :status="data.step_status === 'SUCCESS' ? RUN_STATUS.SUCCEEDED : data.step_status.toLowerCase()" />
           </template>
           <span
             v-if="data.version"
@@ -175,7 +174,6 @@ async function copyPath() {
           :class="{ selected: activeSection === section }">{{ section }}</RouterLink>
       </nav>
       <template v-if="activeSection === 'Results'">
-        <!-- Result: the grade is the hero; duration and finish time sit beside it in one strip -->
         <div class="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-lg border border-surface-border bg-surface px-5 py-4">
           <div>
             <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Grade</div>
@@ -222,7 +220,6 @@ async function copyPath() {
           </ul>
         </div>
 
-        <!-- Attrition: the items this run attempted and never graded, by cause -->
         <div v-if="attritionRows.length">
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
             Ungraded items
@@ -272,13 +269,9 @@ async function copyPath() {
            can still have graded some questions, and the panel degrades gracefully when none exist. -->
       <SamplesPanel v-if="activeSection === 'Samples'" :key="props.runId" :run-id="data.run_id" />
 
-      <!-- Reference detail below the results: how to reach sibling evals, the run's configuration,
-           where its artifacts live, and its live job/log state. -->
       <template v-if="activeSection === 'Configuration'">
         <GroupLinks :run-id="data.run_id" />
 
-        <!-- Run details: static configuration, serving params, provenance, and the artifact path in
-             one reference card below the results -->
         <div class="rounded-lg border border-surface-border bg-surface p-4">
           <div class="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-4">
             <div>
@@ -379,10 +372,8 @@ async function copyPath() {
       </template>
 
       <template v-if="activeSection === 'Diagnostics'">
-        <!-- Live iris job + attempt status for every role -->
         <JobsPanel :key="props.runId" :run-id="data.run_id" />
 
-        <!-- Live finelog logs (collapsed), with the recorded log tails as fallback -->
         <LogsPanel :key="props.runId" :run-id="data.run_id" :roles="jobRoles" :log-tails="data.log_tails ?? {}" />
       </template>
     </div>

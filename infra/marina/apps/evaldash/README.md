@@ -99,10 +99,12 @@ and Finelog output. The former Inspect directory links into the successful-run l
 
 **Compare** accepts two to four models. The index lists settings scored by
 every selected model under **Shared only**. **All recorded** includes partial
-coverage and shows how many models contributed to each setting. Select a
-setting to read estimates and 95% intervals on a common axis. **Fit to scores**
+coverage and shows how many models contributed to each setting. The overview
+plots binary estimates on the same 0–100% scale across rows and lists
+continuous estimates in their recorded units. Each model keeps its symbol
+when you open a setting to read exact estimates and 95% intervals. **Fit to scores**
 expands the range around the intervals. **Full scale** restores the full range.
-Each measurement links to its source. On phones, open a setting and use
+Each measurement links to its source. On phones, scan the overview, open a setting, and use
 **Back to benchmarks** to return to the same list.
 
 **Benchmarks** lists recorded settings by suite. Search for a setting to

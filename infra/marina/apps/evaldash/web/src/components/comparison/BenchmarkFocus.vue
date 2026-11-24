@@ -3,8 +3,9 @@ import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import ModelName from '@/components/shared/ModelName.vue'
 import { INTERVAL_KIND, type ComparisonRow } from '@/types/api'
-import { formatMeasurement, formatTimestamp, isPercentMetric } from '@/utils/formatting'
+import { formatMeasurement, formatMeasurementInterval, formatTimestamp, isPercentMetric } from '@/utils/formatting'
 import { cellCoverageLabel, scoredItemsLabel, UNVERSIONED_COHORT } from '@/utils/panel'
+import ModelScoreSymbol from './ModelScoreSymbol.vue'
 
 const props = defineProps<{ row: ComparisonRow; models: string[] }>()
 const cells = computed(() => Object.values(props.row.cells))
@@ -31,14 +32,15 @@ const axis = computed(() => {
   return [low, ...interior, high].map((value) => ({ value, label: format.format(percent.value ? 100 * value : value) }))
 })
 const reference = computed(() => commonMetric.value && cells.value.length > 1 ? props.row.leader : null)
-const models = computed(() => props.models.map((model) => {
+const models = computed(() => props.models.map((model, index) => {
   const cell = props.row.cells[model]
   const usePercent = cell && isPercentMetric(cell)
   return {
     model,
+    index,
     cell,
     score: cell ? formatMeasurement(cell.value, usePercent) + (usePercent ? '%' : '') : '',
-    interval: cell ? `${formatMeasurement(cell.low, usePercent)}–${formatMeasurement(cell.high, usePercent)}${usePercent ? '%' : ''}` : '',
+    interval: cell ? formatMeasurementInterval(cell.low, cell.high, usePercent) : '',
     gap: gap(model),
   }
 }))
@@ -59,7 +61,7 @@ function gap(model: string) {
   return {
     estimate: signed(props.row.cells[model].value - props.row.cells[props.row.leader].value),
     interval: `${signed(low)} to ${signed(high)}`,
-    evidence: low > 0 ? 'Higher than reference' : high < 0 ? 'Lower than reference' : 'Includes zero',
+    evidence: low > 0 || high < 0 ? 'Interval excludes zero' : 'Includes zero',
   }
 }
 </script>
@@ -93,11 +95,14 @@ function gap(model: string) {
       </div>
 
       <ul class="score-rows" aria-label="Model scores">
-        <li v-for="{ model, cell, score, interval } in models" :key="model" class="figure-grid score-row">
-          <ModelName class="focus-model-name" :model="model" />
+        <li v-for="{ model, index, cell, score, interval } in models" :key="model" class="figure-grid score-row">
+          <div class="focus-model-label">
+            <ModelScoreSymbol :index="index" />
+            <ModelName class="focus-model-name" :model="model" />
+          </div>
           <div v-if="cell && commonMetric" class="plot-track" aria-hidden="true">
             <span class="plot-interval" :style="{ left: position(cell.low), right: `calc(100% - ${position(cell.high)})` }"></span>
-            <span class="plot-point" :style="{ left: position(cell.value) }"></span>
+            <span class="plot-point" :style="{ left: position(cell.value) }"><ModelScoreSymbol :index="index" /></span>
           </div>
           <div v-if="cell" class="score-values">
             <RouterLink
@@ -125,7 +130,8 @@ function gap(model: string) {
                   :to="{ name: 'run', params: { runId: cell.run_id } }"
                   :title="`Open source run ${cell.run_id}`"
                   class="score-link"
-                >{{ cell.version ?? UNVERSIONED_COHORT }} <span aria-hidden="true">↗</span></RouterLink>
+                >View run <span aria-hidden="true">→</span></RouterLink>
+                <span class="source-cohort">{{ cell.version ?? UNVERSIONED_COHORT }}</span>
               </p>
               <p>{{ formatTimestamp(cell.created_at) }}</p>
               <p>{{ scoredItemsLabel(cell) }} scored · {{ cellCoverageLabel(cell) || 'Coverage unreported' }}</p>
@@ -142,7 +148,7 @@ function gap(model: string) {
       </ul>
       <details v-if="reference">
         <summary>How differences are calculated</summary>
-        <p>Each difference is this model’s score minus the reference score. The reference has the highest lower bound on its score interval. An interval including zero leaves the direction of the difference unresolved.</p>
+        <p>Each difference is this model’s score minus the reference score. The reference has the highest lower bound on its score interval. An interval including zero leaves the direction of the difference unresolved. Runs from different settings can differ for reasons other than model performance.</p>
       </details>
     </section>
   </section>
@@ -162,15 +168,15 @@ function gap(model: string) {
 .axis-grid,
 .score-row,
 .focus-evidence {
-  padding-inline: 1.15rem;
+  padding-inline: 0.85rem;
 }
 
 .focus-heading {
-  padding-block: 0.78rem;
+  padding-block: 0.55rem;
 }
 
 .focus-heading h2 {
-  font-size: 1.35rem;
+  font-size: 1.2rem;
   font-weight: 650;
   line-height: 1.3;
 }
@@ -193,7 +199,7 @@ function gap(model: string) {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.35rem 0.75rem;
-  padding-block: 0.55rem 0.45rem;
+  padding-block: 0.4rem 0.35rem;
   border-top: 1px solid var(--c-surface-border-subtle);
 }
 
@@ -243,7 +249,7 @@ function gap(model: string) {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.25rem 0.75rem;
   align-items: center;
-  padding-block: 0.55rem;
+  padding-block: 0.4rem;
 }
 
 .score-row + .score-row {
@@ -254,6 +260,12 @@ function gap(model: string) {
   color: var(--c-text);
   font-size: 0.8rem;
   font-weight: 650;
+}
+
+.focus-model-label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.38rem;
 }
 
 .plot-track {
@@ -279,13 +291,13 @@ function gap(model: string) {
 }
 
 .plot-point {
-  width: 0.625rem;
-  height: 0.625rem;
+  display: grid;
+  place-items: center;
+  width: 0.78rem;
+  height: 0.78rem;
   transform: translate(-50%, -50%);
-  border: 2px solid var(--c-surface);
   border-radius: 50%;
-  background: var(--c-accent);
-  box-shadow: 0 0 0 1px var(--c-accent);
+  background: var(--c-surface);
 }
 
 .score-values {
@@ -310,7 +322,7 @@ function gap(model: string) {
 
 .focus-evidence {
   border-top: 1px solid var(--c-surface-border);
-  padding-block: 0.75rem;
+  padding-block: 0.55rem;
 }
 
 .focus-evidence h3 {
@@ -322,7 +334,7 @@ function gap(model: string) {
 .evidence-row {
   display: grid;
   gap: 0.1rem 0.75rem;
-  padding-block: 0.55rem;
+  padding-block: 0.42rem;
 }
 
 .evidence-row + .evidence-row {
@@ -338,7 +350,9 @@ function gap(model: string) {
   max-width: 75ch;
 }
 
-@container (min-width: 520px) {
+.source-cohort { display: block; overflow-wrap: anywhere; }
+
+@container (min-width: 640px) {
   .figure-grid {
     display: grid;
     grid-template-columns: minmax(8rem, 1.4fr) minmax(0, 3fr) minmax(5.5rem, 1fr);
@@ -356,8 +370,9 @@ function gap(model: string) {
     grid-row: 1;
   }
 
-  .evidence-row {
-    grid-template-columns: minmax(8rem, 1.4fr) minmax(0, 1.7fr) minmax(0, 1.3fr);
-  }
+}
+
+@container (min-width: 480px) {
+  .evidence-row { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.4fr) minmax(0, 1fr); }
 }
 </style>
