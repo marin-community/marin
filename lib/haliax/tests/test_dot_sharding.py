@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
+import pytest
 
 import jax
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec, get_abstract_mesh
