@@ -1890,7 +1890,10 @@ def _preflight_wrapped_run(handle: ArtifactStep, node: str, policy: PreflightPol
 
     def run(config: dict) -> StageReceipt:
         policy.ensure(node)
-        return original(config)
+        receipt = original(config)
+        if not isinstance(receipt, StageReceipt):
+            raise ValueError(f"graph node {node!r} did not produce a StageReceipt")
+        return receipt
 
     return run
 
