@@ -390,35 +390,41 @@ def write_outputs(output: StoragePath, records: list[BuildRecord], package: str,
 PACKAGE_ORG = "marin-community"
 
 
-def fetch_package_versions(package: str, token: str) -> dict[str, str]:
+def fetch_package_versions(package: str, token: str) -> dict[str, str] | None:
     """List the GHCR package's tags and manifest digests through the GitHub REST API.
 
     The container-registry endpoints rate-limit per token; the REST API has a separate,
     much larger budget, so one paginated listing replaces thousands of per-tag reads.
-    The returned mapping is tag name -> manifest digest (the version's name).
+    The returned mapping is tag name -> manifest digest (the version's name). ``None``
+    means the listing is unavailable and callers fall back to per-tag registry reads.
     """
     repository = package.removeprefix("ghcr.io/")
+    token = token.strip()
     versions: dict[str, str] = {}
     page = 1
-    while True:
-        request = urllib.request.Request(
-            f"https://api.github.com/orgs/{PACKAGE_ORG}/packages/container/{repository}/versions"
-            f"?per_page=100&page={page}",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            batch = json.load(response)
-        for version in batch:
-            digest = version.get("name") or ""
-            for tag in (version.get("metadata", {}).get("container", {}) or {}).get("tags") or []:
-                versions[tag] = digest
-        if len(batch) < 100:
-            return versions
-        page += 1
+    try:
+        while True:
+            request = urllib.request.Request(
+                f"https://api.github.com/orgs/{PACKAGE_ORG}/packages/container/{repository}/versions"
+                f"?per_page=100&page={page}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=60) as response:
+                batch = json.load(response)
+            for version in batch:
+                digest = version.get("name") or ""
+                for tag in (version.get("metadata", {}).get("container", {}) or {}).get("tags") or []:
+                    versions[tag] = digest
+            if len(batch) < 100:
+                return versions
+            page += 1
+    except urllib.error.HTTPError as error:
+        logger.warning("the package listing is unavailable (HTTP %d); falling back to per-tag reads", error.code)
+        return None
 
 
 def adopt_from_registry(
@@ -466,6 +472,45 @@ def adopt_from_registry(
     return adopted, pending
 
 
+def recover_provenance(output: StoragePath, package: str, token: str, job: str, release: dict) -> dict[str, BuildRecord]:
+    """Rebuild per-task provenance from the registry's own package listing.
+
+    After a job dies before writing its provenance, the pushed tags are still the
+    durable record of what was built: the registry's listing maps each task tag to
+    the manifest digest it serves. The recovery binds those digests to each task's
+    own recipe so a resumed run skips them instead of rebuilding or re-reading the
+    registry per tag.
+    """
+    existing = load_provenance(output)
+    records = dict(existing)
+    versions = fetch_package_versions(package, token)
+    if versions is None:
+        raise BuildRejected("the package listing is unavailable; recovery cannot proceed")
+    tasks = read_tasks(release["repo"], release["revision"])
+    recovered = 0
+    for task in tasks:
+        tag = task_tag(task["task_id"])
+        digest = versions.get(tag)
+        if digest is None or task["task_id"] in records:
+            continue
+        records[task["task_id"]] = BuildRecord(
+            task_id=task["task_id"],
+            tag=tag,
+            image=f"{package}@{digest}",
+            digest=digest,
+            base_digest=task["recipe"].base_digest,
+            base_manifest_sha256=task["recipe"].base_digest,
+            recipe_sha256=task["recipe_sha256"],
+            source="listing-recovery",
+            job=job,
+            built_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        )
+        recovered += 1
+    write_outputs(output, list(records.values()), package, release)
+    logger.info("recovered %d records from the package listing (%d total)", recovered, len(records))
+    return records
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
@@ -477,9 +522,14 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="build only the first N tasks (smoke runs)")
     parser.add_argument("--tasks", default=None, help="comma-separated task ids to build (smoke runs)")
     parser.add_argument("--resume", action="store_true", help="skip tasks whose recorded provenance matches")
+    parser.add_argument(
+        "--recover-listing",
+        action="store_true",
+        help="rebuild provenance from the registry's package listing and exit (resume afterwards)",
+    )
     arguments = parser.parse_args()
 
-    job = require_job()
+    job = require_job() if not arguments.recover_listing else "listing-recovery"
     output = StoragePath(arguments.output)
     output.relative_to(StoragePath(REGIONAL_PREFIX))
     config = BuildConfig(
@@ -490,6 +540,10 @@ def main() -> None:
         resume=arguments.resume,
     )
     release = {"repo": arguments.repo, "revision": arguments.revision}
+    if arguments.recover_listing:
+        token = get_secret("GHCR_PUSH_TOKEN") or os.environ.get("GHCR_PUSH_TOKEN", "")
+        recover_provenance(output, arguments.package, token.strip(), job, release)
+        return
     tasks = read_tasks(arguments.repo, arguments.revision)
     if arguments.tasks:
         selected = set(arguments.tasks.split(","))
@@ -508,8 +562,8 @@ def main() -> None:
     logger.info("tasks=%d pending=%d resumed=%d", len(tasks), len(pending), len(tasks) - len(pending))
 
     authfile = None
-    token = get_secret("GHCR_PUSH_TOKEN") or os.environ.get("GHCR_PUSH_TOKEN", "")
-    user = get_secret("GHCR_USER") or os.environ.get("GHCR_USER", "")
+    token = (get_secret("GHCR_PUSH_TOKEN") or os.environ.get("GHCR_PUSH_TOKEN", "")).strip()
+    user = (get_secret("GHCR_USER") or os.environ.get("GHCR_USER", "")).strip()
     if token:
         if not user:
             raise BuildRejected("the GHCR push token requires GHCR_USER (the GitHub login the token belongs to)")
