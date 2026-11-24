@@ -63,6 +63,7 @@ from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     TASK_MANIFEST_FILENAME,
+    VALIDATION_FILENAME,
 )
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
@@ -830,6 +831,115 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
             pq.write_table(pa.Table.from_pylist(pool), copied / filename)
     report = compare(preset, "--candidate", "users/test/task-content-edited")
     assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
+
+
+@pytest.mark.parametrize(
+    "case, replaced, extra, shared, reason",
+    (
+        ("different-content", (19,), 0, 19, None),
+        ("additional-tasks", (), 1, 20, None),
+        ("relabeled-family", (), 0, 20, None),
+        ("too-few-common", range(10, 20), 0, 10, "10 of 20 control tasks shared"),
+        ("missing-family", (0,), 0, 19, "family/small: 0 of 1 control tasks shared"),
+    ),
+)
+def test_learning_gate_scores_shared_evaluation(
+    recorded_runs, preset_table, monkeypatch, case, replaced, extra, shared, reason
+):
+    cache_native_compositions(monkeypatch)
+    preset = snowball_model.SNOWBALL.by_name["learning-medium"]
+    controls(recorded_runs, preset.name)
+    recorded_runs(preset.name, "users/test/shared-eval-baseline")
+    baseline = compare(preset.name, "--candidate", "users/test/shared-eval-baseline")
+    assert baseline["verdict"] == "pass", baseline
+    old_binding = preset.held_out_tasks
+    assert old_binding is not None
+    new_binding = old_binding.split("@")[0] + "@2026.11.24.1"
+    old_panel = Path(recipe.selection_artifact(old_binding).path())
+    panel = Path(recipe.selection_artifact(new_binding).path())
+    panel.mkdir(parents=True)
+    old_tasks = pq.read_table(old_panel / FULL_VALIDATION_FILENAME).to_pylist()
+    count = len(old_tasks)
+    assert count == 20
+    annotations = pq.read_table(old_panel / TASK_MANIFEST_FILENAME).to_pylist()[:count]
+    if case == "relabeled-family":
+        annotations[0]["family"] = "large"
+    for index in replaced:
+        task = json.loads(old_tasks[index]["task_spec"])
+        task["context"]["events"][0]["content"] = f"Updated question {index}"
+        old_tasks[index]["task_spec"] = json.dumps(task)
+        annotations[index]["task_digest"] = canonical_sha256(task)
+    for index in range(count, count + extra):
+        task = json.loads(old_tasks[-1]["task_spec"])
+        task["id"] = f"task-{index}"
+        old_tasks.append({"task_spec": json.dumps(task)})
+        annotations.append({**annotations[-1], "task_id": task["id"], "task_digest": canonical_sha256(task)})
+    for name in (VALIDATION_FILENAME, FULL_VALIDATION_FILENAME):
+        pq.write_table(pa.Table.from_pylist(old_tasks), panel / name)
+    pq.write_table(
+        pa.Table.from_pylist(annotations, schema=arrow_schema(SelectionTaskRow)), panel / TASK_MANIFEST_FILENAME
+    )
+    summary = json.loads((old_panel / "summary.json").read_text())
+    summary.update(validation_rows=count + extra, full_validation_rows=count + extra)
+    summary["selection_strata"]["version"] = "2026.11.24.1"
+    _json(panel / "summary.json", summary)
+
+    preset = replace(preset, held_out_tasks=new_binding)
+    preset_table(preset)
+    name = f"users/test/shared-eval-{case}"
+    candidate = recorded_runs(preset.name, name)
+    export = str(candidate / "exports")
+    changed_ids = {f"task-{index}" for index in (*replaced, *range(count, count + extra))}
+    rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/", step=preset.updates)
+    if changed_ids:
+        write_evaluations(
+            export,
+            [
+                row.model_copy(
+                    update={"answers": [answer.model_copy(update={"verifier_score": 1.0}) for answer in row.answers]}
+                )
+                for row in rows
+                if row.task_id in changed_ids
+            ],
+        )
+    else:
+        with edit_receipt(candidate) as receipt:
+            receipt["result"].update(started_at="2026-11-06T18:41:00+00:00", finished_at="2026-11-06T19:41:00+00:00")
+    report = compare(preset.name, "--candidate", name)
+    if reason is not None:
+        assert report["verdict"] == "invalid" and reason in report["reason"], report
+        return
+    assert (report["verdict"], report["effect"]) == (baseline["verdict"], baseline["effect"]), report
+    assert report["control"]["held_out_tasks"] == old_binding
+    assert report["run"]["held_out_tasks"] == new_binding
+    results = comparisons(report)
+    family_mean = results["eval_lite/family_mean"]
+    assert family_mean["tasks"] == shared and family_mean["run"] == comparisons(baseline)["eval_lite/family_mean"]["run"]
+    if changed_ids:
+        unshared = results["eval_lite/unshared/mean"]
+        assert (unshared["role"], unshared["tasks"], unshared["run"]) == ("reported", len(changed_ids), 1.0)
+    else:
+        assert "eval_lite/unshared/mean" not in results
+        assert "eval_lite/family/small/mean" not in results
+        assert results["eval_lite/family/large/mean"]["tasks"] == 20
+    gain = "eval_lite/family_mean/gain_per_gpu_hour"
+    expected_gain = None if extra else comparisons(baseline)[gain]["run"]
+    assert results[gain]["run"] == expected_gain
+    if extra:
+        table = snowball_model.SNOWBALL
+        previous = gate.control_pin(preset, table=table)
+        fresh = replace(previous, commit="next-main", replicates=2)
+        table = replace(table, control_pins={**table.control_pins, preset.name: fresh})
+        monkeypatch.setattr(snowball_model, "SNOWBALL", table)
+        settings = RunInputs(preset_name=preset.name, settings=("trainer.policy.optimizer_config.lr=2e-6",))
+        controls(recorded_runs, preset.name, inputs=settings)
+        link = gate.control_link_step(preset, fresh, previous, table=table)
+        [stored] = run(link)
+        report = gate.read_gate_report(stored.path)
+        assert report is not None and report.verdict == "pass", stored.reason
+        assert report.control.held_out_tasks == old_binding and report.run.held_out_tasks == new_binding
+        assert "skyrl.trainer.policy.optimizer_config.lr" in report.run.config_changes
+        assert report.run.attempt_ids == ("recorded-attempt", "recorded-attempt")
 
 
 @pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])

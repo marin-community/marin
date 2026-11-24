@@ -162,9 +162,8 @@ def build_record(
                 effect=report.effect,
                 reason=report.reason,
                 invariants=list(report.invariants),
-                comparisons=list(
-                    report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT)
-                ),
+                comparisons=list(report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT))
+                + [row for row in report.rows(ComparisonRole.SLICE) if "/family/" in row.metric],
                 attempt_ids=list(report.run.attempt_ids),
                 replicates=report.run.replicates,
             )

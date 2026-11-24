@@ -319,17 +319,19 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         "comparisons": [
             row.model_dump(mode="json")
             for row in report.comparisons
-            if row.role in ("objective", "guard", "requirement")
+            if row.role in ("objective", "guard", "requirement") or (row.role == "slice" and "/family/" in row.metric)
         ],
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
     }
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
-    assert {(item["metric"], item["role"]) for item in rows["native-0"]["gate_result"]["comparisons"]} == {
+    assert {(item["metric"], item["role"]) for item in rows["native-0"]["gate_result"]["comparisons"]} >= {
         ("eval_lite/family_mean", "objective"),
         ("eval_lite/family_mean/gain_per_gpu_hour", "objective"),
         ("policy/entropy", "guard"),
         (relative_key, "requirement"),
+        ("eval_lite/family/small/mean", "slice"),
+        ("eval_lite/family/large/mean", "slice"),
     }
 
     run_ids = ("eval-initial-policy", "eval-terminal-policy")

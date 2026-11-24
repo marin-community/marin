@@ -42,6 +42,12 @@
       "rows": 100000,
       "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04.1/train.parquet",
       "version": "2026.11.04.1"
+    },
+    {
+      "format": "task_spec",
+      "rows": 100000,
+      "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.19.1/train.parquet",
+      "version": "2026.11.19.1"
     }
   ],
   "version": "2026.11.17.1"

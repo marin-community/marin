@@ -284,6 +284,14 @@ replicate count. Data-medium shares learning-medium's pin. Before submission, th
 candidate on CPU and checks every control against current defaults. During comparison, candidate configuration
 must match its recorded inputs. The report states why a comparison is INVALID or an invariant fails.
 
+Held-out comparisons use task digests shared by every candidate and control at the scored step
+and at the initial step when that evaluation measures gain. All recorded evaluation requests
+must match. Each control must share at least 90% of its tasks overall and in each family.
+The report names each side's recorded selection, counts the shared tasks and shows candidate-only
+scores separately. The gate uses the newest run's strata labels for both sides and recalibrates
+the control spread on the shared set. Gain per GPU-hour is unavailable when the evaluation
+task counts differ. A control pin still needs the preset's revision.
+
 Guard tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, where `k` is the number of
 guards and `sd` is the controls' sample standard deviation. A worse change beyond tolerance fails the guard.
 Objectives and guards determine `improves`, `trade-off`, `regression` or `no change`; infrastructure invariants
@@ -306,6 +314,18 @@ uv run python -m experiments.post_training.snowball_rl compare \
 Set `CANDIDATE` to the stored run name or `NAME@VERSION`. Leave-one-out compares one control
 replicate against the remaining controls with fixed default inputs.
 Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
+
+### Refresh controls from a merged PR
+
+When the repository has configured the requester and bot identities, an authorized `/rl-controls`
+comment requests a refresh after the PR merges into main. The workflow checks the merged revision
+and the training and evaluation task digests. It collects only stale cohorts, qualifies every
+replicate and opens one draft with the updated pins. For each refreshed preset it records a
+comparison to the prior cohort on shared tasks. The learning-medium link is attached to the
+published control attempts.
+
+Live collection uses the configured bot token, W&B credentials and Together grader credentials.
+Use the workflow's manual dry run to see which cohorts would be collected.
 
 ## Change a preset's default
 

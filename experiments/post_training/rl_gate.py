@@ -18,6 +18,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import click
+import pyarrow as pa
+import pyarrow.compute as pc
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
@@ -50,16 +52,19 @@ from experiments.post_training.rl_measurements import (
     InvalidComparison,
     RunInputs,
     RunMeasurements,
+    held_out_identity,
     read_measurements,
     read_recorded_launch,
     read_run_inputs,
+    restrict_evaluation,
 )
 from experiments.post_training.rl_presets import ControlPin, ModelPresets
-from experiments.post_training.rl_scoring import AAII_WEIGHTS
+from experiments.post_training.rl_scoring import AAII_WEIGHTS, SLICE_COLUMNS, score_answers
 
-GATE_REVISION = "2026.11.13"
+GATE_REVISION = "2026.11.24"
 GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
+MIN_SHARED_TASK_FRACTION = 0.9
 
 
 REPORTED_PREFIXES = ("async/", "consumed/", "generate/", "loss/", "policy/", "reward/", "startup/", "timing/", "vllm/")
@@ -138,13 +143,15 @@ def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: Mode
         return candidate
     defaults, candidate = _compose_plans(preset, (RunInputs(preset_name=preset.name), inputs))
     pin = control_pin(preset, table=table)
+    panel_defaults = {preset.held_out_tasks: defaults}
     for index in range(pin.replicates):
         path = control_path(preset, pin, index, table=table)
         receipt = read_stored_skyrl_attempt(path)
         if receipt is None:
             raise InvalidComparison(f"control receipt is unavailable: {path}")
         launch = read_recorded_launch(receipt)
-        _check_control_config(receipt.native.config, defaults, launch, preset=preset)
+        baseline = _panel_defaults(preset, launch, panel_defaults)
+        _check_control_config(receipt.native.config, baseline, launch, preset=preset)
     return candidate
 
 
@@ -279,6 +286,128 @@ def _check_control(run: RunMeasurements, pin: ControlPin) -> None:
         raise InvalidComparison(f"control does not match its pin: {run.path}")
     if any(not row.holds for row in run.invariants):
         raise InvalidComparison(f"control has failed invariants: {run.path}")
+
+
+def _task_labels(table: pa.Table) -> dict[str, dict]:
+    rows = table.select(["task_digest", *SLICE_COLUMNS]).to_pylist()
+    return {digest: row for row in rows if (digest := row.pop("task_digest")) is not None}
+
+
+def _check_protocols(runs: Sequence[RunMeasurements], controls: Sequence[RunMeasurements]) -> None:
+    if any(run.evaluation_protocols != controls[0].evaluation_protocols for run in (*runs, *controls)):
+        raise InvalidComparison("evaluation protocol differs")
+
+
+def _shared_task_fraction(name: str, shared: set[str], control_labels: Sequence[Mapping[str, dict]]) -> Invariant:
+    minimum = 1.0
+    for labels in control_labels:
+        families: dict[str | None, set[str]] = {}
+        for digest, strata in labels.items():
+            families.setdefault(strata["family"], set()).add(digest)
+        for label, total in [(name, set(labels)), *((f"{name}/family/{key}", ids) for key, ids in families.items())]:
+            accepted = len(shared & total)
+            required = max(1, math.ceil(MIN_SHARED_TASK_FRACTION * len(total)))
+            if accepted < required:
+                raise InvalidComparison(f"{label}: {accepted} of {len(total)} control tasks shared; minimum {required}")
+            if label == name:
+                minimum = min(minimum, accepted / len(total))
+    return Invariant(
+        name=f"{name}/shared_tasks", value=minimum, limit=MIN_SHARED_TASK_FRACTION, comparator=">=", holds=True
+    )
+
+
+def _unshared_tasks(
+    name: str,
+    runs: Sequence[RunMeasurements],
+    extra: Sequence[set[str]],
+) -> Comparison | None:
+    if not any(extra):
+        return None
+    key = f"{name}/mean"
+    means = []
+    for candidate, digests in zip(runs, extra, strict=True):
+        table = candidate.held_out_answers[name].final
+        value_set = pa.array(sorted(digests), type=pa.string())
+        score = score_answers(table.filter(pc.is_in(table["task_digest"], value_set=value_set))).get(key)
+        if score is not None:
+            means.append(score)
+    return Comparison(
+        metric=f"{name}/unshared/mean",
+        role=ComparisonRole.REPORTED,
+        run=statistics.mean(means) if means else None,
+        n_run=len(means),
+        n_control=0,
+        tasks=len(set.union(*extra)),
+    )
+
+
+def _compare_evaluations(
+    preset: presets.Preset,
+    runs: Sequence[RunMeasurements],
+    controls: Sequence[RunMeasurements],
+    requirements: tuple[str, ...] = (),
+) -> tuple[list[Invariant], list[Comparison]]:
+    cohort = [*runs, *controls]
+    newest = max(
+        range(len(cohort)),
+        key=lambda index: recipe.utc_millis(cohort[index].started_at) if cohort[index].started_at else -1,
+    )
+    invariants, reported, counts, gain_counts = [], [], {}, {}
+    unavailable = set()
+    for evaluation in preset.evaluations:
+        if not evaluation.held_out:
+            continue
+        name = evaluation.name
+        labels = [_task_labels(run.held_out_answers[name].final) for run in cohort]
+        sets = [set(tasks) for tasks in labels]
+        shared = set.intersection(*sets)
+        gain = shared.copy()
+        if evaluation.at_start:
+            for member in cohort:
+                gain.intersection_update(member.held_out_answers[name].initial["task_digest"].to_pylist())
+        invariants.append(_shared_task_fraction(name, shared, labels[len(runs) :]))
+        counts[name] = len(shared)
+        gain_counts[name] = len(gain)
+        baseline = set.union(*sets[len(runs) :])
+        extra = [tasks - baseline for tasks in sets[: len(runs)]]
+        if (unshared := _unshared_tasks(name, runs, extra)) is not None:
+            reported.append(unshared)
+        strata = labels[newest]
+        for index, member in enumerate(cohort):
+            if sets[index] != shared or gain != shared or labels[index] != strata:
+                cohort[index] = restrict_evaluation(member, name, shared, gain, strata)
+        if len({len(tasks) for tasks in sets}) > 1:
+            unavailable.update(
+                metric.key
+                for metric in preset.objectives
+                if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR and metric.key.startswith(name + "/")
+            )
+    cohort = [with_objectives(run, preset) for run in cohort]
+    if unavailable:
+        cohort = [
+            replace(run, values={key: value for key, value in run.values.items() if key not in unavailable})
+            for run in cohort
+        ]
+    selected_runs = [with_requirements(run, requirements) for run in cohort[: len(runs)]]
+    selected_controls = cohort[len(runs) :]
+    invariants.extend(
+        row.model_copy(update={"replicate": index}) for index, run in enumerate(selected_runs) for row in run.invariants
+    )
+    comparisons = _compare(preset, selected_runs, selected_controls, requirements)
+    return (
+        invariants,
+        [
+            (
+                row.model_copy(
+                    update={"tasks": (gain_counts if "/gain" in row.metric else counts)[row.metric.split("/", 1)[0]]}
+                )
+                if row.metric.split("/", 1)[0] in counts and row.role in (ComparisonRole.GUARD, ComparisonRole.OBJECTIVE)
+                else row
+            )
+            for row in comparisons
+        ]
+        + reported,
+    )
 
 
 def _compare(
@@ -722,6 +851,16 @@ def _check_control_config(
         raise InvalidComparison(f"control config differs from current preset defaults: {', '.join(sorted(differences))}")
 
 
+def _panel_defaults(preset: presets.Preset, recorded: RecordedLaunch, cache: dict[str | None, dict]) -> dict:
+    identity = held_out_identity(preset, recorded)
+    if identity is None:
+        return cache[preset.held_out_tasks]
+    if identity not in cache:
+        bound = replace(preset, held_out_tasks=identity)
+        (cache[identity],) = _compose_plans(bound, (RunInputs(preset_name=preset.name),))
+    return cache[identity]
+
+
 def _write_gate(
     preset: presets.Preset,
     run_paths: tuple[str, ...],
@@ -742,10 +881,7 @@ def _write_gate(
         metadata = metadata.model_copy(
             update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
         )
-        runs = [
-            with_requirements(with_objectives(read_measurements(path, preset, inputs), preset), inputs.requirements)
-            for path in run_paths
-        ]
+        runs = [read_measurements(path, preset, inputs) for path in run_paths]
         if runs:
             provenance_fields = {"tree": "tree_hash", "base_commit": "base_commit", "dirty": "dirty"}
             metadata = metadata.model_copy(
@@ -761,7 +897,7 @@ def _write_gate(
             for index, candidate in enumerate(runs)
             for row in candidate.invariants
         ]
-        controls = [with_objectives(read_measurements(path, preset), preset) for path in control_paths]
+        controls = [read_measurements(path, preset) for path in control_paths]
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
         control = control.model_copy(
@@ -769,8 +905,7 @@ def _write_gate(
         )
         for candidate in controls:
             _check_control(candidate, control_pin)
-        if any(candidate.evaluation_identity != controls[0].evaluation_identity for candidate in (*runs, *controls)):
-            raise InvalidComparison("evaluation protocol or held-out TaskSpec content differs")
+        _check_protocols(runs, controls)
         model = runs[0].config["inputs"]["model"]
         resolved_model = ResolvedModelLocator(
             **{field.name: model[field.name] for field in fields(ResolvedModelLocator)}
@@ -788,9 +923,11 @@ def _write_gate(
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
                 )
+        panel_defaults = {preset.held_out_tasks: current_config}
         for candidate in controls:
-            _check_control_config(candidate.config, current_config, candidate.recorded, preset=preset)
-        comparisons = _compare(preset, runs, controls, inputs.requirements)
+            baseline = _panel_defaults(preset, candidate.recorded, panel_defaults)
+            _check_control_config(candidate.config, baseline, candidate.recorded, preset=preset)
+        invariants, comparisons = _compare_evaluations(preset, runs, controls, inputs.requirements)
         verdict, effect = _verdict(invariants, comparisons)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
         reason = str(error)
@@ -805,6 +942,10 @@ def _write_gate(
         comparisons=comparisons,
         gaps=list(preset.gaps),
     )
+    return _store_report(report, output)
+
+
+def _store_report(report: GateReport, output: str) -> GateReport:
     for name, value in (
         (
             GATE_REPORT_FILENAME,
@@ -841,6 +982,91 @@ def control_pin(preset: presets.Preset, *, table: ModelPresets, check_revision: 
 
 def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: ModelPresets) -> str:
     return recipe.run_path(preset, control_name(pin.preset, pin.commit, index, table=table), pin.revision)
+
+
+def _read_previous_control(preset: presets.Preset, path: str) -> RunMeasurements:
+    receipt = read_stored_skyrl_attempt(path)
+    if receipt is None:
+        raise FileNotFoundError(f"no terminal attempt record at {path}")
+    launch = read_recorded_launch(receipt)
+    if launch.max_steps is not None:
+        preset = preset.with_updates(launch.max_steps)
+    return read_measurements(path, preset, attempt=receipt)
+
+
+def _write_control_link(
+    preset: presets.Preset,
+    current: ControlPin,
+    previous: ControlPin,
+    run_paths: tuple[str, ...],
+    control_paths: tuple[str, ...],
+    output: str,
+) -> GateReport:
+    metadata = RunMetadata(preset_name=preset.name, base_commit=current.commit, replicates=len(run_paths))
+    baseline = ControlMetadata(commit=previous.commit, revision=previous.revision, replicates=len(control_paths))
+    invariants, comparisons = [], []
+    verdict, effect, reason = Verdict.INVALID, None, None
+    try:
+        runs = [read_measurements(path, preset) for path in run_paths]
+        metadata = metadata.model_copy(
+            update={
+                "held_out_tasks": runs[0].held_out_tasks,
+                "attempt_ids": tuple(run.attempt_id for run in runs),
+                "engines": tuple(run.engine for run in runs),
+            }
+        )
+        for candidate in runs:
+            _check_control(candidate, current)
+        controls = [_read_previous_control(preset, path) for path in control_paths]
+        for candidate in controls:
+            _check_control(candidate, previous)
+        baseline = baseline.model_copy(
+            update={"held_out_tasks": controls[0].held_out_tasks, "engines": tuple(run.engine for run in controls)}
+        )
+        _check_protocols(runs, controls)
+        changes = _changed_config_keys(
+            _gate_config(controls[0].config, controls[0].recorded),
+            _gate_config(runs[0].config, runs[0].recorded),
+        )
+        metadata = metadata.model_copy(update={"config_changes": tuple(sorted(changes))})
+        invariants, comparisons = _compare_evaluations(preset, runs, controls)
+        verdict, effect = _verdict(invariants, comparisons)
+    except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
+        reason = str(error)
+    return _store_report(
+        GateReport(
+            preset=preset.name,
+            verdict=verdict,
+            effect=effect,
+            reason=reason,
+            run=metadata,
+            control=baseline,
+            invariants=invariants,
+            comparisons=comparisons,
+            gaps=preset.gaps,
+        ),
+        output,
+    )
+
+
+def control_link_step(
+    preset: presets.Preset, current: ControlPin, previous: ControlPin, *, table: ModelPresets
+) -> ArtifactStep[GateReport]:
+    """Compare consecutive control cohorts for the publication history."""
+    if any(pin.preset != preset.name or pin.replicates < 2 for pin in (current, previous)):
+        raise ValueError(f"expected two complete control pins for {preset.name}")
+    return apply(
+        user_owned_name(f"checkpoints/{table.namespace}/control-links/{preset.name}-{previous.commit}-{current.commit}"),
+        _write_control_link,
+        version=GATE_REVISION,
+        artifact_type=GateReport,
+        preset=preset,
+        current=current,
+        previous=previous,
+        run_paths=tuple(control_path(preset, current, index, table=table) for index in range(current.replicates)),
+        control_paths=tuple(control_path(preset, previous, index, table=table) for index in range(previous.replicates)),
+        output=OUT,
+    )
 
 
 def _gate_artifact(

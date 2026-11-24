@@ -12,7 +12,7 @@ import statistics
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 import pyarrow as pa
@@ -33,10 +33,11 @@ from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import Outcome
+from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_presets as presets
-from experiments.post_training.rl_scoring import ANSWER_SCHEMA, answer_table, score_answers, score_slices
+from experiments.post_training.rl_scoring import ANSWER_SCHEMA, SLICE_COLUMNS, answer_table, score_answers, score_slices
 from experiments.post_training.task_curation.selection import TASK_SPEC_COLUMN
 
 
@@ -91,15 +92,31 @@ def _task_specs(path: StoragePath) -> Iterator[tuple[str, str]]:
             yield json.loads(raw)["id"], raw
 
 
-def read_recorded_task_set(launch: RecordedLaunch, name: str) -> RecordedTaskSet:
-    """Read evaluation task IDs and a hash of the sorted raw TaskSpec strings."""
-    pairs = [
-        pair
-        for source in recorded_sources(launch, name)
-        for pair in _task_specs(StoragePath(source.uri) / source.relative_path)
-    ]
+def _source_task_specs(sources: Sequence[RecordedSource]) -> list[tuple[str, str]]:
+    return [pair for source in sources for pair in _task_specs(StoragePath(source.uri) / source.relative_path)]
+
+
+def read_task_set(sources: Sequence[RecordedSource]) -> RecordedTaskSet:
+    """Read task IDs and a hash of the sorted raw TaskSpec strings."""
+    pairs = _source_task_specs(sources)
     payload = json.dumps(sorted(pairs), separators=(",", ":"), ensure_ascii=False).encode()
     return RecordedTaskSet(tuple(task_id for task_id, _ in pairs), hashlib.sha256(payload).hexdigest())
+
+
+def read_recorded_task_set(launch: RecordedLaunch, name: str) -> RecordedTaskSet:
+    """Read the task set bound to a recorded evaluation."""
+    return read_task_set(recorded_sources(launch, name))
+
+
+def held_out_identity(preset: presets.Preset, launch: RecordedLaunch) -> str | None:
+    evaluation = preset.held_out
+    if evaluation is None:
+        return None
+    identities = {source.identity for source in recorded_sources(launch, evaluation.name)}
+    if len(identities) != 1:
+        raise InvalidComparison(f"expected one recorded selection identity for {evaluation.name}")
+    identity = identities.pop().removeprefix(recipe.SELECTION_PREFIX + "/")
+    return identity.split(":", 1)[0]
 
 
 def evaluation_protocol(launch: RecordedLaunch, name: str) -> dict:
@@ -295,14 +312,15 @@ def _session_invariants(
     evaluation: presets.Evaluation,
     preset: presets.Preset,
     expected: int,
+    samples: int,
     task_ids: Sequence[str],
 ) -> list[Invariant]:
     rows = table.to_pylist()
     counts = Counter(row["task_id"] for row in rows)
-    holds = len(rows) == expected and set(counts.values()) == {evaluation.answers} and set(counts) == set(task_ids)
+    holds = len(rows) == expected and set(counts.values()) == {samples} and set(counts) == set(task_ids)
     result = [Invariant(name=f"{name}/answers_complete", value=len(rows), limit=expected, comparator="==", holds=holds)]
     if _checks_task_coverage(preset, evaluation):
-        coverage = len({row["task_id"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
+        coverage = len({row["task_id"] for row in rows if row["scored"]}) / (expected // samples)
         result.append(
             Invariant(
                 name=f"{name}/task_coverage",
@@ -322,6 +340,12 @@ def _checks_task_coverage(preset: presets.Preset, evaluation: presets.Evaluation
 
 
 @dataclass(frozen=True)
+class HeldOutAnswers:
+    final: pa.Table
+    initial: pa.Table
+
+
+@dataclass(frozen=True)
 class RunMeasurements:
     config: dict
     recorded: RecordedLaunch
@@ -332,10 +356,68 @@ class RunMeasurements:
     invariants: tuple[Invariant, ...]
     evaluations: tuple[Comparison, ...]
     slices: dict[str, int]
-    evaluation_identity: dict[str, tuple[str | None, dict]]
+    evaluation_protocols: dict[str, dict]
+    held_out_answers: dict[str, HeldOutAnswers]
+    started_at: str | None
     gpu_hours: float | None
     engine: dict
     attempt_id: str
+
+
+def _evaluation_values(
+    final: pa.Table, initial: pa.Table, *, final_for_gain: pa.Table | None = None
+) -> tuple[dict[str, float], dict[str, int]]:
+    values = score_answers(final)
+    gain_values = score_answers(final_for_gain) if final_for_gain is not None else values
+    for key, value in score_answers(initial).items():
+        values[key + "/initial"] = value
+        if key in gain_values:
+            values[key + "/gain"] = gain_values[key] - value
+    slices = {key: len({row["task_id"] for row in rows}) for key, rows in score_slices(final).items()}
+    return values, slices
+
+
+def restrict_evaluation(
+    run: RunMeasurements, name: str, digests: set[str], gain_digests: set[str], strata: Mapping[str, dict]
+) -> RunMeasurements:
+    """Recompute evaluation metrics on the selected digests with shared strata labels."""
+    answers = run.held_out_answers[name]
+
+    def project(table: pa.Table, selected_digests: set[str]) -> pa.Table:
+        values = pa.array(sorted(selected_digests), type=pa.string())
+        selected = table.filter(pc.is_in(table["task_digest"], value_set=values))
+        labels = [strata[digest] for digest in selected["task_digest"].to_pylist()]
+        for column in SLICE_COLUMNS:
+            position = ANSWER_SCHEMA.get_field_index(column)
+            selected = selected.set_column(
+                position,
+                ANSWER_SCHEMA.field(position),
+                pa.array([values[column] for values in labels], type=ANSWER_SCHEMA.field(position).type),
+            )
+        return selected
+
+    final = project(answers.final, digests)
+    initial = project(answers.initial, gain_digests)
+    aligned = project(answers.final, gain_digests) if digests != gain_digests else None
+    values, slices = _evaluation_values(final, initial, final_for_gain=aligned)
+    prefix = name + "/"
+    return replace(
+        run,
+        values={**{key: value for key, value in run.values.items() if not key.startswith(prefix)}, **values},
+        slices={**{key: value for key, value in run.slices.items() if not key.startswith(prefix)}, **slices},
+    )
+
+
+def _bind_task_digests(table: pa.Table, task_specs: Sequence[tuple[str, str]]) -> pa.Table:
+    expected = {name: canonical_sha256(json.loads(raw)) for name, raw in task_specs}
+    digests = []
+    for name, recorded in zip(table["task_id"].to_pylist(), table["task_digest"].to_pylist(), strict=True):
+        digest = expected.get(name)
+        if recorded is not None and recorded != digest:
+            raise InvalidComparison(f"recorded held-out TaskSpec content differs for {name}")
+        digests.append(digest)
+    position = ANSWER_SCHEMA.get_field_index("task_digest")
+    return table.set_column(position, ANSWER_SCHEMA.field(position), pa.array(digests, type=pa.string()))
 
 
 class EvaluationStatus(BaseModel):
@@ -394,40 +476,46 @@ def read_measurements(
         raise InvalidComparison(f"native job {terminal.native.result.iris_job_id} is {terminal.native.result.state}")
     if terminal.native.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
+    launch = read_recorded_launch(terminal)
     metrics = read_skyrl_metrics(path, attempt_id=terminal.attempt_id)
     workload = preset.recipe.layout.workload
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
     invariants = list(training_invariants(preset, metrics))
-    launch = read_recorded_launch(terminal)
     tracking = attempt_tracking(terminal, launch)
     try:
-        recorded_task_sets = {
-            evaluation.name: read_recorded_task_set(launch, evaluation.name) for evaluation in preset.evaluations
-        }
-        identities = {
-            evaluation.name: (
-                (recorded_task_sets[evaluation.name].task_set_sha256 if evaluation.held_out else None),
-                evaluation_protocol(launch, evaluation.name),
-            )
+        recorded_tasks = {
+            evaluation.name: _source_task_specs(recorded_sources(launch, evaluation.name))
             for evaluation in preset.evaluations
         }
+        protocols = {evaluation.name: evaluation_protocol(launch, evaluation.name) for evaluation in preset.evaluations}
     except (KeyError, TypeError, ValueError) as error:
         raise InvalidComparison(f"recorded evaluation identity is malformed: {error}") from error
     default, selection = recipe.task_selections(
         preset, recipe.selection_artifact(inputs.tasks) if inputs.tasks else None
     )
-    task_set = preset.held_out_tasks if preset.held_out is not None else None
+    task_set = held_out_identity(preset, launch)
     scores, initial_scores = [ANSWER_SCHEMA.empty_table()], []
+    held_out_answers = {}
     evaluations = []
     response_token_counts: set[int | None] = set()
     primary_answers = 0
     for index, evaluation in enumerate(preset.evaluations):
         quality = evaluation.held_out and _checks_task_coverage(preset, evaluation)
-        expected = recipe.evaluation_answer_count(
-            evaluation, recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks)
-        )
+        task_specs = recorded_tasks[evaluation.name]
+        samples = evaluation.answers
+        if evaluation.held_out:
+            samples = protocols[evaluation.name]["n_samples_per_prompt"]
+            expected = len(task_specs) * samples
+        else:
+            expected = recipe.evaluation_answer_count(
+                evaluation, recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks)
+            )
+        if samples < 1 or expected < samples:
+            raise InvalidComparison(f"recorded evaluation task set is empty for {evaluation.name}")
         all_scores = read_answers(evaluation, path, launch=launch, attempt=terminal)
+        if evaluation.held_out:
+            all_scores = _bind_task_digests(all_scores, task_specs)
         if index == 0:
             primary_answers = all_scores.num_rows
             response_token_counts.update(all_scores["response_token_count"].to_pylist())
@@ -436,6 +524,8 @@ def read_measurements(
         table = table.filter(pc.equal(table["step"], workload.scored_step(preset.updates)))
         scores.append(table)
         initial_scores.append(initial)
+        if evaluation.held_out:
+            held_out_answers[evaluation.name] = HeldOutAnswers(table, initial)
         ids = frozenset(table["task_id"].to_pylist())
         sessions = [(evaluation.name, table, workload.metric_step(preset.updates))]
         if evaluation.at_start:
@@ -467,7 +557,13 @@ def read_measurements(
                 )
             invariants.extend(
                 _session_invariants(
-                    session_name, session, evaluation, preset, expected, recorded_task_sets[evaluation.name].task_ids
+                    session_name,
+                    session,
+                    evaluation,
+                    preset,
+                    expected,
+                    samples,
+                    tuple(task_id for task_id, _ in task_specs),
                 )
             )
             if quality:
@@ -492,33 +588,26 @@ def read_measurements(
                 response_token_counts = {fixed}
         holds = workload.fixed_reply_holds(fixed, training, response_token_counts)
         invariants.append(Invariant(name="fixed_reply_tokens", value=holds, limit=True, comparator="==", holds=holds))
-    final = pa.concat_tables(scores)
-    values = {
-        **_window_values(preset, metrics),
-        **score_answers(final),
-    }
-    for key, value in score_answers(pa.concat_tables([scores[0], *initial_scores])).items():
-        values[key + "/initial"] = value
-        if key in values:
-            values[key + "/gain"] = values[key] - value
+    values, slices = _evaluation_values(pa.concat_tables(scores), pa.concat_tables([scores[0], *initial_scores]))
     result = terminal.native.result
     gpu_hours = None
     if result.started_at and result.finished_at:
         seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
         if seconds > 0:
             gpu_hours = seconds * launch.num_nodes * launch.gpus_per_node / 3600
-    slices = {key: len({row["task_id"] for row in rows}) for key, rows in score_slices(final).items()}
     return RunMeasurements(
         config=terminal.native.config,
         recorded=launch,
         path=path,
         held_out_tasks=task_set,
         provenance=terminal.native.result.provenance,
-        values=values,
+        values={**_window_values(preset, metrics), **values},
         invariants=tuple(invariants),
         evaluations=tuple(evaluations),
         slices=slices,
-        evaluation_identity=identities,
+        evaluation_protocols=protocols,
+        held_out_answers=held_out_answers,
+        started_at=result.started_at,
         gpu_hours=gpu_hours,
         engine=tracking.get("engine", {}),
         attempt_id=terminal.attempt_id,
