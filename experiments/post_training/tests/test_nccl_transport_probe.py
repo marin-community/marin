@@ -3,9 +3,9 @@
 
 """Tests for the NCCL transport probe's log parsing and gate verdict."""
 
-import argparse
 import hashlib
 import os
+import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -86,7 +86,8 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures():
     assert gate_verdict(False, [["NET/IB/0/GDRDMA"]]) == "collective_failed"
 
 
-def test_gate_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode_args", [(), ("--mode", "gate")], ids=["launcher", "gate"])
+def test_probe_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, monkeypatch, mode_args):
     coordinator = JobName.root("test-user", "coordinator")
     first_job, second_job = coordinator.child("first"), coordinator.child("second")
     addresses = {first_job: "127.0.0.1", second_job: "127.0.0.2"}
@@ -102,7 +103,6 @@ def test_gate_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, mon
     cluster.unregister_endpoint.side_effect = endpoints.pop
     cluster.list_endpoint_instances.side_effect = lambda name: [item for item in endpoints.values() if item.name == name]
     client = IrisClient(cluster)
-    args = argparse.Namespace(gate_coverage="first-pair", env_pairs=(), gate_report_prefix=None)
     groups = {}
 
     def run_task(job, rank):
@@ -111,7 +111,7 @@ def test_gate_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, mon
         set_job_info(info)
         try:
             with iris_ctx_scope(IrisContext.from_job_info(info, client)):
-                probe.run_gate(args)
+                probe.main()
         finally:
             set_job_info(previous)
 
@@ -126,7 +126,9 @@ def test_gate_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, mon
             run_task(second_job, 1)
         return {"pass": True, "ranks": [{"transports": ["NET/IB/0/GDRDMA"]}]}
 
+    argv = ["probe", "--max-local-gpus", "1", "--variants", "baseline_default_env", *mode_args]
     monkeypatch.setenv("GLOO_SOCKET_IFNAME", "lo")
+    monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(probe, "RESULT_DIR", tmp_path)
     monkeypatch.setattr(probe, "run_variant", run_variant)
     monkeypatch.setattr(probe, "collect_ib_port_inventory", lambda: [])

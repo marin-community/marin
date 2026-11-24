@@ -468,7 +468,7 @@ def run_launcher(args: argparse.Namespace) -> None:
         endpoint_name = args.endpoint_name
         coordinator = rank_offset == 0
     else:
-        endpoint_name = f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}"
+        endpoint_name = job_info.job_id.child(f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}").to_wire()
         coordinator = task_index == 0
     if coordinator:
         base_port = allocate_port_block(len(build_variants()) + 1)

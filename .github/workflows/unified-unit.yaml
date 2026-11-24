@@ -111,7 +111,6 @@ jobs:
           if [ "${{ matrix.package }}" = "marin-haliax" ]; then
             export JAX_NUM_CPU_DEVICES=8
           fi
-          # Marin's native RL checks compose launches in the SkyRL environment.
           status=0
           uv run \
             --python ${{ matrix.python }} \
@@ -119,7 +118,6 @@ jobs:
             ${{ matrix.extras }} \
             --group test \
             pytest ${{ matrix.pytest_args }} \
-            ${{ matrix.package == 'marin-core' && '--session-timeout=780' || '' }} \
             ${{ matrix.test_paths }} || status=$?
           [ "$status" -eq 5 ] && exit 0
           exit "$status"
