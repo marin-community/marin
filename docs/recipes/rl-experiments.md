@@ -320,12 +320,13 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 When the repository has configured the requester and bot identities, an authorized `/rl-controls`
 comment requests a refresh after the PR merges into main. The workflow checks the merged revision
 and the training and evaluation task digests. It collects only stale cohorts, qualifies every
-replicate and opens one draft with the updated pins. For each refreshed preset it records a
-comparison to the prior cohort on shared tasks. The learning-medium link is attached to the
-published control attempts.
+replicate, publishes comparisons to the prior cohort on shared tasks, and opens one draft with
+the updated pins after checking that main still has the same control inputs.
 
-Live collection uses the configured bot token, W&B credentials and Together grader credentials.
-Use the workflow's manual dry run to see which cohorts would be collected.
+Choose a merge that contains the refresh driver. Manual dry runs read stored task sets and
+receipts using the workflow's storage credentials. Live collection also requires the bot token,
+W&B and Together grader credentials, and the approved overlap threshold recorded in
+`RL_CONTROLS_MIN_OVERLAP`.
 
 ## Change a preset's default
 

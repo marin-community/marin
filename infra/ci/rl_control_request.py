@@ -19,7 +19,7 @@ class RefreshRequest:
 
 
 def _allowed_comment(comment: dict, allowed: set[str]) -> bool:
-    return comment["body"].strip() == "/rl-controls" and comment["user"]["login"].casefold() in allowed
+    return comment["body"] == "/rl-controls" and comment["user"]["login"].casefold() in allowed
 
 
 def _github(*args: str):

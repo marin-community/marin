@@ -299,10 +299,17 @@ def _check_protocols(runs: Sequence[RunMeasurements], controls: Sequence[RunMeas
         raise InvalidComparison("evaluation protocol differs")
 
 
+class InsufficientOverlap(InvalidComparison):
+    def __init__(self, reason: str, coverage: tuple[Invariant, ...]):
+        super().__init__(reason)
+        self.coverage = coverage
+
+
 def _require_shared_overlap(
     name: str, shared: set[str], control_labels: Sequence[Mapping[str, TaskStrata]]
 ) -> Invariant:
     minimum = 1.0
+    failure = None
     for labels in control_labels:
         families: dict[str, set[str]] = {}
         for digest, strata in labels.items():
@@ -313,13 +320,27 @@ def _require_shared_overlap(
         ]:
             accepted = len(shared & total)
             required = max(1, math.ceil(MIN_SHARED_TASK_FRACTION * len(total)))
-            if accepted < required:
-                raise InvalidComparison(f"{label}: {accepted} of {len(total)} control tasks shared; minimum {required}")
+            fraction = accepted / len(total) if total else 0.0
+            if accepted < required and failure is None:
+                failure = (label, accepted, len(total), required, fraction)
             if label == name:
-                minimum = min(minimum, accepted / len(total))
-    return Invariant(
-        name=f"{name}/shared_tasks", value=minimum, limit=MIN_SHARED_TASK_FRACTION, comparator=">=", holds=True
+                minimum = min(minimum, fraction)
+    overall = Invariant(
+        name=f"{name}/shared_tasks",
+        value=minimum,
+        limit=MIN_SHARED_TASK_FRACTION,
+        comparator=">=",
+        holds=minimum >= MIN_SHARED_TASK_FRACTION,
     )
+    if failure is not None:
+        label, accepted, total, required, fraction = failure
+        coverage = (overall,)
+        if label != name:
+            coverage += (
+                overall.model_copy(update={"name": f"{label}/shared_tasks", "value": fraction, "holds": False}),
+            )
+        raise InsufficientOverlap(f"{label}: {accepted} of {total} control tasks shared; minimum {required}", coverage)
+    return overall
 
 
 def _unshared_score(
@@ -349,7 +370,7 @@ def _unshared_score(
 
 @dataclass(frozen=True)
 class SharedEvaluation:
-    coverage: Invariant
+    coverage: tuple[Invariant, ...]
     final_tasks: int
     gain_tasks: int
     same_task_count: bool
@@ -366,18 +387,23 @@ def _align_evaluation(
     labels = [_task_labels(run.held_out_answers[name].final) for run in cohort]
     sets = [set(tasks) for tasks in labels]
     shared = set.intersection(*sets)
-    coverage = _require_shared_overlap(name, shared, labels[n_runs:])
+    coverage = (_require_shared_overlap(name, shared, labels[n_runs:]),)
     gain = shared.copy()
     if evaluation.at_start:
         for member in cohort:
             gain.intersection_update(member.held_out_answers[name].initial["task_digest"].to_pylist())
+        if gain != shared:
+            try:
+                coverage += (_require_shared_overlap(name + "/gain", gain, labels[n_runs:]),)
+            except InsufficientOverlap as error:
+                raise InsufficientOverlap(str(error), coverage + error.coverage) from error
     baseline = set.union(*sets[n_runs:])
     extra = _unshared_score(name, cohort[:n_runs], [tasks - baseline for tasks in sets[:n_runs]])
     strata = labels[newest]
     aligned = [
         (
             restrict_evaluation(member, name, shared, gain, strata)
-            if tasks != shared or gain != shared or member_labels != strata
+            if evaluation.at_start or tasks != shared or member_labels != strata
             else member
         )
         for member, tasks, member_labels in zip(cohort, sets, labels, strict=True)
@@ -415,15 +441,19 @@ def _compare_evaluations(
         ]
     selected_runs = [with_requirements(run, requirements) for run in cohort[: len(runs)]]
     selected_controls = cohort[len(runs) :]
-    invariants = [alignment.coverage for alignment in shared.values()]
+    invariants = [fact for alignment in shared.values() for fact in alignment.coverage]
     invariants.extend(
         row.model_copy(update={"replicate": index}) for index, run in enumerate(selected_runs) for row in run.invariants
     )
     comparisons = _compare(preset, selected_runs, selected_controls, requirements)
     for index, row in enumerate(comparisons):
         alignment = shared.get(row.metric.split("/", 1)[0])
-        if alignment is not None and row.role in (ComparisonRole.GUARD, ComparisonRole.OBJECTIVE):
-            tasks = alignment.gain_tasks if "/gain" in row.metric else alignment.final_tasks
+        if alignment is not None and row.tasks is None and (row.run is not None or row.control is not None):
+            tasks = (
+                alignment.gain_tasks
+                if "/gain" in row.metric or row.metric.endswith("/initial")
+                else alignment.final_tasks
+            )
             comparisons[index] = row.model_copy(update={"tasks": tasks})
     comparisons.extend(alignment.unshared for alignment in shared.values() if alignment.unshared is not None)
     return invariants, comparisons
@@ -948,6 +978,9 @@ def _write_gate(
             _check_control_config(candidate.config, baseline, candidate.recorded, preset=preset)
         invariants, comparisons = _compare_evaluations(preset, runs, controls, inputs.requirements)
         verdict, effect = _verdict(invariants, comparisons)
+    except InsufficientOverlap as error:
+        invariants.extend(error.coverage)
+        reason = str(error)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
         reason = str(error)
     report = GateReport(
@@ -1050,6 +1083,9 @@ def _write_control_link(
         metadata = metadata.model_copy(update={"config_changes": tuple(sorted(changes))})
         invariants, comparisons = _compare_evaluations(preset, runs, controls)
         verdict, effect = _verdict(invariants, comparisons)
+    except InsufficientOverlap as error:
+        invariants.extend(error.coverage)
+        reason = str(error)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
         reason = str(error)
     return _store_report(

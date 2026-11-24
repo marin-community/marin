@@ -8,7 +8,6 @@ import ast
 import json
 import os
 import subprocess
-import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -34,7 +33,7 @@ class ControlRefresh:
 
 
 def plan_refresh(table: ModelPresets) -> list[ControlRefresh]:
-    """Select incomplete cohorts and cohorts whose revision or task sets have changed."""
+    """Select cohorts whose recorded revision or task sets differ from the preset."""
     provenance = Provenance.capture(rl_compose.REPO_ROOT)
     if provenance.dirty or not provenance.base_commit:
         raise ValueError("control refresh needs a clean source commit")
@@ -55,8 +54,6 @@ def plan_refresh(table: ModelPresets) -> list[ControlRefresh]:
     planned = []
     for previous in table.control_pins.values():
         preset = table.by_name[previous.preset]
-        if preset.recipe.layout.gpu_variant != "H100":
-            raise ValueError(f"control refresh requires H100 placement for {preset.name}")
         stale = previous.revision != preset.revision
         if not stale:
             (config,) = rl_gate._compose_plans(preset, (RunInputs(preset_name=preset.name),))
@@ -66,12 +63,16 @@ def plan_refresh(table: ModelPresets) -> list[ControlRefresh]:
                 output = rl_gate.control_path(preset, previous, index, table=table)
                 receipt = read_stored_skyrl_attempt(output)
                 if receipt is None or receipt.native.result.state != "succeeded":
-                    stale = True
-                    break
-                if signature(read_recorded_launch(receipt), preset) != current_tasks:
+                    raise ValueError(f"expected a successful pinned control receipt at {output}")
+                observed = read_recorded_launch(receipt)
+                if observed.evaluation_data.keys() != expected.evaluation_data.keys() or (
+                    signature(observed, preset) != current_tasks
+                ):
                     stale = True
                     break
         if stale:
+            if preset.recipe.layout.gpu_variant != "H100":
+                raise ValueError(f"control refresh requires H100 placement for {preset.name}")
             current = ControlPin(preset.name, provenance.base_commit, preset.revision, previous.replicates)
             planned.append(ControlRefresh(preset, previous, current))
     return planned
@@ -115,13 +116,12 @@ def qualify_refresh(
 def publish_refresh(reports: Sequence[tuple[ControlRefresh, str]], table: ModelPresets) -> list[str]:
     errors = []
     for item, report in reports:
-        if item.preset.publishes:
-            outputs = [
-                rl_gate.control_path(item.preset, item.current, index, table=table)
-                for index in range(item.current.replicates)
-            ]
-            result = rl_publication.publish_runs(outputs, item.preset, table=table, gate_path=report)
-            errors.extend(result.errors)
+        outputs = [
+            rl_gate.control_path(item.preset, item.current, index, table=table)
+            for index in range(item.current.replicates)
+        ]
+        result = rl_publication.publish_runs(outputs, item.preset, table=table, gate_path=report)
+        errors.extend(result.errors)
     return errors
 
 
@@ -204,8 +204,8 @@ def _submit_pin_pr(
 
 def _configured_bot() -> str:
     bot = os.environ.get("RL_CONTROLS_BOT_LOGIN")
-    if not bot or not os.environ.get("RL_CONTROLS_ALLOWED_LOGINS") or not os.environ.get("WANDB_API_KEY"):
-        raise ValueError("control refresh requires configured bot, requester and W&B credentials")
+    if not bot or not os.environ.get("RL_CONTROLS_ALLOWED_LOGINS"):
+        raise ValueError("control refresh requires configured bot and requester identities")
     login = subprocess.check_output(["gh", "api", "user", "--jq", ".login"], text=True).strip()
     if login != bot:
         raise ValueError("control refresh token does not match the configured bot")
@@ -226,6 +226,23 @@ def _remote_pin_head(branch: str) -> str | None:
     return None
 
 
+def _verify_pin_base(source: str) -> None:
+    subprocess.run(["git", "fetch", "--no-tags", "origin", "main"], check=True)
+    inputs = (
+        "experiments/post_training/snowball_rl.py",
+        "experiments/post_training/rl.py",
+        "experiments/post_training/rl_presets.py",
+        "experiments/post_training/rl_compose.py",
+        "experiments/data.lock",
+        "lib/marin/src/marin/rl",
+        "lib/skyrlrecipe",
+        "vendor/skyrl",
+    )
+    changed = subprocess.check_output(["git", "diff", "--name-only", source, "FETCH_HEAD", "--", *inputs], text=True)
+    if changed:
+        raise ValueError(f"current main changed Snowball control inputs after {source}:\n{changed}")
+
+
 def _refresh_controls(planned: Sequence[ControlRefresh], *, pull: int, bot: str) -> None:
     if not planned:
         subprocess.run(
@@ -233,8 +250,10 @@ def _refresh_controls(planned: Sequence[ControlRefresh], *, pull: int, bot: str)
             check=True,
         )
         return
-    if not os.environ.get("TOGETHER_API_KEY"):
-        raise ValueError("control collection requires Together grader credentials")
+    if os.environ.get("RL_CONTROLS_MIN_OVERLAP") != str(rl_gate.MIN_SHARED_TASK_FRACTION):
+        raise ValueError("control collection needs approval of the current gate overlap threshold")
+    if not os.environ.get("TOGETHER_API_KEY") or not os.environ.get("WANDB_API_KEY"):
+        raise ValueError("control collection requires W&B and Together grader credentials")
     source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     branch = f"rl-controls/{source}"
     published = _remote_pin_head(branch)
@@ -245,11 +264,14 @@ def _refresh_controls(planned: Sequence[ControlRefresh], *, pull: int, bot: str)
         if int(count):
             print(f"Control pin branch {branch} already has a pull request.")
             return
+    _verify_pin_base(source)
     subprocess.run(["git", "config", "user.name", bot], check=True)
     subprocess.run(["git", "config", "user.email", f"{bot}@users.noreply.github.com"], check=True)
     table, reports = qualify_refresh(planned, SNOWBALL, entry_module="experiments.post_training.snowball_rl")
-    for error in publish_refresh(reports, table):
-        print(f"Control link publication: {error}", file=sys.stderr)
+    errors = publish_refresh(reports, table)
+    if errors:
+        raise RuntimeError("Control link publication failed:\n" + "\n".join(errors))
+    _verify_pin_base(source)
     _submit_pin_pr(table, reports, source, branch, pull, published)
 
 

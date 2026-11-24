@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import shutil
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -315,11 +316,14 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             AttemptSummary.model_validate_json(json.dumps(rows["native-0"]), strict=True), "http://localhost"
         )
     monkeypatch.setattr("marina.client.marina_request", request)
+    family_metrics = {
+        f"eval_lite/family/{family}/mean{suffix}" for family in ("small", "large") for suffix in ("", "/gain", "/initial")
+    }
     expected = report.model_dump(mode="json", include={"verdict", "effect", "reason", "invariants"}) | {
         "comparisons": [
             row.model_dump(mode="json")
             for row in report.comparisons
-            if row.role in ("objective", "guard", "requirement") or (row.role == "slice" and "/family/" in row.metric)
+            if row.role in ("objective", "guard", "requirement") or row.metric in family_metrics
         ],
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
@@ -553,6 +557,46 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
     )
+    old_binding = preset.held_out_tasks
+    assert old_binding is not None
+    new_binding = old_binding.split("@")[0] + "@2026.11.24.1"
+    old_panel = Path(recipe.selection_artifact(old_binding).path())
+    new_panel = Path(recipe.selection_artifact(new_binding).path())
+    shutil.copytree(old_panel, new_panel)
+    summary_path = new_panel / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["selection_strata"]["version"] = "2026.11.24.1"
+    write_json(summary_path, summary)
+    fresh_preset = replace(preset, held_out_tasks=new_binding)
+    fresh_pin = replace(pin, commit="next-main", replicates=2)
+    fresh_table = preset_table(fresh_preset)
+    fresh_table = replace(fresh_table, control_pins={**fresh_table.control_pins, preset.name: fresh_pin})
+    monkeypatch.setattr(snowball_model, "SNOWBALL", fresh_table)
+    fresh_roots = [
+        recorded_runs(
+            preset.name,
+            gate.control_name(preset.name, fresh_pin.commit, index, table=fresh_table),
+            inputs=RunInputs(preset_name=preset.name, settings=("trainer.policy.optimizer_config.lr=2e-6",)),
+            attempt_id=f"fresh-{index}",
+            score=0.5 + index * 0.01,
+            metrics={"policy/entropy": 0.5 + index * 0.01},
+        )
+        for index in range(2)
+    ]
+    [link] = run(gate.control_link_step(fresh_preset, fresh_pin, pin, table=fresh_table))
+    saved = gate.read_gate_report(link.path)
+    assert saved is not None and saved.verdict == "pass", link.reason
+    assert saved.control.held_out_tasks == old_binding and saved.run.held_out_tasks == new_binding
+    assert "skyrl.trainer.policy.optimizer_config.lr" in saved.run.config_changes
+    attached = publication.publish_runs(
+        list(map(str, fresh_roots)), fresh_preset, table=fresh_table, gate_path=link.path, service_url="http://localhost"
+    )
+    assert attached.errors == []
+    for attempt in ("fresh-0", "fresh-1"):
+        persisted = stored()[attempt]["gate_result"]
+        assert persisted["attempt_ids"] == ["fresh-0", "fresh-1"] and persisted["verdict"] == "pass"
+        slices = {row["metric"] for row in persisted["comparisons"] if row["role"] == "slice"}
+        assert slices == family_metrics
     before_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
     }

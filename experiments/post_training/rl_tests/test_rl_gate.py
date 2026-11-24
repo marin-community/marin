@@ -54,6 +54,7 @@ from experiments.post_training.rl_tests.fixtures import (
     evaluation_task_rows,
     fake_s3,
     fake_s3_checkpoint,
+    replace_evaluations,
     write_metrics,
     write_receipt,
     write_skyrl_run_record,
@@ -841,6 +842,7 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
         ("relabeled-family", (), 0, 20, None),
         ("too-few-common", range(10, 20), 0, 10, "10 of 20 control tasks shared"),
         ("missing-family", (0,), 0, 19, "family/small: 0 of 1 control tasks shared"),
+        ("missing-initial", (), 0, 20, "eval_lite/gain: 0 of 20 control tasks shared"),
     ),
 )
 def test_learning_gate_scores_shared_evaluation(
@@ -857,10 +859,29 @@ def test_learning_gate_scores_shared_evaluation(
         "SNOWBALL",
         replace(table, control_pins={**table.control_pins, preset.name: replace(pin, replicates=2)}),
     )
-    controls(recorded_runs, preset.name)
-    recorded_runs(preset.name, "users/test/shared-eval-baseline")
-    baseline = compare(preset.name, "--candidate", "users/test/shared-eval-baseline")
-    assert baseline["verdict"] == "pass", baseline
+    baseline_roots = controls(recorded_runs, preset.name)
+    if case in ("different-content", "relabeled-family"):
+        for control, score in zip(baseline_roots, (0.1, 0.9), strict=True):
+            export = str(control / "exports")
+            rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/")
+            selected = "task-19" if case == "different-content" else "task-0"
+            write_evaluations(
+                export,
+                [
+                    row.model_copy(
+                        update={
+                            "answers": [answer.model_copy(update={"verifier_score": score}) for answer in row.answers],
+                            "strata": (
+                                row.strata.model_copy(update={"family": "large"})
+                                if case == "relabeled-family" and row.step == preset.updates
+                                else row.strata
+                            ),
+                        }
+                    )
+                    for row in rows
+                    if row.task_id == selected
+                ],
+            )
     old_binding = preset.held_out_tasks
     assert old_binding is not None
     new_binding = old_binding.split("@")[0] + "@2026.11.24.1"
@@ -900,7 +921,9 @@ def test_learning_gate_scores_shared_evaluation(
     export = str(candidate / "exports")
     changed_ids = {f"task-{index}" for index in (*replaced, *range(count, count + extra))}
     rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/", step=preset.updates)
-    if changed_ids:
+    if case == "missing-initial":
+        replace_evaluations(candidate, rows)
+    elif changed_ids and reason is None:
         write_evaluations(
             export,
             [
@@ -911,19 +934,22 @@ def test_learning_gate_scores_shared_evaluation(
                 if row.task_id in changed_ids
             ],
         )
-    else:
+    elif case == "relabeled-family":
         with edit_receipt(candidate) as receipt:
             receipt["result"].update(started_at="2026-11-06T18:41:00+00:00", finished_at="2026-11-06T19:41:00+00:00")
     report = compare(preset.name, "--candidate", name)
+    facts = {fact["name"]: fact for fact in report["invariants"]}
+    assert facts["eval_lite/shared_tasks"]["value"] == shared / count
     if reason is not None:
         assert report["verdict"] == "invalid" and reason in report["reason"], report
         return
-    assert (report["verdict"], report["effect"]) == (baseline["verdict"], baseline["effect"]), report
+    assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
     assert report["control"]["held_out_tasks"] == old_binding
     assert report["run"]["held_out_tasks"] == new_binding
     results = comparisons(report)
     family_mean = results["eval_lite/family_mean"]
-    assert family_mean["tasks"] == shared and family_mean["run"] == comparisons(baseline)["eval_lite/family_mean"]["run"]
+    assert family_mean["tasks"] == shared and family_mean["run"] == pytest.approx(0.5)
+    assert family_mean["control"] == pytest.approx(0.49525 if case == "relabeled-family" else 0.495)
     if changed_ids:
         unshared = results["eval_lite/unshared/mean"]
         assert (unshared["role"], unshared["tasks"], unshared["run"]) == ("reported", len(changed_ids), 1.0)
@@ -932,23 +958,12 @@ def test_learning_gate_scores_shared_evaluation(
         assert "eval_lite/family/small/mean" not in results
         assert results["eval_lite/family/large/mean"]["tasks"] == 20
     gain = "eval_lite/family_mean/gain_per_gpu_hour"
-    expected_gain = None if extra else comparisons(baseline)[gain]["run"]
-    assert results[gain]["run"] == expected_gain
     if extra:
-        table = snowball_model.SNOWBALL
-        previous = gate.control_pin(preset, table=table)
-        fresh = replace(previous, commit="next-main", replicates=2)
-        table = replace(table, control_pins={**table.control_pins, preset.name: fresh})
-        monkeypatch.setattr(snowball_model, "SNOWBALL", table)
-        settings = RunInputs(preset_name=preset.name, settings=("trainer.policy.optimizer_config.lr=2e-6",))
-        controls(recorded_runs, preset.name, inputs=settings)
-        link = gate.control_link_step(preset, fresh, previous, table=table)
-        [stored] = run(link)
-        report = gate.read_gate_report(stored.path)
-        assert report is not None and report.verdict == "pass", stored.reason
-        assert report.control.held_out_tasks == old_binding and report.run.held_out_tasks == new_binding
-        assert "skyrl.trainer.policy.optimizer_config.lr" in report.run.config_changes
-        assert report.run.attempt_ids == ("recorded-attempt", "recorded-attempt")
+        assert results[gain]["run"] is results[gain]["control"] is None
+    else:
+        assert results[gain]["run"] == pytest.approx(0.2 / 40)
+        expected_control_gain = 0.18525 if case == "relabeled-family" else 0.195
+        assert results[gain]["control"] == pytest.approx(expected_control_gain / 40)
 
 
 @pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])
