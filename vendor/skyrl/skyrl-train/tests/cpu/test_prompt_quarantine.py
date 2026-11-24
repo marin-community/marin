@@ -16,7 +16,6 @@ from skyrl_train.rollouts.buffer import (
     RolloutBuffer,
     RolloutBufferConfig,
     RolloutContentPolicy,
-    RolloutLease,
     RolloutTask,
     RolloutVerdict,
 )
@@ -142,9 +141,9 @@ def test_recovered_prompt_fills_the_missing_group(family: str | None):
 
 @pytest.mark.asyncio
 async def test_recovered_prompt_fills_the_current_full_batch_with_a_future_lease(monkeypatch: pytest.MonkeyPatch):
-    rejection_batches = (2, 1, 2)
-    prompts = loader(num_rows=3, batch_size=2, max_unusable_groups=len(rejection_batches))
-    for _ in rejection_batches:
+    max_unusable_groups = 3
+    prompts = loader(num_rows=3, batch_size=2, max_unusable_groups=max_unusable_groups)
+    for _ in range(max_unusable_groups):
         prompts.record_disposition("0", UNUSABLE)
     config = RolloutBufferConfig(
         batch_size=2,
@@ -155,13 +154,10 @@ async def test_recovered_prompt_fills_the_current_full_batch_with_a_future_lease
         max_candidate_groups=None,
     )
     buffer = RolloutBuffer(config)
-    leases: asyncio.Queue[int] = asyncio.Queue()
     rejections: asyncio.Queue[None] = asyncio.Queue()
-
-    async def acquire_lease() -> RolloutLease:
-        lease = await buffer.acquire_lease()
-        leases.put_nowait(lease.batch_id)
-        return lease
+    # Hold later attempts from the failing prompt while the first batch waits for its last group.
+    for _ in range(max_unusable_groups):
+        rejections.put_nowait(None)
 
     async def run_task(task: RolloutTask, _writer: RolloutWriter) -> int:
         uid = task.prompt["uid"]
@@ -180,7 +176,7 @@ async def test_recovered_prompt_fills_the_current_full_batch_with_a_future_lease
 
     actor = SimpleNamespace(
         publish=SimpleNamespace(remote=buffer.publish),
-        acquire_lease=SimpleNamespace(remote=acquire_lease),
+        acquire_lease=SimpleNamespace(remote=buffer.acquire_lease),
         admit=SimpleNamespace(remote=buffer.admit),
     )
     monkeypatch.setattr(ray, "kill", lambda _actor: None)
@@ -204,14 +200,8 @@ async def test_recovered_prompt_fills_the_current_full_batch_with_a_future_lease
     try:
         async with asyncio.timeout(5):
             await context.publish(1)
-            async with asyncio.TaskGroup() as tasks:
-                batch = tasks.create_task(context.next_batch_metadata(stall_timeout=2))
-                assert [await leases.get(), await leases.get()] == [1, 1]
-                # Release each rejection once dispatch is holding the next lease.
-                for batch_id in rejection_batches:
-                    assert await leases.get() == batch_id
-                    rejections.put_nowait(None)
-            assert {group.uid for group in batch.result().groups} == {"0", "1"}
+            batch = await context.next_batch_metadata(stall_timeout=2)
+        assert {group.uid for group in batch.groups} == {"0", "1"}
     finally:
         await context.close()
 

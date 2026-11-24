@@ -188,10 +188,9 @@ class PromptLoader:
     def next_prompt(self, live: Collection[str], family: str | None = None, *, batches_ahead: int = 0) -> dict | None:
         """Offer a non-live prompt in the requested family.
 
-        Prompts awaiting regeneration come first. A lease that can fill the current batch can use an early
-        quarantine retry. ``batches_ahead`` is the number of batches a full-batch lease is reserved ahead of the
-        current one. A family lease advances only that family's seeded pass. Without a family lease, two batches'
-        worth of draws precede a scan that can pick a row the order weights at zero.
+        Prompts awaiting regeneration come first. A pending quarantine retry can fill the current batch. For a lease
+        reserved for a later full batch, pass its offset from the current batch as ``batches_ahead``. A family lease
+        advances only its family's seeded pass. Rows with zero sampling weight can be offered.
         """
 
         def eligible(uid: str) -> bool:
