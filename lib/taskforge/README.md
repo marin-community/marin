@@ -54,7 +54,15 @@ an author session. Review otherwise decides as for any task, and a source task w
 always gets *modify*, since controls are how review checks the grader. On *modify*, a new author session opens with the
 `author.repair` prompt and the review findings. The workspace is seeded with the task, its
 resources and the validation evidence; there is no `proposal.json`. Later rounds run as in the
-chosen arm, with the same budgets, band and solver trials as generation.
+chosen arm, with the same band and solver trials as generation. The modify after the first
+review isn't charged against `budget.max_modify_rounds`, so a source task gets as many author
+sessions as a proposal, and when it asks for missing controls it also reports the measured solve rate.
+
+`workpiece.json` keeps the task as its source delivered it in `source`, beside the latest
+`submission`. A revision that changes the task's `id` or `source` goes back to the author, since
+they join the task to its source. A relaunch whose input file no longer matches the published
+workpiece fails rather than resuming another version's event stream; use a new `--output` for a
+re-converted input.
 
 ## Running on the cluster
 

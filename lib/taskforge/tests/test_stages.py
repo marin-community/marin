@@ -200,6 +200,20 @@ async def test_source_task_author_works_in_the_tasks_container_when_admitted(
     assert (f"`{requested.docker_image}`" in system, "`/testbed`" in system) == (True, admitted)
 
 
+async def test_validate_returns_a_source_task_whose_id_changed_to_the_author(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    original = workpiece.submission
+    renamed = replace(original, task=original.task.model_copy(update={"id": "renamed"}))
+    source = Workpiece("source", submission=renamed, source=original)
+    ctx = Context(log=EventLog())
+    result = (await validate(ctx, source, config(), resources(ctx))).result
+    await ctx.drain()
+    assert result.lowering_cause is Cause.INVALID_TASK and not result.solver
+    assert result.lowering_error is not None and "'renamed'" in result.lowering_error
+    decision = default_review(source.with_(evidence=(result,)), config().band, config().budget)
+    assert isinstance(decision, Modify)
+
+
 async def test_author_reference_describes_valid_wire_values_and_supported_environments(workpiece: Workpiece) -> None:
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     ctx = Context(log=EventLog())

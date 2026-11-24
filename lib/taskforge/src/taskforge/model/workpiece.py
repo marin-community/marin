@@ -48,6 +48,7 @@ class Terminal(StrEnum):
 class WorkpieceChanges(TypedDict, total=False):
     id: str
     proposal: TaskProposal | None
+    source: Submission | None
     round: int
     session: Conversation | None
     submission: Submission | None
@@ -63,11 +64,13 @@ class Workpiece:
     """A task in progress, started from a proposal or from an existing task in ``submission``.
 
     A workpiece without a proposal repairs a task another source wrote: it starts at validation, and
-    review's findings open its author sessions.
+    review's findings open its author sessions. ``source`` keeps that task as the source delivered it,
+    after the author replaces ``submission``.
     """
 
     id: str
     proposal: TaskProposal | None = None
+    source: Submission | None = None
     round: int = 0
     session: Conversation | None = None
     submission: Submission | None = None
@@ -80,6 +83,8 @@ class Workpiece:
     def __post_init__(self) -> None:
         if self.proposal is None and self.submission is None:
             raise ValueError(f"Workpiece {self.id} needs a proposal or an existing task")
+        if self.proposal is not None and self.source is not None:
+            raise ValueError(f"Workpiece {self.id} starts from a proposal or a source task, not both")
 
     @property
     def modify_rounds(self) -> int:

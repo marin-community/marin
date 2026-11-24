@@ -153,7 +153,8 @@ def seed(path: str, policy: Policy) -> Workpiece | None:
         text = source.read()
     if path.endswith(TASK_SUFFIX):
         task = TaskSpec.model_validate_json(text)
-        return Workpiece(task.id, submission=Submission(task, source_controls(path, task), SOURCE_TASK_NOTES))
+        submission = Submission(task, source_controls(path, task), SOURCE_TASK_NOTES)
+        return Workpiece(task.id, submission=submission, source=submission)
     proposal = TASK_PROPOSAL.validate_json(text)
     return Workpiece(proposal.header.id, proposal) if eligible(proposal, policy) else None
 
@@ -188,6 +189,22 @@ def source_images(seed: Workpiece) -> tuple[str, ...]:
     return tuple(sorted(image for image in images if image not in (None, GRADER_BASE_IMAGE)))
 
 
+def check_seed(published: Path, initial: Workpiece) -> None:
+    """Refuse to resume a published workpiece for an input that has changed since it was published.
+
+    A relaunch replays the published event stream, so a re-converted source task or an edited proposal
+    would otherwise continue another input's run.
+
+    Raises:
+        ValueError: the published workpiece started from another proposal or source task.
+    """
+    if not published.exists():
+        return
+    previous = WORKPIECE.validate_json(published.read_bytes())
+    if (previous.proposal, previous.source) != (initial.proposal, initial.source):
+        raise ValueError(f"{published} was published for another version of this input; use a new --output")
+
+
 def first_stage(seed: Workpiece) -> Stage:
     """Validate a task from another source before any author revises it; author a proposal."""
     return Stage.AUTHOR if seed.proposal is not None else Stage.VALIDATE
@@ -212,6 +229,8 @@ async def one(args: argparse.Namespace) -> None:
     skipped = False
     try:
         restored = await recover(workdir, destination)
+        if restored is not None:
+            check_seed(workdir / "workpiece.json", initial)
         if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
             logging.info("SKIP %s: published terminal=%s", identity, restored.terminal)
             skipped = True

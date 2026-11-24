@@ -817,3 +817,24 @@ async def test_driver_validates_source_task_with_its_own_controls(
     stages = [record.event.stage for record in records if isinstance(record.event, StageCompleted)]
     assert stages == ["validate", "review"]
     assert isinstance(bundle.inference, FakeInference) and not bundle.inference.requests
+
+
+async def test_driver_refuses_to_resume_a_changed_source_task(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "arithmetic.task.json"
+    source.write_text(arithmetic_task().model_dump_json())
+    driver_args.proposals = str(source)
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield config(arm), resources(Envs(), script(arm))
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+    source.write_text(arithmetic_task().model_copy(update={"tags": ("reconverted",)}).model_dump_json())
+    driver_args.work_dir = str(tmp_path / "relaunch-work")
+    with pytest.raises(ValueError, match="another version of this input"):
+        await driver.one(driver_args)
