@@ -4,7 +4,7 @@
 """Recorded effect requests and the stable kinds that name them in a journal.
 
 Every concrete ``Event`` declares ``kind = "<area>.<name>"``: ``<area>`` is the resource whose executor resolves
-the request (``env``, ``inference``, ``grading``, ``rollouts``, ``ids``, ``web``) or, for diagnostics, the
+the request (``env``, ``inference``, ``grading``, ``rollouts``, ``ids``, ``web``, ``schema``) or, for diagnostics, the
 mechanism that emits it (``effect``, ``scope``, ``stage``, ``tool``); ``<name>`` is the snake-case request or
 occurrence. The kind, never the Python module or class name, is the recorded ``type`` and the first element of
 the replay digest, so classes may move or be renamed freely. Changing a kind breaks every journal that recorded it.

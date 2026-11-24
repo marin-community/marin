@@ -3,7 +3,6 @@
 
 """The default adversary roster: two briefs as policy data, one report schema, one reproduction check."""
 
-import gzip
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -18,9 +17,7 @@ from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments
 from lib.taskforge.tests.test_end_to_end import (
     SETTINGS,
     Envs,
-    ServedOnce,
     call,
-    executions,
     resources,
     script,
 )
@@ -30,9 +27,9 @@ from taskcompendium.models import EnvironmentRequirements
 
 from taskforge.coordinator import run_workpiece
 from taskforge.effects.context import Context
-from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, StageCompleted
+from taskforge.effects.events import Fingerprint, ReplayPolicy
 from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted
-from taskforge.effects.log import EventLog, decode
+from taskforge.effects.log import EventLog
 from taskforge.llm.policy import replay_arguments
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
@@ -46,9 +43,7 @@ from taskforge.model.review import (
     Continuation,
     Defect,
     DefectClaim,
-    EvidenceKind,
     Incomplete,
-    MissingEvidence,
     Modify,
     Observation,
     ObservedStatus,
@@ -60,7 +55,6 @@ from taskforge.policy import Policy, Prompt, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource
 from taskforge.resources.inference import InferenceClient, InferenceRequest
-from taskforge.stages.classify import replayable_grade
 from taskforge.stages.rules import default_review
 from taskforge.stages.validate import validate
 from taskforge.wiring import build_config, install
@@ -519,75 +513,6 @@ async def test_a_complete_policy_without_a_revision_budget_fails_at_wiring_and_i
         await validate(ctx, workpiece, build_config(load_policy(DEFAULTS_DIR).overlaid(overlay), {}), bundle)
     ).result.adversary
     assert result.status is AdversaryStatus.REPORTED and len(client.requests) == 1
-
-
-SINGLE_ADVERSARY = Path(__file__).parent / "fixtures" / "n7-single-adversary-held.jsonl.gz"
-
-
-async def test_a_single_adversary_policy_resumes_its_held_journal(proposal: TaskProposal) -> None:
-    """The fixture is the journal this revision (journal format 4) published for a driver launch of the ordinary author
-    script under ``{"adversary.roster": ["adversary"]}``, held on the adversary's first model call. Regenerate it from
-    that launch when a deliberate change to the prompts, tool schemas, event identities or envelopes invalidates it.
-
-    The single name keeps its strategy line through the ``adversary`` brief. Author turns, solver trials, control
-    grades and the adversary's hydration replay; only the adversary's model turns are new. Its solver fake recorded no
-    transcripts, so the solve-review is skipped without a call and the acceptance names that missing evidence."""
-    recorded = decode(gzip.decompress(SINGLE_ADVERSARY.read_bytes()))
-    served = [
-        r.event.request
-        for r in recorded
-        if isinstance(r.event, Resolved) and isinstance(r.event.request, InferenceRequest)
-    ]
-    policy = load_policy(DEFAULTS_DIR).overlaid(
-        {"proposals.environments": ["container"], **SETTINGS, "adversary.roster": ["adversary"]}
-    )
-    adversary = ServedOnce(
-        (call("shell", {"command": "inspect", "timeout": 5}, "look"), call("report", {"findings": []}, "r")), ()
-    )
-    adversary.identity = "adversary"
-    reviewer = CleanReviewer()
-    roles = {"solve_review": reviewer, "adversary": adversary}
-    resumed = replace(resources(Envs(), ()), inference=ServedOnce((), served), role_inference=roles)
-    log = EventLog(replay_from=recorded, replayable=replayable_grade)
-    workpiece = await run_workpiece(proposal, build_config(policy, {}), resumed, log, install=install)
-    assert workpiece.terminal is Terminal.ACCEPTED and not reviewer.requests
-    assert isinstance(accept := workpiece.decisions[-1], Accept)
-    assert accept.missing == (
-        MissingEvidence(EvidenceKind.TRANSCRIPTS, "solver trials [0, 1] have no complete transcript"),
-    )
-    assert isinstance(resumed.inference, ServedOnce) and not resumed.inference.requests
-    assert executions(resumed) == (0, 0) and len(adversary.requests) == 2
-    assert adversary.requests[0].conversation[1].content.startswith("Review strategy: adversary\n\n")
-    was = next(r.event.config_digest for r in recorded if isinstance(r.event, StageCompleted))
-    entries = {key: value for key, value in policy.entries.items() if key not in LATER_SETTINGS}
-    template = policy.prompt("author.system").template
-    assert template.count("{decision_model}") == 1  # renders nothing without a configured decision model
-    entries["author.system"] = Prompt(template.replace("{decision_model}", ""))
-    assert was == digest(Policy(entries))
-
-
-LATER_SETTINGS = frozenset(
-    {
-        "budget.max_missing_trials",
-        "solver.concurrency",
-        "solver.heartbeat_interval",
-        "author.decision_model",
-        *(f"decision_model.{name}" for name in ("model", "route", "concurrency", "request_timeout")),
-        *(f"decision_model.{name}" for name in ("unavailable_wait", "backoff_initial", "backoff_maximum")),
-        "decision_model.retry_interval",
-        *(f"solve_review.{name}" for name in ("model", "context_tokens", "system", "user", "nudge")),
-        "author.review",
-        "solver.confirmation_k",
-        "solve_review.final.system",
-        "solve_review.final.user",
-        "solve_review.final.nudge",
-        "author.notes",
-    }
-)
-"""The entries the default policy gained after this fixture was recorded (by the solver batch, the decision model, the
-solve-review, then the confirmation step); none enters a replay key of a recorded effect: the decision-model ones while
-``decision_model.model`` is empty, the solve-review ones only the solve-review's own, the confirmation ones only the
-confirmation step's."""
 
 
 # Owner's ruling 2026-11-21: a search that ends without a reproduced finding counts for a strong task, but every record

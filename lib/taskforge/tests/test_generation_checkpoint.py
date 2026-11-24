@@ -9,7 +9,6 @@ import json
 import subprocess
 import sys
 import time
-from argparse import Namespace
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -17,7 +16,6 @@ from typing import cast
 
 import pytest
 from lib.taskforge.tests.effect_fakes import local_records
-from lib.taskforge.tests.resource_doubles import FakeInference
 from lib.taskforge.tests.resources.inference_fakes import HANG, Act, Fails, ScriptedProvider, segment
 from lib.taskforge.tests.resources.test_decision_model import (
     GRADER,
@@ -28,19 +26,8 @@ from lib.taskforge.tests.resources.test_decision_model import (
     overlaid,
     request,
 )
-from lib.taskforge.tests.stage_fakes import SolverEngine
 from lib.taskforge.tests.test_end_to_end import (
-    ConfirmationOutage,
-    Envs,
-    ServedOnce,
-    confirming,
     driver_args,  # noqa: F401 (a fixture)
-    history,
-    published,
-    published_workpiece,
-    resources,
-    script,
-    serve,
 )
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
@@ -60,10 +47,9 @@ from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerType, FinalAction, FunctionDefinition
 
-from taskforge import driver
-from taskforge.checkpoint import HEAD, HEAD_JSON, JOURNAL_FORMAT, CheckpointSink
+from taskforge.checkpoint import CheckpointSink
 from taskforge.effects.context import Context
-from taskforge.effects.events import Invalidated, Resolved, ScopeEntered, ScopeExited, event_digest
+from taskforge.effects.events import Invalidated, Resolved, ScopeEntered, ScopeExited
 from taskforge.effects.issues import DecisionModelUnavailable
 from taskforge.effects.log import Billing, EventLog, JsonlSink, Record, Status
 from taskforge.llm.client import AttemptOutcome, ModelRequestRejected, Segment
@@ -408,32 +394,3 @@ def test_a_resumed_read_that_fails_holds_after_its_siblings_settle_and_recovery_
         ["twelve"],
     )
     assert recovered["solver"] == "tokens role=solver prompt=30 cached=0 completion=15"
-
-
-# The checkpoint row is new at format 9, and every format-8 row means the same at 9: a format-8 root, written before
-# this change, resumes with its completed slots and author calls replayed, and its claim fences it from format-8 readers.
-async def test_a_format_8_root_resumes_its_recorded_slots_and_is_claimed_at_the_current_format(
-    driver_args: Namespace,  # noqa: F811
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    confirming(driver_args)
-    first = replace(
-        resources(Envs(), script()), rollouts=replace(resources(Envs(), ()).rollouts, engine=ConfirmationOutage(2))
-    )
-    resumed = replace(resources(Envs(), ()), inference=ServedOnce((), ()))
-    resumed = replace(resumed, rollouts=replace(resumed.rollouts, engine=SolverEngine(1)))
-    serve(monkeypatch, first, resumed)
-    assert await driver.one(driver_args) == driver.DEFERRED
-    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
-    assert not generations(history(destination))  # nothing a format-8 writer could not have written
-    (destination / HEAD).write_bytes(HEAD_JSON.dump_json(replace(published(destination).head, format=8)))
-    assert isinstance(first.inference, FakeInference) and isinstance(resumed.inference, ServedOnce)
-    resumed.inference.served = {event_digest(request) for request in first.inference.requests}
-    assert await driver.one(driver_args) == 0
-    before, engine = first.rollouts.engine, resumed.rollouts.engine
-    assert isinstance(before, SolverEngine) and isinstance(engine, SolverEngine)
-    assert engine.started[0] == "arithmetic:4:1" and not {r for r in before.started if r != "arithmetic:4:1"} & set(
-        engine.started
-    )
-    assert published(destination).head.format == JOURNAL_FORMAT == 10
-    assert published_workpiece(destination).terminal is Terminal.ACCEPTED

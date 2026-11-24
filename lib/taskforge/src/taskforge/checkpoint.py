@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal (format 10; its layout is in the README) under one fenced writer.
+"""Publish a workpiece's journal (format 11; its layout is in the README) under one fenced writer.
 
 Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
 advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.
@@ -32,16 +32,21 @@ from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFail
 from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 
-JOURNAL_FORMAT = 10
-"""Format 10 names the role that paid for each physical cached resolution (a row's ``billed``, outside the event), so
+JOURNAL_FORMAT = 11
+"""Format 11 records a ``schema.author_reference`` row: the TaskSpec and Control schemas a root's author is shown,
+generated once from the installed models and replayed by every later visit and launch. Format-10 readers cannot
+decode that row; at 11 they refuse the root as another format. Every format-8, 9 and 10 row means the same at 11, so
+the usage report reads them, but this writer claims none of those roots: their recorded author calls embedded a
+reference this writer cannot reproduce, so a resumed author would buy different answers that the sandbox history it
+recorded refuses. Such a root stays with its own writer or is rerun at a fresh output prefix.
+Format 10 names the role that paid for each physical cached resolution (a row's ``billed``, outside the event), so
 the usage report no longer guesses it from overlapping scopes; request digests and replay keys are unchanged. Every
-format-8 and format-9 row means the same at 10, so this reader resumes both and its claim writes 10; the report
+format-8 and format-9 row means the same at 10, so a format-10 writer resumed both; the report
 charges their rows, which name no payer, to one unattributed bucket. Format-9 readers refuse a format-10 root as
 another format.
 Format 9 records a ``rollouts.solver_generation`` row: a slot's finished generation that its decision model did not
 score, which a resumed slot grades without generating again. Format-8 readers cannot decode that row, and would report
-the root corrupt; at 9 they refuse it as another format, untouched. Every format-8 row means the same at 9, so this
-reader also resumes a format-8 root (``READABLE``).
+the root corrupt; at 9 they refuse it as another format, untouched. Every format-8 row means the same at 9.
 Format 8 confirms an acceptance (``solver.confirmation_k`` more solver trials and a final review) before it is
 terminal; a format-7 acceptance ended at its validation round and names neither as missing, and a resumed format-7
 round would buy a confirmation its recorded history lacks. Its workpiece records each author response to a review
@@ -60,8 +65,8 @@ submission named by digest; format 4 hydrated each trial without a detail and re
 Format 4 records adversary findings as a defect direction with observed and deserved grades; format 3 recorded an
 expected reward band, which cannot establish a deserved reward. Format 3 links sandbox rows to their environment
 owners; format 2 replayed them by content, without owners."""
-READABLE = frozenset({8, 9, JOURNAL_FORMAT})
-"""The head formats this reader resumes: its own, and formats 8 and 9, whose rows it reads unchanged."""
+READABLE = frozenset({8, 9, 10, JOURNAL_FORMAT})
+"""The head formats whose rows this code decodes, for the usage report; a writer claims only ``JOURNAL_FORMAT``."""
 FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "workpiece.json"})
 """Format 1 named events by module path and wrote these objects beside its stream; any one marks its root."""
 HEAD = "journal.json"
@@ -255,7 +260,13 @@ class CheckpointSink(Sink):
         _write(self.head, HEAD_JSON.dump_json(head), expected, successor)
 
     def claim(self, journal: Journal | None) -> tuple[Record, ...]:
-        """Own the head ``journal`` was read at and return its history, decoded before anything is claimed."""
+        """Own the head ``journal`` was read at and return its history, decoded before anything is claimed; a head of an
+        earlier format is ``UnsupportedFormat``, untouched."""
+        if journal is not None and journal.head.format != JOURNAL_FORMAT:
+            raise UnsupportedFormat(
+                f"{self.destination}/{HEAD} has journal format {journal.head.format}, not {JOURNAL_FORMAT}: resume it "
+                "with the writer of its format or rerun at a fresh output prefix"
+            )
         events = journal.events() if journal else b""
         try:
             records = self.local.start(events)

@@ -105,7 +105,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 10); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 11); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -132,9 +132,13 @@ format 7 (no confirmation step: its acceptances end at the validation round and 
 resumed format-7 round would buy one its history lacks),
 fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 10` and reports the
-rest. Formats 8 and 9 are the exception: every format-8 or format-9 row means the same at format 10, so this reader
-resumes both and its claim writes 10. Format 10 adds a row's `billed` field, outside the event, naming the role that
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 11` and reports the
+rest. Formats 8 to 10 differ: their rows mean the same at format 11, so `report` reads them, but the driver refuses
+to claim a running or held root of those formats, exiting 4 with its head untouched and naming the writer of its
+format or a fresh output prefix as the way on. Their author calls embedded a schema reference this writer does not
+reproduce, so a resumed author would buy different answers that the recorded sandbox history then refuses. Format 11
+adds the `schema.author_reference` row (below), which a format-10 reader cannot decode; at 11 that reader refuses the
+root as another format. Format 10 adds a row's `billed` field, outside the event, naming the role that
 paid for a physical cached resolution; a format-9 reader refuses a format-10 root as another format. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its
 decision-model grade, below), which a format-8 reader cannot decode; at 9 that reader refuses the root as another
 format, untouched, instead of reporting it corrupt. Such roots are converted once by a separate migration, or rebuilt. Format 5 covers two writers that its
@@ -202,9 +206,12 @@ stage. A refusal of a slot's first read still restarts the stage, as before.
 
 Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear. A held
-format-8, format-9 or format-10 root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone; the
-author's system prompt embeds the pinned reference, so a wording-only change in TaskCompendium's schema does not
-affect it.
+root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone. The author's system prompt embeds the `TaskSpec` and control JSON schemas, generated from the installed
+TaskCompendium models at a root's first fresh author session and recorded as a `schema.author_reference` row
+(about 29 KB); every later author session of the root, in this launch or a resumed one, replays that text, so a
+wording-only change in TaskCompendium's schemas does not affect a root that recorded it. `wiring.install` binds
+this effect; a caller that passes `run_workpiece` its own installer must bind `AuthorReference` to
+`stages.author.author_reference` (or its own executor) to run the stock author stage.
 Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and
 its initial sandbox definition; each command or file operation it issues references that row, takes the
 next position in the owner's history, and its outcome references the request. A resumed attempt is
@@ -404,9 +411,8 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
 - **Tools**: `tools.output_chars` (at least 240); longer output is saved to `.tool-output/<digest>.txt` in
   the workspace and the model gets the head plus the path, or, for a session without a machine, is clipped.
 
-Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the pinned
-`TaskSpec` and control reference (`defaults/author-reference-v2.json`, with the decision-model grader kind from
-`defaults/author-reference-v2-decision-model.json` inserted where a decision model is configured), and the adversary's user prompt renders its brief and the task without
+Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the root's
+recorded `TaskSpec` and control reference (above), and the adversary's user prompt renders its brief and the task without
 file payloads (they are in the workdir).
 
 ## Models and providers

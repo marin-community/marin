@@ -1103,16 +1103,16 @@ def reword() -> Iterator[Callable[[], None]]:
 
 
 @pytest.mark.parametrize("reworded", [False, True], ids=["installed wording", "reworded sibling"])
-async def test_a_held_format_7_root_resumes_only_its_unfinished_turns(
+async def test_a_held_root_resumes_only_its_unfinished_turns(
     driver_args: Namespace,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
     reword: Callable[[], None],
     reworded: bool,
 ) -> None:
-    """Review 2026-11-21: a format-7 root this driver held after three author calls re-bought
-    them on resume once main reworded ``JsonAnswer`` (five calls where the earlier reader made two). With the pinned
-    author reference only the unfinished turns reach inference: the author's submit and the never-run review,
-    whatever the installed library's descriptions say between the hold and the resume."""
+    """Review 2026-11-21: a root this driver held after three author calls re-bought them on resume once main reworded
+    ``JsonAnswer`` (five calls where the earlier reader made two). The root replays the author reference it recorded,
+    so only the unfinished turns reach inference: the author's submit and the never-run review, whatever the installed
+    library's descriptions say between the hold and the resume."""
     held = FakeInference((*script()[:3], Hold("relay unavailable")))
     first = replace(resources(Envs(), ()), inference=held, role_inference={"solve_review": CleanReviewer()})
     author, reviewer = FakeInference(script()[3:]), CleanReviewer()

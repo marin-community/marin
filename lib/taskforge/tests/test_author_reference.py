@@ -1,87 +1,73 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import json
+from collections.abc import Sequence
+from typing import Any
 
 import pytest
+from lib.taskforge.tests.resource_doubles import FakeInference
+from lib.taskforge.tests.test_end_to_end import Envs, config, resources, script
 from taskcompendium.models import TaskSpec
 
-from taskforge.model.controls import CONTROL
-from taskforge.policy import Policy, load_policy
-from taskforge.policy.defaults import DEFAULTS_DIR
-from taskforge.stages.author import AUTHOR_REFERENCE, DECISION_MODEL_GRADER, author_reference, system_prompt
-
-# sha256 of the v2 reference as generated from TaskSpec and CONTROL: what recorded author requests embed.
-V2_DIGEST = "28bef7104d48e9e3752479bc0c98a9c87dae1af4a1704e0e22994e6d15b29a40"
-# The same with the decision-model grader kind inserted, as a decision-model configuration shows it.
-DECISION_MODEL_DIGEST = "6097046236d23c1e96cc41464ef5093012eb85a7133b924639daf249ca186025"
-WORDING = frozenset({"description", "title"})
-# Keywords whose values are schemas; every other keyword's value is data (default, examples, const, enum, mapping, ...).
-SCHEMA = frozenset({"additionalProperties", "contains", "else", "if", "items", "not", "propertyNames", "then"})
-SCHEMA_LISTS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
-SCHEMA_MAPS = frozenset({"$defs", "dependentSchemas", "patternProperties", "properties"})
+from taskforge.coordinator import run_workpiece
+from taskforge.effects.events import Resolved
+from taskforge.effects.log import EventLog, Record
+from taskforge.model.proposal import TaskProposal
+from taskforge.model.workpiece import Terminal
+from taskforge.stages.author import AuthorReference
+from taskforge.stages.classify import replayable_grade
+from taskforge.wiring import install
 
 
-def shape(schema: object) -> object:
-    """The schema node without its wording; data values stay verbatim."""
-    if not isinstance(schema, dict):
-        return schema
-    shaped: dict[str, object] = {}
-    for key, value in schema.items():
-        if key in SCHEMA_MAPS:
-            value = {name: shape(child) for name, child in value.items()}
-        elif key in SCHEMA_LISTS or (key in SCHEMA and isinstance(value, list)):
-            value = [shape(child) for child in value]
-        elif key in SCHEMA:
-            value = shape(value)
-        elif key in WORDING:
-            continue
-        shaped[key] = value
-    return shaped
+def reword(monkeypatch: pytest.MonkeyPatch, description: str) -> None:
+    """Install a TaskCompendium whose ``JsonAnswer`` description reads ``description``."""
+    schema = TaskSpec.model_json_schema
+
+    def reworded() -> dict[str, Any]:
+        installed = schema()
+        installed["$defs"]["JsonAnswer"]["description"] = description
+        return installed
+
+    monkeypatch.setattr(TaskSpec, "model_json_schema", reworded)
 
 
-def shapes(reference: dict[str, object]) -> dict[str, object]:
-    return {name: shape(schema) for name, schema in reference.items()}
+def references(records: Sequence[Record]) -> list[tuple[str, bool]]:
+    """Each recorded author reference, and whether it replayed."""
+    return [
+        (record.event.value, record.event.replayed)
+        for record in records
+        if isinstance(record.event, Resolved) and isinstance(record.event.request, AuthorReference)
+    ]
 
 
-def policy(decision_model: bool) -> Policy:
-    return load_policy(DEFAULTS_DIR).overlaid({"decision_model.model": "decision-model" if decision_model else ""})
+def described(reference: str) -> str:
+    return json.loads(reference)["TaskSpec"]["$defs"]["JsonAnswer"]["description"]
 
 
-def installed_shapes(decision_model: bool) -> dict[str, object]:
-    installed = json.loads(json.dumps({"TaskSpec": TaskSpec.model_json_schema(), "Control": CONTROL.json_schema()}))
-    if not decision_model:  # the author is offered this kind only when a decision model is configured
-        grader = installed["TaskSpec"]["properties"]["grader"]
-        del installed["TaskSpec"]["$defs"]["DecisionModelGrader"], grader["discriminator"]["mapping"]["decision_model"]
-        grader["oneOf"].remove({"$ref": "#/$defs/DecisionModelGrader"})
-    return shapes(installed)
-
-
-@pytest.mark.parametrize("decision_model, digest", [(False, V2_DIGEST), (True, DECISION_MODEL_DIGEST)])
-def test_author_is_shown_the_pinned_reference_bytes(decision_model: bool, digest: str) -> None:
-    reference = author_reference(decision_model)
-    assert hashlib.sha256(reference.encode()).hexdigest() == digest
-    assert reference in system_prompt(policy(decision_model))
-
-
-@pytest.mark.parametrize("decision_model", [False, True])
-def test_a_reworded_field_description_leaves_the_author_prompt_unchanged(
-    monkeypatch: pytest.MonkeyPatch, decision_model: bool
+async def test_a_fresh_root_records_the_installed_wording_and_shows_it_to_the_author(
+    proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    before = system_prompt(policy(decision_model))
-    reworded = TaskSpec.model_json_schema()
-    reworded["$defs"]["JsonAnswer"]["description"] = "The answer field, reworded."
-    monkeypatch.setattr(TaskSpec, "model_json_schema", lambda *_args, **_kwargs: reworded)
-    assert system_prompt(policy(decision_model)) == before
+    reword(monkeypatch, "Installed wording.")
+    bundle = resources(Envs(), script())
+    log = EventLog(replayable=replayable_grade)
+    assert (await run_workpiece(proposal, config(), bundle, log, install=install)).terminal is Terminal.ACCEPTED
+    ((reference, replayed),) = references(log.records)
+    assert described(reference) == "Installed wording." and not replayed
+    assert isinstance(bundle.inference, FakeInference)
+    assert reference in bundle.inference.requests[0].messages[0].content
 
 
-@pytest.mark.parametrize("decision_model", [False, True])
-def test_pinned_reference_has_the_installed_schema_shapes(decision_model: bool) -> None:
-    pinned = json.dumps(shapes(json.loads(author_reference(decision_model))), sort_keys=True, indent=2)
-    installed = json.dumps(installed_shapes(decision_model), sort_keys=True, indent=2)
-    assert pinned == installed, (
-        f"The installed TaskSpec/Control shapes differ from {AUTHOR_REFERENCE.name} (with "
-        f"{DECISION_MODEL_GRADER.name} when a decision model is configured: {decision_model}). "
-        "Add a new reference version and select it deliberately."
-    )
+async def test_a_resumed_root_replays_its_recorded_reference_after_the_wording_changes(
+    proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reword(monkeypatch, "Recorded wording.")
+    recorded = EventLog(replayable=replayable_grade)
+    await run_workpiece(proposal, config(), resources(Envs(), script()), recorded, install=install)
+    reword(monkeypatch, "Later wording.")
+    resumed = resources(Envs(), ())  # an author call bought again exhausts this empty script
+    log = EventLog(replay_from=recorded.records, replayable=replayable_grade)
+    assert (await run_workpiece(proposal, config(), resumed, log, install=install)).terminal is Terminal.ACCEPTED
+    assert isinstance(resumed.inference, FakeInference) and not resumed.inference.requests
+    ((reference, replayed),) = references(log.records[len(recorded.records) :])
+    assert described(reference) == "Recorded wording." and replayed

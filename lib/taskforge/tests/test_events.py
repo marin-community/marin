@@ -38,6 +38,7 @@ from taskforge.resources.ids import NewId
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverGeneration, SolverRollout
 from taskforge.resources.web import WebFetch, WebSearch
+from taskforge.stages.author import AuthorReference
 
 KINDS: dict[str, type[Event[object]]] = {
     "decision_model.read": DecisionModelRead,
@@ -55,6 +56,7 @@ KINDS: dict[str, type[Event[object]]] = {
     "inference.request": InferenceRequest,
     "rollouts.solver_generation": SolverGeneration,
     "rollouts.solver_rollout": SolverRollout,
+    "schema.author_reference": AuthorReference,
     "scope.entered": ScopeEntered,
     "scope.exited": ScopeExited,
     "stage.completed": StageCompleted,

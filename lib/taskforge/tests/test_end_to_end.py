@@ -55,7 +55,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource
 
-from taskforge import checkpoint, coordinator, driver
+from taskforge import checkpoint, coordinator, driver, wiring
 from taskforge.checkpoint import HEAD, HEAD_JSON, CheckpointSink, Head, Journal, read_journal
 from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, advance, run_workpiece
@@ -80,6 +80,7 @@ from taskforge.effects.issues import (
     Restart,
     Superseded,
     Transient,
+    UnsupportedFormat,
 )
 from taskforge.effects.log import EventLog, JsonlSink, Opened, Record, Status, decode, fold
 from taskforge.harness.protocol import Stopped, StopReason
@@ -110,6 +111,7 @@ from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Fallback, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
+from taskforge.report import report as usage_report
 from taskforge.resources.bundle import Resources
 from taskforge.resources.decision_model import (
     ClefReader,
@@ -136,6 +138,7 @@ from taskforge.resources.inference import GlmInference, InferenceClient, Inferen
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages import STAGES
+from taskforge.stages.author import AuthorReference
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config, build_resources, install, retry_policy, solver_turn
@@ -2092,15 +2095,29 @@ async def test_a_confirmation_outage_parks_and_the_next_launch_buys_only_what_it
 N4_JOURNAL = Path(__file__).parent / "fixtures" / "n4-held-drift.jsonl.gz"
 
 
+def bind_reference(monkeypatch: pytest.MonkeyPatch, records: Sequence[Record]) -> None:
+    """Serve the author reference ``records`` recorded, whatever the installed models say: a journal golden then pins
+    its sandbox and model rows, not TaskCompendium's wording."""
+    recorded = {
+        record.event.request.decision_model: record.event.value
+        for record in records
+        if isinstance(record.event, Resolved) and isinstance(record.event.request, AuthorReference)
+    }
+
+    async def served(event: AuthorReference) -> str:
+        return recorded[event.decision_model]
+
+    monkeypatch.setattr(wiring, "author_reference", served)
+
+
 def rows(records: Sequence[Record]) -> list[Record]:
-    """Records without their wall times or payers: events and the envelopes that link sandbox rows. The fixtures
-    predate format 10, whose rows name the role that paid for each physical resolution."""
-    return [replace(record, wall_time=0.0, billed=None) for record in records]
+    """Records without their wall times: events, payers and the envelopes that link sandbox rows."""
+    return [replace(record, wall_time=0.0) for record in records]
 
 
-FIXTURE_CONFIG_DIGEST = "c2c325d70cb80fa73625a0c2b9745c52c33eea84250542b1d4013d4bd8e16f49"
-"""The policy digest the ``N3_JOURNAL`` and ``N4_JOURNAL`` fixtures recorded. The default policy has since gained the
-two adversary briefs, which changes only that digest in an author-only journal."""
+FIXTURE_CONFIG_DIGEST = "1797f796269d33067b1b26a1bbf934c262605ebaa992e42691d91cbe014f7384"
+"""The policy digest the ``N4_JOURNAL`` and ``N4_POLLS`` fixtures recorded. A later policy entry changes only that
+digest in an author-only journal."""
 
 
 def rebased(recorded: Sequence[Record], fresh: Sequence[Record]) -> list[Record]:
@@ -2118,9 +2135,11 @@ async def test_a_journal_written_by_positional_dispatch_resumes_without_repeated
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
 ) -> None:
     """The fixture is the journal this dispatch published for the held first launch of ``held_after_stamp``. It pins
-    the recorded events, owner references and replay keys. A deliberate change to the author prompts, tool schemas,
-    event identities or envelopes invalidates it; regenerate it then from that first launch."""
+    the recorded events, owner references and replay keys; it serves the author reference it recorded, so
+    TaskCompendium's wording does not enter it. A deliberate change to the author prompts, tool schemas, event
+    identities or envelopes invalidates it; regenerate it then from that first launch."""
     recorded = decode(gzip.decompress(N4_JOURNAL.read_bytes()))
+    bind_reference(monkeypatch, recorded)
     await held_after_stamp(monkeypatch, driver_args)
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     fresh = history(destination)
@@ -2233,6 +2252,28 @@ async def test_an_earlier_format_root_needs_migration_before_claim_and_stays_unt
         await driver.one(driver_args)
     assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
     assert tree(destination) == before and not Path(driver_args.work_dir).exists()
+
+
+FORMAT_10_HELD = Path(__file__).parent / "fixtures" / "format10-author-held-root.json.gz"
+"""The whole root the format-10 writer (f854288c62) published for the held first launch of ``held_after_stamp``: three
+author turns and their commands, without an author reference row."""
+
+
+async def test_a_held_format_10_root_is_refused_before_claim_and_the_report_still_reads_it(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its author calls embedded a reference this writer does not reproduce, so resuming it would buy answers its
+    recorded sandbox history refuses; the driver refuses it untouched and names the ways on."""
+    destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), FORMAT_10_HELD)
+    before = tree(destination)
+    monkeypatch.setattr(driver, "runtime", unexpected_runtime)
+    driver_args.resume_held = True
+    with pytest.raises(UnsupportedFormat, match="format 10, not 11: resume it with the writer of its format") as raised:
+        await driver.one(driver_args)
+    assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
+    assert tree(destination) == before
+    lines = await usage_report(str(destination))
+    assert lines[0] == "workpieces=1 since_hours=all" and not [line for line in lines if "skipped" in line]
 
 
 def test_an_optional_field_at_its_default_is_absent_from_every_persisted_form(proposal: TaskProposal) -> None:
@@ -2476,12 +2517,15 @@ async def test_a_journal_with_two_polls_serves_each_poll_its_own_recording(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The fixture is the journal this dispatch published for this test's held first launch: two identical reads of a
-    file a guest process changed, then a hold on the third model call. Regenerate it from that launch when a
-    deliberate change to the author prompts, tool schemas, event identities or envelopes invalidates it."""
+    file a guest process changed, then a hold on the third model call, serving the author reference it recorded.
+    Regenerate it from that launch when a deliberate change to the author prompts, tool schemas, event identities or
+    envelopes invalidates it."""
+    recorded = decode(gzip.decompress(N4_POLLS.read_bytes()))
+    bind_reference(monkeypatch, recorded)
     served = await held_after_polls(monkeypatch, driver_args, (b"pending", b"done"))
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     fresh = history(destination)
-    assert rows(fresh) == rows(rebased(decode(gzip.decompress(N4_POLLS.read_bytes())), fresh))
+    assert rows(fresh) == rows(rebased(recorded, fresh))
     envs = ProducerEnvs(STATUS, (b"pending", b"done"))
     resumed = replace(resources(envs, ()), inference=ServedOnce(polling_script()[2:], served))
     serve(monkeypatch, resumed)
@@ -2931,9 +2975,9 @@ def lines(records: Sequence[Record], *changes: tuple[int, str, object]) -> bytes
 
 
 def relabelled_inference() -> bytes:
-    """``N4_JOURNAL`` with its first inference resolution (row 9) relabelled REEXECUTE, as the review planted it."""
+    """``N4_JOURNAL`` with its first inference resolution (row 11) relabelled REEXECUTE."""
     rows = [json.loads(line) for line in gzip.decompress(N4_JOURNAL.read_bytes()).splitlines()]
-    (fingerprint,) = rows[8]["event"]["payload"]["fingerprints"]
+    (fingerprint,) = rows[10]["event"]["payload"]["fingerprints"]
     assert fingerprint["resource"] == "inference" and fingerprint["replay"] == ReplayPolicy.CACHE
     fingerprint["replay"] = ReplayPolicy.REEXECUTE
     return b"".join(json.dumps(row).encode() + b"\n" for row in rows)

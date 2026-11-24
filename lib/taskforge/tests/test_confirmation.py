@@ -47,7 +47,7 @@ from verifyit.spec import JudgeSpec
 
 import taskforge.harness.tools.evidence as evidence_tools_module
 import taskforge.stages.solve_review as review_stage
-from taskforge.checkpoint import JOURNAL_FORMAT, CheckpointSink, read_journal
+from taskforge.checkpoint import CheckpointSink, read_journal
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
@@ -1252,6 +1252,7 @@ PAID = {
     ("inference.request", "judge"): 8,
     ("rollouts.solver_rollout", "confirmation"): 5,
     ("inference.request", "final_review"): 1,
+    ("schema.author_reference", "author"): 1,
 }
 """``billed_bundle``'s physical resolutions by kind and payer, sandbox commands and ids aside: they name none."""
 
@@ -1285,29 +1286,16 @@ async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
     clients = [live.inference, *live.role_inference.values()]
     assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
     assert payers(root, replayed=False) == PAID  # the cold rerun paid for nothing
-    replayed = payers(root, replayed=True)  # eighteen resolutions, none naming a payer
-    assert sum(replayed.values()) == 18 and {payer for _, payer in replayed} == {None}
+    replayed = payers(root, replayed=True)
+    assert sum(replayed.values()) == 19 and {payer for _, payer in replayed} == {None}
 
 
-async def test_a_format_9_root_charges_its_tokens_as_unattributed_and_replays_with_zero_calls(
-    proposal: TaskProposal, tmp_path: Path
-) -> None:
-    """Rows written before the payer was recorded name none, and their tokens are charged as unattributed; the root
-    resumes under the current reader, every request matching its recorded key."""
+async def test_a_format_9_root_charges_its_tokens_as_unattributed(tmp_path: Path) -> None:
+    """Rows written before the payer was recorded name none, and the report charges their tokens as unattributed."""
     root = plant_root(tmp_path / "root", FORMAT_9_ROOT)
-    before = await report(str(root))
-    assert charged(before) == {**dict.fromkeys(CHARGED, 0), "unattributed": 82160}
     journal = read_journal(str(root))
     assert journal is not None and journal.head.format == 9
-    live = billed_bundle(())
-    await billed_root(proposal, tmp_path, live, root)
-    resumed = read_journal(str(root))
-    assert resumed is not None and resumed.head.format == JOURNAL_FORMAT and resumed.workpiece() == journal.workpiece()
-    clients = [live.inference, *live.role_inference.values()]
-    assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
-    assert isinstance(live.rollouts.engine, Trials) and not live.rollouts.engine.runs
-    after = await report(str(root))
-    assert charged(after) == charged(before)
+    assert charged(await report(str(root))) == {**dict.fromkeys(CHARGED, 0), "unattributed": 82160}
 
 
 # Review 2026-11-21: a clean three-and-five confirmation built its evidence index three times (3, 8 and 8 trials) and

@@ -86,6 +86,7 @@ from taskforge.resources.sandbox.factories import (
 )
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.resources.web import ParallelWeb, WebClient, WebFetch, WebSearch, fetch, search
+from taskforge.stages.author import AuthorReference, author_reference
 from taskforge.stages.rules import default_review
 
 SOLVER_TURN_MARGIN = 60.0
@@ -165,6 +166,7 @@ def install(ctx: Context, resources: Resources) -> None:
         ctx.handle(DecisionModelRead, partial(read_level, ctx=ctx), decision_model)
         solve = partial(decided_rollout, ctx=ctx)
     ctx.observe(Resolved, cleanup_notes)
+    ctx.handle(AuthorReference, author_reference)
     if resources.verifiers is not None:
         resources.verifiers.notify = ctx.notify
     for event, execute, resource in (
