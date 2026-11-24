@@ -11,6 +11,22 @@ from infra.marina.tests.rl_progress_fixtures import APPLET_ID, progress_record
 pytestmark = pytest.mark.integration
 
 
+def test_grader_report_survives_republication_and_is_served_by_attempt(rl_progress_client):
+    client, _ = rl_progress_client
+    api = f"/a/{APPLET_ID}/api"
+    record = progress_record()
+    report = {"evaluation": {"eval_lite/0": [{"environment": "script", "success_rate": 0.5}]}}
+    assert client.post(f"{api}/runs", json=record | {"grader_report": report}).status_code == 200
+    assert client.post(f"{api}/runs", json=record | {"attempt_id": "native-second"}).status_code == 200
+    assert client.post(f"{api}/runs", json=record).status_code == 200
+    first, second = client.get(f"{api}/runs").json()["runs"]
+    assert first["has_grader_report"] is True and "grader_report" not in first
+    assert second.get("has_grader_report") is None
+    query = {"run_id": record["run_id"], "attempt_id": record["attempt_id"]}
+    assert client.get(f"{api}/graders", params=query).json() == {"label": record["label"], "report": report}
+    assert client.get(f"{api}/graders", params=query | {"attempt_id": "missing"}).status_code == 404
+
+
 def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progress_client):
     client, request = rl_progress_client
     query_path = f"/a/{APPLET_ID}/query"

@@ -207,6 +207,14 @@ evaluation summaries.
 The dashboard's detail view shows each evaluation step's counts and strata means, including
 family, AAII category and difficulty, and links to the run's Grafana window.
 
+The publishing presets also save grader diagnostics in
+`exports/grader_reports/<attempt_id>/grader_report.json`. The report groups
+training rollouts and each named evaluation by environment and task source.
+Success rates use verified responses and are null when no verdict is available.
+Open **Grader stats** from the published attempt's details to see coverage,
+failure counts and grading latency alongside success rates. The trainer logs
+reporting errors and continues, so an attempt may have a partial or missing report.
+
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
 data-medium, train-long and train-long-harbor attempts using the caller's Marina login. The row shows the model and
 the issue link when the launch supplied a number. Record the finishing status's `rl_progress_url` with the verdict.
