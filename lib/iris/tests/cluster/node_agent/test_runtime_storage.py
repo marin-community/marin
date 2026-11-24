@@ -51,9 +51,12 @@ binary_name = "/usr/local/bin/runsc"
 """
 
 
-@pytest.fixture
-def nvme(tmp_path, monkeypatch):
-    """An NVMe directory reported on a different device from the rest of tmp_path."""
+def test_configure_redirects_logs_and_preserves_backup_and_permissions(tmp_path, monkeypatch):
+    config = tmp_path / "etc/containerd/runsc.toml"
+    config.parent.mkdir(parents=True)
+    source = LOGGING_CONFIG
+    config.write_text(source)
+    config.chmod(0o640)
     nvme = tmp_path / "nvme"
     nvme.mkdir()
     host_stat = Path.stat
@@ -67,15 +70,6 @@ def nvme(tmp_path, monkeypatch):
         return metadata
 
     monkeypatch.setattr(Path, "stat", separate_nvme_device)
-    return nvme
-
-
-def test_configure_redirects_logs_and_preserves_backup_and_permissions(tmp_path, nvme):
-    config = tmp_path / "etc/containerd/runsc.toml"
-    config.parent.mkdir(parents=True)
-    source = LOGGING_CONFIG
-    config.write_text(source)
-    config.chmod(0o640)
     configure(config, nvme)
     updated = config.read_text()
     settings = tomllib.loads(updated)
@@ -102,10 +96,13 @@ def test_configure_refuses_to_place_runtime_logs_on_host_root(tmp_path):
     assert not (nvme / "iris-runtime").exists()
 
 
-def test_configure_leaves_config_with_logging_disabled_untouched(tmp_path, nvme):
+def test_configure_leaves_config_with_logging_disabled_untouched(tmp_path):
     config = tmp_path / "etc/containerd/runsc.toml"
     config.parent.mkdir(parents=True)
     config.write_text(LOGGING_DISABLED_CONFIG)
+    # Same filesystem as the config: setup must not need NVMe when there is nothing to redirect.
+    nvme = tmp_path / "nvme"
+    nvme.mkdir()
     configure(config, nvme)
     assert config.read_text() == LOGGING_DISABLED_CONFIG
     assert not (nvme / "iris-runtime").exists()

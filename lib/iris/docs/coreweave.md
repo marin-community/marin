@@ -722,7 +722,8 @@ Setup preserves the provider's NVIDIA runtime and other options, saves the
 original configuration beside the log directory, and replaces the config
 atomically. It refuses placement on the same filesystem as the host config
 directory, so a missing NVMe mount cannot silently put logs back on root.
-Nodes without a runsc config skip this step. Configuration failures leave the
+Nodes without a runsc config, or whose config comments out both log settings
+so shims log through containerd, skip this step. Configuration failures leave the
 init container failed for Kubernetes to retry; inspect its logs before changing
 the provider configuration.
 

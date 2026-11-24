@@ -3,9 +3,9 @@
 
 """Move new CoreWeave shim and gVisor logs onto the host's NVMe disk.
 
-CoreWeave provides /etc/containerd/runsc.toml with log paths under /var/log/runsc.
-Abandoned runtime logs can fill the small RAM-backed root filesystem and prevent
-container startup and exec. The node-agent DaemonSet runs this module in an init
+Older CoreWeave node images provide /etc/containerd/runsc.toml with log paths
+under /var/log/runsc. Abandoned runtime logs can fill the small RAM-backed root
+filesystem and prevent container startup and exec. The node-agent DaemonSet runs this module in an init
 container with the host config directory mounted at /host-containerd and the NVMe
 disk at /mnt/local, so replacement nodes receive the same log-path correction.
 
@@ -57,14 +57,14 @@ def configure(config_path: Path, nvme: Path) -> None:
         return
     if config_path.is_symlink() or not stat.S_ISREG(config_path.stat().st_mode):
         raise ValueError("runsc config must be a regular file")
-    # Both paths are host mounts; the init container's root is an overlay filesystem.
-    if nvme.stat().st_dev == config_path.parent.stat().st_dev:
-        raise ValueError("NVMe must be backed by a different filesystem from the host config directory")
     source = config_path.read_text()
     settings = tomllib.loads(source)
     if "log_path" not in settings and "debug-log" not in settings["runsc_config"]:
         logger.info("runsc logging is disabled in %s; skipping runtime log setup", config_path)
         return
+    # Both paths are host mounts; the init container's root is an overlay filesystem.
+    if nvme.stat().st_dev == config_path.parent.stat().st_dev:
+        raise ValueError("NVMe must be backed by a different filesystem from the host config directory")
     log_root = nvme / "iris-runtime/runsc"
     updated = redirected_config(source, log_root)
     log_root.mkdir(parents=True, exist_ok=True)
