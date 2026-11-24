@@ -64,6 +64,8 @@ _DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|
 TEXT_CONNECTOR_CONTENT = r"\s*(?:and|or)\s*"
 REFERENCE_TEXT_GROUP = re.compile(r"\\(?:text|mbox|mathrm)\{(?!" + TEXT_CONNECTOR_CONTENT + r"\})")
 LEADING_LIST_CONNECTOR = re.compile(r"^\\text\{" + TEXT_CONNECTOR_CONTENT + r"\}\s*")
+# The current normalizer strips one unbraced digit or a braced whole-number power after a unit.
+TERMINAL_UNIT_POWER = re.compile(r"\^(?:[0-9]|\{[0-9]+\})")
 
 
 def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
@@ -123,7 +125,8 @@ def _parse_reference(text: str) -> tuple[list, bool]:
         if first_close is None:
             return [], strip_units
         group_contents = value[text_group.end() : text_group.end() + first_close - 1]
-        if value[text_group.end() + first_close :].strip() not in ("", "^2", "^{2}"):
+        suffix = value[text_group.end() + first_close :].strip()
+        if suffix and not TERMINAL_UNIT_POWER.fullmatch(suffix):
             prefix = value[: text_group.start()].rstrip()
             upright_symbol = text_group.group() == r"\mathrm{" and len(group_contents) == 1 and group_contents.isalpha()
             no_gap_before_group = text_group.start() > 0 and not value[text_group.start() - 1].isspace()

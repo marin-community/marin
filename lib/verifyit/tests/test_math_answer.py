@@ -226,7 +226,14 @@ def test_math_text_connector_does_not_invalidate_comma_separated_reference(conne
     [
         (r"15\mbox{ cm}^2", "15", MathType.SCALAR),
         (r"15\mbox{ cm}^{2}", "15", MathType.SCALAR),
+        (r"15\mbox{ cm}^{3}", "15", MathType.SCALAR),
+        (r"15\mbox{ cm}^{3}", r"15\mbox{ cm}^{3}", MathType.SCALAR),
+        (r"15\text{ cm}^3", "15", MathType.SCALAR),
+        (r"15\text{ cm}^{4}", "15", MathType.SCALAR),
         (r"[1, 15\mbox{ cm}^{2}]", "[1, 15]", MathType.LIST),
+        (r"[1, 15\mbox{ cm}^{3}]", "[1, 15]", MathType.LIST),
+        (r"[1, 15\mbox{ cm}^{3}]", r"[1, 15\mbox{ cm}^{3}]", MathType.LIST),
+        (r"[1, 15\text{ cm}^3]", "[1, 15]", MathType.LIST),
     ],
 )
 def test_math_terminal_unit_power_stays_parseable(reference, candidate, math_type):
