@@ -5,6 +5,7 @@ import math
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -962,17 +963,47 @@ def test_control_link_scores_shared_evaluation(
         )
         assert gate_report.verdict == "invalid"
         assert gate_report.reason == "evaluation protocol or held-out TaskSpec content differs"
+
+        with pytest.raises(ValueError, match="distinct cohorts"):
+            gate.control_link_step(preset, fresh, fresh, table=table)
+        with pytest.raises(ValueError, match="current control pin must match"):
+            gate.control_link_step(preset, previous, fresh, table=table)
+
+        def rejected_link(expected_reason):
+            report = gate._write_control_link(
+                preset,
+                fresh,
+                previous,
+                tuple(map(str, fresh_roots)),
+                tuple(map(str, baseline_roots)),
+                str(tmp_path / "incompatible-link"),
+            )
+            assert report.verdict == "invalid" and report.reason == expected_reason
+
+        baseline = baseline_roots[1]
+        with edit_receipt(baseline) as receipt:
+            native = deepcopy(receipt["config"])
+        validation = native["inputs"]["validation_data"]
+        mutations = (
+            ("inputs.train_data", [], "recorded control workload differs from the link preset"),
+            ("inputs.evaluation_data", {"retired_evaluation": validation}, EVALUATION_PROTOCOL_DIFFERS),
+            (
+                "inputs.validation_data",
+                [{**validation[0], "identity": "selection/other-panel@2026.11.24.2:fixture"}],
+                "control cohort contains different held-out selections or TaskSpec sets",
+            ),
+        )
+        for key, value, expected_reason in mutations:
+            with edit_receipt(baseline) as receipt:
+                receipt["config"] = deepcopy(native)
+                set_path(receipt["config"], key, value)
+            rejected_link(expected_reason)
+        with edit_receipt(baseline) as receipt:
+            receipt["config"] = native
+
         with edit_receipt(fresh_roots[0]) as receipt:
             receipt["config"]["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.5
-        incompatible = gate._write_control_link(
-            preset,
-            fresh,
-            previous,
-            tuple(map(str, fresh_roots)),
-            tuple(map(str, baseline_roots)),
-            str(tmp_path / "incompatible-link"),
-        )
-        assert incompatible.verdict == "invalid" and incompatible.reason == EVALUATION_PROTOCOL_DIFFERS
+        rejected_link(EVALUATION_PROTOCOL_DIFFERS)
     if changed_ids:
         unshared = results["eval_lite/unshared/mean"]
         assert (unshared["role"], unshared["tasks"], unshared["run"]) == ("reported", len(changed_ids), 1.0)

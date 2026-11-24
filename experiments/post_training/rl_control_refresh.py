@@ -59,7 +59,7 @@ def plan_refresh(table: ModelPresets, preset_name: str | None = None) -> tuple[s
                 for source in recorded_sources(launch, evaluation.name)
             ]
 
-        (config,) = rl_gate._compose_plans(preset, (RunInputs(preset_name=preset.name),))
+        config = rl_gate.validate_candidate(preset, RunInputs(preset_name=preset.name), table=table, control=True)
         expected = RecordedLaunch.from_document(config, attempt=config["run"]["attempt_id"])
         current = inputs(expected)
         if not current:

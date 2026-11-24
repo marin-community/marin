@@ -1035,14 +1035,28 @@ def control_path(preset: presets.Preset, pin: ControlPin, index: int, *, table: 
     return recipe.run_path(preset, control_name(pin.preset, pin.commit, index, table=table), pin.revision)
 
 
-def _read_previous_control(preset: presets.Preset, path: str) -> RunMeasurements:
+def _read_link_control(preset: presets.Preset, path: str) -> RunMeasurements:
     receipt = read_stored_skyrl_attempt(path)
     if receipt is None:
         raise FileNotFoundError(f"no terminal attempt record at {path}")
     launch = read_recorded_launch(receipt)
-    if launch.max_steps is not None:
-        preset = preset.with_updates(launch.max_steps)
-    return read_measurements(path, preset, attempt=receipt)
+    training = isinstance(preset.recipe.layout.workload, presets.Training)
+    if launch.max_steps is None or bool(launch.train_data) != training:
+        raise InvalidComparison("recorded control workload differs from the link preset")
+    additional = {evaluation.name for evaluation in preset.evaluations[1:]}
+    if set(launch.evaluation_data) != additional or bool(launch.validation_data) != bool(preset.evaluations):
+        raise InvalidComparison(EVALUATION_PROTOCOL_DIFFERS)
+    return read_measurements(path, preset.with_updates(launch.max_steps), attempt=receipt)
+
+
+def _cohort_held_out_tasks(runs: Sequence[RunMeasurements]) -> str | None:
+    first = runs[0]
+    if any(
+        run.held_out_tasks != first.held_out_tasks or run.evaluation_identity != first.evaluation_identity
+        for run in runs[1:]
+    ):
+        raise InvalidComparison("control cohort contains different held-out selections or TaskSpec sets")
+    return first.held_out_tasks
 
 
 def _write_control_link(
@@ -1058,23 +1072,23 @@ def _write_control_link(
     invariants, comparisons = [], []
     verdict, effect, reason = Verdict.INVALID, None, None
     try:
-        runs = [read_measurements(path, preset) for path in run_paths]
+        runs = [_read_link_control(preset, path) for path in run_paths]
         metadata = metadata.model_copy(
             update={
-                "held_out_tasks": runs[0].held_out_tasks,
                 "attempt_ids": tuple(run.attempt_id for run in runs),
                 "engines": tuple(run.engine for run in runs),
             }
         )
         for candidate in runs:
             _check_control(candidate, current)
-        controls = [_read_previous_control(preset, path) for path in control_paths]
+        controls = [_read_link_control(preset, path) for path in control_paths]
         for candidate in controls:
             _check_control(candidate, previous)
-        baseline = baseline.model_copy(
-            update={"held_out_tasks": controls[0].held_out_tasks, "engines": tuple(run.engine for run in controls)}
-        )
         _check_protocols(runs, controls)
+        metadata = metadata.model_copy(update={"held_out_tasks": _cohort_held_out_tasks(runs)})
+        baseline = baseline.model_copy(
+            update={"held_out_tasks": _cohort_held_out_tasks(controls), "engines": tuple(run.engine for run in controls)}
+        )
         changes = _changed_config_keys(
             _gate_config(controls[0].config, controls[0].recorded),
             _gate_config(runs[0].config, runs[0].recorded),
@@ -1109,6 +1123,10 @@ def control_link_step(
     """Compare consecutive control cohorts for the publication history."""
     if any(pin.preset != preset.name or pin.replicates < 2 for pin in (current, previous)):
         raise ValueError(f"expected two complete control pins for {preset.name}")
+    if current.revision != preset.revision:
+        raise ValueError(f"current control pin must match the {preset.name} revision")
+    if (current.commit, current.revision) == (previous.commit, previous.revision):
+        raise ValueError("control link requires distinct cohorts")
     return apply(
         user_owned_name(f"checkpoints/{table.namespace}/control-links/{preset.name}-{previous.commit}-{current.commit}"),
         _write_control_link,

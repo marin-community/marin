@@ -15,7 +15,13 @@ from urllib.parse import parse_qs, urlparse
 import click
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import SHARED_TASKS_INVARIANT, AttemptSummary, Invariant, Verdict
+from finestore.rl.rl_progress import (
+    SHARED_TASK_FRACTION_INVARIANT,
+    SHARED_TASKS_INVARIANT,
+    AttemptSummary,
+    Invariant,
+    Verdict,
+)
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -739,10 +745,14 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         list(map(str, fresh_roots)), fresh_preset, table=fresh_table, gate_path=link.path, service_url="http://localhost"
     )
     assert attached.errors == []
+    names = {f"eval_lite/{SHARED_TASKS_INVARIANT}", f"eval_lite/{SHARED_TASK_FRACTION_INVARIANT}"}
+    coverage = {fact.name: fact.value for fact in saved.invariants if fact.name in names}
+    assert coverage.keys() == names
     for attempt in ("fresh-0", "fresh-1"):
         persisted = stored()[attempt]["gate_result"]
         assert persisted["attempt_ids"] == ["fresh-0", "fresh-1"] and persisted["verdict"] == "pass"
         assert (persisted["control_commit"], persisted["control_revision"]) == (pin.commit, pin.revision)
+        assert {fact["name"]: fact["value"] for fact in persisted["invariants"] if fact["name"] in names} == coverage
         slices = {row["metric"] for row in persisted["comparisons"] if row["role"] == "slice"}
         assert slices == {"eval_lite/mean", "eval_lite/family/small/mean", "eval_lite/family/large/mean"}
     before_ids = {

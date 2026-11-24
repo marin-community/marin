@@ -47,12 +47,17 @@ def test_nightly_and_named_dry_runs_plan_revision_and_launch_selected_training_c
     monkeypatch.setattr(
         refresh.Provenance, "capture", lambda _: refresh.Provenance("tree", "a" * 10, False, "main", "test")
     )
-    monkeypatch.setattr(refresh.rl_gate, "_compose_plans", lambda *args: [configs[None]])
+    monkeypatch.setattr(refresh.rl_gate, "validate_candidate", lambda *args, **kwargs: configs[None])
     changed_source = None
+    last_pin = table.control_pins["learning-medium"]
+    last_path = refresh.rl_gate.control_path(
+        table.by_name["learning-medium"], last_pin, last_pin.replicates - 1, table=table
+    )
 
     def read_attempt(path):
         assert "learning-medium" in path
-        return attempt.model_copy(update={"config": configs[changed_source]})
+        source = None if changed_source == "train" and path != last_path else changed_source
+        return attempt.model_copy(update={"config": configs[source]})
 
     monkeypatch.setattr(refresh, "read_stored_skyrl_attempt", read_attempt)
 
@@ -120,7 +125,7 @@ def test_generation_refresh_reads_the_sampled_training_set(recorded_runs, tmp_pa
     monkeypatch.setattr(
         refresh.Provenance, "capture", lambda _: refresh.Provenance("tree", "a" * 10, False, "main", "test")
     )
-    monkeypatch.setattr(refresh.rl_gate, "_compose_plans", lambda *args: [config])
+    monkeypatch.setattr(refresh.rl_gate, "validate_candidate", lambda *args, **kwargs: config)
     monkeypatch.setattr(refresh, "read_stored_skyrl_attempt", lambda _: attempt.model_copy(update={"config": observed}))
 
     assert refresh.plan_refresh(table, preset.name)[1] == []
