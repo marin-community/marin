@@ -209,7 +209,7 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
             ),
             item_builder=livecodebench_item,
             protocol_name="official",
-            # Hidden tests reach 92 MB per problem; an attempt keeps a corpus reference instead of a copy.
+            # Each task carries up to 1 MB of compressed hidden tests; attempts keep a corpus reference instead.
             task_evidence=TaskEvidence.REFERENCE,
         ),
         pipeline=prepare_evaluation,

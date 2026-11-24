@@ -111,18 +111,19 @@ def corpus_steps(selection: ResolvedEvaluationSelection, runtime: CampaignRuntim
     return tuple(prepare_evaluation(source, options) for source in selected_sources(selection))
 
 
-def selection_corpora(selection: EvaluationSelection) -> tuple[EvaluationCorpusRecipe, ...]:
-    sources = evaluation_benchmarks()[selection.benchmark].resolve(selection.protocol, selection.num_fewshot)
-    return tuple(source.config for source in sources if source.config is not None)
-
-
 def requires_judge(selection: EvaluationSelection) -> bool:
-    return any(corpus.protocol.requires_judge for corpus in selection_corpora(selection))
+    return any(
+        source.config is not None and source.config.protocol.requires_judge
+        for source in evaluation_benchmarks()[selection.benchmark].resolve(selection.protocol, selection.num_fewshot)
+    )
 
 
-def declared_task_evidence(selection: EvaluationSelection) -> TaskEvidence:
-    """Reference when any of the selection's corpora declares it, else embedded."""
-    if any(corpus.task_evidence is TaskEvidence.REFERENCE for corpus in selection_corpora(selection)):
+def declared_task_evidence(selection: ResolvedEvaluationSelection) -> TaskEvidence:
+    """Reference when any selected corpus declares it, else embedded."""
+    if any(
+        source.config is not None and source.config.task_evidence is TaskEvidence.REFERENCE
+        for source in selected_sources(selection)
+    ):
         return TaskEvidence.REFERENCE
     return TaskEvidence.EMBEDDED
 
@@ -231,7 +232,7 @@ def settings_for(
         seed=explicit_seed if explicit_seed is not None else default_seed,
         judge=run.judge,
         task_machine=task_machine,
-        task_evidence=task_evidence if task_evidence is not None else declared_task_evidence(selection),
+        task_evidence=task_evidence if task_evidence is not None else declared_task_evidence(protocol),
     )
 
 
