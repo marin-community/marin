@@ -13,6 +13,14 @@ export function formatTimestamp(iso: string | null | undefined): string {
   })
 }
 
+export function isPercentMetric(cell: { metric_kind: string }): boolean {
+  return cell.metric_kind === 'binary'
+}
+
+export function formatMeasurement(value: number, percent: boolean): string {
+  return percent ? (100 * value).toFixed(1) : value.toFixed(3)
+}
+
 export function formatScore(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '—'
   // Accuracy-style metrics live in [0, 1]; show as a percentage. Anything else

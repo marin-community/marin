@@ -34,7 +34,7 @@ const servingRows = computed(() =>
 
     <template v-if="data">
       <div class="flex flex-wrap items-baseline gap-3">
-        <h2 class="text-lg font-semibold font-mono">{{ data.report.model }}</h2>
+        <h1>{{ data.report.model }}</h1>
         <span class="text-sm text-text-secondary">
           {{ formatTimestamp(data.created_at) }} · {{ data.report.reporter || 'anonymous' }}
         </span>

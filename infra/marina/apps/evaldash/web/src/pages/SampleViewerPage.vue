@@ -21,6 +21,7 @@ import EmptyState from '@/components/shared/EmptyState.vue'
 const props = defineProps<{ runId: string }>()
 const route = useRoute()
 const router = useRouter()
+const sampleList = computed(() => ({ name: 'run', params: { runId: props.runId }, query: { section: 'samples' } }))
 
 function queryTask(): string {
   return typeof route.query.task === 'string' ? route.query.task : ''
@@ -132,7 +133,7 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key === 'ArrowLeft') prev()
   else if (e.key === 'ArrowRight') next()
   else if (e.key === 'r') random()
-  else if (e.key === 'Escape') router.push(`/runs/${props.runId}`)
+  else if (e.key === 'Escape') router.push(sampleList.value)
 }
 
 onMounted(() => window.addEventListener('keydown', onKeydown))
@@ -144,10 +145,10 @@ function metricEntries(row: SampleRow): [string, number][] {
 </script>
 
 <template>
-  <div class="-mx-6 -mt-4">
+  <div class="min-w-0">
     <div class="sticky top-0 z-10 border-b border-surface-border bg-surface px-4 py-2 flex items-center gap-3 flex-wrap text-sm">
-      <RouterLink :to="`/runs/${runId}`" class="text-accent hover:text-accent-hover hover:underline whitespace-nowrap">← run</RouterLink>
-      <span class="font-mono text-xs text-text-muted">{{ runId }}</span>
+      <RouterLink :to="sampleList" class="text-accent hover:text-accent-hover hover:underline whitespace-nowrap">← Samples</RouterLink>
+      <span class="font-mono text-xs text-text-muted [overflow-wrap:anywhere]">{{ runId }}</span>
 
       <select v-model="task" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[10rem]">
         <option v-for="t in tasksData?.tasks ?? []" :key="t.task" :value="t.task">{{ t.task }}</option>
@@ -187,7 +188,7 @@ function metricEntries(row: SampleRow): [string, number][] {
       <span class="text-xs text-text-muted ml-auto whitespace-nowrap">← → navigate · r random · esc back</span>
     </div>
 
-    <div class="max-w-4xl mx-auto px-6 py-5">
+    <div class="sample-reading mx-auto py-5">
       <p v-if="tasksError" class="text-sm text-status-danger">{{ tasksError }}</p>
       <p v-else-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">{{ error }}</p>
       <p v-else-if="loading && !row" class="text-sm text-text-muted py-12 text-center">Loading samples…</p>

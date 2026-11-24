@@ -1,7 +1,10 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
-  { path: '/', name: 'panel', component: () => import('@/pages/PanelPage.vue') },
+  // Saved panel links carry their cohort or benchmark selection in the root URL.
+  { path: '/', redirect: (to) => ({ name: 'cohort' in to.query || 'benchmarks' in to.query ? 'panel' : 'runs', query: to.query }) },
+  { path: '/benchmarks', name: 'benchmarks', component: () => import('@/pages/BenchmarksPage.vue') },
+  { path: '/benchmarks/all', name: 'panel', component: () => import('@/pages/PanelPage.vue') },
   { path: '/models', name: 'models', component: () => import('@/pages/ModelsIndexPage.vue') },
   {
     path: '/models/:model',
@@ -30,7 +33,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/ReportDetailPage.vue'),
     props: true,
   },
-  { path: '/inspect', name: 'inspect', component: () => import('@/pages/InspectPage.vue') },
+  { path: '/inspect', redirect: to => ({ name: 'runs', query: { ...to.query, view: 'runs', status: 'succeeded' } }) },
   { path: '/debug', name: 'debug', component: () => import('@/pages/DebugPage.vue') },
 ]
 

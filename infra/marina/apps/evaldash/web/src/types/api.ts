@@ -658,6 +658,26 @@ export interface LaunchGroup {
   evals: GroupMember[]
 }
 
+export type LaunchRow = Omit<LaunchGroup, 'evals'>
+
+export interface CatalogPage {
+  rows: (LaunchRow | RunRow)[]
+  total: number
+}
+
+export type CatalogFacets = Pick<Meta, 'run_facets'>
+
+export interface ModelCatalogPage {
+  rows: {
+    model: string
+    archived: boolean
+    run_count: number
+    benchmark_count: number
+    latest_run: Pick<RunRow, 'run_id' | 'eval_name' | 'status' | 'created_at' | 'version'>
+  }[]
+  total: number
+}
+
 // Playground reports: model feedback saved by the marin-serve dashboard's Report issue button.
 // One row of /api/playground-reports, newest first.
 export interface ReportSummary {

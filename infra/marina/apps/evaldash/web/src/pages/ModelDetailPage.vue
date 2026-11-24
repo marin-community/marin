@@ -124,7 +124,7 @@ function coverageNote(cell: PanelCell): string {
 
 <template>
   <section>
-    <RouterLink to="/" class="text-sm text-accent hover:underline">← Panel</RouterLink>
+    <RouterLink :to="{ path: '/benchmarks', query: { cohort: route.query.cohort } }" class="text-sm text-accent hover:underline">← Benchmarks</RouterLink>
 
     <div
       v-if="error"
@@ -138,8 +138,8 @@ function coverageNote(cell: PanelCell): string {
       <!-- header -->
       <div class="flex flex-wrap items-start gap-4">
         <div>
-          <h1 class="font-mono text-2xl font-semibold tracking-tight">{{ data.model }}</h1>
-          <div class="mt-1.5 text-sm text-text-secondary font-mono flex flex-wrap items-center gap-x-2 gap-y-1">
+          <h1 class="break-words">{{ data.model }}</h1>
+          <div class="mt-1.5 text-sm text-text-secondary flex flex-wrap items-center gap-x-2 gap-y-1">
             <a
               v-if="objectStoreUrl(location)"
               :href="objectStoreUrl(location)!"
@@ -240,7 +240,7 @@ function coverageNote(cell: PanelCell): string {
             class="w-full flex items-center gap-4 px-4 py-2.5 border-b border-surface-border-subtle last:border-b-0 hover:bg-surface-raised text-left"
             @click="router.push(`/runs/${run.run_id}`)"
           >
-            <span class="font-mono text-[13px] font-semibold w-40 truncate">{{ run.eval_name }}</span>
+            <span class="text-sm font-semibold w-40 truncate">{{ run.eval_name }}</span>
             <StatusChip :status="run.status" />
             <span class="font-mono text-[11px] text-text-muted w-40">{{ formatTimestamp(run.created_at) }}</span>
             <span v-if="run.version" class="font-mono text-[11px] text-text-muted">{{ run.version }}</span>

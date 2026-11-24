@@ -32,6 +32,7 @@ import functools
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -72,14 +73,17 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import playground_reports, review, samples
+from .catalog import CatalogFilters, RunCatalog
 from .db_migrations import apply_migrations
 from .metrics import (
     ALL_COHORTS,
     RUN_FACETS,
+    ScoredRecords,
     build_comparison,
     build_meta,
     build_model_detail,
     build_panel,
+    comparison_models,
     dashboard_measurements,
     display_status,
     panel_request,
@@ -106,6 +110,8 @@ logger = logging.getLogger(__name__)
 CATALOG_CHECK_INTERVAL = 10.0
 DEFAULT_RUNS_LIMIT = 200
 MAX_RUNS_LIMIT = 1000
+DEFAULT_CATALOG_LIMIT = 50
+DEFAULT_MODEL_CATALOG_LIMIT = 24
 DEFAULT_LOG_TAIL = 200
 MAX_LOG_TAIL = 5000
 DEFAULT_SAMPLE_LIMIT = 50
@@ -400,37 +406,55 @@ def _group_sibling_row(record: EvalRunRecord) -> dict:
     }
 
 
+class _RecordSnapshot:
+    def __init__(self, records: list[EvalRunRecord]) -> None:
+        self.records = records
+        self.by_id = {record.run_id: record for record in records}
+        self.catalog = RunCatalog(records)
+        self._metadata: dict | None = None
+        self._metadata_lock = threading.Lock()
+        self._scored: ScoredRecords | None = None
+        self._scored_lock = threading.Lock()
+
+    def meta(self) -> dict:
+        # Panel metadata scans scores. Build it only for callers of /meta.
+        with self._metadata_lock:
+            if self._metadata is None:
+                self._metadata = build_meta(self.records)
+            return dict(self._metadata)
+
+    def scored(self) -> ScoredRecords:
+        with self._scored_lock:
+            if self._scored is None:
+                self._scored = ScoredRecords(self.records)
+            return self._scored
+
+
 class RecordStore:
     """Expose dashboard query views over one consistent in-memory record snapshot."""
 
     backend = "memory"
 
     def __init__(self) -> None:
-        self._records: list[EvalRunRecord] = []
-        self._by_id: dict[str, EvalRunRecord] = {}
-        self._metadata = build_meta([])
+        self._current = _RecordSnapshot([])
         self._archived: set[str] = set()
         self._lock = threading.Lock()
 
     def _set_snapshot(self, records: list[EvalRunRecord]) -> None:
-        by_id = {record.run_id: record for record in records}
-        metadata = build_meta(records)
+        snapshot = _RecordSnapshot(records)
         with self._lock:
-            self._records = records
-            self._by_id = by_id
-            self._metadata = metadata
+            self._current = snapshot
 
-    def _snapshot(self) -> tuple[list[EvalRunRecord], dict[str, EvalRunRecord]]:
+    def _snapshot(self) -> _RecordSnapshot:
         with self._lock:
-            return self._records, self._by_id
+            return self._current
 
     def store_info(self) -> StoreInfo:
-        records, _by_id = self._snapshot()
         return StoreInfo(
             backend=self.backend,
             instance=None,
             database=None,
-            record_count=len(records),
+            record_count=len(self._snapshot().records),
             catalog_generation=None,
             snapshot_updated_at=None,
             catalog_error=None,
@@ -455,8 +479,7 @@ class RecordStore:
                 self._archived.discard(model_name)
 
     def get_record(self, run_id: str) -> dict | None:
-        _records, by_id = self._snapshot()
-        record = by_id.get(run_id)
+        record = self._snapshot().by_id.get(run_id)
         return (
             {**record.model_dump(mode="json", by_alias=True), "comparison_model": record.model.name}
             if record is not None
@@ -475,21 +498,33 @@ class RecordStore:
         accelerator: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
-        records, _by_id = self._snapshot()
-        rows = [record_to_row(record) for record in records]
-        rows = [
-            row
-            for row in rows
-            if (model is None or row["model_name"] == model)
-            and (eval_name is None or row["eval_name"] == eval_name)
-            and (user is None or row["user_name"] == user)
-            and (status is None or row["status"] == status)
-            and (group is None or row["group_id"] == group)
-            and (version is None or row["version"] == version)
-            and (accelerator is None or row["accelerator"] == accelerator)
-        ]
-        rows.sort(key=lambda row: row["created_at"] or "", reverse=True)
-        return rows[:limit]
+        filters = CatalogFilters(
+            model=model,
+            eval_name=eval_name,
+            user=user,
+            status=status,
+            group=group,
+            version=version,
+            accelerator=accelerator,
+        )
+        return self.catalog_runs(filters, 0, limit)["rows"]
+
+    def catalog_runs(self, filters: CatalogFilters, offset: int, limit: int) -> dict:
+        records, total = self._snapshot().catalog.run_page(filters, offset, limit)
+        return {"rows": [record_to_row(record) for record in records], "total": total}
+
+    def catalog_launches(self, filters: CatalogFilters, offset: int, limit: int) -> dict:
+        launches = self._snapshot().catalog.matching_launches(filters)
+        rows = [launch.row() for launch in launches[offset : offset + limit]]
+        return {"rows": rows, "total": len(launches)}
+
+    def catalog_facets(self) -> dict:
+        return {"run_facets": self._snapshot().catalog.facets()}
+
+    def catalog_models(self, query: str, cohort: str, *, include_archived: bool, offset: int, limit: int) -> dict:
+        return self._snapshot().catalog.model_page(
+            query, cohort, self.archived_models(), include_archived=include_archived, offset=offset, limit=limit
+        )
 
     def panel(self, request: SelectionRequest, aggregate: MissingPolicy | None, include_archived: bool) -> dict:
         """The model x benchmark panel the request selects, over the snapshot.
@@ -497,24 +532,26 @@ class RecordStore:
         Archived models are dropped unless requested; when included, their rows carry
         ``archived: true`` so the UI can style them apart.
         """
-        records, _by_id = self._snapshot()
+        snapshot = self._snapshot()
         archived = self.archived_models()
         if archived and not include_archived:
-            records = [record for record in records if record.model.name not in archived]
-        return build_panel(records, request, frozenset(archived), aggregate)
+            records = [record for record in snapshot.records if record.model.name not in archived]
+            return build_panel(records, request, frozenset(archived), aggregate)
+        return build_panel(snapshot.records, request, frozenset(archived), aggregate, scored=snapshot.scored())
+
+    def comparison_models(self, request: SelectionRequest) -> dict:
+        return comparison_models(self._snapshot().scored(), request)
 
     def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:
         """Head-to-head difference intervals between named models, over the snapshot.
 
         Archived models are always in scope: naming a model is an explicit request for it.
         """
-        records, _by_id = self._snapshot()
-        return build_comparison(records, request, models)
+        snapshot = self._snapshot()
+        return build_comparison(snapshot.records, request, models, scored=snapshot.scored())
 
     def meta(self) -> dict:
-        self._snapshot()
-        with self._lock:
-            metadata = dict(self._metadata)
+        metadata = self._snapshot().meta()
         metadata["archived_models"] = sorted(self.archived_models())
         return metadata
 
@@ -535,42 +572,19 @@ class RecordStore:
         each member's headline score) so the runs view can show one row per launch and expand it to
         the individual evals it ran.
         """
-        records, _by_id = self._snapshot()
-        by_group: dict[str, list[EvalRunRecord]] = {}
-        for record in records:
-            if (model and record.model.name != model) or (user and record.user != user):
-                continue
-            by_group.setdefault(record.group_id, []).append(record)
-        groups: list[dict] = []
-        for group_id, members in by_group.items():
-            ordered = sorted(members, key=lambda record: record.created_at or "")
-            newest = ordered[-1]
-            statuses = {display_status(record) for record in members}
-            groups.append(
-                {
-                    "group_id": group_id,
-                    "model_name": newest.model.name,
-                    "version": newest.version,
-                    "description": newest.description,
-                    "user_name": newest.user,
-                    "accelerator": newest.hardware.accelerator,
-                    "created_at": newest.created_at,
-                    "status": _status_rollup(statuses),
-                    "n_evals": len(members),
-                    "n_succeeded": sum(1 for record in members if display_status(record) == "succeeded"),
-                    "evals": [_group_member(record) for record in ordered],
-                }
-            )
-        groups = [
-            group
-            for group in groups
-            if (eval_name is None or any(member["eval_name"] == eval_name for member in group["evals"]))
-            and (status is None or group["status"] == status)
-            and (version is None or group["version"] == version)
-            and (accelerator is None or group["accelerator"] == accelerator)
+        filters = CatalogFilters(
+            model=model or None,
+            user=user or None,
+            eval_name=eval_name,
+            status=status,
+            version=version,
+            accelerator=accelerator,
+        )
+        launches = self._snapshot().catalog.matching_launches(filters)
+        return [
+            {**launch.row(), "evals": [_group_member(run.record) for run in reversed(launch.members)]}
+            for launch in launches[:limit]
         ]
-        groups.sort(key=lambda group: group["created_at"] or "", reverse=True)
-        return groups[:limit]
 
     def history(self, model: str, task: str) -> list[dict]:
         """Every run's headline score for one ``(model, eval)`` over time, oldest first.
@@ -578,7 +592,13 @@ class RecordStore:
         ``task`` is a panel column, i.e. a registry eval name. One point per run that produced a
         primary metric, each carrying its interval, coverage, and provenance for the tooltip.
         """
-        records, _by_id = self._snapshot()
+        snapshot = self._snapshot()
+        scored = snapshot.scored().history(model, task)
+        if scored is not None:
+            return scored
+
+        # A raw evaluation name can also identify runs outside the panel, such as smoke suites.
+        records = snapshot.records
         task_records = [
             record
             for record in records
@@ -602,11 +622,10 @@ class RecordStore:
 
         ``None`` when the model has no records, so the route can answer 404.
         """
-        records, _by_id = self._snapshot()
-        return build_model_detail(records, model)
+        return build_model_detail(self._snapshot().records, model)
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
-        records, _by_id = self._snapshot()
+        records = self._snapshot().records
         siblings = [
             _group_sibling_row(record)
             for record in records
@@ -656,7 +675,7 @@ class PgRecordStore(RecordStore):
                 backend=self.backend,
                 instance=self._instance,
                 database=self._database,
-                record_count=len(self._records),
+                record_count=len(self._current.records),
                 catalog_generation=self._catalog_generation,
                 snapshot_updated_at=self._snapshot_updated_at.isoformat(),
                 catalog_error=self._catalog_error,
@@ -669,14 +688,11 @@ class PgRecordStore(RecordStore):
         if generation <= current_generation:
             return
         snapshot = fetch_snapshot(self._engine)
-        by_id = {record.run_id: record for record in snapshot.records}
-        metadata = build_meta(snapshot.records)
+        current = _RecordSnapshot(snapshot.records)
         with self._lock:
             if snapshot.generation <= self._catalog_generation:
                 return
-            self._records = snapshot.records
-            self._by_id = by_id
-            self._metadata = metadata
+            self._current = current
             self._catalog_generation = snapshot.generation
             self._snapshot_updated_at = snapshot.updated_at
         logger.info("postgres store loaded generation %d with %d records", snapshot.generation, len(snapshot.records))
@@ -706,7 +722,7 @@ class PgRecordStore(RecordStore):
                 return
             self.set_catalog_error(None)
 
-    def _snapshot(self) -> tuple[list[EvalRunRecord], dict[str, EvalRunRecord]]:
+    def _snapshot(self) -> _RecordSnapshot:
         self.refresh_if_due()
         return super()._snapshot()
 
@@ -1081,18 +1097,6 @@ def _status_payload(store: RecordStore, ingestor: IngestorLike) -> dict:
     return {"store": asdict(store.store_info()), "ingest": ingestor.status()}
 
 
-def _status_rollup(statuses: set[str]) -> str:
-    """Collapse a launch's per-eval statuses without inventing an evaluator failure."""
-    if statuses == {"succeeded"}:
-        return "succeeded"
-    if "succeeded" not in statuses:
-        if len(statuses) == 1:
-            return next(iter(statuses))
-        if "failed" in statuses:
-            return "failed"
-    return "mixed"
-
-
 def _run_headline(record: EvalRunRecord) -> dict | None:
     """Return an admitted run's primary grade, or None when it scored nothing or violates policy."""
     if record_policy_violations(record):
@@ -1144,6 +1148,39 @@ def _ingestor_and_loop(
 
 def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashConfig) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/catalog")
+    async def api_catalog(request: Request) -> JSONResponse:
+        params = request.query_params
+        view = params.get("view", "launches")
+        if view == "launches":
+            query = store.catalog_launches
+        elif view == "runs":
+            query = store.catalog_runs
+        else:
+            return JSONResponse({"error": "view must be launches or runs"}, status_code=400)
+        offset = _parse_int(params.get("offset"), default=0, low=0, high=sys.maxsize)
+        limit = _parse_int(params.get("limit"), default=DEFAULT_CATALOG_LIMIT, low=1, high=MAX_RUNS_LIMIT)
+        return JSONResponse(await asyncio.to_thread(query, CatalogFilters.from_query(params), offset, limit))
+
+    @router.get("/catalog/facets")
+    async def api_catalog_facets() -> JSONResponse:
+        return JSONResponse(await asyncio.to_thread(store.catalog_facets))
+
+    @router.get("/catalog/models")
+    async def api_catalog_models(request: Request) -> JSONResponse:
+        params = request.query_params
+        offset = _parse_int(params.get("offset"), default=0, low=0, high=sys.maxsize)
+        limit = _parse_int(params.get("limit"), default=DEFAULT_MODEL_CATALOG_LIMIT, low=1, high=MAX_RUNS_LIMIT)
+        payload = await asyncio.to_thread(
+            store.catalog_models,
+            params.get("q", "").strip().casefold(),
+            params.get("cohort") or ALL_COHORTS,
+            include_archived=_parse_flag(params.get("include_archived")),
+            offset=offset,
+            limit=limit,
+        )
+        return JSONResponse(payload)
 
     @router.get("/runs")
     async def api_runs(request: Request) -> JSONResponse:
@@ -1404,6 +1441,14 @@ def _analysis_router(store: RecordStore) -> APIRouter:
             store.panel, selection, aggregate_policy, _parse_flag(params.get("include_archived"))
         )
         return PanelResponse.model_validate(payload)
+
+    @router.get("/comparison-models")
+    async def api_comparison_models(request: Request) -> JSONResponse:
+        try:
+            selection = _selection(request.query_params)
+        except BadRequest as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(await asyncio.to_thread(store.comparison_models, selection))
 
     @router.get("/compare")
     async def api_compare(request: Request) -> JSONResponse:

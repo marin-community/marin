@@ -160,6 +160,7 @@ def test_metadata_database_wait_does_not_block_other_requests(engine, catalog):
 def test_metadata_refreshes_with_catalog_and_archive_updates_without_a_new_generation(engine, catalog, records):
     store = evaldash_app.PgRecordStore(engine)
     assert "added-model" not in store.meta()["models"]
+    assert "added-model" not in store.catalog_facets()["run_facets"]["model"]
     added = catalog.records[0].model_copy(
         update={
             "run_id": "metadata-added-run",
@@ -180,6 +181,7 @@ def test_metadata_refreshes_with_catalog_and_archive_updates_without_a_new_gener
     assert "added-model" in updated["models"]
     assert "added-user" in updated["facets"]["user"]
     assert "added-cohort" in updated["run_facets"]["version"]
+    assert "added-model" in store.catalog_facets()["run_facets"]["model"]
     generation = store.store_info().catalog_generation
     assert generation > catalog.generation
 

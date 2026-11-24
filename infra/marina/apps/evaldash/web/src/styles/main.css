@@ -5,14 +5,6 @@
 
 @config '../../tailwind.config.ts';
 
-/*
- * Instrument-readout identity. Chrome is warm lab-paper + ink (light) / deep slate
- * (dark); color is reserved for *measurement*, not brand. Score magnitude uses the
- * dataviz-validated blue sequential ramp (--c-score-1..7); run state uses the fixed
- * status palette; fleet-best is a warm graphite-amber (--c-best) kept distinct from
- * both so it never reads as a score or a status. Token *names* are unchanged, so every
- * existing view re-themes from these values alone.
- */
 :root {
   --c-page:                 #F3F0E9;
   --c-surface:              #FCFBF8;
@@ -23,7 +15,7 @@
 
   --c-text:                 #191B1E;
   --c-text-secondary:       #565B63;
-  --c-text-muted:           #8B8F97;
+  --c-text-muted:           #696D75;
 
   --c-accent:               #2F4B7C;
   --c-accent-hover:         #1F3A66;
@@ -59,7 +51,7 @@
 
     --c-text:                 #E7E9ED;
     --c-text-secondary:       #A0A5AE;
-    --c-text-muted:           #6B7077;
+    --c-text-muted:           #9A9FA8;
 
     --c-accent:               #8FB0E6;
     --c-accent-hover:         #B9CDEE;
@@ -96,3 +88,53 @@
 }
 
 body { background: var(--c-page); }
+
+/* Keep the Marina chrome and the evaluation workspace on the same reading grid. */
+.review-page {
+  max-width: 90rem;
+  margin-inline: auto;
+  padding: clamp(1rem, 2.5vw, 2.25rem) clamp(1rem, 3.5vw, 3.5rem);
+  font-family: "Noto Sans Variable", system-ui, sans-serif;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+.review-page h1 {
+  font: 650 clamp(1.75rem, 2.8vw, 2.375rem)/1.16 "Noto Sans Variable", system-ui, sans-serif;
+  letter-spacing: -.04em;
+  overflow-wrap: anywhere;
+}
+.sample-reading { max-width: 78ch; }
+.review-page :is(button, a, select, input, summary):focus-visible, .tools-menu summary:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+#app .marina-bar { font-family: "Noto Sans Variable", system-ui, sans-serif; }
+#app .marina-app-nav { overflow: visible; align-items: stretch; gap: clamp(.7rem, 2.3vw, 2rem); }
+#app .marina-app-nav, #app .marina-title-row {
+  box-sizing: border-box;
+  max-width: 90rem;
+  margin: auto;
+  padding-inline: clamp(1rem, 3.5vw, 3.5rem);
+}
+#app .marina-app-nav > a {
+  padding-block: .6rem;
+  border-bottom: 2px solid transparent;
+  font-weight: 550;
+  font-size: .875rem;
+  color: var(--c-text-secondary);
+}
+#app .marina-app-nav > a[aria-current="page"] {
+  color: var(--c-accent); border-color: currentColor; box-shadow: none;
+}
+.tools-menu { margin-left: auto; position: relative; align-self: center; font-size: .875rem; }
+.tools-menu summary { cursor: pointer; color: var(--c-text-secondary); padding-block: .6rem; }
+.tools-menu > div {
+  position: absolute; right: 0; z-index: 35; min-width: 12rem; padding: .35rem;
+  background: var(--c-surface); border: 1px solid var(--c-surface-border); border-radius: .4rem;
+  box-shadow: 0 .5rem 1.5rem #1018281a;
+}
+.tools-menu a { display: block; padding: .55rem .7rem; color: var(--c-accent); }
+.tools-menu a:hover { background: var(--c-accent-subtle); }
+@media (max-width: 23rem) {
+  #app .marina-app-nav { gap: .55rem; padding-inline: .65rem; }
+}

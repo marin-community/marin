@@ -83,7 +83,7 @@ const resultLabel = computed(() => {
 <template>
   <section>
     <div class="flex items-baseline justify-between mb-4">
-      <h2 class="text-lg font-semibold">Playground reports</h2>
+      <h1>Playground reports</h1>
     </div>
 
     <p class="mb-4 text-xs text-text-muted">

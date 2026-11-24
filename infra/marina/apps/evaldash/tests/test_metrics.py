@@ -730,6 +730,71 @@ def test_comparison_scores_models_on_their_shared_benchmarks_only():
     assert comparison["aggregates"]["a"]["value"] == pytest.approx(0.60)
 
 
+def test_comparison_model_picker_uses_selected_cohort_and_effective_family_panel():
+    first = "2026-01-01T00:00:00+00:00"
+    latest = "2026-02-01T00:00:00+00:00"
+    records = [
+        _record("archived", "mmlu", "v1", first, 0.56),
+        _record("archived", "mmlu", "v2", latest, 0.60),
+        _record("archived", "gsm8k", "v2", latest, 0.00, family="gsm8k"),
+        _record("complete", "mmlu", "v2", latest, 0.70),
+        _record("complete", "gsm8k", "v2", latest, 0.80, family="gsm8k"),
+        _record("other-setting", "mmlu", "v2", latest, 0.72),
+        _record("other-setting", "gsm8k-0shot", "v2", latest, 0.65, family="gsm8k"),
+        _record("older-positive", "mmlu", "v1", first, 0.80),
+        _record("older-positive", "mmlu", "v2", latest, 0.00),
+        _record("older-positive", "gsm8k", "v2", latest, 0.00, family="gsm8k"),
+        _record("smoke-only", "mmlu-smoke", "v2", latest, 0.99),
+    ]
+    store = MemoryRecordStore()
+    store.refresh(records)
+    store.set_model_archived("archived", True, None)
+    complete = panel_request(
+        cohort="v2",
+        benchmarks=("mmlu", "gsm8k", "gsm8k-0shot"),
+        completeness=Completeness.COMPLETE_PANEL,
+    )
+
+    assert store.comparison_models(complete)["models"] == ["archived", "complete"]
+    assert store.comparison_models(panel_request(cohort="v1"))["models"] == ["archived", "older-positive"]
+    assert store.comparison_models(panel_request())["models"] == ["archived", "complete", "other-setting"]
+
+    request = panel_request(cohort="v2", benchmarks=("mmlu", "gsm8k"))
+    assert store.comparison_models(request)["models"] == ["archived", "complete", "other-setting"]
+    result = store.comparison(request, ("archived", "complete"))
+    gsm8k = next(row for row in result["rows"] if row["benchmark"] == "gsm8k")
+    assert gsm8k["cells"]["archived"]["value"] == 0.0
+
+    store.refresh([_record("new-generation", "mmlu", "v2", latest, 0.9)])
+    assert store.comparison_models(request)["models"] == ["new-generation"]
+
+
+def test_comparison_model_picker_does_not_choose_a_protocol_from_filtered_models():
+    timestamp = "2026-02-01T00:00:00+00:00"
+    store = MemoryRecordStore()
+    store.refresh(
+        [
+            _record(
+                "declared",
+                "mmlu",
+                "v2",
+                timestamp,
+                0.8,
+                primary_metric="accuracy",
+                metric_kind=MetricKind.BINARY,
+                accelerator="h100",
+            ),
+            _record("admitted", "mmlu", "v2", timestamp, 0.7),
+            _record("other-metric", "mmlu", "v2", timestamp, 0.82, metric="acc_norm,none"),
+        ]
+    )
+    request = panel_request(cohort="v2", filters={"accelerator": "v6e-8"})
+    assert store.comparison_models(request)["models"] == ["admitted"]
+    result = store.comparison(request, ("admitted", "other-metric"))
+    assert result["shared"] == []
+    assert list(result["rows"][0]["cells"]) == ["admitted"]
+
+
 def test_comparison_reports_a_difference_interval_against_each_benchmark_leader():
     """A ten-point gap over a thousand items each is a real ordering; the interval says so without a
     reader having to compare two error bars by eye."""
@@ -988,6 +1053,11 @@ def test_comparison_keeps_protocol_variants_and_matches_historical_shots():
     detail = build_model_detail(records, "old")
     assert detail is not None
     assert set(detail["history"]) == set(rows)
+    store = MemoryRecordStore()
+    store.refresh(records)
+    for model in ("old", "new"):
+        points = store.history(model, selected)
+        assert [point["run_id"] for point in points] == [rows[selected]["cells"][model]["run_id"]]
 
 
 def test_historical_harbor_and_curated_agent_scores_share_a_family_and_the_reward_metric():

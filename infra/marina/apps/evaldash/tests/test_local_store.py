@@ -14,7 +14,7 @@ import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
 from evalrecords.eval_measurements import measurement_from_record
-from evalrecords.records import EvalRunRecord, list_records, write_record
+from evalrecords.records import EvalRunRecord, RunStatus, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
 
@@ -85,6 +85,59 @@ def test_a_request_without_a_cohort_reads_the_newest_result_across_cohorts(clien
     assert comparison.status_code == 200
 
 
+def test_comparison_models_api_lists_cohorts_and_keeps_archived_candidates(client, store):
+    store.set_model_archived("qwen3-8b", True, None)
+    payload = client.get("/comparison-models", params={"cohort": "2026.07.19", "benchmarks": "mmlu"}).json()
+
+    assert payload["models"] == ["qwen3-8b"]
+    assert payload["default_cohort"] == "all"
+    assert "2026.07.19" in payload["versions"]
+    assert "eval-policy-2026-09-24-verified" in payload["verified_cohorts"]
+
+
+def test_model_catalog_paginates_recorded_activity_within_cohort(client, store, tmp_path):
+    template = list_records(str(tmp_path))[0]
+    records = [
+        template.model_copy(
+            update={
+                "run_id": run_id,
+                "created_at": f"2026-01-{day:02d}T00:00:00+00:00",
+                "model": template.model.model_copy(update={"name": model}),
+                "evaluation": template.evaluation.model_copy(update={"name": eval_name}),
+                "version": version,
+            }
+        )
+        for day, (run_id, model, eval_name, version) in enumerate(
+            [
+                ("older-alpha", "alpha", "mmlu", "v1"),
+                ("newer-alpha", "alpha", "mmlu", "v1"),
+                ("other-cohort", "alpha", "gsm8k", "v2"),
+                ("newest-beta", "beta@aaaaaaaaaaaa", "drop", "v1"),
+            ],
+            1,
+        )
+    ]
+    store.refresh(records)
+    store.set_model_archived("beta", True, None)
+
+    params = {"cohort": "v1", "limit": 1}
+    page = client.get("/catalog/models", params=params).json()
+    assert page["total"] == 1
+    (alpha,) = page["rows"]
+    assert (alpha["model"], alpha["run_count"], alpha["benchmark_count"]) == ("alpha", 2, 1)
+    assert alpha["latest_run"]["run_id"] == "newer-alpha"
+
+    params["include_archived"] = "1"
+    page = client.get("/catalog/models", params=params).json()
+    assert page["total"] == 2
+    assert [(row["model"], row["archived"]) for row in page["rows"]] == [("beta@aaaaaaaaaaaa", True)]
+    assert client.get("/catalog/models", params={**params, "offset": 1}).json()["rows"] == [alpha]
+
+    (all_cohorts,) = client.get("/catalog/models", params={"q": " ALPHA "}).json()["rows"]
+    assert (all_cohorts["run_count"], all_cohorts["benchmark_count"]) == (3, 2)
+    assert all_cohorts["latest_run"]["run_id"] == "other-cohort"
+
+
 def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):
     panel = _panel(store)
     qwen = next(row for row in panel["rows"] if row["model"] == "qwen3-8b")
@@ -150,9 +203,20 @@ def test_groups_roll_up_mixed_launch_status(store):
     assert groups["snowball-2026.07.20"]["n_succeeded"] == 7
 
 
-def test_status_rollup_does_not_invent_evaluator_failure():
-    assert evaldash_app._status_rollup({"artifact_failed", "infra_failed"}) == "mixed"
-    assert evaldash_app._status_rollup({"failed", "artifact_failed", "infra_failed"}) == "failed"
+def test_launch_catalog_does_not_invent_evaluator_failure(client, store, tmp_path):
+    record = list_records(str(tmp_path))[0]
+    records = [
+        record.model_copy(update={"run_id": status.value, "status": status})
+        for status in [RunStatus.ARTIFACT_FAILED, RunStatus.INFRA_FAILED, RunStatus.FAILED]
+    ]
+    records[-1] = records[-1].model_copy(update={"user": "second-submitter", "created_at": "2026-11-24T00:00:00+00:00"})
+    store.refresh(records[:2])
+    assert client.get("/catalog").json()["rows"][0]["status"] == "mixed"
+    store.refresh(records)
+    assert client.get("/catalog").json()["rows"][0]["status"] == "failed"
+    (launch,) = client.get("/catalog", params={"user": record.user, "status": "mixed"}).json()["rows"]
+    assert launch["user_name"] == record.user
+    assert launch["n_evals"] == 2
 
 
 def test_fetch_runs_filters_and_get_record_round_trip(store):
@@ -469,3 +533,52 @@ def test_run_filter_options_include_catalog_outside_recent_window(client):
     all_runs = client.get("/runs", params={"limit": 1000}).json()
     assert set(facets["eval"]) == {row["eval_name"] for row in all_runs}
     assert set(facets["version"]) == {row["version"] for row in all_runs if row["version"]}
+
+
+@pytest.mark.parametrize(("view", "id_field"), [("launches", "group_id"), ("runs", "run_id")])
+def test_catalog_searches_entire_snapshot_and_pages_ties(client, store, tmp_path, view, id_field):
+    record = list_records(str(tmp_path))[0]
+    matching = [
+        record.model_copy(
+            update={"run_id": f"run-{suffix}", "group_id": f"group-{suffix}", "description": "Straße checkpoint"}
+        )
+        for suffix in ("a", "b")
+    ]
+    newest = record.model_copy(
+        update={"run_id": "run-c", "group_id": "group-c", "created_at": "2026-11-24T00:00:00+00:00"}
+    )
+    records = [*matching, newest]
+    params = {"view": view, "q": "  STRASSE CHECKPOINT  ", "limit": 1}
+    expected = [getattr(row, id_field) for row in reversed(matching)]
+    for snapshot in (records, list(reversed(records))):
+        store.refresh(snapshot)
+        for offset, expected_id in enumerate(expected):
+            page = client.get("/catalog", params={**params, "offset": offset}).json()
+            assert page["total"] == 2
+            assert [row[id_field] for row in page["rows"]] == [expected_id]
+        assert client.get("/catalog", params={**params, "offset": 2}).json() == {"rows": [], "total": 2}
+
+
+def test_catalog_returns_mixed_launch_summary_and_paged_members(client):
+    launch_id = "tootsie-8b-2026.07.20"
+    page = client.get(
+        "/catalog",
+        params={"q": f"{launch_id}-MMLU", "model": "tootsie-8b", "eval": "mmlu", "status": "mixed", "limit": 1},
+    ).json()
+    assert page["total"] == 1
+    (launch,) = page["rows"]
+    assert launch["group_id"] == launch_id
+    assert launch["status"] == "mixed"
+    assert launch["n_evals"] == 7
+    assert launch["n_succeeded"] == 5
+    assert "evals" not in launch
+
+    params = {"view": "runs", "q": launch_id, "group": launch_id, "limit": 1}
+    member_page = client.get("/catalog", params={**params, "offset": 1}).json()
+    assert member_page["total"] == 7
+    assert [row["run_id"] for row in member_page["rows"]] == [f"{launch_id}-aime24"]
+
+    members = client.get("/catalog", params={**params, "status": "infra_failed"}).json()
+    assert members["total"] == 1
+    assert [row["run_id"] for row in members["rows"]] == [f"{launch_id}-aime"]
+    assert "mixed" in client.get("/catalog/facets").json()["run_facets"]["status"]

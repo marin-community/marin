@@ -1,16 +1,4 @@
-/**
- * Process-wide refresh coordination.
- *
- * The mounted view registers its data refetch via `onViewRefresh`. The header's manual
- * button and a visibility-aware timer both call `triggerRefresh`, which refetches whichever
- * view is currently mounted. The timer polls every 60s and pauses while the tab is hidden,
- * refetching once on the transition back to visible.
- *
- * `useServerRefresh` exposes one shared in-flight state for the "rescan now" action behind
- * both the header and status-page refresh buttons: a POST /api/refresh with spinner/disabled
- * state, a "queued HH:MM:SS" confirmation, and a visible error. State is module-level so the
- * two buttons stay in lockstep — starting one disables the other.
- */
+/** Refetch the mounted view after a rescan, once a minute while visible, and when the tab regains visibility. */
 import { onMounted, onUnmounted, readonly, ref, type DeepReadonly, type Ref } from 'vue'
 import { apiPost } from '@/composables/useApi'
 
