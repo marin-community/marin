@@ -175,19 +175,16 @@ class Micro210Evaluation:
         )
 
 
-<<<<<<< HEAD
-def micro210_evaluation(model: Micro210Model, *, run_id: str, output_uri: str, **overrides) -> Micro210Evaluation:
-    """Verify the frozen policy and bind the model and run identity."""
-    if overrides:
-        raise ValueError(f"Canonical Micro210 refuses override field: {next(iter(overrides))}")
-    request = Micro210Evaluation(model, run_id, output_uri)
-=======
 def micro210_evaluation(
-    model: Micro210Model, *, run_id: str, output_uri: str, route: Micro210Route
+    model: Micro210Model, *, run_id: str, output_uri: str, route: Micro210Route | None = None, **overrides
 ) -> Micro210Evaluation:
     """Verify the frozen policy and bind the model, run identity and execution route."""
-    request = Micro210Evaluation(model, run_id, output_uri, route)
->>>>>>> 5aaf8ba75b ([eval] Bind the Micro210 execution route to the model, not the protocol)
+    if overrides:
+        raise ValueError(f"Canonical Micro210 refuses override field: {next(iter(overrides))}")
+    resolved = route or Micro210Route.from_policy_execution(
+        read_micro210_policy(POLICY_REFERENCE)["evaluation"]["execution"]
+    )
+    request = Micro210Evaluation(model, run_id, output_uri, resolved)
     request.policy()
     return request
 
