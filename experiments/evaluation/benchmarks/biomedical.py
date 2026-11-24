@@ -14,7 +14,8 @@ tasks do; the test split's answers are hidden. `medmcqa` is the zero-shot
 letter likelihood task. `medmcqa-cot` is lm-eval's `medmcqa_cot` chat prompt
 graded on the final answer, with each served model's sampling defaults and
 token budget instead of the reference's greedy 512-token decoding, which would
-truncate reasoning models.
+truncate reasoning models. Its answer letter must stand alone, so option text
+such as `Final Answer: Bone marrow` does not count as B.
 """
 
 from taskcompendium.evaluation.spec import (
@@ -52,7 +53,7 @@ MEDMCQA_SOURCE = HfSource(
     SourceFormat.PARQUET,
 )
 MEDMCQA_POPULATION = 4183
-MEDMCQA_COT_VERSION = "2026.11.20"
+MEDMCQA_COT_VERSION = "2026.11.24"
 
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:

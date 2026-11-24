@@ -10,7 +10,8 @@ from verifyit.spec import McqExtraction, McqSpec
 SPEC = McqSpec("B", options=4, extraction=McqExtraction.MEDMCQA_COT_REFERENCE)
 
 
-# Expected letters follow lm-eval's medmcqa_cot regex filter with take_first, applied after any inline reasoning.
+# Expected letters follow lm-eval's medmcqa_cot regex filter with take_first, applied after any inline
+# reasoning and requiring a standalone letter.
 @pytest.mark.parametrize(
     "response,reward,extracted",
     [
@@ -24,6 +25,9 @@ SPEC = McqSpec("B", options=4, extraction=McqExtraction.MEDMCQA_COT_REFERENCE)
         ("The answer is B.", 0, None),
         ("Answer: B", 0, None),
         ("Final Answer: (B)", 0, None),
+        ("Final Answer: Bone marrow", 0, None),
+        ("Final Answer: ABCD", 0, None),
+        ("Final Answer: B.", 1, "B"),
         ("", 0, None),
     ],
 )

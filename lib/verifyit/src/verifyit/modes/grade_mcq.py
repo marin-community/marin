@@ -24,7 +24,8 @@ ANSWER = re.compile(r"Answer\s*:\s*(?!Answer)\s*([A-Za-z0-9])(?![A-Za-z0-9])\s*"
 BOXED_LETTER = re.compile(r"\\boxed\{\s*([A-Za-z0-9])\s*\}")
 WRAPPERS = re.compile(r"[*`_()\[\]]")
 # lm-eval-harness `medmcqa_cot` (MIT, d6de81643928d653435c431bae19945d41d32520): the first match is the answer.
-MEDMCQA_FINAL_ANSWER = re.compile(r"Final Answer:\s*(?:\*\*)?\s*([A-D])")
+# The trailing boundary is Marin's: lm-eval reads `Final Answer: Bone marrow` as B.
+MEDMCQA_FINAL_ANSWER = re.compile(r"Final Answer:\s*(?:\*\*)?\s*([A-D])(?![A-Za-z0-9])")
 MAX_OPTIONS = len(string.ascii_uppercase)
 
 
