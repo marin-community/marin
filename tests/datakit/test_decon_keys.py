@@ -19,10 +19,12 @@ from marin.datakit.decon_keys import (
     excerpt,
     hit_indices,
     item_stream,
+    json_unescaped,
     key_streams,
     keys_table,
     long_record_pairs,
     pieces,
+    readings,
     record_hit_indices,
     record_pairs,
     record_readings,
@@ -327,6 +329,13 @@ def test_a_key_spread_over_a_run_of_spaces_at_a_piece_edge_lies_in_one_piece():
     key = "abcdefghijklmnopqrst"
     text = "z" * 50 + key[:10] + " " * 12 + key[10:] + "y" * 50
     assert any(key in text_stream(piece) for piece in pieces(text, size=64, overlap=8))
+
+
+def test_a_key_split_by_escaped_spaces_at_a_piece_edge_lies_in_one_piece():
+    key = "abcdefghijklmnopqrst"
+    text = "z" * 220 + key[:10] + "\\u0020" * 12 + key[10:] + "y" * 150
+    assert key not in text_stream(text) and key in text_stream(json_unescaped(text))
+    assert any(key in text_stream(reading) for piece in pieces(text, size=256, overlap=8) for reading in readings(piece))
 
 
 def test_a_long_record_keeps_the_whole_excerpt_of_a_hit_near_a_piece_edge():

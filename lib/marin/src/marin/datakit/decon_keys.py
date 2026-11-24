@@ -462,9 +462,10 @@ def excerpt(
 
 def pieces(text: str, size: int = MAX_DOC_CHARS, overlap: int = PIECE_OVERLAP, width: int = WINDOW) -> Iterator[str]:
     """Pieces of *text* of at most *size* characters. Consecutive pieces share at least *overlap* characters, so
-    every stretch that long lies inside one piece, and the shared part widens (up to half a piece) until its text
-    stream holds *width* characters, so a key window whose letters are spread over a long run of spaces or
-    punctuation also lies inside one piece. Each piece starts at least half a piece after the one before."""
+    every stretch that long lies inside one piece, and the shared part widens (up to half a piece) until the text
+    stream of each of its ``readings`` holds *width* characters, so a key window whose letters are spread over a
+    long run of spaces, punctuation or JSON escapes also lies inside one piece. Each piece starts at least half a
+    piece after the one before."""
     if size <= 2 * overlap:
         raise ValueError(f"piece size {size} must exceed twice the overlap {overlap}")
     start = 0
@@ -474,7 +475,7 @@ def pieces(text: str, size: int = MAX_DOC_CHARS, overlap: int = PIECE_OVERLAP, w
         if end == len(text):
             return
         shared = overlap
-        while len(text_stream(text[end - shared : end])) < width and shared < size // 2:
+        while min(len(text_stream(r)) for r in readings(text[end - shared : end])) < width and shared < size // 2:
             shared = min(2 * shared, size // 2)
         start = end - shared
 
