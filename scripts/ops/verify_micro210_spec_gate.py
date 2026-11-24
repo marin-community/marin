@@ -391,7 +391,9 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="Grade only the first N rows (development)")
     parser.add_argument("--benchmark", action="append", default=[], help="Grade only these benchmarks")
     parser.add_argument(
-        "--judge-credential", default="gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/1"
+        "--judge-credential",
+        default="",
+        help="Judge credential spec; empty resolves JUDGE_API_KEY/OPENAI_API_KEY from the environment",
     )
     arguments = parser.parse_args()
 
