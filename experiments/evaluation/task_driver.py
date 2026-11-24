@@ -14,8 +14,6 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from marin.evaluation.task_worker import (
     DAYTONA_API_KEY,
-    DAYTONA_API_URL,
-    DAYTONA_TARGET,
     DEFAULT_MAX_ATTEMPTS,
     JUDGE_API_KEY,
     JUDGE_ENDPOINT,
@@ -147,9 +145,8 @@ def main() -> None:
     secrets.update({name: require_secret(name) for name in config.task_secrets})
     env_vars = {}
     if daytona is not None:
-        assert daytona.api_key is not None and daytona.api_url is not None and daytona.target is not None
+        assert daytona.api_key is not None
         secrets[DAYTONA_API_KEY] = daytona.api_key
-        env_vars = {DAYTONA_API_URL: daytona.api_url, DAYTONA_TARGET: daytona.target}
     if arguments.judge_endpoint:
         secrets[JUDGE_ENDPOINT] = arguments.judge_endpoint
         secrets[JUDGE_API_KEY] = require_secret(arguments.judge_api_key_env)
