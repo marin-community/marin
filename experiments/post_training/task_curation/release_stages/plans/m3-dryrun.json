@@ -52,8 +52,8 @@
       "uri": "s3://marin-us-east-08a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/curriculum-composition/composed/coverage.json"
     },
     "prior_declarations": {
-      "sha256": "67ab84cf89404aa5ef9b05d92de07420e8b281edeb8b35ac1ec8eaccdc753353",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v17/prior-declarations.json"
+      "sha256": "9d61c3c29c167f794ce96283c266d79248193a45e24f6e39407ec1ff8bc6f944",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v24/prior-declarations.json"
     },
     "prior_identity": {
       "sha256": "bb00732530d2c8ffbe7e924a7048978b1beb99cea8814a25f23a1fea64f311d4",
@@ -423,7 +423,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "m3-dryrun",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v23",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v25",
   "scan_regions": {
     "us-east-02a": "s3://marin-us-east-02a/marin/rl-data/atlas/"
   },
@@ -440,7 +440,6 @@
   "source_revision": "60770c25bdcf8eacda3ca0bcc16c61ff200e45c0",
   "strict_audit_local": false,
   "targets": [
-    "Lego-X:Terminal-Lego-15k",
-    "di-zhang-fdu:aime_1983_2024"
+    "Lego-X:Terminal-Lego-15k"
   ]
 }
