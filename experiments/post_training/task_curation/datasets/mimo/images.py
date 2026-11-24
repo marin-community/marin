@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import shutil
+import stat as stat_module
 import subprocess
 import tempfile
 import time
@@ -210,23 +211,57 @@ def copy_base(source: str, base_digest: str, layout: Path) -> None:
     )
 
 
+RUN_DEVICE_NODES = (
+    ("/dev/null", 1, 3),
+    ("/dev/zero", 1, 5),
+    ("/dev/random", 1, 8),
+    ("/dev/urandom", 1, 9),
+)
+
+
+def prepare_run_devices(rootfs: Path) -> list[Path]:
+    """Create the /dev nodes a build container always provides, and return the created ones.
+
+    Docker mounts a fresh /dev into build containers without persisting it into layers;
+    the caller removes the returned nodes after the step so the packed layer matches a
+    Nodes the base image already carries stay untouched.
+    """
+    created = []
+    for path, major, minor in RUN_DEVICE_NODES:
+        target = rootfs / path.removeprefix("/")
+        if target.exists():
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.mknod(target, mode=0o666 | stat_module.S_IFCHR, dev=os.makedev(major, minor))
+            os.chmod(target, 0o666)
+            created.append(target)
+        except OSError as error:
+            logger.warning("could not create %s inside the rootfs (%s); the RUN step may fail", path, error)
+    return created
+
+
 def run_in_rootfs(rootfs: Path, command: str, environment: dict[str, str], workdir: str) -> None:
     """Execute one RUN step inside the unpacked root filesystem, as a Docker build would.
 
     The step runs as root with the image's own environment in the declared working
-    directory. Host DNS is injected for the duration of the step and restored afterwards,
-    matching a builder that supplies the host resolver without persisting it into a layer.
+    directory. Host DNS and the /dev nodes a build container provides are injected for
+    the duration of the step and restored afterwards, matching a builder that supplies
+    the host resolver without persisting either into a layer.
     """
     resolv = rootfs / "etc" / "resolv.conf"
     saved = resolv.read_bytes() if resolv.is_file() or resolv.is_symlink() else None
     resolv.parent.mkdir(parents=True, exist_ok=True)
     resolv.write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    devices = prepare_run_devices(rootfs)
     chroot = shutil.which("chroot")
     if chroot is None:
         raise BuildRejected("the build host has no chroot; the lane cannot execute RUN steps")
     try:
         run([chroot, str(rootfs), "/bin/sh", "-c", command], env=dict(environment), timeout=1800)
     finally:
+        for node in devices:
+            node.unlink(missing_ok=True)
         if saved is None:
             resolv.unlink(missing_ok=True)
         else:
