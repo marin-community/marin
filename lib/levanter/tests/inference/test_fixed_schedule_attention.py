@@ -55,6 +55,7 @@ def _dense_oracle(
 
 @pytest.mark.parametrize("position", [0, 127, 128, 255])
 @pytest.mark.parametrize("window", [None, 128])
+@pytest.mark.tpu
 def test_fixed_schedule_public_forward_matches_oracle_and_decode(position: int, window: int | None) -> None:
     _require_four_tpu_devices()
     spec = FixedScheduleSpec(sliding_window=window)
@@ -117,6 +118,7 @@ def test_fixed_schedule_public_forward_matches_oracle_and_decode(position: int, 
     assert jnp.array_equal(full, permuted)
 
 
+@pytest.mark.tpu
 def test_fixed_schedule_public_forward_isolates_data_sharded_neighbor_changes() -> None:
     _require_four_tpu_devices()
     spec = FixedScheduleSpec()
@@ -156,6 +158,7 @@ def test_fixed_schedule_public_forward_isolates_data_sharded_neighbor_changes() 
     assert before.sharding.spec == P("data", None, None, None)
 
 
+@pytest.mark.tpu
 def test_fixed_schedule_public_forward_normalizes_compound_explicit_input_shardings() -> None:
     _require_four_tpu_devices()
     spec = FixedScheduleSpec()
@@ -211,6 +214,7 @@ def test_fixed_schedule_public_forward_normalizes_compound_explicit_input_shardi
     assert compound.sharding.spec == P("data", None, None, None)
 
 
+@pytest.mark.tpu
 def test_fixed_schedule_public_forward_empty_neighbor_preserves_target() -> None:
     _require_four_tpu_devices()
     spec = FixedScheduleSpec()
@@ -336,6 +340,7 @@ def test_materialize_contiguous_kv_explicit_data_sharding_preserves_packing(dtyp
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.tpu
 def test_fixed_schedule_public_forward_poison_invalid_metadata() -> None:
     _require_four_tpu_devices()
     spec = FixedScheduleSpec()
