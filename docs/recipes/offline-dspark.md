@@ -104,6 +104,10 @@ Speculators uses one of the leader's GPUs and reads activations as it batches
 examples. The RunAI loader caps each process's CPU buffer at 8 GiB. The trainer
 stages only the teacher's embedding and final gated head shards.
 
+Teacher prefill requests generate one token to return each activation file.
+The cache progress log reports completed conversations and prompt tokens per
+second, plus the mean time spent uploading an activation file.
+
 Export `CW_KEY_ID` and `CW_KEY_SECRET` before submission so Iris can pass
 them to the job as secrets.
 

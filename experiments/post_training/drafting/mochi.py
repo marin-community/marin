@@ -14,6 +14,7 @@ from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic
 
 import requests
 from datasets import Dataset, load_from_disk
@@ -203,7 +204,7 @@ def _stage_data(prepared: str, scratch: Path, sample: Sample) -> tuple[Dataset, 
 
 
 def _cache_rows(url: str, dataset: Dataset, hidden_states: StoragePath, recipe: DraftRecipe) -> None:
-    def cache_row(row_index: int) -> None:
+    def cache_row(row_index: int) -> tuple[int, float]:
         ids = dataset[row_index]["input_ids"]
         response = requests.post(
             f"{url}/completions",
@@ -228,15 +229,32 @@ def _cache_rows(url: str, dataset: Dataset, hidden_states: StoragePath, recipe: 
         if not bool(tensors["hidden_states"].isfinite().all()):
             raise ValueError(f"Mochi returned non-finite features for row {row_index}")
         fs, key = filesystem_for(str(activation_path(hidden_states, row_index)))
+        upload_start = monotonic()
         fs.put_file(str(path), key)
+        upload_seconds = monotonic() - upload_start
         path.unlink()
         lock_path.unlink()
+        return len(ids), upload_seconds
 
     # Pin requests to a local rank so the extracted tensors stay on the trainer's worker.
+    started = monotonic()
+    cached_tokens = 0
+    total_upload_seconds = 0.0
     with ThreadPoolExecutor(max_workers=8) as pool:
-        for count, _ in enumerate(pool.map(cache_row, range(len(dataset))), start=1):
+        for count, (tokens, upload_seconds) in enumerate(pool.map(cache_row, range(len(dataset))), start=1):
+            cached_tokens += tokens
+            total_upload_seconds += upload_seconds
             if count % 32 == 0 or count == len(dataset):
-                logger.info("Cached %d/%d Mochi rows for taps %s", count, len(dataset), recipe.extraction_taps)
+                elapsed = monotonic() - started
+                logger.info(
+                    "Cached %d/%d Mochi rows for taps %s (%.2f rows/s, %.0f prompt tokens/s, %.2f s mean upload)",
+                    count,
+                    len(dataset),
+                    recipe.extraction_taps,
+                    count / elapsed,
+                    cached_tokens / elapsed,
+                    total_upload_seconds / count,
+                )
 
 
 def _teacher_environment(teacher: str, recipe: DraftRecipe, launch: IrisVllmLaunch, hidden: Path) -> VllmEnvironment:
