@@ -225,9 +225,17 @@ def test_math_list_text_connector_before_final_member(connector):
     assert grade_math.grade_math_candidate(spec, "2, 3, 4").reward == 1.0
 
 
-def test_math_terminal_unit_power_stays_parseable():
-    spec = MathSpec(expected=r"15\mbox{ cm}^2")
-    assert grade_math.grade_math_candidate(spec, "15").reward == 1.0
+@pytest.mark.parametrize(
+    "reference, candidate, math_type",
+    [
+        (r"15\mbox{ cm}^2", "15", MathType.SCALAR),
+        (r"15\mbox{ cm}^{2}", "15", MathType.SCALAR),
+        (r"[1, 15\mbox{ cm}^{2}]", "[1, 15]", MathType.LIST),
+    ],
+)
+def test_math_terminal_unit_power_stays_parseable(reference, candidate, math_type):
+    spec = MathSpec(expected=reference, math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
 
 
 @pytest.mark.parametrize(
@@ -242,6 +250,21 @@ def test_math_terminal_unit_power_stays_parseable():
 )
 def test_math_upright_symbols_parse_with_following_math(reference, candidate, math_type):
     assert grade_math.grade_math_candidate(MathSpec(expected=reference, math_type=math_type), candidate).reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, wrong_candidate, math_type",
+    [
+        (r"2\mathrm{xy}+1", r"2\mathrm{xy}+1", "2", MathType.SCALAR),
+        (r"2\text{x}+1", r"2\text{x}+1", "2", MathType.SCALAR),
+        (r"[1, 2\mathrm{xy}+1]", r"[1, 2\mathrm{xy}+1]", "[1, 2]", MathType.LIST),
+        (r"[1, 2\text{x}+1]", r"[1, 2\text{x}+1]", "[1, 2]", MathType.LIST),
+    ],
+)
+def test_math_adjacent_text_symbols_keep_following_math(reference, candidate, wrong_candidate, math_type):
+    spec = MathSpec(expected=reference, math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
 
 
 @pytest.mark.parametrize(
