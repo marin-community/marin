@@ -64,8 +64,14 @@ _DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|
 TEXT_CONNECTOR_CONTENT = r"\s*(?:and|or)\s*"
 REFERENCE_TEXT_GROUP = re.compile(r"\\(?:text|mbox|mathrm)\{(?!" + TEXT_CONNECTOR_CONTENT + r"\})")
 LEADING_LIST_CONNECTOR = re.compile(r"^\\text\{" + TEXT_CONNECTOR_CONTENT + r"\}\s*")
-# The current normalizer strips one unbraced digit or a braced whole-number power after a unit.
-TERMINAL_UNIT_POWER = re.compile(r"\^(?:[0-9]|\{[0-9]+\})")
+# Unit normalization strips terminal text groups and their powers.
+TERMINAL_UNIT_POWER = r"\^(?:[+-]?[0-9]|\{\s*[+-]?[0-9]+\s*\})"
+TERMINAL_UNIT_GROUP = r"\\(?:text|mbox|mathrm)\{[\s~]*[A-Za-z]+\}"
+TERMINAL_UNIT_SUFFIX = re.compile(
+    rf"(?:{TERMINAL_UNIT_POWER})?(?:\s*(?:/|\\cdot|\\times)\s*{TERMINAL_UNIT_GROUP}(?:{TERMINAL_UNIT_POWER})?)*"
+)
+UNIT_GROUP_CONTENT = re.compile(r"[\s~]*[A-Za-z]+")
+ORDINAL_SUFFIX = re.compile(r"(?<=\d)\^\{\\text\{(?:st|nd|rd|th)\}\}(?=\s*(?:\\(?:text|mbox|mathrm)\{|$))")
 
 
 def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
@@ -112,7 +118,8 @@ def _parse_reference(text: str) -> tuple[list, bool]:
     from math_verify.parser import LatexExtractionConfig  # noqa: PLC0415
     from math_verify.utils import timeout  # noqa: PLC0415
 
-    value = strip_math_delimiters(text)
+    # Normalization would otherwise leave a dangling exponent before an ordinal text group.
+    value = ORDINAL_SUFFIX.sub("", strip_math_delimiters(text))
     text_groups = list(REFERENCE_TEXT_GROUP.finditer(value))
     strip_units = bool(text_groups)
     symbolic_text_group = False
@@ -126,7 +133,10 @@ def _parse_reference(text: str) -> tuple[list, bool]:
             return [], strip_units
         group_contents = value[text_group.end() : text_group.end() + first_close - 1]
         suffix = value[text_group.end() + first_close :].strip()
-        if suffix and not TERMINAL_UNIT_POWER.fullmatch(suffix):
+        terminal_unit_suffix = TERMINAL_UNIT_SUFFIX.fullmatch(suffix)
+        if suffix and terminal_unit_suffix and not UNIT_GROUP_CONTENT.fullmatch(group_contents):
+            return [], strip_units
+        if suffix and not terminal_unit_suffix:
             prefix = value[: text_group.start()].rstrip()
             upright_symbol = text_group.group() == r"\mathrm{" and len(group_contents) == 1 and group_contents.isalpha()
             no_gap_before_group = text_group.start() > 0 and not value[text_group.start() - 1].isspace()

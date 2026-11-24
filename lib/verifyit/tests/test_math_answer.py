@@ -176,6 +176,7 @@ def test_math_unparsable_expected_is_an_invalid_task(tmp_path, expected):
         (r"\{x \mid 2 < x < 3\}", MathType.SET),
         (r"32 \text{ white}, 16 \text{ black}", MathType.SCALAR),
         (r"32 \text{white}, 16 \text{black}", MathType.SCALAR),
+        (r"30 \text{m}/\text{s}+5", MathType.SCALAR),
         (r"\mathrm{x}+32 \text{ white}, 16 \text{ black}", MathType.SCALAR),
         (r"[1, 67.\overline{3}]", MathType.LIST),
         (r"x = \frac\pi 2 = 2", MathType.EQUATION),
@@ -239,6 +240,27 @@ def test_math_text_connector_does_not_invalidate_comma_separated_reference(conne
 def test_math_terminal_unit_power_stays_parseable(reference, candidate, math_type):
     spec = MathSpec(expected=reference, math_type=math_type)
     assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, wrong_candidate",
+    [
+        (r"\frac{4}{3} \mathrm{~m} / \mathrm{s}", "4/3", "7/3"),
+        (r"215 \, \text{kJ}/\text{mol}", "215", "216"),
+        (r"30 \mathrm{m}/\mathrm{s}", "30", "31"),
+        (r"1.8^{\circ} \mathrm{C} / \mathrm{h}", "1.8", "2.8"),
+        (r"1000 \, \text{kg} \cdot \text{m}^2/\text{s}", "1000", "1001"),
+        (r"11^{\text{th}}", "11", "12"),
+        (r"25^{\text{th}}", "25", "26"),
+        (r"4^{\text{th}} \text{ minute}", "4", "5"),
+        (r"9.9 \, \text{s}^{-1}", "9.9", "10.9"),
+        (r"15\mbox{ cm}^{ 2 }", "15", "16"),
+    ],
+)
+def test_math_reference_unit_chains_ordinals_and_powers_grade_numeric_value(reference, candidate, wrong_candidate):
+    spec = MathSpec(expected=reference)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
 
 
 @pytest.mark.parametrize(
