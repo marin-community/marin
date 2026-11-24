@@ -30,7 +30,7 @@ from levanter.main.export_hf_to_lm import ImportHfConfig
 from levanter.main.export_hf_to_lm import main as import_hf_to_levanter
 from levanter.models.lm_model import LmConfig
 
-from marin.execution.fingerprint import default_fields_omitted_from_fingerprint
+from marin.execution.fingerprint import fingerprint_omitted_fields
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.training.training import LevanterCheckpoint
@@ -125,16 +125,16 @@ class HfToLevanterCheckpoint:
     model: LmConfig
 
 
-def _omit_encoded_defaults(config: object, encoded: Any) -> Any:
+def _omit_encoded_legacy_values(config: object, encoded: Any) -> Any:
     if isinstance(encoded, list) and isinstance(config, list | tuple):
-        return [_omit_encoded_defaults(item, value) for item, value in zip(config, encoded, strict=True)]
+        return [_omit_encoded_legacy_values(item, value) for item, value in zip(config, encoded, strict=True)]
     if not isinstance(encoded, dict):
         return encoded
 
     omitted: set[str] = set()
     values: Mapping[Any, object]
     if is_dataclass(config) and not isinstance(config, type):
-        omitted = default_fields_omitted_from_fingerprint(config)
+        omitted = fingerprint_omitted_fields(config)
         values = {item.name: getattr(config, item.name) for item in fields(config)}
     elif isinstance(config, Mapping):
         values = config
@@ -142,7 +142,7 @@ def _omit_encoded_defaults(config: object, encoded: Any) -> Any:
         return encoded
 
     return {
-        key: _omit_encoded_defaults(values[key], value) if key in values else value
+        key: _omit_encoded_legacy_values(values[key], value) if key in values else value
         for key, value in encoded.items()
         if key not in omitted
     }
@@ -168,7 +168,8 @@ def hf_to_levanter(
     tokenizer = tokenizer or hf_id
     tokenizer_revision = tokenizer_revision or hf_revision
     model_config = resolve_lm_config(model_type, hf_id, hf_revision)
-    model_config_json = _omit_encoded_defaults(model_config, draccus.encode(model_config))
+    model_config_json = draccus.encode(model_config)
+    fingerprint_model_config_json = _omit_encoded_legacy_values(model_config, model_config_json)
     name = f"checkpoints/hf-to-levanter/{get_directory_friendly_name(hf_id)}-{model_type}"
 
     def build_config(ctx: StepContext) -> HfToLevanterConfig:
@@ -179,7 +180,7 @@ def hf_to_levanter(
             tokenizer=tokenizer,
             tokenizer_revision=tokenizer_revision,
             compute_dtype=compute_dtype,
-            model_config_json=model_config_json,
+            model_config_json=fingerprint_model_config_json if ctx.is_fingerprint else model_config_json,
             output_path=ctx.output_path,
             resources=ctx.runtime_arg(_CONVERT_RESOURCES),
         )
