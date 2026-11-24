@@ -1,34 +1,40 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bisect pool 502s: alternate proxied vs direct URLs from a pod, capture failure bodies.
+"""Bisect pool 502/500s: concurrent large-prompt requests from a pod, capture failure bodies.
 
 Writes the result matrix to in-region S3 (short-job stdout is not reliably retrievable).
 """
 
 import json
+import threading
 
 import httpx
-
 from iris.client.client import iris_ctx
 
 _RESULT_PATH = "s3://marin-us-east-08a/marin/users/benfeuer/glm-synthesis-serving/failure-probe.json"
-_BODY = {
-    "model": "glm-5.3",
-    "cache_salt": "failure-probe",
-    "messages": [
-        {"role": "system", "content": "You convert tool-harness traces into native tool calls."},
-        {"role": "user", "content": "Convert this bash call to a native tool call: echo hello"},
-    ],
-    "temperature": 1.0,
-    "top_p": 0.95,
-    "thinking_token_budget": 8192,
-    "max_tokens": 64,
-    "stream": True,
-    "tool_choice": "none",
-    "stream_options": {"include_usage": True},
-    "chat_template_kwargs": {"reasoning_effort": "low", "clear_thinking": True},
-}
+_UNIT = "tool trace line with json payloads and shell commands "
+
+
+def _body(seed: int, prompt_tokens: int = 48_000) -> dict:
+    needed = prompt_tokens * 4
+    filler = ((f"row-{seed} " + _UNIT) * (needed // len(_UNIT) + 1))[:needed]
+    return {
+        "model": "glm-5.3",
+        "cache_salt": "failure-probe",
+        "messages": [
+            {"role": "system", "content": "You convert tool-harness traces into native tool calls. " * 60},
+            {"role": "user", "content": filler},
+        ],
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "thinking_token_budget": 8192,
+        "max_tokens": 256,
+        "stream": True,
+        "tool_choice": "none",
+        "stream_options": {"include_usage": True},
+        "chat_template_kwargs": {"reasoning_effort": "low", "clear_thinking": True},
+    }
 
 
 def main() -> None:
@@ -42,26 +48,34 @@ def main() -> None:
     }
     results: dict[str, dict] = {}
     for name, url in urls.items():
-        outcomes = []
-        with httpx.Client(timeout=120.0) as http:
-            for attempt in range(10):
-                try:
-                    with http.stream("POST", url, json=_BODY, headers=headers) as response:
+        outcomes: list[dict] = []
+        lock = threading.Lock()
+
+        def worker(seed: int) -> None:
+            outcome: dict = {}
+            try:
+                with httpx.Client(timeout=600.0) as http:
+                    with http.stream("POST", url, json=_body(seed), headers=headers) as response:
                         if response.status_code == 200:
-                            chunks = 0
-                            for line in response.iter_lines():
-                                if line.startswith("data:"):
-                                    chunks += 1
-                            outcomes.append({"status": 200, "chunks": chunks})
+                            chunks = sum(1 for line in response.iter_lines() if line.startswith("data:"))
+                            outcome = {"status": 200, "chunks": chunks}
                         else:
-                            body = response.read()[:400].decode(errors="replace")
-                            outcomes.append({"status": response.status_code, "body": body})
-                except Exception as error:
-                    outcomes.append({"error": str(error)[:200]})
-        results[name] = {
-            "ok": sum(1 for o in outcomes if o.get("status") == 200),
-            "outcomes": outcomes,
-        }
+                            outcome = {
+                                "status": response.status_code,
+                                "body": response.read()[:600].decode(errors="replace"),
+                            }
+            except Exception as error:
+                outcome = {"error": str(error)[:200]}
+            with lock:
+                outcomes.append({"seed": seed, **outcome})
+
+        threads = [threading.Thread(target=worker, args=(seed,)) for seed in range(12)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        ok = sum(1 for o in outcomes if o.get("status") == 200)
+        results[name] = {"ok": ok, "of": len(outcomes), "failures": [o for o in outcomes if o.get("status") != 200][:6]}
     payload = {"resolved": resolved, **results}
     from rigging.filesystem.s3_compat import configure_coreweave_s3
 
@@ -71,7 +85,7 @@ def main() -> None:
     fs, _ = filesystem_for(_RESULT_PATH)
     with fs.open(_RESULT_PATH, "w") as stream:
         stream.write(json.dumps(payload))
-    print(json.dumps({k: {"ok": v["ok"]} for k, v in results.items()}))
+    print(json.dumps({k: {"ok": v["ok"], "of": v["of"]} for k, v in results.items()}))
 
 
 if __name__ == "__main__":
