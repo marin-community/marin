@@ -14,7 +14,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from functools import cached_property, partial
 from pathlib import Path
@@ -798,10 +798,16 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
 def download_verified(url: str, sha256: str, destination: StoragePath) -> None:
     """Stream ``url`` to ``destination``, removing it unless its SHA-256 is ``sha256``."""
     digest = hashlib.sha256()
-    with requests.get(url, stream=True, timeout=URL_TIMEOUT) as response:
-        response.raise_for_status()
+    with ExitStack() as stack:
+        if url.startswith(("http://", "https://")):
+            response = stack.enter_context(requests.get(url, stream=True, timeout=URL_TIMEOUT))
+            response.raise_for_status()
+            chunks = response.iter_content(URL_CHUNK_BYTES)
+        else:
+            reader = stack.enter_context(StoragePath(url).open("rb"))
+            chunks = iter(lambda: reader.read(URL_CHUNK_BYTES), b"")
         with destination.open("wb", auto_mkdir=True) as stream:
-            for chunk in response.iter_content(URL_CHUNK_BYTES):
+            for chunk in chunks:
                 digest.update(chunk)
                 stream.write(chunk)
     if digest.hexdigest() != sha256:

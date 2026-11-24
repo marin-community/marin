@@ -45,7 +45,7 @@ from experiments.evaluation.benchmark import fixed_benchmarks
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.cli import cli
 from experiments.evaluation.curated import load_evaluations
-from experiments.evaluation.evals import DAYTONA_SECRET_ENV, resolve_evaluations
+from experiments.evaluation.evals import DAYTONA_SECRET_ENV, HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
 from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST
@@ -163,6 +163,39 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     assert config.verifier_env_keys == ()
     assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {"judge_access": "runtime"}
     assert batch.judge.api_model == "qwen3-0.6b"
+
+
+def test_judge_deadline_change_preserves_launch_identity_and_saved_results(tmp_path, harbor_task_workspace):
+    policy = harbor_task_workspace / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "local"},
+                "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
+                "datasets": [{"path": "dataset"}],
+            }
+        )
+    )
+    judge = models()["qwen3-0.6b"]
+    spec = replace(
+        _pipeline_spec(tmp_path),
+        evals=(HarborDefinition(policy.stem, policy),),
+        judge_model=judge,
+        judge_accelerator="H100x1",
+        cache_key=None,
+        run_id="judge-resume",
+    )
+    before = prepare_evaluation_batch(spec)
+    identity = replace(before.evaluations[0].identity, output_dir=str(tmp_path / "saved-results"))
+    record_path = Path(_record(before, identity, RunStatus.INFRA_FAILED, "interrupted", {}, {}, {}))
+    record = json.loads(record_path.read_text())
+    record["judge"]["model"]["config"].pop("evaluation_request_timeout", None)
+    record_path.write_text(json.dumps(record))
+
+    after = prepare_evaluation_batch(replace(spec, judge_model=replace(judge, evaluation_request_timeout=21600)))
+
+    assert after.evaluations[0].identity.run_id == identity.run_id
+    assert after.evaluations[0].identity.output_dir == identity.output_dir
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
@@ -382,7 +415,7 @@ def test_relaunch_changed_request_concurrency_and_task_evidence_preserves_identi
     StepRunner().run(build_evaluation_steps(before, execute))
     executed.clear()
 
-    model = replace(model, evaluation_num_concurrent=64)
+    model = replace(model, evaluation_num_concurrent=64, evaluation_request_timeout=21600)
     tuned = replace(model.serve, max_num_batched_tokens=8192, max_num_seqs=128, gpu_memory_utilization=0.9)
     config.write_text("evaluations:\n  custom:\n    benchmark: gsm8k\n    run:\n      concurrency: 16\n")
     bounded = load_evaluations(config)[0]
@@ -484,6 +517,24 @@ def _pipeline_spec(tmp_path):
         cache_key="caller-owned-immutable-artifact",
         version="2026.10.19",
     )
+
+
+@pytest.mark.parametrize("request_timeout", [1800, 21600])
+def test_relaunch_matches_records_without_a_request_deadline(tmp_path, request_timeout):
+    spec = replace(_pipeline_spec(tmp_path), cache_key=None, run_id="legacy-record")
+    before = prepare_evaluation_batch(spec)
+    identity = replace(before.evaluations[0].identity, output_dir=str(tmp_path / "saved-results"))
+    record_path = Path(_record(before, identity, RunStatus.INFRA_FAILED, "timed out", {}, {}, {}))
+    record = json.loads(record_path.read_text())
+    record["model"]["config"].pop("evaluation_request_timeout")
+    record_path.write_text(json.dumps(record))
+
+    after = prepare_evaluation_batch(
+        replace(spec, model=replace(spec.model, evaluation_request_timeout=request_timeout))
+    )
+
+    assert after.evaluations[0].identity.run_id == identity.run_id
+    assert after.evaluations[0].identity.output_dir == identity.output_dir
 
 
 @pytest.mark.parametrize(
