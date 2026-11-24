@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Source: Forge marin-forge-passes, lib/forge/src/forge/stages/solve_review.py (behaviour and prompts).
-
 """The solve-review: a machine-less agent that reads recorded solver trials and reports the task defects they show.
 
 One implementation over any set of trials: a review names its prompts and its report tool, so a later kind (the
