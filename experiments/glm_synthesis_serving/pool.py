@@ -219,11 +219,12 @@ def coordinator_resources() -> ResourceConfig:
     every request streams through this process's dashboard proxy into the broker
     actor before reaching an engine. Size it for the full fleet's SSE throughput —
     2 CPUs starved the lease renewals under fleet load (transient "No endpoint")
-    and would cap aggregate throughput.
+    and 16 CPUs still throttled a 32-engine pool to ~1/8 of solo throughput
+    (TTFT grew to minutes at 768 concurrent).
     """
     return ResourceConfig.with_cpu(
-        cpu=16.0,
-        ram="64g",
+        cpu=32.0,
+        ram="96g",
         disk="40g",
         preemptible=False,
         target_cluster=CLUSTER,

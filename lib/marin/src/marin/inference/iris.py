@@ -112,7 +112,12 @@ _METADATA_MAX_MODEL_LEN = "max_model_len"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
-_BROKER_ACTOR_MAX_CONCURRENCY = 32
+# Actor method-concurrency for the inference broker. The actor sits on every
+# request submit, worker fetch, and per-chunk stream event for the WHOLE pool, so
+# this cap serializes the fleet's data path; 32 throttled a 32-engine pool to
+# ~1/8 of its engines' solo throughput (TTFT grew to minutes). One method call is
+# a short queue operation, so a large value only widens parallelism.
+_BROKER_ACTOR_MAX_CONCURRENCY = 512
 
 
 class InferenceStartupPhase(StrEnum):
