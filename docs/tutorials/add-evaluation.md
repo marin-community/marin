@@ -131,12 +131,20 @@ def convert_mmlu_redux(row: RawRow, context: ConversionContext) -> TaskSpec:
 
 
 def mmlu_redux_item(task: TaskSpec) -> EvaluationItem:
-    return chat_item(task).model_copy(update={"groups": {"subject": source_evidence(task)["config"]}})
+    return chat_item(task, response_selection="final_only").model_copy(
+        update={"groups": {"subject": source_evidence(task)["config"]}}
+    )
 ```
 
 The item builder maps each task to an `EvaluationItem`. Use `chat_item` alone
 unless the benchmark reports subgroup scores; with `groups`, the reducer adds
 one score per group, such as `subject=anatomy/accuracy`.
+
+Every chat item states which part of the reply is graded. Generation evals
+grade the final answer (`final_only`), so graders never see reasoning and a
+reply cut off mid-reasoning scores as empty. Choose a content-first selection
+only when the benchmark's reference harness requires it, as MATH500, AIME and
+MMLU-Pro do.
 
 ## 4. Grade responses
 

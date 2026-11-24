@@ -1624,7 +1624,15 @@ def convert_ignoring_case(row: RawRow, _context: ConversionContext):
 COLORS = ("colors/0", "colors/1", "colors/2")
 
 
-def publish_colors_corpus(tmp_path, name, *, converter=convert, questions=COLORS, trials=None, item=chat_item):
+def publish_colors_corpus(
+    tmp_path,
+    name,
+    *,
+    converter=convert,
+    questions=COLORS,
+    trials=None,
+    item=partial(chat_item, response_selection="combine"),
+):
     """A colors corpus; trials default to three unseeded greedy trials, which send identical requests."""
     source = tmp_path / (name + "-source")
     source.mkdir()
