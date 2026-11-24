@@ -4,9 +4,12 @@
 """Connect published evaluation corpora to model transports and isolated graders."""
 
 import asyncio
+import functools
 import logging
-from collections.abc import Mapping
+import threading
+from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
+from typing import Any
 
 from iris.cluster.setup_scripts import default_setup_script
 from levanter.compat.hf_checkpoints import load_tokenizer
@@ -159,27 +162,56 @@ def daytona_connection(api_key: str) -> DaytonaConnection:
     return DaytonaConnection(api_key=api_key)
 
 
-def machine_factories(config: EvaluationRunConfig, daytona: DaytonaConnection | None) -> dict[str, MachineFactory]:
-    """Construct the factory of each backend the run selects."""
-    factories: dict[str, MachineFactory] = {}
+class LazyMachineFactories(Mapping[str, MachineFactory]):
+    """Backend factories built on first lookup.
+
+    The engine looks a factory up only for a task that runs in a machine, so a run whose tasks are all
+    graded in process never constructs one. The local backend needs Linux bubblewrap, which the
+    default verifier machine would otherwise demand even for chat and judge evaluations.
+    """
+
+    def __init__(self, builders: Mapping[str, Callable[[], MachineFactory]]):
+        self._builders = dict(builders)
+        self._built: dict[str, MachineFactory] = {}
+        self._lock = threading.Lock()
+
+    def __getitem__(self, backend: str) -> MachineFactory:
+        with self._lock:
+            if backend not in self._built:
+                self._built[backend] = self._builders[backend]()
+            return self._built[backend]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._builders)
+
+    def __len__(self) -> int:
+        return len(self._builders)
+
+
+def machine_factories(config: EvaluationRunConfig, daytona: DaytonaConnection | None) -> LazyMachineFactories:
+    """The factory of each backend the run selects, each constructed when a task first needs it."""
+    builders: dict[str, Callable[[], MachineFactory]] = {}
     for backend in machine_backends(config):
         match backend:
             case Backend.LOCAL:
-                factories[backend] = LocalMachineFactory()
+                builders[backend] = LocalMachineFactory
             case Backend.DOCKER:
-                factories[backend] = DockerMachineFactory()
+                builders[backend] = DockerMachineFactory
             case Backend.DAYTONA:
                 if daytona is None:
                     raise ValueError("Daytona machines require an explicit Daytona connection")
-                # The Daytona SDK is optional; marin-core's daytona extra installs it.
-                from shellbox.backends.daytona.machine import DaytonaImageBuild, DaytonaMachineFactory  # noqa: PLC0415
-
-                factories[backend] = DaytonaMachineFactory(
-                    client_factory=daytona.client_factory(), image_build=DaytonaImageBuild(config.image_build)
-                )
+                # Validate the account now; only the factory waits for a task that uses it.
+                builders[backend] = functools.partial(daytona_machine_factory, config, daytona.client_factory())
             case _:
                 raise ValueError(f"Evaluation workers have no factory for {backend!r}")
-    return factories
+    return LazyMachineFactories(builders)
+
+
+def daytona_machine_factory(config: EvaluationRunConfig, client_factory: Callable[[], Any]) -> MachineFactory:
+    # The Daytona SDK is optional; marin-core's daytona extra installs it.
+    from shellbox.backends.daytona.machine import DaytonaImageBuild, DaytonaMachineFactory  # noqa: PLC0415
+
+    return DaytonaMachineFactory(client_factory=client_factory, image_build=DaytonaImageBuild(config.image_build))
 
 
 def model_client(endpoint: str, api_key: str, timeout: float | None) -> AsyncOpenAI:
