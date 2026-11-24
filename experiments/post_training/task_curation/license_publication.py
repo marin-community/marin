@@ -418,7 +418,7 @@ def check_publication(
             }
     if result.verdict is LicenseCheckVerdict.FAIL and lineage is not None:
         record = lineage.get(source_id)
-        if record is not None and (record.get("dataset_id"), record.get("revision")) == (dataset_id, revision):
+        if record is not None and (record.get("dataset_id"), record.get("revision")) == (result.dataset_id, result.revision):
             identifier = lineage_folder_identifier(record)
             return {
                 **evidence,
