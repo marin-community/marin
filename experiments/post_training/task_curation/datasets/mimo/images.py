@@ -35,7 +35,6 @@ import json
 import logging
 import os
 import shutil
-import stat as stat_module
 import subprocess
 import tempfile
 import time
@@ -233,10 +232,14 @@ def prepare_run_devices(rootfs: Path) -> list[Path]:
             continue
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            os.mknod(target, mode=0o666 | stat_module.S_IFCHR, dev=os.makedev(major, minor))
+            subprocess.run(
+                ["mknod", str(target), "c", str(major), str(minor)],
+                capture_output=True,
+                check=True,
+            )
             os.chmod(target, 0o666)
             created.append(target)
-        except OSError as error:
+        except (OSError, subprocess.SubprocessError) as error:
             logger.warning("could not create %s inside the rootfs (%s); the RUN step may fail", path, error)
     return created
 
