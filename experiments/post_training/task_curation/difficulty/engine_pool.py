@@ -219,6 +219,8 @@ def run_pool(solver: Solver, registry: str) -> None:
         if ready.effective_serving is None or ready.effective_serving.max_model_len < 65536:
             raise ValueError("Solver pool did not confirm the protocol context window")
         measurement = asyncio.run(warm_throughput(ready.model.endpoint.base_url, SOLVER_MODELS[solver], shape.gpu_count))
+        engine = asdict(config.engine)
+        engine["extra_metric_families"] = sorted(engine["extra_metric_families"])
         receipt = {
             "solver": solver,
             "model": SOLVER_MODELS[solver],
@@ -230,7 +232,7 @@ def run_pool(solver: Solver, registry: str) -> None:
             "warm_throughput": measurement,
             "effective_serving": asdict(ready.effective_serving),
             "requested_config": asdict(pool_model(solver)),
-            "engine": asdict(config.engine),
+            "engine": engine,
             "vllm_gpu_release": asdict(VLLM_GPU_RELEASE),
             "ready_at": datetime.now(UTC).isoformat(),
         }
