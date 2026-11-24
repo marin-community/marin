@@ -309,7 +309,10 @@ For a single immutable Parquet task selection, the SkyRL driver caches validated
 lengths for 14 days in the checkpoint storage backend's temporary bucket. The key includes the
 selection's Parquet and manifest bytes, the loaded fast tokenizer and template, task runtime settings,
 and the installed preparation code. Each launch applies its own prompt limit to the cached lengths.
-A cache miss runs the original selection validation before publishing prepared rows.
+A cache miss validates the selection, writes batches of prepared rows and lengths to driver-local disk,
+and publishes the Parquet object when complete. A hit decodes the object in batches to driver-local
+disk. The driver memory-maps the prepared rows during training, so its local disk needs space for
+the uncompressed dataset as well as the staged Parquet file.
 
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
 training entrypoint first waits up to 30 seconds for remote node loggers, then
