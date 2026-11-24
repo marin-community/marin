@@ -189,17 +189,24 @@ async def _one_request(
         logger.warning("request failed: %s", str(error)[:200])
 
 
-async def run_load(base_url: str, concurrency: int, duration_seconds: float, reasoning_effort: str) -> RequestStats:
+async def run_load(
+    base_url: str,
+    concurrency: int,
+    duration_seconds: float,
+    reasoning_effort: str,
+    api_key: str | None = None,
+) -> RequestStats:
     """Drive `concurrency` conversion-shaped streaming requests for `duration_seconds`."""
     stats = RequestStats()
     rng = random.Random(1234)
     cache_salt = f"bench-{int(time.time())}"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
     limits = httpx.Limits(max_connections=concurrency + 8, max_keepalive_connections=concurrency + 8)
     stop_at = time.monotonic() + duration_seconds
     in_flight: set[asyncio.Task] = set()
     request_index = 0
 
-    async with httpx.AsyncClient(limits=limits) as client:
+    async with httpx.AsyncClient(limits=limits, headers=headers) as client:
         while time.monotonic() < stop_at or in_flight:
             while len(in_flight) < concurrency and time.monotonic() < stop_at:
                 body = _request_body(rng, cache_salt, reasoning_effort, request_index)
@@ -232,6 +239,16 @@ def resolve_base_url(arg: str | None) -> str:
     return normalize_base_url(client.resolve_endpoint(pool.ENDPOINT_NAME))
 
 
+def resolve_api_key(arg: str | None) -> str | None:
+    """The --api-key value, or a freshly minted endpoint capability JWT for 'mint'."""
+    if arg != "mint":
+        return arg
+    client = iris_ctx().client
+    if client is None:
+        raise SystemExit("--api-key mint requires an Iris job")
+    return client.mint_endpoint_token(pool.ENDPOINT_NAME).token
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=None, help="OpenAI base URL (default: resolve the pool endpoint).")
@@ -241,19 +258,26 @@ def main() -> None:
     parser.add_argument("--duration", type=float, default=600.0, help="Load duration in seconds.")
     parser.add_argument("--reasoning-effort", default="high", choices=["low", "high", "max"])
     parser.add_argument("--gpus-per-engine", type=int, default=pool.GPUS_PER_ENGINE)
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="Authorization: Bearer value for every request (e.g. the endpoint's capability JWT).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="[warmup-bench] %(message)s")
     base_url = resolve_base_url(args.base_url)
+    api_key = resolve_api_key(args.api_key)
     logger.info(
-        "bench %s concurrency=%d duration=%.0fs effort=%s",
+        "bench %s concurrency=%d duration=%.0fs effort=%s auth=%s",
         base_url,
         args.concurrency,
         args.duration,
         args.reasoning_effort,
+        "bearer-jwt" if api_key else "none",
     )
     started = time.monotonic()
-    stats = asyncio.run(run_load(base_url, args.concurrency, args.duration, args.reasoning_effort))
+    stats = asyncio.run(run_load(base_url, args.concurrency, args.duration, args.reasoning_effort, api_key))
     elapsed = time.monotonic() - started
     summary = stats.summary(elapsed, args.gpus_per_engine)
     print(json.dumps(summary, indent=2))
