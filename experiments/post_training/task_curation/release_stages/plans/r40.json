@@ -1,5 +1,5 @@
 {
-  "artifact_version": "2026.11.24.7",
+  "artifact_version": "2026.11.24.8",
   "catalog_root": "s3://marin-us-east-02a/marin/rl-data/catalog/production",
   "catalog_target_load_id": "54405be9b4db4c2d9828549469abe759",
   "curriculum_target_load_id": "cbe58f5c9e2142b294986479c6f457c2",
@@ -11,7 +11,7 @@
   "expected_population_tasks": 4363214,
   "expected_prior_sources": 332,
   "expected_selected_panels": 227,
-  "expected_source_count": 332,
+  "expected_source_count": 334,
   "gpu_runtime": null,
   "kind": "atlas-release-plan",
   "measured": {
@@ -184,6 +184,7 @@
     "Marin:thoughtcrime": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/41f22e32b9744169bcd5/2026.11.17.1",
     "Nemotron:Nemotron-Cascade-2-RL-data/MOPD": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/retained-census/cascade/2026.11.16.1/d941139928857a09768b/population",
     "Nemotron:Nemotron-Cascade-2-RL-data/multi-domain-RL": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/retained-census/cascade/2026.11.16.1/ee15b18affec7822f712/population",
+    "Nemotron:Nemotron-RL-instruction_following-structured_outputs": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemo-gym-remaining/2026.11.24.1/structured-release-sample-v1/census/population",
     "Nemotron:nemotron_if": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/bfb072d29ffee7b027a7/population",
     "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/04b49f982cc79a1d3b01/population",
     "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/c82c21c77bf0522eca2c/population",
@@ -390,6 +391,7 @@
     "TaskTrove:tasktrove-taco-built-image": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.15.222-taco-built-final-pin-population/084a8cc32013b7b78c04/population",
     "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.15.217-unitsyn-large-rebuilt-final-pin-population/228cc082e8561db27269/population",
     "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.15.208-large-pair-final-pin-populations/6416837472d708f54128/population",
+    "TerminalWorld:TerminalWorld": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/litecoder-terminalworld/2026.11.22.1/terminalworld-seven-release-sample-v1/census/population",
     "agentica-org:deepscaler": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/3a8094974e3e686887ea/population",
     "di-zhang-fdu:aime_1983_2024": "s3://marin-us-east-02a/marin/rl-data/atlas/pending-burndown/20261123-lexical-v1/retained-census/f822865284f71d809902/population",
     "marin-community:mcp-atlas-easy": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/mcp-atlas/2026.11.23.1/easy-eval-private-publication-census-v1/final-census/population",
@@ -418,7 +420,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "r40",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v7",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/r40-cut-v8",
   "removed_sources": [
     "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
     "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
@@ -439,7 +441,7 @@
   },
   "slice_output_root": "",
   "snapshot_id": "assembly-r40-cut-v1",
-  "source_revision": "f1cac216a2c96dc29f91611c67b4595676c1134b",
+  "source_revision": "e370e1e9e2bfea72a1a3610632cbd7781be54785",
   "strict_audit_local": false,
   "targets": [
     "Lego-X:Terminal-Lego-15k"
