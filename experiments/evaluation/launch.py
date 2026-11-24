@@ -119,7 +119,8 @@ _EVALCHEMY_THROUGHPUT_FIELDS = frozenset({"num_concurrent"})
 logger = logging.getLogger(__name__)
 
 
-def _model_identity(model: ModelRef) -> dict:
+def model_identity(model: ModelRef) -> dict:
+    """The model fields that define a run: everything recorded except throughput-only serving settings."""
     return model.model_copy(update={"source_config": model.source_config or model.config}).model_dump(
         mode="json",
         exclude={
@@ -130,7 +131,8 @@ def _model_identity(model: ModelRef) -> dict:
     )
 
 
-def _evaluation_identity(evaluation: EvalRef) -> dict:
+def evaluation_identity(evaluation: EvalRef) -> dict:
+    """The evaluation fields that define a run: everything recorded except throughput-only settings."""
     excluded = {"tasks": {"__all__": {"benchmark"}}}
     if evaluation.evalchemy is not None:
         excluded.update({"source_digest": True, "evalchemy": _EVALCHEMY_THROUGHPUT_FIELDS})
@@ -141,7 +143,7 @@ def _evaluation_identity(evaluation: EvalRef) -> dict:
 
 
 def _same_evaluation(prior: EvalRef, current: EvalRef) -> bool:
-    before, after = _evaluation_identity(prior), _evaluation_identity(current)
+    before, after = evaluation_identity(prior), evaluation_identity(current)
     if (
         current.evalchemy is not None
         and current.source_digest is not None
@@ -535,8 +537,8 @@ def build_evaluation_batch(
         cache_key = json.dumps(
             {
                 "pipeline": spec.cache_key or group_id,
-                "model": _model_identity(model_ref),
-                "evaluation": _evaluation_identity(definition.record_ref),
+                "model": model_identity(model_ref),
+                "evaluation": evaluation_identity(definition.record_ref),
                 **(
                     {"runtime": definition.cache_runtime_descriptor}
                     if definition.cache_runtime_descriptor is not None
@@ -607,6 +609,17 @@ def build_evaluation_steps(batch: EvaluationBatch, execute: EvaluationStep) -> t
     )
 
 
+def batch_model_ref(batch: EvaluationBatch) -> ModelRef:
+    """The model reference a batch's records carry."""
+    return ModelRef(
+        name=batch.model.name,
+        location=batch.model.location,
+        backend=batch.model.serve.backend.value,
+        config=ModelConfigRef.model_validate(asdict(batch.model)),
+        source_config=batch.source_model_config,
+    )
+
+
 def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
     """Resolve one launch before an Iris client is opened."""
     provenance = LaunchProvenance(
@@ -618,15 +631,7 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
         return batch
     if batch.records_prefix.startswith("s3://"):
         configure_coreweave_s3()
-    model = _model_identity(
-        ModelRef(
-            name=batch.model.name,
-            location=batch.model.location,
-            backend=batch.model.serve.backend.value,
-            config=ModelConfigRef.model_validate(asdict(batch.model)),
-            source_config=batch.source_model_config,
-        )
-    )
+    model = model_identity(batch_model_ref(batch))
     judge = None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model))
     records = sorted(
         (
@@ -634,7 +639,7 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             for record in list_records(batch.records_prefix)
             if record.group_id == batch.group_id
             and record.version == batch.version
-            and _model_identity(record.model) == model
+            and model_identity(record.model) == model
             and (record.judge.model.source_config or record.judge.model.config if record.judge is not None else None)
             == judge
         ),

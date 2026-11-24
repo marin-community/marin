@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Show and launch eval policies.
+"""Show, launch and check eval policies.
 
 ``uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20-trial``.
 """
@@ -16,12 +16,22 @@ from iris.cli.connect import open_iris_client
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.runner import EvaluationBatch
 from rigging.config_discovery import find_project_root
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.cli import require_coreweave_credentials
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, launch_group, prepare_evaluation_batch
 from experiments.evaluation.policies import POLICIES
 from experiments.evaluation.policy.launch import evaluation_dataset, launch_specs
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
+from experiments.evaluation.policy.runs import (
+    ExpectedRun,
+    RunCheck,
+    RunState,
+    check_run,
+    expected_record,
+    expected_runs,
+    find_record,
+)
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
 
 logger = logging.getLogger(__name__)
@@ -81,16 +91,41 @@ def policy_rows(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[_Row, .
     return tuple(_row(item) for item in resolve(policy, candidate))
 
 
-def _print_table(rows: tuple[_Row, ...]) -> None:
-    cells = [_COLUMNS, *((*vars(row).values(),) for row in rows)]
-    widths = [max(len(row[index]) for row in cells) for index in range(len(_COLUMNS))]
+def _print_table(columns: tuple[str, ...], rows: tuple[tuple[str, ...], ...]) -> None:
+    cells = [columns, *rows]
+    widths = [max(len(row[index]) for row in cells) for index in range(len(columns))]
     for row in cells:
         click.echo("  ".join(value.ljust(width) for value, width in zip(row, widths, strict=True)).rstrip())
 
 
+def _run_summary(check: RunCheck) -> str:
+    """State, primary score, items scored, commit, and the first problem of a checked run."""
+    record = check.record
+    parts = [check.state.value]
+    for task in record.evaluation.tasks:
+        if task.benchmark is not None and (
+            (score := record.metrics.get(task.name, {}).get(task.benchmark.primary_metric)) is not None
+        ):
+            parts.append(f"{task.benchmark.primary_metric}={score:.3f}")
+    if record.coverage:
+        scored = sum(coverage.n_scored for coverage in record.coverage.values())
+        total = sum(coverage.n_benchmark or 0 for coverage in record.coverage.values())
+        parts.append(f"{scored}/{total}")
+    parts.append(f"@{record.provenance.git_sha[:7]}")
+    if check.problems:
+        more = f" (+{len(check.problems) - 1})" if len(check.problems) > 1 else ""
+        parts.append(f"[{check.problems[0]}{more}]")
+    return " ".join(parts)
+
+
+def _expected_summary(run: ExpectedRun) -> str:
+    record = expected_record(run)
+    return "not run" if record is None else _run_summary(check_run(record, run))
+
+
 @click.group()
 def cli() -> None:
-    """Show and launch eval policies."""
+    """Show, launch and check eval policies."""
 
 
 def _candidate(policy: EvalPolicy, name: str) -> PolicyCandidate:
@@ -151,7 +186,7 @@ def show(version: str, candidate_name: str | None) -> None:
             f"\n{policy.version}  candidate {name} ({model.location}@{model.revision})  "
             f"max_context={candidate.max_context}  served max_model_len={model.serve.max_model_len}"
         )
-        _print_table(policy_rows(policy, candidate))
+        _print_table(_COLUMNS, tuple(tuple(vars(row).values()) for row in policy_rows(policy, candidate)))
         for exclusion in policy.exclusions:
             if exclusion.candidate == candidate:
                 click.echo(f"excluded: {exclusion.evaluation.name} ({exclusion.reason})")
@@ -219,6 +254,62 @@ def launch(
         for batch in batches:
             group = launch_group(batch, client)
             click.echo(f"submitted {group.group_id}  job {group.job.job_id}  records {group.records_prefix}")
+
+
+@cli.command()
+@click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
+@click.option("--candidate", "candidate_name", help="One candidate; default all.")
+@click.option("--limit", type=click.IntRange(min=1), default=20, show_default=True, help="Item limit of smoke runs.")
+def status(version: str, candidate_name: str | None, limit: int) -> None:
+    """Print each evaluation's full and smoke run, found where a launch from this checkout puts them.
+
+    Runs launched before deterministic run IDs, or with other inputs, are not found; check those with verify.
+    """
+    policy = POLICIES[version]
+    candidates = policy.candidates if candidate_name is None else (_candidate(policy, candidate_name),)
+    configure_coreweave_s3()
+    for candidate in candidates:
+        smoke = {run.name: run for run in expected_runs(policy, candidate, limit=limit)}
+        rows = tuple(
+            (run.name, _expected_summary(run), _expected_summary(smoke[run.name]))
+            for run in expected_runs(policy, candidate, limit=None)
+        )
+        click.echo(f"\n{policy.version}  candidate {candidate.name}")
+        _print_table(("evaluation", "full run", f"smoke run (limit {limit})"), rows)
+
+
+@cli.command()
+@click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
+@click.argument("run_ids", nargs=-1, required=True)
+def verify(version: str, run_ids: tuple[str, ...]) -> None:
+    """Check runs against the policy as this checkout resolves it, and exit non-zero if any is invalid."""
+    policy = POLICIES[version]
+    candidates = {candidate.model.location: candidate for candidate in policy.candidates}
+    configure_coreweave_s3()
+    invalid = False
+    for run_id in run_ids:
+        record = find_record(run_id)
+        candidate = candidates.get(record.model.location)
+        if candidate is None or record.evaluation.curated is None:
+            raise click.ClickException(
+                f"{run_id}: {record.model.location} / {record.evaluation.name} is not a curated {version} run"
+            )
+        try:
+            (expected,) = expected_runs(
+                policy,
+                candidate,
+                limit=record.evaluation.curated.settings.source_limit,
+                evaluations={record.evaluation.name},
+            )
+        except ValueError as error:
+            raise click.ClickException(f"{run_id}: {error}") from error
+        check = check_run(record, expected)
+        click.echo(f"{run_id}  {_run_summary(check)}")
+        for problem in check.problems:
+            click.echo(f"  {problem}")
+        invalid |= check.state is RunState.INVALID
+    if invalid:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

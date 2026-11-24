@@ -98,7 +98,8 @@ def launch_specs(
 
     ``evaluations`` narrows the launch to those names; ``limit`` caps items per task for a smoke run;
     ``federated_cluster`` overrides the fleet's GPU cluster.
-    Unset seeds stay unset so each protocol decides them.
+    Unset seeds stay unset so each protocol decides them. Run IDs derive from the policy version and
+    each run's identity, so a relaunch finds finished runs at the same paths and reruns failed ones.
     """
     resolved = resolve(policy, candidate)
     if evaluations is not None:
@@ -126,6 +127,7 @@ def launch_specs(
                 priority_band=priority_band,
                 default_seed=None,
                 version=policy.version,
+                cache_key=policy.version,
                 description=f"{policy.version} {'smoke' if limit is not None else 'full'} run of {candidate.name}",
             )
         )

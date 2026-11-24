@@ -12,6 +12,23 @@ the same Harbor packages, agents and limits. [`policy.py`](policy.py) declares i
 uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20-trial
 ```
 
+## Running
+
+```bash
+uv run python -m experiments.evaluation.policy.cli launch --policy marin-2026-11-20-trial \
+  --candidate qwen3.6-35b-a3b --priority batch [--limit 20] [--dry-run]
+uv run python -m experiments.evaluation.policy.cli status --policy marin-2026-11-20-trial
+uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11-20-trial RUN_ID...
+```
+
+All three resolve the agentic evaluations' Daytona task machines, so they need `DAYTONA_TARGET`,
+and CoreWeave credentials to read or write records. Run IDs derive from the policy version and
+each run's inputs, so re-running a launch skips finished runs and reruns failed ones. `status`
+reads each evaluation's full and smoke run from those paths. `verify` checks any run, including
+one launched another way, and names each field that differs from what this checkout would run; a
+run whose inputs differ and that ran at another commit is reported as differing from this
+checkout, not as invalid.
+
 ## Candidates
 
 | Candidate | Revision | Served window | Native window |
