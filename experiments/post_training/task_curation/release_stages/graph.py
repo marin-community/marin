@@ -944,15 +944,18 @@ def _stage_step(
     identity: Callable[[], dict],
     inputs_type: type,
     resources: Callable[[], ResourceConfig] | None = None,
-    receipt_key: str = "receipt",
+    receipt_key: str | None = None,
     name_suffix: str = "",
 ) -> ArtifactStep[StageReceipt]:
     """One stage as a lazy step: typed inputs in, sealed :class:`StageReceipt` out.
 
     ``node`` is the graph key (unique, used for the graph-receipt document);
-    ``spec.stage`` is the executor key (shared by phase variants).
+    ``spec.stage`` is the executor key (shared by phase variants). ``receipt_key``
+    overrides the spec's sealed-reference key; it defaults to the spec's own so a
+    custom spec key cannot drift out of the cluster dispatch.
     """
     graph_receipt_root = f"{plan.release_root}/graph"
+    receipt_key = spec.receipt_key if receipt_key is None else receipt_key
     dispatch_resources = resources() if resources is not None else None
 
     def build_config(ctx: StepContext) -> dict:
@@ -979,7 +982,7 @@ def _stage_step(
                 receipt=ArtifactRef(**document["receipt"]),
                 proof=document["proof"],
             )
-        return _stage_receipt(node, _execute_stage(spec.stage, config), spec.receipt_key)
+        return _stage_receipt(node, _execute_stage(spec.stage, config), receipt_key)
 
     step = ArtifactStep(
         name=f"atlas-release-{plan.release_id}-{node}",

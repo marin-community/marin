@@ -502,6 +502,51 @@ def test_execute_stage_node_seals_the_graph_receipt(tmp_path, monkeypatch):
     assert document["kind"] == GRAPH_RECEIPT_KIND and document["node"] == "fixture_stage"
     assert document["receipt"]["uri"].endswith("receipt.json")
 
+    def _nested_executor(_config: dict) -> dict:
+        return {
+            "release_id": "testrelease",
+            "documents": {"identity_receipt": {"uri": str(tmp_path / "identity.json"), "sha256": "d" * 64}},
+        }
+
+    monkeypatch.setitem(release_graph_module._STAGE_EXECUTORS, "fixture_stage", _nested_executor)
+    _execute_stage_node("fixture_identity", "fixture_stage", "documents.identity_receipt", config)
+    document = json.loads(StoragePath(f"{release_root}/graph/fixture_identity.json").read_text())
+    assert document["receipt"]["uri"].endswith("identity.json")
+
+
+def test_cluster_dispatch_extracts_the_spec_receipt_key(tmp_path, monkeypatch):
+    """The cluster dispatch reads the spec's sealed reference, not the default key.
+
+    Regression: the dispatch defaulted to 'receipt' while the identity-backend
+    compose spec seals its receipt under 'documents.identity_receipt', so the
+    stage's own graph receipt could never be read back.
+    """
+    release_root = str(tmp_path / "release")
+    plan = fixture_plan(release_root=release_root)
+    built = release_graph(plan)
+    spec = release_graph_module._STAGE_SPECS["identity_backend_compose"]
+    receipt_ref = {
+        "uri": f"{release_root}/identity-backend/identity-composition-receipt.json",
+        "sha256": "a" * 64,
+    }
+
+    def fake_executor(_config: dict) -> dict:
+        return {"release_id": plan.release_id, "documents": {"identity_receipt": receipt_ref}}
+
+    captured = {}
+
+    def fake_remote(callable_, *, resources):
+        captured["dispatch"] = callable_
+        return lambda config: callable_(config)
+
+    monkeypatch.setitem(release_graph_module._STAGE_EXECUTORS, spec.stage, fake_executor)
+    monkeypatch.setattr(release_graph_module, "remote", fake_remote)
+    receipt = built.stages["identity_backend_compose"].run({"graph_receipt_root": f"{release_root}/graph"})
+    dispatch = captured["dispatch"]
+    assert dispatch.func is release_graph_module._execute_stage_node
+    assert dispatch.args == ("identity_backend_compose", spec.stage, "documents.identity_receipt")
+    assert receipt.receipt == ArtifactRef(**receipt_ref)
+
 
 def test_typed_inputs_coerce_reference_fields():
     config = {
