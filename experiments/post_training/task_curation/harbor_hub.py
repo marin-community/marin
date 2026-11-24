@@ -120,8 +120,8 @@ def _release_archives(session: requests.Session, release: str) -> dict[str, _Tas
 
 
 def _task_content_hash(stream: BinaryIO) -> str:
-    # Pinned Hub references use the registry's wire format: Packager.compute_content_hash
-    # hashes sorted relative paths and file digests, independent of tar metadata.
+    # The packager filters the source directory before creating a Hub archive.
+    # Hash every archive file so an extra file cannot reach the importer unverified.
     files: dict[str, str] = {}
     with tarfile.open(fileobj=stream, mode="r|gz") as archive:
         for member in archive:
@@ -156,7 +156,7 @@ def _download_task(session: requests.Session, ref: str, task: _TaskArchive, outp
                 archive.write(chunk)
         archive.seek(0)
         if _task_content_hash(archive) != task.content_hash:
-            raise ValueError(f"Downloaded task differs from the pinned package: {ref}")
+            raise ValueError(f"Archive files do not match the pinned task digest: {ref}")
         archive.seek(0)
         pending = output / f"{identity}.partial"
         with pending.open("wb", auto_mkdir=True) as target:

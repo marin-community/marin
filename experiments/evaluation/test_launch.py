@@ -15,7 +15,14 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from evalrecords.records import CuratedAgentRef, RunStatus, TaskEvidence, TaskMachineBackend, TaskMachineSettings
+from evalrecords.records import (
+    CuratedAgentRef,
+    EvaluationSelection,
+    RunStatus,
+    TaskEvidence,
+    TaskMachineBackend,
+    TaskMachineSettings,
+)
 from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
@@ -448,8 +455,20 @@ def _pipeline_spec(tmp_path):
     )
 
 
-@pytest.mark.parametrize("uses_harbor_hub", [False, True])
-def test_curated_group_submission_declares_resources_and_source_egress(tmp_path, monkeypatch, uses_harbor_hub):
+@pytest.mark.parametrize(
+    ("agent_selection", "expected_hosts"),
+    [
+        (None, set()),
+        (EvaluationSelection(benchmark="terminal-bench-2.1"), {REGISTRY_HOST}),
+        (
+            EvaluationSelection(benchmark="ot-tblite", protocol="campaign-2026-09-25"),
+            {"codeload.github.com"},
+        ),
+    ],
+)
+def test_curated_group_submission_declares_resources_and_source_egress(
+    tmp_path, monkeypatch, agent_selection, expected_hosts
+):
     requests = []
 
     def submit(request, **_kwargs):
@@ -462,10 +481,10 @@ def test_curated_group_submission_declares_resources_and_source_egress(tmp_path,
         lambda **_kwargs: SimpleNamespace(launch_job=submit, close=lambda: None),
     )
     spec = _pipeline_spec(tmp_path)
-    if uses_harbor_hub:
+    if agent_selection is not None:
         spec = replace(
             spec,
-            evals=resolve_evaluations("terminal-bench-2.1"),
+            evals=(agent_selection,),
             model=_agent_model(),
             task_machine_backend=TaskMachineBackend.DOCKER,
         )
@@ -476,7 +495,7 @@ def test_curated_group_submission_declares_resources_and_source_egress(tmp_path,
     (request,) = requests
     assert request.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED
     assert request.constraints[0].value.string_value == "cw-rno2a"
-    assert {rule.domain for rule in request.egress_allow} == ({REGISTRY_HOST} if uses_harbor_hub else set())
+    assert {rule.domain for rule in request.egress_allow} == expected_hosts
 
 
 @pytest.mark.parametrize("cache_key", [None, "caller-owned-immutable-artifact"])

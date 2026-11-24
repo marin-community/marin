@@ -19,6 +19,7 @@ from experiments.post_training.task_curation.harbor_packages import package_arch
 
 RELEASE_DIGEST = "a" * 64
 RELEASE = f"fixture/tasks@sha256:{RELEASE_DIGEST}"
+# Computed with the vendored Harbor Packager on the two original fixture files.
 TASK_DIGEST = "7c3c451d09512efd56ecfc6acfb5c89b3d108a934c643440c37c116f2f4f7935"
 TASK_NAMES = ("one", "two")
 REFS = tuple(f"fixture/{name}@sha256:{TASK_DIGEST}" for name in TASK_NAMES)
@@ -28,6 +29,7 @@ REFS = tuple(f"fixture/{name}@sha256:{TASK_DIGEST}" for name in TASK_NAMES)
 class RegistryState:
     archive: bytes
     modified_archive: bytes
+    archive_with_extra_file: bytes
     requests: Counter[str] = field(default_factory=Counter)
     fail_once: set[str] = field(default_factory=set)
 
@@ -84,8 +86,12 @@ def registry(tmp_path, monkeypatch) -> Iterator[RegistryState]:
     instruction = package / "instruction.md"
     instruction.write_text("Solve the task.\n")
     archive = package_archive(package)
+    ignored = package / "tests/extra.pyc"
+    ignored.write_bytes(b"unexpected file")
+    archive_with_extra_file = package_archive(package)
+    ignored.unlink()
     instruction.write_text("Modified instruction")
-    state = RegistryState(archive, package_archive(package))
+    state = RegistryState(archive, package_archive(package), archive_with_extra_file)
 
     with ThreadingHTTPServer(("127.0.0.1", 0), registry_handler(state)) as server:
         monkeypatch.setattr(harbor_hub, "REGISTRY_URL", f"http://127.0.0.1:{server.server_port}")
@@ -116,6 +122,14 @@ def test_acquisition_preserves_native_archives_and_resumes_downloads(tmp_path, r
 
 def test_acquisition_rejects_modified_package_without_publishing_archive(tmp_path, registry):
     registry.archive = registry.modified_archive
+    output = tmp_path / "output"
+    with pytest.raises(ValueError):
+        harbor_hub.acquire_release(RELEASE, StoragePath(str(output)), REFS[:1])
+    assert not output.exists()
+
+
+def test_acquisition_rejects_archive_with_an_unverified_file(tmp_path, registry):
+    registry.archive = registry.archive_with_extra_file
     output = tmp_path / "output"
     with pytest.raises(ValueError):
         harbor_hub.acquire_release(RELEASE, StoragePath(str(output)), REFS[:1])

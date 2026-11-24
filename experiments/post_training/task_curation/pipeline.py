@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, field, replace
 from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import click
 import requests
@@ -81,7 +82,7 @@ from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIME
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
-from experiments.post_training.task_curation.harbor_hub import acquire_release
+from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST, acquire_release
 from experiments.post_training.task_curation.harbor_packages import (
     PACKAGE_ARCHIVE_REVISION,
     PACKAGE_ARCHIVES,
@@ -696,6 +697,18 @@ def download_identity(source: RecipeSource) -> dict[str, Any]:
             **({"packages": sorted(source.packages)} if source.packages is not None else {}),
         }
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
+
+
+def download_hosts(recipe: CurationRecipe) -> tuple[str, ...]:
+    """Hosts to grant in addition to Iris's default Hugging Face access."""
+    hosts: set[str] = set()
+    for source in (recipe.source, *recipe.inputs.values()):
+        if isinstance(source, HarborHubSource):
+            hosts.add(REGISTRY_HOST)
+        elif isinstance(source, UrlSource | HarborArchiveSource):
+            if host := urlsplit(source.url).hostname:
+                hosts.add(host)
+    return tuple(sorted(hosts))
 
 
 def pipeline_identity(
