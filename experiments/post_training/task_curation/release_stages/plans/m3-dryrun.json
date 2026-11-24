@@ -7,7 +7,7 @@
   "expected_browse_source_count": 223,
   "expected_contract_count": 4,
   "expected_contract_tasks": 51879,
-  "expected_panels": 233,
+  "expected_panels": 228,
   "expected_population_tasks": 4363214,
   "expected_prior_sources": 332,
   "expected_selected_panels": 227,
@@ -29,8 +29,8 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v22/backend-validation/backend-survey.json"
     },
     "backend_validation_receipt": {
-      "sha256": "40109fc9970a14aa512f22b78cf6d572954fbf0278d8e191dcad44bf9c69e95e",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v9/backend-validation/backend-validation-receipt.json"
+      "sha256": "c19d42eaecd22ee186230d9c72a5acbb86f4954dd17d00fab54353a6b4d2f8cb",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v23/backend-validation/backend-validation-receipt.json"
     },
     "exposure_input_check": null,
     "fresh_qc_index": {
@@ -412,13 +412,18 @@
   "prior_curriculum_load_id": "55555555555555555555555555555555",
   "prior_snapshot_id": "assembly-r39-admissions-20261123-v2",
   "qc_exclusions": [
-    "di-zhang-fdu:aime_1983_2024"
+    "di-zhang-fdu:aime_1983_2024",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit"
   ],
   "rebound_source": "",
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "m3-dryrun",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v22",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v23",
   "scan_regions": {
     "us-east-02a": "s3://marin-us-east-02a/marin/rl-data/atlas/"
   },
