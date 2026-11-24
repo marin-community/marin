@@ -64,6 +64,7 @@ logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
 # this is only a convenience snapshot, capped because vLLM logs can be large.
 _NATIVE_LOG_TAIL_LINES = 1000
+_HEALTH_TIMEOUT_SECONDS = 5
 _DEFAULT_VLLM_PORT = 8000
 _VLLM_EAGER_ACKNOWLEDGEMENT = "--i-know-i-am-making-vllm-slow"
 _VLLM_EAGER_GUIDE = "experiments/evaluation/serve/models/README.md"
@@ -1026,6 +1027,12 @@ class VllmEnvironment:
             self.router.check_alive()
         return_code = self.vllm_server.process.poll()
         if return_code is None:
+            if self.model_id is not None:
+                # EngineCore can die while the HTTP process keeps accepting
+                # requests. Fail the Iris task so its retry replaces the engine.
+                health_url = self.worker_server_url.removesuffix(OPENAI_API_SUFFIX) + "/health"
+                response = requests.get(health_url, timeout=_HEALTH_TIMEOUT_SECONDS)
+                response.raise_for_status()
             return
         if self.vllm_server.log_pump is not None:
             self.vllm_server.log_pump.join(timeout=5)

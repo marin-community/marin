@@ -19,6 +19,7 @@ from pathlib import Path
 
 import marin.inference.vllm_server as vllm_server
 import pytest
+import requests
 from marin.inference.config import VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import (
@@ -520,6 +521,19 @@ def test_serves_when_startup_succeeds():
     with _environment(FakeVllmLauncher("serve")) as environment:
         _wait_until_ready(environment)
         assert environment.model_id == "fake-model"
+
+
+def test_environment_detects_failed_engine_while_http_process_lives(tmp_path):
+    status = tmp_path / "health-status"
+    status.write_text("200")
+    with _environment(FakeVllmLauncher("health-file", str(status))) as environment:
+        _wait_until_ready(environment)
+        environment.check_alive()
+        status.write_text("503")
+        with pytest.raises(requests.HTTPError) as error:
+            environment.check_alive()
+        assert error.value.response.status_code == 503
+        assert environment.vllm_server.process.poll() is None
 
 
 def test_native_launch_forwards_api_key_without_logging_it(tmp_path, caplog):

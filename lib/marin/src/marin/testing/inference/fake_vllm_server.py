@@ -12,6 +12,7 @@ Modes:
   exit                           Exit successfully without becoming ready.
   record-args <path>             Record argv, then answer /v1/models.
   record-engine-timeout <path>   Record the engine timeout env, then answer /v1/models.
+  health-file <path>             Serve normally; read /health status from this file.
 """
 
 import argparse
@@ -49,7 +50,7 @@ def _record_start(counter: str) -> int:
     return n
 
 
-def _serve() -> None:
+def _serve(health_status: Path | None = None) -> None:
     port = int(sys.argv[sys.argv.index("--port") + 1])
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--data-parallel-size", "--data_parallel_size", "-dp", type=int, default=1)
@@ -57,6 +58,10 @@ def _serve() -> None:
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            if self.path == "/health" and health_status is not None:
+                self.send_response(int(health_status.read_text()))
+                self.end_headers()
+                return
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'{"data": [{"id": "fake-model"}]}')
@@ -85,6 +90,8 @@ def main() -> None:
     mode = sys.argv[1]
     if mode == "serve":
         _serve()
+    elif mode == "health-file":
+        _serve(Path(sys.argv[2]))
     elif mode == "record-args":
         Path(sys.argv[2]).write_text(json.dumps(sys.argv[3:]))
         _serve()
