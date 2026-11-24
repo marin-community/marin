@@ -94,7 +94,9 @@ def test_normalizer_preserves_auto_row_sharding():
             logits = jax.device_put(values, NamedSharding(mesh, P("data", None)))
             actual = jax.jit(batch_invariant_logsumexp)(logits)
         assert actual.sharding.spec == P("data")
-        np.testing.assert_allclose(actual, jax.nn.logsumexp(jnp.asarray(values), axis=-1), rtol=1e-5)
+        # The default TPU exp and log have a lower accuracy target than the kernel.
+        reference = np.logaddexp.reduce(values.astype(np.float64), axis=-1)
+        np.testing.assert_allclose(actual, reference, rtol=1e-5)
 
 
 def test_logprobs_with_masked_vocabulary_match_reference():
