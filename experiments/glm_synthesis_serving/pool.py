@@ -38,7 +38,7 @@ JOB_PREFIX = "glm-synthesis-serving"
 
 
 def engine() -> VllmEngineConfig:
-    """Use upstream's KPOOL fixes with compilation and graphs enabled."""
+    """Use upstream's KPOOL fixes with CUDA graphs enabled."""
     return VllmEngineConfig(
         launcher=VllmLauncherType.CUDA,
         source=VllmSource.UPSTREAM,

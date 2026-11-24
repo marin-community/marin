@@ -77,6 +77,11 @@ an exact `vllm_version`, and a plugin requirement pinned to a release or commit.
 part of the model catalog and the recorded effective serving configuration. The plugin is installed
 in the same isolated environment as vLLM; TPU serving does not accept these GPU-specific settings.
 
+Upstream vLLM's `runai` extra owns its compatible loader range. Pin a tested
+loader through `vllm_plugin_requirements`, such as
+`runai-model-streamer[s3]==0.17.1` with vLLM 0.34.0. The Marin fork's loader pin
+is applied only to Marin fork wheels.
+
 ## vLLM eager execution
 
 vLLM defaults `enforce_eager` to false. `--enforce-eager` disables both `torch.compile` and CUDA
