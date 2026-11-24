@@ -590,7 +590,7 @@ def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
             environment = builder.ensure_directories(str(path / ".venv"))
             builder.create_configuration(environment)
             builder.setup_python(environment)
-            sources = [path, *sorted(path.glob("lib/*/src")), *site.getsitepackages([sys.prefix, sys.exec_prefix])]
+            sources = [path, *sorted(path.glob("lib/*/src")), *site.getsitepackages()]
             (Path(environment.lib_path) / "archive.pth").write_text("\n".join(map(str, sources)) + "\n")
             result = subprocess.run(
                 [
