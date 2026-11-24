@@ -1260,7 +1260,7 @@ async def test_agent_episodes_grade_turn_deadlines_and_retry_machine_start_failu
         ("rows.jsonl:1", 0): "submission_failure",
         ("rows.jsonl:2", 0): "graded",
     }
-    assert finished["rows.jsonl:0", 0][1]["failure"]["diagnostics"]["operation"] == "start"
+    assert finished["rows.jsonl:0", 0][1]["failure"]["operation"] == "start"
     stalled = finished["rows.jsonl:1", 0][1]
     assert (stalled["stop_reason"], stalled["limits"]["total_turn_timeout"]) == ("total_turn_timeout", 0.5)
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]

@@ -17,6 +17,8 @@ from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.reasoning_markup import ReasoningViolation
 
+CLEANUP_ERRORS_DIAGNOSTIC = "cleanup_errors"
+
 GRADING_SECONDS_METRIC = "timing/grading"
 SETUP_SECONDS_METRIC = "timing/setup"
 SETUP_COMPLETED_METRIC = "setup_completed"

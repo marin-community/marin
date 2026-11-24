@@ -12,7 +12,7 @@ from types import MappingProxyType
 import yaml
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 from shellbox.machine import NetworkPolicy
@@ -170,7 +170,7 @@ def write_checkpoint_tasks(
 
     def rows() -> Iterator[dict[str, str]]:
         for package in cohort.packages:
-            path = f"tasks/{package}{ARCHIVE_SUFFIX}"
+            path = prefix_join("tasks", f"{package}{ARCHIVE_SUFFIX}")
             provenance = Source(
                 dataset=source.name,
                 revision=source.revision,

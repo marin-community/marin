@@ -34,7 +34,7 @@ from rigging.task_errors import (
     record_retry_disposition,
     retry_delay,
 )
-from shellbox.backends.daytona.errors import daytona_error_identity
+from shellbox.backends.daytona.errors import daytona_error_identity, daytona_error_diagnostics
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
@@ -43,6 +43,7 @@ from rolloutengine.agents.model_relay import PromptTokenizationError
 from rolloutengine.harness.core import Harness
 from rolloutengine.machines import MachineSetupError
 from rolloutengine.models import (
+    CLEANUP_ERRORS_DIAGNOSTIC,
     GenerationLimitReached,
     ContextRejected,
     ContextWindowExceeded,
@@ -107,33 +108,11 @@ from skyrl_train.trajectory_runners.types import (
     TaskRequestBatch,
 )
 
-DAYTONA_DIAGNOSTIC_CALLS = frozenset(
-    {
-        ("daytona._async.daytona", "create"),
-        ("daytona._async.daytona", "_create"),
-        ("daytona._async.daytona", "delete"),
-        ("daytona._async.snapshot", "get"),
-        ("daytona._async.snapshot", "create"),
-        ("daytona._async.sandbox", "wait_for_sandbox_start"),
-        ("daytona._async.process", "exec"),
-        ("daytona._async.filesystem", "upload_file_stream"),
-        ("daytona._async.filesystem", "download_file"),
-        ("daytona_api_client_async.api.sandbox_api", "create_sandbox"),
-        ("daytona_api_client_async.api.sandbox_api", "get_toolbox_proxy_url"),
-        ("daytona_api_client_async.api.sandbox_api", "get_sandbox"),
-    }
-)
-DAYTONA_RATE_LIMIT_HEADERS = frozenset(
-    f"{prefix}-{throttler}"
-    for prefix in ("x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after")
-    for throttler in ("anonymous", "authenticated", "sandbox-create", "sandbox-lifecycle")
-) | {"retry-after"}
-
 
 async def _tokenize(
     inference: InferenceEngineClient, template_kwargs: Mapping[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """Count agent prompt tokens with the same serving actors that produce sampled tokens."""
+    """Return the serving endpoint's tokenization response for an agent prompt."""
     body = {**payload, "model": inference.model_name}
     if "messages" in body and template_kwargs:
         body["chat_template_kwargs"] = {**template_kwargs, **body.get("chat_template_kwargs", {})}
@@ -229,42 +208,6 @@ async def _model_turn(
     )
 
 
-def _machine_diagnostics(error: TaskMachineError) -> dict[str, str | dict[str, int]]:
-    """Return only provider metadata allowed in rollout diagnostics."""
-    assert error.__cause__ is not None
-    diagnostics: dict[str, str | dict[str, int]] = {}
-    diagnostics["machine_operation"] = error.operation.value
-    provider_error = error.__cause__
-    if isinstance(provider_error, DaytonaError):
-        rate_limits = {
-            name.lower(): int(value)
-            for name, value in (provider_error.headers or {}).items()
-            if name.lower() in DAYTONA_RATE_LIMIT_HEADERS
-            and isinstance(value, str)
-            and value.isascii()
-            and value.isdecimal()
-            and len(value) <= 12
-        }
-        if rate_limits:
-            diagnostics["provider_rate_limits"] = rate_limits
-        # This identifies an SDK call, not the HTTP phase of a compound operation.
-        diagnostics["provider_sdk_call"] = "unknown"
-        nested_error: BaseException | None = provider_error
-        seen = set()
-        while nested_error is not None and id(nested_error) not in seen:
-            seen.add(id(nested_error))
-            traceback = nested_error.__traceback__
-            while traceback is not None:
-                frame = traceback.tb_frame
-                call = (frame.f_globals.get("__name__"), frame.f_code.co_name)
-                if call in DAYTONA_DIAGNOSTIC_CALLS:
-                    diagnostics["provider_sdk_call"] = ".".join(call)
-                traceback = traceback.tb_next
-            # The SDK translates HTTP errors with `raise ... from None`.
-            nested_error = nested_error.__cause__ or nested_error.__context__
-    return diagnostics
-
-
 def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdentity:
     error = interruption.__cause__
     assert isinstance(error, Exception)
@@ -295,7 +238,9 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
             }
         )
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
-        diagnostics.update(_machine_diagnostics(error))
+        diagnostics["machine_operation"] = error.operation.value
+        if isinstance(error.__cause__, DaytonaError):
+            diagnostics.update(daytona_error_diagnostics(error.__cause__))
     if isinstance(error, TimeoutError):
         exception_type = {
             RolloutOperation.ATTEMPT: TRIAL_TIMEOUT_ERROR,
@@ -368,8 +313,8 @@ def _failed_rollout(
     grade = rollout.grade
     if grade.status == Outcome.UNAVAILABLE and interruption.operation != RolloutOperation.GRADE and rollout.steps:
         grade = fold_grades([step.transition.grade for step in rollout.steps if step.transition.grade is not None])
-    if cleanup_errors := interruption.grade.diagnostics.get("cleanup_errors"):
-        grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
+    if cleanup_errors := interruption.grade.diagnostics.get(CLEANUP_ERRORS_DIAGNOSTIC):
+        grade = replace(grade, diagnostics={**grade.diagnostics, CLEANUP_ERRORS_DIAGNOSTIC: cleanup_errors})
     detail = exception_type
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
         # Diagnostics carry only allowlisted fields. The cause's text can contain credentials, so log it redacted.
@@ -406,7 +351,7 @@ async def _run_task_attempt(
 
 
 def _reject_unconfirmed_cleanup(result: TrainingRollout) -> TrainingRollout:
-    if not result.grade.diagnostics.get("cleanup_errors"):
+    if not result.grade.diagnostics.get(CLEANUP_ERRORS_DIAGNOSTIC):
         return result
     grade = replace(
         result.grade,

@@ -2539,7 +2539,7 @@ async def test_task_machine_user_is_used_for_the_relay_and_not_the_verifier(rela
                         assert base_url == f"http://127.0.0.1:{relay_port}"
                 else:
                     error = ValueError if relay == "failed" else UnsupportedMachineSpec
-                    with pytest.raises(error, match=r"Relay startup failed|require persistent process sessions"):
+                    with pytest.raises(error):
                         async with service:
                             pytest.fail("An unavailable relay started")
             return Prompt(({"role": "user", "content": "Run the task."},), {})

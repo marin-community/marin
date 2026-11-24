@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import MappingProxyType
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -49,11 +50,13 @@ SWESMITH_MACHINE = MachineRuntimeSpec(
 VERIFIER_TIMEOUT = 900
 _PI_LOCK = "environment/long-loop-pi/package-lock.json"
 _PI_LOCK_PACKAGE = "node_modules/@earendil-works/pi-coding-agent"
-_IMAGE_DIGESTS = {
-    "ghcr.io/astral-sh/uv:0.8": "sha256:1d31be550ff927957472b2a491dc3de1ea9b5c2d319a9cea5b6a48021e2990a6",
-    "python:3.10-bookworm": "sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8",
-    "python:3.11-bookworm": "sha256:726d304906fa5eb468e5531e366548d1903286352f5adb54ef508ac01fbd80c6",
-}
+_IMAGE_DIGESTS = MappingProxyType(
+    {
+        "ghcr.io/astral-sh/uv:0.8": "sha256:1d31be550ff927957472b2a491dc3de1ea9b5c2d319a9cea5b6a48021e2990a6",
+        "python:3.10-bookworm": "sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8",
+        "python:3.11-bookworm": "sha256:726d304906fa5eb468e5531e366548d1903286352f5adb54ef508ac01fbd80c6",
+    }
+)
 
 
 def lower_swesmith_task(task: TaskSpec, machine: MachineRuntimeSpec, image_digests: Mapping[str, str]) -> TaskSpec:

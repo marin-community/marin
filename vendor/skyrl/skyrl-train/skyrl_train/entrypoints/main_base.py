@@ -205,8 +205,7 @@ def create_ray_wrapped_inference_engines_from_config(
         # signature default and (per ray_wrapped_inference_engine) NOT passed to the vLLM
         # engine, so flag-off engine init is byte-identical to today (G1). When > 1 it is
         # threaded into vllm.LLM / AsyncEngineArgs as a native EngineArgs kwarg. DCP rides
-        # the TP GPUs and is NOT part of any GPU/placement math (G4). Reaches both the
-        # Training entrypoints share this config assembly.
+        # the TP GPUs and is NOT part of any GPU/placement math (G4).
         decode_context_parallel_size=cfg.generator.get("inference_engine_decode_context_parallel_size", 1),
         shared_pg=colocate_pg,
         inference_engine_enable_sleep=(cfg.trainer.placement.colocate_all and operation is EntrypointOperation.TRAIN),

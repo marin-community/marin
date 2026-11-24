@@ -2088,11 +2088,12 @@ def test_daytona_connection_and_delete_conflict_use_shared_retry_identity():
     assert reset.retry_disposition is RetryDisposition.TRANSIENT
     conflict = DaytonaConflictError("state change in progress", status_code=409)
     assert daytona_error_identity(conflict, operation="delete").retry_disposition is RetryDisposition.TRANSIENT
-    assert daytona_error_identity(conflict, operation="create").retry_disposition is RetryDisposition.UNKNOWN
+    assert daytona_error_identity(conflict, operation="create").retry_disposition is RetryDisposition.TRANSIENT
 
 
 @pytest.mark.parametrize(
-    "status_code", [HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.SERVICE_UNAVAILABLE]
+    "status_code",
+    [HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.CONFLICT, HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.SERVICE_UNAVAILABLE],
 )
 def test_repeatable_daytona_requests_retry_shared_transient_statuses(status_code, no_retry_wait):
     attempts = 0
@@ -2112,7 +2113,7 @@ def test_repeatable_daytona_requests_retry_shared_transient_statuses(status_code
     "failure",
     [
         DaytonaError("request failed", status_code=HTTPStatus.UNAUTHORIZED),
-        DaytonaError("request failed", status_code=HTTPStatus.CONFLICT),
+        DaytonaError("request failed", status_code=HTTPStatus.NOT_FOUND),
         DaytonaConnectionError("TLS connection failed"),
     ],
 )
