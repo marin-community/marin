@@ -27,6 +27,7 @@ from taskcompendium.submission import require_submission_compatibility
 from verifyit.grade import InvalidTask
 from verifyit.judge_contract import validate_judge_spec
 from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import RUBRIC_ANSWERS, RUBRICS
 
 from taskforge.model.controls import Candidate
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
@@ -61,6 +62,11 @@ def check_authored(task: TaskSpec) -> None:
                 raise InvalidTaskSpec(
                     f"Leave judge {', '.join(fixed)} unset: the Taskforge judge samples greedily and takes no chat "
                     "template arguments"
+                )
+            if judge.rubric == RUBRIC_ANSWERS:
+                raise InvalidTaskSpec(
+                    f"The Taskforge judge cannot grade the {RUBRIC_ANSWERS} rubric: it samples at the judge's default "
+                    f"rather than greedily; use one of {sorted(RUBRICS - {RUBRIC_ANSWERS})}"
                 )
         resolve_shell_tool(task, DEFAULT_SHELL_TOOL)
         if task.answer_type in CONVERSATION_ANSWERS:

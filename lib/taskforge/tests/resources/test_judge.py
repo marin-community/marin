@@ -521,14 +521,30 @@ async def test_the_author_reference_omits_only_the_judge_fields_the_taskforge_ju
     assert {f.name for f in fields(JudgeSpec)} - shown.keys() == UNSHOWN.keys()
 
 
-@pytest.mark.parametrize("name", UNSHOWN)
-def test_a_task_setting_an_unshown_judge_field_is_returned_to_the_author_at_submit(name: str) -> None:
-    # Regression: the callback refused it only at grading, after a validation round, without naming the field.
-    task = arithmetic_task(grader=verifyit_package(labels(**{name: UNSHOWN[name]})).grader)
+@pytest.mark.parametrize(
+    "judge, refusal",
+    [
+        *(
+            (labels(**{name: value}), f"Leave judge {name} unset: the Taskforge judge samples greedily")
+            for name, value in UNSHOWN.items()
+        ),
+        (
+            JudgeSpec(
+                rubric="answers", references=("12",), prompt_template="{candidate} {references}", exact_gate=False
+            ),
+            "The Taskforge judge cannot grade the answers rubric",
+        ),
+    ],
+)
+def test_a_task_the_taskforge_judge_cannot_grade_is_returned_to_the_author_at_submit(
+    judge: JudgeSpec, refusal: str
+) -> None:
+    # Regression: the callback refused these only at grading, after a validation round, without naming the cause.
+    task = arithmetic_task(grader=verifyit_package(judge).grader)
     control = Control(Candidate("12"), RewardBand(Outcome.GRADED, 1, 1), ControlKind.POSITIVE)
     settings = lowering_settings(load_policy(DEFAULTS_DIR).overlaid({"judge.model": "glm-5.3"}))
     (message,) = submit_gate(Submission(task, (control,), ""), settings=settings, factories={})
-    assert message.startswith(f"Leave judge {name} unset: the Taskforge judge samples greedily")
+    assert message.startswith(refusal)
 
 
 JUDGE_CAP = 3
