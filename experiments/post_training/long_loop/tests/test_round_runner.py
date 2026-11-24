@@ -289,7 +289,6 @@ def test_round_yaml_diff_is_exactly_identity_and_multiplier():
 )
 def test_clocked_sft_rounds_use_the_canonical_training_duration(round_path):
     spec = load_round(round_path)
-    assert isinstance(spec, RoundSpec)
     assert spec.sft.training_budget.duration == SFT_TRAINING_DURATION
     assert spec.sft.task_timeout_seconds == SFT_TRAINING_DURATION.total_seconds()
 

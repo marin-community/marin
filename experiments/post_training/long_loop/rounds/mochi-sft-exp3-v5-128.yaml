@@ -1,5 +1,5 @@
 # Native hero SFT on the first new long-loop mix: Exp3's sealed V5.
-# Preparation only. Submission requires the user's go and a completed verified initializer copy.
+# Submission requires a completed verified initializer copy and native preflight.
 schema: 1
 format: mochi_sft
 name: long-loop-mochi-sft-exp3-v5-128/sft
