@@ -41,6 +41,7 @@ from experiments.evaluation.curated import load_evaluations
 from experiments.evaluation.evals import DAYTONA_SECRET_ENV, resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
+from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST
 
 
 @pytest.fixture
@@ -447,7 +448,8 @@ def _pipeline_spec(tmp_path):
     )
 
 
-def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, monkeypatch):
+@pytest.mark.parametrize("uses_harbor_hub", [False, True])
+def test_curated_group_submission_declares_resources_and_source_egress(tmp_path, monkeypatch, uses_harbor_hub):
     requests = []
 
     def submit(request, **_kwargs):
@@ -459,13 +461,22 @@ def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, mon
         "ControllerServiceClientSync",
         lambda **_kwargs: SimpleNamespace(launch_job=submit, close=lambda: None),
     )
-    batch = prepare_evaluation_batch(_pipeline_spec(tmp_path))
+    spec = _pipeline_spec(tmp_path)
+    if uses_harbor_hub:
+        spec = replace(
+            spec,
+            evals=resolve_evaluations("terminal-bench-2.1"),
+            model=_agent_model(),
+            task_machine_backend=TaskMachineBackend.DOCKER,
+        )
+    batch = prepare_evaluation_batch(spec)
     with IrisClient.remote("http://controller.invalid") as client:
         launch_module.launch_group(batch, client)
 
     (request,) = requests
     assert request.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED
     assert request.constraints[0].value.string_value == "cw-rno2a"
+    assert {rule.domain for rule in request.egress_allow} == ({REGISTRY_HOST} if uses_harbor_hub else set())
 
 
 @pytest.mark.parametrize("cache_key", [None, "caller-owned-immutable-artifact"])

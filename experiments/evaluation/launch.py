@@ -91,6 +91,7 @@ from experiments.evaluation.curated import (
     record_ref_for,
     resolve_selection,
     runs_agent,
+    selected_sources,
     settings_for,
 )
 from experiments.evaluation.evals import (
@@ -107,6 +108,8 @@ from experiments.evaluation.policy_finalization import (
     requires_policy_judge,
 )
 from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST
+from experiments.post_training.task_curation.pipeline import HarborHubSource
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
@@ -309,6 +312,13 @@ def _resolve_definitions(
             egress_allow = (
                 (urlsplit(definition.run.judge_endpoint).hostname,) if definition.run.judge_endpoint is not None else ()
             )
+            if any(
+                isinstance(dependency, HarborHubSource)
+                for source in selected_sources(protocol)
+                if source.config is not None
+                for dependency in (source.config.recipe.source, *source.config.recipe.inputs.values())
+            ):
+                egress_allow = (*egress_allow, REGISTRY_HOST)
             if settings.task_machine is not None and settings.task_machine.backend is TaskMachineBackend.DAYTONA:
                 # The worker reads the target from the forwarded launch environment; fail before serving.
                 if not os.environ.get(DAYTONA_TARGET):

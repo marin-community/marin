@@ -496,8 +496,8 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 
 `HarborHubSource(name, revision, read)` acquires a complete release pinned by
 `sha256:...`. It caches the original task archives as
-`tasks/<task-reference-hash>.tar.gz`, verifies their extracted contents with the
-vendored Harbor runtime, and records the task references in `release.json`.
+`tasks/<task-reference-hash>.tar.gz`, verifies their native content hashes against
+the public Hub records, and records the task references in `release.json`.
 The recipe's `read(StoragePath, ConversionContext)` yields rows from each archive,
 using the same custom-reader interface as HF sources. Acquisition does not
 convert task files or impose a package size cutoff. Dataset-level scoring files
@@ -505,13 +505,11 @@ are not supported.
 
 The existing download cache, sampling, and local-input overrides apply. Retries
 reuse completed archives; use a fresh override directory for a different release
-or task selection. The cache identity includes the release, acquisition code, and
-vendored runtime's source and lock digests. To acquire selected tasks locally,
-inspect the CLI in its isolated environment:
+or task selection. The cache identity includes the release digest. To acquire
+selected tasks locally, inspect the CLI:
 
 ```bash
-uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --frozen \
-  python -m experiments.post_training.task_curation.harbor_hub --help
+uv run python -m experiments.post_training.task_curation.harbor_hub --help
 ```
 
 ## Environments

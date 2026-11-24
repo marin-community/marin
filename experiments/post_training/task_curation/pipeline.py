@@ -13,7 +13,6 @@ for ``taskcompendium.pipeline.source_processing.run_source_pipeline``. SAMPLE/FU
 import hashlib
 import json
 import re
-import subprocess
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -30,7 +29,6 @@ from marin.datakit.download.huggingface import (
     plan_download,
     stream_file_to_fsspec,
 )
-from marin.evaluation.harbor.driver_config import harbor_runtime_command
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -83,6 +81,7 @@ from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIME
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
+from experiments.post_training.task_curation.harbor_hub import acquire_release
 from experiments.post_training.task_curation.harbor_packages import (
     PACKAGE_ARCHIVE_REVISION,
     PACKAGE_ARCHIVES,
@@ -103,8 +102,6 @@ URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
 IMAGE_MACHINE_CPUS = 4
 INPUT_OVERRIDES_REVISION = "2"
-
-HARBOR_EXPORTER = Path(__file__).with_name("harbor_hub.py")
 
 
 type RowSelector = Callable[[dict[str, Any], ConversionContext], bool]
@@ -771,17 +768,7 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
         stage_repository_packages(source.repo, source.revision, StoragePath(request.output_path))
         return
     if isinstance(source, HarborHubSource):
-        subprocess.run(
-            harbor_runtime_command(
-                HARBOR_EXPORTER,
-                "--release",
-                f"{source.name}@{source.revision}",
-                "--output",
-                request.output_path,
-                "--all",
-            ),
-            check=True,
-        )
+        acquire_release(f"{source.name}@{source.revision}", StoragePath(request.output_path), ())
         return
     if isinstance(source, HarborArchiveSource):
         with requests.get(source.url, stream=True, timeout=URL_TIMEOUT) as response:
