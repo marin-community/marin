@@ -69,7 +69,8 @@ GATE_REVISION = "2026.11.13"
 GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
 _NATIVE_PREPARATION_TIMEOUT = 300
-_NATIVE_PHASE = "SkyRL configuration phase: "
+_NATIVE_CONFIG_MODULE = "cloud.iris.config_cli"
+_NATIVE_PHASE = f"{_NATIVE_CONFIG_MODULE}: "
 _NATIVE_ERROR = "native configuration cannot be composed"
 
 logger = logging.getLogger(__name__)
@@ -647,8 +648,7 @@ def _run_native_process(command: list[str], *, env: dict[str, str], timeout: int
         return stdout.read()
 
 
-def _native_command_json(operation: str, command: list[str], *, env: dict[str, str], timeout: int):
-    """Run one native step and decode JSON from its last nonempty stdout line."""
+def _native_output(operation: str, command: list[str], *, env: dict[str, str], timeout: int) -> str:
     started = monotonic()
     try:
         output = _run_native_process(command, env=env, timeout=timeout).strip()
@@ -657,6 +657,12 @@ def _native_command_json(operation: str, command: list[str], *, env: dict[str, s
             f"{_NATIVE_ERROR}: {operation} after {monotonic() - started:.2f} s. {_native_diagnostic(error)}"
         ) from error
     logger.info("%s took %.2f s", operation, monotonic() - started)
+    return output
+
+
+def _native_command_json(operation: str, command: list[str], *, env: dict[str, str], timeout: int):
+    """Run one native step and decode JSON from its last nonempty stdout line."""
+    output = _native_output(operation, command, env=env, timeout=timeout)
     if not output:
         raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
     try:
@@ -665,55 +671,26 @@ def _native_command_json(operation: str, command: list[str], *, env: dict[str, s
         raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 
 
-def _native_json(operation: str, program: str, *args: str, timeout: int = 120):
+def _native_json(operation: str, *args: str, timeout: int = 120):
     env = skyrl_cpu_environment()
     for key in ("PYTHONIOENCODING", "PYTHONOPTIMIZE"):
         env.pop(key, None)
-    # Resolve and verify the frozen CPU venv before starting the composition deadline.
-    probe = skyrl_cpu_command("python", "-I", "-c", "import json,sys; print(json.dumps(sys.executable))")
-    path = _native_command_json("Prepare SkyRL CPU environment", probe, env=env, timeout=_NATIVE_PREPARATION_TIMEOUT)
-    interpreter = Path(path)
-    expected = recipe.REPO_ROOT / SKYRL_PROJECT / ".venv" / "bin"
-    if interpreter.parent.resolve() != expected.resolve() or not interpreter.is_file():
-        raise InvalidComparison(f"{_NATIVE_ERROR}: expected the vendor SkyRL CPU interpreter")
-    env["VIRTUAL_ENV"] = str(interpreter.parent.parent)
+    venv = recipe.REPO_ROOT / SKYRL_PROJECT / ".venv"
+    interpreter = venv / "bin" / "python"
+    # Sync the frozen project and verify its interpreter within the preparation deadline.
+    probe = skyrl_cpu_command(str(interpreter), "-I", "--version")
+    _native_output("Prepare SkyRL CPU environment", probe, env=env, timeout=_NATIVE_PREPARATION_TIMEOUT)
+    env["VIRTUAL_ENV"] = str(venv)
     env["PATH"] = os.pathsep.join((str(interpreter.parent), env.get("PATH", os.defpath)))
-    return _native_command_json(operation, [str(interpreter), "-I", "-c", program, *args], env=env, timeout=timeout)
-
-
-def _native_program(native_root: str, modules: tuple[str, ...], body: str) -> str:
-    return (
-        "import json,sys\n"
-        f"def phase(name): print({_NATIVE_PHASE!r} + name, file=sys.stderr, flush=True)\n"
-        "phase('Import native modules')\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
-        "from importlib import import_module\n"
-        f"for name in {modules!r}:\n"
-        f"    if not Path(import_module(name).__file__).resolve().is_relative_to({native_root!r}):\n"
-        "        raise RuntimeError(f'{name} loaded from outside the vendor SkyRL checkout')\n" + body
-    )
+    return _native_command_json(operation, [str(interpreter), "-I", *args], env=env, timeout=timeout)
 
 
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
-    program = _native_program(
-        str(recipe.REPO_ROOT / "vendor/skyrl"),
-        ("cloud.iris.launch_config", "skyrl_train", "marinskyrl"),
-        "from cloud.iris import launch_config\n"
-        "from rigging.filesystem.s3_compat import configure_coreweave_s3\n"
-        "configure_coreweave_s3()\n"
-        "configs = []\n"
-        "for index, path in enumerate(sys.argv[1:], 1):\n"
-        "    phase(f'Compose document {index}/{len(sys.argv)-1}')\n"
-        "    configs.append(launch_config.load_launch_config(path))\n"
-        "phase('Convert native configurations')\n"
-        "documents = [OmegaConf.to_container(config, resolve=True) for config in configs]\n"
-        f"if {validate_driver!r}:\n"
-        "    for index, config in enumerate(configs, 1):\n"
-        "        phase(f'Validate driver for document {index}/{len(configs)}')\n"
-        "        launch_config.validate_launch_driver_config(config)\n"
-        "print(json.dumps(documents))\n",
+    options = ["--validate-driver"] if validate_driver else []
+    return _native_json(
+        "Compose native launch configurations", "-m", _NATIVE_CONFIG_MODULE, "compose", *options, "--", *paths
     )
-    return _native_json("Compose native launch configurations", program, *paths)
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:
@@ -764,19 +741,10 @@ def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
 
 
 @lru_cache(maxsize=16)
-def _schema_defaults(native_project: str, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    program = _native_program(
-        native_project,
-        ("cloud.iris.launch_config", "cloud.iris.rl_config_translation"),
-        "from cloud.iris import launch_config, rl_config_translation\n"
-        "phase('Read native schema defaults')\n"
-        "config = rl_config_translation.compose_config_groups(json.loads(sys.argv[1]), config_name='ppo_base_config')\n"
-        "defaults = OmegaConf.to_container(\n"
-        "    OmegaConf.structured(launch_config.SkyRLLaunchConfig), resolve=False, enum_to_str=True)\n"
-        "defaults['skyrl'] = OmegaConf.to_container(config, resolve=True, enum_to_str=True)\n"
-        "print(json.dumps(defaults))\n",
+def _schema_defaults(source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
+    return _native_json(
+        "Read native schema defaults", "-m", _NATIVE_CONFIG_MODULE, "schema-defaults", json.dumps(dict(groups))
     )
-    return _native_json("Read native schema defaults", program, json.dumps(dict(groups)))
 
 
 def _check_control_config(
@@ -787,9 +755,7 @@ def _check_control_config(
     missing = {key for key in differences if key not in observed}
     if missing:
         groups = tuple(sorted(preset.recipe.config.to_skyrl().get("config_groups", {}).items()))
-        defaults = _schema_defaults(
-            str(recipe.REPO_ROOT / "vendor/skyrl"), Provenance.capture(recipe.REPO_ROOT).tree_hash, groups
-        )
+        defaults = _schema_defaults(Provenance.capture(recipe.REPO_ROOT).tree_hash, groups)
         for key in missing:
             value = get_path(defaults, key)
             if value is MISSING:

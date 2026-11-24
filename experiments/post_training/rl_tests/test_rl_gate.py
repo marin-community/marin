@@ -732,9 +732,9 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 )
 
                 def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
-                    if diagnostic == "bootstrap" and "import json,sys; print(json.dumps(sys.executable))" in command:
+                    if diagnostic == "bootstrap" and command[-1] == "--version":
                         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
-                    if any("OmegaConf.structured(launch_config.SkyRLLaunchConfig)" in str(value) for value in command):
+                    if command[1:5] == ["-I", "-m", "cloud.iris.config_cli", "schema-defaults"]:
                         if diagnostic == "timeout":
                             interrupted_secret = secret.replace("sk-", "sk\x1b-")
                             stderr = (
