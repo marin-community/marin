@@ -68,12 +68,21 @@ def test_nightly_and_named_dry_runs_plan_revision_and_launch_selected_training_c
     revised = replace(
         table,
         presets=tuple(
-            replace(preset, revision="2026.11.24.1") if preset.name == "learning-medium" else preset
+            replace(preset, revision="2026.11.24.1") if preset.control_preset == "learning-medium" else preset
             for preset in table.presets
         ),
     )
     monkeypatch.setattr(refresh, "SNOWBALL", revised)
     assert planned("--preset", "learning-medium") == ["learning-medium"]
+    mismatched = replace(
+        revised,
+        presets=tuple(
+            table.by_name["data-medium"] if preset.name == "data-medium" else preset for preset in revised.presets
+        ),
+    )
+    monkeypatch.setattr(refresh, "SNOWBALL", mismatched)
+    with pytest.raises(ValueError, match="data-medium must share the learning-medium revision"):
+        planned("--preset", "data-medium")
     monkeypatch.setattr(refresh, "SNOWBALL", table)
     changed_source = "train"
     assert planned() == ["learning-medium"]

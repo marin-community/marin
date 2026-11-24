@@ -866,11 +866,6 @@ def test_control_link_scores_shared_evaluation(
                     row.model_copy(
                         update={
                             "answers": [answer.model_copy(update={"verifier_score": score}) for answer in row.answers],
-                            "strata": (
-                                row.strata.model_copy(update={"family": "large"})
-                                if case == "relabeled-family" and row.step == preset.updates
-                                else row.strata
-                            ),
                         }
                     )
                     for row in rows
@@ -962,6 +957,17 @@ def test_control_link_scores_shared_evaluation(
         )
         assert gate_report.verdict == "invalid"
         assert gate_report.reason == "evaluation protocol or held-out TaskSpec content differs"
+        with edit_receipt(fresh_roots[0]) as receipt:
+            receipt["config"]["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.5
+        incompatible = gate._write_control_link(
+            preset,
+            fresh,
+            previous,
+            tuple(map(str, fresh_roots)),
+            tuple(map(str, baseline_roots)),
+            str(tmp_path / "incompatible-link"),
+        )
+        assert incompatible.verdict == "invalid" and incompatible.reason == "evaluation protocol differs"
     if changed_ids:
         unshared = results["eval_lite/unshared/mean"]
         assert (unshared["role"], unshared["tasks"], unshared["run"]) == ("reported", len(changed_ids), 1.0)

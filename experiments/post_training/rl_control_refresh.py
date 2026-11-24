@@ -32,6 +32,11 @@ def plan_refresh(table: ModelPresets, preset_name: str | None = None) -> tuple[s
             raise ValueError(f"choose a gated preset with controls, got {preset_name!r}")
         pins = {name: pins[name]}
 
+    for preset in presets.values():
+        owner = preset.control_preset
+        if owner is not None and owner in pins and preset.revision != presets[owner].revision:
+            raise ValueError(f"{preset.name} must share the {owner} revision to use its controls")
+
     launch_selected = {preset.control_preset for preset in presets.values() if preset.tasks_input != "forbidden"}
     digests: dict[tuple[tuple[str, str], ...], str] = {}
 
