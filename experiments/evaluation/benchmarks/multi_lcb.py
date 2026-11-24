@@ -42,7 +42,7 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import DEFAULT_OUTPUT
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
-from experiments.evaluation.benchmarks.environments import BASIC_GRADER
+from experiments.evaluation.benchmarks.environments import COMPILER_GRADER
 from experiments.evaluation.benchmarks.livecodebench import (
     DATASET_REVISION,
     EVIDENCE_FIELDS,
@@ -235,7 +235,7 @@ def source(language: Language) -> RlDataSource[EvaluationCorpusRecipe]:
                 convert=partial(convert_multi_lcb, language=language),
                 version=CONVERSION_REVISION,
                 intended_use=IntendedUse.EVAL,
-                grader=BASIC_GRADER,
+                grader=COMPILER_GRADER,
             ),
             protocol=EvaluationProtocol(
                 benchmark=language.benchmark,
