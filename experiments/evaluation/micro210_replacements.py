@@ -21,6 +21,8 @@ policy provenance.
 import base64
 import json
 import random
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
 import pyarrow.parquet as pq
@@ -205,7 +207,10 @@ def tb2_candidate(source_task_id: str, template_row: dict, package_files: dict[s
         if path.startswith("tests/") and path != "tests/test.sh"
     ]
     verifier += [{"path": "solution/solve.sh", "content": package_files["solution/solve.sh"]}]
-    verifier.append({"path": "environment/Dockerfile", "content": _pi_dockerfile_tb2(source_task_id).encode()})
+    base_image, workdir = _tb2_base_image(source_task_id, package_files)
+    verifier.append(
+        {"path": "environment/Dockerfile", "content": _pi_dockerfile_tb2(source_task_id, base_image, workdir).encode()}
+    )
     verifier += [{"path": path, "content": payload} for path, payload in pi_manifests.items()]
     toml = package_files["task.toml"].decode()
     if "[verifier]" not in toml:
@@ -255,8 +260,47 @@ def _pi_dockerfile(upstream_dockerfile: str) -> str:
     return stage + upstream_dockerfile.rstrip("\n") + "\n" + tail
 
 
-def _pi_dockerfile_tb2(source_task_id: str) -> str:
-    """The tb2 Dockerfile: Pi stage on the task's prebuilt registry image."""
+def _tb2_base_image(source_task_id: str, package_files: dict[str, bytes]) -> tuple[str, str]:
+    """The task's base image: the published registry image, else a build-it-yourself marker.
+
+    Published images win (the frozen rows use them). When the registry never published
+    one, the caller builds the task's own environment Dockerfile in-region, pushes it to
+    ghcr, and pins the pushed digest — ``base_image`` then starts with "FROM ".
+    """
+    if _tb2_registry_image_exists(source_task_id):
+        return f"alexgshaw/{source_task_id}:{TB2_IMAGE_TAG}", _upstream_workdir(package_files)
+    return _BUILD_FROM_UPSTREAM_MARKER, _upstream_workdir(package_files)
+
+
+def _tb2_registry_image_exists(source_task_id: str) -> bool:
+    request = urllib.request.Request(
+        f"https://hub.docker.com/v2/repositories/alexgshaw/{source_task_id}/tags/?page_size=100"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            tags = [tag["name"] for tag in json.loads(response.read()).get("results", [])]
+    except urllib.error.HTTPError as error:
+        if error.code == 429:
+            # Rate-limited: prefer building; the digest pin keeps the result reproducible.
+            return False
+        if error.code == 404:
+            return False
+        raise
+    return TB2_IMAGE_TAG in tags
+
+
+def _upstream_workdir(package_files: dict[str, bytes]) -> str:
+    dockerfile = package_files.get("Dockerfile", b"").decode(errors="replace")
+    workdirs = [line.split(None, 1)[1].strip() for line in dockerfile.splitlines() if line.startswith("WORKDIR ")]
+    return workdirs[-1] if workdirs else "/app"
+
+
+BUILD_FROM_UPSTREAM_MARKER = "__BUILD_FROM_UPSTREAM__"
+_BUILD_FROM_UPSTREAM_MARKER = BUILD_FROM_UPSTREAM_MARKER
+
+
+def _pi_dockerfile_tb2(source_task_id: str, base_image: str, workdir: str) -> str:
+    """The tb2 Dockerfile: Pi stage on the task's base image (registry or digest-pinned)."""
     stage = (
         "FROM node@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS long_loop_pi_runtime\n"
         "WORKDIR /opt/long-loop-pi\n"
@@ -264,10 +308,14 @@ def _pi_dockerfile_tb2(source_task_id: str) -> str:
         "RUN npm ci --omit=dev --no-audit --no-fund\n"
     )
     tail = (
-        "\nCOPY --from=long_loop_pi_runtime /usr/local/bin/node /opt/long-loop-node/node\n"
+        "\nFROM task_base\n"
+        "COPY --from=long_loop_pi_runtime /usr/local/bin/node /opt/long-loop-node/node\n"
         "COPY --from=long_loop_pi_runtime /opt/long-loop-pi /opt/long-loop-pi\n"
         "ENV PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH}\n"
         "RUN PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH} "
         'bash -c \'test "$(pi --version)" = "0.87.0"\'\n'
     )
-    return stage + f"FROM alexgshaw/{source_task_id}:{TB2_IMAGE_TAG}\n" + tail
+    if workdir and workdir != "/":
+        tail += f"WORKDIR {workdir}\n"
+    upstream = f"FROM {base_image} AS task_base\n" if not base_image.startswith("FROM ") else ""
+    return stage + upstream + tail

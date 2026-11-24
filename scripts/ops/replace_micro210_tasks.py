@@ -26,6 +26,8 @@ import hashlib
 import json
 import os
 import random
+import subprocess
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -36,15 +38,21 @@ from huggingface_hub import hf_hub_download, list_repo_files
 
 from experiments.evaluation.micro210_gate import HARBOR_BENCHMARKS
 from experiments.evaluation.micro210_replacements import (
+    _BUILD_FROM_UPSTREAM_MARKER,
     BROKEN_TASKS,
     REPLACEMENT_SEED,
-    TB2_IMAGE_TAG,
     CandidateRow,
     humanevalplus_candidate,
     ot_tblite_candidate,
     tb2_candidate,
 )
-from scripts.ops.verify_micro210_spec_gate import grade_family_a_row, grade_family_b_row
+from scripts.ops.verify_micro210_spec_gate import (
+    _docker,
+    _docker_dns_mounts,
+    _docker_network,
+    grade_family_a_row,
+    grade_family_b_row,
+)
 
 REPLACEMENT_ATTEMPTS_PER_FAMILY = 4
 CANDIDATE_RETRIES = 2
@@ -154,23 +162,8 @@ def _family_pool(benchmark: str) -> list[str]:
         return sorted({name.split("/")[0] for name in files if "/" in name and not name.startswith(".")})
     if benchmark == "tb2-recovery":
         entries = _github_json("https://api.github.com/repos/harbor-framework/terminal-bench-1/contents/original-tasks")
-        return sorted(entry["name"] for entry in entries if _tb2_image_exists(entry["name"]))
+        return sorted(entry["name"] for entry in entries)
     raise ValueError(f"No replacement pool for benchmark {benchmark!r}")
-
-
-def _tb2_image_exists(source_task_id: str) -> bool:
-    """Skip candidates whose prebuilt registry image was never published."""
-    request = urllib.request.Request(
-        f"https://hub.docker.com/v2/repositories/alexgshaw/{source_task_id}/tags/?page_size=100"
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            tags = [tag["name"] for tag in json.loads(response.read()).get("results", [])]
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return False
-        raise
-    return TB2_IMAGE_TAG in tags
 
 
 def _ot_tblite_package(source_task_id: str) -> dict[str, bytes]:
@@ -287,6 +280,85 @@ if [ $? -eq 0 ]; then echo 1 > /logs/verifier/reward.txt; else echo 0 > /logs/ve
 _TB2_PIN = "2af0e447794d89f71f7b982d5a5fdb684679d421"
 
 
+GHCR_NAMESPACE = "ghcr.io/marin-community/micro210-replacements"
+GHCR_TAG = "20251031"
+
+
+def _row_files(spec_json: str) -> dict[str, bytes]:
+    spec = json.loads(spec_json)
+    return {
+        resource["path"]: base64.b64decode(resource["source"]["content_base64"])
+        for resource in spec["resources"]["verifier"]
+    }
+
+
+def _push_tb2_image(candidate: CandidateRow) -> str:
+    """Build the marker candidate's combined image, push it to ghcr, return the digest ref."""
+    task = candidate.source_task_id
+    tag = f"{GHCR_NAMESPACE}/{task}:{GHCR_TAG}"
+    with tempfile.TemporaryDirectory(prefix="micro210-tb2-build-") as directory:
+        context = Path(directory) / "environment"
+        context.mkdir(parents=True)
+        for path, payload in _row_files(candidate.task_spec).items():
+            if not path.startswith("environment/"):
+                continue
+            destination = context / path[len("environment/") :]
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(payload)
+        _docker(
+            [
+                "build",
+                "--platform",
+                "linux/amd64",
+                "--network",
+                _docker_network(),
+                *_docker_dns_mounts(),
+                "-t",
+                tag,
+                str(context),
+            ]
+        )
+    login = subprocess.run(
+        ["docker", "login", "ghcr.io", "-u", os.environ.get("GHCR_USER", "penfever"), "--password-stdin"],
+        input=os.environ.get("GITHUB_TOKEN", ""),
+        capture_output=True,
+        text=True,
+    )
+    if login.returncode:
+        raise RuntimeError(f"ghcr login failed: {login.stderr[-500:]}")
+    _docker(["push", tag], timeout=7200)
+    inspected = _docker(["inspect", "--format", "{{index .RepoDigests 0}}", tag])
+    return inspected.stdout.strip()
+
+
+def _pin_candidate_image(candidate: CandidateRow, digest_ref: str) -> CandidateRow:
+    """Rewrite the row's Dockerfile to the digest-pinned ghcr image."""
+    spec = json.loads(candidate.task_spec)
+    resources = []
+    for resource in spec["resources"]["verifier"]:
+        if resource["path"] != "environment/Dockerfile":
+            resources.append(resource)
+            continue
+        resources.append(
+            {
+                "path": "environment/Dockerfile",
+                "source": {
+                    "kind": "inline_file",
+                    "content_base64": base64.b64encode(f"FROM {digest_ref}\n".encode()).decode(),
+                },
+            }
+        )
+    spec["resources"]["verifier"] = resources
+    spec["labels"] = {**spec["labels"], "micro210_replacement_image": digest_ref}
+    return CandidateRow(
+        benchmark=candidate.benchmark,
+        source_task_id=candidate.source_task_id,
+        task_id=candidate.task_id,
+        task_spec=json.dumps(spec, sort_keys=True),
+        task_rollout_spec=candidate.task_rollout_spec,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--table", type=Path, required=True)
@@ -301,8 +373,12 @@ def main() -> None:
 
     table = pq.read_table(arguments.table)
     rows = table.to_pylist()
+
+    def _bare(source_task_id: str, benchmark: str) -> str:
+        return source_task_id.removeprefix("terminal-bench/") if benchmark == "tb2-recovery" else source_task_id
+
     in_policy_by_benchmark = {
-        benchmark: {row["source_task_id"] for row in rows if row["benchmark"] == benchmark}
+        benchmark: {_bare(row["source_task_id"], benchmark) for row in rows if row["benchmark"] == benchmark}
         for benchmark in {broken_row["benchmark"] for broken_row in rows if broken_row["task_id"] in BROKEN_TASKS}
     }
     if arguments.dry_run:
@@ -339,6 +415,13 @@ def main() -> None:
         )
         chosen = None
         for candidate in candidates:
+            files = _row_files(candidate.task_spec)
+            dockerfile = files.get("environment/Dockerfile", b"").decode()
+            if _BUILD_FROM_UPSTREAM_MARKER in dockerfile:
+                print(f"building ghcr image for {candidate.source_task_id}", flush=True)
+                digest_ref = _push_tb2_image(candidate)
+                candidate = _pin_candidate_image(candidate, digest_ref)
+                print(f"pinned {candidate.source_task_id} -> {digest_ref}", flush=True)
             print(f"gating candidate {candidate.task_id}", flush=True)
             outcome = None
             for attempt in range(CANDIDATE_RETRIES + 1):
