@@ -2611,13 +2611,14 @@ def test_combine_in_fp32_matches_an_fp32_combine_reference_on_eight_devices():
 
 def test_route_capture_replay_keeps_ids_but_recomputes_current_gate_weights():
     mesh = _make_dense_mesh()
+    num_experts = 4
     key_x, key_router, key_expert = jax.random.split(jax.random.key(91), 3)
     x = jax.random.normal(key_x, (6, 8), dtype=jnp.float32)
     token_valid = jnp.asarray([True, True, False, True, False, True])
-    router = jax.random.normal(key_router, (8, 4), dtype=jnp.float32)
-    router_bias = jnp.zeros((4,), dtype=jnp.float32)
+    router = jax.random.normal(key_router, (8, num_experts), dtype=jnp.float32)
+    router_bias = jnp.zeros((num_experts,), dtype=jnp.float32)
     expert_mlp = MoEExpertMlp.init(
-        num_experts=4,
+        num_experts=num_experts,
         hidden_dim=8,
         intermediate_dim=12,
         initializer_std=0.1,
@@ -2645,6 +2646,18 @@ def test_route_capture_replay_keeps_ids_but_recomputes_current_gate_weights():
             report_capacity_overflow=False,
             route_capture=capture,
         )
+        raw_logits = x @ perturbed_router
+        weights = jax.nn.sigmoid(jnp.take_along_axis(raw_logits, capture.selected_experts, axis=-1))
+        weights = weights / jnp.sum(weights, axis=-1, keepdims=True) * routerer.routing_renorm_sum
+        expected = expert_mlp(
+            x,
+            capture.selected_experts,
+            weights,
+            token_valid=token_valid,
+            mesh=mesh,
+            report_capacity_overflow=False,
+        )
+        np.testing.assert_allclose(replayed, expected, rtol=1e-5, atol=1e-7)
         fresh, _ = routerer(
             x,
             token_valid,

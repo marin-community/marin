@@ -109,7 +109,7 @@ class MoERouteCapture(NamedTuple):
 
 
 class PreparedMoERouteCapture(NamedTuple):
-    """Canonical JIT-safe route data produced by host-side preparation."""
+    """Canonical route data from native capture or validated host preparation."""
 
     selected_experts: Int[Array, "T K"]
     token_valid: Bool[Array, "T"]
