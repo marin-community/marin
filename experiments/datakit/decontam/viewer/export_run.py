@@ -68,8 +68,8 @@ def flagged_doc(row: dict, texts: dict[str, ItemText], evals: dict[str, str]) ->
         "id": str(row["id"]),
         "max_score": float(row["max_score"]),
         "evals": list(row["matched_evals"]),
-        # The viewer highlights these phrases in both columns: the whole question of each matched item.
-        "matched_ngrams": [texts[item].question for item in items if item in texts],
+        # The viewer highlights the question of each matched item in both columns.
+        "highlights": [texts[item].question for item in items if item in texts],
         "matched_evals": [
             {"item": item, "eval": evals.get(item, ""), "text": texts[item].question if item in texts else ""}
             for item in items

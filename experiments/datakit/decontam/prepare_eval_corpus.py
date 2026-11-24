@@ -20,7 +20,7 @@ Each record has the form ``{id: str, text: str}``. Mandatory extraction is
 pinned by benchmark. Preparation of a mandatory suite fails if a source cannot
 load or if its extracted record count differs from the registered count. A
 complete suite manifest is written only after all of its artifacts pass
-validation. Bloom creation requires both mandatory manifests. Source downloads
+validation. The item table build requires both mandatory manifests. Source downloads
 and required lm-eval task loads are retried with backoff.
 
 Test split is preferred; tasks without a test split fall back to
@@ -141,7 +141,7 @@ def _lmh_output_root() -> str:
 # `.extraction_version` sidecar next to each `lmh/<task>/eval.parquet`; the prepare
 # step rewrites (does not skip) any shard whose sidecar doesn't match. Without this,
 # a policy change like the cluster-B passage drop (marin#6852) never reaches an
-# already-staged corpus — the bloom keeps reading the old passage-bearing text.
+# already-staged corpus, which keeps the old passage-bearing text.
 _LMH_EXTRACTION_VERSION = "2-passage-drop"
 _LMH_VERSION_SIDECAR = ".extraction_version"
 
@@ -750,7 +750,7 @@ def _prepare_uncheatable() -> dict[str, Any]:
     )
 
 
-# Eval tasks excluded from the *decontamination* bloom (they remain valid
+# Eval tasks excluded from decontamination (they remain valid
 # benchmarks for actual evaluation — this only affects what we treat as
 # "eval content to scrub from training data"). Each of these has test
 # "documents" that are ordinary, ubiquitous corpus material rather than a

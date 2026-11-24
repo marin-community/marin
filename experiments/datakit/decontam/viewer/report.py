@@ -44,15 +44,15 @@ _JS = """
 <script>
 function esc(t){return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function chips(fs){return (fs||[]).map(function(x){return '<span class=chip>'+esc(''+x[0])+' '+x[1]+'</span>'}).join(' ')}
-// Highlight the overlapping n-gram spans inside `text`, preserving whitespace.
-// Works at the token level so highlighting is robust to newlines/indentation:
-// tokenize on whitespace, mark every token run equal to a matched n-gram, then
+// Highlight the given phrases inside `text`, preserving whitespace.
+// Works at the token level so newlines and indentation do not break a match:
+// tokenize on whitespace, mark every token run equal to a phrase, then
 // coalesce (including the separators between two marked tokens) into <mark> spans.
-function hl(text,ngrams){text=text||'';var parts=text.split(/(\\s+)/);
+function hl(text,phrases){text=text||'';var parts=text.split(/(\\s+)/);
  var isTok=parts.map(function(p){return p.length>0&&!/^\\s+$/.test(p)});
  var vals=[],idxs=[];parts.forEach(function(p,i){if(isTok[i]){vals.push(p);idxs.push(i)}});
  var m=new Array(vals.length).fill(false);
- (ngrams||[]).forEach(function(ng){var g=ng.split(/\\s+/).filter(Boolean);if(!g.length)return;
+ (phrases||[]).forEach(function(ng){var g=ng.split(/\\s+/).filter(Boolean);if(!g.length)return;
   for(var s=0;s+g.length<=vals.length;s++){var ok=true;for(var j=0;j<g.length;j++){if(vals[s+j]!==g[j]){ok=false;break}}
    if(ok)for(var j=0;j<g.length;j++)m[s+j]=true}});
  var pm=new Array(parts.length).fill(false);idxs.forEach(function(pi,k){pm[pi]=m[k]});
@@ -60,13 +60,13 @@ function hl(text,ngrams){text=text||'';var parts=text.split(/(\\s+)/);
  var out='',open=false;for(var i=0;i<parts.length;i++){
   if(pm[i]&&!open){out+='<mark>';open=true}if(!pm[i]&&open){out+='</mark>';open=false}out+=esc(parts[i])}
  if(open)out+='</mark>';return out}
-function evcol(d){var ng=d.matched_ngrams||[];var e=(d.matched_evals||[]).map(function(e){
+function evcol(d){var ng=d.highlights||[];var e=(d.matched_evals||[]).map(function(e){
   return '<div class=evblock><div class=evh><span class=chip>'+esc(''+e.eval)+'</span> '+esc(e.item)+
    '</div><pre class=ev>'+hl(e.text,ng)+'</pre></div>'}).join('');
  return e||'<span class=meta>(eval text unavailable)</span>'}
 function toggle(i){var r=document.getElementById('d'+i);r.classList.toggle('open');
  if(r.dataset.filled)return;r.dataset.filled=1;var s=DATA.sources[i],h='';
- (s.samples||[]).forEach(function(d){var ng=d.matched_ngrams||[];
+ (s.samples||[]).forEach(function(d){var ng=d.highlights||[];
   h+='<div class=doc><span class=meta>score <span class=hi>'+d.max_score.toFixed(3)+
    '</span> · '+(d.matched_evals||[]).length+' matched items · '+esc(d.id)+' · '+esc((d.evals||[]).join(', '))+'</span>'+
    '<div class=cols>'+

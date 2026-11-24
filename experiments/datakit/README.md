@@ -179,8 +179,8 @@ The decontamination stages (`marin.datakit.decon`) mark the records that hold a 
 2. `datakit/decontam/_keys` chooses each item's key: the 20-character window of its normalized letters and
    digits that the fewest records of a reference sample hold (two shards per source).
 3. `datakit/decontam/<source>` scans every record for keys (stage 1), scores each record–item pair with two
-   fine-tuned mmBERT-base encoders on GPU workers (stage 2), and marks a record when its best pair scores at
-   least `CUTOFF` (0.6). Records over 5,000,000 characters are read in overlapping pieces.
+   fine-tuned mmBERT-base encoders (stage 2, on H100 workers in production), and marks a record when its best
+   pair scores at least `CUTOFF` (0.6). Records over 5,000,000 characters are read in overlapping pieces.
 
 The attributes have the input's shard names and row order: `id`, `partition_id`, `contaminated`,
 `max_score`, and `matched_items`. A sample of flagged records with their excerpts goes to

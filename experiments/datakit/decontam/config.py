@@ -3,7 +3,8 @@
 
 """Shared decontamination policy for the reference pipeline and testbed (``marin.datakit.decon``).
 
-Each setting comes from the measured result in ``experiments/datakit/decontam/encoder/README.md``.
+The models, the cutoff and the key settings come from the measurements in
+``experiments/datakit/decontam/encoder/README.md``.
 """
 
 from fray.types import ResourceConfig, create_environment
@@ -12,7 +13,7 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import prefix_join
 
 # The encoder classifiers (iteration 16, seeds 0 and 1) under the storage prefix; each region that runs the
-# pipeline needs a copy, as it needs the eval corpus.
+# pipeline needs a copy, as it needs the item table.
 MODELS_RELATIVE = "datakit/decontam/models"
 MODEL_NAMES = ("encoder-it16-s0", "encoder-it16-s1")
 MODELS_VERSION = "it16-s0-s1"

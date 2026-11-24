@@ -123,7 +123,7 @@ def main() -> None:
         "<section style='margin:0 0 18px;padding:12px;background:#171a21;border:1px solid #262b34'>"
         f"<h2 style='font-size:16px'>Coverage and sampling</h2><p>{html.escape(coverage)}</p>"
         f"<p>Eval corpus: {html.escape(EVAL_CORPUS_VERSION)}. Exact flagged count: {exact_flagged:,}. "
-        "AA counts below are flagged records in the sample, not full-corpus counts.</p>"
+        "AA counts below count the flagged records of the sample only.</p>"
         "<h3 style='font-size:14px'>Source contamination-rate distribution</h3>"
         f"{_rate_histogram([source['rate'] for source in per_source])}"
         "<h3 style='font-size:14px'>Mandatory AA benchmarks in the sample</h3>"

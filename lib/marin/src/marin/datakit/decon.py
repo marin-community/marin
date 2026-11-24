@@ -13,10 +13,10 @@ Two stages, each resumable shard by shard:
 2. Marks (:func:`decon_step`, one per normalized source), in three phases:
 
    - scan (CPU): every record of every shard is read three ways (as is, and with JSON escapes read once and
-     twice); each item whose key a reading holds gives one candidate pair, the record text around the item
+     twice); each item whose key a reading holds gives a candidate pair, the record text around the item
      (``decon_keys.record_pairs``; records over ``MAX_DOC_CHARS`` are read in overlapping pieces);
-   - score (GPU): the encoder models give each pair the probability that the excerpt holds the item, and the
-     pair's score is the models' mean (:class:`EncoderModels`);
+   - score (:class:`ScoreWorkers`, GPUs in production): the encoder models give each pair the probability that
+     the excerpt holds the item, and the pair's score is the models' mean (:class:`EncoderModels`);
    - mark (CPU): a record is contaminated when one of its pairs scores at or above the cutoff.
 
 The marks are a co-partitioned attributes dataset, one file per input shard in input order (the contract that
@@ -83,7 +83,7 @@ DECON_ATTRIBUTES_VERSION = 6
 KEYS_FILENAME = "keys.parquet"
 LOCATORS_FILENAME = "locators.parquet"
 _WINDOWS_FILENAME = "windows.npz"
-# Pair files scored by one GPU worker task; the next group is read and tokenized while the GPU scores one.
+# Pair files that one score task reads and scores together.
 SCORE_GROUP_FILES = 16
 SCORE_BATCH = 64
 MAX_INPUT_TOKENS = 1024
