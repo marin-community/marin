@@ -15,13 +15,11 @@ import logging
 import math
 import os
 import shutil
-import site
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
-import venv
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -585,17 +583,10 @@ def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
             # The launcher owns the JSON protocol, including for bases that predate it.
             cli = Path(__file__).with_name("rl_preset_cli.py")
             shutil.copyfile(cli, path / "experiments/post_training" / cli.name)
-            # Isolated Python reads paths from its venv rather than the shell environment.
-            builder = venv.EnvBuilder(symlinks=True)
-            environment = builder.ensure_directories(str(path / ".venv"))
-            builder.create_configuration(environment)
-            builder.setup_python(environment)
-            sources = [path, *sorted(path.glob("lib/*/src")), *site.getsitepackages()]
-            (Path(environment.lib_path) / "archive.pth").write_text("\n".join(map(str, sources)) + "\n")
+            sources = [path, *sorted(path.glob("lib/*/src"))]
             result = subprocess.run(
                 [
-                    environment.env_exec_cmd,
-                    "-I",
+                    sys.executable,
                     "-m",
                     "experiments.post_training.rl_preset_cli",
                     "describe",
@@ -607,7 +598,11 @@ def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
                 capture_output=True,
                 check=True,
                 cwd=path,
-                env={"PATH": os.defpath},
+                env={
+                    "PATH": os.defpath,
+                    "PYTHONNOUSERSITE": "1",
+                    "PYTHONPATH": os.pathsep.join(map(str, sources)),
+                },
                 timeout=30,
             )
             revision = json.loads(result.stdout)
