@@ -14,6 +14,7 @@ use crate::indices::{local_sidecar_artifacts, SegmentArtifacts};
 use crate::partition_policy::SegmentPartition;
 use crate::proto::finelog::stats::ObjectRef;
 use crate::store::catalog::{Catalog, ObjectSegmentRecord};
+use crate::store::column_bounds::ColumnBounds;
 use crate::store::object_store::{ObjectId, ObjectStore};
 use crate::store::table::query_view::SegmentObjectMap;
 use crate::store::table_state::{ArtifactReferences, LocalArtifacts};
@@ -31,6 +32,9 @@ pub struct SegmentSnapshot {
     pub read_deadline: Option<tokio::time::Instant>,
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (String, String)>,
+    /// Bounds of the table's `catalog_bounds` columns, for the segments that
+    /// record any; a segment absent here is scanned for every filter.
+    pub column_bounds: BTreeMap<String, ColumnBounds>,
     /// Exact per-segment `seq` bounds, so a `seq`-bounded scan selects only the
     /// segments whose disjoint ranges it overlaps.
     pub seq_bounds: BTreeMap<String, (i64, i64)>,
@@ -208,6 +212,8 @@ impl SegmentView {
                     ))
                 })
                 .collect(),
+            // A legacy-local table plans without column bounds.
+            column_bounds: BTreeMap::new(),
             seq_bounds: segments
                 .iter()
                 .map(|segment| (segment.path.clone(), (segment.min_seq, segment.max_seq)))
@@ -305,6 +311,9 @@ pub fn visible_segments(
             max_key_value: row.max_key_value,
             partition: row.partition,
             location: row.location,
+            column_bounds: record
+                .map(|record| record.column_bounds.clone())
+                .unwrap_or_default(),
             artifacts,
         });
     }

@@ -15,8 +15,8 @@ until the change is ready to publish. `review-pr` owns independent assessment;
 Before authoring a commit or PR title or body, read:
 
 - `docs/dev-guide/writing-style/index.md`
+- `docs/dev-guide/writing-style/drafting.md`
 - `docs/dev-guide/writing-style/pull-requests.md`
-- `docs/dev-guide/writing-style/ai-writing-donts.md`
 
 Clean and format the diff, commit it, then run advisory review and independent
 validation concurrently. Resolve their results before pushing and publishing,

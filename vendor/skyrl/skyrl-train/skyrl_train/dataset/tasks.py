@@ -16,16 +16,17 @@ from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
+from skyrl_train.config.rollout_validation import FAMILY_COLUMN
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
-    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
-    VerifyitGrader,
+    grader_environment,
     grades_with_judge,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
@@ -36,12 +37,30 @@ from skyrl_train.inference_engines.chat_template import assistant_prefix_token_i
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
+from finestore.rl.strata import SelectionManifest, TaskEvaluationIdentity, TaskStrata, read_selection_manifest
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
 TASK_ROLLOUT_COLUMN = "task_rollout_spec"
 TASK_SPEC_COLUMN = "task_spec"
+TASK_EVALUATION_IDENTITY = "task_evaluation_identity"
 TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=False)])
 PARQUET_BATCH_SIZE = 1024
+
+
+def task_evaluation_identity(task: dict, selection: SelectionManifest | None) -> TaskEvaluationIdentity:
+    digest = canonical_sha256(task)
+    if selection is None:
+        return TaskEvaluationIdentity(task_digest=digest, strata=TaskStrata(agentic="agentic" in task.get("tags", ())))
+    identity = selection.identity(task["id"])
+    if identity.task_digest != digest:
+        raise ValueError(f"evaluation task content differs from selection manifest: {task['id']}")
+    return identity
+
+
+def with_evaluation_identities(dataset: Dataset, identities: Iterable[TaskEvaluationIdentity | None]) -> Dataset:
+    return dataset.add_column(
+        TASK_EVALUATION_IDENTITY, [identity.model_dump_json() if identity is not None else None for identity in identities]
+    )
 
 
 def task_prompt(lowered: TaskRolloutSpec) -> dict:
@@ -68,6 +87,10 @@ class TaskDataset(PromptDataset):
         tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str, *, chat_template_kwargs: dict | None = None
     ) -> int:
         return task_prompt_token_count(tokenizer, row, prompt_key, chat_template_kwargs=chat_template_kwargs)
+
+    def label(self, index: int) -> str:
+        """The task id, which unlike the default row-number uid survives prompt-length filtering."""
+        return TaskRolloutSpec.model_validate_json(self.dataframe[index][TASK_ROLLOUT_COLUMN]).task.id
 
     def collate_fn(self, rows) -> list[dict]:
         inputs = []
@@ -97,6 +120,11 @@ class TaskDataset(PromptDataset):
                             data_source=extra_info.get("data_source") or extras.get("data_source"),
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
+                            evaluation_identity=(
+                                TaskEvaluationIdentity.model_validate_json(extras[TASK_EVALUATION_IDENTITY])
+                                if extras.get(TASK_EVALUATION_IDENTITY) is not None
+                                else None
+                            ),
                         ),
                         group_grader=task_group_grader(lowered),
                     ),
@@ -202,22 +230,23 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     if task.source.dataset in config["max_turns_by_dataset"]:
         session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
     machine = config["task_machine_by_dataset"].get(task.source.dataset)
+    if machine is None:
+        # A dataset mixing shell-simulator and Linux tasks binds machines by command semantics. The binding has
+        # no default-config entry, so it appears in a native configuration only when a launch sets it.
+        by_semantics = config.get("task_machine_by_command_semantics", {})
+        machine = by_semantics.get(task.environment_requirements.command_semantics)
     task_machine = (
         MachineRuntimeSpec.model_validate(machine)
         if machine is not None and task_machine_reason(task) is not None
         else None
     )
     verifier = None
-    grader = task.grader
-    if (
-        isinstance(grader, ScriptGrader | VerifyitGrader)
-        and grader.environment is not None
-        and not grades_with_judge(grader)
-    ):
-        machine = config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
+    grader_build = grader_environment(task.grader)
+    if grader_build is not None and not grades_with_judge(task.grader):
+        machine = config["image_verifier"] if grader_build.docker_image is not None else config["package_verifier"]
         verifier = MachineRuntimeSpec.model_validate(machine)
     lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
-    return _stored_prompt(lowered)
+    return {**_stored_prompt(lowered), FAMILY_COLUMN: row.get(FAMILY_COLUMN)}
 
 
 def write_tasks(path: Path, records: Iterable[TaskRolloutSpec]) -> None:
@@ -261,9 +290,39 @@ class SourceTaskDataset(TaskDataset):
         chat_template_kwargs: dict | None = None,
     ):
         self.environment_configs = environment_configs
+        identities: dict[str, TaskEvaluationIdentity | None] = {}
+
+        def prepare_source(source: str, dataset: Dataset) -> Dataset:
+            selection = read_selection_manifest(str(Path(source).parent))
+            column = TASK_SPEC_COLUMN if TASK_SPEC_COLUMN in dataset.column_names else TASK_ROLLOUT_COLUMN
+            annotations = []
+            for row in dataset:
+                if column not in row:
+                    if selection is not None:
+                        raise ValueError(f"selection input has no canonical task identity: {source}")
+                    annotations.append(None)
+                    continue
+                document = json.loads(row[column])
+                task = document if column == TASK_SPEC_COLUMN else document["task"]
+                task_id = task["id"]
+                identity = task_evaluation_identity(task, selection)
+                if selection is not None and TASK_SPEC_COLUMN in row:
+                    carried = {key: row[key] for key in TaskStrata.model_fields if key in row}
+                    if carried != identity.strata.model_dump(include=set(carried)):
+                        raise ValueError(f"training row strata differ from selection manifest: {task_id}")
+                if task_id in identities and identities[task_id] != identity:
+                    raise ValueError(f"task has conflicting selection identities in one input set: {task_id}")
+                identities[task_id] = identity
+                annotations.append(identity)
+            return with_evaluation_identities(dataset, annotations)
+
         super().__init__(
-            list(datasets), tokenizer, max_prompt_length, num_workers=num_workers,
+            list(datasets),
+            tokenizer,
+            max_prompt_length,
+            num_workers=num_workers,
             chat_template_kwargs=chat_template_kwargs,
+            prepare_source=prepare_source,
         )
 
     def prepare_dataset(self, dataset: Dataset) -> Dataset:
@@ -282,8 +341,14 @@ class SourceTaskDataset(TaskDataset):
         )
 
     def _map_task_rows(self, dataset: Dataset, mapper: Callable[[dict, int], dict]) -> Dataset:
+        def prepare(row: dict, index: int) -> dict:
+            carrier = row.get(TASK_EVALUATION_IDENTITY)
+            result = mapper({key: value for key, value in row.items() if key != TASK_EVALUATION_IDENTITY}, index)
+            result[TASK_EVALUATION_IDENTITY] = carrier
+            return result
+
         return dataset.map(
-            mapper,
+            prepare,
             with_indices=True,
             remove_columns=dataset.column_names,
             num_proc=dataset_num_proc(len(dataset), self.num_workers),

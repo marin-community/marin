@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from shellbox.machine import NetworkPolicy
 
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ConversationInput
@@ -22,6 +23,11 @@ class OperationKind(StrEnum):
     TEXT_GENERATION = "text_generation"
     CHOICE_LIKELIHOOD = "choice_likelihood"
     CONTINUATION_LIKELIHOOD = "continuation_likelihood"
+    AGENT_EPISODE = "agent_episode"
+
+
+GENERATION_OPERATIONS = (OperationKind.CHAT_GENERATION, OperationKind.TEXT_GENERATION, OperationKind.AGENT_EPISODE)
+CHAT_OPERATIONS = (OperationKind.CHAT_GENERATION, OperationKind.AGENT_EPISODE)
 
 
 class EvaluationModel(BaseModel):
@@ -83,14 +89,117 @@ class ContinuationLikelihood(EvaluationModel):
     request: LikelihoodRequest
 
 
+class EpisodeLimits(EvaluationModel):
+    """Episode limits with RolloutEngine's meanings; ``None`` sets no limit."""
+
+    max_turns: int | None = Field(gt=0)
+    max_total_tokens: int | None = Field(gt=0)
+    model_turn_timeout: float | None = Field(gt=0)
+    total_turn_timeout: float | None = Field(gt=0)
+    """The agent's time budget. Reaching it ends the episode, which is still graded."""
+    verifier_timeout: float | None = Field(gt=0)
+    attempt_timeout: float | None = Field(gt=0)
+    """The infrastructure backstop. An expired attempt is an infrastructure failure, retried on resume."""
+
+    @model_validator(mode="after")
+    def check_backstop(self) -> "EpisodeLimits":
+        agent, verifier, attempt = self.total_turn_timeout, self.verifier_timeout, self.attempt_timeout
+        if agent is not None and verifier is not None and attempt is not None and agent + verifier >= attempt:
+            raise ValueError("The attempt timeout must exceed the agent and verifier timeouts")
+        return self
+
+
+class EpisodeInputs(EvaluationModel):
+    """One task's episode settings. Set values replace the protocol's limits and the run's machine resources."""
+
+    agent_timeout: float | None = Field(default=None, gt=0)
+    verifier_timeout: float | None = Field(default=None, gt=0)
+    cpus: int | None = Field(default=None, gt=0)
+    memory_mb: int | None = Field(default=None, gt=0)
+    storage_mb: int | None = Field(default=None, gt=0)
+    gpus: int = Field(default=0, ge=0)
+    network: NetworkPolicy
+
+
+class ShellAgent(EvaluationModel):
+    """RolloutEngine's shell harness: one shell tool on the task machine, without a per-command timeout."""
+
+    kind: Literal["shell"] = "shell"
+
+
+class TerminusAgent(EvaluationModel):
+    """Harbor's Terminus 2, driving a tmux session with its JSON response format."""
+
+    kind: Literal["terminus-2"] = "terminus-2"
+
+
+class PiAgent(EvaluationModel):
+    """Harbor's Pi coding agent, run from the task image, which must provide it.
+
+    Pi chooses its own sampling and output limits, so the protocol's sampling does not apply to its
+    requests; the protocol's ``max_tokens`` is the per-reply limit Pi is configured with. ``version``,
+    when set, must equal the image's Pi version. ``thinking`` is Pi's ``--thinking`` level. Pi compacts
+    its history when fewer than ``compaction_reserve_tokens`` of its context are free, by default the
+    per-reply limit. ``setup_timeout`` bounds Pi's setup in the task machine.
+    """
+
+    kind: Literal["pi"] = "pi"
+    version: str | None = Field(default=None, min_length=1)
+    thinking: Literal["off", "minimal", "low", "medium", "high", "xhigh"] | None = None
+    compaction_reserve_tokens: int | None = Field(default=None, gt=0)
+    setup_timeout: float | None = Field(default=None, gt=0)
+
+
+class MiniSweAgent(EvaluationModel):
+    """mini-swe-agent 2.1.0 as Harbor runs it: one ``bash`` tool, each command in a fresh subshell.
+
+    Like Pi, it sends its own requests, so the protocol's sampling does not apply to them; the protocol's
+    ``max_tokens`` is the largest reply it asks for.
+    """
+
+    kind: Literal["mini-swe-agent"] = "mini-swe-agent"
+
+
+EpisodeAgent = Annotated[ShellAgent | TerminusAgent | PiAgent | MiniSweAgent, Field(discriminator="kind")]
+
+
+class AgentEpisode(EvaluationModel):
+    """Run ``harness`` on a task machine, then grade the episode."""
+
+    kind: Literal[OperationKind.AGENT_EPISODE] = OperationKind.AGENT_EPISODE
+    harness: EpisodeAgent
+    limits: EpisodeLimits
+    max_input_tokens: int | None = Field(default=None, gt=0)
+    """The agent's context limit, when the protocol caps it below the served context window."""
+
+    def limits_for(self, inputs: EpisodeInputs) -> EpisodeLimits:
+        """The protocol's limits with the task's own agent and verifier timeouts."""
+        return EpisodeLimits.model_validate(
+            {
+                **self.limits.model_dump(),
+                **({} if inputs.agent_timeout is None else {"total_turn_timeout": inputs.agent_timeout}),
+                **({} if inputs.verifier_timeout is None else {"verifier_timeout": inputs.verifier_timeout}),
+            }
+        )
+
+
 Operation = Annotated[
-    ChatGeneration | TextGeneration | ChoiceLikelihood | ContinuationLikelihood, Field(discriminator="kind")
+    ChatGeneration | TextGeneration | ChoiceLikelihood | ContinuationLikelihood | AgentEpisode,
+    Field(discriminator="kind"),
 ]
 
 
 class CohortOrder(StrEnum):
+    """Candidate order before a limit.
+
+    ``SHUFFLED`` sorts rows by a hash of their source row, so a limit selects a fixed uniform sample. The hash
+    keys on the row's file position, so the sample is fixed per corpus revision: an upstream insert or delete
+    reshuffles which rows a limit selects, and also changes the protocol's expected population.
+    """
+
     SOURCE = "source"
     ROUND_ROBIN = "round_robin"
+    SHUFFLED = "shuffled"
 
 
 class LimitStage(StrEnum):
@@ -153,6 +262,8 @@ class EvaluationItem(EvaluationModel):
     groups: dict[str, str] = Field(default_factory=dict)
     reference_text: str | None = None
     prompt_characters: int | None = Field(default=None, ge=0)
+    episode: EpisodeInputs | None = Field(default=None, exclude_if=lambda value: value is None)
+    """Required by, and only allowed for, an agent episode."""
 
     @property
     def source_ordinal(self) -> int:
@@ -257,8 +368,10 @@ class EvaluationProtocol(EvaluationModel):
         names = [metric.name for metric in self.metrics]
         if len(names) != len(set(names)) or self.primary_metric not in names:
             raise ValueError("Evaluation metrics must be unique and include the primary metric")
-        if (self.operation in ("chat_generation", "text_generation")) != (self.sampling is not None):
+        if (self.operation in GENERATION_OPERATIONS) != (self.sampling is not None):
             raise ValueError("Only generation protocols declare sampling settings")
+        if self.operation == OperationKind.AGENT_EPISODE and self.context_policy is not None:
+            raise ValueError("Agent harnesses build their own prompts, so agent episodes have no context policy")
         if self.operation in ("choice_likelihood", "continuation_likelihood"):
             if {metric.name for metric in self.likelihood_metrics} != set(names):
                 raise ValueError("Each likelihood metric must declare its normalization")

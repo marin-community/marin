@@ -124,7 +124,10 @@ class RecoveryEndpoint:
         question = payload["messages"][-1]["content"]
         if question == "colors/0" and payload["seed"] == 7 and self.failures_remaining:
             self.failures_remaining -= 1
-            return httpx.Response(self.status, json={"error": {"message": "temporary fixture failure"}})
+            # The client retries a transient failure after the endpoint's requested delay.
+            return httpx.Response(
+                self.status, json={"error": {"message": "temporary fixture failure"}}, headers={"retry-after-ms": "1"}
+            )
         content = "blue" if question == "paints/1" else "red"
         return httpx.Response(
             200,
@@ -141,7 +144,8 @@ class RecoveryEndpoint:
 
 @pytest.fixture
 def recovery_endpoint(monkeypatch):
-    endpoint = RecoveryEndpoint(failures_remaining=1)
+    # One logical request fails: the client's first request and each of its retries.
+    endpoint = RecoveryEndpoint(failures_remaining=task_worker.MODEL_REQUEST_RETRIES + 1)
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(WordLevel({"[BOS]": 0, "[UNK]": 1}, unk_token="[UNK]")),
         bos_token="[BOS]",
@@ -187,7 +191,7 @@ def test_retry_drains_later_corpora_and_resumes_only_failed_attempt_with_same_se
 def test_retry_exhaustion_preserves_all_failed_physical_attempts_and_later_grades(
     tmp_path, recovery_corpora, recovery_endpoint, driver_config
 ):
-    recovery_endpoint.failures_remaining = 10
+    recovery_endpoint.failures_remaining = task_worker.DEFAULT_MAX_ATTEMPTS * (task_worker.MODEL_REQUEST_RETRIES + 1)
     output = str(tmp_path / "results")
     with pytest.raises(EvaluationInfrastructureError):
         execute_with_retries(recovery_corpora, output, driver_config, "http://fixture.test/v1", "unused", None)

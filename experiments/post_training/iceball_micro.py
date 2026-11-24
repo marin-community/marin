@@ -54,6 +54,7 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLPolicyModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
@@ -63,12 +64,12 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe, sections
+from skyrlrecipe import ContextBudget, SkyRLRecipe, sections
 from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.pipeline import EvaluationResult
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
+from experiments.post_training.skyrl_evaluation import evaluate_model
 from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSpec, resources_from_accelerator, sft_step
 
 logger = logging.getLogger(__name__)
@@ -150,7 +151,6 @@ QWEN3_CHAT_TEMPLATE = (
 )
 
 ICEBALL_RL_RECIPE = SkyRLRecipe(
-    entrypoint=RLEntrypoint.STANDARD,
     context_budget=ContextBudget(
         request_window_tokens=ICEBALL_SEQUENCE_LENGTH, max_new_tokens_per_turn=256, max_turns=1
     ),
@@ -446,8 +446,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     evaluation_version = version or resolve_version(evaluation_name, None)
     evaluation_model = ModelConfig(
         name=ICEBALL_MODEL_NAME,
-        location=SKYRL_POLICY_LOCATION,
-        tokenizer=QWEN_TOKENIZER,
+        location="",
         apply_chat_template=True,
         resource_hint=ResourceHint(gpu={ICEBALL_GPU_VARIANT: 1}),
         serve=ServeConfig(
@@ -460,8 +459,8 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
         ),
         generation=GenerationConfig(max_gen_toks=256),
     )
-    evaluation = skyrl_eval_step(
-        rl,
+    evaluation = evaluate_model(
+        SkyRLPolicyModel(rl),
         evaluation_model,
         resolve_evaluations(ICEBALL_EVALS),
         version=evaluation_version,

@@ -204,12 +204,19 @@ class ArtifactStep(Generic[T]):
     """Opt-in hard pin: when set, :func:`lower` raises :class:`FingerprintMismatchError` if the
     config now fingerprints to something else, and the drift check raises rather than warns. Leave
     ``None`` to opt out."""
+    output_path_prefix: str | None = None
+    """Storage root for this produced artifact. Dependencies retain their own roots."""
 
     def __post_init__(self) -> None:
         validate_path_segment("name", self.name)
         validate_version(self.version)
         if self.adopt_source is not None and self.override_path is not None:
             raise ValueError(f"{self.name}@{self.version}: an artifact cannot be both adopted and pinned")
+        if self.output_path_prefix is not None:
+            if not self.output_path_prefix or _is_relative_path(self.output_path_prefix):
+                raise ValueError("output_path_prefix must be a storage URI or an absolute directory")
+            if self.override_path is not None or self.adopt_source is not None:
+                raise ValueError("output_path_prefix applies to produced artifacts")
 
     def fingerprint_payload(self) -> str:
         """The canonical config bytes this handle's fingerprint hashes. For a computed
@@ -226,7 +233,7 @@ class ArtifactStep(Generic[T]):
         return fingerprint_hash(self.fingerprint_payload())
 
     def path(self, prefix: str | None = None) -> str:
-        resolved_prefix = prefix or marin_prefix()
+        resolved_prefix = self.output_path_prefix or prefix or marin_prefix()
         # An adopted artifact resolves to its source; a pin to its location; else the
         # canonical name@version address.
         location = self.adopt_source if self.adopt_source is not None else self.override_path
@@ -301,7 +308,7 @@ def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
 
 
 def _output_path_spec(handle: "ArtifactStep") -> str:
-    """The relative output path StepSpec should use: the pin if set, else ``{name}/{version}``."""
+    """The pin if it is set, otherwise the artifact's name and version."""
     return handle.override_path or f"{handle.name}/{handle.version}"
 
 
@@ -404,6 +411,7 @@ def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepS
     step_fn = replace(handle.run, fn=fn) if isinstance(handle.run, RemoteCallable) else fn
     spec = StepSpec(
         name=handle.name,
+        output_path_prefix=handle.output_path_prefix,
         override_output_path=_output_path_spec(handle),
         deps=dep_specs,
         hash_attrs=hash_attrs,

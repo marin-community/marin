@@ -26,6 +26,7 @@ pub struct SegmentFormat {
     key_column: String,
     sort_columns: Vec<String>,
     max_row_group_rows: usize,
+    bounds_columns: Vec<String>,
 }
 
 impl SegmentFormat {
@@ -40,12 +41,19 @@ impl SegmentFormat {
         } else {
             schema.max_row_group_rows as usize
         };
+        let bounds_columns = schema
+            .columns
+            .iter()
+            .filter(|column| column.index.catalog_bounds)
+            .map(|column| column.name.clone())
+            .collect();
         Ok(Self {
             schema,
             arrow_schema,
             key_column,
             sort_columns,
             max_row_group_rows,
+            bounds_columns,
         })
     }
 
@@ -78,7 +86,13 @@ impl SegmentFormat {
             sort_columns: &self.sort_columns,
             key_column: &self.key_column,
             max_row_group_rows: self.max_row_group_rows,
+            bounds_columns: &self.bounds_columns,
         }
+    }
+
+    /// The columns whose per-segment min/max the catalog keeps.
+    pub fn bounds_columns(&self) -> &[String] {
+        &self.bounds_columns
     }
 
     /// The derived-index policy for `table`, empty when the deployment disables

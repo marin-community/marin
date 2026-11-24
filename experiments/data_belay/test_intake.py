@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from finestore.rl.licenses import LicenseVerdict, license_verdict
 
-from experiments.data_belay.intake import LicenseVerdict, license_verdict
 from experiments.data_belay.prepare import cache_epochs
 
 
@@ -24,6 +24,10 @@ from experiments.data_belay.prepare import cache_epochs
         ((), LicenseVerdict.NEEDS_REVIEW),
         # Every id on the card must be allowed: a second license off the list sends the dataset to a person.
         (("mit", "gfdl"), LicenseVerdict.NEEDS_REVIEW),
+        # The shared table admits the ODC-By 1.0 and PDDL/ODC-PDDL dedications.
+        (("odc-by-1.0",), LicenseVerdict.ALLOWED),
+        (("pddl-1.0",), LicenseVerdict.ALLOWED),
+        (("odc-pddl",), LicenseVerdict.ALLOWED),
         (("apache-2.0", "cc-by-nc-4.0"), LicenseVerdict.REJECTED),
     ],
 )

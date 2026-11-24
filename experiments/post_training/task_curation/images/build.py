@@ -260,6 +260,7 @@ def dockerfile(environment: Environment) -> str:
     )
     lines.append(
         "RUN find /opt/task-curation/runtime -name __pycache__ -prune -exec rm -rf {} +"
+        " && find /opt/task-curation/runtime \\( -name '*.so' -o -name '*.pyd' \\) -delete"
         " && echo /opt/task-curation/runtime"
         f' > "$(python3 -c \'import sysconfig; print(sysconfig.get_path("purelib"))\')/{RUNTIME_PTH}"'
         " && python3 -c 'from verifyit.grade import main'"

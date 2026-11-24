@@ -156,6 +156,9 @@ Rollback explicitly selects a retained package; database migrations are not reve
 The registry retains the current revision and four other recent revisions. A runtime
 rollback must still support the active package APIs and dependency requirements.
 
+Anonymous readers can access only the current revision selected by publish or rollback;
+other revisions return 404. Signed-in Marina users retain access to retained revision history.
+
 Apps default to private. Public mode exposes GET/HEAD only on the public app
 origin and must contain only data and trusted handlers intended for unrestricted
 access. Named apps stay private. See the [reference](https://github.com/marin-community/marin/blob/main/infra/marina/README.md)

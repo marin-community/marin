@@ -7,7 +7,7 @@
 it. The script regenerates the entry with the grader packages' ``reasoning_gym`` and the seeds and JSON
 encoding of ``generate.py`` (shipped beside it), exits nonzero when the regenerated entry or the
 generator configuration differs from the recorded one, and otherwise scores the text after the reply's
-last ``Answer:`` marker, or the whole reply, with the task's own scorer. The scorer sees the
+last ``Answer:`` marker, or the whole reply, with the pinned scorer and targeted repairs. The scorer sees the
 generator's Python values, not their JSON forms.
 """
 
@@ -24,7 +24,7 @@ from verifyit.modes.grade_reasoning_gym import score_reasoning_gym_answer
 
 sys.path.insert(0, "/tests")
 
-from generate import ROWS_PER_TASK, encoded, task_seed
+from generate import ROWS_PER_TASK, encoded, task_seed, without_generation_day
 
 CONFIG = Path("/tests/config.json")
 ANSWER = Path("/app/answer.txt")
@@ -53,7 +53,7 @@ def main() -> None:
         raise ValueError(f"PYTHONHASHSEED must be {generation['python_hash_seed']} to regenerate the entry")
     with contextlib.redirect_stdout(sys.stderr):
         entry = regenerated_entry(generation)
-        if encoded(entry) != contract["entry"]:
+        if without_generation_day(encoded(entry)) != without_generation_day(contract["entry"]):
             raise ValueError("Regenerated entry differs from the recorded entry")
         reward = score_reasoning_gym_answer(generation["task"], entry, candidate(ANSWER.read_text(errors="replace")))
     print(reward)

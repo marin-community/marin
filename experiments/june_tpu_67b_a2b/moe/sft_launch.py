@@ -207,6 +207,12 @@ class GrugModel:
         resources: ResourceConfig,
         num_train_steps: int,
     ) -> GrugMoeSFTConfig:
+        if spec.xla_flags:
+            raise ValueError("GrugModel does not accept SFTSpec.xla_flags")
+        if spec.per_device_parallelism != -1:
+            raise ValueError("GrugModel takes per_device_parallelism from the model source")
+        if spec.timeout is not None:
+            raise ValueError("GrugModel does not accept SFTSpec.timeout")
         if isinstance(self.init_from, ArtifactStep):
             # A chained Grug stage: init from the prior stage's saved checkpoints.
             init_from_path = prefix_join(ctx.artifact_path(self.init_from), "checkpoints")

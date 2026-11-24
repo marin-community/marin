@@ -42,7 +42,7 @@ def sft_trainer(tmp_path, monkeypatch):
     spec = SFTSpec(
         name="checkpoints/test-sft",
         version="2026.10.29",
-        model=HFModel(model_ref="unused-local-model"),
+        model=HFModel(model_ref=str(tmp_path / "unused-local-model")),
         chat_template="unused",
         datasets=[],
         optimizer=AdamConfig(),

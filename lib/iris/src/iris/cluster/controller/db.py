@@ -57,8 +57,11 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
+from iris.cluster.controller import write_lock_cost
 from iris.cluster.controller.caches import CacheRegistry
+from iris.cluster.controller.observability_rows import ObservabilityRowTables
 from iris.cluster.controller.schema import metadata, schema_migrations_table
+from iris.cluster.controller.write_lock_cost import CostWindow
 
 logger = logging.getLogger(__name__)
 
@@ -151,9 +154,21 @@ class Tx:
     while the write lock is still held (see ``write_transaction``).
     """
 
-    def __init__(self, conn: Connection, caches: CacheRegistry, seq: int, task_event_table: Table | None = None):
+    def __init__(
+        self,
+        conn: Connection,
+        caches: CacheRegistry,
+        seq: int,
+        task_event_table: Table | None = None,
+        observability_rows: ObservabilityRowTables | None = None,
+        lock_cost: CostWindow | None = None,
+    ):
         self.conn = conn
         self.task_event_table = task_event_table
+        self.observability_rows = observability_rows
+        # The owning DB's write-lock cost window; None on a read snapshot.
+        self.lock_cost = lock_cost
+        self._pre_commit_hooks: list[Callable[[], None]] = []
         self._hooks: list[Callable[[], None]] = []
         # The DB commit sequence sampled just BEFORE this cursor's snapshot was
         # established (``BEGIN``). It is a conservative lower bound on what the
@@ -194,6 +209,18 @@ class Tx:
         """
         self._hooks.append(hook)
 
+    def register_pre_commit(self, hook: Callable[[], None]) -> None:
+        """Register a hook that runs inside the transaction, just before ``COMMIT``.
+
+        Hooks run in registration order and may read and write through this
+        cursor. An exception rolls the transaction back.
+        """
+        self._pre_commit_hooks.append(hook)
+
+    def _fire_pre_commit_hooks(self) -> None:
+        for hook in self._pre_commit_hooks:
+            hook()
+
     def _fire_hooks(self) -> None:
         for hook in self._hooks:
             hook()
@@ -204,7 +231,9 @@ def write_transaction(
     write_engine: Engine,
     write_lock: threading.RLock,
     caches: CacheRegistry,
+    lock_cost: CostWindow,
     task_event_table: Table | None = None,
+    observability_rows: ObservabilityRowTables | None = None,
 ) -> Iterator[Tx]:
     """Open a write transaction backed by ``write_engine``.
 
@@ -216,17 +245,24 @@ def write_transaction(
     ``caches`` is the owning DB's per-controller cache registry, mirrored onto
     the yielded ``Tx`` as ``tx.caches`` so write sinks can reach a memo through
     the cursor (see :mod:`iris.cluster.controller.caches`).
+
+    The time spent waiting for ``write_lock`` and holding it is added to
+    ``lock_cost``; its records are emitted after the lock is released
+    (:mod:`iris.cluster.controller.write_lock_cost`).
     """
+    requested_at = time.monotonic()
     write_lock.acquire()
+    acquired_at = time.monotonic()
     conn: Connection | None = None
     try:
         conn = write_engine.connect()
         # Sample the commit sequence BEFORE opening the snapshot (conservative).
         seq = caches.commit_seq
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = Tx(conn, caches, seq, task_event_table)
+        tx = Tx(conn, caches, seq, task_event_table, observability_rows, lock_cost)
         try:
             yield tx
+            tx._fire_pre_commit_hooks()
         except Exception:
             conn.execute(text("ROLLBACK"))
             raise
@@ -239,7 +275,10 @@ def write_transaction(
     finally:
         if conn is not None:
             conn.close()
+        now = time.monotonic()
+        pending = lock_cost.close_transaction(acquired_at - requested_at, now - acquired_at, now)
         write_lock.release()
+        write_lock_cost.emit(pending)
 
 
 @contextmanager
@@ -284,6 +323,8 @@ class ControllerDB:
         self._lock = RLock()
         self._reopen_hooks: list[Callable[[], None]] = []
         self._task_event_table: Table | None = None
+        self._observability_rows: ObservabilityRowTables | None = None
+        self._lock_cost = CostWindow(started=time.monotonic())
         # Per-controller cache registry, mirrored onto every Tx this DB mints as
         # ``tx.caches``. Built before the engines so no cursor is ever minted
         # without it. Populated by higher layers (each per-controller memo
@@ -322,6 +363,9 @@ class ControllerDB:
 
     def attach_task_event_table(self, table: Table) -> None:
         self._task_event_table = table
+
+    def attach_observability_rows(self, tables: ObservabilityRowTables) -> None:
+        self._observability_rows = tables
 
     @property
     def sa_read_engine(self) -> Engine:
@@ -412,7 +456,9 @@ class ControllerDB:
             self._sa_write_engine,
             self._lock,
             self._caches,
+            self._lock_cost,
             self._task_event_table,
+            self._observability_rows,
         ) as tx:
             yield tx
 

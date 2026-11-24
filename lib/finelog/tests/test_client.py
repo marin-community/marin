@@ -526,6 +526,7 @@ def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clien
         columns=(
             Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, trigram_index=True),
             Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64),
+            Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, catalog_bounds=True),
         ),
         key_column="timestamp_ms",
         sort_columns=("worker_id", "timestamp_ms"),
@@ -553,7 +554,7 @@ def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clien
     client = LogClient.connect("http://h:1")
     try:
         table = client.get_table("iris.worker", schema, storage_policy=policy, table_spec=table_spec)
-        table.write([SimpleNamespace(worker_id="w-1", timestamp_ms=1)])
+        table.write([SimpleNamespace(worker_id="w-1", timestamp_ms=1, epoch_ms=1)])
         assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
 
         registered = tracked_clients[0].registered_specs["iris.worker"]
@@ -562,7 +563,8 @@ def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clien
         assert registered.source_layout.partition.fields[0].bucket.buckets == 16
         assert registered.source_layout.target_object_bytes == 128 * 1024 * 1024
         assert registered.artifact_policy.revision == 4
-        assert registered.artifact_policy.indexes[0].column == "worker_id"
+        assert registered.logical_schema.columns[2].index.catalog_bounds
+        assert [index.column for index in registered.artifact_policy.indexes] == ["worker_id"]
         assert registered.operating_policy.l0_mode == stats_pb2.L0_MODE_OBJECT_STORE
         assert registered.operating_policy.local_cache.max_bytes == 1024
         assert registered.operating_policy.remote_retention.retain_forever
@@ -954,8 +956,7 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
     """
     client = LogClient.connect("http://h:1")
     try:
-        client.get_table("iris.worker", WorkerStat)
-        table = client._tables["iris.worker"]
+        table = client.get_table("iris.worker", WorkerStat, max_buffer_rows=4, max_buffer_bytes=1024)
         # Stop the bg thread so trim_oldest's notify_all has no consumer.
         # Re-enable writes by clearing the flag once the thread has exited.
         with table._cond:
@@ -964,8 +965,6 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
         table._thread.join(timeout=2.0)
         with table._cond:
             table._closing = False
-        table._max_buffer_rows = 4
-        table._max_buffer_bytes = 1024
         table._batch_rows = 1_000_000
         # Bypass the rate limiter so the very first overflow logs.
         table._overflow_log_limiter = log_client_mod.RateLimiter(interval_seconds=0)
@@ -1137,6 +1136,110 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
     assert len(thread_targets) == 1
     assert len(sent) == 1
     assert sent[0].column("worker_id").to_pylist() == ["w-1", "w-2"]
+
+
+def test_table_sends_a_large_queue_in_bounded_requests_and_drops_only_the_refused_one(monkeypatch):
+    sent = []
+
+    def flusher(_namespace, batch):
+        workers = batch.column("worker_id").to_pylist()
+        if "refused-a" in workers:
+            raise ConnectError(Code.INVALID_ARGUMENT, "body too large")
+        sent.append(workers)
+
+    # Each row counts 9 bytes, so two rows fit in one request of 20 bytes.
+    monkeypatch.setattr(log_client_mod, "SEND_TARGET_BYTES", 20)
+    schema = Schema(columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),))
+    table = log_client_mod.Table(namespace="iris.worker", schema=schema, flusher=flusher)
+    names = ["worker-01", "worker-02", "refused-a", "refused-b", "worker-05"]
+    # One write queues the five rows together, so the flush thread takes them as one queue.
+    table.write([SimpleNamespace(worker_id=name) for name in names])
+    table.close()
+
+    assert sent == [["worker-01", "worker-02"], ["worker-05"]]
+    assert table.flush() is FlushResult.DROPPED
+
+
+def test_table_sends_a_failed_request_again_without_the_rows_already_sent(monkeypatch):
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
+    # Each row counts 9 bytes, so two rows fit in one request of 20 bytes.
+    monkeypatch.setattr(log_client_mod, "SEND_TARGET_BYTES", 20)
+    sent = []
+    failures = [ConnectError(Code.UNAVAILABLE, "server restarting")]
+
+    def flusher(_namespace, batch):
+        workers = batch.column("worker_id").to_pylist()
+        if "worker-03" in workers and failures:
+            raise failures.pop()
+        sent.append(workers)
+
+    schema = Schema(columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),))
+    table = log_client_mod.Table(namespace="iris.worker", schema=schema, flusher=flusher)
+    table.write([SimpleNamespace(worker_id=f"worker-0{number}") for number in range(1, 6)])
+
+    assert table.flush(timeout=10) is FlushResult.SUCCEEDED
+    assert sent == [["worker-01", "worker-02"], ["worker-03", "worker-04"], ["worker-05"]]
+    table.close()
+
+
+def test_table_halves_a_request_above_the_encoded_bound_and_drops_a_row_that_cannot_fit(monkeypatch):
+    sent = []
+    # A bytes value counts 8 bytes in the queue, so the five rows are one request by their estimated size.
+    # A 60-byte row encodes to about 70 bytes: two fit below the bound, and the 400-byte row never does.
+    monkeypatch.setattr(log_client_mod, "MAX_REQUEST_BYTES", 150)
+    schema = Schema(columns=(Column(name="payload", type=stats_pb2.COLUMN_TYPE_BYTES, nullable=False),))
+    table = log_client_mod.Table(
+        namespace="iris.blob",
+        schema=schema,
+        flusher=lambda _namespace, batch: sent.append([len(value) for value in batch.column("payload").to_pylist()]),
+    )
+    table.write([SimpleNamespace(payload=bytes(size)) for size in (400, 60, 60, 60, 60)])
+    table.close()
+
+    assert sent == [[60], [60], [60, 60]]
+    assert table.flush() is FlushResult.DROPPED
+
+
+@pytest.mark.parametrize("failing_row", [0, 2], ids=["first-half", "second-half"])
+def test_table_sends_each_row_once_when_one_half_of_a_split_request_fails(monkeypatch, failing_row):
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
+    # The four rows are one request by their estimated size; two rows encode below the bound and four do not.
+    monkeypatch.setattr(log_client_mod, "MAX_REQUEST_BYTES", 150)
+    sent = []
+    failures = [ConnectError(Code.UNAVAILABLE, "server restarting")]
+
+    def flusher(_namespace, batch):
+        rows = [value[0] for value in batch.column("payload").to_pylist()]
+        if failing_row in rows and failures:
+            raise failures.pop()
+        sent.append(rows)
+
+    schema = Schema(columns=(Column(name="payload", type=stats_pb2.COLUMN_TYPE_BYTES, nullable=False),))
+    table = log_client_mod.Table(namespace="iris.blob", schema=schema, flusher=flusher)
+    table.write([SimpleNamespace(payload=bytes([row]) * 60) for row in range(4)])
+
+    assert table.flush(timeout=10) is FlushResult.SUCCEEDED
+    assert sent == [[0, 1], [2, 3]]
+    table.close()
+
+
+def test_get_table_keeps_the_buffer_bounds_that_a_caller_set_whatever_the_order():
+    client = LogClient.connect("http://h:1")
+    try:
+        raised_first = client.get_table("iris.worker", WorkerStat, max_buffer_rows=50_000)
+        assert client.get_table("iris.worker", WorkerStat) is raised_first
+        default_first = client.get_table("iris.task", WorkerStat)
+        assert client.get_table("iris.task", WorkerStat, max_buffer_rows=50_000) is default_first
+        for table in (raised_first, default_first):
+            assert (table._max_buffer_rows, table._max_buffer_bytes) == (50_000, log_client_mod.DEFAULT_MAX_BUFFER_BYTES)
+
+        with pytest.raises(ValueError, match="max_buffer_rows=50000, not 4"):
+            client.get_table("iris.worker", WorkerStat, max_buffer_rows=4)
+        assert raised_first._max_buffer_rows == 50_000
+    finally:
+        client.close()
 
 
 def test_schema_from_proto_consistency():

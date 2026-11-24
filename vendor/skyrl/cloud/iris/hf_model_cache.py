@@ -34,9 +34,9 @@ from marinskyrl.hf_model import (
     normalize_fast_tokenizer_metadata_bytes,
     validate_hf_model_weights,
 )
+from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 from marinskyrl.model_manifest import (
     HF_WEIGHT_INDEX_FILENAME,
-    MODEL_MANIFEST_FILENAME,
     ModelManifest,
     ModelManifestFile,
     build_model_manifest,

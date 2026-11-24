@@ -11,7 +11,10 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use axum::response::IntoResponse;
+use axum::extract::{Request, State};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
+use axum::Router;
 use connectrpc::client::{ClientBody, ClientConfig, ServiceTransport};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client as HyperClient;
@@ -19,6 +22,7 @@ use hyper_util::rt::TokioExecutor;
 
 use crate::proto::finelog::logging::LogServiceClient;
 use crate::proto::finelog::stats::StatsServiceClient;
+use crate::read_executor::ReadExecutor;
 use crate::server::auth::AuthPolicy;
 use crate::server::forwarding::forward_client_config;
 use crate::server::{build_app_with_config, ServerConfig};
@@ -137,29 +141,11 @@ pub fn stats_client(addr: SocketAddr) -> StatsServiceClient<TestTransport> {
     StatsServiceClient::new(transport, config)
 }
 
-/// Serve `store` on an ephemeral loopback port under `policy`, counting the RPC
-/// requests that reach it. Returns the address and that counter.
-pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<RequestStats>) {
-    let requests = Arc::new(RequestStats::default());
-    let counted = Arc::clone(&requests);
-    let app = build_app_with_config(store, ServerConfig::default().with_auth(policy)).layer(
-        axum::middleware::from_fn(
-            move |req: axum::extract::Request, next: axum::middleware::Next| {
-                let counted = Arc::clone(&counted);
-                async move {
-                    let observed = counted.begin(&req);
-                    let response = next.run(req).await;
-                    if observed {
-                        counted.finish();
-                    }
-                    response
-                }
-            },
-        ),
-    );
+/// Serve a test app with the same connection metadata as the production listener.
+pub async fn serve_app(app: Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
+    let server = tokio::spawn(async move {
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -167,6 +153,36 @@ pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<Re
         .await
         .unwrap();
     });
+    (addr, server)
+}
+
+async fn count_requests(
+    State(requests): State<Arc<RequestStats>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let observed = requests.begin(&request);
+    let response = next.run(request).await;
+    if observed {
+        requests.finish();
+    }
+    response
+}
+
+/// Serve `store` on an ephemeral loopback port under `policy`, counting the RPC
+/// requests that reach it. Returns the address and that counter.
+pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<RequestStats>) {
+    let requests = Arc::new(RequestStats::default());
+    let app = build_app_with_config(
+        store,
+        ServerConfig::default().with_auth(policy),
+        Arc::new(ReadExecutor::for_process().unwrap()),
+    )
+    .layer(axum::middleware::from_fn_with_state(
+        Arc::clone(&requests),
+        count_requests,
+    ));
+    let (addr, _) = serve_app(app).await;
     (addr, requests)
 }
 
@@ -184,46 +200,37 @@ pub async fn serve_with_outage(
     let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let outage = Arc::clone(&down);
     let requests = Arc::new(RequestStats::default());
-    let counted = Arc::clone(&requests);
-    let app = build_app_with_config(store, ServerConfig::default().with_auth(policy)).layer(
-        axum::middleware::from_fn(
-            move |req: axum::extract::Request, next: axum::middleware::Next| {
-                let counted = Arc::clone(&counted);
-                let down = Arc::clone(&down);
-                async move {
-                    let observed = counted.begin(&req);
-                    let response = if down.load(Ordering::SeqCst) {
-                        let error = connectrpc::ConnectError::new(
-                            connectrpc::ErrorCode::Unavailable,
-                            "hub outage",
-                        );
-                        (
-                            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                            [(axum::http::header::CONTENT_TYPE, "application/json")],
-                            error.to_json(),
-                        )
-                            .into_response()
-                    } else {
-                        next.run(req).await
-                    };
-                    if observed {
-                        counted.finish();
-                    }
-                    response
+    let app = build_app_with_config(
+        store,
+        ServerConfig::default().with_auth(policy),
+        Arc::new(ReadExecutor::for_process().unwrap()),
+    )
+    .layer(axum::middleware::from_fn(
+        move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let down = Arc::clone(&down);
+            async move {
+                if down.load(Ordering::SeqCst) {
+                    let error = connectrpc::ConnectError::new(
+                        connectrpc::ErrorCode::Unavailable,
+                        "hub outage",
+                    );
+                    (
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        error.to_json(),
+                    )
+                        .into_response()
+                } else {
+                    next.run(req).await
                 }
-            },
-        ),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
+            }
+        },
+    ))
+    .layer(axum::middleware::from_fn_with_state(
+        Arc::clone(&requests),
+        count_requests,
+    ));
+    let (addr, _) = serve_app(app).await;
     (addr, requests, outage)
 }
 
@@ -286,10 +293,6 @@ async fn serve_error(
             }
         },
     ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let (addr, _) = serve_app(app).await;
     (addr, requests)
 }

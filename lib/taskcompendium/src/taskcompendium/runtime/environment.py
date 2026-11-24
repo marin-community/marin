@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import replace
 
+from shellbox.image import DockerfileSource
 from shellbox.machine import (
     Backend,
     HostImage,
@@ -15,7 +16,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 
-from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
+from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.local import local_runtime
 
 _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
@@ -24,6 +25,11 @@ _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
 def setup_user(backend: Backend) -> str | None:
     """Use the host user for local writable roots and root for image-owned directories."""
     return None if backend == Backend.LOCAL else "0"
+
+
+def host_variables(environment: Mapping[str, str]) -> frozenset[str]:
+    """The host variables that whole-value ``${NAME}`` and ``${NAME:-default}`` references read."""
+    return frozenset(match[1] for value in environment.values() if (match := _TEMPLATE_PATTERN.fullmatch(value)))
 
 
 def resolve_env_vars(environment: Mapping[str, str], host_environment: Mapping[str, str]) -> dict[str, str]:
@@ -54,8 +60,15 @@ def bound_machine_spec(requirements: EnvironmentRequirements, factory: MachineFa
 
 
 def validate_machine_spec(requirements: EnvironmentRequirements, factory: MachineFactory, spec: MachineSpec) -> None:
-    """Ask the selected factory to reject unsupported requirements before preparation."""
-    require_resolved_environment(requirements)
+    """Ask the selected factory to reject unsupported requirements before preparation.
+
+    A Docker build context runs only on a machine built from a Dockerfile, which a factory that
+    supports builds creates when it starts the machine.
+    """
+    if requirements.services or requirements.readiness is not None:
+        raise UnsupportedMachineSpec("Service groups and readiness checks require a multi-container task runtime")
+    if requirements.docker_build is not None and not isinstance(spec.source, DockerfileSource):
+        raise UnsupportedMachineSpec("A Docker build context requires a machine built from its Dockerfile")
     factory.check_environment(requirements, bound_machine_spec(requirements, factory, spec))
 
 

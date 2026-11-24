@@ -106,16 +106,24 @@ def math_type(expected: str) -> MathType:
 
 
 def math_answer_task(
-    row: RawRow, *, prompt: Any, answer: Any, evidence: Mapping[str, Any] | None = None
+    row: RawRow,
+    *,
+    prompt: Any,
+    answer: Any,
+    evidence: Mapping[str, Any] | None = None,
+    positive_symbols: tuple[str, ...] = (),
 ) -> TaskSpec | ImportRejection:
-    """Grade a symbolic math answer; a boxed reference is unwrapped."""
+    """Grade a symbolic math answer; a boxed reference is unwrapped.
+
+    Positive symbols must also be stated in the public prompt.
+    """
     problem, reference = _text(prompt), _text(answer)
     if problem is None:
         return source_defect("missing_prompt", "The problem must be a nonempty string")
     if reference is None:
         return source_defect("invalid_reference", "The reference answer must be a nonempty string")
     expected = extract_boxed(reference) or reference
-    spec = MathSpec(expected=expected, math_type=math_type(expected))
+    spec = MathSpec(expected=expected, math_type=math_type(expected), positive_symbols=positive_symbols)
     try:
         grade_math_candidate(spec, "")
     except InvalidTask as error:

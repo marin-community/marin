@@ -28,6 +28,8 @@ from cloud.iris.task_runtime import (
     prepare_policy_model,
     prepare_policy_tokenizer,
 )
+from cloud.iris.launch_config import load_launch_config
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
 from marinskyrl.hf_model import HuggingFaceModelCache
@@ -226,31 +228,41 @@ def test_staged_models_are_written_as_structured_config(tmp_path, monkeypatch) -
 
 
 def test_staged_policy_model_supplies_its_embedded_tokenizer(tmp_path, monkeypatch) -> None:
-    policy = task_runtime.PreparedPolicyModel("s3://models/policy", "step-630", "/tmp/policy-metadata")
-    launch = OmegaConf.create(
-        {
-            "run": {"id": "run", "attempt_id": "attempt"},
-            "inputs": {"model": {"uri": "s3://models/policy"}},
-            "skyrl": {
-                "trainer": {
-                    "policy": {"model": {"path": "/tmp/stale-model", "tokenizer_path": "/tmp/stale-model"}},
-                    "ref": {"model": {"path": "/tmp/stale-model", "tokenizer_path": "/tmp/stale-model"}},
-                },
-                "generator": {"engine_init_kwargs": {"served_model_name": "policy"}},
-                "data": {"train_data": [], "val_data": [], "terminal_bench_data": []},
-            },
-        }
+    source = tmp_path / "model-with-tokenizer"
+    _write_tokenizer(source)
+    (source / "config.json").write_text('{"model_type": "llama"}')
+    (source / "model.safetensors").write_bytes(save({"weight": np.arange(4, dtype=np.float32)}))
+    document = raw_launch_config()
+    document["inputs"]["model"].update(
+        uri="s3://test/own-tokenizer-export",
+        identity="own-tokenizer-export",
+        tokenizer_uri=None,
+        tokenizer_revision=None,
     )
-    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path))
+    config_path = tmp_path / "launch.yaml"
+    OmegaConf.save(OmegaConf.create(document), config_path)
+    launch_config = load_launch_config(config_path)
+    monkeypatch.setattr(hf_model_cache, "fs_and_path", lambda _uri: (fsspec.filesystem("file"), str(source)))
+    args = task_runtime._runtime_namespace(launch_config)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
 
-    path = _write_final_config(launch, policy_model=policy, policy_tokenizer=None, draft_model=None)
+    def reject_hub_download(*args, **kwargs):
+        raise AssertionError("embedded-tokenizer staging requested a Hub download")
+
+    monkeypatch.setattr(hf_model_cache, "snapshot_download", reject_hub_download)
+    policy = prepare_policy_model(args)
+    assert policy is not None
+    tokenizer = prepare_policy_tokenizer(args)
+    assert tokenizer is None
+    path = _write_final_config(launch_config, policy_model=policy, policy_tokenizer=tokenizer, draft_model=None)
     resolved = OmegaConf.load(path)
-
     for role in ("policy", "ref"):
         model = resolved.skyrl.trainer[role].model
-        assert model.path == "/tmp/policy-metadata"
-        assert model.tokenizer_path == "/tmp/policy-metadata"
+        assert model.path == policy.local_path
+        assert model.tokenizer_path == policy.local_path
         assert model.tokenizer_revision is None
+        loaded = AutoTokenizer.from_pretrained(model.tokenizer_path, local_files_only=True)
+        assert loaded.encode("hello world") == [1, 2]
 
 
 @pytest.mark.parametrize("requested_revision", ["a" * 40, "main", "refs/pr/7"])

@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.local_backend import LocalClient
+from shellbox.machine import NetworkPolicy
 from zephyr.context import ZephyrContext
 from zephyr.stage_io import ZephyrWorkerError
 
@@ -16,11 +17,14 @@ from taskcompendium.convert.answers import exact_answer_task, source_defect
 from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, chat_item, evaluation_cases, evaluation_items, task_rows
 from taskcompendium.evaluation.selection import select_cases
 from taskcompendium.evaluation.spec import (
+    AgentEpisode,
     ChatGeneration,
     ChatPromptVariant,
     CohortOrder,
     CohortPolicy,
     ContextPolicy,
+    EpisodeInputs,
+    EpisodeLimits,
     EvaluationProtocol,
     LimitStage,
     Metric,
@@ -30,6 +34,7 @@ from taskcompendium.evaluation.spec import (
     Sampling,
     SummaryKind,
     TaskGroup,
+    TerminusAgent,
     TextGeneration,
     TrialPolicy,
 )
@@ -371,6 +376,28 @@ def test_source_selection_applies_limit_at_declared_stage(corpus, tmp_path, limi
     assert len(decisions) == 5
 
 
+def test_shuffled_selection_grows_a_fixed_sample_that_differs_from_source_order(corpus, tmp_path):
+    root, protocol = publish_cohort(corpus, tmp_path, CohortPolicy(order=CohortOrder.SHUFFLED))
+
+    def selected(limit):
+        decisions = select_cases(
+            root,
+            protocol,
+            dataset_id="colors",
+            context_window=1000,
+            max_tokens=20,
+            limit=limit,
+            tokenizer=CharacterTokenizer(),
+        )
+        ranked = [decision.record for decision in decisions if decision.case is not None]
+        return [record.source_ordinal for record in sorted(ranked, key=lambda record: record.rank)]
+
+    order = selected(None)
+    assert sorted(order) == [0, 1, 2, 3, 4]
+    assert order != [0, 1, 2, 3, 4]
+    assert [selected(limit) for limit in (1, 3)] == [order[:1], order[:3]]
+
+
 def test_grouped_selection_rejects_missing_active_stratum(corpus, tmp_path):
     root, protocol = publish_cohort(
         corpus, tmp_path, CohortPolicy(groups=(TaskGroup(labels={"color": "green"}, minimum_context=50),))
@@ -427,3 +454,72 @@ def test_selected_payload_reread_retains_prompt_variant_chosen_before_output_cla
     assert decision.case is not None
     assert decision.case.task.context.events[0].content == "z" * 20
     assert decision.record.max_tokens == 16
+
+
+EPISODE = AgentEpisode(
+    harness=TerminusAgent(),
+    limits=EpisodeLimits(
+        max_turns=None,
+        max_total_tokens=None,
+        model_turn_timeout=600,
+        total_turn_timeout=900,
+        verifier_timeout=300,
+        attempt_timeout=3600,
+    ),
+)
+
+
+def episode_item(task, *, agent_timeout=1800):
+    return chat_item(task).model_copy(
+        update={
+            "operation": EPISODE,
+            "episode": EpisodeInputs(agent_timeout=agent_timeout, cpus=2, memory_mb=4096, network=NetworkPolicy.DENY),
+        }
+    )
+
+
+@pytest.fixture
+def episode_corpus(corpus):
+    source, output, recipe, protocol = corpus
+    return source, output, recipe, protocol.model_copy(update={"operation": OperationKind.AGENT_EPISODE})
+
+
+def test_agent_episode_corpus_round_trips_inputs_and_selects_without_prompt_admission(episode_corpus, tmp_path):
+    publish(episode_corpus, tmp_path, episode_item)
+    root = str(episode_corpus[1])
+    cases = list(evaluation_cases(root))
+    assert [case.item for case in cases] == [episode_item(case.task) for case in cases]
+    assert cases[0].item.operation.limits_for(cases[0].item.episode) == EPISODE.limits.model_copy(
+        update={"total_turn_timeout": 1800}
+    )
+    decisions = list(
+        select_cases(
+            root,
+            episode_corpus[3],
+            dataset_id="episodes",
+            context_window=8,
+            max_tokens=64,
+            limit=None,
+            tokenizer=CharacterTokenizer(),
+        )
+    )
+    assert [(decision.case is not None, decision.record.max_tokens) for decision in decisions] == [(True, 20)] * 3
+
+
+def test_chat_items_serialize_without_episode_inputs(corpus, tmp_path):
+    publish(corpus, tmp_path)
+    case = next(evaluation_cases(str(corpus[1])))
+    assert "episode" not in json.loads(case.item.model_dump_json())
+
+
+@pytest.mark.parametrize(
+    "item_builder",
+    [
+        pytest.param(chat_item, id="missing-episode-inputs"),
+        pytest.param(lambda task: episode_item(task, agent_timeout=3400), id="no-attempt-backstop"),
+    ],
+)
+def test_agent_episode_publication_rejects_invalid_items(episode_corpus, tmp_path, item_builder):
+    with pytest.raises((ValueError, ZephyrWorkerError)):
+        publish(episode_corpus, tmp_path, lambda task: item_builder(task).model_copy(update={"operation": EPISODE}))
+    assert not (episode_corpus[1] / MANIFEST_FILENAME).exists()

@@ -151,7 +151,9 @@ def test_remote_result_round_trips_at_the_run_output_prefix(tmp_path, monkeypatc
         terminal_manifest_uri=str(output / "terminal.json"),
         iris_job_id="/atqamar/canary-test",
     )
-    monkeypatch.setattr("experiments.post_training.cat_count_canary.launcher.run_skyrl", lambda _config: result)
+    monkeypatch.setattr(
+        "experiments.post_training.cat_count_canary.launcher.run_skyrl", lambda _config, *, env_vars: result
+    )
     run = build_run(version="2026.10.01", preset="gate", export=export)
     config = run.build_config(
         StepContext.for_run(output_path=str(output), prefix=str(tmp_path), runtime_args=run.runtime_args, deps=run.deps)

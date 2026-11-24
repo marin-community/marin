@@ -5,6 +5,11 @@ from enum import StrEnum
 from typing import Any
 
 
+class BatchBuilder(StrEnum):
+    DRIVER = "driver"
+    WORKER = "worker"
+
+
 class R3Transport(StrEnum):
     BY_VALUE = "by_value"
     RESIDENT = "resident"
@@ -14,11 +19,6 @@ class R3Transport(StrEnum):
 class WeightSyncTransport(StrEnum):
     BROADCAST = "broadcast"
     EXPERT_BLOCK = "expert_block"
-
-
-class GDNBackend(StrEnum):
-    TORCH = "torch"
-    FLASHQLA = "flashqla"
 
 
 TRAJECTORY_SELECTOR_TYPE_PATH = "trainer.trajectory_selector.type"
@@ -32,13 +32,15 @@ class RolloutGrading(StrEnum):
 
 
 class AdvantageEstimator(StrEnum):
-    GAE = "gae"
     GRPO = "grpo"
     RLOO = "rloo"
     RLOO_N = "rloo_n"  # RLOO-Neutral: excludes masked samples from baseline
     REINFORCE_PP = "reinforce++"
     UNIFORM = "uniform"
     REWARD = "reward"
+
+
+OUTCOME_ADVANTAGE_ESTIMATORS = frozenset((AdvantageEstimator.RLOO, AdvantageEstimator.RLOO_N, AdvantageEstimator.GRPO))
 
 
 class PolicyLossType(StrEnum):
