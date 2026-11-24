@@ -18,7 +18,7 @@ BATCH_INVARIANT_NCCL_ENV = {
     "NCCL_MIN_NCHANNELS": "1",  # Match vLLM's channel lower bound.
     "NCCL_MAX_NCHANNELS": "1",  # Prevent a multiple-channel split.
     "NCCL_PROTO": "Simple",  # Keep LL and LL128 out of collectives.
-    "NCCL_ALGO": "ring;allreduce:tree",  # Keep all-reduce on Tree; use Ring for other collectives.
+    "NCCL_ALGO": "ring,tree;allreduce:tree",  # Match upstream vLLM; keep all-reduce on Tree.
     "NCCL_NTHREADS": "1",  # Match vLLM; NCCL does not document 1 as valid.
     "NCCL_SOCKET_NTHREADS": "1",  # Avoid platform-dependent socket thread counts.
 }

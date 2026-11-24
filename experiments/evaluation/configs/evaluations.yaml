@@ -1,0 +1,336 @@
+# Shared run settings, referenced by the evaluations below.
+judges:
+  together: &together_judge
+    judge:
+      deployment: together
+      models:
+        openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
+      default_model: openai/gpt-oss-120b
+    judge_endpoint: https://api.together.xyz/v1
+    judge_api_key:
+    - env:TOGETHER_API_KEY
+    - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+evaluations:
+  aime24-smoke:
+    benchmark: aime24
+    run:
+      limit: 2
+  financebench:
+    benchmark: financebench
+    run: *together_judge
+  facts-grounding-v2:
+    benchmark: facts-grounding-v2
+    run: *together_judge
+  simpleqa-verified:
+    benchmark: simpleqa-verified
+    run: *together_judge
+  simpleqa-verified-thinking:
+    benchmark: simpleqa-verified-thinking
+    run: *together_judge
+  multichallenge:
+    benchmark: multichallenge
+    run: *together_judge
+  econevals-dwa:
+    benchmark: econevals-synthetic-dwa
+    run: *together_judge
+  econevals-occupation:
+    benchmark: econevals-synthetic-occupation
+    run: *together_judge
+  econevals-dwa-o3:
+    benchmark: econevals-synthetic-dwa-o3
+    run: *together_judge
+  econevals-occupation-o3:
+    benchmark: econevals-synthetic-occupation-o3
+    run: *together_judge
+  econevals-dwa-sampled:
+    benchmark: econevals-synthetic-dwa-sampled
+    run: *together_judge
+  econevals-occupation-sampled:
+    benchmark: econevals-synthetic-occupation-sampled
+    run: *together_judge
+  econevals-dwa-sampled-o3:
+    benchmark: econevals-synthetic-dwa-sampled-o3
+    run: *together_judge
+  econevals-occupation-sampled-o3:
+    benchmark: econevals-synthetic-occupation-sampled-o3
+    run: *together_judge
+  gsm8k-0shot:
+    benchmark: gsm8k
+    num_fewshot: 0
+  gsm8k-smoke:
+    benchmark: gsm8k
+    run:
+      limit: 128
+  mmlu-smoke:
+    partitions:
+    - abstract_algebra
+    benchmark: mmlu
+    num_fewshot: 0
+    run:
+      limit: 64
+  supergpqa-sample:
+    benchmark: supergpqa
+    run:
+      limit: 2500
+  olympiadbench-deterministic:
+    benchmark: olympiadbench
+    protocol: deterministic
+  olympiadbench:
+    benchmark: olympiadbench
+    run: *together_judge
+  physics-verified:
+    benchmark: physics-verified
+    run:
+      judge:
+        deployment: together
+        models:
+          zai-org/GLM-5.3-Flash: provider-managed:zai-org/GLM-5.3-Flash
+        default_model: zai-org/GLM-5.3-Flash
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key:
+      - env:TOGETHER_API_KEY
+      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+  arc-challenge-10shot:
+    benchmark: arc-challenge
+    num_fewshot: 10
+  arc-easy-10shot:
+    benchmark: arc-easy
+    num_fewshot: 10
+  boolq-10shot:
+    benchmark: boolq
+    num_fewshot: 10
+  piqa-10shot:
+    benchmark: piqa
+    num_fewshot: 10
+  winogrande-0shot:
+    benchmark: winogrande
+    num_fewshot: 0
+  hellaswag-0shot:
+    benchmark: hellaswag
+    num_fewshot: 0
+  truthfulqa-6shot:
+    benchmark: truthfulqa
+    num_fewshot: 6
+  mmlu-0shot:
+    benchmark: mmlu
+    num_fewshot: 0
+  mmlu-pro-5shot:
+    benchmark: mmlu-pro
+    protocol: likelihood
+    num_fewshot: 5
+  gsm8k-cot-8shot:
+    benchmark: gsm8k
+    protocol: cot
+    num_fewshot: 8
+  bbh-cot-3shot:
+    benchmark: bbh
+    protocol: cot
+  nq-open-0shot:
+    benchmark: nq-open
+    num_fewshot: 0
+  triviaqa-0shot:
+    benchmark: triviaqa
+    num_fewshot: 0
+  drop-0shot:
+    benchmark: drop
+    num_fewshot: 0
+  humaneval-10shot:
+    benchmark: humaneval
+    num_fewshot: 10
+  mrcr-32k:
+    benchmark: mrcr
+    protocol: 32k
+  mrcr-65k:
+    benchmark: mrcr
+    protocol: 65k
+  longbench-v2-thinking:
+    benchmark: longbench-v2
+    protocol: thinking
+  # Agentic benchmarks lowered from Harbor task packages; see experiments/evaluation/benchmarks/agentic.py.
+  # Datasets with more distinct environments than the Daytona eval account's snapshot quota build
+  # each machine's image declaratively. Each runs as many attempts at once as its Harbor job did.
+  tb2:
+    benchmark: terminal-bench-2.0
+    protocol: terminus-2
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  tb2-lite:
+    benchmark: terminal-bench-2.0
+    protocol: terminus-2
+    run:
+      limit: 2
+      task_machine:
+        image_build: declarative
+  swebench:
+    benchmark: swebench-verified-100
+    protocol: terminus-2
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-lite:
+    benchmark: swebench-verified-100
+    protocol: terminus-2
+    run:
+      limit: 2
+      task_machine:
+        image_build: declarative
+  swebench-full:
+    benchmark: swebench-verified
+    protocol: terminus-2
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-pro:
+    benchmark: swebench-pro
+    protocol: mini-swe-agent
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-pro-200:
+    benchmark: swebench-pro-200
+    protocol: mini-swe-agent
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-pro-smoke:
+    benchmark: swebench-pro-smoke
+    protocol: mini-swe-agent
+    run:
+      concurrency: 16
+      task_machine:
+        image_build: declarative
+  swebench-pro-lite:
+    benchmark: swebench-pro-smoke
+    protocol: mini-swe-agent
+    run:
+      limit: 2
+      task_machine:
+        image_build: declarative
+  gaia:
+    benchmark: gaia
+    protocol: terminus-2
+    run:
+      concurrency: 32
+  bfcl:
+    benchmark: bfcl-parity
+    protocol: terminus-2
+    run:
+      concurrency: 32
+  aider:
+    benchmark: aider-polyglot
+    protocol: terminus-2
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  medagentbench:
+    benchmark: medagentbench
+    protocol: terminus-2
+    run:
+      concurrency: 32
+  aime-harbor:
+    benchmark: aime-agent
+    protocol: terminus-2
+suites:
+  smoke:
+  - mmlu-smoke
+  - gsm8k-smoke
+  standard:
+  - mmlu
+  - arc-challenge
+  - hellaswag
+  - winogrande
+  - truthfulqa
+  - boolq
+  - piqa
+  - openbookqa
+  - gsm8k
+  - math500
+  - humaneval
+  - arc-easy
+  - lambada
+  - triviaqa
+  - nq-open
+  - drop
+  - gsm8k-0shot
+  - aime24
+  - olympiadbench
+  - olympiadbench-deterministic
+  - humanevalplus
+  - mbppplus
+  - mmlu-smoke
+  - gsm8k-smoke
+  - aime24-smoke
+  - mmlu-pro
+  - gpqa-diamond
+  - cruxeval
+  - financebench
+  - ifeval
+  - ifbench
+  - mrcr
+  - graphwalks
+  - nupa5k-loose
+  core:
+  - mmlu
+  - gsm8k
+  - arc-challenge
+  - hellaswag
+  - winogrande
+  - truthfulqa
+  - boolq
+  - piqa
+  - openbookqa
+  - humaneval
+  - math500
+  nlp:
+  - mmlu
+  - arc-challenge
+  - arc-easy
+  - hellaswag
+  - winogrande
+  - truthfulqa
+  - boolq
+  - piqa
+  - openbookqa
+  - lambada
+  - triviaqa
+  - nq-open
+  - drop
+  - gsm8k-0shot
+  chat:
+  - math500
+  - aime24
+  - olympiadbench
+  math:
+  - math500
+  - aime24
+  - gsm8k-0shot
+  code:
+  - humanevalplus
+  - mbppplus
+  econevals:
+  - econevals-dwa
+  - econevals-occupation
+  econevals-o3:
+  - econevals-dwa-o3
+  - econevals-occupation-o3
+  econevals-sampled:
+  - econevals-dwa-sampled
+  - econevals-occupation-sampled
+  econevals-sampled-o3:
+  - econevals-dwa-sampled-o3
+  - econevals-occupation-sampled-o3
+  agentic:
+  - tb2
+  - swebench
+  - gaia
+  - bfcl
+  - aider
+  - medagentbench
+  # The standalone financeagent and ot-tblite recipes in benchmarks/agentic.py are outside this suite.

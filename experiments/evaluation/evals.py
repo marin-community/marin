@@ -19,6 +19,7 @@ from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHa
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import EvalExecutor
+from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS
 from rigging.secrets import SecretSpec
 
 from experiments.evaluation.catalog import evaluation_benchmarks
@@ -27,11 +28,10 @@ from experiments.evaluation.curated import requires_judge
 logger = logging.getLogger(__name__)
 
 _DAYTONA_ENVIRONMENT_TYPE = "daytona"
-_HARBOR_CONFIG_DIR = Path(__file__).with_name("configs") / "harbor"
 # Evals run only in the Daytona eval org; RL and data keys never reach this launcher.
-_DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
+DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     {
-        "DAYTONA_API_KEY": (
+        DAYTONA_API_KEY: (
             "env:DAYTONA_EVAL_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         )
@@ -45,7 +45,6 @@ _VERIFIER_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType({"TOGETHER_API
 # Destinations beyond Iris's base egress allowlist (iris.cluster.egress). The
 # orchestrator job declares them; they take effect on clusters that enforce the
 # allowlist.
-_DAYTONA_EGRESS: tuple[str, ...] = ("app.daytona.io", "*.app.daytona.io")
 # Harbor's dataset registry, a Supabase project (Harbor's HARBOR_SUPABASE_URL).
 _HARBOR_REGISTRY_EGRESS: tuple[str, ...] = ("hlqxxzsirfrgeqasvaps.supabase.co",)
 
@@ -56,18 +55,17 @@ class HarborDefinition:
 
     name: str
     config_path: Path
-    max_eval_instances: int | None = None
     family: str | None = None
 
     def egress_allow_for(self, config: ValidatedHarborConfig) -> tuple[str, ...]:
         """Egress rules for the Harbor driver's sandbox service and dataset registry."""
-        rules = _DAYTONA_EGRESS if config.environment == _DAYTONA_ENVIRONMENT_TYPE else ()
+        rules = DAYTONA_EGRESS if config.environment == _DAYTONA_ENVIRONMENT_TYPE else ()
         if config.dataset_kind == HarborDatasetKind.HARBOR_REGISTRY:
             rules = (*rules, *_HARBOR_REGISTRY_EGRESS)
         return rules
 
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
-        secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
+        secret_env = dict(DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
         for key in config.verifier_env_keys:
             secret_env.setdefault(key, _VERIFIER_SECRET_ENV.get(key, (f"env:{key}",)))
         return MappingProxyType(secret_env)
@@ -126,52 +124,16 @@ def harbor_model_agent_kwargs(model: ModelConfig) -> dict[str, object]:
     }
 
 
-def harbor_definition(
-    name: str,
-    max_eval_instances: int | None = None,
-) -> HarborDefinition:
-    """Create a Harbor definition from its same-named checked-in YAML policy."""
-    return HarborDefinition(
-        name=name,
-        config_path=_HARBOR_CONFIG_DIR / f"{name}.yaml",
-        max_eval_instances=max_eval_instances,
-    )
-
-
 EvaluationDefinition = EvaluationSelection | HarborDefinition
 
 
-_CONFIG = yaml.safe_load((Path(__file__).with_name("configs") / "evalchemy.yaml").read_text())
-EVALS: dict[str, EvaluationDefinition] = {
+_CONFIG = yaml.safe_load((Path(__file__).with_name("configs") / "evaluations.yaml").read_text())
+EVALS: dict[str, EvaluationSelection] = {
     name: EvaluationSelection.model_validate({"label": name, **entry}) for name, entry in _CONFIG["evaluations"].items()
 }
-EVALS.update(
-    {
-        # --- Harbor (agentic registry benchmarks) ---
-        # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
-        # Harbor's verifier scores the boxed answer.
-        "aime-harbor": harbor_definition("aime-harbor"),
-        # Agentic datasets contain Harbor task directories and run with Daytona.
-        "tb2": harbor_definition("tb2"),
-        "tb2-lite": harbor_definition("tb2-lite", 2),
-        "swebench": harbor_definition("swebench"),
-        "swebench-lite": harbor_definition("swebench-lite", 2),
-        "swebench-full": harbor_definition("swebench-full"),
-        "swebench-pro": harbor_definition("swebench-pro"),
-        "swebench-pro-200": harbor_definition("swebench-pro-200"),
-        "swebench-pro-lite": harbor_definition("swebench-pro-lite", 2),
-        "swebench-pro-smoke": harbor_definition("swebench-pro-smoke"),
-        "gaia": harbor_definition("gaia"),
-        "bfcl": harbor_definition("bfcl"),
-        "aider": harbor_definition("aider"),
-        "medagentbench": harbor_definition("medagentbench"),
-        "financeagent": harbor_definition("financeagent"),
-        "ot-tblite": harbor_definition("ot-tblite"),
-    }
-)
 
 
-def evaluation_for(name: str) -> EvaluationDefinition:
+def evaluation_for(name: str) -> EvaluationSelection:
     if name in EVALS:
         return EVALS[name]
     if name in evaluation_benchmarks():
@@ -180,14 +142,10 @@ def evaluation_for(name: str) -> EvaluationDefinition:
 
 
 SUITES: dict[str, tuple[str, ...]] = {name: tuple(entries) for name, entries in _CONFIG["suites"].items()}
-SUITES["standard-local"] = tuple(
-    name
-    for name in SUITES["standard"]
-    if isinstance(definition := evaluation_for(name), EvaluationSelection) and not requires_judge(definition)
-)
+SUITES["standard-local"] = tuple(name for name in SUITES["standard"] if not requires_judge(evaluation_for(name)))
 
 
-def resolve_evaluations(selection: str) -> tuple[EvaluationDefinition, ...]:
+def resolve_evaluations(selection: str) -> tuple[EvaluationSelection, ...]:
     """Resolve suite and CLI labels once, at the textual input boundary."""
     keys = SUITES.get(selection) or tuple(part.strip() for part in selection.split(",") if part.strip())
     if not keys:

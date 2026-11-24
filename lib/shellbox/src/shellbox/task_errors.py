@@ -12,7 +12,6 @@ DAYTONA_CONNECTION_ERROR = "DaytonaConnectionError"
 DAYTONA_DOCKER_SETUP_ERROR = "DaytonaDockerSetupError"
 DAYTONA_OUTPUT_UNAVAILABLE = "DaytonaOutputUnavailable"
 DAYTONA_PROCESS_ERROR = "DaytonaProcessError"
-DAYTONA_TIMEOUT_ERROR = "DaytonaTimeoutError"
 MACHINE_TERMINATED = "MachineTerminated"
 
 
@@ -25,7 +24,6 @@ SHELLBOX_ERROR_CATEGORIES = MappingProxyType(
         DAYTONA_OUTPUT_UNAVAILABLE: ErrorCategory.INFRASTRUCTURE,
         DAYTONA_PROCESS_ERROR: ErrorCategory.INFRASTRUCTURE,
         "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
-        DAYTONA_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
         MACHINE_TERMINATED: ErrorCategory.INFRASTRUCTURE,
         "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
     }

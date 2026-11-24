@@ -824,6 +824,25 @@ class TestCreateRunAgentCommands:
         assert "'" in cmd
 
 
+# ---------------------------------------------------------------------------
+# Install method
+# ---------------------------------------------------------------------------
+
+
+class TestInstallMethod:
+    @pytest.mark.asyncio
+    async def test_install_adds_required_mcp_runtime(self, temp_dir):
+        agent = MiniSweAgent(logs_dir=temp_dir)
+        environment = AsyncMock()
+        environment.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+
+        await agent.install(environment)
+
+        install_command = environment.exec.call_args_list[1].kwargs["command"]
+        assert "uv tool install mini-swe-agent --with mcp==2.3.0" in install_command
+        assert "from mcp.types import CacheableResult" in install_command
+
+
 @pytest.mark.asyncio
 async def test_install_model_import_ignores_task_repository_packages(tmp_path):
     agent = MiniSweAgent(logs_dir=tmp_path / "logs")

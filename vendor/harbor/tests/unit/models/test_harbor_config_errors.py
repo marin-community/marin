@@ -74,8 +74,7 @@ def test_openai_connect_timeout_is_retryable_infrastructure() -> None:
 
 
 @pytest.mark.parametrize(
-    "name",
-    ["InternalServerError", "APIConnectionError", "APITimeoutError", "DaytonaTimeoutError"],
+    "name", ["InternalServerError", "APIConnectionError", "APITimeoutError"]
 )
 def test_provider_transport_failure_is_retryable_infrastructure(name: str) -> None:
     assert error_category(name, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE

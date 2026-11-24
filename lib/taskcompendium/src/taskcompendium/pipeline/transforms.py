@@ -9,7 +9,7 @@ from tempfile import SpooledTemporaryFile
 from typing import Any
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.models import TaskSpec, grader_environment
 from taskcompendium.pipeline.conversion import ConvertedRow, convert_record
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
@@ -35,16 +35,18 @@ GROUP_MEMORY_BYTES = 1024 * 1024
 
 
 def task_resource_bytes(task: TaskSpec) -> int:
-    """Decoded bytes across all roles and build contexts, counting each occurrence."""
+    """Decoded bytes across all roles and build contexts, including services', counting each occurrence."""
     resources = task.resources
     environments = [task.environment_requirements]
-    if isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None:
-        environments.append(task.grader.environment)
+    grader_build = grader_environment(task.grader)
+    if grader_build is not None:
+        environments.append(grader_build)
     build_files = tuple(
         resource
         for environment in environments
-        if environment.docker_build is not None
-        for resource in environment.docker_build.files
+        for build in (environment.docker_build, *(service.docker_build for service in environment.services))
+        if build is not None
+        for resource in build.files
     )
     return sum(
         len(resource_bytes(resource))

@@ -16,7 +16,6 @@ from shellbox.task_errors import (
     DAYTONA_DOCKER_SETUP_ERROR,
     DAYTONA_OUTPUT_UNAVAILABLE,
     DAYTONA_PROCESS_ERROR,
-    DAYTONA_TIMEOUT_ERROR,
     MACHINE_TERMINATED,
 )
 from shellbox.task_errors import (
@@ -60,6 +59,7 @@ HARBOR_ERROR_CATEGORIES = MappingProxyType(
         CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
         "DownloadVerifierDirError": ErrorCategory.INFRASTRUCTURE,
         "EnrootMemoryLimitExceededError": ErrorCategory.INFRASTRUCTURE,
+        "EnvironmentSetupError": ErrorCategory.INFRASTRUCTURE,
         ENVIRONMENT_STOP_ERROR: ErrorCategory.INFRASTRUCTURE,
         "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
         LLM_REQUEST_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
@@ -105,7 +105,6 @@ RESUME_RETRYABLE_ERROR_TYPES = frozenset(
         DAYTONA_DOCKER_SETUP_ERROR,
         DAYTONA_OUTPUT_UNAVAILABLE,
         DAYTONA_PROCESS_ERROR,
-        DAYTONA_TIMEOUT_ERROR,
         ENVIRONMENT_STOP_ERROR,
         INTERNAL_SERVER_ERROR,
         LLM_REQUEST_TIMEOUT_ERROR,

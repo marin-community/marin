@@ -32,12 +32,12 @@ MASKS = {
 }
 
 
-def _qkv(dtype):
-    """Two sequences with 8 query heads sharing 2 KV heads, head_dim 64."""
+def _qkv(dtype, num_q_heads=8, num_kv_heads=2):
+    """Two sequences of query heads sharing KV heads, head_dim 64."""
     kq, kk, kv = jax.random.split(jax.random.key(0), 3)
-    q = jax.random.normal(kq, (2, SEQ_LEN, 8, 64), jnp.float32).astype(dtype)
-    k = jax.random.normal(kk, (2, SEQ_LEN, 2, 64), jnp.float32).astype(dtype)
-    v = jax.random.normal(kv, (2, SEQ_LEN, 2, 64), jnp.float32).astype(dtype)
+    q = jax.random.normal(kq, (2, SEQ_LEN, num_q_heads, 64), jnp.float32).astype(dtype)
+    k = jax.random.normal(kk, (2, SEQ_LEN, num_kv_heads, 64), jnp.float32).astype(dtype)
+    v = jax.random.normal(kv, (2, SEQ_LEN, num_kv_heads, 64), jnp.float32).astype(dtype)
     return q, k, v
 
 
@@ -85,13 +85,24 @@ def _assert_gradients_match(actual, expected, *, tol):
         np.testing.assert_allclose(got / scale, want / scale, atol=tol, rtol=tol, err_msg=f"d{name}")
 
 
-@pytest.mark.parametrize("mask_name", list(MASKS))
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_flash_attention_forward_matches_reference(mask_name, dtype):
+# Every mask at 8 query heads per 2 KV heads, then GQA ratios 1, 2, 3, 6 and 8 under the causal and windowed masks.
+# The dK/dV kernel accumulates each KV head over its whole query-head group, whatever the group size.
+CASES = [
+    *((dtype, mask_name, 8, 2) for dtype in (jnp.float32, jnp.bfloat16) for mask_name in MASKS),
+    *(
+        (jnp.bfloat16, mask_name, num_q_heads, num_kv_heads)
+        for mask_name in ("causal", "window")
+        for num_q_heads, num_kv_heads in ((2, 2), (4, 2), (6, 2), (6, 1), (8, 1))
+    ),
+]
+
+
+@pytest.mark.parametrize("dtype,mask_name,num_q_heads,num_kv_heads", CASES)
+def test_flash_attention_forward_matches_reference(dtype, mask_name, num_q_heads, num_kv_heads):
     if dtype == jnp.float32 and _f32_dots_use_tf32():
         # About 2.7e-3 off on MI300X.
         pytest.skip("f32 Triton dots use TF32 on NVIDIA and gfx942")
-    q, k, v = _qkv(dtype)
+    q, k, v = _qkv(dtype, num_q_heads, num_kv_heads)
     mask = MASKS[mask_name]
     actual = _flash(q, k, v, mask)
     expected = _reference(q, k, v, mask)
@@ -100,13 +111,12 @@ def test_flash_attention_forward_matches_reference(mask_name, dtype):
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected), atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("mask_name", list(MASKS))
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_flash_attention_gradients_match_reference(mask_name, dtype):
+@pytest.mark.parametrize("dtype,mask_name,num_q_heads,num_kv_heads", CASES)
+def test_flash_attention_gradients_match_reference(dtype, mask_name, num_q_heads, num_kv_heads):
     if dtype == jnp.float32 and _f32_dots_use_tf32():
         # About 2.7e-3 off on MI300X.
         pytest.skip("f32 Triton dots use TF32 on NVIDIA and gfx942")
-    q, k, v = _qkv(dtype)
+    q, k, v = _qkv(dtype, num_q_heads, num_kv_heads)
     mask = MASKS[mask_name]
     cotangent = jax.random.normal(jax.random.key(1), q.shape, jnp.float32)
 
@@ -251,14 +261,16 @@ def _zero_padding_rows(x, segment_ids):
 
 
 @pytest.mark.skipif(INTERPRET, reason="production tiles and shapes are too slow for the Pallas interpreter")
-def test_flash_attention_bf16_default_tiles_at_production_shape_matches_reference():
+@pytest.mark.parametrize("num_q_heads,num_kv_heads", [(8, 2), (6, 1)])
+def test_flash_attention_bf16_default_tiles_at_production_shape_matches_reference(num_q_heads, num_kv_heads):
     # The only test that compiles the default tile sizes a training run uses, at moe_hero_ep's sequence length,
-    # window and head size. It passes the mask as moe_hero_ep does, with precomputed bounds.
+    # window and head size, and with the 6:1 head grouping of the Snowball d768 ladder rung. It passes the mask as
+    # moe_hero_ep does, with precomputed bounds.
     seq_len, window = 4096, 2048
     kq, kk, kv, kc = jax.random.split(jax.random.key(0), 4)
-    q = jax.random.normal(kq, (2, seq_len, 8, 128), jnp.float32).astype(jnp.bfloat16)
-    k = jax.random.normal(kk, (2, seq_len, 2, 128), jnp.float32).astype(jnp.bfloat16)
-    v = jax.random.normal(kv, (2, seq_len, 2, 128), jnp.float32).astype(jnp.bfloat16)
+    q = jax.random.normal(kq, (2, seq_len, num_q_heads, 128), jnp.float32).astype(jnp.bfloat16)
+    k = jax.random.normal(kk, (2, seq_len, num_kv_heads, 128), jnp.float32).astype(jnp.bfloat16)
+    v = jax.random.normal(kv, (2, seq_len, num_kv_heads, 128), jnp.float32).astype(jnp.bfloat16)
     segments = jnp.concatenate([jnp.zeros(1500), jnp.ones(2300), -jnp.ones(296)]).astype(jnp.int32)
     segment_ids = jnp.stack([segments, jnp.roll(segments, 700).at[:700].set(0)])
     reference_mask = AttentionMask.causal(sliding_window=window).with_segment_ids(segment_ids)

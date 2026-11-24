@@ -22,6 +22,8 @@ class GradingFailure(StrEnum):
     EMPTY_REWARD = "empty_reward"
     INVALID_REWARD = "invalid_reward"
     EXECUTION = "execution"
+    GRADER_EXIT = "grader_exit"
+    GRADER_TIMEOUT = "grader_timeout"
 
 
 @dataclass(frozen=True)

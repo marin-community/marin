@@ -40,9 +40,6 @@ _HOSTED_VLLM_PREFIX = "hosted_vllm/"
 _MODEL_DIRECTORY = "/opt/harbor-mini-swe"
 _K2_HORIZON_MODEL_FORMAT = "k2_horizon"
 _MCP_VERSION = "2.3.0"
-# The agent runs on its own interpreter rather than whichever Python the task image provides.
-# Images with an older system Python otherwise get uv's 3.10, which lacks the -P flag used below.
-_AGENT_PYTHON = "3.12"
 
 
 def _normalize_content(raw_content: Any) -> str:
@@ -445,15 +442,11 @@ class MiniSweAgent(BaseInstalledAgent):
         return match.group(1) if match else stdout.strip()
 
     async def install(self, environment: BaseEnvironment) -> None:
-        # Install packages only when bash, curl or git is missing: end-of-life base images
-        # (such as Debian bullseye) can fail package downloads that the agent does not need.
+        # Install build tools (multi-OS)
         await self.exec_as_root(
             environment,
             command=(
-                "if command -v bash &>/dev/null && command -v curl &>/dev/null"
-                " && command -v git &>/dev/null; then"
-                "  true;"
-                " elif command -v apt-get &>/dev/null; then"
+                "if command -v apt-get &>/dev/null; then"
                 "  apt-get update && apt-get install -y curl build-essential git;"
                 " elif command -v apk &>/dev/null; then"
                 "  apk add --no-cache curl bash build-base git python3 py3-pip;"
@@ -477,7 +470,7 @@ class MiniSweAgent(BaseInstalledAgent):
                 '  echo \'export PATH="$HOME/.local/bin:$PATH"\' >> "$HOME/.bashrc";'
                 " fi && "
                 'source "$HOME/.local/bin/env" && '
-                f"uv tool install --python {_AGENT_PYTHON} mini-swe-agent{version_spec} --with mcp=={_MCP_VERSION} "
+                f"uv tool install mini-swe-agent{version_spec} --with mcp=={_MCP_VERSION} "
                 "--with 'openai>=2' --with 'httpx>=0.27' --with 'tenacity>=9.1.2' "
                 "--excludes <(echo litellm) && "
                 '"$(uv tool dir)/mini-swe-agent/bin/python" '
