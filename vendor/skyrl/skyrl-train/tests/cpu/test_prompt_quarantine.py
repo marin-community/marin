@@ -98,6 +98,26 @@ def test_usable_group_resets_the_count():
     assert "0" in offered(prompts, 4)
 
 
+def test_quarantine_cooldown_grows_to_the_cap_and_resets_after_usable_group():
+    prompts = loader(num_rows=2, batch_size=1, max_unusable_groups=1)
+
+    def check_cooldown(completed_batches: int) -> None:
+        prompts.record_disposition("0", UNUSABLE)
+        for _ in range(completed_batches):
+            assert prompts.next_prompt(live={"1"}) is None
+            prompts.observe([])
+        returned = prompts.next_prompt(live={"1"})
+        assert returned is not None and returned["uid"] == "0"
+
+    for completed_batches in (10, 20, 40, 40):
+        check_cooldown(completed_batches)
+        prompts.record_disposition("0", AdmissionRejection.STALE.value)
+        prompts.record_disposition("0", AdmissionRejection.DUPLICATE_UID.value)
+
+    prompts.record_disposition("0", USABLE)
+    check_cooldown(10)
+
+
 @pytest.mark.parametrize("family", [None, "agentic"])
 def test_recovered_prompt_fills_the_missing_group(family: str | None):
     max_unusable_groups = 3

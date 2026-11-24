@@ -15,8 +15,9 @@ from skyrl_train.group_admission import AdmissionRejection
 
 STALE_RETRIES_EXHAUSTED_METRIC = "async/stale_retries_exhausted"
 QUARANTINED_PROMPTS_METRIC = "async/quarantined_prompts"
-# Training steps a quarantined prompt sits out before the loader offers it again.
+# Initial and maximum cooldowns in completed batches.
 QUARANTINE_STEPS = 10
+MAX_QUARANTINE_STEPS = 40
 # Rejections of a group training cannot use: no loss tokens, or too few graded samples for its baseline. A broken
 # grader causes them, and so does an infrastructure failure, whose samples are masked.
 UNUSABLE_GROUP_REJECTIONS = frozenset(
@@ -128,10 +129,11 @@ class PromptLoader:
     A prompt whose group missed the staleness window is regenerated at most ``max_stale_retries`` times in a row;
     after that it waits until the prompt order offers it again.
 
-    After ``max_unusable_groups`` unusable groups in a row, a prompt can enter quarantine for
-    ``QUARANTINE_STEPS`` completed batches. Quarantine keeps enough eligible prompts for one batch, or enough in each
-    family for every open batch when batches specify groups per family. When that minimum keeps a failing prompt in
-    rotation, its rejection can trigger an early retry for a non-live quarantined prompt in the same pool.
+    After ``max_unusable_groups`` unusable groups in a row, a prompt can enter quarantine for 10 completed batches.
+    The cooldown doubles on each repeat quarantine up to 40 batches and resets to 10 after a usable group.
+    Quarantine keeps enough eligible prompts for one batch, or enough in each family for every open batch when
+    batches specify groups per family. When that minimum keeps a failing prompt in rotation, its rejection can
+    trigger an early retry for a non-live quarantined prompt in the same pool.
     A usable group ends quarantine early. Retry counts and quarantine restart empty when a run resumes.
 
     The sequence never ends; the trainer decides when to stop.
@@ -178,6 +180,7 @@ class PromptLoader:
         self._unusable_groups: dict[str, int] = {}
         # Quarantined uid to the training step that releases it.
         self._quarantined: dict[str, int] = {}
+        self._next_quarantine_steps: dict[str, int] = {}
         self._early_retry_pools: set[str | None] = set()
         self._step = 0
         self._retries: collections.deque[dict] = collections.deque()
@@ -275,6 +278,7 @@ class PromptLoader:
         if disposition not in UNUSABLE_GROUP_REJECTIONS:
             self._unusable_groups.pop(uid, None)
             self._quarantined.pop(uid, None)
+            self._next_quarantine_steps.pop(uid, None)
             return
         if uid in self._quarantined:
             return
@@ -308,11 +312,14 @@ class PromptLoader:
                 scope,
             )
             return
-        self._quarantined[uid] = self._step + QUARANTINE_STEPS
+        cooldown = self._next_quarantine_steps.get(uid, QUARANTINE_STEPS)
+        self._quarantined[uid] = self._step + cooldown
+        self._next_quarantine_steps[uid] = min(2 * cooldown, MAX_QUARANTINE_STEPS)
         logger.warning(
-            "Quarantined prompt {} for {} steps after {} unusable groups in a row (last: {}); {} usable prompts remain{}",
+            "Quarantined prompt {} for {} batches after {} unusable groups in a row (last: {}); "
+            "{} usable prompts remain{}",
             self._log_name(uid),
-            QUARANTINE_STEPS,
+            cooldown,
             count,
             disposition,
             usable - 1,
