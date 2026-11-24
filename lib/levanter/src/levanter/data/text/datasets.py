@@ -1322,7 +1322,7 @@ class LmDataConfig:
             return {}
 
         catalog = self._loaded_cache_catalog
-        # cached_property does not serialize concurrent first loads.
+        # Materialize the tokenizer once before concurrent cache reads use it.
         tokenizer = self.the_tokenizer
 
         # Loads are pure GCS metadata reads and parallelize cleanly. Builds may
