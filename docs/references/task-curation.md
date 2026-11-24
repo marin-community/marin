@@ -2903,7 +2903,7 @@ name, engine job IDs and warm measurement.
 Self-hosted pools replace their active solver receipt after each successful
 warm-up, retaining both the previous and new receipts under
 `history/<solver>/<sha256>.json`. A replacement must preserve the model and
-revision. Workers and brokers allow three failure retries and ten preemption
+revision. GPU workers allow three failure retries and ten preemption
 retries; submit the CPU owner with a positive failure retry budget too.
 
 Choose one fresh registry URI for a generation. Launch each self-hosted solver
