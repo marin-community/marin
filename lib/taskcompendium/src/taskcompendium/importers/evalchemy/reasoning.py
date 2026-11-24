@@ -242,6 +242,6 @@ def reasoning_item(task: TaskSpec, *, benchmark: str) -> EvaluationItem:
             ),
         )
         if benchmark == "MMLUPro"
-        else ChatGeneration()
+        else ChatGeneration(response_selection="final_only")
     )
     return chat_item(task).model_copy(update={"groups": groups, "operation": operation})

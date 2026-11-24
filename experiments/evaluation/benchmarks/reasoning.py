@@ -138,6 +138,7 @@ def choice_dataset(
     benchmark: str,
     source: HfSource,
     converter: Converter,
+    protocol_version: str,
     population: int,
     trials: int,
     inputs: dict[str, HfSource],
@@ -163,7 +164,7 @@ def choice_dataset(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.02",
+                version=protocol_version,
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
                     temperature=None,
@@ -193,6 +194,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             benchmark="GPQADiamond",
             source=HfSource("Idavidrein/gpqa", GPQA_REVISION, ("gpqa_diamond.csv",), SourceFormat.CSV),
             converter=convert_gpqa,
+            protocol_version="2026.11.21",
             population=198,
             trials=3,
             inputs={},
@@ -202,6 +204,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             benchmark="MMLUPro",
             source=HfSource("TIGER-Lab/MMLU-Pro", MMLU_PRO_REVISION, (MMLU_TEST_FILE,), SourceFormat.PARQUET),
             converter=convert_mmlu,
+            protocol_version="2026.11.02",
             population=12032,
             trials=1,
             inputs={
