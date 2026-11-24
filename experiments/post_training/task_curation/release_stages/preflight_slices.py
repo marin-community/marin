@@ -132,8 +132,21 @@ def _ref_dict(ref: ArtifactRef) -> dict:
 
 
 def _declarations_document() -> dict:
-    """The current declaration set through the maintained extraction (real path)."""
-    return declarations_stage.current_declarations()
+    """The current declaration set, read the way the census rows bind it.
+
+    The declaration gate belongs to the declarations stage's own check; the
+    slice's census-inputs document needs the registry's declarations as the
+    census rows will see them.
+    """
+    from experiments.post_training.task_curation.sources import all_sources  # noqa: PLC0415
+    from infra.marina.apps.rl_data_catalog.server.source_identity import (  # noqa: PLC0415 — the app import stays beside its only use
+        canonical_source_id,
+    )
+
+    document = {}
+    for source in all_sources().values():
+        document[canonical_source_id(source.info.id)] = source.declaration.model_dump(mode="json")
+    return document
 
 
 def _seal_slice_document(path: str, document) -> ArtifactRef:
