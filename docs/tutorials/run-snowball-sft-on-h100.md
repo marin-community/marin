@@ -64,35 +64,16 @@ Here `keep` retains a permanent checkpoint every 1,000 steps in addition to the 
 
 ## Match the served vLLM forward
 
-By default, Levanter's Snowball forward differs numerically from the forward that vLLM serves; small per-operation differences compound and change expert routing on H100 ([issue 10698](https://github.com/marin-community/marin/issues/10698)). Default `moe_capacity_factor=1.0` can also drop routed assignments in any expert-parallel run, SFT included.
+By default, Levanter's Snowball forward differs numerically from served vLLM ([issue 10698](https://github.com/marin-community/marin/issues/10698)), and `moe_capacity_factor=1.0` can drop routed tokens under expert parallelism.
 
-For the full table of Levanter, SkyRL/Megatron, and vLLM parity knobs (including measured effects, costs, backend limits, and evidence boundaries), see [Serving Numerical Parity](../references/serving-parity.md).
-
-To opt in to the Snowball serving-parity settings available on `main` without changing the default recipe, use or adapt `VLLM_PARITY_SPEC` from [experiments/sft/configs/snowball_h100.py](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py):
+To enable the serving-parity settings available on `main` without changing the default recipe, import `VLLM_PARITY_SPEC` from [experiments/sft/configs/snowball_h100.py](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py):
 
 ```python
 from dataclasses import replace
 
-from levanter.models.snowball import SnowballConfig
+from experiments.sft.configs.snowball_h100 import VLLM_PARITY_SPEC
 
-from experiments.sft.configs.snowball_h100 import SPEC
-from experiments.sft.launcher import HFModel
-
-assert isinstance(SPEC.model, HFModel)
-SPEC = replace(
-    SPEC,
-    model=replace(
-        SPEC.model,
-        model=SnowballConfig(
-            moe_capacity_factor=8.0,  # match the mesh's expert-axis size
-            router_dot_fp32=True,
-            fp32_activations=True,
-        ),
-    ),
-    field_dtype_overrides={"router_bias": "float32"},
-)
+SPEC = replace(VLLM_PARITY_SPEC, name="checkpoints/my-snowball-sft")
 ```
 
-Once [PR 10686](https://github.com/marin-community/marin/pull/10686) merges, also set `router_combine_fp32=True` on `SnowballConfig(...)`. Leave `attention_implementation="torch_order"` ([PR 10688](https://github.com/marin-community/marin/pull/10688)) off outside short-context diagnostics. Note that `field_dtype_overrides={"router_bias": "float32"}` also exports `router_bias` in FP32, and recipes using `hf_to_levanter` (such as [curriculum SFT and self-distillation](https://github.com/marin-community/marin/blob/main/experiments/post_training/curriculum_sft/trial.py)) must pass `compute_dtype=None` so conversion does not round `router_bias` to BF16 before training.
-
-These settings move Levanter toward the served vLLM forward; agreement with Snowball's original TPU pretraining forward and downstream SFT quality have not been measured. See [Serving Numerical Parity](../references/serving-parity.md#evidence-boundaries-and-limits) for full scope and limits.
+See [Serving Numerical Parity](../references/serving-parity.md) for the full knob table, SkyRL/Megatron settings, `hf_to_levanter(..., compute_dtype=None)` requirements, and coverage limits.
