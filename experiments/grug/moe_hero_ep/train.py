@@ -1051,6 +1051,13 @@ def _merge_microbatch_metrics(left, right, left_count, right_count):
     return merged
 
 
+class _AccumulatedGradients(NamedTuple):
+    loss: jax.Array
+    metrics: dict
+    gradients: Transformer
+    valid_tokens: jax.Array
+
+
 def _accumulated_loss_and_grads(params, batch, mp, z_loss, microbatch_size, logical_batch_size):
     """Accumulate one logical update, excluding loader padding before a single clip/optimizer update."""
     physical_size = batch.tokens.shape[0]
@@ -1073,22 +1080,24 @@ def _accumulated_loss_and_grads(params, batch, mp, z_loss, microbatch_size, logi
         piece = eqx.combine(piece, shared)
         (loss, metrics), grads = _loss_and_grads(params, piece, mp, z_loss, normalizer)
         count = jnp.sum(piece.attn_mask.segment_ids[0] >= 0)
-        return loss, metrics, grads, count
+        return _AccumulatedGradients(loss, metrics, grads, count)
 
     initial = evaluate(jax.tree.map(lambda x: x[0], batched))
 
     def accumulate(carry, piece):
-        loss, metrics, grads, count = carry
-        this_loss, this_metrics, this_grads, this_count = evaluate(piece)
+        current = evaluate(piece)
         return (
-            loss + this_loss,
-            _merge_microbatch_metrics(metrics, this_metrics, count, this_count),
-            jax.tree.map(jnp.add, grads, this_grads),
-            count + this_count,
-        ), None
+            _AccumulatedGradients(
+                carry.loss + current.loss,
+                _merge_microbatch_metrics(carry.metrics, current.metrics, carry.valid_tokens, current.valid_tokens),
+                jax.tree.map(jnp.add, carry.gradients, current.gradients),
+                carry.valid_tokens + current.valid_tokens,
+            ),
+            None,
+        )
 
-    (loss, metrics, grads, _), _ = jax.lax.scan(accumulate, initial, jax.tree.map(lambda x: x[1:], batched))
-    return (loss, metrics), grads
+    accumulated, _ = jax.lax.scan(accumulate, initial, jax.tree.map(lambda x: x[1:], batched))
+    return (accumulated.loss, accumulated.metrics), accumulated.gradients
 
 
 def _compute_diagnostic_watch_stats(params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig):
