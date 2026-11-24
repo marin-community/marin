@@ -27,10 +27,10 @@ from taskforge.resources.bundle import Resources
 
 # The TaskSpec and Control schemas the author is shown. Every author request embeds them, so they are pinned data: a
 # wording change in TaskCompendium cannot reprice recorded calls, and a new schema shape needs a new version.
-AUTHOR_REFERENCE = DEFAULTS_DIR / "author-reference-v1.json"
-# The decision-model grader kind, inserted into v1 only where a decision model is configured: without one, the author
-# keeps v1's bytes and recorded author calls replay.
-DECISION_MODEL_GRADER = DEFAULTS_DIR / "author-reference-v1-decision-model.json"
+AUTHOR_REFERENCE = DEFAULTS_DIR / "author-reference-v2.json"
+# The decision-model grader kind, inserted into v2 only where a decision model is configured: without one, the author
+# keeps v2's bytes and recorded author calls replay.
+DECISION_MODEL_GRADER = DEFAULTS_DIR / "author-reference-v2-decision-model.json"
 
 
 def author_reference(decision_model: bool) -> str:

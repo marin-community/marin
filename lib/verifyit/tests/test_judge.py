@@ -61,7 +61,7 @@ class _Handler(BaseHTTPRequestHandler):
         usage = {}
         if server.usage_tokens:
             index = min(len(server.prompts) - 1, len(server.usage_tokens) - 1)
-            usage = {"usage": {"completion_tokens": server.usage_tokens[index]}}
+            usage = {"usage": {"completion_tokens": server.usage_tokens[index], "prompt_tokens": 123}}
         body = json.dumps(
             {
                 "id": "chatcmpl-fake",
@@ -242,6 +242,17 @@ def test_unparseable_reply_is_retried_once_then_masks_candidate(tmp_path, fake_j
     assert len(fake_judge.prompts) == 2
 
 
+@pytest.mark.parametrize("rubric", ["reference", "checklist"])
+def test_default_transport_recovers_from_transient_failure(tmp_path, fake_judge, rubric):
+    fake_judge.http_statuses = [503, 200]
+    fake_judge.retry_after = "0"
+    fake_judge.replies = ["SCORE: 1"]
+    spec = JudgeSpec(rubric=rubric, references=(REFERENCE,), criteria=("Be correct",), exact_gate=False)
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "candidate"))
+    assert (reward.status, reward.reward) == (Status.SCORED, 1)
+    assert len(fake_judge.requests) == 2
+
+
 def test_second_attempt_is_accepted(tmp_path, fake_judge):
     fake_judge.replies = ["I cannot grade this.", "Matches the reference.\nSCORE: 1"]
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
@@ -276,6 +287,8 @@ def test_reference_retries_truncation_with_budget_and_records_attempts(tmp_path,
         {"finish_reason": "length", "completion_tokens": 1024},
         {"finish_reason": "stop", "completion_tokens": 1600},
     ]
+    assert [reply["usage"]["prompt_tokens"] for reply in reward.detail["judge_responses"]] == [123, 123]
+    assert reward.detail["judge_responses"][-1]["choices"][0]["message"]["content"] == "SCORE: 0.5"
 
 
 def test_reference_exhausted_truncation_is_unscored_with_attempts(tmp_path, fake_judge):
@@ -354,6 +367,11 @@ def test_checklist_records_attempts_per_criterion(tmp_path, fake_judge):
         ],
         [{"finish_reason": "stop", "completion_tokens": 100}],
     ]
+    assert [
+        reply["usage"]["prompt_tokens"]
+        for criterion in reward.detail["criteria"]
+        for reply in criterion["judge_responses"]
+    ] == [123, 123, 123]
 
 
 def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(tmp_path, fake_judge):
@@ -373,12 +391,15 @@ def test_checklist_truncated_criterion_keeps_partial_diagnostics_without_score(t
 
 
 def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):
-    context = "é" * (grade_judge.CONTEXT_LIMIT - 4) + "TAIL" + "excluded"
+    context_limit = 24
+    context = "é" * (context_limit - 4) + "TAIL" + "excluded"
     (tmp_path / "conversation.txt").write_text(context)
     fake_judge.replies = ["SCORE: 1"]
-    spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt")
+    spec = JudgeSpec(
+        rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt", context_char_limit=context_limit
+    )
     grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "1. 2. 3."))
-    assert context[: grade_judge.CONTEXT_LIMIT] in fake_judge.prompts[0]
+    assert context[:context_limit] in fake_judge.prompts[0]
     assert "excluded" not in fake_judge.prompts[0]
 
 
@@ -481,6 +502,8 @@ def test_malformed_final_judge_labels_never_award_reward(tmp_path, fake_judge, r
 def _label_spec(**overrides) -> JudgeSpec:
     values = dict(
         rubric="labels",
+        transport_attempts=1,
+        parse_attempts=1,
         references=("reference answer",),
         question="trusted question",
         system_prompt="Compare {reference} against {candidate} for {question}.",
@@ -519,6 +542,29 @@ def test_configured_judge_labels_on_real_http_boundary(tmp_path, fake_judge, rep
         {"role": "system", "content": "Compare reference answer against candidate {reference} for trusted question."},
         {"role": "user", "content": "A: reference answer\nB: candidate {reference}"},
     ]
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+def test_label_parse_retry_preserves_context_and_attempt_diagnostics(fake_judge, finish_reason):
+    fake_judge.replies = ["unclear", "[[A=B]]"]
+    fake_judge.finish_reasons = ["stop", finish_reason]
+    spec = _label_spec(parse_attempts=2, system_prompt="Context: {context}")
+    if finish_reason == "length":
+        with pytest.raises(GradingInfraError) as raised:
+            grade_judge.grade_judge_candidate(spec, "candidate", context="trusted context")
+        detail = raised.value.detail
+    else:
+        result = grade_judge.grade_judge_candidate(spec, "candidate", context="trusted context")
+        assert result.reward == 1
+        detail = result.detail
+    assert detail["parse_attempt"] == 2
+    assert detail["previous_parse_attempts"] == [{"attempt": 1, "completion": "unclear"}]
+    assert [request["messages"] for request in fake_judge.requests] == [
+        [
+            {"role": "system", "content": "Context: trusted context"},
+            {"role": "user", "content": "A: reference answer\nB: candidate"},
+        ]
+    ] * 2
 
 
 @pytest.mark.parametrize(
@@ -856,6 +902,8 @@ def test_responses_whole_labels_preserve_source_request_and_reject_prose(tmp_pat
         label_scores={"CORRECT": 1, "INCORRECT": 0},
         max_completion_tokens=1024,
         reasoning_effort="low",
+        temperature=None,
+        parse_attempts=1,
     )
     path = tmp_path / "verifier.toml"
     path.write_text(render_spec(spec))
@@ -1313,4 +1361,20 @@ def test_a_callback_refuses_a_rubric_that_samples_at_the_judges_default_temperat
     connection = grade_judge.JudgeConnection("", "", default_model="callback-judge", callback=calls.append)
     with pytest.raises(InvalidTask, match="answers rubric"):
         grade_judge.grade_judge_candidate(_answers_spec(), "candidate", connection=connection, runtime=None)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("spec", "match"),
+    [
+        (JudgeSpec(references=("12",), exact_gate=False, temperature=0.7), "reference rubric needs 0.7"),
+        (_label_spec(temperature=0.7), "labels rubric needs 0.7"),
+        (_label_spec(chat_template_kwargs={"thinking": "off"}), "no chat_template_kwargs"),
+    ],
+)
+def test_a_callback_refuses_a_sampling_setting_its_request_cannot_carry(spec, match):
+    calls = []
+    connection = grade_judge.JudgeConnection("", "", default_model="callback-judge", callback=calls.append)
+    with pytest.raises(InvalidTask, match=match):
+        grade_judge.grade_judge_candidate(spec, "candidate", connection=connection, runtime=None)
     assert calls == []
