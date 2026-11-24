@@ -63,16 +63,7 @@ fn emit(store: &Store) {
 }
 
 /// Spawn the diagnostics task. It emits once per [`POOL_DIAGNOSTICS_INTERVAL`]
-/// and exits when `stop` is latched (set the `AtomicBool` THEN `notify_waiters`
-/// the `Notify`).
-///
-/// The latch is load-bearing: `Notify::notify_waiters` stores no permit, so a
-/// notify that fires while the task is between the prior `select!` and
-/// re-registering `notified()` would be lost and the task would sleep up to a
-/// full interval before noticing shutdown. Checking the latch at loop-top and
-/// after the select closes that race (the same pattern the per-namespace
-/// flush/maintenance tasks use), so shutdown is prompt and cannot stall the
-/// process drain.
+/// and stops as [`spawn_periodic`] describes.
 pub fn spawn_pool_diagnostics(
     store: Arc<Store>,
     stop: Arc<AtomicBool>,
@@ -84,7 +75,16 @@ pub fn spawn_pool_diagnostics(
     })
 }
 
-/// Run `tick` once per `interval` until `stop` is latched.
+/// Run `tick` once per `interval` until `stop` is latched (set the
+/// `AtomicBool` THEN `notify_waiters` the `Notify`).
+///
+/// The latch is load-bearing: `Notify::notify_waiters` stores no permit, so a
+/// notify that fires while the task is between the prior `select!` and
+/// re-registering `notified()` would be lost and the task would sleep up to a
+/// full interval before noticing shutdown. Checking the latch at loop-top and
+/// after the select closes that race (the same pattern the per-namespace
+/// flush/maintenance tasks use), so shutdown is prompt and cannot stall the
+/// process drain.
 pub(crate) fn spawn_periodic<F, Fut>(
     interval: Duration,
     stop: Arc<AtomicBool>,

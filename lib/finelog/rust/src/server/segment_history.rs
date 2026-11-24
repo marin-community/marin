@@ -128,8 +128,8 @@ impl TableSegmentHistory {
 
     /// Write one row per live table with its current segment statistics.
     ///
-    /// Registration goes through the catalog's schema lock and commit, so it
-    /// runs once per process; a failed attempt is retried by the next call.
+    /// The first successful call registers the history table. After an error
+    /// nothing is written for that timestamp and the next call starts over.
     pub fn record(&self, timestamp_ms: i64) -> Result<(), StatsError> {
         let schema = table_segments_schema();
         if !self.registered.load(Ordering::SeqCst) {
