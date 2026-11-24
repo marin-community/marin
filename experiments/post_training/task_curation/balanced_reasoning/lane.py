@@ -17,8 +17,6 @@ import logging
 from dataclasses import dataclass, replace
 
 import fsspec
-from rigging.filesystem.factory import open_url
-
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskSpec, TextMessage
 from taskforge.effects.context import Context

@@ -125,7 +125,12 @@ def test_build_tasks_manifest_joins_census_to_ledger(tmp_path: Path) -> None:
     )
     difficulty = {
         ("org:source", SHA_A): TaskDifficulty(
-            source_id="org:source", task_sha256=SHA_A, task_id="task-solved", solve_rate=1.0, scored=3, basis="ledger:pooled"
+            source_id="org:source",
+            task_sha256=SHA_A,
+            task_id="task-solved",
+            solve_rate=1.0,
+            scored=3,
+            basis="ledger:pooled",
         )
     }
     receipt = build_tasks_manifest(difficulty, [entry], str(tmp_path / "out"))
@@ -155,7 +160,12 @@ def test_build_tasks_manifest_counts_ungraded_tasks(tmp_path: Path) -> None:
     )
     difficulty = {
         ("org:source", SHA_A): TaskDifficulty(
-            source_id="org:source", task_sha256=SHA_A, task_id="task-none", solve_rate=0.5, scored=2, basis="ledger:pooled"
+            source_id="org:source",
+            task_sha256=SHA_A,
+            task_id="task-none",
+            solve_rate=0.5,
+            scored=2,
+            basis="ledger:pooled",
         )
     }
     receipt = build_tasks_manifest(difficulty, [entry], str(tmp_path / "out"))

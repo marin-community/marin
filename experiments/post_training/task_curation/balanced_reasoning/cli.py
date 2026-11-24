@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import sys
-from pathlib import Path
 
 import fsspec
 from rigging.filesystem.factory import open_url
@@ -234,7 +233,9 @@ def command_report(args: argparse.Namespace) -> int:
             task_solve["solved"] += 1
         for attempt in document["attempts"]:
             if attempt.get("kind") == KIND_GRACEFUL and attempt.get("graceful_resolution"):
-                graceful_forms[attempt["graceful_resolution"]] = graceful_forms.get(attempt["graceful_resolution"], 0) + 1
+                graceful_forms[attempt["graceful_resolution"]] = (
+                    graceful_forms.get(attempt["graceful_resolution"], 0) + 1
+                )
 
         events_path = attempt_path.replace("attempt.json", "events.jsonl")
         try:
@@ -266,7 +267,9 @@ def command_report(args: argparse.Namespace) -> int:
         tokens = stats["completion_tokens"]
         stats["decode_tok_per_s"] = round(tokens / stats["decode_seconds"], 1) if stats["decode_seconds"] else 0.0
         stats["solve_rate"] = (
-            round(solve_by_band[name]["solved"] / solve_by_band[name]["tasks"], 3) if solve_by_band[name]["tasks"] else 0.0
+            round(solve_by_band[name]["solved"] / solve_by_band[name]["tasks"], 3)
+            if solve_by_band[name]["tasks"]
+            else 0.0
         )
     graceful_passes = graceful_forms.get("graceful_best_effort", 0) + graceful_forms.get("graceful_uncertain", 0)
     graceful_attempts = sum(graceful_forms.values())
