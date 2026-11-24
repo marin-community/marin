@@ -102,8 +102,8 @@ def _candidate(policy: EvalPolicy, name: str) -> PolicyCandidate:
     return candidates[name]
 
 
-def _uncommitted_changes() -> str:
-    return subprocess.check_output(["git", "status", "--porcelain"], text=True, cwd=find_project_root()).strip()
+def _git(*args: str) -> str:
+    return subprocess.check_output(["git", *args], text=True, cwd=find_project_root()).strip()
 
 
 def _print_launch(policy: EvalPolicy, candidate: PolicyCandidate, batches: list[EvaluationBatch]) -> None:
@@ -188,7 +188,7 @@ def launch(
     """
     policy = POLICIES[version]
     candidate = _candidate(policy, candidate_name)
-    if not dry_run and (changes := _uncommitted_changes()):
+    if not dry_run and (changes := _git("status", "--porcelain")):
         if limit is None:
             raise click.ClickException(f"commit or remove uncommitted changes before a full launch:\n{changes}")
         logger.warning("smoke run from a checkout with uncommitted changes; its records name only HEAD")
@@ -205,6 +205,11 @@ def launch(
         batches = [prepare_evaluation_batch(spec) for spec in specs]
     except ValueError as error:
         raise click.ClickException(str(error)) from error
+    recorded, head = batches[0].provenance.git_sha, _git("rev-parse", "HEAD")
+    if not dry_run and limit is None and recorded != head:
+        raise click.ClickException(
+            f"records would name commit {recorded}, not HEAD {head}; unset MARIN_GIT_SHA and GIT_COMMIT"
+        )
     for batch in batches:
         require_coreweave_credentials(batch)
     _print_launch(policy, candidate, batches)
