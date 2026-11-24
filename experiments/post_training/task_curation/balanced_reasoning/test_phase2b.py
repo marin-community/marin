@@ -4,6 +4,7 @@
 """Tests for the Phase 2b pieces: pooled difficulty, the census manifest, the launcher."""
 
 import json
+from argparse import Namespace
 from pathlib import Path
 
 import pyarrow as pa
@@ -17,6 +18,7 @@ from experiments.post_training.task_curation.balanced_reasoning.catalog import (
     read_census_entries,
     validate_task_spec,
 )
+from experiments.post_training.task_curation.balanced_reasoning.cli import build_parser
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import (
     SOLVER_ALL,
     LedgerAttempt,
@@ -194,25 +196,25 @@ def test_parse_endpoint_address() -> None:
         parse_endpoint_address("NAME ACCESS PEER ADDRESS TASK\n", "/muchanem/glm53-relay/glm-5.3")
 
 
-def _arguments(**overrides):
-    from argparse import Namespace
+_DEFAULT_ARGUMENTS = {
+    "selection": "s3://bucket/selection.json",
+    "run_root": "s3://bucket/run",
+    "job_name": "balanced-reasoning-pilot",
+    "concurrency": 16,
+    "target_cluster": "cw-us-east-08a",
+    "relay_cluster": "cw-us-east-02a",
+    "relay_endpoint": "/muchanem/glm53-relay/glm-5.3",
+    "cpu": 8,
+    "memory": "16GB",
+    "disk": "50GB",
+    "max_retries": 3,
+    "priority": "production",
+    "pool": "bulk",
+}
 
-    defaults = {
-        "selection": "s3://bucket/selection.json",
-        "run_root": "s3://bucket/run",
-        "job_name": "balanced-reasoning-pilot",
-        "concurrency": 16,
-        "target_cluster": "cw-us-east-08a",
-        "relay_cluster": "cw-us-east-02a",
-        "relay_endpoint": "/muchanem/glm53-relay/glm-5.3",
-        "cpu": 8,
-        "memory": "16GB",
-        "disk": "50GB",
-        "max_retries": 3,
-        "priority": "production",
-        "pool": "bulk",
-    }
-    defaults.update(overrides)
+
+def _arguments(**overrides) -> Namespace:
+    defaults = {**_DEFAULT_ARGUMENTS, **overrides}
     return Namespace(**defaults)
 
 
@@ -240,8 +242,6 @@ def test_check_credentials_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_report_aggregates_bands_resolutions_and_transport(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-    from experiments.post_training.task_curation.balanced_reasoning.cli import build_parser
-
     task_dir = tmp_path / "tasks" / "t1"
     task_dir.mkdir(parents=True)
     (task_dir / "attempt.json").write_text(
