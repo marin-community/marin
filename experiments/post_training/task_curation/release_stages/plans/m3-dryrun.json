@@ -29,8 +29,8 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v22/backend-validation/backend-survey.json"
     },
     "backend_validation_receipt": {
-      "sha256": "c19d42eaecd22ee186230d9c72a5acbb86f4954dd17d00fab54353a6b4d2f8cb",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v23/backend-validation/backend-validation-receipt.json"
+      "sha256": "ed98550829303ae1c05a1e500a5d817a750d1530cf4f552ac39a1499452af34f",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v28/backend-validation/backend-validation-receipt.json"
     },
     "exposure_input_check": null,
     "fresh_qc_index": {
@@ -423,7 +423,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "m3-dryrun",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v27",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v28",
   "scan_regions": {
     "us-east-02a": "s3://marin-us-east-02a/marin/rl-data/atlas/"
   },
