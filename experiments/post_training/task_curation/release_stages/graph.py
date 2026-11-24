@@ -170,7 +170,6 @@ class ReleasePins(BaseModel):
     prior_release: ArtifactRef
     prior_coverage: ArtifactRef
     prior_manifest: ArtifactRef | None = None
-    prior_fresh_qc_index: ArtifactRef
     registry_index: ArtifactRef
     oracle_inventory: ArtifactRef
     source_counts: ArtifactRef
@@ -251,6 +250,7 @@ class ReleasePlan(BaseModel):
     migrations: tuple[str, ...] = ()
     rebound_source: str = ""
     rebound_tasks: int = 0
+    removed_sources: tuple[str, ...] = ()
     strict_audit_local: bool = False
     slice_output_root: str = ""
     validation_target: str
@@ -397,7 +397,14 @@ def _coerce_ref(value: Any, hint: Any) -> Any:
         return None
     origin = get_origin(hint)
     if origin is dict:
-        return {key: ArtifactRef(**item) for key, item in value.items()}
+        args = [arg for arg in get_args(hint) if arg is not type(None)]
+        value_hint = args[1] if len(args) == 2 else None
+        if value_hint is ArtifactRef:
+            return {key: ArtifactRef(**item) for key, item in value.items()}
+        if value_hint is not None and value_hint is not dict and get_origin(value_hint) is None:
+            # Plain typed values stay as-is; the JSON config already carries them.
+            return {key: _coerce_ref(item, value_hint) for key, item in value.items()}
+        return value
     if origin is not None:
         args = [arg for arg in get_args(hint) if arg is not type(None)]
         if origin is tuple:
@@ -861,7 +868,12 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         "backend_validation", "backend_validation", backend_validation_stage.__name__, ("census_inputs",), True
     ),
     "fresh_qc_index": StageSpec(
-        "fresh_qc_index", "fresh_qc_index", fresh_qc_index_stage.__name__, ("qc_browse",), False, receipt_key="index"
+        "fresh_qc_index",
+        "fresh_qc_index",
+        fresh_qc_index_stage.__name__,
+        ("qc_browse", "declarations"),
+        False,
+        receipt_key="index",
     ),
     "history_staging": StageSpec("history_staging", "history_staging", history_staging_stage.__name__, (), True),
     "text_scan_region": StageSpec(
@@ -1068,6 +1080,7 @@ def _declarations_step(plan: ReleasePlan, plan_handle: ArtifactStep) -> Artifact
             "expected_source_count": plan.expected_source_count,
             "targets": plan.targets,
             "prior_declarations": _ref_dict(plan.pins.prior_declarations),
+            "removed_sources": plan.removed_sources,
         }
 
     return _stage_step(
@@ -1596,9 +1609,11 @@ def _catalog_stage_step(
     )
 
 
-def _fresh_qc_index_step(plan: ReleasePlan, qc_browse: ArtifactStep) -> ArtifactStep[StageReceipt]:
+def _fresh_qc_index_step(
+    plan: ReleasePlan, qc_browse: ArtifactStep, declarations: ArtifactStep
+) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["fresh_qc_index"]
-    identity = _identity_fields(plan, "release_id", "catalog_target_load_id", "snapshot_id", "source_revision", "pins")
+    identity = _identity_fields(plan, "release_id", "catalog_target_load_id", "snapshot_id", "source_revision")
 
     def build_inputs(ctx: StepContext) -> dict:
         return {
@@ -1607,7 +1622,7 @@ def _fresh_qc_index_step(plan: ReleasePlan, qc_browse: ArtifactStep) -> Artifact
             "snapshot_id": plan.snapshot_id,
             "source_revision": plan.source_revision,
             "output_root": stage_output_root(plan, "qc-index"),
-            "prior_index": _ref_dict(plan.pins.prior_fresh_qc_index),
+            "declarations": _resolved_receipt(ctx, declarations),
             "qc_completion": _resolved_receipt(ctx, qc_browse),
         }
 
@@ -1615,7 +1630,7 @@ def _fresh_qc_index_step(plan: ReleasePlan, qc_browse: ArtifactStep) -> Artifact
         plan,
         "fresh_qc_index",
         spec,
-        (qc_browse,),
+        (qc_browse, declarations),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=fresh_qc_index_stage.FreshQcIndexInputs,
@@ -2029,7 +2044,7 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     history = _history_staging_step(plan)
     qc_plan = _qc_browse_plan_step(plan, declarations)
     qc_browse = _qc_browse_copy_step(plan, qc_plan)
-    fresh_qc_index = _fresh_qc_index_step(plan, qc_browse)
+    fresh_qc_index = _fresh_qc_index_step(plan, qc_browse, declarations)
     snapshot = _snapshot_publication_step(plan, census, identity_backend, admission_check)
     catalog_stage = _catalog_stage_step(plan, declarations, snapshot, history, qc_browse, fresh_qc_index)
     catalog_load = _catalog_load_step(plan, catalog_stage)

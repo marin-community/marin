@@ -110,6 +110,19 @@ from experiments.post_training.task_curation.within_source_binding import bind_w
 CASCADE_RETAINED_SUBSETS = ("multi-domain-RL", "MOPD")
 
 # Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
+OUT_OF_REGION_PENDING_IDS = frozenset(
+    {
+        # Sealed populations and censuses exist only in the rno2a region; the release
+        # census refuses out-of-region populations (ruling 2026-11-24: don't block
+        # R40). They stage here for R41, re-measured in-region.
+        "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
+        "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
+        "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
+        "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
+        "TaskTrove:laion__wizardlm-orca-v4",
+    }
+)
+
 PENDING_MEASUREMENT_SOURCES = (
     *terminalworld.sources(),
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
@@ -120,6 +133,7 @@ PENDING_MEASUREMENT_SOURCES = (
     # sealed intake pin; it stages here until its release adopts it (R41), so its
     # registry receipts bind without entering the served declarations.
     *tasktrove_identity_repair.repaired_sources(),
+    *(source for source in tasktrove_judged.sources() if source.info.id in OUT_OF_REGION_PENDING_IDS),
 )
 
 
@@ -151,7 +165,7 @@ def configured_sources() -> list[RlDataSource]:
         *tasktrove_repositories.sources(),
         *swe_rebench_v2.admitted_sources(),
         *tasktrove_math.sources(),
-        *tasktrove_judged.sources(),
+        *(source for source in tasktrove_judged.sources() if source.info.id not in OUT_OF_REGION_PENDING_IDS),
         *tasktrove_qa.sources(),
         *tasktrove_calendar.sources(),
         *tasktrove_instructions.sources(),

@@ -42,6 +42,7 @@ class DeclarationInputs:
     expected_source_count: int
     targets: tuple[str, ...]
     prior_declarations: ArtifactRef
+    removed_sources: tuple[str, ...] = ()
 
     def validate(self) -> None:
         """Refuse malformed inputs before any read runs."""
@@ -113,10 +114,19 @@ def verify_declarations(inputs: DeclarationInputs, current: dict[str, dict], pri
     missing = [target for target in inputs.targets if target not in current]
     if missing:
         raise ValueError(f"current declarations lack the release targets {sorted(missing)}")
+    removed = sorted(source_id for source_id in prior if source_id not in current)
+    unplanned = sorted(set(removed) - set(inputs.removed_sources))
+    if unplanned:
+        raise ValueError(f"prior declarations absent from the current set: {unplanned[:5]}")
+    planned_but_present = sorted(set(inputs.removed_sources) & set(current))
+    if planned_but_present:
+        raise ValueError(f"the plan removes declarations the current set still carries: {planned_but_present[:5]}")
     drift = [
         source_id
         for source_id, row in prior.items()
-        if source_id not in inputs.targets and fingerprint_input(row) != fingerprint_input(current[source_id])
+        if source_id in current
+        and source_id not in inputs.targets
+        and fingerprint_input(row) != fingerprint_input(current[source_id])
     ]
     if drift:
         raise ValueError(f"non-target declarations drifted from the prior release: {sorted(drift)[:5]}")

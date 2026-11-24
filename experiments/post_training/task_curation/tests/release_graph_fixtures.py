@@ -23,7 +23,6 @@ def fixture_pins(release_root: str = RELEASE_ROOT) -> dict:
         "prior_backend": _pin(f"{release_root}/prior/backend.json"),
         "prior_release": _pin(f"{release_root}/prior/release.json"),
         "prior_coverage": _pin(f"{release_root}/prior/coverage.json"),
-        "prior_fresh_qc_index": _pin(f"{release_root}/prior/fresh-qc.json"),
         "registry_index": _pin(f"{release_root}/prior/registry-index.json"),
         "oracle_inventory": _pin(f"{release_root}/prior/oracle-inventory.json"),
         "source_counts": _pin(f"{release_root}/prior/source-counts.json"),

@@ -4,15 +4,16 @@
 """The fresh-QC-index stage: the graph's producer of the release's staged QC panel index.
 
 The release's fresh QC index is a graph output bound to the release's target load and
-snapshot (ruling 2026-11-24), not a hand-produced pin. The panels are the prior
-release's current-pin SAMPLE QC panels; the browse stage copied their review tables at
-the target load, and this stage re-stages each panel document byte-identically under
-the release prefix (digest-verified against the prior index) and seals the index the
-catalog load replays. Every panel must have been staged by the browse completion
-before it enters the index.
+snapshot (ruling 2026-11-24), not a hand-produced pin. One panel entry per browse-staged
+source: the maintained
+(:mod:`infra.marina.apps.rl_data_catalog.load_reviews`) stager resolves the frozen
+declaration's selected review evidence into the replayable staged document; this stage
+compresses it byte-deterministically under the release prefix, seals the per-panel
+receipt row, and seals the index the catalog load replays.
 """
 
 import argparse
+import gzip
 import hashlib
 import json
 from dataclasses import dataclass
@@ -22,7 +23,6 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
-from experiments.post_training.task_curation.release_stages.catalog_load import QC_PANEL_RECORDS
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 
 INDEX_KIND_SUFFIX = "fresh-qc-index"
@@ -38,7 +38,7 @@ class FreshQcIndexInputs:
     snapshot_id: str
     source_revision: str
     output_root: str
-    prior_index: ArtifactRef
+    declarations: ArtifactRef
     qc_completion: ArtifactRef
 
     def validate(self) -> None:
@@ -49,70 +49,67 @@ class FreshQcIndexInputs:
             raise ValueError("source_revision and output_root are required")
 
 
-def _read_index(ref: ArtifactRef, expected_load_id: str | None) -> dict:
-    """Digest-verify and read a fresh-QC-index document."""
+def _read_declarations(ref: ArtifactRef) -> dict[str, dict]:
+    """Digest-verify the frozen declarations document the panels bind."""
     payload = StoragePath(ref.uri).read_bytes()
     if hashlib.sha256(payload).hexdigest() != ref.sha256:
-        raise ValueError(f"fresh QC index digest mismatch: {ref.uri}")
+        raise ValueError(f"declarations digest mismatch: {ref.uri}")
     document = json.loads(payload)
-    if not isinstance(document.get("receipts"), list) or not document["receipts"]:
-        raise ValueError(f"fresh QC index at {ref.uri} carries no receipts")
-    if expected_load_id is not None and document.get("load_id") != expected_load_id:
-        raise ValueError(f"fresh QC index at {ref.uri} names load {document.get('load_id')!r}")
+    if not isinstance(document, dict) or not document:
+        raise ValueError("declarations document is empty or malformed")
     return document
 
 
-def _completion_panels(ref: ArtifactRef) -> dict[str, dict]:
-    """The browse completion's staged panels by source id."""
+def _completion_rows(ref: ArtifactRef) -> list[dict]:
+    """The browse completion's staged panels."""
     payload = StoragePath(ref.uri).read_bytes()
     if hashlib.sha256(payload).hexdigest() != ref.sha256:
         raise ValueError(f"browse completion digest mismatch: {ref.uri}")
     completion = json.loads(payload)
     if completion.get("status") != "PASS":
         raise ValueError(f"the browse completion is {completion.get('status')!r}; the index needs a PASS")
-    panels = {}
-    for row in completion.get("results") or []:
-        source_id = row.get("source_id")
-        if not source_id:
-            raise ValueError("the browse completion carries a result without a source_id")
-        panels[source_id] = row
-    if not panels:
+    rows = completion.get("results") or []
+    if not rows:
         raise ValueError("the browse completion carries no staged panels")
-    return panels
+    return rows
 
 
-def restage_panel(inputs: FreshQcIndexInputs, row: dict, *, write: bool) -> dict:
-    """Verify one prior panel document; ``write`` re-stages it byte-identically under the release prefix."""
-    raw = StoragePath(row["reference"]["uri"]).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != row["reference"]["sha256"]:
-        raise ValueError(f"prior panel digest mismatch: {row['source_id']}")
-    if row.get("status") != "complete" or row.get("records") != QC_PANEL_RECORDS:
-        raise ValueError(f"prior panel {row['source_id']} is {row.get('status')!r} with {row.get('records')} records")
-    reference = {"uri": row["reference"]["uri"], "sha256": row["reference"]["sha256"]}
+def _stage_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str, dict], *, write: bool) -> dict:
+    """Resolve, verify and (in write mode) stage one panel document under the release prefix."""
+    from infra.marina.apps.rl_data_catalog import load_reviews  # noqa: PLC0415 — the maintained stager
+    from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference  # noqa: PLC0415
+
+    source_id = row["source_id"]
+    declaration = declarations.get(source_id)
+    if declaration is None:
+        raise ValueError(f"no frozen declaration for staged panel source: {source_id}")
+    reference = ManifestReference.model_validate(row["original_receipt"]["artifact"])
+    staged = load_reviews.stage_content_reviews(reference, declaration, 8, None)
+    if staged["receipt"]["artifact"] != row["original_receipt"]["artifact"]:
+        raise ValueError(f"the staged review receipt differs from the browse copy: {source_id}")
+    payload = gzip.compress(
+        json.dumps(staged, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(), mtime=0
+    )
+    identity = reference.sha256
+    reference_out = {"uri": row["original_receipt"]["artifact"]["uri"], "sha256": identity}
     if write:
-        target = StoragePath(f"{inputs.output_root}/{STAGED_DIR}/{row['identity']}.json.gz")
-        if target.exists():
-            if target.read_bytes() != raw:
-                raise ValueError(f"staged panel {row['identity']} exists with different content; use a new output root")
+        path = StoragePath(f"{inputs.output_root}/{STAGED_DIR}/{identity}.json.gz")
+        if path.exists():
+            if path.read_bytes() != payload:
+                raise ValueError(f"staged panel {identity} exists with different content; use a new output root")
         else:
-            target.write_bytes(raw, auto_mkdir=True)
-        if target.read_bytes() != raw:
-            raise ValueError(f"staged panel readback mismatch: {row['identity']}")
-        reference = {"uri": str(target), "sha256": row["reference"]["sha256"]}
+            path.write_bytes(payload, auto_mkdir=True)
+        if path.read_bytes() != payload:
+            raise ValueError(f"staged panel readback mismatch: {identity}")
+        reference_out = {"uri": str(path), "sha256": hashlib.sha256(payload).hexdigest()}
     return {
-        "source_id": row["source_id"],
-        "status": row["status"],
-        "records": row["records"],
-        "bytes": len(raw),
-        "identity": row["identity"],
-        "reference": reference,
+        "source_id": source_id,
+        "identity": identity,
+        "status": "complete",
+        "records": len(staged["items"]),
+        "bytes": len(payload),
+        "reference": reference_out,
     }
-
-
-def _basis(prior: dict, inputs: FreshQcIndexInputs) -> str:
-    """The index's factual basis: the prior panels, re-staged for this release's load."""
-    prior_basis = str(prior.get("basis") or "the prior release's staged SAMPLE QC panels").rstrip(".")
-    return f"{prior_basis}; review tables re-copied at load {inputs.target_load_id} by the {inputs.release_id} browse"
 
 
 def run_fresh_qc_index(
@@ -128,15 +125,9 @@ def run_fresh_qc_index(
     try:
         inputs.validate()
         configure_coreweave_s3()
-        prior = _read_index(inputs.prior_index, expected_load_id=None)
-        panels = _completion_panels(inputs.qc_completion)
-        index_rows = [restage_panel(inputs, row, write=not dry_run) for row in prior["receipts"]]
-        index_sources = {row["source_id"] for row in index_rows}
-        if index_sources != set(panels):
-            raise ValueError(
-                f"the prior index panels {sorted(index_sources - set(panels))} and the browse completion "
-                f"panels {sorted(set(panels) - index_sources)} disagree"
-            )
+        declarations = _read_declarations(inputs.declarations)
+        rows = _completion_rows(inputs.qc_completion)
+        index_rows = [_stage_panel(inputs, row, declarations, write=not dry_run) for row in rows]
         if dry_run:
             alerts.stage_finished(
                 inputs.release_id,
@@ -159,11 +150,14 @@ def run_fresh_qc_index(
             "load_id": inputs.target_load_id,
             "snapshot_id": inputs.snapshot_id,
             "source_revision": inputs.source_revision,
-            "basis": _basis(prior, inputs),
+            "basis": (
+                "The browse-staged SAMPLE QC panels at their frozen declarations' selected review evidence, "
+                f"staged by this release at load {inputs.target_load_id}"
+            ),
             "receipts": index_rows,
             "provenance": {
-                "prior_index": {"uri": inputs.prior_index.uri, "sha256": inputs.prior_index.sha256},
                 "browse_completion": {"uri": inputs.qc_completion.uri, "sha256": inputs.qc_completion.sha256},
+                "declarations": {"uri": inputs.declarations.uri, "sha256": inputs.declarations.sha256},
             },
         }
         raw = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()

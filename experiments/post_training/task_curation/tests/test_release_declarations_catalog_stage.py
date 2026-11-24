@@ -205,6 +205,34 @@ def test_declarations_refusals(tmp_path, monkeypatch):
         )
 
 
+def test_declarations_refuse_unplanned_removals_and_allow_planned_ones(tmp_path, monkeypatch):
+    declarations = {SOURCE_A: _declaration("fixture-a"), SOURCE_B: _declaration("fixture-b")}
+    monkeypatch.setattr(declarations_stage, "require_catalog_declaration", lambda declaration: None)
+    prior = _seal_json(tmp_path, "prior-declarations.json", {SOURCE_A: declarations[SOURCE_A].model_dump(mode="json")})
+    revision = _init_repo(tmp_path / "repo")
+    # the current set drops the prior's only source: a refusal unless the plan removes it
+    dropped = _registry({SOURCE_B: _declaration("fixture-b")})
+    unannounced = _declaration_inputs(tmp_path, prior, revision)
+    unannounced = dataclasses.replace(unannounced, expected_source_count=1)
+    with pytest.raises(ValueError, match="absent from the current set"):
+        declarations_stage.run_declarations(
+            unannounced,
+            dry_run=True,
+            repo_root=tmp_path / "repo",
+            sources_fn=dropped,
+            feeds=_feeds(tmp_path),
+        )
+    planned = dataclasses.replace(
+        _declaration_inputs(tmp_path, prior, revision),
+        removed_sources=(SOURCE_A,),
+        expected_source_count=1,
+    )
+    proof = declarations_stage.run_declarations(
+        planned, dry_run=True, repo_root=tmp_path / "repo", sources_fn=dropped, feeds=_feeds(tmp_path)
+    )
+    assert proof["source_count"] == 1
+
+
 def _staged_documents(tmp_path: Path) -> dict[str, dict]:
     return {
         "declarations.json": {SOURCE_A: {}, SOURCE_B: {}},
