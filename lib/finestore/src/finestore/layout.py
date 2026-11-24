@@ -216,6 +216,9 @@ class CommitInfo(_FormatModel):
 
     author: str
     message: str
+    # The commit this record describes. An older writer copies its parent's record into the
+    # manifests it publishes, so readers ignore a record whose sequence is not the manifest's.
+    sequence: int
     created_at: str
 
 
@@ -234,7 +237,7 @@ class Manifest(_FormatModel):
     maintainer_epoch: int = 0
     # Disposable-cache recovery invalidates these commits across descriptor and chunk tables.
     cache_history_floor: int = 0
-    # Set only on the commit that carries it; the parent's value is never inherited.
+    # Written by the commit it describes; never inherited from the parent manifest.
     commit_info: CommitInfo | None = None
 
 

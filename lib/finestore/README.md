@@ -30,6 +30,13 @@ with DataStore.open("gs://bucket/purchases", writer_id="worker-0") as store:
     token = transaction.token
 ```
 
+`store.transaction(author=..., message=...)`, and the same arguments to
+`store.unbounded_transaction()`, record who made a change and why. The manifest of the
+commit the transaction publishes holds them as `commit_info`, with that commit's
+sequence and publication time, and `ReadView.commit_info` returns the record of the
+pinned commit. A transaction without rows on a non-empty archive publishes no commit
+and records nothing.
+
 The transaction buffers its rows and object bytes in memory. Each participating
 table produces one level-zero Parquet shard. FineStore writes every shard and an
 immutable full manifest before it conditionally advances `HEAD`. Until that final
@@ -271,12 +278,14 @@ archive retention or reader leases; it is outside the current API.
 Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
 sequence. A manifest names every active shard, its writer and compaction generation,
 row, sequence, and primary-key bounds, byte size, SHA-256 digest, each table's metadata
-object, the current maintainer epoch, and optional seal state. Writers compute shard
+object, the current maintainer epoch, optional seal state, and, for an attributed
+transaction, its `commit_info`. Writers compute shard
 integrity metadata while streaming Parquet, so it does not require another object-store
 read.
 
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
-commit. A manifest can also name `required_features`; readers reject features they do
+commit. Such a writer copies its parent's `commit_info` into the commits it publishes;
+the record names the sequence of the commit it describes, so readers ignore the copy. A manifest can also name `required_features`; readers reject features they do
 not implement before exposing a view. This lets future optional metadata remain
 additive while mandatory semantics fail closed without forcing unrelated archives to
 change their format version.

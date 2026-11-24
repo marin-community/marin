@@ -14,7 +14,6 @@ import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from types import TracebackType
 from typing import Protocol
 
@@ -25,6 +24,7 @@ from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.timing import ExponentialBackoff
 
 from finestore.commit import (
+    Attribution,
     ClearSeal,
     CommitConflict,
     CommitCoordinator,
@@ -39,7 +39,6 @@ from finestore.layout import (
     RESERVED_COLUMNS,
     BlobColumns,
     BlobTables,
-    CommitInfo,
     CommitToken,
     FineStoreLayout,
     KeyRange,
@@ -100,12 +99,12 @@ class TransactionTooLarge(ValueError):
     """A transaction exceeded its configured in-memory byte limit."""
 
 
-def _commit_info(author: str | None, message: str | None) -> CommitInfo | None:
+def _attribution(author: str | None, message: str | None) -> Attribution | None:
     if author is None and message is None:
         return None
     if author is None or message is None:
         raise ValueError("a commit needs both author and message, or neither")
-    return CommitInfo(author=author, message=message, created_at=datetime.now(UTC).isoformat(timespec="seconds"))
+    return Attribution(author=author, message=message)
 
 
 def _row_digest(row: Mapping[str, object]) -> bytes:
@@ -330,20 +329,20 @@ class DataStore:
     ) -> Transaction:
         """Create a transaction bounded by actual Arrow buffer bytes.
 
-        When both are given, ``author`` and ``message`` are recorded in the manifest of the commit
-        this transaction publishes. A transaction without rows on a non-empty archive publishes no
-        commit, so it records nothing.
+        When both are given, ``author`` and ``message`` are recorded, with the commit's sequence and
+        publication time, as the ``commit_info`` of the commit this transaction publishes. A
+        transaction without rows on a non-empty archive publishes no commit and records nothing.
         """
         self.raise_if_failed()
         transaction_limit = self._max_buffer_bytes if max_bytes is None else max_bytes
         if transaction_limit <= 0:
             raise ValueError("max_bytes must be positive")
-        return Transaction(self, max_bytes=transaction_limit, commit_info=_commit_info(author, message))
+        return Transaction(self, max_bytes=transaction_limit, attribution=_attribution(author, message))
 
     def unbounded_transaction(self, *, author: str | None = None, message: str | None = None) -> Transaction:
         """Create a transaction without an Arrow buffer byte limit."""
         self.raise_if_failed()
-        return Transaction(self, max_bytes=None, commit_info=_commit_info(author, message))
+        return Transaction(self, max_bytes=None, attribution=_attribution(author, message))
 
     def flush(self) -> CommitToken | None:
         """Commit all buffers with one HEAD update, or return ``None`` when empty."""
@@ -379,7 +378,7 @@ class DataStore:
                     table._restore(pending)
                 raise
 
-    def _commit_transaction(self, rows: dict[str, list[ArrowRow]], *, commit_info: CommitInfo | None) -> CommitToken:
+    def _commit_transaction(self, rows: dict[str, list[ArrowRow]], *, attribution: Attribution | None) -> CommitToken:
         with self._commit_lock:
             additions = {}
             for name, pending_rows in rows.items():
@@ -392,9 +391,9 @@ class DataStore:
             if not additions:
                 snapshot = self._commits.snapshot()
                 if snapshot.token is None:
-                    return self._commits.commit(CommitDelta(commit_info=commit_info))
+                    return self._commits.commit(CommitDelta(attribution=attribution))
                 return snapshot.token
-            return self._commits.commit(replace(_addition_delta(additions), commit_info=commit_info))
+            return self._commits.commit(replace(_addition_delta(additions), attribution=attribution))
 
     def compact(self, table: str, *, generation: int | None = None) -> CompactionResult:
         """Logically compact one table against the current manifest."""
@@ -612,12 +611,12 @@ class TransactionTable:
 class Transaction:
     """A set of retained Arrow rows and objects published through one commit token."""
 
-    def __init__(self, store: DataStore, *, max_bytes: int | None, commit_info: CommitInfo | None) -> None:
+    def __init__(self, store: DataStore, *, max_bytes: int | None, attribution: Attribution | None) -> None:
         self._store = store
         self._base = store.read_view()
         self._rows: dict[str, list[ArrowRow]] = {}
         self._objects: dict[str, bytes] = {}
-        self._commit_info = commit_info
+        self._attribution = attribution
         self._max_bytes = max_bytes
         self._buffer_bytes = 0
         self._closed = False
@@ -669,7 +668,7 @@ class Transaction:
             if self.token is None:
                 raise RuntimeError("transaction closed without committing")
             return self.token
-        self.token = self._store._commit_transaction(self._rows, commit_info=self._commit_info)
+        self.token = self._store._commit_transaction(self._rows, attribution=self._attribution)
         self._closed = True
         return self.token
 
