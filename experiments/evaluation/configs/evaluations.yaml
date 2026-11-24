@@ -87,6 +87,18 @@ evaluations:
   imo-answerbench:
     benchmark: imo-answerbench
     run: *together_judge
+  imo-proofbench:
+    benchmark: imo-proofbench
+    run:
+      judge:
+        deployment: together
+        models:
+          zai-org/GLM-5.3-Flash: provider-managed:zai-org/GLM-5.3-Flash
+        default_model: zai-org/GLM-5.3-Flash
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key:
+      - env:TOGETHER_API_KEY
+      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
   physics-verified:
     benchmark: physics-verified
     run:
