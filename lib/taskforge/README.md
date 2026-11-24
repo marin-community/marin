@@ -123,7 +123,7 @@ for arm in S T; do
 done
 ```
 
-Each proposal maps to `int(sha256(str(proposal_key)), 16) % 4096`; drivers process their
+Each input maps to `int(sha256(str(input_key)), 16) % 4096`; drivers process their
 half-open `--bucket-range a:b` in manifest order. The launcher splits buckets evenly
 across `--drivers N`; `--driver-range a:b` launches only those driver indices. To replace
 drivers 24–31 of a 32-driver fleet with 16 drivers, cancel them, then launch with

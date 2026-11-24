@@ -4,6 +4,7 @@
 """Hydrate a fresh environment and continue the author's saved conversation."""
 
 import json
+from dataclasses import dataclass
 from functools import partial
 from pathlib import PurePosixPath
 
@@ -136,20 +137,35 @@ def author_image_requirements(policy: Policy) -> EnvironmentRequirements:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class AuthorMachine:
+    """The author's started machine, its requirements, and why it is not the task's own when setup failed."""
+
+    env: Env
+    requirements: EnvironmentRequirements
+    setup_failure: str | None
+
+
+async def author_machine(workpiece: Workpiece, policy: Policy, resources: Resources) -> AuthorMachine:
+    """Start the author's machine, in ``author.image`` when a source task's own environment will not start.
+
+    The source task's environment is then what needs repair, so the author works beside it.
+    """
+    requested = host_requirements(author_requirements(workpiece, policy))
+    try:
+        return AuthorMachine(await resources.envs.create(requested), requested, None)
+    except EnvironmentSetupFailed as error:
+        if requested.docker_image not in policy.setting("sandbox.source_images", tuple):
+            raise
+        fallback = host_requirements(author_image_requirements(policy))
+        return AuthorMachine(await resources.envs.create(fallback), fallback, str(error))
+
+
 async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, resources: Resources) -> Exit:
     policy = config.policy
     workdir = PurePosixPath(policy.setting("author.workdir", str))
-    machine = author_requirements(workpiece, policy)
-    setup_failure: str | None = None
-    try:
-        env = await resources.envs.create(host_requirements(machine))
-    except EnvironmentSetupFailed as error:
-        if machine.docker_image not in policy.setting("sandbox.source_images", tuple):
-            raise
-        # The source task's environment is what needs repair, so the author works beside it in author.image.
-        setup_failure = str(error)
-        machine = author_image_requirements(policy)
-        env = await resources.envs.create(host_requirements(machine))
+    started = await author_machine(workpiece, policy, resources)
+    env, machine, setup_failure = started.env, started.requirements, started.setup_failure
     try:
         async with ctx.scope("author"):
             install_env(ctx, env)
@@ -182,7 +198,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
             tools = config.tools["author"]
             session = workpiece.session or Conversation(
                 (
-                    Message(Role.SYSTEM, system_prompt(policy, host_requirements(machine))),
+                    Message(Role.SYSTEM, system_prompt(policy, machine)),
                     Message(Role.USER, opening_prompt(workpiece, policy)),
                 ),
                 tuple(tool.schema for tool in tools.values()),

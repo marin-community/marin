@@ -359,7 +359,7 @@ async def test_driver_persists_programming_failure_then_reraises(
 
     with pytest.raises(RuntimeError, match="exhaust"):
         await driver.one(args)
-    destination = tmp_path / "out" / driver.proposal_key(args.proposals)
+    destination = tmp_path / "out" / driver.input_key(args.proposals)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert result.terminal == Terminal.HELD
     assert "bug:" in str(result.decisions[-1]) and "Traceback" in str(result.decisions[-1])
@@ -369,7 +369,7 @@ async def test_driver_persists_programming_failure_then_reraises(
     # An Iris retry has a fresh local directory, but must not rerun this held workpiece.
     args.work_dir = str(tmp_path / "retry-work")
     await driver.one(args)
-    assert (Path(args.work_dir) / driver.proposal_key(args.proposals) / "events.jsonl").read_bytes() == (
+    assert (Path(args.work_dir) / driver.input_key(args.proposals) / "events.jsonl").read_bytes() == (
         destination / "events.jsonl"
     ).read_bytes()
 
@@ -404,7 +404,7 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
     with pytest.raises(asyncio.CancelledError):
         await driver.one(args)
     monkeypatch.setattr(driver, "publish", final_publish)
-    destination = tmp_path / "out" / driver.proposal_key(args.proposals)
+    destination = tmp_path / "out" / driver.input_key(args.proposals)
     assert json.loads((destination / "status.json").read_text())["terminal"] is None
     args.work_dir = str(tmp_path / "second")
     await driver.one(args)
@@ -505,7 +505,7 @@ async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trial
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
     assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.HELD
     published = (destination / "events.jsonl").read_bytes()
     driver_args.work_dir += "-skip"
@@ -542,7 +542,7 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert envs.calls == min(failures + 1, 3)
     assert result.terminal is (Terminal.ACCEPTED if failures == 1 else Terminal.HELD)
@@ -568,7 +568,7 @@ async def test_recover_resumes_a_stream_published_without_status(tmp_path: Path)
 async def test_driver_holds_an_undecodable_stream_without_touching_it(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
     (destination / "events.jsonl.parts").mkdir(parents=True)
     first = JsonlSink(str(destination / "events.jsonl"))
     await EventLog(sink=first).record(StageCompleted(Stage.AUTHOR, "", "Held", 0, Terminal.HELD))
@@ -632,7 +632,7 @@ async def test_broken_guest_helper_holds_with_its_cause_without_a_bug(
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert result.terminal is Terminal.HELD
     assert "wc: not found" in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])
@@ -698,7 +698,7 @@ async def test_iris_command_runs_once_per_sandbox_and_holds_with_its_cause(
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert result.terminal is Terminal.HELD
     assert cause in str(result.decisions[-1]) and "bug:" not in str(result.decisions[-1])
@@ -738,7 +738,7 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
-    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    destination = Path(driver_args.output) / driver.input_key(driver_args.proposals)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert result.terminal is Terminal.ACCEPTED and result.session is not None
     assert [message.content for message in result.session.messages if message.tool_call_id == "read-proof"] == ["proof"]
@@ -764,7 +764,7 @@ async def test_driver_repairs_source_task_without_proposal(
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
 
-    destination = tmp_path / "out" / driver.proposal_key(str(source))
+    destination = tmp_path / "out" / driver.input_key(str(source))
     wp = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert wp.terminal == Terminal.ACCEPTED
     assert wp.proposal is None
@@ -808,7 +808,7 @@ async def test_driver_validates_source_task_with_its_own_controls(
     monkeypatch.setattr(driver, "runtime", fake_runtime)
     await driver.one(driver_args)
 
-    destination = tmp_path / "out" / driver.proposal_key(str(source))
+    destination = tmp_path / "out" / driver.input_key(str(source))
     wp = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert wp.terminal == Terminal.ACCEPTED
     assert wp.submission is not None and wp.submission.controls == controls

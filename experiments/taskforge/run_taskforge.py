@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submit sized Iris drivers over stable SHA256 proposal-key buckets.
+"""Submit sized Iris drivers over stable SHA256 input-key buckets.
 
 --drivers N partitions 4096 buckets; --driver-range a:b launches only that half-open
 range of drivers. To resize the last quarter of 32 drivers to 16, cancel 24:32 and

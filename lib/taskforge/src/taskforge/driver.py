@@ -57,7 +57,7 @@ CONTROLS_SUFFIX = ".controls.json"
 SOURCE_TASK_NOTES = "source task"
 
 
-def proposal_key(path: str) -> PurePosixPath:
+def input_key(path: str) -> PurePosixPath:
     """The output identity of an input file: its directory and its name without the input suffix.
 
     A proposal's ``slot-`` prefix is dropped; a source task keeps its whole name, so ``slot-a.task.json``
@@ -69,8 +69,8 @@ def proposal_key(path: str) -> PurePosixPath:
     return PurePosixPath(file.parent.name, file.name.removesuffix(PROPOSAL_SUFFIX).removeprefix("slot-"))
 
 
-def proposal_bucket(path: str, buckets: int) -> int:
-    return int.from_bytes(hashlib.sha256(str(proposal_key(path)).encode()).digest()) % buckets
+def input_bucket(path: str, buckets: int) -> int:
+    return int.from_bytes(hashlib.sha256(str(input_key(path)).encode()).digest()) % buckets
 
 
 def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
@@ -95,7 +95,7 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
         raise ValueError("Rank selection requires sample.json")
     if not paths:
         raise ValueError(f"No proposal or task files at {source}")
-    if len({proposal_key(path) for path in paths}) != len(paths):
+    if len({input_key(path) for path in paths}) != len(paths):
         raise ValueError("Proposal inputs have duplicate output identities")
     return paths
 
@@ -223,7 +223,7 @@ async def one(args: argparse.Namespace) -> None:
     if initial is None:
         return
     policy = policy.overlaid({"sandbox.source_images": list(source_images(initial))})
-    identity = proposal_key(args.proposals)
+    identity = input_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
     workdir = Path(args.work_dir) / identity
@@ -286,9 +286,7 @@ async def run(args: argparse.Namespace) -> None:
     start, end = args.bucket_range or (0, args.buckets)
     if args.concurrency < 1 or not 0 <= start < end <= args.buckets:
         raise ValueError("Concurrency must be positive and bucket range nonempty within buckets")
-    proposals = (
-        path for path in inputs(args.proposals, args.ranks) if start <= proposal_bucket(path, args.buckets) < end
-    )
+    proposals = (path for path in inputs(args.proposals, args.ranks) if start <= input_bucket(path, args.buckets) < end)
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
     failures: list[str] = []
     _, policy = run_policy(args.policy)

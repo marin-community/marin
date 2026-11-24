@@ -270,8 +270,8 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
 def check_images(task: TaskSpec, settings: LoweringSettings) -> None:
     """Refuse a container image the run does not admit: the pinned one, ShellSim, or a source task's own.
 
-    A generated task's own image is left to the machine factory, as before source images existed; a task
-    from another source must stay on its source's images.
+    A generated task's own image is left to the machine factory; a task from another source must stay
+    on its source's images.
     """
     admitted = (GRADER_BASE_IMAGE, *sorted(settings.source_images))
     grader = grading_environment(task)
