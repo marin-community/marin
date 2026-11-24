@@ -15,6 +15,7 @@ from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
+from experiments.post_training.mochi_tokenizer import MOCHI_TOKENIZER_REVISION, MOCHI_TOKENIZER_URI
 from experiments.post_training.rl_agentic_recipe import agentic_limits, agentic_preset
 from experiments.post_training.rl_presets import (
     RL_TRAINING_BASE,
@@ -35,8 +36,8 @@ _MODEL = ArtifactHfModel(
         "2026.11.17",
         "s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1",
     ),
-    tokenizer_uri="marin-community/marin-tokenizer-tools",
-    tokenizer_revision="3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
+    tokenizer_uri=MOCHI_TOKENIZER_URI,
+    tokenizer_revision=MOCHI_TOKENIZER_REVISION,
     relative_path="",
 )
 

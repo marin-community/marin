@@ -590,7 +590,7 @@ def test_published_init_binds_export_tokenizer(
     )
 
 
-def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_path):
+def test_mochi_three_rack_launch_configures_evaluation_without_model_exports(selection, tmp_path):
     preset = MOCHI.by_name["train-long-3rack"]
     (step,) = snowball.build_experiment(preset, table=MOCHI).runs
     path = tmp_path / "mochi.yaml"

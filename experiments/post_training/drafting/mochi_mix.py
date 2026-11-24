@@ -9,6 +9,7 @@ from heapq import merge
 from itertools import batched
 from operator import itemgetter
 from random import Random
+from typing import NamedTuple
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -58,7 +59,12 @@ _SOURCES = (
 )
 
 
-def _sample_splits(source: str, rows_per_shard: int, max_shards: int, rng: Random) -> dict[str, list[dict]]:
+class _SourceSplits(NamedTuple):
+    train: list[dict]
+    validation: list[dict]
+
+
+def _sample_splits(source: str, rows_per_shard: int, max_shards: int, rng: Random) -> _SourceSplits:
     from dupekit import hash_xxh3_128  # noqa: PLC0415 - Datakit extra
 
     shards = sorted((StoragePath(source) / "outputs/main" / "*.parquet").glob(), key=str)
@@ -78,16 +84,16 @@ def _sample_splits(source: str, rows_per_shard: int, max_shards: int, rng: Rando
                 if not remaining:
                     break
     rng.shuffle(examples)
-    splits: dict[str, list[dict]] = {_TRAIN: [], _VALIDATION: []}
+    train, validation = [], []
     for row in examples:
         user = next(message for message in row["messages"] if message["role"] == "user")
         prompt = "\n".join(part["text"] for part in user["content"])
-        split = _VALIDATION if hash_xxh3_128(prompt.encode()) % _HOLDOUT_MODULUS == 0 else _TRAIN
-        splits[split].append(row)
-    for split, rows in splits.items():
+        split = validation if hash_xxh3_128(prompt.encode()) % _HOLDOUT_MODULUS == 0 else train
+        split.append(row)
+    for split, rows in ((_TRAIN, train), (_VALIDATION, validation)):
         if not rows:
             raise ValueError(f"No {split} rows from {source}")
-    return splits
+    return _SourceSplits(train, validation)
 
 
 def _rows_by_position(rows: list[dict]) -> Iterator[tuple[float, dict]]:
@@ -102,11 +108,14 @@ def _write_mix(*, output: str, sources: tuple[tuple[str, str, int], ...], seed: 
     source_splits = [
         _sample_splits(source, rows, max_shards, Random(f"{seed}:{name}")) for name, source, rows in sources
     ]
-    for split in (_TRAIN, _VALIDATION):
+    for split, components in (
+        (_TRAIN, [source.train for source in source_splits]),
+        (_VALIDATION, [source.validation for source in source_splits]),
+    ):
         directory = root / split
         directory.mkdirs()
         # Place each source's rows evenly across the split, including when a shard is too short to fill its quota.
-        mixed = merge(*(_rows_by_position(splits[split]) for splits in source_splits), key=itemgetter(0))
+        mixed = merge(*map(_rows_by_position, components), key=itemgetter(0))
         with (directory / "mix.parquet").open("wb") as stream, pq.ParquetWriter(stream, CHAT_SCHEMA) as writer:
             for batch in batched((row for _, row in mixed), _OUTPUT_BATCH_ROWS):
                 writer.write_table(pa.Table.from_pylist(batch, schema=CHAT_SCHEMA))

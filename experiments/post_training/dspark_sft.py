@@ -41,6 +41,7 @@ from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
 from experiments.models import ModelConfig, download_model
 from experiments.post_training.drafting import mochi
 from experiments.post_training.drafting.mochi_mix import scaled_mix, smoke_mix
+from experiments.post_training.mochi_tokenizer import MOCHI_TOKENIZER_REVISION, MOCHI_TOKENIZER_URI
 
 
 class TeacherFamily(StrEnum):
@@ -82,7 +83,7 @@ MOCHI_STEP_400407 = CompletedSFT(
     source=(
         "s3://marin-us-east-02a/marin/exports/mochi-sft/" "hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1"
     ),
-    tokenizer_source="hf://marin-community/marin-tokenizer-tools@3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
+    tokenizer_source=f"hf://{MOCHI_TOKENIZER_URI}@{MOCHI_TOKENIZER_REVISION}",
     artifact_version="2026.11.13",
 )
 

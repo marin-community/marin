@@ -16,6 +16,7 @@ from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.sft_recipe import MochiSFT
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
+from experiments.post_training.mochi_tokenizer import MOCHI_TOKENIZER_REVISION, MOCHI_TOKENIZER_URI
 from experiments.sft.launcher import SFTPreset
 
 # This reproduces the eleven-rack `hero-sft-fullab-step393k-v2` run through step 400407.
@@ -40,8 +41,8 @@ MOCHI_SFT = MochiSFT(
     source_revision="406dff47f217637ceca499b266989588cb0df5ab",
     export_resources=ResourceConfig.with_cpu(cpu=64, ram="256g", disk="512g", regions=(ANY_REGION,)),
     # The pinned Hub tokenizer, config, and chat template match the training copy at S3 version 2026.09.18 by SHA-256.
-    tokenizer_uri="marin-community/marin-tokenizer-tools",
-    tokenizer_revision="3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
+    tokenizer_uri=MOCHI_TOKENIZER_URI,
+    tokenizer_revision=MOCHI_TOKENIZER_REVISION,
 )
 
 
