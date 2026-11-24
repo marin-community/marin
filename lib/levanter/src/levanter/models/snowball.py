@@ -230,7 +230,7 @@ class SnowballConfig(HFCompatConfig):
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
     shared_attention_implementation: Literal["native", "fixed_schedule"] = dataclasses.field(
-        default="native", metadata={"fingerprint_omit_default": True}
+        default="native", metadata={"fingerprint_omit_value": "native"}
     )
     """Use the bounded shared TPUv4 schedule for both paged attention and learner forward."""
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
