@@ -94,7 +94,10 @@ class FakeTools:
             reference = command[-1]
             if reference.startswith("oci:"):
                 return self.base_manifest.decode()
-            return self.pushed[reference.removeprefix("docker://")].decode()
+            key = reference.removeprefix("docker://")
+            if key not in self.pushed:
+                raise lane.BuildRejected(f"unauthorized or missing tag: {reference}")
+            return self.pushed[key].decode()
         raise AssertionError(f"the lane issued an un-doubleable command: {joined}")
 
     @staticmethod
@@ -153,7 +156,7 @@ def fixture_parquet(tmp_path: Path, row: dict) -> str:
     return str(path)
 
 
-def run_main(monkeypatch, tmp_path: Path, row: dict, tools: FakeTools, *extra: str) -> None:
+def run_main(monkeypatch, tmp_path: Path, row: dict, tools: FakeTools, *extra: str, output: Path | None = None) -> None:
     parquet = fixture_parquet(tmp_path, row)
     info = SimpleNamespace(job_id="/benfeuer/test-lane")
     monkeypatch.setattr(lane, "run", tools)
@@ -165,7 +168,16 @@ def run_main(monkeypatch, tmp_path: Path, row: dict, tools: FakeTools, *extra: s
     monkeypatch.setenv("GHCR_USER", "tester")
     monkeypatch.setattr(
         "sys.argv",
-        ["images", "--tasks", row["id"], "--output", str(tmp_path / "regional"), "--concurrency", "2", *extra],
+        [
+            "images",
+            "--tasks",
+            row["id"],
+            "--output",
+            str(output or tmp_path / "regional"),
+            "--concurrency",
+            "2",
+            *extra,
+        ],
     )
     lane.main()
 
@@ -202,6 +214,24 @@ def test_entry_point_builds_one_task_end_to_end_and_resumes(tmp_path, monkeypatc
     run_main(monkeypatch, tmp_path, row, resume, "--resume")
     assert not any(command[0] == "umoci" for command in resume.commands)
     assert not any(command[:3] == ["skopeo", "--insecure-policy", "copy"] for command in resume.commands)
+
+
+def test_entry_point_adopts_pushed_tags_on_resume(tmp_path, monkeypatch):
+    row, _recipe_digest, manifest = smoke_row()
+    tools = FakeTools(manifest)
+    run_main(monkeypatch, tmp_path, row, tools)
+    first = json.loads((tmp_path / "regional" / "images-v1" / "provenance.json").read_text())
+    assert len(first["images"]) == 1
+
+    # A resume run against a fresh output with no provenance document adopts the
+    # already-pushed tag from the registry instead of rebuilding.
+    umoci_before = sum(1 for command in tools.commands if command[0] == "umoci")
+    run_main(monkeypatch, tmp_path, row, tools, "--resume", output=tmp_path / "regional2")
+    assert sum(1 for command in tools.commands if command[0] == "umoci") == umoci_before
+    adopted = json.loads((tmp_path / "regional2" / "images-v1" / "provenance.json").read_text())["images"]
+    assert len(adopted) == 1 and adopted[0]["source"] == "registry-adopt"
+    assert adopted[0]["digest"].startswith("sha256:")
+    assert adopted[0]["image"] == first["images"][0]["image"]
 
 
 def test_entry_point_records_failures_and_still_writes_provenance(tmp_path, monkeypatch):

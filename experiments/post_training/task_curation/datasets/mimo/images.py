@@ -116,6 +116,29 @@ def run(command: list[str], *, env: dict | None = None, timeout: float | None = 
     return result.stdout
 
 
+REGISTRY_BACKOFF_SECONDS = (30, 60, 120, 300, 600)
+REGISTRY_BUSY_MARKERS = ("too many requests", "429", "rate limit", "secondary rate")
+
+
+def registry_run(command: list[str], *, env: dict | None = None, timeout: float | None = None) -> str:
+    """Run a registry operation with bounded backoff over the registry's rate responses."""
+    for attempt, backoff in enumerate((*REGISTRY_BACKOFF_SECONDS, None)):
+        try:
+            return run(command, env=env, timeout=timeout)
+        except BuildRejected as error:
+            message = str(error).lower()
+            if backoff is None or not any(marker in message for marker in REGISTRY_BUSY_MARKERS):
+                raise
+            logger.warning(
+                "registry rate response on %s (attempt %d); backing off %ds",
+                " ".join(command[:4]),
+                attempt + 1,
+                backoff,
+            )
+            time.sleep(backoff)
+    raise BuildRejected(f"the registry stayed rate-limited past the bounded backoff: {' '.join(command[:4])}")
+
+
 def read_tasks(release_repo: str, release_revision: str) -> list[dict]:
     """Stream the pinned population's Dockerfiles as (task_id, recipe) pairs."""
     local = Path(hf_hub_download(release_repo, "tasks.parquet", repo_type="dataset", revision=release_revision))
@@ -153,7 +176,7 @@ def registry_readback(package: str, tag: str, authfile: Path | None) -> str:
     environment = None
     if authfile is not None:
         environment = {**os.environ, "REGISTRY_AUTH_FILE": str(authfile)}
-    output = run(command, env=environment)
+    output = registry_run(command, env=environment)
     digest = hashlib.sha256(output.encode()).hexdigest()
     return f"sha256:{digest}"
 
@@ -171,7 +194,7 @@ def base_manifest_digest(source: str, base_digest: str) -> str:
 def copy_base(source: str, base_digest: str, layout: Path) -> None:
     """Copy the pinned base image into a fresh OCI layout, verifying the digest."""
     reference = f"docker://{source}/{BASE_REPOSITORY}@{base_digest}"
-    run(
+    registry_run(
         [
             SKOPEO,
             "--insecure-policy",
@@ -294,7 +317,7 @@ def build_one(task: dict, config: BuildConfig, workroot: Path, authfile: Path | 
         push = [SKOPEO, "--insecure-policy", "copy", f"oci:{layout}:base", reference]
         if authfile is not None:
             push += ["--dest-authfile", str(authfile)]
-        run(push, timeout=3600)
+        registry_run(push, timeout=3600)
         digest = registry_readback(config.package, tag, authfile)
         shutil.rmtree(layout, ignore_errors=True)
 
@@ -363,6 +386,43 @@ def write_outputs(output: StoragePath, records: list[BuildRecord], package: str,
     return binding_path
 
 
+def adopt_from_registry(
+    tasks: list[dict], package: str, authfile: Path | None, job: str
+) -> tuple[list[BuildRecord], list[dict]]:
+    """Verify-and-adopt tasks whose digest-pinned tags the registry already serves.
+
+    A tag that resolves at all is a complete push (incomplete uploads never create a
+    tag), and the derived digest is deterministic for a recipe, so the adopted record
+    binds the tag's own readback digest.
+    """
+    adopted = []
+    pending = []
+    for task in tasks:
+        tag = task_tag(task["task_id"])
+        try:
+            digest = registry_readback(package, tag, authfile)
+        except BuildRejected as error:
+            logger.info("adopt: %s not in the registry yet (%s)", task["task_id"], str(error)[-120:])
+            pending.append(task)
+            continue
+        adopted.append(
+            BuildRecord(
+                task_id=task["task_id"],
+                tag=tag,
+                image=f"{package}@{digest}",
+                digest=digest,
+                base_digest=task["recipe"].base_digest,
+                base_manifest_sha256=task["recipe"].base_digest,
+                recipe_sha256=task["recipe_sha256"],
+                source="registry-adopt",
+                job=job,
+                built_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            )
+        )
+        logger.info("adopted %s at %s", task["task_id"], digest)
+    return adopted, pending
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
@@ -416,6 +476,10 @@ def main() -> None:
         authfile.chmod(0o600)
 
     records = [record for record in existing.values()]
+    if arguments.resume and pending:
+        adopted, pending = adopt_from_registry(pending, config.package, authfile, job)
+        records.extend(adopted)
+        logger.info("tasks=%d pending=%d adopted=%d", len(tasks), len(pending), len(adopted))
     workroot = Path(tempfile.gettempdir()) / "mimo-image-work"
     workroot.mkdir(parents=True, exist_ok=True)
     failures = []
