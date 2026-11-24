@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-license-receipts",
-  "revision": "02eaf87152ac9d023002426b0c7358bae133ced4",
+  "revision": "b4eb211c1a4eade1c5a32f0b798ed44ddfeb40bc",
   "references": [
     {
       "repo": "open-athena/marin-license-receipts",
@@ -17,26 +17,26 @@
     {
       "repo": "open-athena/marin-license-receipts",
       "revision": "02eaf87152ac9d023002426b0c7358bae133ced4",
-      "path": "litecoder_20261124_b_v1/part-002.json",
-      "sha256": "1ec8943603ed407be43c4e9a64f1a9d7f2cc11e8e434db219cfddbc0c6c21bde"
-    },
-    {
-      "repo": "open-athena/marin-license-receipts",
-      "revision": "02eaf87152ac9d023002426b0c7358bae133ced4",
-      "path": "litecoder_20261124_b_v1/part-003.json",
-      "sha256": "752a535a87e5e8185fd81fbf93239c358ab3065b0cc3a52b38851dca7f965399"
-    },
-    {
-      "repo": "open-athena/marin-license-receipts",
-      "revision": "02eaf87152ac9d023002426b0c7358bae133ced4",
       "path": "litecoder_20261124_b_v1/part-004.json",
       "sha256": "d696dd94f7b5dde3937e89c4418c34cb37337d2892ac3a52d5c270a177ec9110"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "02eaf87152ac9d023002426b0c7358bae133ced4",
+      "revision": "1379c691345b50231eab956f59f197b2452dd82c",
+      "path": "litecoder_20261124_b_v1/part-002.json",
+      "sha256": "cd3871286380dd813efbe317c5fe724748aabaa42ecd599aaf53fcef4827d375"
+    },
+    {
+      "repo": "open-athena/marin-license-receipts",
+      "revision": "7bbada04dc504650dedc2b179a5097c39c56d746",
+      "path": "litecoder_20261124_b_v1/part-003.json",
+      "sha256": "2c05f66983d61c9ed62d8d74863e339be871a30b4d0bb001d685351f1f3ce313"
+    },
+    {
+      "repo": "open-athena/marin-license-receipts",
+      "revision": "b4eb211c1a4eade1c5a32f0b798ed44ddfeb40bc",
       "path": "litecoder_20261124_b_v1/part-005.json",
-      "sha256": "2e0f0035dc1a5c52d9cb4b5bfd3552c4d6d770771b5fc7f0250e3ee2539dd862"
+      "sha256": "3344ba0ee2bb2d538a136f480e8cf07dfa73cdfa3d4b8c0c411e79952612d1fd"
     }
   ]
 }
