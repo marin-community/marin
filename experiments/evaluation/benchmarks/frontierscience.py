@@ -15,8 +15,12 @@ from taskcompendium.evaluation.spec import (
     SummaryKind,
     TrialPolicy,
 )
-from taskcompendium.importers.evalchemy.frontierscience import convert_olympiad, convert_research, frontierscience_item
-from taskcompendium.importers.evalchemy.grader import scorer_revision
+from taskcompendium.importers.evalchemy.frontierscience import (
+    RESEARCH_SCORER_REVISION,
+    convert_olympiad,
+    convert_research,
+    frontierscience_item,
+)
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
@@ -37,12 +41,12 @@ def sources(output_fit: OutputFit = OutputFit.REQUIRE) -> list[RlDataSource[Eval
     result = []
     for track, count, convert, metrics, version, grader in (
         ("olympiad", 100, convert_olympiad, (Metrics.ACCURACY,), "2026.11.19", None),
-        ("research", 60, convert_research, RESEARCH_METRICS, "2026.11.24", JUDGE_GRADER),
+        ("research", 60, convert_research, RESEARCH_METRICS, "2026.11.24.1", JUDGE_GRADER),
     ):
         if output_fit is OutputFit.SHRINK:
             version += "-remaining-context"
         name = f"frontierscience-{track}"
-        recipe_version = f"{version}-{scorer_revision('frontierscience_research')}" if track == "research" else version
+        recipe_version = f"{version}-{RESEARCH_SCORER_REVISION}" if track == "research" else version
         result.append(
             RlDataSource(
                 info=SourceInfo(

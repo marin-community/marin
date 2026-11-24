@@ -6,7 +6,7 @@ from verifyit.grade import GradingInfraError
 from verifyit.modes.grade_judge import BASE_URL_ENV
 from verifyit.spec import JudgeSpec
 
-from taskcompendium.importers.evalchemy.scorers.main import score
+from taskcompendium.importers.evalchemy.scorers.frontierscience import grade_research
 
 
 @pytest.mark.parametrize(
@@ -36,9 +36,9 @@ def test_research_verdict(judge_server, monkeypatch, reply, points, passed):
     )
     if points is None:
         with pytest.raises(GradingInfraError):
-            score("frontierscience_research", {}, "Two.", judge)
+            grade_research(judge, "Two.")
     else:
-        result = score("frontierscience_research", {}, "Two.", judge)
+        result = grade_research(judge, "Two.")
         assert result.reward == passed
         assert result.detail["metrics"] == {"pass_rate": passed, "rubric_points": points}
     [request] = judge_server.requests
@@ -46,6 +46,6 @@ def test_research_verdict(judge_server, monkeypatch, reply, points, passed):
 
 
 def test_blank_research_final_scores_zero_without_a_judge():
-    result = score("frontierscience_research", {}, "  ", JudgeSpec())
+    result = grade_research(JudgeSpec(), "  ")
     assert result.reward == 0
     assert result.detail["metrics"] == {"pass_rate": 0, "rubric_points": 0}

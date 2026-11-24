@@ -5,11 +5,12 @@
 
 import re
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
-from verifyit.grade import GradingInfraError, Reward, scored
+from verifyit.grade import GradingInfraError, InvalidTask, Reward, infra_error, invalid_task, scored, write_reward
 from verifyit.modes.grade_judge import judge_reply
-from verifyit.spec import JudgeSpec
+from verifyit.spec import JudgeSpec, parse_spec
 
 VERDICT_PREFIX = "VERDICT:"
 
@@ -35,3 +36,15 @@ def grade_research(judge: JudgeSpec, response: str) -> Reward:
     if not match or (points := Decimal(match[1])) > 10:
         raise GradingInfraError("judge must return Research rubric points between 0 and 10", **detail)
     return _research_score(points, **detail, verdict=verdicts[0])
+
+
+if __name__ == "__main__":
+    try:
+        judge = parse_spec(Path("/tests/judge.toml").read_text())
+        assert isinstance(judge, JudgeSpec)
+        result = grade_research(judge, Path("/app/answer.txt").read_text())
+    except InvalidTask as error:
+        result = invalid_task(str(error))
+    except GradingInfraError as error:
+        result = infra_error(str(error), **error.detail)
+    write_reward(Path("/app"), result)
