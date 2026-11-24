@@ -14,7 +14,6 @@ import importlib
 import json
 import logging
 import sys
-from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -23,8 +22,9 @@ from transformers import AutoModel, AutoTokenizer
 
 from experiments.post_training.task_curation.datasets.browsecomp.tool import source_diagnostics
 from experiments.post_training.task_curation.datasets.openresearcher.dense_contract import (
+    EMBEDDING_DIM,
     EMBEDDING_MAX_TOKENS,
-    EMBEDDING_QUERY_PREFIX,
+    query_text,
 )
 from experiments.post_training.task_curation.datasets.openresearcher.hybrid_fusion import (
     CANDIDATE_DEPTH,
@@ -36,8 +36,9 @@ from experiments.post_training.task_curation.datasets.openresearcher.hybrid_fusi
 logger = logging.getLogger(__name__)
 
 
-def normalize(vector: np.ndarray) -> np.ndarray:
-    return vector / max(float(np.linalg.norm(vector)), 1e-12)
+def normalize_rows(vectors: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    return vectors / np.maximum(norms, 1e-12)
 
 
 class HybridRetriever:
@@ -60,36 +61,42 @@ class HybridRetriever:
         self.docids = pq.read_table(docids, columns=["docid"]).column("docid").to_pylist()
         if self.dense.ntotal != len(self.docids):
             raise ValueError("Dense index rows disagree with the ordered docid table")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+        if self.dense.d != EMBEDDING_DIM:
+            raise ValueError("Dense index dimension differs from the pinned encoder")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, padding_side="left")
         self.model = AutoModel.from_pretrained(model_dir, torch_dtype=torch.float32, local_files_only=True)
         self.model.eval()
+        if self.model.config.hidden_size != EMBEDDING_DIM:
+            raise ValueError("Pinned encoder dimension differs from the dense index")
         self.candidates = candidates
         self.rrf_k = rrf_k
         self.top_k = top_k
 
-    def encode(self, query: str) -> np.ndarray:
+    def encode(self, queries: list[str]) -> np.ndarray:
+        """Encode queries with the documented instruction; rows align with the input."""
         encoded = self.tokenizer(
-            EMBEDDING_QUERY_PREFIX + query,
+            [query_text(query) for query in queries],
+            padding=True,
             truncation=True,
             max_length=EMBEDDING_MAX_TOKENS,
             return_tensors="pt",
         )
         with torch.no_grad():
-            hidden = self.model(**encoded).last_hidden_state[0, 0]
-        return normalize(hidden.numpy())
+            hidden = self.model(**encoded).last_hidden_state[:, -1]
+        return normalize_rows(hidden.numpy())
 
-    def dense_search(self, query: str) -> list[str]:
-        scores, rows = self.dense.search(self.encode(query)[None, :], self.candidates)
+    def dense_search(self, vector: np.ndarray) -> list[str]:
+        _, rows = self.dense.search(vector[None, :], self.candidates)
         return [self.docids[row] for row in rows[0] if row >= 0]
 
     def bm25_search(self, query: str) -> list[str]:
         return [hit.docid for hit in self.searcher.search(query, self.candidates)]
 
-    def search(self, query: str) -> dict:
+    def search(self, query: str, vector: np.ndarray) -> dict:
         """Fuse one BM25 list and one dense list into the sealed five-hit shape."""
-        fused = rrf_fuse([self.bm25_search(query), self.dense_search(query)], self.rrf_k, self.top_k)
+        fused = rrf_fuse([self.bm25_search(query), self.dense_search(vector)], self.rrf_k, self.top_k)
         documents = {}
-        for docid, score in fused:
+        for docid, _ in fused:
             documents[docid] = json.loads(self.searcher.doc(docid).raw())["contents"]
         return {
             "query": query,
@@ -122,8 +129,9 @@ def main() -> None:
             queries = json.loads(line)
             documents, searches = {}, []
             with source_diagnostics():
-                for query in queries:
-                    result = retriever.search(query)
+                vectors = retriever.encode(queries)
+                for query, vector in zip(queries, vectors, strict=True):
+                    result = retriever.search(query, vector)
                     documents.update(result.pop("documents"))
                     searches.append(result)
             sys.stdout.write(json.dumps({"searches": searches, "documents": documents}, ensure_ascii=False) + "\n")

@@ -10,6 +10,12 @@ from pathlib import Path
 import pytest
 from finestore.rl.licenses import LicenseReceipt, require_license
 from pydantic import ValidationError
+from taskcompendium.models import ProviderRequirement
+from taskcompendium.openresearcher import (
+    OpenResearcherHybridState,
+    openresearcher_hybrid_state,
+    openresearcher_hybrid_tools,
+)
 
 from experiments.post_training.task_curation.datasets.openresearcher.dense_contract import (
     EMBEDDING_DIM,
@@ -19,20 +25,12 @@ from experiments.post_training.task_curation.datasets.openresearcher.dense_contr
 from experiments.post_training.task_curation.datasets.openresearcher.embedding import validate_model_license
 from experiments.post_training.task_curation.datasets.openresearcher.hybrid_fusion import rrf_fuse
 from experiments.post_training.task_curation.datasets.openresearcher.hybrid_index import (
-    PROVIDER_VERSION,
     FusionParameters,
     provider_state,
 )
 from experiments.post_training.task_curation.datasets.openresearcher.pilot_sample import (
     PILOT_SEED,
     RECOVERY_DROP_REASON,
-)
-from taskcompendium.models import ProviderRequirement
-from taskcompendium.openresearcher import (
-    OPENRESEARCHER_HYBRID_ACTION_INTERFACE,
-    OpenResearcherHybridState,
-    openresearcher_hybrid_state,
-    openresearcher_hybrid_tools,
 )
 
 BM25_MANIFEST = "a" * 64
@@ -45,7 +43,7 @@ def hybrid_index_stub():
         embedding_model = EMBEDDING_MODEL
         embedding_model_revision = EMBEDDING_MODEL_REVISION
         embedding_dim = EMBEDDING_DIM
-        max_embed_tokens = 512
+        max_embed_tokens = 8192
         fusion = FusionParameters(rrf_k=60, candidate_depth=25)
 
         class bm25_index:
@@ -91,8 +89,8 @@ class TestProviderState:
             "dense_index_manifest_sha256": DENSE_MANIFEST,
             "embedding_model": EMBEDDING_MODEL,
             "embedding_model_revision": EMBEDDING_MODEL_REVISION,
-            "embedding_dim": 1024,
-            "max_embed_tokens": 512,
+            "embedding_dim": 4096,
+            "max_embed_tokens": 8192,
             "fusion": "rrf",
             "fusion_rrf_k": 60,
             "candidate_depth": 25,
@@ -116,15 +114,13 @@ class TestProviderState:
             openresearcher_hybrid_state(requirement)
 
     def test_state_rejects_looser_contracts(self):
-        for field, value in (("top_k", 10), ("candidate_depth", 50), ("embedding_dim", 768), ("fusion", "bm25")):
+        for field, value in (("top_k", 10), ("candidate_depth", 50), ("embedding_dim", 1024), ("fusion", "bm25")):
             changed = self.canonical_state() | {field: value}
             with pytest.raises(ValidationError):
                 OpenResearcherHybridState.model_validate(changed)
 
     def test_provider_state_derives_from_the_index_artifact(self):
-        state = OpenResearcherHybridState.model_validate(
-            provider_state(hybrid_index_stub(), "1" * 40)
-        )
+        state = OpenResearcherHybridState.model_validate(provider_state(hybrid_index_stub(), "1" * 40))
         assert state.bm25_index_manifest_sha256 == BM25_MANIFEST
         assert state.dense_index_manifest_sha256 == DENSE_MANIFEST
         assert state.implementation_revision == "1" * 40
@@ -134,16 +130,11 @@ class TestModelLicense:
     def test_recorded_license_is_permissive(self, tmp_path: Path):
         receipt = validate_model_license()
         assert receipt.classification.value == "permissive"
-        assert receipt.license_ids == ("mit",)
+        assert receipt.license_ids == ("apache-2.0",)
         require_license(receipt, EMBEDDING_MODEL, EMBEDDING_MODEL, EMBEDDING_MODEL_REVISION, "train", ban=None)
 
     def test_tampered_evidence_fails_closed(self, tmp_path: Path):
-        receipt_path = (
-            Path(__file__).parents[1]
-            / "datasets"
-            / "openresearcher"
-            / "embedding_model_license.json"
-        )
+        receipt_path = Path(__file__).parents[1] / "datasets" / "openresearcher" / "embedding_model_license.json"
         payload = json.loads(receipt_path.read_text())
         payload["revision"] = "f" * 40
         receipt = LicenseReceipt.model_validate(payload)
@@ -159,8 +150,14 @@ class TestPilotSamplingSemantics:
     def test_seed_reproduces_the_sample_from_sorted_populations(self):
         drops = [f"drop-{number:04d}" for number in range(600)]
         kept = [f"kept-{number:04d}" for number in range(100)]
-        first = sorted(random.Random(PILOT_SEED).sample(drops, 300)), sorted(random.Random(PILOT_SEED).sample(kept, 100))
-        second = sorted(random.Random(PILOT_SEED).sample(drops, 300)), sorted(random.Random(PILOT_SEED).sample(kept, 100))
+        first = (
+            sorted(random.Random(PILOT_SEED).sample(drops, 300)),
+            sorted(random.Random(PILOT_SEED).sample(kept, 100)),
+        )
+        second = (
+            sorted(random.Random(PILOT_SEED).sample(drops, 300)),
+            sorted(random.Random(PILOT_SEED).sample(kept, 100)),
+        )
         assert first == second
         assert len(first[0]) == 300 and len(first[1]) == 100
         assert not set(first[0]) & set(first[1])

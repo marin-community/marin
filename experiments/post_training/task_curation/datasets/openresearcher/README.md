@@ -159,18 +159,23 @@ they do not establish executable source oracles. Use the documented
 
 The versioned `openresearcher-hybrid:v1` provider searches the same approved
 corpus with BM25 plus a dense index, fused by reciprocal rank fusion. The
-dense side embeds every corpus document with the pinned, permissively
-licensed `BAAI/bge-large-en-v1.5` (MIT; receipt in
-`embedding_model_license.json`) at a 512-token truncation, stores raw fp16
-shards in-region, and builds a flat inner-product index whose docid order is
-verified against the corpus shard order. Search encodes each query with the
-same pinned encoder, retrieves 25 BM25 and 25 dense candidates, fuses the two
-lists with `rrf_fuse` (k=60), and returns the top five hits with full
-documents. The tool contract, hit shape, snippet budget and grounding
-contract are unchanged; only the provider version differs.
+dense side embeds every full corpus document with the pinned,
+permissively licensed `Qwen/Qwen3-Embedding-8B` (Apache-2.0; receipt in
+`embedding_model_license.json`) — the same encoder family, dimensionality and
+pooling the synthesis environment used — storing raw fp16 shards in-region
+and building a flat inner-product index whose docid order is verified
+against the corpus shard order. Search encodes each query with the same
+pinned encoder and the model card's documented instruction format,
+retrieves 25 BM25 and 25 dense candidates, fuses the two lists with
+`rrf_fuse` (k=60), and returns the top five hits with full documents. The
+tool contract, hit shape, snippet budget and grounding contract are
+unchanged; only the provider version differs. See COMPARISON.md next to the
+task brief for the full original-implementation comparison.
 
 The `embedding` entrypoint embeds the complete corpus in an Iris GPU job (GPU
-work runs in the pinned dense-embedding venv through `embedding_worker`).
+work runs in the pinned dense-embedding venv through `embedding_worker`;
+`--mode stats` first measures the corpus token distribution that fixes the
+document token cap).
 `build_dense_index` verifies every vector and docid part against the
 embedding manifest and the approved corpus, then seals the flat index.
 `hybrid_index` binds the BM25 index, dense index and embedding receipts into

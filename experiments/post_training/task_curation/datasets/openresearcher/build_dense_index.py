@@ -16,12 +16,11 @@ import os
 import shutil
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pathlib import Path
-
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -40,7 +39,7 @@ from experiments.post_training.task_curation.datasets.openresearcher.embedding i
     EXPECTED_DOCUMENTS,
     EmbeddingShards,
 )
-from experiments.post_training.task_curation.local import artifact_prefix, local_client
+from experiments.post_training.task_curation.local import artifact_prefix
 
 FAISS_INDEX_TYPE = "IndexFlatIP"
 SPOT_CHECK_STRIDE = 100_000
@@ -118,7 +117,7 @@ def corpus_docids(staged: RegionalInputs, shard_name: str) -> list[str]:
 
 
 def build_index(config: DenseIndexConfig) -> DenseIndex:
-    import faiss
+    import faiss  # noqa: PLC0415  # optional dependency, present in the regional build job
 
     if not os.environ.get("IRIS_TASK_ID"):
         raise RuntimeError("The dense index must be built inside the regional Iris CPU job")
@@ -147,7 +146,9 @@ def build_index(config: DenseIndexConfig) -> DenseIndex:
         prefixes[entry["shard"]] = consumed
         consumed += entry["documents"]
     for number in range(0, EXPECTED_DOCUMENTS, SPOT_CHECK_STRIDE):
-        entry = next(item for item in manifest if prefixes[item["shard"]] <= number < prefixes[item["shard"]] + item["documents"])
+        entry = next(
+            item for item in manifest if prefixes[item["shard"]] <= number < prefixes[item["shard"]] + item["documents"]
+        )
         reconstructed = np.empty(EMBEDDING_DIM, dtype=np.float32)
         index.reconstruct(number, reconstructed)
         local_row = number - prefixes[entry["shard"]]

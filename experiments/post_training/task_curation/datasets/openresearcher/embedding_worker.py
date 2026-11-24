@@ -3,8 +3,12 @@
 
 """Embed assigned corpus shards on one GPU inside the pinned dense-embedding runtime.
 
-This module must stay importable without the Marin workspace: the embedding
-runtime venv only carries torch, transformers, pyarrow and numpy.
+Documents embed whole (empty passage prefix) with last-token pooling and left
+padding, following the pinned encoder's documented usage. Shards process in
+length-sorted batches to bound padding waste, and vectors return to original
+row order before writing. This module must stay importable without the Marin
+workspace: the embedding runtime venv only carries torch, transformers,
+pyarrow and numpy.
 """
 
 import argparse
@@ -20,7 +24,7 @@ import pyarrow.parquet as pq
 import torch
 from transformers import AutoModel, AutoTokenizer
 
-from experiments.post_training.task_curation.datasets.openresearcher.dense_contract import EMBEDDING_MAX_TOKENS
+from experiments.post_training.task_curation.datasets.openresearcher.dense_contract import EMBEDDING_DIM
 
 logger = logging.getLogger(__name__)
 
@@ -55,33 +59,42 @@ def embed_shard(
     vectors_path: Path,
     docids_path: Path,
     batch_size: int,
+    max_tokens: int,
 ) -> dict:
     """Stream one corpus shard, writing raw fp16 vectors and the ordered docids."""
     if vectors_path.exists() or docids_path.exists():
         raise ValueError(f"Embedding outputs already exist for {shard.name}")
     vectors_path.parent.mkdir(parents=True, exist_ok=True)
     docids_path.parent.mkdir(parents=True, exist_ok=True)
-    documents = 0
-    with vectors_path.open("wb") as vectors_writer:
-        docids: list[str] = []
-        with pq.ParquetFile(shard) as parquet:
-            for batch in parquet.iter_batches(batch_size=batch_size, columns=["docid", "text"]):
-                rows = batch.to_pylist()
-                encoded = tokenizer(
-                    [row["text"] for row in rows],
-                    padding=True,
-                    truncation=True,
-                    max_length=EMBEDDING_MAX_TOKENS,
-                    return_tensors="pt",
-                ).to(model.device)
-                with torch.no_grad():
-                    hidden = model(**encoded).last_hidden_state[:, 0]
-                vectors = normalize_rows(hidden.to(torch.float32).cpu().numpy()).astype(np.float16)
-                vectors.tofile(vectors_writer)
-                docids.extend(row["docid"] for row in rows)
-                documents += len(rows)
-                if len(docids) % (batch_size * 200) < len(rows):
-                    logger.info("Embedded %s: %d documents", shard.name, documents)
+    docids: list[str] = []
+    texts: list[str] = []
+    with pq.ParquetFile(shard) as parquet:
+        for batch in parquet.iter_batches(batch_size=batch_size, columns=["docid", "text"]):
+            for row in batch.to_pylist():
+                docids.append(row["docid"])
+                texts.append(row["text"])
+    documents = len(docids)
+    # Length-sorted batches minimize padding waste; vectors scatter back to the
+    # corpus row order before writing so the docid mapping never changes.
+    order = sorted(range(documents), key=lambda index: len(texts[index]))
+    vectors = np.empty((documents, model.config.hidden_size), dtype=np.float16)
+    embedded = 0
+    for start in range(0, documents, batch_size):
+        rows = order[start : start + batch_size]
+        encoded = tokenizer(
+            [texts[row] for row in rows],
+            padding=True,
+            truncation=True,
+            max_length=max_tokens,
+            return_tensors="pt",
+        ).to(model.device)
+        with torch.no_grad():
+            hidden = model(**encoded).last_hidden_state[:, -1]
+        vectors[rows] = normalize_rows(hidden.to(torch.float32).cpu().numpy()).astype(np.float16)
+        embedded += len(rows)
+        if embedded % (batch_size * 100) < len(rows):
+            logger.info("Embedded %s: %d/%d documents", shard.name, embedded, documents)
+    vectors.tofile(vectors_path)
     table = pa.Table.from_arrays([pa.array(docids)], names=["docid"])
     with docids_path.open("wb") as writer:
         pq.write_table(table, writer, compression="zstd")
@@ -98,10 +111,10 @@ def embed_shard(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", required=True, help="JSON file with this worker's corpus shard paths")
+    parser.add_argument("--plan", required=True, help="JSON file with this worker's corpus shard assignments")
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=32)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not torch.cuda.is_available():
@@ -109,9 +122,13 @@ def main() -> None:
     plan = json.loads(Path(args.plan).read_text())
     model_dir, output = Path(args.model_dir), Path(args.output)
     verify_model(model_dir, plan["model_manifest"])
-    tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, padding_side="left")
     model = AutoModel.from_pretrained(model_dir, torch_dtype=torch.float16, local_files_only=True)
     model.to("cuda").eval()
+    if model.config.hidden_size != EMBEDDING_DIM:
+        raise ValueError(
+            f"Pinned encoder hidden size {model.config.hidden_size} differs from the dense contract {EMBEDDING_DIM}"
+        )
     entries = []
     for shard in plan["shards"]:
         entry = embed_shard(
@@ -121,12 +138,12 @@ def main() -> None:
             output / "vectors" / (Path(shard).stem + ".f16"),
             output / "docids" / (Path(shard).stem + ".parquet"),
             args.batch_size,
+            plan["max_tokens"],
         )
         entries.append(entry)
         logger.info("Embedded shard %s: %d documents", entry["shard"], entry["documents"])
     (output / f"worker-manifest-{plan['worker']}.json").write_text(json.dumps(entries, indent=2) + "\n")
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    torch.cuda.empty_cache()
     sys.stdout.write(json.dumps({"worker": plan["worker"], "entries": len(entries)}) + "\n")
 
 

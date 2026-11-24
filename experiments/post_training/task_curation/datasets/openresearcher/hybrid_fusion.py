@@ -14,9 +14,7 @@ RRF_K = 60
 TOP_K = 5
 
 
-def rrf_fuse(
-    ranked_lists: list[list[str]], k: int = RRF_K, top_k: int = TOP_K
-) -> list[tuple[str, float]]:
+def rrf_fuse(ranked_lists: list[list[str]], k: int = RRF_K, top_k: int = TOP_K) -> list[tuple[str, float]]:
     """Fuse ranked docid lists with reciprocal rank fusion.
 
     Each list contributes ``1 / (k + rank)`` for its members (ranks start at 1).

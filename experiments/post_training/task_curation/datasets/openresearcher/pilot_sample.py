@@ -24,7 +24,6 @@ from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
-from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.datasets.openresearcher.assets import (
     REGIONAL_PREFIX,
@@ -35,7 +34,7 @@ from experiments.post_training.task_curation.datasets.openresearcher.questions i
     QUESTION_SCHEMA,
     QuestionPool,
 )
-from experiments.post_training.task_curation.local import artifact_prefix, local_client
+from experiments.post_training.task_curation.local import artifact_prefix
 
 PILOT_SEED = "openresearcher-hybrid-pilot-v1"
 RECOVERY_DROP_REASON = "required_hop_not_grounded_or_citation_not_literal"
@@ -71,7 +70,6 @@ class PilotSampleConfig:
     v12_decisions_sha256: str
     question_pool_uri: str
     question_pool_sha256: str
-    workdir: str
     output_path: str
 
 
@@ -91,10 +89,7 @@ def build_pilot_sample(config: PilotSampleConfig) -> PilotSample:
     decisions = StoragePath(config.v12_decisions_uri)
     if file_sha256(decisions) != config.v12_decisions_sha256:
         raise ValueError("Decisions parquet digest differs before sampling")
-    rows = [
-        {"id": row["id"], **json.loads(row["decision_json"])}
-        for row in pq.read_table(decisions).to_pylist()
-    ]
+    rows = [{"id": row["id"], **json.loads(row["decision_json"])} for row in pq.read_table(decisions).to_pylist()]
     if len(rows) != EXPECTED_INPUT_QUESTIONS:
         raise ValueError("Decisions parquet covers a different question population")
     kept = sorted(row["id"] for row in rows if row["keep"] and row["reason"] == "pass")
@@ -113,7 +108,6 @@ def build_pilot_sample(config: PilotSampleConfig) -> PilotSample:
     selected = [row for row in pq.read_table(questions).to_pylist() if row["id"] in sample_ids]
     if sorted(row["id"] for row in selected) != sorted(sample_ids):
         raise ValueError("Sampled question ids are not covered exactly once by the pool")
-    work = config.workdir
     output = StoragePath(config.output_path)
     with (output / "questions.parquet").open("wb", auto_mkdir=True) as writer:
         pq.write_table(pa.Table.from_pylist(selected, schema=QUESTION_SCHEMA), writer, compression="zstd")
@@ -129,7 +123,9 @@ def build_pilot_sample(config: PilotSampleConfig) -> PilotSample:
             "recovery_drops": EXPECTED_RECOVERY_DROPS,
             "kept": EXPECTED_KEPT,
         },
-        "v12_status_by_id": {row["id"]: {"keep": row["keep"], "reason": row["reason"]} for row in rows if row["id"] in sample_ids},
+        "v12_status_by_id": {
+            row["id"]: {"keep": row["keep"], "reason": row["reason"]} for row in rows if row["id"] in sample_ids
+        },
     }
     selection_json = (json.dumps(selection, indent=2, sort_keys=True) + "\n").encode()
     (output / "selection.json").write_bytes(selection_json)
@@ -158,11 +154,10 @@ def pilot_config(
     decisions_sha256: str,
     pool_uri: str,
     pool_sha256: str,
-    workdir: str,
     context: StepContext,
 ) -> PilotSampleConfig:
     return PilotSampleConfig(
-        v12_uri, v12_sha256, decisions_uri, decisions_sha256, pool_uri, pool_sha256, workdir, context.output_path
+        v12_uri, v12_sha256, decisions_uri, decisions_sha256, pool_uri, pool_sha256, context.output_path
     )
 
 
@@ -174,7 +169,6 @@ def main() -> None:
     parser.add_argument("--v12-decisions-sha256", required=True)
     parser.add_argument("--question-pool-receipt", required=True)
     parser.add_argument("--question-pool-receipt-sha256", required=True)
-    parser.add_argument("--workdir", required=True)
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--artifact-version", required=True)
     parser.add_argument("--output", required=True)
@@ -197,7 +191,6 @@ def main() -> None:
                 args.v12_decisions_sha256,
                 args.question_pool_receipt,
                 args.question_pool_receipt_sha256,
-                args.workdir,
             ),
         )
         if not args.run:

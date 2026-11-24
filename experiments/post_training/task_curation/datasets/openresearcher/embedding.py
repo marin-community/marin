@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
+import pyarrow.parquet as pq
 from finestore.rl.licenses import LicenseReceipt, require_license
 from huggingface_hub import snapshot_download
 from marin.execution.artifact import Artifact
@@ -26,6 +27,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+from transformers import AutoTokenizer
 
 from experiments.post_training.task_curation.datasets.openresearcher.assets import (
     CORPUS,
@@ -41,7 +43,7 @@ from experiments.post_training.task_curation.datasets.openresearcher.dense_contr
     EMBEDDING_MODEL_REVISION,
     MODEL_FILES,
 )
-from experiments.post_training.task_curation.local import artifact_prefix, local_client
+from experiments.post_training.task_curation.local import artifact_prefix
 
 EMBEDDING_MODEL_LICENSE = Path(__file__).with_name("embedding_model_license.json")
 EXPECTED_DOCUMENTS = 14_878_084
@@ -70,6 +72,7 @@ class EmbeddingConfig:
     workdir: str
     embed_python: str
     batch_size: int
+    max_embed_tokens: int
     output_path: str
 
 
@@ -134,9 +137,7 @@ def download_model(work: Path) -> list[dict]:
 
 
 def visible_gpus(embed_python: str) -> int:
-    output = subprocess.check_output(
-        [embed_python, "-c", "import torch; print(torch.cuda.device_count())"], text=True
-    )
+    output = subprocess.check_output([embed_python, "-c", "import torch; print(torch.cuda.device_count())"], text=True)
     count = int(output.strip())
     if count < 1:
         raise RuntimeError("The embedding job requires at least one visible GPU")
@@ -177,6 +178,7 @@ def run_workers(
                     "worker": worker,
                     "shards": [str(shard) for shard in shards[worker::gpus]],
                     "model_manifest": model_manifest,
+                    "max_tokens": config.max_embed_tokens,
                 }
             )
         )
@@ -227,6 +229,8 @@ def run_workers(
 def run_embedding(config: EmbeddingConfig) -> EmbeddingShards:
     if not os.environ.get("IRIS_TASK_ID"):
         raise RuntimeError("Corpus embedding must run inside the regional Iris GPU job")
+    if config.max_embed_tokens < 128 or config.max_embed_tokens > 32768:
+        raise ValueError("The document token cap must stay within the encoder's context budget")
     validate_model_license()
     staged = RegionalInputs.model_validate_json(pinned_document(config.stage_receipt_uri, config.stage_receipt_sha256))
     work = Path(config.workdir)
@@ -246,7 +250,7 @@ def run_embedding(config: EmbeddingConfig) -> EmbeddingShards:
         embedding_model=EMBEDDING_MODEL,
         embedding_model_revision=EMBEDDING_MODEL_REVISION,
         embedding_dim=EMBEDDING_DIM,
-        max_embed_tokens=EMBEDDING_MAX_TOKENS,
+        max_embed_tokens=config.max_embed_tokens,
         document_count=sum(entry["documents"] for entry in entries),
         shard_manifest_sha256=hashlib.sha256((output / "shard-manifest.json").read_bytes()).hexdigest(),
         model_manifest_sha256=hashlib.sha256(model_manifest_json.encode()).hexdigest(),
@@ -255,10 +259,69 @@ def run_embedding(config: EmbeddingConfig) -> EmbeddingShards:
     )
 
 
+def measure_token_stats(config: EmbeddingConfig) -> None:
+    """Measure the corpus token distribution under the pinned tokenizer (CPU only).
+
+    Fixes the document token cap before the GPU job: the stats record total
+    tokens and full-coverage counts at each candidate cap, and the chosen cap
+    is then recorded in the embedding artifact and retrieval state.
+    """
+    if not os.environ.get("IRIS_TASK_ID"):
+        raise RuntimeError("Corpus statistics must be measured inside the regional Iris CPU job")
+    validate_model_license()
+    staged = RegionalInputs.model_validate_json(pinned_document(config.stage_receipt_uri, config.stage_receipt_sha256))
+    work = Path(config.workdir)
+    work.mkdir(parents=True, exist_ok=False)
+    shards = stage_corpus(corpus_shards(staged), work)
+    tokenizer = AutoTokenizer.from_pretrained(
+        EMBEDDING_MODEL, revision=EMBEDDING_MODEL_REVISION, trust_remote_code=False
+    )
+    caps = (1024, 2048, 4096, 8192, 16384, 32768)
+    documents, total_tokens, total_chars = 0, 0, 0
+    per_cap = {cap: {"tokens": 0, "documents_fully_embedded": 0, "documents_truncated": 0} for cap in caps}
+    percentiles_source: list[int] = []
+    for shard in shards:
+        with pq.ParquetFile(shard) as parquet:
+            for batch in parquet.iter_batches(batch_size=512, columns=["docid", "text"]):
+                rows = batch.to_pylist()
+                lengths = [len(tokenizer.encode(row["text"], add_special_tokens=False)) for row in rows]
+                documents += len(rows)
+                total_tokens += sum(lengths)
+                total_chars += sum(len(row["text"]) for row in rows)
+                percentiles_source.extend(lengths)
+                for cap in caps:
+                    bucket = per_cap[cap]
+                    for length in lengths:
+                        bucket["tokens"] += min(length, cap)
+                        if length <= cap:
+                            bucket["documents_fully_embedded"] += 1
+                        else:
+                            bucket["documents_truncated"] += 1
+        logger.info("Measured shard %s: %d documents so far", shard.name, documents)
+    if documents != EXPECTED_DOCUMENTS:
+        raise ValueError(f"Corpus contains {documents} documents; expected {EXPECTED_DOCUMENTS}")
+    percentiles_source.sort()
+
+    def percentile(fraction: float) -> int:
+        return percentiles_source[min(int(fraction * documents), documents - 1)]
+
+    stats = {
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_model_revision": EMBEDDING_MODEL_REVISION,
+        "documents": documents,
+        "total_tokens": total_tokens,
+        "total_chars": total_chars,
+        "token_percentiles": {str(p): percentile(p) for p in (0.5, 0.75, 0.9, 0.95, 0.99)},
+        "caps": {str(cap): per_cap[cap] for cap in caps},
+    }
+    (work / "token-stats.json").write_text(json.dumps(stats, indent=2) + "\n")
+    logger.info("Token stats: %s", json.dumps(stats))
+
+
 def embedding_config(
-    uri: str, sha256: str, workdir: str, embed_python: str, batch_size: int, context: StepContext
+    uri: str, sha256: str, workdir: str, embed_python: str, batch_size: int, max_embed_tokens: int, context: StepContext
 ) -> EmbeddingConfig:
-    return EmbeddingConfig(uri, sha256, workdir, embed_python, batch_size, context.output_path)
+    return EmbeddingConfig(uri, sha256, workdir, embed_python, batch_size, max_embed_tokens, context.output_path)
 
 
 def main() -> None:
@@ -269,13 +332,30 @@ def main() -> None:
     parser.add_argument("--artifact-version", required=True)
     parser.add_argument("--workdir", required=True)
     parser.add_argument("--embed-python", required=True)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--max-embed-tokens", type=int, default=EMBEDDING_MAX_TOKENS)
+    parser.add_argument("--mode", choices=("embed", "stats"), default="embed")
     parser.add_argument("--output", required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     StoragePath(args.artifact_root).relative_to(StoragePath(REGIONAL_PREFIX))
     configure_coreweave_s3()
+    if args.mode == "stats":
+        if not args.run:
+            raise SystemExit("Token statistics run in-place; pass --run")
+        measure_token_stats(
+            EmbeddingConfig(
+                args.stage_receipt,
+                args.stage_receipt_sha256,
+                args.workdir,
+                args.embed_python,
+                args.batch_size,
+                args.max_embed_tokens,
+                args.output,
+            )
+        )
+        return
     with artifact_prefix(args.artifact_root):
         step = ArtifactStep(
             name="rl-data/openresearcher/embedding-shards",
@@ -289,6 +369,7 @@ def main() -> None:
                 args.workdir,
                 args.embed_python,
                 args.batch_size,
+                args.max_embed_tokens,
             ),
         )
         if not args.run:

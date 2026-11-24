@@ -33,7 +33,7 @@ from experiments.post_training.task_curation.datasets.openresearcher.hybrid_fusi
     TOP_K,
 )
 from experiments.post_training.task_curation.datasets.openresearcher.index import BM25Index
-from experiments.post_training.task_curation.local import artifact_prefix, local_client
+from experiments.post_training.task_curation.local import artifact_prefix
 
 PROVIDER_VERSION = "openresearcher-hybrid:v1"
 SNIPPET_MAX_TOKENS = 512

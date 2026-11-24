@@ -41,10 +41,10 @@ class OpenResearcherHybridState(BaseModel):
     corpus_revision: Literal["8367703babe6e080899a48782f365c284c32b668"]
     bm25_index_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     dense_index_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    embedding_model: Literal["BAAI/bge-large-en-v1.5"]
+    embedding_model: Literal["Qwen/Qwen3-Embedding-8B"]
     embedding_model_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    embedding_dim: Literal[1024]
-    max_embed_tokens: Literal[512]
+    embedding_dim: Literal[4096]
+    max_embed_tokens: int = Field(ge=128, le=32768)
     fusion: Literal["rrf"]
     fusion_rrf_k: Literal[60]
     candidate_depth: Literal[25]

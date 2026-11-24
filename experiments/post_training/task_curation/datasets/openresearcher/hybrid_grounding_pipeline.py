@@ -32,6 +32,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from transformers import AutoTokenizer
 from verifyit.modes.grade_judge import JudgeConnection
 
@@ -58,7 +59,6 @@ from experiments.post_training.task_curation.datasets.openresearcher.questions i
 )
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, LocalJudgeModel, PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.local import artifact_prefix
-from taskcompendium.pipeline.reviewer_spec import JudgeTier
 
 QUESTION_KINDS = ("pool", "pilot_sample")
 logger = logging.getLogger(__name__)
@@ -112,7 +112,10 @@ class HybridGroundingConfig:
 def local_dense(index: HybridIndex, work: Path) -> None:
     """Materialize the sealed dense index and ordered docids beside the BM25 index."""
     manifest = json.loads(
-        pinned_document(str(StoragePath(index.dense_index.path) / "dense-manifest.json"), index.dense_index.index_manifest_sha256)
+        pinned_document(
+            str(StoragePath(index.dense_index.path) / "dense-manifest.json"),
+            index.dense_index.index_manifest_sha256,
+        )
     )
     directory = work / "dense"
     directory.mkdir(parents=True, exist_ok=False)
@@ -132,7 +135,10 @@ def local_dense(index: HybridIndex, work: Path) -> None:
 def local_model(index: HybridIndex, work: Path) -> None:
     """Materialize the pinned query encoder from the sealed embedding artifact."""
     manifest = json.loads(
-        pinned_document(str(StoragePath(index.embedding.path) / "model-manifest.json"), index.embedding.model_manifest_sha256)
+        pinned_document(
+            str(StoragePath(index.embedding.path) / "model-manifest.json"),
+            index.embedding.model_manifest_sha256,
+        )
     )
     directory = work / "model"
     directory.mkdir(parents=True, exist_ok=False)
@@ -215,7 +221,6 @@ async def hybrid_grounded_rows(
 def load_questions(config: HybridGroundingConfig, index: HybridIndex) -> list[dict]:
     """Load and verify the pinned question rows for a pool or pilot-sample run."""
     document = pinned_document(config.question_receipt_uri, config.question_receipt_sha256)
-    source = StoragePath(config.question_receipt_uri)
     if config.question_kind == "pool":
         pool = QuestionPool.model_validate_json(document)
         if (
@@ -274,9 +279,7 @@ def hybrid_ground_questions(config: HybridGroundingConfig) -> HybridGroundedQues
     actual_runtime = subprocess.check_output(["uv", "pip", "freeze", "--python", config.runtime_python])
     if actual_runtime != frozen_runtime:
         raise ValueError("Grounding retrieval runtime differs from the sealed hybrid runtime")
-    index = HybridIndex.model_validate_json(
-        pinned_document(config.hybrid_index_uri, config.hybrid_index_sha256)
-    )
+    index = HybridIndex.model_validate_json(pinned_document(config.hybrid_index_uri, config.hybrid_index_sha256))
     rows = load_questions(config, index)
     local_index(index.bm25_index, Path(config.workdir) / "bm25")
     local_dense(index, Path(config.workdir))
@@ -332,12 +335,16 @@ def hybrid_ground_questions(config: HybridGroundingConfig) -> HybridGroundedQues
     (output / "summary.json").write_text(
         json.dumps(dict(Counter(decision["reason"] for decision in decisions)), indent=2)
     )
-    pilot = pilot_metrics(config, decisions) if config.question_kind == "pilot_sample" else {
-        "v12_recovery_sample": None,
-        "v12_regression_sample": None,
-        "recovered_questions": None,
-        "regressions": None,
-    }
+    pilot = (
+        pilot_metrics(config, decisions)
+        if config.question_kind == "pilot_sample"
+        else {
+            "v12_recovery_sample": None,
+            "v12_regression_sample": None,
+            "recovered_questions": None,
+            "regressions": None,
+        }
+    )
     return HybridGroundedQuestions(
         path=config.output_path,
         question_receipt_sha256=config.question_receipt_sha256,
