@@ -212,6 +212,7 @@ def test_driver_command_carries_credentials_by_reference() -> None:
     assert "--target-cluster cw-us-east-08a" in joined
     assert "--timeout 259200" in joined
     assert "--sync-package marin-core" in joined
+    assert "--sync-package marin-taskforge" in joined
     assert "env:GLM_BULK_TOKEN" in joined, "the bulk token rides as a secret file, never as argv"
     assert "GLM_BULK_TOKEN=" not in joined and "Bearer" not in joined
     assert command[-1] == "--allow-live"
