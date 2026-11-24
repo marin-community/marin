@@ -679,9 +679,9 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     assert get_path(receipt, parent).pop(key) == original
     if case == "schema-timeout":
         cache_native_compositions(monkeypatch)
-        original_subprocess = subprocess.run
         secret = "sk-fixture-abcdefghijklmnopqrstuvwxyz"
-        for diagnostic in ("timeout", "empty", "whitespace", "oserror", "bootstrap"):
+        run_native = gate._run_native_process
+        for diagnostic in ("timeout", "last-phase", "empty", "whitespace", "oserror", "bootstrap"):
             with monkeypatch.context() as unavailable:
                 unavailable.setattr(
                     Provenance,
@@ -694,14 +694,25 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
                     if any("OmegaConf.structured(launch_config.SkyRLLaunchConfig)" in str(value) for value in command):
                         if diagnostic == "timeout":
-                            stderr = f"{gate._NATIVE_PHASE}Import native modules\nInterrupted with {secret}".encode()
+                            interrupted_secret = secret.replace("sk-", "sk\x1b-")
+                            stderr = (
+                                f"{gate._NATIVE_PHASE}Import native modules\nInterrupted with {interrupted_secret}"
+                            ).encode()
+                            raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
+                        if diagnostic == "last-phase":
+                            stderr = (
+                                f"{gate._NATIVE_PHASE}Import native modules\nEarlier warning\n"
+                                f"{gate._NATIVE_PHASE}Read native schema defaults\n"
+                            ).encode()
                             raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=stderr)
                         if diagnostic == "oserror":
                             raise FileNotFoundError("native composer executable missing")
-                        return subprocess.CompletedProcess(command, 1 if diagnostic == "whitespace" else 0, "", "\n")
-                    return original_subprocess(command, *args, **kwargs)
+                        if diagnostic == "whitespace":
+                            raise subprocess.CalledProcessError(1, command, "", "\n")
+                        return ""
+                    return run_native(command, *args, **kwargs)
 
-                unavailable.setattr(subprocess, "run", unavailable_defaults)
+                unavailable.setattr(gate, "_run_native_process", unavailable_defaults)
                 report = compare(preset.name, "--candidate", name)
                 assert (
                     report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]
@@ -710,6 +721,10 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                     assert "timed out after 120 s" in report["reason"]
                     assert "Import native modules" in report["reason"]
                     assert "Interrupted with [REDACTED]" in report["reason"] and secret not in report["reason"]
+                if diagnostic == "last-phase":
+                    assert (
+                        "Read native schema defaults" in report["reason"] and "Earlier warning" not in report["reason"]
+                    )
                 if diagnostic == "bootstrap":
                     assert "Prepare SkyRL CPU environment" in report["reason"]
                     assert "timed out after 300 s" in report["reason"]

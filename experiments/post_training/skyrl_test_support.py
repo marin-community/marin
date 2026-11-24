@@ -53,13 +53,10 @@ def native_json(*uv_options: str):
         program = gate._native_program(source, ("cloud.iris.launch_config", "skyrl_train"), script)
         try:
             if uv_options:
-                result = gate._native_output(
-                    "Run isolated native test program",
-                    skyrl_cpu_command(*uv_options, "python", "-c", program, *paths),
-                    env=skyrl_cpu_environment(),
-                    timeout=170,
+                command = skyrl_cpu_command(*uv_options, "python", "-I", "-c", program, *paths)
+                return gate._native_command_json(
+                    "Run isolated native test program", command, env=skyrl_cpu_environment(), timeout=170
                 )
-                return json.loads(result)
             return gate._native_json("Run native test program", program, *paths, timeout=170)
         except gate.InvalidComparison as error:
             cause = error.__cause__

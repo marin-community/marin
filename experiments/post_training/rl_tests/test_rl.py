@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import importlib.util
 import json
+import os
 import runpy
 import shutil
 import subprocess
@@ -37,6 +38,7 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.rl_measurements import RunInputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
@@ -109,11 +111,23 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
 
     coordinator = tmp_path / "coordinator-env"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(coordinator)], check=True, timeout=20)
-    before = set(coordinator.rglob("*"))
+    before = {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*")}
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(coordinator))
     monkeypatch.setenv("VIRTUAL_ENV", str(coordinator))
-    gate.compose_configs(launch_paths, validate_driver=True)
-    assert set(coordinator.rglob("*")) == before
+    monkeypatch.setenv("PATH", str(coordinator / "bin"), prepend=os.pathsep)
+    monkeypatch.setenv("PYTHONIOENCODING", "utf-16")
+    monkeypatch.setenv("PYTHONOPTIMIZE", "1")
+
+    local = table.by_name["speed-short"]
+    region = replace(local, recipe=replace(local.recipe, layout=replace(local.recipe.layout, cluster="cw-rno2a")))
+    defaults = RunInputs(preset_name=local.name)
+    compose = gate.compose_configs
+    with monkeypatch.context() as batch:
+        # Validate the CLI documents in the same native process as the paired defaults.
+        batch.setattr(gate, "compose_configs", lambda paths: compose([*paths, *launch_paths], validate_driver=True))
+        first, second, *_ = gate._compose_plans(((region, defaults), (local, defaults)))
+    assert [first["iris"]["cluster"], second["iris"]["cluster"]] == ["cw-rno2a", local.recipe.layout.cluster]
+    assert {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*")} == before
 
 
 def test_plan_rejects_gated_preset_without_control_pin(selection):

@@ -8,11 +8,14 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
+import signal
 import statistics
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
@@ -67,6 +70,7 @@ GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
 _NATIVE_PREPARATION_TIMEOUT = 300
 _NATIVE_PHASE = "SkyRL configuration phase: "
+_NATIVE_ERROR = "native configuration cannot be composed"
 
 logger = logging.getLogger(__name__)
 
@@ -598,7 +602,7 @@ def _compose_plans(
         return compose_configs(paths)
 
 
-def _native_failure(error: OSError | subprocess.CalledProcessError | subprocess.TimeoutExpired) -> str:
+def _native_diagnostic(error: OSError | subprocess.CalledProcessError | subprocess.TimeoutExpired) -> str:
     phase = diagnostic = ""
     if isinstance(error, OSError):
         cause = error.strerror or str(error)
@@ -606,54 +610,77 @@ def _native_failure(error: OSError | subprocess.CalledProcessError | subprocess.
         stderr = error.stderr or ""
         if isinstance(stderr, bytes):
             stderr = stderr.decode(errors="replace")
-        lines = [line.strip() for line in stderr.splitlines() if line.strip()]
-        phase = next((line.removeprefix(_NATIVE_PHASE) for line in reversed(lines) if line.startswith(_NATIVE_PHASE)), "")
-        diagnostic = next((line for line in reversed(lines) if not line.startswith(_NATIVE_PHASE)), "")
+        for line in reversed(stderr.splitlines()):
+            line = line.strip()
+            if line.startswith(_NATIVE_PHASE):
+                phase = line.removeprefix(_NATIVE_PHASE)
+                break
+            diagnostic = diagnostic or line
         cause = (
             f"timed out after {error.timeout:g} s"
             if isinstance(error, subprocess.TimeoutExpired)
             else f"exited with status {error.returncode}"
         )
     context = " ".join(part for part in (phase, cause, diagnostic) if part)
-    return "".join(char for char in redact_string(context) if char.isprintable())[:400]
+    return redact_string("".join(char for char in context if char.isprintable()))[:400]
+
+
+def _run_native_process(command: list[str], *, env: dict[str, str], timeout: int) -> str:
+    with subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        env=env,
+        start_new_session=True,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            raise
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command, stdout, stderr)
+    return stdout
 
 
 def _native_output(operation: str, command: list[str], *, env: dict[str, str], timeout: int) -> str:
     """Run one native step and return its last nonempty stdout line."""
     started = monotonic()
     try:
-        result = subprocess.run(command, capture_output=True, text=True, errors="replace", env=env, timeout=timeout)
-        result.check_returncode()
+        output = _run_native_process(command, env=env, timeout=timeout).strip()
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         raise InvalidComparison(
-            f"native configuration cannot be composed: {operation} after {monotonic() - started:.2f} s. "
-            f"{_native_failure(error)}"
+            f"{_NATIVE_ERROR}: {operation} after {monotonic() - started:.2f} s. {_native_diagnostic(error)}"
         ) from error
     logger.info("%s took %.2f s", operation, monotonic() - started)
-    if not result.stdout.strip():
-        raise InvalidComparison(f"native configuration cannot be composed: {operation} returned no output")
-    return result.stdout.strip().splitlines()[-1]
+    if not output:
+        raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
+    return output.splitlines()[-1]
+
+
+def _native_command_json(operation: str, command: list[str], *, env: dict[str, str], timeout: int):
+    output = _native_output(operation, command, env=env, timeout=timeout)
+    try:
+        return json.loads(output)
+    except ValueError as error:
+        raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 
 
 def _native_json(operation: str, program: str, *args: str, timeout: int = 120):
     env = skyrl_cpu_environment()
     # Resolve and verify the frozen CPU venv before starting the composition deadline.
-    interpreter = Path(
-        _native_output(
-            "Prepare SkyRL CPU environment",
-            skyrl_cpu_command("python", "-c", "import sys; print(sys.executable)"),
-            env=env,
-            timeout=_NATIVE_PREPARATION_TIMEOUT,
-        )
-    )
+    probe = skyrl_cpu_command("python", "-I", "-c", "import sys; print(sys.executable)")
+    path = _native_output("Prepare SkyRL CPU environment", probe, env=env, timeout=_NATIVE_PREPARATION_TIMEOUT)
+    interpreter = Path(path)
     expected = recipe.REPO_ROOT / SKYRL_PROJECT / ".venv" / "bin"
     if interpreter.parent.resolve() != expected.resolve() or not interpreter.is_file():
-        raise InvalidComparison("native configuration cannot be composed: expected the vendor SkyRL CPU interpreter")
-    output = _native_output(operation, [str(interpreter), "-c", program, *args], env=env, timeout=timeout)
-    try:
-        return json.loads(output)
-    except ValueError as error:
-        raise InvalidComparison(f"native configuration cannot be composed: {operation} returned invalid JSON") from error
+        raise InvalidComparison(f"{_NATIVE_ERROR}: expected the vendor SkyRL CPU interpreter")
+    env["VIRTUAL_ENV"] = str(interpreter.parent.parent)
+    env["PATH"] = os.pathsep.join((str(interpreter.parent), env.get("PATH", os.defpath)))
+    return _native_command_json(operation, [str(interpreter), "-I", "-c", program, *args], env=env, timeout=timeout)
 
 
 def _native_program(native_root: str, modules: tuple[str, ...], body: str) -> str:
@@ -662,8 +689,9 @@ def _native_program(native_root: str, modules: tuple[str, ...], body: str) -> st
         f"def phase(name): print({_NATIVE_PHASE!r} + name, file=sys.stderr, flush=True)\n"
         "phase('Import native modules')\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
         "from importlib import import_module\n"
-        f"assert all(Path(import_module(name).__file__).resolve().is_relative_to({native_root!r}) "
-        f"for name in {modules!r})\n" + body
+        f"for name in {modules!r}:\n"
+        f"    if not Path(import_module(name).__file__).resolve().is_relative_to({native_root!r}):\n"
+        "        raise RuntimeError(f'{name} loaded from outside the vendor SkyRL checkout')\n" + body
     )
 
 
