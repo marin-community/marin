@@ -4,9 +4,9 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
-The latest full-model quick loop at `40723ba125` completed one finite update on all
-four native learner ranks, then failed the unchanged five-second process-exit
-check before checkpoint restore. Updated-policy publication, generation from
+The full-model run at `8f520676ef` completed one finite update on all four
+native learner ranks, then failed the unchanged five-second process-exit check
+before checkpoint restore. Updated-policy publication, generation from
 that policy, and the matched 25-update comparison remain open. The integrated
 inference endpoints and benchmarks below have their own source and workload
 boundaries. The experimental shutdown observer is disabled by default.
@@ -427,8 +427,8 @@ attach display's single `ioctl` frame does not identify the failed rank's exit
 cause. The underlying exit cause remains unknown. The coordinator and GPU jobs
 each failed once, with no preemptions; all five GPU pods were verified absent.
 Iris task-output archives were unavailable. Independently fetched per-rank
-state proofs and error tracebacks support these results. The next observer must
-save frames as they are collected and cover every native rank. Restore, update
+state proofs and error tracebacks support these results. This failure motivated
+the streamed, all-rank observer tested below. Restore, update
 two, updated-policy publication and generation, and the matched 25-update
 Megatron-versus-Levanter comparison remain unverified.
 [Corrected observed diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.2-coordinator-8a56842f)
@@ -446,8 +446,8 @@ The bounded outputs were backed up before cancellation; Iris reports
 `KILLED` and the exact pod was verified absent. This is progress
 in retaining diagnostics, not qualification of capture capacity or learner exit.
 The 439 frames use only 17 distinct PCs. Symbol memoization and fewer
-per-thread journal writes are the next optimization candidates; their costs
-have not been separated. No capture deadline or coverage gate is relaxed.
+per-thread journal writes were the next optimization candidates; the following
+CPU control tested both together without separating their costs. No capture deadline or coverage gate is relaxed.
 [Streamed native capture control](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-streamed-native-c6-20261124-1)
 
 The `python_atexit_begin` marker proves entry into Python's ordinary atexit
@@ -455,6 +455,64 @@ callbacks. It runs before previously registered callbacks, so it does not
 prove that every callback finished. The full-model exit cause still requires
 a discriminating native stack; loaded libraries and an idle attach frame do
 not identify the owner of the wait.
+
+Control `policy-streamed-native-c6-20261124-2` at `8f520676ef` passed the strict
+Linux capture gate. Its real frame-only trace contains 235,588 bytes, 3,087
+frames and all 386 observed threads, including all 384 fixture threads and the
+main thread's `late_cleanup` frame. Stop/backtrace/detach took 0.548 seconds;
+all nine phase checks and the original cleanup and identity guards passed.
+The injected six-second C finalizer still produced the expected five-second
+protocol timeout and native exit -9. The outer control and original suite
+exited zero, every tracked owned process exited, and all four Pod containers
+terminated zero with no restarts. Iris succeeded and its complete output
+archive was independently inspected. The Succeeded Pod was retained. This
+qualifies CPU capture instrumentation; full-model native exit remains unproven.
+Symbol caching and journal throttling were tested together, with no separate
+causal comparison of their costs.
+[Qualified streamed native capture](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-streamed-native-c6-20261124-2)
+
+Full diagnostic `2026.11.24.3` at `8f520676ef` failed during checkpoint
+roundtrip validation. The native learner acknowledged shutdown, then exceeded
+the unchanged five-second natural process-exit limit before restore. All four
+initial and step-one state proofs report finite model and optimizer values,
+changed model and optimizer hashes, and preserved schemas and layouts.
+The independently fetched 321-byte checkpoint metadata records step 1, policy
+version 1 and the preserved initializer; array payloads were not decoded.
+The run used 32 learner and eight existing vLLM H100s at BATCH priority,
+with zero automatic retries. All 286 numeric configuration values match
+`2026.11.24.2` exactly in type and value. The accepted bundles match all 4,640
+frozen source files. The GPU bundle has two extra generated launcher entries:
+`full_observed_coordinator.py` and its timestamped alias, with identical bytes.
+The startup Pod profiles matched the requested resources and isolation.
+
+The observer retained real post-acknowledgment stacks from all four native
+ranks, sampled 2.001–2.004 seconds after acknowledgment. Every main-thread
+trace contains `ioctl` followed by seven CUDA-driver frames. The eight-frame
+limit ends inside the driver, so the caller responsible for the wait remains
+unknown. Captures completed 47–67 thread stacks out of 430–448 observed
+threads before the detach reserve; every capture remains incomplete and
+unqualified. Complete CPU capture did not establish GPU coverage; the reason
+for the coverage difference has not been isolated. Debuggers detached and
+guardian helper cleanup passed. Deeper
+main-thread frames are needed before choosing a lifecycle repair.
+
+The terminal failure was first observed at 09:43 UTC after a missed heartbeat;
+durable debug objects were written around 08:42–08:43 UTC. Continuous monitoring
+and exact failure time are not established. Iris output archives were
+unavailable; 78 indexed debug files totaling 390,937 bytes were fetched and
+checked against their receipt hashes. R3 has no active jobs. Restore,
+update two, updated-policy publication and generation, and the matched
+25-update comparison remain unverified.
+[Full diagnostic R3](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.3-coordinator-9efc0292)
+
+The follow-up observer implementation permits 64 main-thread frames and keeps
+eight frames per supplementary thread. It records the main stack's end or
+truncation explicitly and rejects incomplete capture. All original deadlines,
+the one-MiB output limit, process identity and cleanup checks remain in force.
+Local guardian and artifact-handoff tests passed 65 cases, with three Linux-only
+skips. A new real C fixture places the destructor caller above frame eight;
+Linux execution of that control is still required before GPU reuse.
+
 
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and

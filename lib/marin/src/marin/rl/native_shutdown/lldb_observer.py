@@ -13,6 +13,7 @@ from stack_safety import identity  # pyrefly: ignore[missing-import]  # standalo
 
 LIMIT = 1024 * 1024
 _MAX_FRAMES_PER_THREAD = 8
+_MAX_MAIN_FRAMES = 64
 _DETACH_RESERVE_SECONDS = 0.2
 _THREAD_JOURNAL_INTERVAL_SECONDS = 0.1
 
@@ -42,7 +43,12 @@ def run(debugger, command, result, internal_dict):
         "threads_seen": 0,
         "threads_captured": 0,
         "frames_written": 0,
-        "max_frames_per_thread": _MAX_FRAMES_PER_THREAD,
+        "max_supplementary_frames_per_thread": _MAX_FRAMES_PER_THREAD,
+        "main_frame_limit": _MAX_MAIN_FRAMES,
+        "main_frames_captured": 0,
+        "main_frame_limit_reached": False,
+        "main_stack_complete": False,
+        "main_stack_truncated": None,
         "output_bytes_seen": 0,
         "trace_bytes_written": 0,
         "output_truncated": False,
@@ -112,13 +118,16 @@ def run(debugger, command, result, internal_dict):
             # thousands of atomic JSON rewrites while the target is stopped.
             receipt.pop("active_frame_index", None)
             journal("thread_frames", periodic=True, active_thread_id=thread_id)
-        for index in range(_MAX_FRAMES_PER_THREAD):
+        frame_limit = _MAX_MAIN_FRAMES if main else _MAX_FRAMES_PER_THREAD
+        for index in range(frame_limit):
             capture_budget(deadline)
             if main:
                 journal("frame_unwind", active_thread_id=thread_id, active_frame_index=index)
             frame = measured("frame_unwinds", thread.GetFrameAtIndex, index)
             capture_budget(deadline)
             if not frame.IsValid():
+                if main:
+                    receipt.update(main_stack_complete=True, main_stack_truncated=False)
                 break
             pc = frame.GetPC()
             if pc == lldb.LLDB_INVALID_ADDRESS:
@@ -167,6 +176,20 @@ def run(debugger, command, result, internal_dict):
             captured += 1
             receipt["frames_written"] += 1
             receipt["frame_marker_present"] = True
+            if main:
+                receipt["main_frames_captured"] = captured
+                receipt["main_frame_limit_reached"] = captured == frame_limit
+        if main and receipt["main_frame_limit_reached"]:
+            # One validity-only probe distinguishes an exact-cap stack from a
+            # truncated caller chain. Never print or enrich the extra frame.
+            journal("main_stack_limit_probe", active_thread_id=thread_id, active_frame_index=frame_limit)
+            capture_budget(deadline)
+            frame = measured("frame_unwinds", thread.GetFrameAtIndex, frame_limit)
+            capture_budget(deadline)
+            receipt["main_stack_truncated"] = frame.IsValid()
+            if receipt["main_stack_truncated"]:
+                raise RuntimeError("Main thread stack exceeds its frame limit")
+            receipt["main_stack_complete"] = True
         if not captured:
             raise RuntimeError("Stopped thread has no readable frames")
         receipt["threads_captured"] += 1

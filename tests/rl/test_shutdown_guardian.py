@@ -358,6 +358,66 @@ def test_lldb_later_unwind_failure_preserves_already_written_main_frames(lldb_ca
     assert receipt["final_detach_success"] and value.state.value == 4
 
 
+def test_lldb_deep_main_exposes_caller_above_eight_without_deepening_supplementary_threads(lldb_capture):
+    value = lldb_capture
+    value.main.frames[:] = [value.frame("cuda_driver", 0x2000 + index) for index in range(12)]
+    value.main.frames.append(value.frame("owning_resource_destructor", 0x3000))
+    value.other.frames[:] = [value.frame(f"helper_{index}", 0x4000 + index) for index in range(12)]
+    value.run()
+    data = Path(value.settings["trace_path"]).read_text()
+    receipt = json.loads(Path(value.settings["lldb_receipt_path"]).read_text())
+    assert "frame #12: 0x3000 libnative.so owning_resource_destructor" in data
+    assert "helper_7\n" in data and "helper_8\n" not in data
+    assert receipt["main_frames_captured"] == 13 and receipt["main_frame_limit"] == 64
+    assert receipt["main_stack_complete"] and receipt["main_stack_truncated"] is False
+    assert not receipt["main_frame_limit_reached"]
+    assert receipt["max_supplementary_frames_per_thread"] == 8
+    assert receipt["threads_seen"] == receipt["threads_captured"] == 2
+    assert receipt["native_stack_qualified"] and receipt["frames_complete"]
+
+
+@pytest.mark.parametrize("main_depth", [64, 65])
+def test_lldb_main_cap_requires_actual_end_of_stack_before_qualification(lldb_capture, main_depth):
+    value = lldb_capture
+    value.main.frames[:] = [value.frame(f"caller_{index}", 0x2000 + index) for index in range(main_depth)]
+    value.run()
+    data = Path(value.settings["trace_path"]).read_text()
+    receipt = json.loads(Path(value.settings["lldb_receipt_path"]).read_text())
+    assert receipt["main_frames_captured"] == 64 and receipt["main_frame_limit_reached"]
+    assert "caller_63\n" in data and "caller_64\n" not in data
+    if main_depth == 64:
+        assert receipt["main_stack_complete"] and receipt["main_stack_truncated"] is False
+        assert receipt["native_stack_qualified"] and receipt["frames_complete"]
+    else:
+        assert not receipt["main_stack_complete"] and receipt["main_stack_truncated"] is True
+        assert not receipt["native_stack_qualified"] and not receipt["frames_complete"]
+        assert receipt["error_phase"] == "main_stack_limit_probe" and receipt["final_detach_success"]
+
+
+@pytest.mark.parametrize("expired_frame", [10, 64])
+def test_lldb_deep_main_deadline_retains_progress_and_never_qualifies_partial_stack(lldb_capture, expired_frame):
+    value = lldb_capture
+    value.main.frames[:] = [value.frame(f"caller_{index}", 0x2000 + index) for index in range(65)]
+    observed = []
+
+    def expire(index):
+        if index == expired_frame:
+            observed.append(Path(value.settings["trace_path"]).read_bytes())
+            value.clock[0] = 2.8
+
+    value.main.hook.before_frame = expire
+    value.run()
+    data = Path(value.settings["trace_path"]).read_bytes()
+    receipt = json.loads(Path(value.settings["lldb_receipt_path"]).read_text())
+    assert data == observed[0] and b"caller_9\n" in data
+    assert receipt["main_frames_captured"] == expired_frame
+    assert not receipt["main_stack_complete"] and receipt["main_stack_truncated"] is None
+    assert not receipt["native_stack_qualified"] and not receipt["frames_complete"]
+    assert receipt["active_frame_index"] == expired_frame
+    assert receipt["main_frame_limit_reached"] == (expired_frame == 64)
+    assert receipt["final_detach_success"] and value.state.value == 4
+
+
 @pytest.mark.parametrize("operation", ["GetFrameAtIndex", "GetModule", "GetFunctionName"])
 def test_lldb_late_frame_return_cannot_qualify_capture_after_detach_reserve(lldb_capture, operation):
     value = lldb_capture
