@@ -880,22 +880,20 @@ def skyrl_cpu_command(*arguments: str) -> list[str]:
     project_root = workspace_root / SKYRL_PROJECT
     uv_version = (project_root / ".uv-version").read_text().strip()
     python_requirement = tomllib.loads((project_root / "pyproject.toml").read_text())["project"]["requires-python"]
+    # Match Iris task setup: older cached managed builds can lack Linux pidfd APIs.
+    python_selection = ["--python-preference", "system", "--python", python_requirement, "--no-python-downloads"]
     return [
         "uv",
         "tool",
         "run",
         "--from",
         f"uv=={uv_version}",
-        "--python",
-        python_requirement,
-        "--no-python-downloads",
+        *python_selection,
         "uv",
         "run",
         "--project",
         str(project_root),
-        "--python",
-        python_requirement,
-        "--no-python-downloads",
+        *python_selection,
         "--frozen",
         "--extra",
         "cpu",

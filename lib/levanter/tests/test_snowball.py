@@ -1265,3 +1265,31 @@ def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries(
             assert weight.sharding == want, (name, weight.sharding, want)
 
         assert initialized.memory_analysis().temp_size_in_bytes < replicated.memory_analysis().temp_size_in_bytes / 3
+
+
+@pytest.mark.tpu
+@pytest.mark.skipif(
+    jax.default_backend() != "tpu" or "tpu v4" not in jax.devices()[0].device_kind.lower(),
+    reason="fixed-schedule dense projections require TPUv4",
+)
+def test_snowball_fixed_projection_scores_and_differentiates():
+    cfg = _tiny_config(num_layers=2, projection_implementation="fixed_schedule")
+    with jax.set_mesh(compact_grug_mesh()):
+        inputs = _device_batched_ids(cfg.vocab_size, 8)
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(77))
+        loss_weight = LmExample.causal_loss_mask(inputs.resolve_axis("position")).broadcast_to(inputs.axes)
+        example = LmExample(tokens=inputs, loss_weight=loss_weight.astype(jnp.float32))
+
+        def score(m):
+            hidden = m.activations(inputs, example.attn_mask)
+            return m.project_logits(hidden), m._loss_from_activations(example, hidden, reduction=None)
+
+        logits, loss = jax.jit(score)(model)
+        host_logits = np.asarray(logits.array)
+        targets = np.asarray(inputs.array)[:, 1:, None]
+        selected = np.take_along_axis(host_logits[:, :-1], targets, axis=-1).squeeze(-1)
+        expected = np.logaddexp.reduce(host_logits[:, :-1], axis=-1) - selected
+        np.testing.assert_allclose(np.asarray(loss.array)[:, :-1], np.asarray(expected), atol=2e-6, rtol=0)
+        _, grad = jax.jit(jax.value_and_grad(lambda m: m.compute_next_token_loss(example).array))(model)
+        gate_grad = np.asarray(grad.transformer.blocks[0].attn.attn_gate)
+        assert np.isfinite(gate_grad).all() and np.any(gate_grad != 0)

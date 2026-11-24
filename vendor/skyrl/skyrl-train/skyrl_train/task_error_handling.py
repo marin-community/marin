@@ -1,90 +1,14 @@
+"""Training treatment for terminal task failures."""
+
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from enum import StrEnum
-from types import MappingProxyType
 from typing import Any, Mapping
 
 from loguru import logger
+from rigging.task_errors import ErrorCategory, error_category, errors_by_category, known_error_types
+from skyrl_train.task_errors import ERROR_CATEGORIES
 
 from skyrl_train.error_treatment import ErrorTreatment
-
-
-class ErrorCategory(StrEnum):
-    INFRASTRUCTURE = "infrastructure"
-    AGENT = "agent"
-    PASSTHROUGH = "passthrough"
-    UNKNOWN = "unknown"
-
-
-# Persisted exception names from the Harbor revision in uv.lock. The Harbor
-# integration test compares this snapshot with that revision's taxonomy.
-_ERROR_CATEGORIES: Mapping[str, ErrorCategory] = MappingProxyType(
-    {
-        "ContextManagementInfrastructureError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactUploadTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactWriterBacklogError": ErrorCategory.INFRASTRUCTURE,
-        "EnvironmentStartTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "TrialTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "SandboxBuildFailedError": ErrorCategory.INFRASTRUCTURE,
-        "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
-        "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
-        "BridgeOutageError": ErrorCategory.INFRASTRUCTURE,
-        "EnrootMemoryLimitExceededError": ErrorCategory.INFRASTRUCTURE,
-        "MissingExtraError": ErrorCategory.INFRASTRUCTURE,
-        "AgentKilledBySignalError": ErrorCategory.INFRASTRUCTURE,
-        "AgentSetupTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "ModelAuthenticationError": ErrorCategory.INFRASTRUCTURE,
-        "ContextBudgetExceededError": ErrorCategory.INFRASTRUCTURE,
-        "LLMRequestTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "OpenAITransportConnectTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxBatchProtocolError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxCommandError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxSessionEndedError": ErrorCategory.INFRASTRUCTURE,
-        "TmuxExecTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "DownloadVerifierDirError": ErrorCategory.INFRASTRUCTURE,
-        "RewardFileNotFoundError": ErrorCategory.INFRASTRUCTURE,
-        "RewardFileEmptyError": ErrorCategory.INFRASTRUCTURE,
-        "VerifierRuntimeError": ErrorCategory.INFRASTRUCTURE,
-        "VerifierOutputParseError": ErrorCategory.INFRASTRUCTURE,
-        "AddTestsDirError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactPersistenceError": ErrorCategory.INFRASTRUCTURE,
-        "ArtifactWriteTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        "ContainerRegistryThrottledError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaProcessError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaConnectionError": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaOutputUnavailable": ErrorCategory.INFRASTRUCTURE,
-        "DaytonaConflictError": ErrorCategory.INFRASTRUCTURE,
-        "MachineTerminated": ErrorCategory.INFRASTRUCTURE,
-        "PhaseCancellationError": ErrorCategory.INFRASTRUCTURE,
-        "SandboxDiskFullError": ErrorCategory.INFRASTRUCTURE,
-        "Tau3RuntimeInfrastructureError": ErrorCategory.INFRASTRUCTURE,
-        "AgentTimeoutError": ErrorCategory.AGENT,
-        "ModelInitiatedTmuxFailure": ErrorCategory.AGENT,
-        "AgentDiskFullError": ErrorCategory.AGENT,
-        "AgentCommandOutputLostError": ErrorCategory.AGENT,
-        "ContextLengthExceededError": ErrorCategory.AGENT,
-        "NonZeroAgentExitCodeError": ErrorCategory.AGENT,
-        "OutputLengthExceededError": ErrorCategory.PASSTHROUGH,
-        "TurnCapExhaustedError": ErrorCategory.PASSTHROUGH,
-        "MalformedModelResponseError": ErrorCategory.PASSTHROUGH,
-        "TrialNotScoredError": ErrorCategory.UNKNOWN,
-        "VerificationNotCompletedError": ErrorCategory.UNKNOWN,
-        "VerifierTimeoutError": ErrorCategory.UNKNOWN,
-    }
-)
-
-
-def error_category(exception_type: str) -> ErrorCategory:
-    return _ERROR_CATEGORIES.get(exception_type, ErrorCategory.UNKNOWN)
-
-
-def errors_by_category(category: ErrorCategory) -> frozenset[str]:
-    return frozenset(name for name, value in _ERROR_CATEGORIES.items() if value is category)
-
-
-def known_error_types() -> frozenset[str]:
-    return frozenset(_ERROR_CATEGORIES)
 
 
 AGENT_TIMEOUT_ERROR = "AgentTimeoutError"
@@ -141,9 +65,9 @@ def retry_excluded_exception_types(
     error_handling: ErrorHandlingConfig,
 ) -> frozenset[str]:
     """Return retry exclusions with every pass-through classification made terminal."""
-    classification_candidates = set(known_error_types())
+    classification_candidates = set(known_error_types(categories=ERROR_CATEGORIES))
     if error_handling.default_error_treatment is not ErrorTreatment.PASSTHROUGH:
-        classification_candidates.difference_update(errors_by_category(ErrorCategory.UNKNOWN))
+        classification_candidates.difference_update(errors_by_category(ErrorCategory.UNKNOWN, categories=ERROR_CATEGORIES))
     classification_candidates.update(error_handling.passthrough_exceptions)
     classification_candidates.update(error_handling.mask_exceptions)
     classification_candidates.update(error_handling.zero_exceptions)
@@ -161,7 +85,6 @@ _CATEGORY_TREATMENTS = {
     ErrorCategory.AGENT: ErrorTreatment.ZERO,
     ErrorCategory.PASSTHROUGH: ErrorTreatment.PASSTHROUGH,
 }
-_TASK_INFRASTRUCTURE_ERRORS = frozenset({"TaskMachineError", "TemplateError"})
 
 
 def classify_exception_type(exception_type: str, config: ErrorHandlingConfig) -> ErrorTreatment:
@@ -175,11 +98,7 @@ def classify_exception_type(exception_type: str, config: ErrorHandlingConfig) ->
         if exception_type in exception_types:
             return treatment
 
-    category = (
-        ErrorCategory.INFRASTRUCTURE
-        if exception_type in _TASK_INFRASTRUCTURE_ERRORS
-        else error_category(exception_type)
-    )
+    category = error_category(exception_type, categories=ERROR_CATEGORIES)
     if category is not ErrorCategory.UNKNOWN:
         return _CATEGORY_TREATMENTS[category]
 

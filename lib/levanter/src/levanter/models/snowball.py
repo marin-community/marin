@@ -35,7 +35,7 @@ from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 
 import haliax as hax
-from haliax import Axis, NamedArray
+from haliax import Axis, NamedArray, NamedOrNumeric
 from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
@@ -60,10 +60,14 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.kernels.logsumexp import batch_invariant_logsumexp
+from levanter.kernels.pallas.fixed_schedule_linear import _BLOCK_SIZE as _FIXED_PROJECTION_TILE
+from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.metrics import Metric, ReductionType
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.loss import next_token_ids, next_token_loss_weight
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -222,6 +226,10 @@ class SnowballConfig(HFCompatConfig):
     qk_mult: float = _DEFAULT_QK_MULT
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
+    projection_implementation: Literal["native", "fixed_schedule"] = dataclasses.field(
+        default="native", metadata={"fingerprint_omit_value": "native"}
+    )
+    """Use fixed per-row dense projections in both learner and serving paths on TPUv4."""
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
@@ -420,27 +428,56 @@ class RMSNorm(eqx.Module):
         return (normed * weight).astype(dtype)
 
 
+def _fixed_projection(x: jax.Array, weight: jax.Array) -> jax.Array:
+    contraction, output = weight.shape
+    pad_contract = -contraction % _FIXED_PROJECTION_TILE
+    pad_output = -output % _FIXED_PROJECTION_TILE
+    flat = x.reshape(-1, contraction)
+    if pad_contract:
+        flat = jnp.pad(flat, ((0, 0), (0, pad_contract)))
+    if pad_contract or pad_output:
+        weight = jnp.pad(weight, ((0, pad_contract), (0, pad_output)))
+        # Keep the padding adjoint outside the replicated-gradient collective.
+        weight = jax.lax.optimization_barrier(weight)
+    sharding = jax.typeof(flat).sharding if isinstance(flat, core.Tracer) else flat.sharding
+    if isinstance(sharding, NamedSharding):
+        flat = reshard(flat, P(next(iter(sharding.spec), None), None))
+        weight = reshard(weight, P())
+    projected = fixed_schedule_linear(flat, weight)[:, :output]
+    return projected.reshape((*x.shape[:-1], output))
+
+
 class GatedNorm(eqx.Module):
     """Learnable per-dimension gating (rank-128 low-rank gate on the RMS-normed input)."""
 
     w_down: jax.Array
     w_up: jax.Array
     fp32_activations: bool = eqx.field(static=True, default=False)
+    projection_implementation: Literal["native", "fixed_schedule"] = eqx.field(static=True, default="native")
 
     @staticmethod
     def init(
-        hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray, fp32_activations: bool = False
+        hidden_dim: int,
+        initializer_std: float,
+        *,
+        key: PRNGKeyArray,
+        fp32_activations: bool = False,
+        projection_implementation: Literal["native", "fixed_schedule"] = "native",
     ) -> "GatedNorm":
         k_down, k_up = random.split(key)
         return GatedNorm(
             w_down=_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std, P(None, None)),
             w_up=_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std, P(None, None)),
             fp32_activations=fp32_activations,
+            projection_implementation=projection_implementation,
         )
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         silu, sigmoid = (silu_fp32, sigmoid_fp32) if self.fp32_activations else (jax.nn.silu, jax.nn.sigmoid)
+        if self.projection_implementation == "fixed_schedule":
+            gate = sigmoid(_fixed_projection(silu(_fixed_projection(x, self.w_down)), self.w_up))
+            return x * _partition_match(gate.astype(x.dtype), x)
         gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
         gate_hidden = silu(gate_hidden)
         gate = sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
@@ -501,9 +538,14 @@ class SnowballAttention(eqx.Module):
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         head_dim = self.cfg.inferred_head_dim
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        def project(weight):
+            if self.cfg.projection_implementation == "fixed_schedule":
+                return _fixed_projection(x, weight)
+            return jnp.einsum("bsh,hd->bsd", x, weight)
+
+        q = rearrange(project(self.w_q), "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(project(self.w_k), "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(project(self.w_v), "... (m d) -> ... m d", d=head_dim)
 
         q = rms_norm(q)
         k = rms_norm(k)
@@ -531,13 +573,19 @@ class SnowballAttention(eqx.Module):
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: 2 * sigmoid(x @ attn_gate), one scalar per head.
         sigmoid = sigmoid_fp32 if self.cfg.fp32_activations else jax.nn.sigmoid
-        gate = 2 * sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        if self.cfg.projection_implementation == "fixed_schedule":
+            gate_logits = _fixed_projection(x, self.attn_gate)
+            gate = _partition_match((2 * sigmoid(gate_logits))[..., None], attn_out)
+        else:
+            gate = 2 * sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = jnp.reshape(
             attn_out,
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=_activation_spec("model"),
         )
+        if self.cfg.projection_implementation == "fixed_schedule":
+            return _partition_match(_fixed_projection(attn_out, self.w_o), x)
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_activation_spec())
 
     @named_call
@@ -589,6 +637,7 @@ class DenseMLP(eqx.Module):
     w_up: jax.Array
     w_down: jax.Array
     fp32_activations: bool = eqx.field(static=True, default=False)
+    projection_implementation: Literal["native", "fixed_schedule"] = eqx.field(static=True, default="native")
 
     @staticmethod
     def init(
@@ -598,6 +647,7 @@ class DenseMLP(eqx.Module):
         *,
         key: PRNGKeyArray,
         fp32_activations: bool = False,
+        projection_implementation: Literal["native", "fixed_schedule"] = "native",
     ) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
         return DenseMLP(
@@ -605,15 +655,20 @@ class DenseMLP(eqx.Module):
             w_up=_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std, P(_FSDP_AXES, "model")),
             w_down=_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std, P("model", _FSDP_AXES)),
             fp32_activations=fp32_activations,
+            projection_implementation=projection_implementation,
         )
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        silu = silu_fp32 if self.fp32_activations else jax.nn.silu
+        if self.projection_implementation == "fixed_schedule":
+            gate = _fixed_projection(x, self.w_gate)
+            up = _fixed_projection(x, self.w_up)
+            return _partition_match(_fixed_projection(silu(gate) * up, self.w_down), x)
         b, s, _ = x.shape
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        silu = silu_fp32 if self.fp32_activations else jax.nn.silu
         out_flat = jnp.einsum("tm,md->td", silu(gate) * up, self.w_down, out_sharding=_token_spec())
         return jax.lax.reshape(out_flat, (b, s, out_flat.shape[-1]), out_sharding=_activation_spec())
 
@@ -766,12 +821,20 @@ class SnowballBlock(eqx.Module):
         return SnowballBlock(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(
-                cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key, fp32_activations=cfg.fp32_activations
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=gn_attn_key,
+                fp32_activations=cfg.fp32_activations,
+                projection_implementation=cfg.projection_implementation,
             ),
             attn=SnowballAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             mlp_gated_norm=GatedNorm.init(
-                cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key, fp32_activations=cfg.fp32_activations
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=gn_mlp_key,
+                fp32_activations=cfg.fp32_activations,
+                projection_implementation=cfg.projection_implementation,
             ),
             mlp=SnowballMoEMLP.init(cfg, key=mlp_key),
             shared=DenseMLP.init(
@@ -780,6 +843,7 @@ class SnowballBlock(eqx.Module):
                 cfg.initializer_std,
                 key=shared_key,
                 fp32_activations=cfg.fp32_activations,
+                projection_implementation=cfg.projection_implementation,
             ),
         )
 
@@ -896,13 +960,21 @@ class SnowballTransformer(eqx.Module):
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(
-                cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key, fp32_activations=cfg.fp32_activations
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=embed_gn_key,
+                fp32_activations=cfg.fp32_activations,
+                projection_implementation=cfg.projection_implementation,
             ),
             output_proj=output_proj,
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(
-                cfg.hidden_dim, cfg.initializer_std, key=final_gn_key, fp32_activations=cfg.fp32_activations
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=final_gn_key,
+                fp32_activations=cfg.fp32_activations,
+                projection_implementation=cfg.projection_implementation,
             ),
             config=cfg,
         )
@@ -1099,6 +1171,49 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             )
         }
 
+    def project_logits(self, activations: NamedArray) -> NamedArray:
+        if self.config.projection_implementation == "native":
+            return super().project_logits(activations)
+        logits = _fixed_projection(activations.array, self.transformer.output_proj)
+        return hax.named(logits, (*activations.axes[:-1], self.Vocab))
+
+    def _loss_from_activations(
+        self,
+        example: LmExample,
+        activations: NamedArray | tuple[NamedArray, NamedOrNumeric],
+        *,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jnp.ndarray | NamedArray:
+        if self.config.projection_implementation == "native":
+            return super()._loss_from_activations(
+                example,
+                activations,
+                reduction=reduction,
+                reduction_axis=reduction_axis,
+                logsumexp_weight=logsumexp_weight,
+                loss_dtype=loss_dtype,
+                logit_soft_cap=logit_soft_cap,
+            )
+        hidden, aux_loss = split_activations(activations)
+        loss_type = example.loss_weight.dtype if example.loss_weight is not None else loss_dtype
+        logits = self.project_logits(hidden)
+        if loss_type is not None:
+            logits = logits.astype(loss_type)
+        if logit_soft_cap is not None:
+            logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
+        targets = next_token_ids(self.Pos.name, example.tokens)
+        selected = hax.sum(hax.where(hax.nn.one_hot(targets, self.Vocab, dtype=bool), logits, 0), self.Vocab)
+        normalizers = hax.named(batch_invariant_logsumexp(logits.array), logits.axes[:-1])
+        loss = normalizers - selected
+        if logsumexp_weight:
+            loss = loss + logsumexp_weight * hax.square(normalizers)
+        weights = next_token_loss_weight(logits.resolve_axis(self.Pos.name), example.loss_weight)
+        return hax.nn.loss.reduce_loss(loss, reduction, reduction_axis, weight=weights) + aux_loss
+
     def get_lm_head(self) -> NamedArray:
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))
 
@@ -1160,9 +1275,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
         hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
-        logits = jnp.einsum(
-            "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
-        )
+        if self.config.projection_implementation == "fixed_schedule":
+            logits = _fixed_projection(hidden, self.transformer.output_proj)
+        else:
+            logits = jnp.einsum(
+                "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
+            )
         caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
         return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches
 
