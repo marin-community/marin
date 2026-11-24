@@ -22,7 +22,7 @@ from taskcompendium.importers.fewshot import (
     FewshotPolicy,
     FewshotSampling,
 )
-from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.models import GraderMachine, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 
@@ -73,7 +73,7 @@ def convert_medmcqa_cot(row: RawRow, context: ConversionContext) -> TaskSpec:
         events=(TextMessage(role="user", content=medmcqa_question(row.data) + MEDMCQA_COT_INSTRUCTION),),
         package=verifyit_package(
             McqSpec(MEDMCQA_LETTERS[row.data["cop"]], options=4, extraction=McqExtraction.MEDMCQA_COT_REFERENCE),
-            environment=required_grader_environment(context),
+            placement=GraderMachine(environment=required_grader_environment(context)),
         ),
         evidence=dict(row.data),
     )
