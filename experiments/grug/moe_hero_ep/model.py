@@ -18,7 +18,7 @@ import jax
 import jax.numpy as jnp
 from einops import rearrange
 from haliax import Axis
-from haliax.jax_utils import named_call, tree_checkpoint_name
+from haliax.jax_utils import multilevel_scan, named_call, tree_checkpoint_name
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
@@ -369,6 +369,10 @@ class GrugModelConfig:
     recomputes everything but stages the layer-input residual on pinned host, which
     releases its HBM between forward and backward, and saves the routed MoE output.
     "offload_carry_recompute_moe" also recomputes that output instead of keeping it in HBM."""
+    remat_group_size: int | None = None
+    """Checkpoint groups of this many layers, recomputing their inner scan in backward.
+    With host carry offload, only one group's layer residuals need host scratch at a time;
+    the outer group boundaries stay on device. None keeps the single layer scan."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
     ce_grad_in_forward_token_block_size: int | None = None
@@ -377,6 +381,9 @@ class GrugModelConfig:
     from the forward to the backward. None keeps "xla_fast_bwd"."""
 
     def __post_init__(self) -> None:
+        if self.remat_group_size is not None:
+            if self.remat_group_size <= 0 or self.num_layers % self.remat_group_size:
+                raise ValueError("remat_group_size must be positive and divide num_layers")
         _ = self.inferred_head_dim
         if self.num_heads % self.stored_kv_heads != 0:
             raise ValueError("num_heads must be divisible by the stored KV-head count")
@@ -1481,9 +1488,17 @@ class Transformer(eqx.Module):
                 global_query_scale,
             )
 
-        hidden, stacked_router_stats = jax.lax.scan(
-            _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
-        )
+        scan_inputs = (self.stacked_blocks.stacked, mask_schedule)
+        if cfg.remat_group_size is None:
+            hidden, stacked_router_stats = jax.lax.scan(_scan_layers, hidden, xs=scan_inputs)
+        else:
+            hidden, stacked_router_stats = multilevel_scan(
+                _scan_layers,
+                hidden,
+                scan_inputs,
+                outer_size=cfg.num_layers // cfg.remat_group_size,
+                length=cfg.num_layers,
+            )
         # One cross-device reduction for the whole stack of layers, instead of one inside every
         # scan iteration. See `moe_routing_stats_local`.
         reduced_router_stats = reduce_moe_routing_stats(

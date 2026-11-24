@@ -70,6 +70,14 @@ in the same order and dtype. The default `device` placement is unchanged. At the
 shape this carry is about 35.09 GiB per rank; host transfers and compiler scheduling
 determine the actual device-memory saving and step cost. Qualify both before adoption.
 
+`model.remat_group_size: 8` adds nested checkpoints around groups of eight layers,
+using the existing multilevel scan. Backward recomputes each group's forward before
+its inner backward. With host carry offload this limits the saved layer residuals
+to one group, while retaining group boundaries on device. At 48 layers this targets
+6 GiB of host layer residuals instead of 36 GiB, plus about 4.5 GiB of device group
+boundaries. These are tensor-size estimates; compiled liveness, allocator coexistence
+and a finite full-update memory gate determine fit. The default is no grouping.
+
 ## Inference export
 
 Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. Every export writes

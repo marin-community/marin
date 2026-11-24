@@ -511,6 +511,48 @@ def test_host_gradient_accumulator_preserves_padded_updates(precision):
                 )
 
 
+@pytest.mark.multidevice
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("precision", [_FP32, jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")])
+def test_grouped_remat_preserves_padded_host_accumulated_updates(precision):
+    with use_test_devices(4) as devices:
+        mesh = _expert_sharded_mesh(devices)
+        with jax.set_mesh(mesh):
+            optimizer = _optimizer()
+            configs = [
+                dataclasses.replace(
+                    _tiny_config(),
+                    num_layers=6,
+                    remat_mode=model.OFFLOAD_CARRY_RECOMPUTE_MOE_REMAT_MODE,
+                    remat_group_size=group_size,
+                )
+                for group_size in (None, 2)
+            ]
+            tokens = jnp.asarray(np.random.default_rng(4).integers(0, 64, size=(12, 8), dtype=np.int32))
+            batch = GrugLmExample(tokens=tokens, loss_weight=jnp.ones((12, 8), jnp.float32).at[:, -1].set(0.0))
+            step = _make_train_step(
+                optimizer,
+                precision,
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                max_grad_norm=1.0,
+                offload_opt_state=True,
+                router_bias_mode=RouterBiasMode.FROZEN,
+                microbatch_size=4,
+                logical_batch_size=10,
+                gradient_accumulator_memory=GradientAccumulatorMemory.PINNED_HOST,
+            )
+            states = [_trained_state(config, optimizer, mesh) for config in configs]
+            for _ in range(4):
+                results = [step(state, batch) for state in states]
+                states = [result[0] for result in results]
+                for left, right in zip(jax.tree.leaves(states[0]), jax.tree.leaves(states[1]), strict=True):
+                    np.testing.assert_array_equal(np.asarray(left), np.asarray(right))
+                np.testing.assert_array_equal(
+                    np.asarray(results[0][1]["train/loss"]), np.asarray(results[1][1]["train/loss"])
+                )
+
+
 def _expert_sharded_mesh(devices):
     return Mesh(
         np.asarray(devices).reshape(1, 2, 2, 1, 1),
