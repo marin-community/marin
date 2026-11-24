@@ -49,7 +49,6 @@ def submit_evaluation(
     resources: ResourceSpec,
     timeout: int,
     secrets: dict[str, str],
-    env_vars: dict[str, str] | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> Job:
     """Submit a disposable privileged CPU worker; Shellbox contains every grader command."""
@@ -62,7 +61,7 @@ def submit_evaluation(
         entrypoint=Entrypoint.from_callable(run_worker, datasets, output, config, max_attempts),
         name=name,
         resources=resources,
-        environment=EnvironmentSpec(setup_scripts=(worker_setup_script(config),), secrets=secrets, env_vars=env_vars),
+        environment=EnvironmentSpec(setup_scripts=(worker_setup_script(config),), secrets=secrets),
         egress_allow=worker_egress(config),
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         timeout=Duration.from_seconds(timeout),
