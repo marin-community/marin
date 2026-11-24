@@ -30,7 +30,7 @@ from fray.iris_backend import convert_resources
 from fray.types import ResourceConfig
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
-from iris.cluster.types import EnvironmentSpec, Entrypoint, is_job_finished
+from iris.cluster.types import Entrypoint, EnvironmentSpec, is_job_finished
 from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
 
@@ -147,6 +147,13 @@ def main() -> None:
         help="Enable MTP speculative decoding with this many speculative tokens (warm-run variant).",
     )
     parser.add_argument(
+        "--engine-arg",
+        "engine_args",
+        action="append",
+        default=None,
+        help="Extra raw vLLM argument appended to the engine config (repeatable; variant benching).",
+    )
+    parser.add_argument(
         "--endpoint-name",
         default=None,
         help="Register this endpoint instead of the pool's (variant benching).",
@@ -174,6 +181,8 @@ def main() -> None:
         if args.mtp < 1:
             raise SystemExit("--mtp must be positive")
         extra_args = ("--speculative-config", f'{{"method":"mtp","num_speculative_tokens":{args.mtp}}}')
+    if args.engine_args:
+        extra_args = (*extra_args, *args.engine_args)
     suffix = args.tag or uuid.uuid4().hex[:6]
     endpoint_name = args.endpoint_name
     workspace = find_project_root()
@@ -185,8 +194,11 @@ def main() -> None:
             if args.attach_only:
                 live = client.active_job_names_for_prefix(f"/{pool.JOB_PREFIX}-")
                 coordinator_status = next(
-                    (client.job_status(job_id) for job_id in live if "-watch-" not in str(job_id)
-                     and "-stage-" not in str(job_id)),
+                    (
+                        client.job_status(job_id)
+                        for job_id in live
+                        if "-watch-" not in str(job_id) and "-stage-" not in str(job_id)
+                    ),
                     None,
                 )
                 base_url = wait_for_endpoint(client, coordinator=coordinator_status)
