@@ -25,8 +25,8 @@
   "package_output_root": "/Users/benfeuer/Documents/experiments/active/atlas-release-pipeline/m3-dryrun/package",
   "pins": {
     "backend_survey": {
-      "sha256": "ac27b48428b81cbcebdd91e56d9bde7ed1fb90cdfd060d8096148790681f1708",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261123-r39-admissions-refresh-v3/backend-map-v7.json"
+      "sha256": "bbaa74a358e6806a733913f05263ec598c6e399f9674d89252b5a7e17e466426",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v17/backend-validation/backend-survey.json"
     },
     "backend_validation_receipt": {
       "sha256": "40109fc9970a14aa512f22b78cf6d572954fbf0278d8e191dcad44bf9c69e95e",
@@ -52,8 +52,8 @@
       "uri": "s3://marin-us-east-08a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/curriculum-composition/composed/coverage.json"
     },
     "prior_declarations": {
-      "sha256": "8fb376a1931bf9dc9fc88df75b59c98b67e3b1d6d2312889d22953f4ad21766b",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261123-r39-admissions-refresh-v3/prior-declarations.json"
+      "sha256": "67ab84cf89404aa5ef9b05d92de07420e8b281edeb8b35ac1ec8eaccdc753353",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v17/prior-declarations.json"
     },
     "prior_identity": {
       "sha256": "bb00732530d2c8ffbe7e924a7048978b1beb99cea8814a25f23a1fea64f311d4",
@@ -416,7 +416,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "m3-dryrun",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v16",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v17",
   "scan_regions": {
     "us-east-02a": "s3://marin-us-east-02a/marin/rl-data/atlas/"
   },
@@ -430,9 +430,10 @@
   },
   "slice_output_root": "",
   "snapshot_id": "assembly-r39-admissions-20261123-v2",
-  "source_revision": "2e4e9a8044f25eb75a97bd402732f5ee1a17890c",
+  "source_revision": "60770c25bdcf8eacda3ca0bcc16c61ff200e45c0",
   "strict_audit_local": false,
   "targets": [
-    "Lego-X:Terminal-Lego-15k"
+    "Lego-X:Terminal-Lego-15k",
+    "di-zhang-fdu:aime_1983_2024"
   ]
 }
