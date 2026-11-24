@@ -78,8 +78,9 @@ def test_usable_group_resets_the_count():
 
 @pytest.mark.parametrize("family", [None, "agentic"])
 def test_recovered_prompt_fills_the_missing_group(family: str | None):
+    max_unusable_groups = 3
     if family is None:
-        prompts = loader(num_rows=3, batch_size=2, max_unusable_groups=3)
+        prompts = loader(num_rows=3, batch_size=2, max_unusable_groups=max_unusable_groups)
         live = set()
     else:
         prompts = PromptLoader(
@@ -87,23 +88,23 @@ def test_recovered_prompt_fills_the_missing_group(family: str | None):
             SeededPasses(5, seed=0, shuffle=False),
             batch_size=3,
             max_stale_retries=1,
-            max_unusable_groups=3,
+            max_unusable_groups=max_unusable_groups,
             families={"0": family, "1": family, "2": family, "3": "math", "4": "math"},
             family_minimums={family: 2, "math": 1},
         )
         # A quarantine in another pool precedes the one that can fill this slot.
-        for _ in range(3):
+        for _ in range(max_unusable_groups):
             prompts.record_disposition("3", UNUSABLE)
         live = {"4"}
 
-    for _ in range(3):
+    for _ in range(max_unusable_groups):
         prompts.record_disposition("0", UNUSABLE)
     kept = prompts.next_prompt(live=live, family=family)
     assert kept is not None and kept["uid"] == "1"
     live.add(kept["uid"])
 
     # With one group missing, prompt 2 keeps failing and the cooldown clock cannot advance.
-    for _ in range(3):
+    for _ in range(max_unusable_groups):
         failed = prompts.next_prompt(live=live, family=family)
         assert failed is not None and failed["uid"] == "2"
         prompts.record_disposition(failed["uid"], UNUSABLE)

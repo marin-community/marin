@@ -131,7 +131,8 @@ class PromptLoader:
     A prompt whose last ``max_unusable_groups`` groups were all unusable, for example because its grader failed on
     every sample, is quarantined for ``QUARANTINE_STEPS`` completed batches. Quarantine keeps enough prompts for one
     batch, or enough in each family for every open batch when batches specify groups per family. When that minimum
-    keeps a failing prompt in rotation, the loader gives one quarantined prompt in the same pool an early retry.
+    keeps a failing prompt in rotation, its rejection can trigger an early retry for a non-live quarantined prompt
+    in the same pool.
     A usable group ends quarantine early. Retry counts and quarantine restart empty when a run resumes.
 
     The sequence never ends; the trainer decides when to stop.
@@ -178,7 +179,7 @@ class PromptLoader:
         self._unusable_groups: dict[str, int] = {}
         # Quarantined uid to the training step that releases it.
         self._quarantined: dict[str, int] = {}
-        self._early_retries: set[str | None] = set()
+        self._early_retry_pools: set[str | None] = set()
         self._step = 0
         self._retries: collections.deque[dict] = collections.deque()
         self._stale_retries: dict[str, int] = {}
@@ -200,20 +201,9 @@ class PromptLoader:
             if eligible(prompt["uid"]):
                 del self._retries[position]
                 return self._label_family(prompt)
-        if family in self._early_retries:
-            self._early_retries.remove(family)
-            uid = next(
-                (
-                    uid
-                    for uid in self._quarantined
-                    if uid not in live and (family is None or self._families.get(uid) == family)
-                ),
-                None,
-            )
-            if uid is not None:
-                # Rotate candidates so one persistent failure cannot take every early retry.
-                self._quarantined[uid] = self._quarantined.pop(uid)
-                return self._offer(self._uid_rows[uid])
+        early_retry = self._next_early_retry(live, family)
+        if early_retry is not None:
+            return early_retry
         if family is not None:
             return self._next_family_prompt(live, family)
         # An early retry can be both live and quarantined.
@@ -234,6 +224,24 @@ class PromptLoader:
                 return self._offer(index)
         return None
 
+    def _next_early_retry(self, live: Collection[str], family: str | None) -> dict | None:
+        if family not in self._early_retry_pools:
+            return None
+        self._early_retry_pools.remove(family)
+        uid = next(
+            (
+                uid
+                for uid in self._quarantined
+                if uid not in live and (family is None or self._families.get(uid) == family)
+            ),
+            None,
+        )
+        if uid is None:
+            return None
+        # Rotate candidates so each quarantined prompt gets a turn.
+        self._quarantined[uid] = self._quarantined.pop(uid)
+        return self._offer(self._uid_rows[uid])
+
     def _next_family_prompt(self, live: Collection[str], family: str) -> dict | None:
         rows = self._family_rows.get(family)
         if not rows:
@@ -251,7 +259,7 @@ class PromptLoader:
         return None
 
     def retry(self, prompt: dict) -> None:
-        """Queue a prompt whose group missed the staleness window, unless it used up its regenerations."""
+        """Queue a stale prompt when it has retries left and is outside quarantine."""
         uid = prompt["uid"]
         # A stale early retry stays quarantined until another offer or the cooldown ends.
         if uid in self._quarantined:
@@ -292,7 +300,7 @@ class PromptLoader:
             scope = ""
         if usable <= minimum:
             if quarantined:
-                self._early_retries.add(family)
+                self._early_retry_pools.add(family)
             logger.warning(
                 "Prompt {} produced {} unusable groups in a row (last: {}) and stays in rotation: "
                 "requires {} usable prompts{}",
@@ -323,7 +331,7 @@ class PromptLoader:
         """
         self._step += 1
         self._quarantined = {uid: release for uid, release in self._quarantined.items() if release > self._step}
-        self._early_retries.clear()
+        self._early_retry_pools.clear()
         exhausted, self._retries_exhausted = self._retries_exhausted, 0
         return {
             **self._order.observe(groups),
