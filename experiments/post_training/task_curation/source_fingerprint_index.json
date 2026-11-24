@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "3778d69f498ce95cf51f82e1ea3362cc2418e6d7",
-  "path": "experiments/post_training/task_curation/source_fingerprint_index_litecoder_neighbors_20261124_b_v1.json",
-  "sha256": "fd8a8636e8ca40e8943a057f2d232ee265fa80caa0d6bbbf3bacf4fb19104f87"
+  "revision": "03a7af32ab185fa3e0e5713856f2f3a648a20d4e",
+  "path": "experiments/post_training/task_curation/source_fingerprint_index_identity_repair_20261123_a_v1.json",
+  "sha256": "2c7dce0217c664b1e6b221c9ce4b6f799773bfd780be47c71c49eecd4f94d2ab"
 }

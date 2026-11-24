@@ -68,6 +68,7 @@ from experiments.post_training.task_curation.datasets.skyrl import preference as
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import sources as swe_rebench_v2
 from experiments.post_training.task_curation.datasets.tasktrove import calendar as tasktrove_calendar
 from experiments.post_training.task_curation.datasets.tasktrove import code as tasktrove_code
+from experiments.post_training.task_curation.datasets.tasktrove import identity_following as tasktrove_identity_repair
 from experiments.post_training.task_curation.datasets.tasktrove import instruction_following as tasktrove_instructions
 from experiments.post_training.task_curation.datasets.tasktrove import judged as tasktrove_judged
 from experiments.post_training.task_curation.datasets.tasktrove import math as tasktrove_math
@@ -150,6 +151,7 @@ def configured_sources() -> list[RlDataSource]:
         *tasktrove_qa.sources(),
         *tasktrove_calendar.sources(),
         *tasktrove_instructions.sources(),
+        *tasktrove_identity_repair.repaired_sources(),
         *tasktrove_multichallenge.sources(),
         *tasktrove_puzzles.sources(),
         *arc.sources(),

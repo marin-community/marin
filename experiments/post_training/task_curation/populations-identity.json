@@ -1,0 +1,24 @@
+[
+  {
+    "path": "s3://marin-us-east-02a/marin/rl-data/atlas/identity-following-repair/20261124/population-r4",
+    "source_id": "TaskTrove:laion__nemotron-gym-identity-following-v4@repaired-20261123",
+    "dataset_id": "open-athena/tasktrove-identity-following-repaired-20261123",
+    "dataset_revision": "94967dd29123f9d1274a660491b6612fbd6ebd40",
+    "source_version": "identity-repair-20261123-v2",
+    "converter_revision": "59c780faca0a676731d92f0f77234adce1a8958a",
+    "text_renderer_version": "taskcompendium-format-conversation-v1",
+    "task_count": 21660,
+    "text_sha256": "fd259ccae11608fa8bc5a41df10a9e052f662a80981fe8a5e1145b3aa3ee85a1",
+    "task_specs_sha256": "019105393fc847d52761eb9d32ff08dd9aef120dedb54bbe1dcff9e6d56aa731",
+    "main_output_dir": "s3://marin-us-east-02a/marin/rl-data/atlas/identity-following-repair/20261124/population-r4/outputs/main",
+    "specs_output_dir": "s3://marin-us-east-02a/marin/rl-data/atlas/identity-following-repair/20261124/population-r4/specs",
+    "converter_rejections": {},
+    "admission_rejections": {},
+    "within_source_dedup": {
+      "raw_count": 21660,
+      "unique_count": 21660,
+      "within_source_duplicates": 0,
+      "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/identity-following-repair/20261124/population-r4/within-source-dedup/drops.parquet"
+    }
+  }
+]

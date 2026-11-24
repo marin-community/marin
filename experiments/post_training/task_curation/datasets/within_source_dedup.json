@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "9ddb7930ca19fd678496e1d81e6929107cc41535",
-  "path": "experiments/post_training/task_curation/datasets/within_source_dedup_litecoder_20261124_b_v1.json",
-  "sha256": "2ec021d486edf3f38bd1fb2a83f4436a5fa877c2fc7ea2977fca7d034efb8fe4"
+  "revision": "7a3c464ad2b69e17bf8ecb6ff15d32c67140b5ac",
+  "path": "experiments/post_training/task_curation/datasets/within_source_dedup_identity_repair_20261123_a_v1.json",
+  "sha256": "7f4356b3c88bc001bef92aff4891257bb61442a7eb5226ef390cb61fae16d951"
 }

@@ -197,6 +197,11 @@ REPAIRED_RELEASE_REVISION = "94967dd29123f9d1274a660491b6612fbd6ebd40"
 REPAIRED_TASK_COUNT = 21_660
 
 
+def repaired_sources() -> list[Any]:
+    """The repaired variant's catalog declarations; see :func:`repaired_variant_source`."""
+    return [repaired_variant_source()]
+
+
 def repaired_variant_source() -> Any:
     """The repaired population's catalog declaration, pending its admission receipts.
 
