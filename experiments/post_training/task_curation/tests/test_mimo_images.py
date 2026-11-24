@@ -20,6 +20,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from experiments.post_training.task_curation.datasets.mimo import images as lane
+from experiments.post_training.task_curation.datasets.mimo.images import task_tag
 from experiments.post_training.task_curation.datasets.mimo.repair import load_bindings
 from experiments.post_training.task_curation.tests.test_mimo_repair import resource, retained_row
 
@@ -222,9 +223,15 @@ def test_entry_point_adopts_pushed_tags_on_resume(tmp_path, monkeypatch):
     run_main(monkeypatch, tmp_path, row, tools)
     first = json.loads((tmp_path / "regional" / "images-v1" / "provenance.json").read_text())
     assert len(first["images"]) == 1
+    tag = task_tag(row["id"])
 
     # A resume run against a fresh output with no provenance document adopts the
-    # already-pushed tag from the registry instead of rebuilding.
+    # already-pushed tag from the registry's REST listing instead of rebuilding.
+    monkeypatch.setattr(
+        lane,
+        "fetch_package_versions",
+        lambda package, token: {tag: first["images"][0]["digest"]} if token else {},
+    )
     umoci_before = sum(1 for command in tools.commands if command[0] == "umoci")
     run_main(monkeypatch, tmp_path, row, tools, "--resume", output=tmp_path / "regional2")
     assert sum(1 for command in tools.commands if command[0] == "umoci") == umoci_before

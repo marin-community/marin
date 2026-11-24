@@ -38,6 +38,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -386,23 +387,65 @@ def write_outputs(output: StoragePath, records: list[BuildRecord], package: str,
     return binding_path
 
 
+PACKAGE_ORG = "marin-community"
+
+
+def fetch_package_versions(package: str, token: str) -> dict[str, str]:
+    """List the GHCR package's tags and manifest digests through the GitHub REST API.
+
+    The container-registry endpoints rate-limit per token; the REST API has a separate,
+    much larger budget, so one paginated listing replaces thousands of per-tag reads.
+    The returned mapping is tag name -> manifest digest (the version's name).
+    """
+    repository = package.removeprefix("ghcr.io/")
+    versions: dict[str, str] = {}
+    page = 1
+    while True:
+        request = urllib.request.Request(
+            f"https://api.github.com/orgs/{PACKAGE_ORG}/packages/container/{repository}/versions"
+            f"?per_page=100&page={page}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            batch = json.load(response)
+        for version in batch:
+            digest = version.get("name") or ""
+            for tag in (version.get("metadata", {}).get("container", {}) or {}).get("tags") or []:
+                versions[tag] = digest
+        if len(batch) < 100:
+            return versions
+        page += 1
+
+
 def adopt_from_registry(
-    tasks: list[dict], package: str, authfile: Path | None, job: str
+    tasks: list[dict], package: str, authfile: Path | None, job: str, token: str
 ) -> tuple[list[BuildRecord], list[dict]]:
     """Verify-and-adopt tasks whose digest-pinned tags the registry already serves.
 
     A tag that resolves at all is a complete push (incomplete uploads never create a
     tag), and the derived digest is deterministic for a recipe, so the adopted record
-    binds the tag's own readback digest.
+    binds the registry's own digest for that tag. The tag map comes from the REST
+    listing; a per-tag OCI readback is only the fallback when the listing is
+    unavailable.
     """
+    versions = fetch_package_versions(package, token) if token else None
     adopted = []
     pending = []
     for task in tasks:
         tag = task_tag(task["task_id"])
-        try:
-            digest = registry_readback(package, tag, authfile)
-        except BuildRejected as error:
-            logger.info("adopt: %s not in the registry yet (%s)", task["task_id"], str(error)[-120:])
+        digest = (versions or {}).get(tag)
+        if digest is None and versions is None:
+            try:
+                digest = registry_readback(package, tag, authfile)
+            except BuildRejected as error:
+                logger.info("adopt: %s not in the registry yet (%s)", task["task_id"], str(error)[-120:])
+                pending.append(task)
+                continue
+        if digest is None:
             pending.append(task)
             continue
         adopted.append(
@@ -477,7 +520,7 @@ def main() -> None:
 
     records = [record for record in existing.values()]
     if arguments.resume and pending:
-        adopted, pending = adopt_from_registry(pending, config.package, authfile, job)
+        adopted, pending = adopt_from_registry(pending, config.package, authfile, job, token)
         records.extend(adopted)
         logger.info("tasks=%d pending=%d adopted=%d", len(tasks), len(pending), len(adopted))
     workroot = Path(tempfile.gettempdir()) / "mimo-image-work"
