@@ -20,6 +20,7 @@ import tomllib
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from types import MappingProxyType
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -80,7 +81,7 @@ ATTEMPT_COLUMNS = (
     "docker_image setup_sha256 setup_completed setup_exit_code setup_stdout setup_stderr "
     "verifier_stdout verifier_stderr address"
 ).split()
-ATTEMPT_COLUMN_TYPES = {"setup_completed": pa.bool_(), "setup_exit_code": pa.int64()}
+ATTEMPT_COLUMN_TYPES = MappingProxyType({"setup_completed": pa.bool_(), "setup_exit_code": pa.int64()})
 ATTEMPT_SCHEMA = pa.schema([(name, ATTEMPT_COLUMN_TYPES.get(name, pa.string())) for name in ATTEMPT_COLUMNS])
 SKIP_COLUMNS = (TASK_SPEC_COLUMN, "task_id", "unit", "attempts", "failed_attempts", "error", "example")
 SKIP_SCHEMA = pa.schema([(name, pa.int64() if name.endswith("attempts") else pa.string()) for name in SKIP_COLUMNS])

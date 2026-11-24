@@ -22,7 +22,8 @@ from skyrl_train.rollouts.machines import OwnedMachineFactory
 from rigging.task_errors import RetrySettings, RetryDisposition
 from skyrl_train.trajectory_runners.model_clients import ModelServerError
 from daytona import DaytonaError
-from skyrl_train.trajectory_runners.types import TaskRequestBatch
+from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryBatch
+from skyrl_train.rollouts.training_record import TrainingRollout
 from tests.cpu.task_specs import SHELL_ENVIRONMENT, lowered_task, task_input, text_task
 
 from cloud.iris.tests.task_worker_fixtures import ScriptedClient, WorkerTokenizer, sampled_reply
@@ -81,6 +82,13 @@ class ResettingFactory:
         return ResettingMachine(await ShellSimMachineFactory().create(spec), reset=fails, operation=self.reset)
 
 
+@dataclass
+class RolloutEvidence:
+    result: TrainingRollout
+    waits: list[float]
+    batch: TrajectoryBatch
+
+
 async def rollout_evidence(
     worker_config,
     factory,
@@ -121,7 +129,7 @@ async def rollout_evidence(
         batch = worker.projection.project([result], request)
     finally:
         await worker.shutdown()
-    return result, waits, batch
+    return RolloutEvidence(result, waits, batch)
 
 
 @pytest.mark.asyncio
@@ -132,12 +140,12 @@ async def rollout_evidence(
 )
 async def test_lost_connection_at_machine_start_restarts_the_rollout(worker_config, failures, recovers):
     factory = ResettingFactory(failures)
-    result, waits, _ = await rollout_evidence(worker_config, factory)
+    evidence = await rollout_evidence(worker_config, factory)
     assert factory.creations == RETRY_SETTINGS.max_retries + 1
-    assert (result.failure is None) == recovers
+    assert (evidence.result.failure is None) == recovers
     # Each restart waits first, because the resets arrive in bursts.
-    assert len(waits) == RETRY_SETTINGS.max_retries and all(wait > 0 for wait in waits)
-    assert result.metrics["rollout_retries"] == RETRY_SETTINGS.max_retries
+    assert len(evidence.waits) == RETRY_SETTINGS.max_retries and all(wait > 0 for wait in evidence.waits)
+    assert evidence.result.metrics["rollout_retries"] == RETRY_SETTINGS.max_retries
 
 
 @pytest.mark.asyncio
@@ -153,29 +161,29 @@ async def test_connection_loss_before_first_model_turn_restarts_machine(
     worker_config, operation, environment, resources
 ):
     factory = ResettingFactory(failures=1, reset=operation)
-    result, waits, _ = await rollout_evidence(worker_config, factory, environment=environment, resources=resources)
+    evidence = await rollout_evidence(worker_config, factory, environment=environment, resources=resources)
     assert factory.creations == 2
-    assert waits == [1]
-    assert result.failure is None
+    assert evidence.waits == [1]
+    assert evidence.result.failure is None
 
 
 @pytest.mark.asyncio
 async def test_lost_connection_in_a_model_command_keeps_the_failure(worker_config):
     factory = ResettingFactory(failures=1, reset=Reset.COMMAND)
     replies = [sampled_reply(None, tool_calls=shell_call("true")["tool_calls"])]
-    result, waits, batch = await rollout_evidence(worker_config, factory, replies=replies)
+    evidence = await rollout_evidence(worker_config, factory, replies=replies)
     assert factory.creations == 1
-    assert waits == []
-    assert result.failure.exception_type == "TaskMachineError"
-    assert batch["error_treatments"] == ["mask"]
-    assert batch["exclude_from_baseline"] == [True]
-    assert not any(batch["loss_masks"][0])
+    assert evidence.waits == []
+    assert evidence.result.failure.exception_type == "TaskMachineError"
+    assert evidence.batch["error_treatments"] == ["mask"]
+    assert evidence.batch["exclude_from_baseline"] == [True]
+    assert not any(evidence.batch["loss_masks"][0])
 
 
 @pytest.mark.asyncio
 async def test_task_obeys_zero_retry_budget(worker_config):
     factory = ResettingFactory(failures=1)
-    result, waits, _ = await rollout_evidence(
+    evidence = await rollout_evidence(
         worker_config,
         factory,
         retry=RetrySettings(
@@ -183,8 +191,8 @@ async def test_task_obeys_zero_retry_budget(worker_config):
         ),
     )
     assert factory.creations == 1
-    assert waits == []
-    assert result.failure.exception_type == "TaskMachineError"
+    assert evidence.waits == []
+    assert evidence.result.failure.exception_type == "TaskMachineError"
 
 
 @pytest.mark.asyncio
@@ -195,11 +203,11 @@ async def test_permanent_provider_failure_does_not_restart_the_machine(worker_co
             raise DaytonaError("unauthorized", status_code=401)
 
     factory = UnauthorizedFactory(failures=1)
-    result, waits, _ = await rollout_evidence(worker_config, factory)
+    evidence = await rollout_evidence(worker_config, factory)
     assert factory.creations == 1
-    assert waits == []
-    assert result.failure.cause_type == "DaytonaError"
-    assert result.failure.provider_status_code == 401
+    assert evidence.waits == []
+    assert evidence.result.failure.cause_type == "DaytonaError"
+    assert evidence.result.failure.provider_status_code == 401
 
 
 @pytest.mark.asyncio
@@ -210,18 +218,16 @@ async def test_lost_connection_during_grading_keeps_the_sampled_rollout(worker_c
 
     factory = ResettingFactory(failures=0)
     grader = ScriptGrader(argv=("true",), placement={"kind": "grader_machine", "environment": NATIVE_ENVIRONMENT})
-    result, waits, batch = await rollout_evidence(
-        worker_config, factory, grader=grader, verifier_factory=UnavailableVerifier()
-    )
+    evidence = await rollout_evidence(worker_config, factory, grader=grader, verifier_factory=UnavailableVerifier())
     assert factory.creations == 1
-    assert waits == []
-    assert result.failure.exception_type == "TaskMachineError"
-    assert result.failure.operation == "grade"
-    assert result.failure.retry_disposition is RetryDisposition.TRANSIENT
-    assert result.steps
-    assert batch["error_treatments"] == ["mask"]
-    assert batch["exclude_from_baseline"] == [True]
-    assert not any(batch["loss_masks"][0])
+    assert evidence.waits == []
+    assert evidence.result.failure.exception_type == "TaskMachineError"
+    assert evidence.result.failure.operation == "grade"
+    assert evidence.result.failure.retry_disposition is RetryDisposition.TRANSIENT
+    assert evidence.result.steps
+    assert evidence.batch["error_treatments"] == ["mask"]
+    assert evidence.batch["exclude_from_baseline"] == [True]
+    assert not any(evidence.batch["loss_masks"][0])
 
 
 @pytest.mark.asyncio
@@ -264,8 +270,8 @@ async def test_yaml_spec_worker_retries_machine_start():
 async def test_model_failure_after_sampled_work_does_not_restart(worker_config, failure):
     factory = ResettingFactory(failures=0)
     replies = [sampled_reply(None, tool_calls=shell_call("true")["tool_calls"]), failure]
-    result, waits, _ = await rollout_evidence(worker_config, factory, replies=replies)
+    evidence = await rollout_evidence(worker_config, factory, replies=replies)
     assert factory.creations == 1
-    assert waits == []
-    assert result.steps
-    assert result.failure.retry_disposition is RetryDisposition.TRANSIENT
+    assert evidence.waits == []
+    assert evidence.result.steps
+    assert evidence.result.failure.retry_disposition is RetryDisposition.TRANSIENT

@@ -4,7 +4,6 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import asdict
-from typing import Any
 
 from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, AttemptReceipt, Phase
 from rigging.filesystem.storage_path import StoragePath
@@ -21,7 +20,7 @@ _ERROR_CHARS = 1024
 _OUTPUT_TAIL_CHARS = 4096
 
 
-def _diagnostic_tail(value: Any, limit: int) -> str | None:
+def _diagnostic_tail(value: object, limit: int) -> str | None:
     return redact_string(value)[-limit:] if isinstance(value, str) and value else None
 
 

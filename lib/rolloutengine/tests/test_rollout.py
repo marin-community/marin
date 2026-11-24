@@ -2529,7 +2529,7 @@ async def test_task_machine_user_is_used_for_the_relay_and_not_the_verifier(rela
             self.machine = context.machine
 
         async def prepare(self):
-            async def handler(request):
+            async def handler(_request):
                 return HttpResponse(200, b"{}")
 
             async with asyncio.TaskGroup() as group:

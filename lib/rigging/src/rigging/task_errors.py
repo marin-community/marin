@@ -103,7 +103,7 @@ DEFAULT_RETRY_EXCLUSIONS = frozenset(
 
 
 class RetrySettings(BaseModel):
-    """Retry budget and name filters shared by task execution paths."""
+    """Retry budget and name/category filters shared by task execution paths."""
 
     max_retries: int = Field(default=0, ge=0)
     include_exceptions: set[str] | None = Field(default=None, description="No name inclusion filter when None")

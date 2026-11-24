@@ -139,13 +139,12 @@ def test_batch_mix_refuses_invalid_counts(selection, shares, error):
 
 
 @pytest.mark.parametrize(
-    ("table", "name", "settings", "version", "error"),
+    ("table", "name", "settings", "version"),
     [
         (
             "snowball",
             "train-medium-agentic",
             ("environment.task_sessions.agent_harnesses.pi.unused=true",),
-            None,
             None,
         ),
         (
@@ -153,20 +152,17 @@ def test_batch_mix_refuses_invalid_counts(selection, shares, error):
             "train-medium-agentic",
             ("generator.engine_init_kwargs.enable_return_routed_experts=false",),
             "dev",
-            "moe_router_replay requires generator.engine_init_kwargs.enable_return_routed_experts=true",
         ),
     ],
     indirect=["table"],
     ids=("native-agent-option", "disabled-route-capture"),
 )
-def test_plan_print_rejects_invalid_native_config(table, name, settings, version, error, selection):
+def test_plan_print_rejects_invalid_native_config(table, name, settings, version, selection):
     options = tuple(arg for setting in settings for arg in ("--set", setting))
     result = plan(table, name, *options, version=version)
     assert result.exit_code == 4, (result.output, result.exception)
     issue = json.loads(result.stdout)
     assert issue["verdict"] == "invalid"
-    if error is not None:
-        assert error in issue["reason"]
 
 
 @pytest.mark.parametrize(

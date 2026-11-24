@@ -4,6 +4,7 @@
 """Daytona provider causes expressed through the shared task error schema."""
 
 from http import HTTPStatus
+from typing import NotRequired, TypedDict
 
 from daytona import DaytonaConflictError, DaytonaConnectionError, DaytonaError
 from rigging.task_errors import ErrorIdentity, RetryDisposition, exception_identity
@@ -50,9 +51,14 @@ DAYTONA_RATE_LIMIT_HEADERS = frozenset(
 ) | {"retry-after"}
 
 
-def daytona_error_diagnostics(error: DaytonaError) -> dict[str, str | dict[str, int]]:
+class DaytonaErrorDiagnostics(TypedDict):
+    provider_sdk_call: str
+    provider_rate_limits: NotRequired[dict[str, int]]
+
+
+def daytona_error_diagnostics(error: DaytonaError) -> DaytonaErrorDiagnostics:
     """Return allowlisted SDK call and rate-limit metadata without response text."""
-    diagnostics: dict[str, str | dict[str, int]] = {}
+    diagnostics: DaytonaErrorDiagnostics = {"provider_sdk_call": "unknown"}
     rate_limits = {
         name.lower(): int(value)
         for name, value in (error.headers or {}).items()
@@ -65,7 +71,6 @@ def daytona_error_diagnostics(error: DaytonaError) -> dict[str, str | dict[str, 
     if rate_limits:
         diagnostics["provider_rate_limits"] = rate_limits
     # This identifies an SDK call, not the HTTP phase of a compound operation.
-    diagnostics["provider_sdk_call"] = "unknown"
     nested_error: BaseException | None = error
     seen = set()
     while nested_error is not None and id(nested_error) not in seen:
