@@ -131,7 +131,8 @@ Readers follow only the chunks the head names. A root in any other journal forma
 format-1 layout (`events.jsonl`, `events.jsonl.parts/`, `status.json`), format 2 (sandbox rows
 replayed by content, without owners) and format 3 (adversary findings with an expected reward band, not a
 defect direction with observed and deserved grades), format 4 (trials hydrated without a detail, a too-easy
-baseline in place of a digest-bound fallback), format 5 and format 6 (no solve-review: its acceptances name no
+baseline in place of a digest-bound fallback; format 5 places a round over its scored solver slots and holds a slot
+without one), format 5 and format 6 (no solve-review: its acceptances name no
 missing evidence although none ran, and a resumed format-6 round would buy a review its recorded history lacks),
 format 7 (no confirmation step: its acceptances end at the validation round and name no missing confirmation, and a
 resumed format-7 round would buy one its history lacks),
@@ -149,7 +150,9 @@ decide again on re-observed evidence. Format 12 words two author requests otherw
 with its ordinal, and a too-easy placement's line no longer calls the round the one hardening attempt, so a resumed
 format-11 author would send requests its recorded calls did not. Formats 8 to 10 embedded a schema reference in their
 author calls that this writer does not reproduce, so a resumed author would buy different answers that the recorded
-sandbox history then refuses. Format 11
+sandbox history then refuses. A format-8 workpiece omits author responses to findings, a final revision's notes, a
+confirmation's shipped notes and a finding's citation groups at their defaults (`OMIT_*` in `model/review.py`), and a
+fault revision's null placement; no reader that predates the omitted placement read a root outside tests. Format 11
 adds the `schema.author_reference` row (below), which a format-10 reader cannot decode; at 11 that reader refuses the
 root as another format. Format 10 adds a row's `billed` field, outside the event, naming the role that
 paid for a physical cached resolution; a format-9 reader refuses a format-10 root as another format. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its

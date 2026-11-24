@@ -34,52 +34,10 @@ from taskforge.model.workpiece import WORKPIECE, Workpiece
 from taskforge.stages.classify import commitments
 
 JOURNAL_FORMAT = 15
-"""Format 15 checks judge settings when the author grades or submits a draft. A format-14 author could grade a
-draft that now returns a tool error, so replay would change the next model request and could diverge from its
-recorded sandbox operations. Formats 8 through 14 remain readable for reports.
-Format 14 records a solver generation still running at ``solver.time_limit`` as stopped at the time limit (stop
-reason and cause ``time_limit``), which a
-format-13 reader cannot decode; at 14 it refuses the root as another format. Format 13 recorded such a generation as a
-generation limit. A format-14 writer claimed only its own format because earlier trials used other clocks and
-recording rules.
-Format 13 commits each visit a continuing review decided on (``stage.completed``'s ``committed``) and names each
-solver trial's row (``receipt``), so a later launch reuses that evidence. A format-13 writer claimed no format-12 root:
-it would decide again on re-observed evidence.
-Format 12 words two author requests otherwise: a final revision's request ends with its ordinal (``This is final
-revision N of M.``), and a too-easy placement's line no longer calls the round the one hardening attempt. Its rows
-decode as format 11's, but a format-12 writer claimed no format-11 root: a resumed format-11 author would send
-requests its recorded calls did not, and buy answers its recorded sandbox history refuses.
-Format 11 records a ``schema.author_reference`` row: the TaskSpec and Control schemas a root's author is shown,
-generated once from the installed models and replayed by every later visit and launch. Format-10 readers cannot
-decode that row; at 11 they refuse the root as another format. A format-11 writer claimed no earlier root: their
-recorded author calls embedded a reference it cannot reproduce. Such a root stays with its own writer or is rerun at a
-fresh output prefix.
-Format 10 names the role that paid for each physical cached resolution (a row's ``billed``, outside the event), so
-the usage report no longer guesses it from overlapping scopes; request digests and replay keys are unchanged. Every
-format-8 and format-9 row means the same at 10, so a format-10 writer resumed both; the report
-charges their rows, which name no payer, to one unattributed bucket. Format-9 readers refuse a format-10 root as
-another format.
-Format 9 records a ``rollouts.solver_generation`` row: a slot's finished generation that its decision model did not
-score, which a resumed slot grades without generating again. Format-8 readers cannot decode that row, and would report
-the root corrupt; at 9 they refuse it as another format, untouched. Every format-8 row means the same at 9.
-Format 8 confirms an acceptance (``solver.confirmation_k`` more solver trials and a final review) before it is
-terminal; a format-7 acceptance ended at its validation round and names neither as missing, and a resumed format-7
-round would buy a confirmation its recorded history lacks. Its workpiece records each author response to a review
-finding (``responses``, each marked ``discarded`` once a restore drops the revision it answered), a final
-revision's optional notes, a confirmation record's shipped ``notes`` and a review finding's citation ``groups``: each
-is omitted at its default (``OMIT_*`` in ``model/review.py``), and a fault revision omits its placement
-(``OMIT_NONE``). This reader reads every
-format-8 row, including a null placement; a format-8 reader that predates the omitted placement cannot read a fault
-revision without one, but no such reader wrote or read a root outside tests, so the format stays 8.
-Format 7 solve-reviews every reviewable round and names what an acceptance went without; a format-6 acceptance
-names nothing although no review ran, and a resumed format-6 round would buy a review its recorded history lacks.
-Format 6 records an `effect.invalidated` row naming the refused slot result an operator-authorised replacement
-supersedes, and a `decision_model.read` row, which format-5 readers cannot decode.
-Format 5 places a round over its scored solver slots, holds a slot without one, and falls back to an earlier
-submission named by digest; format 4 hydrated each trial without a detail and restored only a too-easy baseline.
-Format 4 records adversary findings as a defect direction with observed and deserved grades; format 3 recorded an
-expected reward band, which cannot establish a deserved reward. Format 3 links sandbox rows to their environment
-owners; format 2 replayed them by content, without owners."""
+"""Format 15 checks judge settings when the author grades or submits a draft; a format-14 author could grade a draft
+that now returns a tool error, so its replay could diverge from its recorded sandbox operations. Formats 8 through 14
+decode for the usage report only: each records rows or words requests otherwise than format 15, so a writer that
+resumed one would buy calls or decisions its recorded history refuses. The README keeps each format's change."""
 READABLE = frozenset({8, 9, 10, 11, 12, 13, 14, JOURNAL_FORMAT})
 """The head formats whose rows this code decodes, for the usage report; a writer claims only ``JOURNAL_FORMAT``."""
 FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "workpiece.json"})
