@@ -106,6 +106,9 @@ def publish_private_dataset(prepared: PreparedPrivateDataset) -> PublishedPrivat
         # its gate stopped; reuse it only when its inventory is exactly this publication's.
         existing = {entry.path for entry in api.list_repo_tree(prepared.repo, repo_type="dataset", recursive=True)
                     if getattr(entry, "path", None)}
+        # The Hub creates .gitattributes on repo creation; platform boilerplate is not
+        # publication content. Anything else outside this publication fails the reuse.
+        existing.discard(".gitattributes")
         expected = set(prepared.file_hashes)
         if not existing <= expected or not any(existing):
             raise ValueError(f"Private publication repo already exists with other content: {prepared.repo}") from error
