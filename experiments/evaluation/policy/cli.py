@@ -7,7 +7,6 @@
 """
 
 import logging
-import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -17,6 +16,7 @@ from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, prio
 from marin.evaluation.runner import EvaluationBatch
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.provenance import git_output
 
 from experiments.evaluation.cli import require_coreweave_credentials
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, launch_group, prepare_evaluation_batch
@@ -137,10 +137,6 @@ def _candidate(policy: EvalPolicy, name: str) -> PolicyCandidate:
     return candidates[name]
 
 
-def _git(*args: str) -> str:
-    return subprocess.check_output(["git", *args], text=True, cwd=find_project_root()).strip()
-
-
 def _print_launch(policy: EvalPolicy, candidate: PolicyCandidate, batches: list[EvaluationBatch]) -> None:
     model = candidate.model
     click.echo(f"policy {policy.version} @ {batches[0].provenance.git_sha[:10]}  candidate {candidate.name}")
@@ -223,7 +219,7 @@ def launch(
     """
     policy = POLICIES[version]
     candidate = _candidate(policy, candidate_name)
-    if not dry_run and (changes := _git("status", "--porcelain")):
+    if not dry_run and (changes := git_output(["status", "--porcelain"], find_project_root())):
         if limit is None:
             raise click.ClickException(f"commit or remove uncommitted changes before a full launch:\n{changes}")
         logger.warning("smoke run from a checkout with uncommitted changes; its records name only HEAD")
@@ -240,7 +236,7 @@ def launch(
         batches = [prepare_evaluation_batch(spec) for spec in specs]
     except ValueError as error:
         raise click.ClickException(str(error)) from error
-    recorded, head = batches[0].provenance.git_sha, _git("rev-parse", "HEAD")
+    recorded, head = batches[0].provenance.git_sha, git_output(["rev-parse", "HEAD"], find_project_root())
     if not dry_run and limit is None and recorded != head:
         raise click.ClickException(
             f"records would name commit {recorded}, not HEAD {head}; unset MARIN_GIT_SHA and GIT_COMMIT"
@@ -263,7 +259,7 @@ def launch(
 def status(version: str, candidate_name: str | None, limit: int) -> None:
     """Print each evaluation's full and smoke run, found where a launch from this checkout puts them.
 
-    Runs launched before deterministic run IDs, or with other inputs, are not found; check those with verify.
+    Runs at other paths, such as ones launched another way or with other inputs, are not shown; verify checks those.
     """
     policy = POLICIES[version]
     candidates = policy.candidates if candidate_name is None else (_candidate(policy, candidate_name),)

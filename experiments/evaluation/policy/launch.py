@@ -6,12 +6,12 @@
 from collections.abc import Collection
 from dataclasses import dataclass, replace
 
-from evalrecords.records import EvaluationSelection, PromptFormat
+from evalrecords.records import EvaluationSelection
 from marin.evaluation.hardware import default_platform
 from taskcompendium.evaluation.spec import OperationKind
 
 from experiments.evaluation.curated import selection_dataset
-from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec
+from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec, prompt_format
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
@@ -32,9 +32,7 @@ class ServerGroup:
 
 def evaluation_dataset(item: ResolvedPolicyEvaluation) -> EvaluationCorpusRecipe:
     """The catalog dataset, with its protocol, that the evaluation runs as for the candidate."""
-    model = item.candidate.model
-    model_format = PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
-    return selection_dataset(item.evaluation.selection, model_format)
+    return selection_dataset(item.evaluation.selection, prompt_format(item.candidate.model))
 
 
 def benchmark_window(item: ResolvedPolicyEvaluation) -> int | None:
