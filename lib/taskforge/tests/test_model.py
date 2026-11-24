@@ -14,6 +14,7 @@ from taskforge.model.review import (
     Abandon,
     Accept,
     AdversaryResult,
+    AdversaryStatus,
     BandOutcome,
     Cause,
     ControlResult,
@@ -37,7 +38,7 @@ def workpiece(proposal: TaskProposal) -> Workpiece:
         "task-digest",
         (TrialResult(0, GradeResult(Outcome.GRADED, 1.0)), TrialResult(1, None, Cause.AGENT_TIMEOUT)),
         (ControlResult(0, GradeResult(Outcome.GRADED, 1.0), True),),
-        (AdversaryResult("shortcut", True, ()),),
+        (AdversaryResult("shortcut", AdversaryStatus.EXHAUSTED, (), ("exhausted its context window",)),),
     )
     session = Conversation(
         (
