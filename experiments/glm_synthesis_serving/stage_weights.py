@@ -3,11 +3,8 @@
 
 """Stage the pinned GLM-5.3-Flash weights into the pool's in-region prefix.
 
-Runs as an Iris CPU job in the pool cluster so the ~306 GiB snapshot lands on
-regional storage without crossing regions. `cache_hf_model` streams the snapshot
-one file at a time under a distributed lock, verifies the incomplete prefix against
-source file sizes, and writes a completion marker recording the source revision —
-so re-running this job is a cache check, and a crashed run resumes under the lock.
+Run as an Iris CPU job on cw-us-east-08a. The cache helper resumes partial staging
+and reuses a completed snapshot; the 306 GiB weights never pass through the Mac.
 """
 
 import json

@@ -27,6 +27,7 @@ MAX_MODEL_LEN = 262_144
 MAX_NUM_SEQS = 16
 MAX_NUM_BATCHED_TOKENS = 32_768
 GPU_MEMORY_UTILIZATION = 0.90
+GLM_PARSER = "glm47"
 REQUEST_TIMEOUT_SECONDS = 3600.0
 MAX_RETRIES_PREEMPTION = 10
 PRIORITY = priority_band_value("production")
@@ -49,9 +50,9 @@ def engine() -> VllmEngineConfig:
             "fp8",
             "--enable-prefix-caching",
             "--tool-call-parser",
-            "glm47",
+            GLM_PARSER,
             "--reasoning-parser",
-            "glm47",
+            GLM_PARSER,
             "--enable-auto-tool-choice",
             "--limit-mm-per-prompt",
             '{"image":0,"video":0}',
@@ -82,8 +83,4 @@ def iris_config() -> IrisConfig:
     return IrisConfig(
         worker_resources=worker_resources(),
         worker_environment=create_environment(),
-        endpoint_ready_timeout_seconds=4 * 3600,
-        endpoint_health_timeout_seconds=REQUEST_TIMEOUT_SECONDS,
-        max_retries_preemption=MAX_RETRIES_PREEMPTION,
-        priority=PRIORITY,
     )

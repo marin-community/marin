@@ -16,6 +16,7 @@ from enum import StrEnum
 
 import httpx
 from iris.client.client import iris_ctx
+from rigging.connect import proxy_path
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
@@ -28,6 +29,8 @@ SOURCE_START = 1795463520  # Conversion-active window: 2026-11-23 19:52-22:52 UT
 SOURCE_END = SOURCE_START + 10800
 CAPABILITY_HOURS = 168
 ENDPOINT_POLL_SECONDS = 15
+CLIENT_REQUEST_TIMEOUT_SECONDS = 1800
+PROOF_REQUEST_COUNT = 200
 
 
 @dataclass(frozen=True)
@@ -68,18 +71,20 @@ class StageSummary:
     failures: int
     elapsed: float
     rows_per_hour: float
-    prompt_tok_per_second_per_gpu: float
-    output_tok_per_second_per_gpu: float
+    prompt_tokens_per_second_per_gpu: float
+    completion_tokens_per_second_per_gpu: float
     per_endpoint: dict[str, int]
 
 
 def archived_requests(count: int) -> list[dict]:
     """Read distinct request bodies without writing trace text."""
-    fs, root = filesystem_for(SOURCE_ROOT)
+    root = StoragePath(SOURCE_ROOT)
+    fs, _ = filesystem_for(str(root))
     candidates = []
     for fleet, replicas in SOURCE_FLEETS:
         for replica in range(1, replicas + 1):
-            for item in fs.ls(f"{root}/{fleet}/r{replica}/batches", detail=True):
+            _, prefix = filesystem_for(str(root / fleet / f"r{replica}" / "batches"))
+            for item in fs.ls(prefix, detail=True):
                 if item["name"].endswith(".tar.gz") and SOURCE_START <= item["LastModified"].timestamp() <= SOURCE_END:
                     candidates.append(item["name"])
     random.Random(1234).shuffle(candidates)
@@ -113,7 +118,7 @@ def archived_requests(count: int) -> list[dict]:
 def ready_targets(endpoints: list[str], wait_timeout: float) -> list[Target]:
     client = iris_ctx().client
     if client is None:
-        raise RuntimeError("Run inside an Iris CPU job on cw-us-east-08a")
+        raise RuntimeError(f"Run inside an Iris CPU job on {pool.CLUSTER}")
     deadline = time.monotonic() + wait_timeout
     targets = []
     for endpoint in endpoints:
@@ -123,11 +128,10 @@ def ready_targets(endpoints: list[str], wait_timeout: float) -> list[Target]:
                 raise TimeoutError(f"{endpoint} did not register")
             time.sleep(ENDPOINT_POLL_SECONDS)
         minted = client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(CAPABILITY_HOURS))
-        proxy_name = endpoint.lstrip("/").replace("/", ".")
         targets.append(
             Target(
                 endpoint,
-                f"{pool.CONTROLLER_PROXY_ORIGIN}/proxy/{proxy_name}/v1",
+                f"{pool.CONTROLLER_PROXY_ORIGIN}{proxy_path(endpoint)}/v1",
                 minted.token,
                 minted.expires_at.epoch_ms,
             )
@@ -193,7 +197,7 @@ async def prove(targets: list[Target], bodies: list[dict], concurrency: int) -> 
     semaphore = asyncio.Semaphore(concurrency)
     outcomes = []
     limits = httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency)
-    async with httpx.AsyncClient(timeout=1800, limits=limits) as client:
+    async with httpx.AsyncClient(timeout=CLIENT_REQUEST_TIMEOUT_SECONDS, limits=limits) as client:
         await check_models(client, targets)
 
         async def run(index: int, body: dict) -> None:
@@ -219,7 +223,7 @@ async def sustained_load(
     request_index = 0
     concurrency = len(targets) * concurrency_per_replica
     limits = httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency)
-    async with httpx.AsyncClient(timeout=1800, limits=limits) as client:
+    async with httpx.AsyncClient(timeout=CLIENT_REQUEST_TIMEOUT_SECONDS, limits=limits) as client:
 
         async def worker(target: Target) -> None:
             nonlocal request_index
@@ -281,7 +285,7 @@ def publish_manifest(output: StoragePath, targets: list[Target]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", action="append", required=True)
-    parser.add_argument("--requests", type=int, default=200)
+    parser.add_argument("--requests", type=int, default=PROOF_REQUEST_COUNT)
     parser.add_argument(
         "--concurrency", type=int, default=24, help="Global proof concurrency; load concurrency per replica."
     )
@@ -289,13 +293,13 @@ def main() -> None:
     parser.add_argument("--wait-timeout", type=float, default=7200)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    if args.requests < 200 or args.requests < len(args.endpoint):
-        raise ValueError("Proof requires at least 200 requests and one per replica")
+    if args.requests < PROOF_REQUEST_COUNT or args.requests < len(args.endpoint):
+        raise ValueError(f"Proof requires at least {PROOF_REQUEST_COUNT} requests and one per replica")
     if args.concurrency < 1 or args.duration < 0 or args.wait_timeout < 0:
         raise ValueError("Concurrency must be positive and durations must not be negative")
     targets = ready_targets(args.endpoint, args.wait_timeout)
     bodies = archived_requests(args.requests)
-    output = StoragePath(args.output.rstrip("/"))
+    output = StoragePath(args.output)
     started = time.monotonic()
     outcomes = asyncio.run(prove(targets, bodies, args.concurrency))
     proof = write_report(output / "proof.json", outcomes, time.monotonic() - started, len(targets))

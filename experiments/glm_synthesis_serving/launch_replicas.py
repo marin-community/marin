@@ -5,12 +5,11 @@
 
 import argparse
 import json
-from dataclasses import replace
 
-from fray.iris_backend import convert_constraints, convert_resources
+from fray.iris_backend import convert_constraints, convert_environment, convert_resources
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
-from iris.cluster.types import Entrypoint, EnvironmentSpec
+from iris.cluster.types import Entrypoint
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
@@ -25,7 +24,7 @@ def replica_service(endpoint: str) -> IrisServiceConfig:
     return IrisServiceConfig(
         model=pool.model(),
         engine=pool.engine(),
-        iris=replace(pool.iris_config(), max_retries_failure=REPLICA_RETRIES),
+        iris=pool.iris_config(),
         endpoint_name=endpoint,
         timeout_hours=pool.SERVICE_TIMEOUT_HOURS,
         controller_proxy_timeout_seconds=pool.REQUEST_TIMEOUT_SECONDS,
@@ -40,7 +39,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.count < 1 or args.start_index < 0 or args.start_index + args.count > pool.POOL_INSTANCES:
-        raise ValueError("Replica indices must fit within the 32-engine pool")
+        raise ValueError(f"Replica indices must fit within the {pool.POOL_INSTANCES}-engine pool")
     workspace = find_project_root()
     if workspace is None:
         raise RuntimeError("Run from a Marin checkout")
@@ -55,12 +54,13 @@ def main() -> None:
     with connect_controller(cluster_name=pool.CLUSTER) as connection:
         with IrisClient.remote(connection.url, workspace=workspace, credentials=connection.credentials) as client:
             for name, endpoint in replicas:
+                service = replica_service(endpoint)
                 job = client.submit(
                     name=name,
-                    entrypoint=Entrypoint.from_callable(run_iris_service, replica_service(endpoint)),
+                    entrypoint=Entrypoint.from_callable(run_iris_service, service),
                     resources=convert_resources(resources),
                     constraints=convert_constraints(resources),
-                    environment=EnvironmentSpec(),
+                    environment=convert_environment(service.iris.worker_environment),
                     ports=["http"],
                     priority_band=pool.PRIORITY,
                     max_retries_failure=REPLICA_RETRIES,

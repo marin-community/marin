@@ -58,7 +58,6 @@ from marin.inference.dashboard_server import (
 )
 from marin.inference.iris import (
     IrisServiceConfig,
-    _child_resources,
     _resolved_engine,
     _resolved_model,
     _staged_model,
@@ -863,13 +862,6 @@ def test_broker_worker_children_do_not_pin_a_federation_target(monkeypatch):
         assert request.resources.device == unpinned.device
         assert request.resources.cpu == unpinned.cpu
         assert request.priority == config.iris.priority
-
-
-def test_child_resources_only_drop_the_cluster_pin():
-    resources = ResourceConfig.with_gpu("GB200", count=4, cpu=16.0, ram="256g", target_cluster="cw-us-east-08a")
-    child = _child_resources(resources)
-    assert child.target_cluster is None
-    assert dataclasses.replace(child, target_cluster="cw-us-east-08a") == resources
 
 
 @pytest.mark.parametrize("task_index", [0, 1])
