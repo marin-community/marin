@@ -838,3 +838,24 @@ async def test_driver_refuses_to_resume_a_changed_source_task(
     driver_args.work_dir = str(tmp_path / "relaunch-work")
     with pytest.raises(ValueError, match="another version of this input"):
         await driver.one(driver_args)
+
+
+async def test_run_launches_past_a_malformed_source_task_and_reports_it(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "sources"
+    run.mkdir()
+    (run / "good.task.json").write_text(arithmetic_task().model_dump_json())
+    (run / "broken.task.json").write_text('{"id": "broken"}')
+    (run / "slot-3.proposal.json").write_bytes(Path(driver_args.proposals).read_bytes())
+    driver_args.proposals = str(run)
+    launched: list[str] = []
+
+    def launch(command: list[str]) -> SimpleNamespace:
+        launched.append(Path(command[command.index("--proposals") + 1]).name)
+        return SimpleNamespace(wait=lambda: 0, poll=lambda: 0)
+
+    monkeypatch.setattr(driver.subprocess, "Popen", launch)
+    with pytest.raises(RuntimeError, match="broken.task.json"):
+        await driver.run(driver_args)
+    assert sorted(launched) == ["good.task.json", "slot-3.proposal.json"]

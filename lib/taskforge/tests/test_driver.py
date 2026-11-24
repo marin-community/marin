@@ -73,6 +73,7 @@ def test_prefix_lists_proposals_and_source_tasks_under_distinct_identities(tmp_p
     paths = inputs(str(run))
     assert [Path(path).name for path in paths] == ["astropy-1.task.json", "slot-1.proposal.json"]
     assert [str(proposal_key(path)) for path in paths] == ["swe-rebench/astropy-1", "swe-rebench/1"]
+    assert str(proposal_key("s3://bucket/run/slot-1.task.json")) == "run/slot-1", "a source task keeps its whole name"
 
 
 def test_empty_prefix_fails_instead_of_reporting_a_successful_empty_run(tmp_path: Path) -> None:

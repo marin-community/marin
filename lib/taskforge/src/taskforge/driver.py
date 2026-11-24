@@ -58,9 +58,15 @@ SOURCE_TASK_NOTES = "source task"
 
 
 def proposal_key(path: str) -> PurePosixPath:
+    """The output identity of an input file: its directory and its name without the input suffix.
+
+    A proposal's ``slot-`` prefix is dropped; a source task keeps its whole name, so ``slot-a.task.json``
+    and ``slot-a.proposal.json`` keep distinct identities.
+    """
     file = PurePosixPath(urlsplit(path).path)
-    name = file.name.removesuffix(PROPOSAL_SUFFIX).removesuffix(TASK_SUFFIX).removeprefix("slot-")
-    return PurePosixPath(file.parent.name, name)
+    if file.name.endswith(TASK_SUFFIX):
+        return PurePosixPath(file.parent.name, file.name.removesuffix(TASK_SUFFIX))
+    return PurePosixPath(file.parent.name, file.name.removesuffix(PROPOSAL_SUFFIX).removeprefix("slot-"))
 
 
 def proposal_bucket(path: str, buckets: int) -> int:
@@ -295,7 +301,14 @@ async def run(args: argparse.Namespace) -> None:
                 if path is None:
                     exhausted = True
                     break
-                if seed(path, policy) is None:
+                try:
+                    initial = seed(path, policy)
+                except (ValueError, OSError) as error:
+                    # One unreadable or malformed input must not stop the shard's other workpieces.
+                    logging.error("FAILED %s: input could not be read: %s", path, error)
+                    failures.append(path)
+                    continue
+                if initial is None:
                     skipped += 1
                     continue
                 command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--proposals", path]
