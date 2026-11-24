@@ -9,6 +9,7 @@ import json
 import logging
 import tomllib
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlencode
@@ -18,6 +19,7 @@ from finestore.rl.rl_progress import (
     GRADER_REPORT_FILENAME,
     GRADER_REPORTS_DIR,
     AttemptSummary,
+    Comparison,
     ComparisonRole,
     GateResult,
     GraderReport,
@@ -25,7 +27,13 @@ from finestore.rl.rl_progress import (
 from finestore.rl.run_records import AttemptRecord, attempt_lineage, read_attempts, write_attempt
 from marin.execution.artifact import read_record
 from marin.rl import skyrl_records
-from marin.rl.skyrl_records import EXPORTS_SUBDIRECTORY, attempt_tracking, read_stored_skyrl_attempts, recorded_launch
+from marin.rl.skyrl_records import (
+    EXPORTS_SUBDIRECTORY,
+    RecordedLaunch,
+    attempt_tracking,
+    read_stored_skyrl_attempts,
+    recorded_launch,
+)
 from pydantic import BaseModel, Field, ValidationError
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -87,82 +95,20 @@ def run_label(inputs: RunInputs) -> str:
     return " ".join(parts)
 
 
-def build_record(
-    run_output: str,
-    preset: presets.Preset,
-    *,
-    table: presets.ModelPresets,
-    attempt: AttemptRecord,
-    report: gate.GateReport | None = None,
-    gate_name: str | None = None,
-    evaldash_run_ids: tuple[str, ...] | None = None,
-    unfinished_status: Literal["running", "failed"] | None = None,
-    gate_failure: bool = False,
-) -> AttemptSummary:
-    """Build a progress row from stored native outputs without live lookups."""
-    launch, result = recorded_launch(attempt), attempt.native.result
-    evidence = []
-    try:
-        inputs = read_run_inputs(run_output)
-    except FileNotFoundError:
-        inputs = RunInputs(preset_name=preset.name)
-        evidence.append("Stored RL inputs are unavailable; using the supplied preset.")
-    preset = table.by_name[inputs.preset_name]
-    if launch.max_steps is None:
-        raise ValueError("Stored native max_steps is unavailable")
-    preset = preset.with_updates(launch.max_steps)
+@dataclass(frozen=True)
+class _TerminalMeasurements:
+    failed_facts: list[str] = field(default_factory=list)
+    evaluations: list[Comparison] = field(default_factory=list)
+    optimizer_steps: int | None = None
+    elapsed_seconds: float | None = None
+    elapsed_excluding_eval_seconds: float | None = None
+
+
+def _terminal_measurements(
+    run_output: str, preset: presets.Preset, attempt: AttemptRecord, launch: RecordedLaunch, evidence: list[str]
+) -> _TerminalMeasurements:
     attempt_id = launch.attempt_id
-    provenance = result.provenance or {}
-    tracking = attempt_tracking(attempt, launch)
-    started, finished = result.started_at, result.finished_at
-    index = attempt.index
-    common = {
-        "run_id": attempt.index_run_id,
-        "attempt_id": attempt_id,
-        "label": run_label(inputs),
-        "series": preset.name,
-        "model": index.model if index is not None else launch.model_name,
-        "preset": preset.name,
-        "preset_revision": index.preset_revision if index is not None else None,
-        "user": index.user if index is not None else None,
-        "branch": index.branch if index is not None else None,
-        "dirty": index.dirty if index is not None else None,
-        "pr_number": index.pr_number if index is not None else None,
-        "cluster": launch.cluster,
-        "issue": attempt.issue,
-        "run_date": started or tracking.get("started_at") or (index.submitted_at if index is not None else None),
-        "started_at": started,
-        "completed_at": finished,
-        "planned_updates": preset.recipe.layout.workload.update_count(preset.updates),
-        "measured_updates": list(preset.measured),
-        "iris_job_id": result.iris_job_id or launch.coordinator_iris_job_id,
-        "wandb_url": tracking.get("wandb_url"),
-        "grafana_url": attempt_grafana_url(attempt, launch),
-        "timing_scope": "checkpoint_lineage_native_jobs",
-        "source_revision": (
-            index.source_revision
-            if index is not None
-            else f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
-        ),
-        "data_identity": (
-            "; ".join(source.identity for source in launch.train_data or launch.validation_data) or "Unknown"
-        ),
-        "initializer_identity": launch.model_identity,
-        "artifact_uri": run_output,
-        "evidence": evidence,
-    }
-    if result.state not in {"succeeded", "failed"}:
-        if unfinished_status is None:
-            raise ValueError("A progress record requires a terminal native attempt")
-        return AttemptSummary.model_validate(
-            {
-                **common,
-                "status": unfinished_status,
-                "elapsed_seconds": None,
-                "optimizer_steps": None,
-                "failed_facts": ["native_attempt"] if unfinished_status == "failed" else [],
-            }
-        )
+    result = attempt.native.result
     history = attempt_lineage(launch.export_root, attempt_id)
     complete_history = (
         bool(history)
@@ -179,8 +125,6 @@ def build_record(
         evidence.append(f"Evaluation evidence unavailable: {status.evaluation_error}")
     if result.state != "succeeded":
         failed.insert(0, "native_attempt")
-    if gate_failure:
-        failed.append("required_gate_report")
     optimizer_steps = (
         next((int(fact.value) for fact in invariants if fact.name == "planned_updates"), None)
         if complete_history
@@ -212,48 +156,122 @@ def build_record(
         if complete_history and all(duration is not None for duration in trainer_durations)
         else None
     )
-    if not provenance and index is None:
-        evidence.append("Recorded source provenance is unavailable.")
+    return _TerminalMeasurements(failed, evaluations, optimizer_steps, elapsed, elapsed_excluding_eval)
+
+
+def _read_grader_report(launch: RecordedLaunch, attempt_id: str, evidence: list[str]) -> GraderReport | None:
     report_path = StoragePath(launch.export_root) / GRADER_REPORTS_DIR / attempt_id / GRADER_REPORT_FILENAME
-    grader_report = None
     try:
-        stored_report = json.loads(report_path.read_text())
-        if isinstance(stored_report, dict):
-            stored_report.pop("evaluation_duration_seconds", None)
-        grader_report = GraderReport.model_validate(stored_report)
+        return GraderReport.model_validate_json(report_path.read_text())
     except FileNotFoundError:
         pass
-    except (json.JSONDecodeError, ValidationError):
+    except ValidationError:
         evidence.append("Stored grader report failed validation.")
-    return AttemptSummary.model_validate(
-        dict(
-            common,
-            evaldash_run_ids=list(dict.fromkeys(evaldash_run_ids)) if evaldash_run_ids is not None else None,
-            gate=gate_name,
-            gate_result=(
-                GateResult(
-                    verdict=report.verdict,
-                    effect=report.effect,
-                    reason=report.reason,
-                    invariants=list(report.invariants),
-                    comparisons=list(
-                        report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT)
-                    ),
-                    attempt_ids=list(report.run.attempt_ids),
-                    replicates=report.run.replicates,
-                )
-                if report is not None
-                else None
-            ),
-            elapsed_seconds=elapsed,
-            elapsed_excluding_eval_seconds=elapsed_excluding_eval,
-            status="failed" if failed else "succeeded",
-            failed_facts=failed,
-            optimizer_steps=optimizer_steps,
-            evaluations=evaluations,
-            grader_report=grader_report,
-            engine=tracking.get("engine"),
-        )
+    return None
+
+
+def _gate_result(report: gate.GateReport | None) -> GateResult | None:
+    if report is None:
+        return None
+    return GateResult(
+        verdict=report.verdict,
+        effect=report.effect,
+        reason=report.reason,
+        invariants=list(report.invariants),
+        comparisons=list(report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT)),
+        attempt_ids=list(report.run.attempt_ids),
+        replicates=report.run.replicates,
+    )
+
+
+def build_record(
+    run_output: str,
+    preset: presets.Preset,
+    *,
+    table: presets.ModelPresets,
+    attempt: AttemptRecord,
+    report: gate.GateReport | None = None,
+    gate_name: str | None = None,
+    evaldash_run_ids: tuple[str, ...] | None = None,
+    unfinished_status: Literal["running", "failed"] | None = None,
+    gate_failure: bool = False,
+) -> AttemptSummary:
+    """Build a progress row from stored native outputs without live lookups."""
+    launch, result = recorded_launch(attempt), attempt.native.result
+    evidence = []
+    try:
+        inputs = read_run_inputs(run_output)
+    except FileNotFoundError:
+        inputs = RunInputs(preset_name=preset.name)
+        evidence.append("Stored RL inputs are unavailable; using the supplied preset.")
+    preset = table.by_name[inputs.preset_name]
+    if launch.max_steps is None:
+        raise ValueError("Stored native max_steps is unavailable")
+    preset = preset.with_updates(launch.max_steps)
+    attempt_id = launch.attempt_id
+    provenance = result.provenance or {}
+    tracking = attempt_tracking(attempt, launch)
+    started, finished = result.started_at, result.finished_at
+    index = attempt.index
+    terminal = result.state in {"succeeded", "failed"}
+    if not terminal and unfinished_status is None:
+        raise ValueError("A progress record requires a terminal native attempt")
+    measured = (
+        _terminal_measurements(run_output, preset, attempt, launch, evidence) if terminal else _TerminalMeasurements()
+    )
+    failed = list(measured.failed_facts)
+    if unfinished_status == "failed":
+        failed.append("native_attempt")
+    if gate_failure:
+        failed.append("required_gate_report")
+    if not provenance and index is None and terminal:
+        evidence.append("Recorded source provenance is unavailable.")
+    grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
+    return AttemptSummary(
+        run_id=attempt.index_run_id,
+        attempt_id=attempt_id,
+        label=run_label(inputs),
+        series=preset.name,
+        model=index.model if index is not None else launch.model_name,
+        preset=preset.name,
+        preset_revision=index.preset_revision if index is not None else None,
+        user=index.user if index is not None else None,
+        branch=index.branch if index is not None else None,
+        dirty=index.dirty if index is not None else None,
+        pr_number=index.pr_number if index is not None else None,
+        cluster=launch.cluster,
+        issue=attempt.issue,
+        run_date=started or tracking.get("started_at") or (index.submitted_at if index is not None else None),
+        started_at=started,
+        completed_at=finished,
+        planned_updates=preset.recipe.layout.workload.update_count(preset.updates),
+        measured_updates=list(preset.measured),
+        iris_job_id=result.iris_job_id or launch.coordinator_iris_job_id,
+        wandb_url=tracking.get("wandb_url"),
+        grafana_url=attempt_grafana_url(attempt, launch),
+        timing_scope="checkpoint_lineage_native_jobs",
+        source_revision=(
+            index.source_revision
+            if index is not None
+            else f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
+        ),
+        data_identity=(
+            "; ".join(source.identity for source in launch.train_data or launch.validation_data) or "Unknown"
+        ),
+        initializer_identity=launch.model_identity,
+        artifact_uri=run_output,
+        evidence=evidence,
+        status="failed" if failed else "succeeded" if terminal else "running",
+        failed_facts=failed,
+        evaldash_run_ids=list(dict.fromkeys(evaldash_run_ids)) if evaldash_run_ids is not None else None,
+        gate=gate_name,
+        gate_result=_gate_result(report),
+        elapsed_seconds=measured.elapsed_seconds,
+        elapsed_excluding_eval_seconds=measured.elapsed_excluding_eval_seconds,
+        optimizer_steps=measured.optimizer_steps,
+        evaluations=measured.evaluations,
+        grader_report=grader_report,
+        engine=tracking.get("engine"),
     )
 
 
@@ -301,6 +319,37 @@ def publish_running(
         logger.warning("Running row publication will retry for %s (%s)", path, type(error).__name__)
 
 
+def _publication_attempts(
+    path: str, failed_coordinator: str | None
+) -> tuple[str | None, dict[str, AttemptRecord], set[str]]:
+    current, attempts = read_stored_skyrl_attempts(path)
+    interrupted = set()
+    if failed_coordinator is not None:
+        for key, record in _coordinator_attempts(path, failed_coordinator).items():
+            if record.native.result.state not in {"succeeded", "failed"}:
+                interrupted.add(key)
+            attempts.setdefault(key, record)
+            if current is None:
+                current = key
+    return current, attempts, interrupted
+
+
+def _read_publication_gate(
+    gate_path: str | None, current_attempts: tuple[str | None, ...], replicates: int
+) -> gate.GateReport | None:
+    report = gate.read_gate_report(gate_path)
+    if report is not None and (report.run.replicates != replicates or report.run.attempt_ids != current_attempts):
+        raise ValueError("Gate report attempts differ from the current output group; repeat with --wait")
+    return report
+
+
+def _link_issue(receipt: AttemptRecord, issue: int) -> AttemptRecord:
+    export_root = recorded_launch(receipt).export_root
+    assigned = lineage_issue(export_root, receipt.attempt_id, issue)
+    write_attempt(export_root, AttemptRecord(run_id=receipt.run_id, attempt_id=receipt.attempt_id, issue=assigned))
+    return receipt.model_copy(update={"issue": assigned})
+
+
 def publish_runs(
     outputs: Sequence[str],
     preset: presets.Preset,
@@ -320,35 +369,21 @@ def publish_runs(
         raise ValueError("An issue requires exactly one output and its explicit attempt ID")
     result = PublicationOutcome()
     snapshots = {}
-    interrupted = set()
     for path in outputs:
         try:
-            current, attempts = read_stored_skyrl_attempts(path)
-            if failed_coordinator is not None:
-                for key, record in _coordinator_attempts(path, failed_coordinator).items():
-                    if record.native.result.state not in {"succeeded", "failed"}:
-                        interrupted.add((path, key))
-                    attempts.setdefault(key, record)
-                    if current is None:
-                        current = key
-            snapshots[path] = current, attempts
+            snapshots[path] = _publication_attempts(path, failed_coordinator)
         except Exception as error:
             result.unserved_records.append(path)
             result.errors.append(str(error))
     report = None
     report_error = None
     try:
-        report = gate.read_gate_report(gate_path)
-        if report is not None:
-            current_ids = tuple(
-                snapshots[path][0] for path in outputs if path in snapshots and snapshots[path][0] in snapshots[path][1]
-            )
-            if report.run.replicates != len(outputs) or report.run.attempt_ids != current_ids:
-                raise ValueError("Gate report attempts differ from the current output group; repeat with --wait")
+        current_ids = tuple(current for current, attempts, _ in snapshots.values() if current in attempts)
+        report = _read_publication_gate(gate_path, current_ids, len(outputs))
     except Exception as error:
         report = None
         report_error = str(error)
-    for path, (current_id, attempts) in snapshots.items():
+    for path, (current_id, attempts, interrupted) in snapshots.items():
         if current_id not in attempts:
             result.unserved_records.append(path)
             result.errors.append(f"No stored native receipt at {path} for current attempt {current_id}")
@@ -373,12 +408,7 @@ def publish_runs(
                         report_error or "Gate report missing for this attempt; repeat the original command with --wait"
                     )
                 if issue is not None:
-                    export_root = recorded_launch(receipt).export_root
-                    assigned_issue = lineage_issue(export_root, selected_id, issue)
-                    write_attempt(
-                        export_root, AttemptRecord(run_id=receipt.run_id, attempt_id=selected_id, issue=assigned_issue)
-                    )
-                    receipt = receipt.model_copy(update={"issue": assigned_issue})
+                    receipt = _link_issue(receipt, issue)
                 record = build_record(
                     path,
                     preset,
@@ -387,7 +417,7 @@ def publish_runs(
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     evaldash_run_ids=evaldash_run_ids,
-                    unfinished_status="failed" if (path, selected_id) in interrupted else None,
+                    unfinished_status="failed" if selected_id in interrupted else None,
                     gate_failure=missing_gate,
                 )
                 url = publish_result(record, service_url)

@@ -5,10 +5,10 @@
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from statistics import mean
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 import numpy as np
 from finestore.rl.rl_progress import (
@@ -161,10 +161,14 @@ class GraderStats:
         }
 
 
-type GraderReportSection = Literal["training", "training_tasks", "evaluation", "evaluation_tasks"]
+class GraderReportSections(TypedDict, total=False):
+    training: list[SubsetSummary]
+    training_tasks: list[TaskSummary]
+    evaluation: list[SubsetSummary]
+    evaluation_tasks: list[TaskSummary]
 
 
-def write_grader_report(export_path: str, key: str, sections: Mapping[GraderReportSection, object]) -> None:
+def write_grader_report(export_path: str, key: str, sections: GraderReportSections) -> None:
     """Store the diagnostic report without interrupting the workload."""
     path = join_resource_path(export_path, GRADER_REPORT_FILENAME)
     try:
@@ -172,7 +176,6 @@ def write_grader_report(export_path: str, key: str, sections: Mapping[GraderRepo
             report = json.loads(io.read_bytes(path))
         except FileNotFoundError:
             report = {}
-        report.pop("evaluation_duration_seconds", None)
         for section, value in sections.items():
             report.setdefault(section, {})[key] = value
         payload = GraderReport.model_validate(report).model_dump_json()

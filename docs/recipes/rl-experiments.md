@@ -105,7 +105,7 @@ evaluation summaries.
 The dashboard's detail view shows each evaluation step's counts and strata means, including
 family, AAII category and difficulty, and links to the run's Grafana window.
 
-The publishing presets also save grader diagnostics in
+Presets configured for grader diagnostics save them in
 `exports/grader_reports/<attempt_id>/grader_report.json`. The report groups
 training rollouts and each named evaluation by task subset. Each task's
 `subset_id` label supplies the subset, with the source dataset as a fallback.

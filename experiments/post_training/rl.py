@@ -10,6 +10,7 @@ Use the selected model entry's compare command to compare existing results on CP
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -79,6 +80,7 @@ _FOLLOW_JOB_ENV = "MARIN_RL_FOLLOW_JOB"
 _PUBLICATION_POLL_SECONDS = 10
 _IRIS_DASHBOARD_URL = "https://iris.oa.dev"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -405,7 +407,8 @@ def _branch_pr_number(provenance: Provenance) -> int | None:
         )
         number = int(result.stdout)
         return number if number > 0 else None
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        logger.debug("GitHub PR lookup unavailable (%s)", type(error).__name__)
         return None
 
 

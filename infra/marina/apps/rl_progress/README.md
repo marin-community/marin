@@ -24,8 +24,9 @@ Malformed records are skipped individually and named in a visible note.
 The app's release migration creates its `rl_runs` table in the application schema.
 Each `(run_id, attempt_id)` identifies one updatable JSON record. The index groups native
 attempts of the same model, preset, user and composed comparison configuration. Repeat
-publication refreshes that attempt's record; null model, issue, EvalDash links, gate and gate-result values
-preserve their stored values. Other attempts remain separate.
+publication refreshes that attempt's record. Null model, issue, EvalDash links, gate, gate result and
+grader report fields preserve their stored values. A terminal record takes precedence over a
+running update for the same attempt.
 
 Native failures and failed training or evaluation invariants set `status: failed` and name `failed_facts`.
 Training grader errors are reported in rollout metrics; they do not fail an ungated run's status.
@@ -38,8 +39,8 @@ Lineage duration sums those native jobs' stored windows. Missing lineage records
 measurements unknown; a missing window leaves elapsed time unknown with a timing note.
 
 `POST /api/runs` validates each submitted record with the shared
-`finestore.rl.rl_progress.AttemptSummary`, upserts its native key and returns the stored
-record. `GET /api/runs` returns stored records and lists malformed historical rows
+`finestore.rl.rl_progress.AttemptSummary`, upserts its index and attempt key and returns the stored
+record. `GET /api/runs` returns stored summaries with `has_grader_report` and lists malformed historical rows
 in `skipped_records`. See the
 [Snowball publication rules](../../../../docs/recipes/rl-experiments.md#dashboard-publication)
 for record semantics, retries and publishing pinned controls.
