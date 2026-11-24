@@ -38,7 +38,6 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.mochi_rl import MOCHI
-from experiments.post_training.rl_measurements import RunInputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
@@ -116,15 +115,7 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
     monkeypatch.setenv("VIRTUAL_ENV", str(coordinator))
     monkeypatch.setenv("PATH", str(coordinator / "bin"), prepend=os.pathsep)
 
-    local = table.by_name["speed-short"]
-    region = replace(local, recipe=replace(local.recipe, layout=replace(local.recipe.layout, cluster="cw-rno2a")))
-    defaults = RunInputs(preset_name=local.name)
-    compose = gate.compose_configs
-    with monkeypatch.context() as batch:
-        # Batch CLI documents with the paired defaults to avoid a second native process.
-        batch.setattr(gate, "compose_configs", lambda paths: compose([*paths, *launch_paths], validate_driver=True))
-        first, second, *_ = gate._compose_plans(((region, defaults), (local, defaults)))
-    assert [first["iris"]["cluster"], second["iris"]["cluster"]] == ["cw-rno2a", local.recipe.layout.cluster]
+    gate.compose_configs(launch_paths, validate_driver=True)
     assert {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*")} == before
 
 

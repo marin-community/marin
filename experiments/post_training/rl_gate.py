@@ -148,9 +148,9 @@ def validate_requirements(
 def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: ModelPresets, control: bool = False) -> dict:
     """Return the composed candidate after checking gated controls against current defaults."""
     if control or not preset.gated:
-        (candidate,) = _compose_plans(((preset, inputs),))
+        (candidate,) = _compose_plans(preset, (inputs,))
         return candidate
-    defaults, candidate = _compose_plans(((preset, RunInputs(preset_name=preset.name)), (preset, inputs)))
+    defaults, candidate = _compose_plans(preset, (RunInputs(preset_name=preset.name), inputs))
     pin = control_pin(preset, table=table)
     for index in range(pin.replicates):
         path = control_path(preset, pin, index, table=table)
@@ -576,12 +576,12 @@ def _gate_config(launch: dict, recorded: RecordedLaunch | None = None) -> dict[s
 
 
 def _compose_plans(
-    plans: Sequence[tuple[presets.Preset, RunInputs]], *, model: ResolvedModelLocator | None = None
+    preset: presets.Preset, inputs: Sequence[RunInputs], *, model: ResolvedModelLocator | None = None
 ) -> list[dict]:
     with tempfile.TemporaryDirectory(prefix="rl-current-config-") as directory:
         root = Path(directory)
         paths = []
-        for index, (preset, candidate) in enumerate(plans):
+        for index, candidate in enumerate(inputs):
             try:
                 spec = recipe.run_spec(
                     preset,
@@ -825,7 +825,7 @@ def _write_gate(
             **{field.name: model[field.name] for field in fields(ResolvedModelLocator)}
         )
         current_config, expected_config = _compose_plans(
-            ((preset, RunInputs(preset_name=preset.name)), (preset, inputs)), model=resolved_model
+            preset, (RunInputs(preset_name=preset.name), inputs), model=resolved_model
         )
         current, expected = _gate_config(current_config), _gate_config(expected_config)
         changed = _changed_config_keys(current, expected)

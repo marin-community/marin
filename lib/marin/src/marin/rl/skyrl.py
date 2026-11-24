@@ -908,7 +908,7 @@ def _launcher_command(config_path: str) -> list[str]:
 
 
 def skyrl_cpu_environment(env_vars: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Isolate native SkyRL CPU processes from the enclosing Python environment."""
+    """Remove Python path and virtualenv overrides for SkyRL CPU processes."""
     environment = {**os.environ, **(env_vars or {})}
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)
