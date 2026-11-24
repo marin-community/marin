@@ -17,7 +17,7 @@ from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.difficulty.state import ActionFailure, GapReason
-from experiments.post_training.task_curation.difficulty_config import DECLARED_JUDGE_PINS
+from experiments.post_training.task_curation.difficulty_config import DeclaredJudgePin
 from experiments.post_training.task_curation.difficulty_protocol import PINS
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 from experiments.post_training.task_curation.harmony_probe import harmony_prompt_tokens
@@ -80,9 +80,10 @@ def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str, 
     )
 
 
-def probe_declared_judge_endpoint(endpoint: str, api_model: str, api_key: str, temperature: float) -> dict:
+def probe_declared_judge_endpoint(
+    endpoint: str, api_model: str, api_key: str, temperature: float, pin: DeclaredJudgePin
+) -> dict:
     """Verify a declared judge's text request with its pinned tokenizer."""
-    pin = DECLARED_JUDGE_PINS[api_model]
     request = {
         "model": api_model,
         "messages": PROBE_MESSAGES,

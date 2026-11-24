@@ -17,14 +17,18 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    NoGrader,
     PlainText,
+    ResourceGroups,
     Source,
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation import difficulty_preparation
+from experiments.post_training.task_curation.difficulty_config import SUBSTITUTE_JUDGE_MODEL
 from experiments.post_training.task_curation.difficulty_contracts import (
     CONTRACT_VINTAGE_NULL_DEFAULTS,
     ContractVintageError,
@@ -144,3 +148,73 @@ def test_prepare_source_names_a_drifted_task(tmp_path, monkeypatch, difficulty_s
     assert "drifted-task" in message
     assert "ffff" in message
     assert canonical_sha256(task.model_dump(mode="json"))[:16] in message
+
+
+def native_judge_task(task_id: str, declared: str) -> TaskSpec:
+    """A native Harbor bundle whose verifier names its own judge like TaskTrove's RewardKit tasks."""
+    task_toml = (
+        "[verifier]\n"
+        f'env = {{ OPENAI_API_KEY = "${{OPENAI_API_KEY}}", JUDGE_MODEL = "${{JUDGE_MODEL:-}}", '
+        f'REWARDKIT_JUDGE = "{declared}" }}\n'
+        '[environment]\ndocker_image = "ubuntu:24.04"\n'
+    )
+    return TaskSpec(
+        id=task_id,
+        context=ConversationInput(events=(TextMessage(role="user", content="Original question"),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        tags=("harbor",),
+        grader=NoGrader(reason="Native RewardKit verifier"),
+        resources=ResourceGroups(
+            verifier=(
+                inline_resource("task.toml", task_toml.encode()),
+                inline_resource("instruction.md", b"Do the task"),
+                inline_resource("tests/test.sh", b"#!/bin/sh\nexit 0\n"),
+            )
+        ),
+        source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+    )
+
+
+@pytest.mark.parametrize(
+    "declared,resolved",
+    [
+        ("${JUDGE_MODEL:-openai/gpt-5}", "openai/gpt-5"),
+        ("together_ai/Qwen/Unqualified-9B", "together_ai/Qwen/Unqualified-9B"),
+    ],
+)
+def test_prepare_source_types_the_unserved_declared_judge_at_the_source_gate(
+    tmp_path, monkeypatch, difficulty_source, declared, resolved
+):
+    """A native bundle's env-template judge resolves and fails closed at preparation.
+
+    The reconcile previously hit this class only at runtime preflight; the typed
+    gap must come from the source gate instead.
+    """
+    task = native_judge_task("rewardkit-task", declared)
+    source = difficulty_source(task)
+    monkeypatch.setattr(difficulty_preparation, "panel_task_runtimes", lambda panel: ([task], [{}]))
+    prepared = difficulty_preparation.prepare_source(source, tmp_path / "tasks")
+    (result,) = prepared.tasks
+    assert result.reason == f"judge_route_unqualified:{resolved}"
+    assert result.judge_model is None
+    assert result.path is None
+
+
+def test_prepare_source_applies_the_standing_ruling_judge_route_repair(tmp_path, monkeypatch, difficulty_source):
+    """A declared judge with a versioned repair rides the served substitute route.
+
+    The bundle's frozen bytes are unchanged: the repair only re-declares the
+    judge the verifier calls, and preparation records it on the prepared task.
+    """
+    task = native_judge_task("rewardkit-task", "${JUDGE_MODEL:-openai/gpt-4o-mini}")
+    source = difficulty_source(task)
+    monkeypatch.setattr(difficulty_preparation, "panel_task_runtimes", lambda panel: ([task], [{}]))
+    prepared = difficulty_preparation.prepare_source(source, tmp_path / "tasks")
+    (result,) = prepared.tasks
+    assert result.reason is None
+    assert result.judge_model == SUBSTITUTE_JUDGE_MODEL
+    assert result.path is not None
+    written = next((tmp_path / "tasks").rglob("task.toml"))
+    assert 'REWARDKIT_JUDGE = "${JUDGE_MODEL:-openai/gpt-4o-mini}"' in written.read_text()

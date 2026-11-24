@@ -16,6 +16,7 @@ from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation import retirement
+from experiments.post_training.task_curation.difficulty_config import JUDGE_ROUTE_REPAIRS_BY_SOURCE
 from experiments.post_training.task_curation.native_release import import_native_quick
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.registry import read_registry_json
@@ -61,6 +62,11 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
         if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS:
             tags = (*tags, "eval")
             notes += " " + CROSSCODE_EVAL_REASON
+        # A versioned judge-route repair re-declares the source's own judge on the
+        # served route; its protocol difference is recorded on this declaration.
+        repair = JUDGE_ROUTE_REPAIRS_BY_SOURCE.get(entry["id"])
+        if repair is not None:
+            notes = f"{notes} {repair.note}".strip()
         qc = IndependentQC.model_validate(entry["independent_qc"]) if entry["independent_qc"] else None
         origin = RETIRED_ORIGINS[entry["origin"]]
         result.append(

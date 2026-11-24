@@ -3,7 +3,9 @@
 
 """Shared campaign and locked-worker configuration."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from finestore.rl.difficulty import SamplingSettings, Solver, SolverIdentity
 from pydantic import BaseModel, ConfigDict
@@ -52,6 +54,75 @@ DECLARED_JUDGE_PINS = {
     ),
 }
 SNOWBALL_VLLM_RELEASE_TAG = "marin-vllm-gpu-20260924-01911be34fac"
+
+# The standing judge ruling (2026-11-24): a source's own LLM judge this lane cannot
+# serve is re-declared to the served Together GLM-5.3-Flash route, and the protocol
+# difference is recorded on the source declaration. The substitution is ruled, not
+# qualified by a fixture-judgement campaign; the route still carries the tokenizer
+# pins verified at the pinned revision so serving and receipts stay exact.
+SUBSTITUTE_JUDGE_MODEL = "zai-org/GLM-5.3-Flash"
+SUBSTITUTE_JUDGE_PIN = DeclaredJudgePin(
+    revision="46a050bec13002ad29ee795c16e61cf4fa3c4a9c",
+    template_sha256="2614a3c896d53e265f564c23701173c0049f985dacfbae79fc4bcd9f5ba083f4",
+)
+
+
+@dataclass(frozen=True)
+class JudgeRouteRepair:
+    """A versioned re-declaration of one source's unserved judge to a served route.
+
+    ``declared`` is the frozen bundle's env-template value, ``resolved_model`` the
+    model that template resolves to, and ``served_model`` the served route the
+    standing ruling re-declares it to. ``template_var`` names the bundle's own
+    template variable so serving can pin the re-declared judge through it.
+    """
+
+    source_id: str
+    version: str
+    declared: str
+    resolved_model: str
+    served_model: str
+    template_var: str
+    note: str
+
+
+JUDGE_ROUTE_REPAIRS: tuple[JudgeRouteRepair, ...] = (
+    JudgeRouteRepair(
+        source_id="TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3",
+        version="2026.11.24.1",
+        declared="${JUDGE_MODEL:-openai/gpt-4o-mini}",
+        resolved_model="openai/gpt-4o-mini",
+        served_model=SUBSTITUTE_JUDGE_MODEL,
+        template_var="JUDGE_MODEL",
+        note=(
+            "Judge route repair 2026.11.24.1 (standing ruling: source LLM judges this lane cannot "
+            "serve are re-declared to the served Together GLM-5.3-Flash route): the frozen verifier "
+            "declares its judge as the env template '${JUDGE_MODEL:-openai/gpt-4o-mini}', which "
+            "resolves to the unserved openai/gpt-4o-mini route. The judge is re-declared to "
+            "together_ai/zai-org/GLM-5.3-Flash and served at the protocol temperature 0.7. Protocol "
+            "difference: grading runs on GLM-5.3-Flash instead of the source's declared judge; the "
+            "frozen package bytes and the original declaration are retained."
+        ),
+    ),
+)
+
+
+JUDGE_ROUTE_REPAIRS_BY_RESOLVED_MODEL: Mapping[str, JudgeRouteRepair] = MappingProxyType(
+    {repair.resolved_model: repair for repair in JUDGE_ROUTE_REPAIRS}
+)
+JUDGE_ROUTE_REPAIRS_BY_SOURCE: Mapping[str, JudgeRouteRepair] = MappingProxyType(
+    {repair.source_id: repair for repair in JUDGE_ROUTE_REPAIRS}
+)
+
+
+def judge_route_repair(resolved_model: str) -> JudgeRouteRepair | None:
+    """The standing-ruling repair serving one resolved unserved judge model.
+
+    The substitution is keyed by the model the declared judge resolves to, so the
+    source gate, the reconcile's judge repair and the runtime resolve one judge
+    model to exactly one served route.
+    """
+    return JUDGE_ROUTE_REPAIRS_BY_RESOLVED_MODEL.get(resolved_model)
 
 
 class JudgeRun(BaseModel):

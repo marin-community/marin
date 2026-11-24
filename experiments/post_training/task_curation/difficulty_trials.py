@@ -57,6 +57,8 @@ from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFI
 from experiments.post_training.task_curation.datasets.environments import BUILDABLE_ENVIRONMENTS
 from experiments.post_training.task_curation.difficulty.launch import DATA_ADMISSION_COMMAND
 from experiments.post_training.task_curation.difficulty_config import (
+    DECLARED_JUDGE_PROVIDER_PREFIX,
+    SUBSTITUTE_JUDGE_MODEL,
     TASK_PROVIDER_SECRETS,
     TOGETHER_AI_API_BASE_ENV,
     CandidateRun,
@@ -65,6 +67,7 @@ from experiments.post_training.task_curation.difficulty_evidence import write_js
 from experiments.post_training.task_curation.difficulty_prepared import (
     PreparedTask,
     attempt_judge_model,
+    bundle_judge_template_var,
     grader_requires_multi_uid,
     task_declared_judge_model,
 )
@@ -111,6 +114,21 @@ def resolve_provider_secrets(required: Iterable[str]) -> dict[str, str]:
     return {name: require_secret(name) for name in sorted(required)}
 
 
+def substitute_judge_credentials(tasks: Iterable[PreparedTask]) -> frozenset[str]:
+    """Provider credential templates a standing-ruling substitute judge covers.
+
+    The re-declared judge authenticates through the wave's Together grant, so the
+    bundle's own judge-credential templates resolve to Harbor's guest dummy: the
+    templates never name a provider credential this wave must actually hold.
+    """
+    covered: set[str] = set()
+    for task in tasks:
+        if task.path is None or task.judge_model != SUBSTITUTE_JUDGE_MODEL:
+            continue
+        covered |= task_required_provider_secrets((Path(task.path),))
+    return frozenset(covered)
+
+
 def task_guest_environment(task: PreparedTask, provider_secrets: Mapping[str, str]) -> dict[str, str]:
     """The guest environment for one task's provider credential templates.
 
@@ -119,11 +137,15 @@ def task_guest_environment(task: PreparedTask, provider_secrets: Mapping[str, st
     projection for each declared template; the resolved values stay host-side and
     never enter the sandbox. Raises before the task's first attempt when a
     bundle-referenced credential was not resolved for the wave, so a task never
-    fails mid-verifier.
+    fails mid-verifier. A task whose judge rides the standing-ruling substitute
+    covers its own credential templates with that dummy: the re-declared judge
+    authenticates through the wave's Together grant instead.
     """
     if task.path is None:
         return {}
     required = task_required_provider_secrets((Path(task.path),))
+    if task.judge_model == SUBSTITUTE_JUDGE_MODEL and required:
+        return model_guest_credentials({name: "" for name in sorted(required)})
     missing = required - provider_secrets.keys()
     if missing:
         raise ValueError(
@@ -140,9 +162,20 @@ def trial_persistent_environment(task: PreparedTask) -> dict[str, str]:
     declared judge's base-URL override cannot reach the sandbox that way: the
     verifier's LiteLLM Together client reads TOGETHER_AI_API_BASE from the
     sandbox environment, and this value points it at Harbor's in-guest relay so
-    the judge's calls authenticate host-side. A task without a declared judge
-    carries no persistent environment.
+    the judge's calls authenticate host-side. A re-declared judge-route repair
+    also pins the bundle's own `${VAR:-default}` template variable to the served
+    substitute, so the source's declaration names the served judge. A task
+    without a Together-route judge carries no persistent environment.
     """
+    if task.path is None or task.workload != "native":
+        return {}
+    if task.judge_model == SUBSTITUTE_JUDGE_MODEL:
+        template_var = bundle_judge_template_var(task)
+        if template_var is not None:
+            return {
+                TOGETHER_AI_API_BASE_ENV: f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1",
+                template_var: f"{DECLARED_JUDGE_PROVIDER_PREFIX}{SUBSTITUTE_JUDGE_MODEL}",
+            }
     if task_declared_judge_model(task) is None:
         return {}
     return {TOGETHER_AI_API_BASE_ENV: f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1"}

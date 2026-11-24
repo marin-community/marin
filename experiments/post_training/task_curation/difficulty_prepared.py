@@ -4,6 +4,7 @@
 """Prepared source contracts shared with Harbor's isolated trial process."""
 
 import base64
+import re
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -19,6 +20,23 @@ from experiments.post_training.task_curation.difficulty_config import (
 )
 
 GRADER_PRIVILEGE_DROP_UID = "user=65534"
+
+ENV_TEMPLATE_DEFAULT = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*):-(?P<default>[^}]*)\}")
+"""Harbor's `${VAR:-default}` template with a fallback default."""
+
+
+def resolve_judge_template(declared: str) -> str | None:
+    """The model a frozen verifier env value names, with Harbor's `${VAR:-default}` resolved.
+
+    A template resolves to its default — the guest may still override the variable
+    at serving time, which the judge-route repair relies on. A template without a
+    default resolves to nothing this contract can name; plain values return
+    unchanged.
+    """
+    resolved = ENV_TEMPLATE_DEFAULT.sub(lambda match: match.group("default"), declared.strip())
+    if "${" in resolved:
+        return None
+    return resolved or None
 
 
 def grader_requires_multi_uid(spec: Mapping) -> bool:
@@ -51,14 +69,11 @@ class PreparedSource(BaseModel):
     tasks: list[PreparedTask]
 
 
-def task_declared_judge_model(task: PreparedTask) -> str | None:
-    """The grader model a frozen native bundle declares for its own verifier, if any.
+def bundle_declared_judge(task: PreparedTask) -> str | None:
+    """The judge model a frozen native bundle's verifier env declares, with templates resolved.
 
-    Parses the frozen task.toml directly with stdlib tomllib: this contract
-    helper must stay importable where Harbor (and marin) are not installed - the
-    controller, the runtime, and Harbor's isolated trial process. Only qualified
-    declared judges are served, so an unqualified declaration fails closed
-    instead of being silently re-judged by the shared route's model.
+    Returns None when the bundle declares no judge or its template carries no
+    default; the runtime's serving wiring then has no statically nameable judge.
     """
     if task.path is None or task.workload != "native":
         return None
@@ -66,17 +81,55 @@ def task_declared_judge_model(task: PreparedTask) -> str | None:
     declared = ((document.get("verifier") or {}).get("env") or {}).get(DECLARED_JUDGE_ENV_VAR)
     if declared is None:
         return None
-    if not declared.startswith(DECLARED_JUDGE_PROVIDER_PREFIX):
+    return resolve_judge_template(declared)
+
+
+def bundle_judge_template_var(task: PreparedTask) -> str | None:
+    """The bundle's own judge template variable, when its declaration is one.
+
+    The judge-route repair pins the re-declared judge through this variable, so
+    the bundle's own `${VAR:-default}` declaration names the served route.
+    """
+    if task.path is None or task.workload != "native":
+        return None
+    document = tomllib.loads((Path(task.path) / "task.toml").read_text())
+    declared = ((document.get("verifier") or {}).get("env") or {}).get(DECLARED_JUDGE_ENV_VAR)
+    match = ENV_TEMPLATE_DEFAULT.fullmatch(declared.strip()) if declared else None
+    return match.group("name") if match else None
+
+
+def task_declared_judge_model(task: PreparedTask) -> str | None:
+    """The grader model a frozen native bundle declares for its own verifier, if any.
+
+    Parses the frozen task.toml directly with stdlib tomllib: this contract
+    helper must stay importable where Harbor (and marin) are not installed - the
+    controller, the runtime, and Harbor's isolated trial process. Env-template
+    declarations resolve to their default first, so the fail-closed errors name
+    the model the verifier would actually call. Only qualified declared judges
+    are served, so an unqualified declaration fails closed instead of being
+    silently re-judged by the shared route's model.
+    """
+    resolved = bundle_declared_judge(task)
+    if resolved is None:
+        return None
+    if not resolved.startswith(DECLARED_JUDGE_PROVIDER_PREFIX):
         raise ValueError(
-            f"Task {task.task_id} declares judge {declared!r} outside the "
+            f"Task {task.task_id} declares judge {resolved!r} outside the "
             f"{DECLARED_JUDGE_PROVIDER_PREFIX} route this lane serves"
         )
-    model = declared.removeprefix(DECLARED_JUDGE_PROVIDER_PREFIX)
+    model = resolved.removeprefix(DECLARED_JUDGE_PROVIDER_PREFIX)
     if model not in DECLARED_JUDGE_PINS:
         raise ValueError(f"Task {task.task_id} declares judge {model!r} this lane has not qualified")
     return model
 
 
 def attempt_judge_model(task: PreparedTask) -> str | None:
-    """The judge model one attempt's grading uses: the prepared judge or the bundle's declared one."""
+    """The judge model one attempt's grading uses: the prepared judge or the bundle's declared one.
+
+    A task whose preparation typed its judge carries the prepared answer - either
+    the source's re-declared judge-route repair or the typed unqualified gap - so
+    the bundle's declaration is never re-parsed against a decided contract.
+    """
+    if task.reason is not None:
+        return task.judge_model
     return task.judge_model or task_declared_judge_model(task)

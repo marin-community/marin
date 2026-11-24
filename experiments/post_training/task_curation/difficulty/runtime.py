@@ -40,6 +40,8 @@ from experiments.post_training.task_curation.difficulty_config import (
     DATA_ACCOUNT,
     DECLARED_JUDGE_PINS,
     SELF_HOSTED_SOLVERS,
+    SUBSTITUTE_JUDGE_MODEL,
+    SUBSTITUTE_JUDGE_PIN,
     TASK_PROVIDER_SECRETS,
     TOGETHER_API_KEY_ENV,
     CandidateRun,
@@ -307,21 +309,21 @@ def batch_judge_route(prepared: list[PreparedSource]) -> tuple[JudgeTier | None,
 
     A run version serves exactly one judge route. GLM-judged sources share the
     Together route's model; a bundle's declared judge (REWARDKIT_JUDGE) must be
-    a qualified pin and cannot share its queue with GLM or a hosted tier, since
-    the shared relay forces one model.
+    a qualified pin or the standing-ruling substitute route, and cannot share
+    its queue with GLM or a hosted tier, since the shared relay forces one model.
     """
     judged_models = {
         model
         for source in prepared
         for task in source.tasks
-        if (model := attempt_judge_model(task)) is not None and task.reason is None
+        if task.reason is None and (model := attempt_judge_model(task)) is not None
     }
     tiers = {
         tier
         for tier, definition in JUDGE_TIERS.items()
         if definition.spec.model in judged_models and definition.spec.model != GLM_MODEL
     }
-    declared = {model for model in judged_models if model in DECLARED_JUDGE_PINS}
+    declared = {model for model in judged_models if model in DECLARED_JUDGE_PINS or model == SUBSTITUTE_JUDGE_MODEL}
     tier_models = {definition.spec.model for definition in JUDGE_TIERS.values()}
     unqualified = judged_models - tier_models - declared - {GLM_MODEL, TOGETHER_MODEL}
     if unqualified:
@@ -504,7 +506,7 @@ def run_batch(args: argparse.Namespace) -> None:
         for source in prepared
     ]
     has_judge = any(
-        attempt_judge_model(task) is not None and task.reason is None for source in prepared for task in source.tasks
+        task.reason is None and attempt_judge_model(task) is not None for source in prepared for task in source.tasks
     )
     for selected_solver in {args.solver, Solver.HOSTED} if has_judge else {args.solver}:
         selected_pin = PINS[selected_solver]
@@ -599,10 +601,23 @@ def run_batch(args: argparse.Namespace) -> None:
             judge_metadata = None
             if has_judge:
                 if judge_tier is None:
+                    substitute = shared_judge_model == SUBSTITUTE_JUDGE_MODEL
                     declared_pin = None if shared_judge_model is None else DECLARED_JUDGE_PINS.get(shared_judge_model)
-                    if declared_pin is not None:
+                    if substitute:
                         judge_probe = probe_declared_judge_endpoint(
-                            judge_endpoint, judge_api_model, judge_api_key, PROTOCOLS[PROTOCOL_ID].temperature
+                            judge_endpoint,
+                            judge_api_model,
+                            judge_api_key,
+                            PROTOCOLS[PROTOCOL_ID].temperature,
+                            SUBSTITUTE_JUDGE_PIN,
+                        )
+                    elif declared_pin is not None:
+                        judge_probe = probe_declared_judge_endpoint(
+                            judge_endpoint,
+                            judge_api_model,
+                            judge_api_key,
+                            PROTOCOLS[PROTOCOL_ID].temperature,
+                            declared_pin,
                         )
                     elif args.solver == Solver.HOSTED and shared_judge_model is None and pool is None:
                         judge_probe = probe
@@ -614,7 +629,29 @@ def run_batch(args: argparse.Namespace) -> None:
                             judge_api_key,
                             sampling_settings(Solver.HOSTED, []),
                         )
-                    if declared_pin is not None:
+                    if substitute:
+                        judge_metadata = {
+                            "model": judge_api_model,
+                            "api_model": judge_api_model,
+                            "revision": SUBSTITUTE_JUDGE_PIN.revision,
+                            "tokenizer": judge_api_model,
+                            "tokenizer_revision": SUBSTITUTE_JUDGE_PIN.revision,
+                            "chat_template_sha256": SUBSTITUTE_JUDGE_PIN.template_sha256,
+                            "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
+                            "recorded_temperature_deviation": (
+                                "The source's declared judge is unserved and re-declared to the served "
+                                "Together GLM-5.3-Flash route per the standing judge ruling (a protocol "
+                                "difference recorded on the source declaration); served at the protocol "
+                                "temperature 0.7."
+                            ),
+                            "token_budget": "original source request; production service enforces its served context",
+                            "basis": (
+                                "Standing judge ruling: the bundle's declared judge resolves to an unserved "
+                                "model and rides its versioned judge-route repair to the served substitute."
+                            ),
+                            "serving_probe": judge_probe,
+                        }
+                    elif declared_pin is not None:
                         judge_metadata = {
                             "model": judge_api_model,
                             "api_model": judge_api_model,

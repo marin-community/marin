@@ -5,6 +5,7 @@
 
 import argparse
 import json
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -16,10 +17,18 @@ from taskcompendium.harbor.runtime import write_source_runtime
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, NoGrader, TaskSpec, judge_spec
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
+from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.calibration_inventory import packages_lock_available
 from experiments.post_training.task_curation.difficulty_artifacts import restore_original_lock
+from experiments.post_training.task_curation.difficulty_config import (
+    DECLARED_JUDGE_ENV_VAR,
+    DECLARED_JUDGE_PINS,
+    DECLARED_JUDGE_PROVIDER_PREFIX,
+    SUBSTITUTE_JUDGE_MODEL,
+    judge_route_repair,
+)
 from experiments.post_training.task_curation.difficulty_contracts import (
     difficulty_task_contract,
     resolve_receipt_vintage,
@@ -28,6 +37,7 @@ from experiments.post_training.task_curation.difficulty_prepared import (
     PreparedSource,
     PreparedTask,
     grader_requires_multi_uid,
+    resolve_judge_template,
 )
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource, load_queue_sources
 from experiments.post_training.task_curation.judges import JUDGE_TIERS
@@ -38,6 +48,29 @@ from experiments.post_training.task_curation.sample_qc import panel_task_runtime
 # and every pinned judge tier. The endpoint itself is validated at serving time
 # (judge probe and identity receipt), never assumed here.
 SERVED_JUDGE_MODELS = frozenset({"", GLM_MODEL, *(definition.spec.model for definition in JUDGE_TIERS.values())})
+
+# Judges a frozen native bundle may declare for its own verifier on the lane's
+# Together route: the qualified declared pins and the standing-ruling substitute.
+SERVED_DECLARED_JUDGE_MODELS = frozenset(DECLARED_JUDGE_PINS) | {SUBSTITUTE_JUDGE_MODEL}
+
+
+def bundle_declared_judge_model(task: TaskSpec) -> str | None:
+    """The judge a frozen native bundle's verifier declares, with `${VAR:-default}` templates resolved.
+
+    Reads the frozen task.toml resource bytes directly: the source gate runs
+    before staging, so no written bundle exists yet. Returns None when the bundle
+    declares no judge or its template carries no default to resolve.
+    """
+    if not isinstance(task.grader, NoGrader) or "harbor" not in task.tags:
+        return None
+    resource = next((file for file in task.resources.verifier if file.path == "task.toml"), None)
+    if resource is None:
+        return None
+    document = tomllib.loads(resource_bytes(resource).decode())
+    declared = ((document.get("verifier") or {}).get("env") or {}).get(DECLARED_JUDGE_ENV_VAR)
+    if declared is None:
+        return None
+    return resolve_judge_template(declared)
 
 
 def source_gap_reason(gap: DifficultyGap, detail: str | None = None) -> str:
@@ -105,6 +138,21 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
             reason = source_gap_reason(DifficultyGap.JUDGE_API_UNQUALIFIED, judge.api)
         if reason is None and judge is not None and judge.model not in SERVED_JUDGE_MODELS:
             reason = source_gap_reason(DifficultyGap.JUDGE_ROUTE_UNQUALIFIED, judge.model)
+        served_judge = None if judge is None else judge.model
+        if reason is None and native:
+            # A native bundle's own judge declaration is typed at this source gate,
+            # never at runtime: the env template resolves to the model the verifier
+            # would call, and an unserved one either rides its versioned repair or
+            # fails closed here as a typed gap.
+            declared = bundle_declared_judge_model(task)
+            repair = None if declared is None else judge_route_repair(declared)
+            if repair is not None:
+                served_judge = repair.served_model
+            elif (
+                declared is not None
+                and declared.removeprefix(DECLARED_JUDGE_PROVIDER_PREFIX) not in SERVED_DECLARED_JUDGE_MODELS
+            ):
+                reason = source_gap_reason(DifficultyGap.JUDGE_ROUTE_UNQUALIFIED, declared)
         if reason is None:
             environments = [task.environment_requirements]
             if not isinstance(task.grader, NoGrader):
@@ -149,7 +197,7 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
                     requires_multi_uid=grader_requires_multi_uid(task.model_dump(mode="json")),
                 ),
                 reason=reason,
-                judge_model=None if judge is None else judge.model,
+                judge_model=(served_judge if served_judge is not None else None if judge is None else judge.model),
             )
         )
     return PreparedSource(sample=source.sample, sample_receipt=source.sample_receipt, tasks=prepared)

@@ -18,9 +18,11 @@ from experiments.post_training.task_curation.datasets.environments import LEAN_G
 from experiments.post_training.task_curation.difficulty.importer import receipt_row
 from experiments.post_training.task_curation.difficulty.ledger_worker import source_has_judge_traffic
 from experiments.post_training.task_curation.difficulty.state import GapReason
+from experiments.post_training.task_curation.difficulty_config import SUBSTITUTE_JUDGE_MODEL
 from experiments.post_training.task_curation.difficulty_prepared import (
     PreparedTask,
     attempt_judge_model,
+    bundle_judge_template_var,
     task_declared_judge_model,
 )
 from experiments.post_training.task_curation.difficulty_trials import (
@@ -205,6 +207,86 @@ def test_declared_judge_model_parses_the_frozen_bundle(declared_judge_bundle):
     )
     assert task_declared_judge_model(task) == "Qwen/Qwen3.5-9B"
     assert attempt_judge_model(task) == "Qwen/Qwen3.5-9B"
+
+
+def test_env_template_judge_resolves_its_default_and_fails_closed(tmp_path):
+    """A TaskTrove-style `${VAR:-default}` judge resolves to the model the verifier calls."""
+    directory = tmp_path / "rewardkit"
+    directory.mkdir()
+    (directory / "task.toml").write_text(
+        "[verifier]\n"
+        'env = { OPENAI_API_KEY = "${OPENAI_API_KEY}", JUDGE_MODEL = "${JUDGE_MODEL:-}", '
+        'REWARDKIT_JUDGE = "${JUDGE_MODEL:-openai/gpt-4o-mini}" }\n'
+    )
+    (directory / "instruction.md").write_text("Original task")
+    (directory / "tests").mkdir()
+    (directory / "tests/test.sh").write_text("exit 0\n")
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(directory),
+        workload="native",
+        backend="local",
+        reason=None,
+        judge_model=None,
+    )
+    with pytest.raises(ValueError, match="openai/gpt-4o-mini"):
+        task_declared_judge_model(task)
+
+
+def test_repaired_judge_template_rides_the_bundle_template_to_the_substitute(tmp_path):
+    """The re-declared judge pins the bundle's own template variable to the served substitute."""
+    directory = tmp_path / "rewardkit"
+    directory.mkdir()
+    (directory / "task.toml").write_text(
+        "[verifier]\n"
+        'env = { OPENAI_API_KEY = "${OPENAI_API_KEY}", JUDGE_MODEL = "${JUDGE_MODEL:-}", '
+        'REWARDKIT_JUDGE = "${JUDGE_MODEL:-openai/gpt-4o-mini}" }\n'
+    )
+    (directory / "instruction.md").write_text("Original task")
+    (directory / "tests").mkdir()
+    (directory / "tests/test.sh").write_text("exit 0\n")
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(directory),
+        workload="native",
+        backend="daytona",
+        reason=None,
+        judge_model=SUBSTITUTE_JUDGE_MODEL,
+    )
+    assert bundle_judge_template_var(task) == "JUDGE_MODEL"
+    assert trial_persistent_environment(task) == {
+        "TOGETHER_AI_API_BASE": "http://127.0.0.1:8787/v1",
+        "JUDGE_MODEL": "together_ai/zai-org/GLM-5.3-Flash",
+    }
+
+
+def test_repaired_judge_covers_the_bundle_credential_templates_with_the_guest_dummy(tmp_path):
+    """The substitute judge rides the wave's Together grant; the bundle's own templates get dummies."""
+    directory = tmp_path / "rewardkit"
+    directory.mkdir()
+    (directory / "task.toml").write_text(
+        "[verifier]\n"
+        'env = { OPENAI_API_KEY = "${OPENAI_API_KEY}", JUDGE_MODEL = "${JUDGE_MODEL:-}", '
+        'REWARDKIT_JUDGE = "${JUDGE_MODEL:-openai/gpt-4o-mini}" }\n'
+    )
+    (directory / "instruction.md").write_text("Original task")
+    (directory / "tests").mkdir()
+    (directory / "tests/test.sh").write_text("exit 0\n")
+    task = PreparedTask(
+        task_id="task",
+        runtime_sha256="a" * 64,
+        path=str(directory),
+        workload="native",
+        backend="daytona",
+        reason=None,
+        judge_model=SUBSTITUTE_JUDGE_MODEL,
+    )
+    assert difficulty_trials.substitute_judge_credentials([task]) == frozenset({"OPENAI_API_KEY"})
+    granted = task_guest_environment(task, {})
+    assert granted == {"OPENAI_API_KEY": "EMPTY"}
+    validate_task_environment(granted, protected_values=frozenset({"resolved-openai_api_key"}))
 
 
 def test_declared_judge_outside_the_together_route_fails_closed(tmp_path):

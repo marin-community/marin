@@ -198,7 +198,7 @@ def test_campaign_qualifies_only_required_judge_routes(
 
     declared_probes = []
 
-    def declared_probe(endpoint, api_model, api_key, temperature):
+    def declared_probe(endpoint, api_model, api_key, temperature, pin):
         declared_probes.append(api_model)
         return {"tools_thinking_probe": {"completion": {"system_fingerprint": "fixture-pin"}}}
 
@@ -441,6 +441,28 @@ def _native_task(path, **updates):
 def test_declared_judge_serves_its_own_shared_route(tmp_path, difficulty_source):
     source = _prepared_with_tasks(_fixture_source(difficulty_source), [_native_task(_declared_judge_packet(tmp_path))])
     assert difficulty_runtime.batch_judge_route([source]) == (None, "Qwen/Qwen3.5-9B")
+
+
+def test_substitute_judge_route_serves_its_own_shared_route(tmp_path, difficulty_source):
+    """The standing-ruling substitute is a declared-judge-class route: its own queue, one model."""
+    source = _prepared_with_tasks(
+        _fixture_source(difficulty_source),
+        [_native_task(_declared_judge_packet(tmp_path), judge_model=difficulty_runtime.SUBSTITUTE_JUDGE_MODEL)],
+    )
+    assert difficulty_runtime.batch_judge_route([source]) == (None, "zai-org/GLM-5.3-Flash")
+
+
+def test_substitute_judge_cannot_share_the_glm_queue(tmp_path, difficulty_source):
+    packet = _declared_judge_packet(tmp_path)
+    source = _prepared_with_tasks(
+        _fixture_source(difficulty_source),
+        [
+            _native_task(packet, judge_model=difficulty_runtime.SUBSTITUTE_JUDGE_MODEL),
+            _native_task(packet, judge_model=difficulty_runtime.GLM_MODEL),
+        ],
+    )
+    with pytest.raises(ValueError, match="own queue"):
+        difficulty_runtime.batch_judge_route([source])
 
 
 def test_glm_judged_route_is_unchanged(tmp_path, difficulty_source):

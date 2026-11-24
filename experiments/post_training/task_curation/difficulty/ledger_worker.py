@@ -48,6 +48,7 @@ from experiments.post_training.task_curation.difficulty_trials import (
     resolve_provider_secrets,
     run_task,
     seal_model_traffic,
+    substitute_judge_credentials,
     task_guest_environment,
     task_required_provider_secrets,
     worker_host_capabilities,
@@ -59,7 +60,7 @@ LOGGER = logging.getLogger(__name__)
 
 def source_has_judge_traffic(tasks: Iterable[PreparedTask]) -> bool:
     """Whether this source's tasks route judge traffic: a prepared or a declared judge."""
-    return any(attempt_judge_model(task) is not None and task.reason is None for task in tasks)
+    return any(task.reason is None and attempt_judge_model(task) is not None for task in tasks)
 
 
 def record_attempt(
@@ -204,11 +205,13 @@ def main() -> None:
     args.local_root.mkdir(parents=True)
     # Resolve the wave's provider credentials once, before any attempt runs: a
     # bundle-referenced credential that cannot resolve fails the wave closed at
-    # dispatch instead of mid-verifier.
+    # dispatch instead of mid-verifier. A standing-ruling substitute judge covers
+    # its bundle's own credential templates with the relay's guest dummy.
     provider_secrets = resolve_provider_secrets(
         task_required_provider_secrets(
             Path(task.path) for source in sources for task in source.tasks if task.path is not None
         )
+        - substitute_judge_credentials(task for source in sources for task in source.tasks)
     )
     # Daytona's SDK temporarily clears os.environ while uploading build contexts.
     # Resolve authority once before any parallel trial can enter that SDK path.
