@@ -16,7 +16,7 @@ from experiments.grug.moe_hero_ep import launch_hero_sft
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.sft_recipe import MochiSFT
 from experiments.grug.moe_hero_ep.train import RouterBiasMode
-from experiments.post_training.mochi_tokenizer import MOCHI_TOKENIZER_REVISION, MOCHI_TOKENIZER_URI
+from experiments.post_training.mochi_assets import MOCHI_TOKENIZER_REVISION, MOCHI_TOKENIZER_URI
 from experiments.sft.launcher import SFTPreset
 
 # This reproduces the eleven-rack `hero-sft-fullab-step393k-v2` run through step 400407.

@@ -87,7 +87,7 @@ in proportion to their sampled conversation counts, using up to 256 tool-call,
 [Mochi export record](https://github.com/marin-community/marin/issues/8089#issuecomment-6841382920)
 
 ```bash
-export MARIN_PREFIX=s3://marin-us-east-02a/marin
+export MARIN_PREFIX=s3://marin-us-east-08a/marin
 uv run --extra cpu --extra dedup python -m experiments.post_training.dspark_sft \
   --preset mochi-agentic --stage prepare
 uv run --extra cpu python -m experiments.post_training.dspark_sft \
