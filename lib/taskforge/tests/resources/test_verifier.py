@@ -3,11 +3,13 @@
 
 import asyncio
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import override
 
 import pytest
-from rolloutengine.models import ModelRequest, ModelTurn, TraceMode
+from lib.taskforge.tests.resources.rollout_fakes import FakeEngine
+from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn, Rollout, TraceMode
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.machine import (
     Backend,
@@ -19,10 +21,14 @@ from shellbox.machine import (
     MachineTerminated,
     Result,
 )
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import ResourceGroups, ScriptGrader, StdoutReward
 from taskcompendium.runtime.resources import inline_resource
 
+from taskforge.effects.context import Context
 from taskforge.effects.issues import Restart
+from taskforge.effects.log import EventLog
+from taskforge.harness.tools.adversary import AdversaryClaim
 from taskforge.lowering import (
     GRADING_MACHINE,
     LoweringSettings,
@@ -30,11 +36,12 @@ from taskforge.lowering import (
     requirements,
     rollout_engine,
 )
-from taskforge.model.controls import Candidate
-from taskforge.resources.grading import GradeCandidate, GradingResource
+from taskforge.model.controls import Candidate, RewardBand
+from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.rollouts import RolloutResource, SolverRollout
 from taskforge.resources.sandbox.factories import shellsim_factory
 from taskforge.resources.verifier import RoundVerifier
+from taskforge.stages.validate import claim_result
 
 SCRIPT = b"""
 from pathlib import Path
@@ -198,6 +205,32 @@ async def test_dead_verifier_restarts_with_one_replacement(failure: RuntimeError
         await pool.close()
 
 
+async def test_fresh_confirmation_and_replay_require_no_shared_machine_state() -> None:
+    factory = CountedFactory()
+    pool, resource = setup(factory)
+    log = EventLog()
+    candidate = event()
+    claim = AdversaryClaim("passes", candidate.candidate, RewardBand(Outcome.GRADED, 1, 1))
+    try:
+        ctx = Context(log=log)
+        ctx.resource(resource, resource.fingerprint)
+        ctx.handle(GradeCandidate, lambda ev, res: grade(ev, res, notify=ctx.emit), uses=(resource,))
+        first = await claim_result(ctx, candidate.spec, claim)
+        await ctx.drain()
+        assert first.met and first.grade is not None
+        assert first.grade.diagnostics["verifier_fresh"] is True
+        assert len(factory.machines) == 2 and factory.machines[1].closed
+        await pool.close()
+        replay = Context(log=EventLog(replay_from=log.records))
+        replay.resource(resource, resource.fingerprint)
+        replay.handle(GradeCandidate, lambda ev, res: grade(ev, res, notify=replay.emit), uses=(resource,))
+        assert await claim_result(replay, candidate.spec, claim) == first
+        await replay.drain()
+        assert len(factory.machines) == 2
+    finally:
+        await pool.close()
+
+
 async def test_spec_change_and_round_end_replace_machine() -> None:
     factory = CountedFactory()
     pool, resource = setup(factory)
@@ -242,6 +275,22 @@ async def test_queued_grades_wait_outside_the_verifier_deadline() -> None:
         assert sorted(result.diagnostics["verifier_lease"] for result in results) == [1, 2, 3, 4]
     finally:
         await pool.close()
+
+
+async def test_fresh_adversary_result_overrides_shared_confirmation() -> None:
+    shared = FakeEngine((GradedRollout(Rollout("shared", (), "stop"), GradeResult(Outcome.GRADED, 1)),))
+    fresh = FakeEngine((GradedRollout(Rollout("fresh", (), "stop"), GradeResult(Outcome.GRADED, 0)),))
+    resource = GradingResource(shared, "test", fresh)
+    ctx = Context(log=EventLog())
+    ctx.resource(resource, resource.fingerprint)
+    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(resource,))
+    candidate = event()
+    finding = await claim_result(
+        ctx, candidate.spec, AdversaryClaim("passes", candidate.candidate, RewardBand(Outcome.GRADED, 1, 1))
+    )
+    await ctx.drain()
+    assert not finding.met and finding.grade is not None and finding.grade.reward == 0
+    assert len(shared.run_ids) == len(fresh.run_ids) == 1
 
 
 async def test_candidate_files_and_staged_roots_are_replaced_between_grades() -> None:
