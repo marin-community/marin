@@ -15,7 +15,7 @@ from finestore.rl.curation import (
     DaytonaMeasurement,
     LexicalContaminationEvidence,
     LexicalUse,
-    SourceDeclaration,
+    QualifiedSourceDeclaration,
 )
 from finestore.schema import arrow_schema
 
@@ -76,6 +76,8 @@ def test_historical_measurement_reaches_canonical_catalog_without_admitting_trai
             id=canonical_source_id(historical_id),
             origin=SourceOrigin("CodeParrot"),
             upstream_dataset="apps",
+            upstream_name="apps",
+            title=None,
         ),
     )
     record = {**receipt.model_dump(mode="json"), "source_id": historical_id}
@@ -84,8 +86,12 @@ def test_historical_measurement_reaches_canonical_catalog_without_admitting_trai
         tmp_path, LexicalMeasurementReceipt, "lexical", load_json=lambda path: json.loads(path.read_text())
     )
     bound = bind_lexical_measurement(source, receipts[source.info.id], LexicalUse.TRAIN)
-    table = pa.Table.from_pylist([bound.declaration.model_dump(mode="json")], schema=arrow_schema(SourceDeclaration))
-    restored = SourceDeclaration.model_validate(table.to_pylist()[0])
+    # The canonical catalog contract for a measured source is the qualified
+    # declaration; the legacy declaration member carries no measured fields.
+    table = pa.Table.from_pylist(
+        [bound.declaration.model_dump(mode="json")], schema=arrow_schema(QualifiedSourceDeclaration)
+    )
+    restored = QualifiedSourceDeclaration.model_validate(table.to_pylist()[0])
     assert restored.lexical_contamination is not None and source.dataset is not None
     assert restored.id == canonical_source_id(historical_id)
     assert restored.lexical_contamination.contaminated_tasks == 1
