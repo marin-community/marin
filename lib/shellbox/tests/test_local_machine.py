@@ -98,10 +98,11 @@ print(started)
 KEEPER_SLEEP_ARGS = (b"sleep", b"2147483647")
 """The machine keeper's payload argv, which the guest init must run (see the quiesce tests)."""
 
-# The root-delivery grading quiesce (taskcompendium.harbor.root_delivery) as the original
-# task revisions run it: kill every process outside the exec's own ancestry, sparing only
-# PID 1 and zombies. While the machine's keeper was the guest init's child, this killed
-# the keeper, bwrap exited 137, and every graded attempt died as "Machine is closed".
+# The shared native root-delivery grading quiesce (taskcompendium's harbor.root_delivery,
+# whose grading collect runs it first, before restoring private verifier material): kill
+# every process outside the exec's own ancestry, sparing only PID 1 and zombies. While the
+# machine's keeper was the guest init's child, this killed the keeper, bwrap exited 137,
+# and every graded attempt died as "Machine is closed".
 ROOT_DELIVERY_QUIESCE_PROGRAM = """\
 import os, signal
 
@@ -603,18 +604,18 @@ def quiesce_survival_scenario(factory: LocalMachineFactory, quiesce: tuple[str, 
             )
         )
         assert checked.exit_code == 0, checked.stderr
-        # Ordinary commands still run: the quiesce did not close the machine.
         assert (await machine.run(Command(("printf", "alive")))).stdout == b"alive"
 
     on_machine(factory, SPEC, scenario)
 
 
-def test_machine_survives_the_root_delivery_quiesce(factory):
-    quiesce_survival_scenario(factory, ("python3", "-I", "-c", ROOT_DELIVERY_QUIESCE_PROGRAM))
-
-
-def test_machine_survives_the_root_delivery_shell_quiesce(factory):
-    quiesce_survival_scenario(factory, ("bash", "-c", ROOT_DELIVERY_QUIESCE_SCRIPT))
+@pytest.mark.parametrize(
+    "quiesce",
+    [("python3", "-I", "-c", ROOT_DELIVERY_QUIESCE_PROGRAM), ("bash", "-c", ROOT_DELIVERY_QUIESCE_SCRIPT)],
+    ids=["python", "shell"],
+)
+def test_machine_survives_the_root_delivery_quiesce(factory, quiesce):
+    quiesce_survival_scenario(factory, quiesce)
 
 
 def test_cancelled_creation_reclaims_a_process_before_its_handle_is_returned(factory, tmp_path, monkeypatch):

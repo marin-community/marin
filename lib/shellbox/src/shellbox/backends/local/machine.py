@@ -233,10 +233,9 @@ def _sandbox_argv(
 
     The system directories are read-only, or, with ``layers``, overlaid by the machine's layer of each.
     The program runs without capabilities; as root, bwrap needs no user namespace for its own.
-    ``--as-pid-1`` makes the program itself the guest PID namespace's init instead of a
-    re-exec'd bwrap: the machine's lifecycle keeper must be PID 1, because shared grading
-    quiesces kill every process outside their ancestry except PID 1, and a keeper below
-    PID 1 dies with them, closing the machine mid-grading.
+    ``--as-pid-1`` makes the program the guest PID namespace's PID 1: the machine's lifecycle
+    keeper must be PID 1, because grading quiesces kill every process outside their ancestry
+    except PID 1, and a keeper below PID 1 dies with them, closing the machine mid-grading.
     """
     argv = [str(bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try"]
     if network == NetworkPolicy.DENY:
