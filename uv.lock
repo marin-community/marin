@@ -4647,6 +4647,9 @@ datakit = [
     { name = "scikit-learn" },
     { name = "scipy" },
 ]
+daytona = [
+    { name = "marin-shellbox", extra = ["daytona"] },
+]
 dedup = [
     { name = "marin-dupekit" },
 ]
@@ -4780,6 +4783,7 @@ requires-dist = [
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["prometheus"], editable = "lib/rigging" },
     { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-shellbox", extras = ["daytona"], marker = "extra == 'daytona'", editable = "lib/shellbox" },
     { name = "marin-skyrlrecipe", editable = "lib/skyrlrecipe" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
@@ -4822,7 +4826,7 @@ requires-dist = [
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=3.6.0,<3.7" },
     { name = "wandb", specifier = ">0.24.0" },
 ]
-provides-extras = ["gpu", "tpu", "cpu", "rocm", "vizier", "dedup", "datakit"]
+provides-extras = ["gpu", "tpu", "cpu", "rocm", "vizier", "dedup", "daytona", "datakit"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5984,10 +5988,12 @@ name = "marin-rolloutengine"
 version = "0.1.0"
 source = { editable = "lib/rolloutengine" }
 dependencies = [
+    { name = "jinja2" },
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -6001,10 +6007,12 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6" },
 ]
 
 [package.metadata.requires-dev]
@@ -6178,6 +6186,7 @@ dependencies = [
     { name = "marin-shellbox" },
     { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "tomli" },
     { name = "tomlkit" },
 ]
@@ -6213,6 +6222,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
     { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "tiktoken", marker = "extra == 'pipeline'", specifier = ">=0.8" },
     { name = "tomli", specifier = ">=2.0.1" },
     { name = "tomlkit", specifier = ">=0.13" },
@@ -6232,50 +6242,50 @@ name = "marin-taskforge"
 version = "0.1.0"
 source = { editable = "lib/taskforge" }
 dependencies = [
-    { name = "click" },
     { name = "httpx" },
-    { name = "jsonschema" },
-    { name = "marin-finelog" },
     { name = "marin-iris" },
     { name = "marin-rigging" },
     { name = "marin-rolloutengine" },
     { name = "marin-shellbox", extra = ["shellsim"] },
     { name = "marin-taskcompendium" },
     { name = "marin-verifyit" },
-    { name = "marin-zephyr" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "s3fs" },
+    { name = "typing-extensions" },
 ]
 
 [package.dev-dependencies]
 test = [
+    { name = "pyrefly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "click" },
     { name = "httpx", specifier = ">=0.27,<1" },
-    { name = "jsonschema", specifier = ">=4.20" },
-    { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
     { name = "marin-shellbox", extras = ["shellsim"], editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "marin-verifyit", editable = "lib/verifyit" },
-    { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "openai" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "s3fs", specifier = ">=2024.0.0" },
+    { name = "typing-extensions", specifier = ">=4.10" },
 ]
 
 [package.metadata.requires-dev]
 test = [
+    { name = "pyrefly", specifier = ">=1.0.0,<1.1.0" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]

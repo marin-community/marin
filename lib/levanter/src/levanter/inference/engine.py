@@ -454,7 +454,9 @@ def _prefill_kernel(
     temps = decode_state.temperature["seq", new_slot_ids]
     top_ps = decode_state.top_p["seq", new_slot_ids]
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
+    )
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -622,7 +624,9 @@ def _handle_clones(
     top_ps = gen_state.decode_state.top_p["seq", tgt_ids]
     prng_keys = gen_state.decode_state.prng_keys_for(tgt_ids, pos_ids_this_time)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_this_time, temps, top_ps=top_ps, num_samples=num_new, key=prng_keys
+    )
 
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
@@ -722,7 +726,9 @@ def _run_generation_loop(
         temps = decode_state.temperature["seq", new_slot_ids]
         top_ps = decode_state.top_p["seq", new_slot_ids]
 
-        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+        new_tokens, log_probs = sampler.sample_positions(
+            logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
+        )
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)

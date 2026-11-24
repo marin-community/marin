@@ -15,7 +15,7 @@ from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from skyrl_gym.rollout_specs import SHELLBOX_HARNESS, rollout_spec
 from shellbox.machine import Backend, NetworkPolicy
-from taskcompendium.models import NoGrader, ScriptGrader, Source, TaskSpec, VerifyitGrader
+from taskcompendium.models import NoGrader, Source, TaskSpec, grader_environment
 
 from marinskyrl.packed_tasks import PackedTaskMaterializer, PackedTaskReference, select_task_references
 from marinskyrl.task_sources import DirectoryDataSource, TaskTroveParquetSource, data_source
@@ -156,8 +156,7 @@ def lower_harbor_task(directory: Path, task: TaskSpec, *, session: Mapping[str, 
     task_machine = harbor_machine(config.environment, config.agent.user)
     verifier_machine = (
         harbor_machine(config.verifier.environment or config.environment, config.verifier.user)
-        if isinstance(task.grader, ScriptGrader)
-        or (isinstance(task.grader, VerifyitGrader) and task.grader.environment is not None)
+        if grader_environment(task.grader) is not None
         else None
     )
     return rollout_spec(
