@@ -74,6 +74,9 @@ from experiments.post_training.task_curation.release_stages import (
     admission_check as admission_check_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
+    backend_validation as backend_validation_stage,
+)
+from experiments.post_training.task_curation.release_stages import (
     catalog_load as catalog_load_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
@@ -99,6 +102,9 @@ from experiments.post_training.task_curation.release_stages import (
 )
 from experiments.post_training.task_curation.release_stages import (
     exposure_probe as exposure_probe_stage,
+)
+from experiments.post_training.task_curation.release_stages import (
+    fresh_qc_index as fresh_qc_index_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
     history_staging as history_staging_stage,
@@ -164,10 +170,8 @@ class ReleasePins(BaseModel):
     prior_release: ArtifactRef
     prior_coverage: ArtifactRef
     prior_manifest: ArtifactRef | None = None
-    backend_survey: ArtifactRef
-    backend_validation_receipt: ArtifactRef
+    prior_fresh_qc_index: ArtifactRef
     registry_index: ArtifactRef
-    fresh_qc_index: ArtifactRef
     oracle_inventory: ArtifactRef
     source_counts: ArtifactRef
     exposure_input_check: ArtifactRef | None = None
@@ -249,6 +253,10 @@ class ReleasePlan(BaseModel):
     rebound_tasks: int = 0
     strict_audit_local: bool = False
     slice_output_root: str = ""
+    validation_target: str
+    validation_grading_environments: dict[str, dict]
+    validation_integrity_contracts: dict[str, dict]
+    validation_runtime_defaults: dict[str, dict]
 
     def validate_shape(self) -> None:
         """Refuse a plan that cannot drive the graph."""
@@ -495,6 +503,16 @@ def _execute_identity_backend_compose(config: dict) -> dict:
     return identity_backend_compose_stage.run_identity_backend_compose(inputs, dry_run=False)
 
 
+def _execute_backend_validation(config: dict) -> dict:
+    inputs = typed_inputs(backend_validation_stage.BackendValidationInputs, config)
+    return backend_validation_stage.run_backend_validation(inputs, dry_run=False, repo_root=REPO_ROOT)
+
+
+def _execute_fresh_qc_index(config: dict) -> dict:
+    inputs = typed_inputs(fresh_qc_index_stage.FreshQcIndexInputs, config)
+    return fresh_qc_index_stage.run_fresh_qc_index(inputs, dry_run=False)
+
+
 def _execute_history_staging(config: dict) -> dict:
     inputs = typed_inputs(history_staging_stage.HistoryStagingInputs, config)
     return history_staging_stage.run_history_staging(inputs, dry_run=False)
@@ -593,6 +611,8 @@ _STAGE_EXECUTORS: dict[str, Callable[[dict], dict]] = {
     "embed": _execute_embed,
     "curriculum_compose": _execute_curriculum_compose,
     "identity_backend_compose": _execute_identity_backend_compose,
+    "backend_validation": _execute_backend_validation,
+    "fresh_qc_index": _execute_fresh_qc_index,
     "history_staging": _execute_history_staging,
     "text_scan_region": _execute_text_scan,
     "text_scans": _execute_text_scan_merge,
@@ -833,9 +853,15 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         "identity_backend_compose",
         "identity_backend_compose",
         identity_backend_compose_stage.__name__,
-        (),
+        ("backend_validation",),
         True,
         receipt_key="documents.identity_receipt",
+    ),
+    "backend_validation": StageSpec(
+        "backend_validation", "backend_validation", backend_validation_stage.__name__, ("census_inputs",), True
+    ),
+    "fresh_qc_index": StageSpec(
+        "fresh_qc_index", "fresh_qc_index", fresh_qc_index_stage.__name__, ("qc_browse",), False, receipt_key="index"
     ),
     "history_staging": StageSpec("history_staging", "history_staging", history_staging_stage.__name__, (), True),
     "text_scan_region": StageSpec(
@@ -1055,7 +1081,9 @@ def _declarations_step(plan: ReleasePlan, plan_handle: ArtifactStep) -> Artifact
     )
 
 
-def _admission_check_step(plan: ReleasePlan, declarations: ArtifactStep) -> ArtifactStep[StageReceipt]:
+def _admission_check_step(
+    plan: ReleasePlan, declarations: ArtifactStep, identity_backend: ArtifactStep
+) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["admission_check"]
     identity = _identity_fields(
         plan, "release_id", "source_revision", "snapshot_id", "catalog_root", "expected_source_count", "service"
@@ -1066,7 +1094,7 @@ def _admission_check_step(plan: ReleasePlan, declarations: ArtifactStep) -> Arti
             "release_id": plan.release_id,
             "source_revision": plan.source_revision,
             "declarations": _resolved_receipt(ctx, declarations),
-            "backend": _ref_dict(plan.pins.backend_survey),
+            "backend": _resolved_proof(ctx, identity_backend)["documents"]["backend_map"],
             "snapshot_id": plan.snapshot_id,
             "catalog_root": plan.catalog_root,
             "prior_load_id": plan.prior.load_id,
@@ -1080,7 +1108,7 @@ def _admission_check_step(plan: ReleasePlan, declarations: ArtifactStep) -> Arti
         plan,
         "admission_check",
         spec,
-        (declarations,),
+        (declarations, identity_backend),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=admission_check_stage.AdmissionCheckInputs,
@@ -1226,11 +1254,52 @@ def _sql_stage_resources() -> ResourceConfig:
     return _resources_config(StageResources(cpu=4, memory_gb=16, disk_gb=64, timeout_s=14_400))
 
 
-def _identity_backend_compose_step(plan: ReleasePlan) -> ArtifactStep[StageReceipt]:
+def _backend_validation_step(plan: ReleasePlan, census_inputs: ArtifactStep) -> ArtifactStep[StageReceipt]:
+    spec = _STAGE_SPECS["backend_validation"]
+    identity = _identity_fields(
+        plan,
+        "release_id",
+        "source_revision",
+        "snapshot_id",
+        "catalog_root",
+        "validation_target",
+        "validation_grading_environments",
+        "validation_integrity_contracts",
+        "validation_runtime_defaults",
+    )
+
+    def build_inputs(ctx: StepContext) -> dict:
+        census_document = ctx.resolved(census_inputs)
+        return {
+            "release_id": plan.release_id,
+            "source_revision": plan.source_revision,
+            "snapshot_id": plan.snapshot_id,
+            "catalog_root": plan.catalog_root,
+            "output_root": stage_output_root(plan, "backend-validation"),
+            "target": plan.validation_target,
+            "census_inputs": {"uri": census_document.uri, "sha256": census_document.sha256},
+            "grading_environments": plan.validation_grading_environments,
+            "integrity_contracts": plan.validation_integrity_contracts,
+            "runtime_defaults": plan.validation_runtime_defaults,
+        }
+
+    return _stage_step(
+        plan,
+        "backend_validation",
+        spec,
+        (census_inputs,),
+        build_inputs=build_inputs,
+        identity=identity,
+        inputs_type=backend_validation_stage.BackendValidationInputs,
+        resources=_sql_stage_resources,
+    )
+
+
+def _identity_backend_compose_step(plan: ReleasePlan, backend_validation: ArtifactStep) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["identity_backend_compose"]
     identity = _identity_fields(plan, "release_id", "source_revision", "targets", "expected_source_count")
 
-    def build_inputs(_ctx: StepContext) -> dict:
+    def build_inputs(ctx: StepContext) -> dict:
         return {
             "release_id": plan.release_id,
             "source_revision": plan.source_revision,
@@ -1238,7 +1307,7 @@ def _identity_backend_compose_step(plan: ReleasePlan) -> ArtifactStep[StageRecei
             "targets": plan.targets,
             "prior_identity": _ref_dict(plan.pins.prior_identity),
             "prior_backend": _ref_dict(plan.pins.prior_backend),
-            "fresh_backend_receipt": _ref_dict(plan.pins.backend_validation_receipt),
+            "fresh_backend_receipt": _resolved_receipt(ctx, backend_validation),
             "registry_index": _ref_dict(plan.pins.registry_index),
             "expected_target_count": len(plan.targets),
         }
@@ -1247,7 +1316,7 @@ def _identity_backend_compose_step(plan: ReleasePlan) -> ArtifactStep[StageRecei
         plan,
         "identity_backend_compose",
         spec,
-        (),
+        (backend_validation,),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=identity_backend_compose_stage.IdentityBackendComposeInputs,
@@ -1474,6 +1543,7 @@ def _catalog_stage_step(
     snapshot: ArtifactStep,
     history: ArtifactStep,
     qc_browse: ArtifactStep,
+    fresh_qc_index: ArtifactStep,
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["catalog_stage"]
     identity = _identity_fields(
@@ -1508,7 +1578,7 @@ def _catalog_stage_step(
             "publication": _resolved_receipt(ctx, snapshot),
             "history_receipt": _resolved_receipt(ctx, history),
             "prior_qc_completion": _resolved_receipt(ctx, qc_browse),
-            "fresh_qc_index": _ref_dict(plan.pins.fresh_qc_index),
+            "fresh_qc_index": _resolved_receipt(ctx, fresh_qc_index),
             "contracts": _resolved_proof(ctx, snapshot)["contracts"],
             "migrations": plan.migrations,
             "service_url": plan.service.service_url,
@@ -1519,10 +1589,36 @@ def _catalog_stage_step(
         plan,
         "catalog_stage",
         spec,
-        (declarations, snapshot, history, qc_browse),
+        (declarations, snapshot, history, qc_browse, fresh_qc_index),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=catalog_stage_stage.CatalogStageInputs,
+    )
+
+
+def _fresh_qc_index_step(plan: ReleasePlan, qc_browse: ArtifactStep) -> ArtifactStep[StageReceipt]:
+    spec = _STAGE_SPECS["fresh_qc_index"]
+    identity = _identity_fields(plan, "release_id", "catalog_target_load_id", "snapshot_id", "source_revision", "pins")
+
+    def build_inputs(ctx: StepContext) -> dict:
+        return {
+            "release_id": plan.release_id,
+            "target_load_id": plan.catalog_target_load_id,
+            "snapshot_id": plan.snapshot_id,
+            "source_revision": plan.source_revision,
+            "output_root": stage_output_root(plan, "qc-index"),
+            "prior_index": _ref_dict(plan.pins.prior_fresh_qc_index),
+            "qc_completion": _resolved_receipt(ctx, qc_browse),
+        }
+
+    return _stage_step(
+        plan,
+        "fresh_qc_index",
+        spec,
+        (qc_browse,),
+        build_inputs=build_inputs,
+        identity=identity,
+        inputs_type=fresh_qc_index_stage.FreshQcIndexInputs,
     )
 
 
@@ -1919,8 +2015,10 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     plan_handle = _plan_document_step(plan)
 
     declarations = _declarations_step(plan, plan_handle)
-    admission_check = _admission_check_step(plan, declarations)
     census_inputs = _census_inputs_step(plan, declarations)
+    backend_validation = _backend_validation_step(plan, census_inputs)
+    identity_backend = _identity_backend_compose_step(plan, backend_validation)
+    admission_check = _admission_check_step(plan, declarations, identity_backend)
     census = _census_step(plan, census_inputs)
     corpus = _corpus_assembly_step(plan, census_inputs, census)
     embed = _embed_step(plan, corpus, census)
@@ -1928,12 +2026,12 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     compose = _curriculum_compose_step(plan, compose_manifest, census)
     region_handles = tuple(_text_scan_region_step(plan, compose, region) for region in sorted(plan.scan_regions))
     text_scans = _text_scan_merge_step(plan, compose, region_handles)
-    identity_backend = _identity_backend_compose_step(plan)
     history = _history_staging_step(plan)
     qc_plan = _qc_browse_plan_step(plan, declarations)
     qc_browse = _qc_browse_copy_step(plan, qc_plan)
+    fresh_qc_index = _fresh_qc_index_step(plan, qc_browse)
     snapshot = _snapshot_publication_step(plan, census, identity_backend, admission_check)
-    catalog_stage = _catalog_stage_step(plan, declarations, snapshot, history, qc_browse)
+    catalog_stage = _catalog_stage_step(plan, declarations, snapshot, history, qc_browse, fresh_qc_index)
     catalog_load = _catalog_load_step(plan, catalog_stage)
     curriculum_load = _curriculum_load_step(plan, compose, text_scans)
 
@@ -1956,6 +2054,8 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
         "embed": embed,
         "compose_manifest": compose_manifest,
         "curriculum_compose": compose,
+        "backend_validation": backend_validation,
+        "fresh_qc_index": fresh_qc_index,
         "identity_backend_compose": identity_backend,
         "history_staging": history,
         "text_scans": text_scans,

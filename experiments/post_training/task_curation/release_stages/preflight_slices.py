@@ -20,11 +20,15 @@ import dataclasses
 import hashlib
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.release_stages import (
     admission_check as admission_check_stage,
+)
+from experiments.post_training.task_curation.release_stages import (
+    backend_validation as backend_validation_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
     census as census_stage,
@@ -59,6 +63,7 @@ from experiments.post_training.task_curation.release_stages.graph import (
     REPO_ROOT,
     ReleasePlan,
     _seal_census_inputs,
+    release_graph,
     stage_output_root,
 )
 from experiments.post_training.task_curation.release_stages.guard import repo_head
@@ -74,6 +79,7 @@ RUNNABLE_NODES = frozenset(
         "corpus_assembly",
         "embed",
         "admission_check",
+        "backend_validation",
         "history_staging",
         "identity_backend_compose",
         "qc_browse_plan",
@@ -87,6 +93,7 @@ BLOCK_REASONS: dict[str, str] = {
     "text_scan_region": "needs the composed handoff document",
     "text_scans": "needs the composed handoff and the regional scan receipts",
     "qc_browse": "writes SQL; needs the sealed browse plan receipt",
+    "fresh_qc_index": "needs the sealed browse completion receipt",
     "snapshot_publication": "needs the real census receipt and the composed survey documents",
     "catalog_stage": "needs the publication, history-staging and QC-browse receipts",
     "catalog_load": "needs the sealed catalog staging plan",
@@ -177,6 +184,23 @@ def _slice_declarations_ref(plan: ReleasePlan) -> ArtifactRef:
     return ArtifactRef(**plan.pins.prior_declarations.model_dump(mode="json"))
 
 
+def _graph_receipt_document(plan: ReleasePlan, node: str, dotted_key: str) -> dict:
+    """A sealed reference from an upstream stage's graph receipt under the release prefix."""
+    path = StoragePath(f"{plan.release_root}/graph/{node}.json")
+    if not path.exists():
+        raise ValueError(f"blocked: {node} has not run; its graph receipt is missing at {path}")
+    document = json.loads(path.read_text())
+    value: dict = document
+    for part in dotted_key.split("."):
+        value = value[part]
+    return {"uri": value["uri"], "sha256": value["sha256"]}
+
+
+def _graph_receipt_receipt(plan: ReleasePlan, node: str) -> dict:
+    """The sealed receipt reference from an upstream stage's graph receipt."""
+    return _graph_receipt_document(plan, node, "receipt")
+
+
 def _census_inputs_document(plan: ReleasePlan, source: str) -> tuple[str, str]:
     """Seal the one-source census-inputs document into the source's slice root."""
     document = _declarations_document()
@@ -231,14 +255,19 @@ def slice_inputs(node: str, plan: ReleasePlan, selection: SliceSelection) -> dic
     if node in ("admission_check", "qc_browse_plan", "history_staging", "identity_backend_compose"):
         inputs["snapshot_id"] = plan.snapshot_id
         inputs["catalog_root"] = plan.catalog_root
+    if node == "backend_validation":
+        inputs["target"] = plan.validation_target
+        inputs["grading_environments"] = plan.validation_grading_environments
+        inputs["integrity_contracts"] = plan.validation_integrity_contracts
+        inputs["runtime_defaults"] = plan.validation_runtime_defaults
     if node == "identity_backend_compose":
         inputs["pins"] = {
-            name: _ref_dict(getattr(plan.pins, name))
-            for name in ("prior_identity", "prior_backend", "backend_validation_receipt", "registry_index")
+            name: _ref_dict(getattr(plan.pins, name)) for name in ("prior_identity", "prior_backend", "registry_index")
         }
         inputs["targets"] = list(plan.targets)
+        inputs["fresh_backend_receipt"] = _graph_receipt_receipt(plan, "backend_validation")
     if node == "admission_check":
-        inputs["backend_survey"] = _ref_dict(plan.pins.backend_survey)
+        inputs["backend"] = _graph_receipt_document(plan, "identity_backend_compose", "documents.backend_map")
     if node == "qc_browse_plan":
         inputs["expected_panels"] = plan.expected_panels
         inputs["exclusions"] = list(plan.qc_exclusions)
@@ -368,7 +397,9 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     release_id=plan.release_id,
                     source_revision=plan.source_revision,
                     declarations=_slice_declarations_ref(plan),
-                    backend=plan.pins.backend_survey,
+                    backend=ArtifactRef(
+                        **_graph_receipt_document(plan, "identity_backend_compose", "documents.backend_map")
+                    ),
                     snapshot_id=plan.snapshot_id,
                     catalog_root=plan.catalog_root,
                     prior_load_id=plan.prior.load_id,
@@ -385,6 +416,29 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                 "blocked": proof["blocked"],
                 "mode": "dry-run",
             }
+
+        return run
+
+    if node == "backend_validation":
+
+        def run() -> dict:
+            uri, sha = _census_inputs_document(plan, plan.validation_target)
+            proof = backend_validation_stage.run_backend_validation(
+                backend_validation_stage.BackendValidationInputs(
+                    release_id=plan.release_id,
+                    source_revision=plan.source_revision,
+                    snapshot_id=plan.snapshot_id,
+                    catalog_root=plan.catalog_root,
+                    output_root=f"{root}/backend-validation",
+                    target=plan.validation_target,
+                    census_inputs=ArtifactRef(uri=uri, sha256=sha),
+                    grading_environments=plan.validation_grading_environments,
+                    integrity_contracts=plan.validation_integrity_contracts,
+                    runtime_defaults=plan.validation_runtime_defaults,
+                ),
+                dry_run=True,
+            )
+            return {"target": proof["target"], "task_count": proof["task_count"], "mode": "dry-run"}
 
         return run
 
@@ -425,7 +479,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
                     targets=plan.targets,
                     prior_identity=plan.pins.prior_identity,
                     prior_backend=plan.pins.prior_backend,
-                    fresh_backend_receipt=plan.pins.backend_validation_receipt,
+                    fresh_backend_receipt=ArtifactRef(**_graph_receipt_receipt(plan, "backend_validation")),
                     registry_index=plan.pins.registry_index,
                     expected_target_count=len(plan.targets),
                 ),
@@ -485,6 +539,31 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
     raise ValueError(f"node {node!r} has no slice runner: {BLOCK_REASONS.get(node, 'unregistered')}")
 
 
+def _upstream_witness(node: str, plan: ReleasePlan) -> tuple[dict[str, str], dict] | None:
+    """The node's upstream artifact records, digest-bound, once every upstream has run.
+
+    A pipeline stage whose inputs are upstream release documents has no small real-input
+    slice: its real gate is the landed module, the typed-input validation and the
+    write-once seals. The witness receipt binds those upstream records so a changed
+    upstream stales the gate exactly like a changed slice input.
+    """
+    from marin.execution.artifact import read_record  # noqa: PLC0415 — beside its only use
+    from rigging.filesystem.cluster_config import marin_prefix  # noqa: PLC0415 — beside its only use
+
+    handle = release_graph(plan).stages[node]
+    digests: dict[str, str] = {}
+    evidence: dict[str, str] = {}
+    for dep in handle.deps:
+        path = dep.path(marin_prefix())
+        record = read_record(path)
+        if record is None or record.result is None:
+            return None
+        raw = StoragePath(path).read_bytes()
+        digests[dep.name] = hashlib.sha256(raw).hexdigest()
+        evidence[dep.name] = record.result_type or ""
+    return digests, evidence
+
+
 def ensure_preflight(
     node: str,
     plan: ReleasePlan,
@@ -495,26 +574,43 @@ def ensure_preflight(
 ) -> preflight_module.PreflightReceipt:
     """Guarantee a fresh preflight receipt for one node; raise to refuse the stage.
 
-    A receipt sealed at the current landed sha over unchanged slice inputs is served
-    as-is; otherwise the runnable slice runs (type-check included) and seals. A
-    blocked node with no fresh receipt refuses: its preflight waits on real
-    write-mode upstream receipts.
+    A runnable node's receipt is sealed at the current landed sha over unchanged slice
+    inputs (the slice runs, type-check included) and served as-is while fresh. A
+    pipeline stage whose inputs are upstream release documents has no small real-input
+    slice: it is gated on an ``upstream`` witness receipt binding its upstream stages'
+    artifact records, and refuses while any upstream has not run.
     """
     selection = selection or SliceSelection()
     root = output_root or plan.release_root
-    inputs = slice_inputs(node, plan, selection)
-    digests = preflight_module.input_digests(inputs)
     landed = repo_head(repo_root)
     existing = preflight_module.read_receipt(root, node)
+    if node not in RUNNABLE_NODES:
+        witness = _upstream_witness(node, plan)
+        if witness is None:
+            reason = BLOCK_REASONS.get(node, "no slice runner")
+            state = "missing" if existing is None else ("failed" if not existing.ok else "stale")
+            raise ValueError(
+                f"stage {node} has no fresh preflight receipt ({state}) and its slice is blocked: {reason};"
+                " run its upstream stages first, then preflight it"
+            )
+        digests, evidence = witness
+        if preflight_module.receipt_is_fresh(existing, landed, digests):
+            return existing
+        receipt = preflight_module.PreflightReceipt(
+            stage=node,
+            mode="upstream",
+            repo_sha=landed,
+            input_digests=digests,
+            ok=True,
+            checked_at=datetime.now(tz=UTC).isoformat(timespec="seconds"),
+            slice_evidence=evidence,
+        )
+        preflight_module.write_receipt(root, receipt)
+        return receipt
+    inputs = slice_inputs(node, plan, selection)
+    digests = preflight_module.input_digests(inputs)
     if preflight_module.receipt_is_fresh(existing, landed, digests):
         return existing
-    if node not in RUNNABLE_NODES:
-        reason = BLOCK_REASONS.get(node, "no slice runner")
-        state = "missing" if existing is None else ("failed" if not existing.ok else "stale")
-        raise ValueError(
-            f"stage {node} has no fresh preflight receipt ({state}) and its slice is blocked: {reason};"
-            " run its upstream stages first, then preflight it"
-        )
     return preflight_module.run_preflight(
         node,
         module_path(node),

@@ -38,7 +38,9 @@ fields — never release-identifying literals (§4).
 | `corpus_assembly.py` | Corpus assembly | census | `CorpusReceipt` (corpus uri, sha, inventory totals) |
 | `embed.py` | Embedding | corpus, backend parity receipt | `EmbedReceipt` (vectors uri, sha, device) |
 | `curriculum_compose.py` | Curriculum compose | embed, census, prior curriculum | `CurriculumPlanArtifact` (plan uri, plan hash) |
+| `backend_validation.py` | Backend validation | census inputs | backend census manifest + `BackendValidationReceipt` (the release's snapshot-bound survey) |
 | `identity_backend_compose.py` | Identity/backend compose | census, surveys, backend validation | `IdentitySurveyReceipt`, `BackendValidationReceipt` |
+| `fresh_qc_index.py` | Fresh QC index | QC browse | `FreshQcIndexReceipt` (the staged SAMPLE panels bound to the target load) |
 | `history_staging.py` | History staging | curriculum plan, prior release | `HistoryStagingReceipt` |
 | `text_scans.py` | Text scans | curriculum plan | `TextScanReceipt` |
 | `qc_browse.py` | QC browse | curriculum plan, history staging | `QcBrowseReceipt` (plan hash, browse uri) |

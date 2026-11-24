@@ -23,10 +23,8 @@ def fixture_pins(release_root: str = RELEASE_ROOT) -> dict:
         "prior_backend": _pin(f"{release_root}/prior/backend.json"),
         "prior_release": _pin(f"{release_root}/prior/release.json"),
         "prior_coverage": _pin(f"{release_root}/prior/coverage.json"),
-        "backend_survey": _pin(f"{release_root}/prior/backend-survey.json"),
-        "backend_validation_receipt": _pin(f"{release_root}/prior/backend-receipt.json"),
+        "prior_fresh_qc_index": _pin(f"{release_root}/prior/fresh-qc.json"),
         "registry_index": _pin(f"{release_root}/prior/registry-index.json"),
-        "fresh_qc_index": _pin(f"{release_root}/prior/fresh-qc.json"),
         "oracle_inventory": _pin(f"{release_root}/prior/oracle-inventory.json"),
         "source_counts": _pin(f"{release_root}/prior/source-counts.json"),
     }
@@ -59,6 +57,17 @@ def fixture_plan(**overrides) -> ReleasePlan:
         expected_prior_sources=2,
         expected_panels=3,
         expected_population_tasks=1000,
+        validation_target="Marin:fixture",
+        validation_grading_environments={
+            "Marin:fixture": {"assessed_tasks": 10, "evidence_url": "s3://bucket/evidence/fixture.json"}
+        },
+        validation_integrity_contracts={
+            "Marin:fixture": {"task_specs_sha256": "d" * 64, "evidence_url": "s3://bucket/contracts/fixture.json"}
+        },
+        validation_runtime_defaults={
+            "agent": {"cleanup_timeout": 120.0, "network": "allow"},
+            "grader": {"cleanup_timeout": 120.0, "network": "deny"},
+        },
         region_prefix="s3://bucket-region/",
         populations={"Marin:fixture": "s3://bucket/populations/fixture"},
         scan_regions={"alpha": "s3://bucket-region/alpha/"},

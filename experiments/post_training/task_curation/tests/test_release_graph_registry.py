@@ -47,6 +47,8 @@ EXPECTED_NODES = (
     "history_staging",
     "text_scan_region[alpha]",
     "text_scans",
+    "backend_validation",
+    "fresh_qc_index",
     "qc_browse_plan",
     "qc_browse",
     "snapshot_publication",

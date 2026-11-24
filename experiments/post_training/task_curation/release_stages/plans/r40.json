@@ -24,19 +24,7 @@
   "migrations": [],
   "package_output_root": "/tmp/r40-package",
   "pins": {
-    "backend_survey": {
-      "sha256": "b682bebf9b2d0f185b43d228e2aa22e3f12e566800512a491c3bbef532ededee",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v22/backend-validation/backend-survey.json"
-    },
-    "backend_validation_receipt": {
-      "sha256": "ed98550829303ae1c05a1e500a5d817a750d1530cf4f552ac39a1499452af34f",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v28/backend-validation/backend-validation-receipt.json"
-    },
     "exposure_input_check": null,
-    "fresh_qc_index": {
-      "sha256": "c311161eac07a8c46af1a11cc059ce98c7fade3487caa502d8e9fc78768ff560",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261123-r39-admissions-refresh-v3/catalog-load/fresh-qc-index-receipts.json"
-    },
     "oracle_inventory": {
       "sha256": "44b3650e04778b4309c5f1d525ec0df60c49c0c07a802f482db13efd6ea53260",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261123-r39-admissions-refresh-v3/oracle-inventory.json"
@@ -54,6 +42,10 @@
     "prior_declarations": {
       "sha256": "60b7623525cb964d5a1620fb47a57664a7545aad4cdc592896af0f67933eb8c8",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v27/prior-declarations.json"
+    },
+    "prior_fresh_qc_index": {
+      "sha256": "c311161eac07a8c46af1a11cc059ce98c7fade3487caa502d8e9fc78768ff560",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261123-r39-admissions-refresh-v3/catalog-load/fresh-qc-index-receipts.json"
     },
     "prior_identity": {
       "sha256": "bb00732530d2c8ffbe7e924a7048978b1beb99cea8814a25f23a1fea64f311d4",
@@ -441,5 +433,75 @@
   "strict_audit_local": false,
   "targets": [
     "Lego-X:Terminal-Lego-15k"
-  ]
+  ],
+  "validation_grading_environments": {
+    "Lego-X:Terminal-Lego-15k": {
+      "assessed_tasks": 1216,
+      "declared_artifact_counts": {},
+      "declared_counts": {
+        "shared": 1216
+      },
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/terminal-lego/2026.11.20.1/root-delivery-census-correction-v1/qualified/census/retained-grading/b0a503ccba15cda4149d.json",
+      "missing_artifact_counts": {},
+      "reason_counts": {
+        "The root-delivery contract grades delivered verifier material in the agent's environment": 1216
+      },
+      "required_counts": {
+        "shared": 1216
+      },
+      "status_counts": {
+        "matched": 1216
+      }
+    }
+  },
+  "validation_integrity_contracts": {
+    "Lego-X:Terminal-Lego-15k": {
+      "absent_contract_tasks": 0,
+      "dataset_id": "open-athena/terminal-lego-root-delivery-qualified-20261122-b-v1",
+      "dataset_revision": "01d71ba8b6dd0458c5552445c8b7b73b2d8fc4fa",
+      "distinct_groups": 1,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/terminal-lego/2026.11.20.1/root-delivery-census-correction-v1/qualified/census/actor/integrity-contracts.json",
+      "example": {
+        "contract_json": "{\"agent_user\": null, \"dependency_state\": \"agent_mutable\", \"id\": \"root-delivery\", \"known_open_gaps\": [\"Agent-installed pytest plugins and imports in the shared image environment\", \"Candidate-produced test-output injection\"], \"undeclared_deadline\": false, \"verifier_files\": [{\"mode\": 420, \"name\": \"__init__.py\", \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"}, {\"mode\": 420, \"name\": \"test.sh\", \"sha256\": \"ddc6642c02ddace98f687900cad14d7be7e943fb55ed4d50712b46150b367431\"}, {\"mode\": 420, \"name\": \"test_outputs.py\", \"sha256\": \"5966996a23ab3b5fef61b1b72131a30dd1ea074c35015d18a63e44eb65438c08\"}], \"version\": 1}",
+        "task_id": "lego-x-terminal-lego-15k-0f1c3bf38da817b8b8cf6184942a1022f6c78e911f9f16dfa1ba598a6bdbc977"
+      },
+      "groups": [
+        {
+          "count": 1216,
+          "dependency_state": "agent_mutable",
+          "harness_policy_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "id": "root-delivery",
+          "native_family": null,
+          "present": true,
+          "version": 1
+        }
+      ],
+      "required_shared_tasks": 1216,
+      "shared_missing_contract_tasks": 0,
+      "task_specs_sha256": "3d6b405d2305e008fad6d80cd1e999e6092f8dc2127abdc54d8e1054c1381240"
+    }
+  },
+  "validation_runtime_defaults": {
+    "agent": {
+      "cleanup_timeout": 120.0,
+      "cpus": null,
+      "gpus": 0,
+      "memory_mb": null,
+      "network": "allow",
+      "startup_timeout": 900.0,
+      "storage_mb": null,
+      "user": null
+    },
+    "grader": {
+      "cleanup_timeout": 120.0,
+      "cpus": null,
+      "gpus": 0,
+      "memory_mb": null,
+      "network": "deny",
+      "startup_timeout": 900.0,
+      "storage_mb": null,
+      "user": null
+    }
+  },
+  "validation_target": "Lego-X:Terminal-Lego-15k"
 }
