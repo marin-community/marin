@@ -148,9 +148,6 @@ custom_roles:
   permissions:
   - iap.webServices.getIamPolicy
   - iap.webServices.setIamPolicy
-# Exact project-permission delta of the former instanceAdmin.v1, osAdminLogin,
-# and tunnelResourceAccessor bindings after marindev, as of 2026-11-24.
-# Recheck the live predefined roles before applying this migration.
 - role_id: marinInfra
   title: Marin Infra
   description: Preserve existing Iris operator Compute, OS Login, and IAP access alongside marindev.
