@@ -195,11 +195,14 @@ class LevanterBackend:
             trainer.use_explicit_mesh_axes,
         )
 
+        geometry = self.config.snowball_agentx_geometry
         with trainer.use_device_mesh():
-            if self.config.snowball_agentx_geometry is not None:
+            if geometry is not None:
                 if not isinstance(model_config, SnowballConfig):
                     raise ValueError("Native Snowball AgentX requires a Snowball checkpoint")
-                model = load_agentx_model(converter, checkpoint_ref, model_config, trainer.parameter_axis_mapping)
+                model = load_agentx_model(
+                    converter, checkpoint_ref, model_config, trainer.parameter_axis_mapping, geometry
+                )
             elif self.config.checkpoint_load_mode == "snowball_layerwise":
                 if not isinstance(model_config, SnowballConfig):
                     raise ValueError("Layerwise serving load requires a Snowball checkpoint")

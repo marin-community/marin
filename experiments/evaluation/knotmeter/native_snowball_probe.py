@@ -168,7 +168,7 @@ def main() -> None:
         tokenizer = load_tokenizer(str(snapshot))
         started = time.monotonic()
         with trainer.use_device_mesh():
-            model = load_agentx_model(converter, ref, model_config, trainer.parameter_axis_mapping)
+            model = load_agentx_model(converter, ref, model_config, trainer.parameter_axis_mapping, geometry)
             server = InferenceServer.create(server_config, model, tokenizer)
         logger.info("Loaded Snowball and KV in %.1f seconds", time.monotonic() - started)
         try:

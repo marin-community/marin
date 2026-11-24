@@ -25,6 +25,64 @@ from levanter.grug._moe.common import (
 from levanter.grug._moe.ep_common import _assignment_sources, _prefix_cap_counts
 
 
+class _ExpertRouteOrder(NamedTuple):
+    counts: jax.Array
+    accepted_counts: jax.Array
+    selection_key: jax.Array
+
+
+def _expert_route_order(
+    local_expert: Int[Array, "A"],
+    local_mask: Bool[Array, "A"],
+    *,
+    local_experts: int,
+    logical_capacity: jax.Array,
+) -> _ExpertRouteOrder:
+    """Return candidate counts, accepted counts, and order keys for this shard."""
+    assignments = local_expert.shape[0]
+    # TPU lowers this small-expert count reduction better as a dense compare+sum than as `bincount`.
+    expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
+    counts = jnp.sum(
+        (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask.astype(jnp.int32)[:, None],
+        axis=0,
+        dtype=jnp.int32,
+    )
+    accepted_counts = _prefix_cap_counts(counts, capacity=logical_capacity)
+
+    # A top_k over (local expert id, flat position) keys avoids a global argsort while preserving the
+    # grouped layout expected by ragged_dot.
+    order_key = local_expert * assignments + jnp.arange(assignments, dtype=jnp.int32)
+    selection_key = jnp.where(local_mask, local_experts * assignments - order_key, -1)
+    return _ExpertRouteOrder(counts, accepted_counts, selection_key)
+
+
+def _ring_route_order(
+    expert_flat: jax.Array,
+    token_valid: jax.Array,
+    *,
+    topk: int,
+    local_experts: int,
+    ep_size: int,
+    capacity_factor: float,
+    physical_capacity: int,
+) -> _ExpertRouteOrder:
+    assignment_valid = _assignment_validity(token_valid, tokens=token_valid.shape[0], topk=topk)
+    logical_capacity = _scaled_capacity(
+        jnp.sum(assignment_valid, dtype=jnp.int32),
+        capacity_factor=capacity_factor,
+        divisor=ep_size,
+        minimum=local_experts,
+        maximum=physical_capacity,
+    )
+    expert_start = jax.lax.axis_index("expert") * local_experts
+    local_expert = expert_flat - expert_start
+    local_mask = assignment_valid & (local_expert >= 0) & (local_expert < local_experts)
+    local_expert = jnp.where(local_mask, local_expert, 0)
+    return _expert_route_order(
+        local_expert, local_mask, local_experts=local_experts, logical_capacity=logical_capacity
+    )
+
+
 def _select_local_assignments(
     local_expert: Int[Array, "A"],
     local_mask: Bool[Array, "A"],
@@ -38,23 +96,19 @@ def _select_local_assignments(
     ``local_expert`` must be zero where ``local_mask`` is false. Returns accepted counts per expert, the dropped
     assignment count, picked flat positions, and validity for each of the ``physical_capacity`` picks.
     """
-    assignments = local_expert.shape[0]
-    # TPU lowers this small-expert count reduction better as a dense compare+sum than as `bincount`.
-    expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
-    counts = jnp.sum(
-        (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask.astype(jnp.int32)[:, None],
-        axis=0,
-        dtype=jnp.int32,
+    order = _expert_route_order(
+        local_expert, local_mask, local_experts=local_experts, logical_capacity=logical_capacity
     )
-    accepted_counts = _prefix_cap_counts(counts, capacity=logical_capacity)
+    return _pick_local_routes(order, physical_capacity)
+
+
+def _pick_local_routes(
+    order: _ExpertRouteOrder, physical_capacity: int
+) -> tuple[Int[Array, "Elocal"], jax.Array, Int[Array, "C"], Bool[Array, "C"]]:
+    counts, accepted_counts, selection_key = order
     accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
     dropped = jnp.sum(counts, dtype=jnp.int32) - accepted_total
     valid = jnp.arange(physical_capacity, dtype=jnp.int32) < accepted_total
-
-    # A top_k over (local expert id, flat position) keys avoids a global argsort while preserving the
-    # grouped layout expected by ragged_dot.
-    order_key = local_expert * assignments + jnp.arange(assignments, dtype=jnp.int32)
-    selection_key = jnp.where(local_mask, local_experts * assignments - order_key, -1)
     _, picked = jax.lax.top_k(selection_key, physical_capacity)
     # `picked` pads with invalid rows at the end. They stay outside every group, so ragged_dot skips them and leaves
     # their output unspecified; the dispatch and combine read only the valid rows.
@@ -227,28 +281,16 @@ def _moe_mlp_ep_ring_local(
         ep_size = num_experts // local_experts
         physical_capacity = int(math.ceil(capacity_factor * assignments / ep_size))
         physical_capacity = min(assignments, max(local_experts, physical_capacity))
-        assignment_valid = _assignment_validity(token_valid_global, tokens=tokens, topk=topk)
-        valid_assignments = jnp.sum(assignment_valid, dtype=jnp.int32)
-        logical_capacity = _scaled_capacity(
-            valid_assignments,
-            capacity_factor=capacity_factor,
-            divisor=ep_size,
-            minimum=local_experts,
-            maximum=physical_capacity,
-        )
-
-        expert_axis = jax.lax.axis_index("expert")
-        expert_start = expert_axis * local_experts
-        local_expert: jax.Array = expert_flat - expert_start
-        local_mask = assignment_valid & jnp.logical_and(local_expert >= 0, local_expert < local_experts)
-        local_expert = jnp.where(local_mask, local_expert, 0)
-        group_sizes, dropped_local, local_idx, valid = _select_local_assignments(
-            local_expert,
-            local_mask,
+        order = _ring_route_order(
+            expert_flat,
+            token_valid_global,
+            topk=topk,
             local_experts=local_experts,
-            logical_capacity=logical_capacity,
+            ep_size=ep_size,
+            capacity_factor=capacity_factor,
             physical_capacity=physical_capacity,
         )
+        group_sizes, dropped_local, local_idx, valid = _pick_local_routes(order, physical_capacity)
 
         dispatch_combine = make_dispatch_combine(local_idx, valid, tokens, topk)
         weight_local = jnp.take(weight_flat, local_idx, axis=0)
