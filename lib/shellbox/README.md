@@ -36,8 +36,8 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
 runtime on the host. The Daytona SDK and current Iris dependencies require
 `--prerelease allow`. A checkout can supply Iris as a workspace dependency.
-Iris uses `CONTAINER_PROFILE_SANDBOX`: gVisor, no cluster environment,
-credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
+Iris uses `CONTAINER_PROFILE_SANDBOX`: the cluster's sandbox runtime, no cluster
+environment, credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
@@ -268,13 +268,19 @@ Docker and Daytona stop the command's process group on a timeout. A successful s
 A failed stop without confirmed completion raises an infrastructure error and closes the machine.
 Docker and Daytona also stop the process group on caller cancellation. Daytona preserves the machine only after confirming the stop and removing private command files; otherwise it closes the machine.
 
+Daytona repeats a request that failed in transit: one that lost its connection or got a 502, 503, or 504 status.
+A command whose request failed in transit runs once: the command script claims its private directory before it runs,
+and the exit trap records the exit code that the machine then reads. The machine waits for that exit code until the command's timeout.
+If the command shell was killed before it recorded an exit code, or the failure persists, `Machine.run` raises an infrastructure error.
+
 Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
 Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
 Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
 Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
 Model commands that run as root can stop other root-owned processes.
 
-For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
+For Daytona, set `DAYTONA_API_KEY`. The API URL and target region are constants
+(`https://app.daytona.io/api` and `us`).
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
 Each machine owns and closes its client. In the default build mode, the factory
 creates sandboxes from shared snapshots. Snapshot names derive from the registry
@@ -282,6 +288,18 @@ reference or build-context contents and the requested resources. Use immutable
 image references. A mutable tag can select a snapshot built from an earlier image.
 Snapshot creation requires available organization quota.
 Machine cleanup deletes the sandbox and retains the snapshot for reuse.
+`DaytonaMachineFactory(auto_stop_interval=30)` sets the idle-stop interval in
+minutes and configures Daytona to delete sandboxes immediately on stop. An open
+machine renews activity at one-third of that interval because a running guest command does not
+reset Daytona's idle timer. Closing the machine stops renewal before deleting
+the sandbox. If the client process exits without cleanup, renewal stops and idle cleanup
+reclaims the sandbox. `auto_stop_interval=0` disables idle stop and renewal.
+`ttl_minutes` remains the hard wall-clock cap, defaulting to 360 minutes,
+including while activity is renewed.
+Pass `labels={"owner": "agent-eval", "lane": "eval", "job": "swe-rebench"}`
+to attach ownership metadata to every sandbox the factory creates. Use a job
+prefix and lane, without personal information or credentials. The default
+labels contain only `owner=shellbox`; callers supply the lane and job labels.
 The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
 `network_allow_list`, or `domain_allow_list`. The two allow-list modes require a
 `value`. Without a policy override, the factory uses `MachineSpec.network`.

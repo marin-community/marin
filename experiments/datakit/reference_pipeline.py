@@ -458,11 +458,6 @@ def select_sources(names: list[str] | None = None) -> dict[str, StepSpec]:
     return sources
 
 
-def default_sources() -> dict[str, StepSpec]:
-    """Every ``all_sources()`` entry, mapped to its normalize StepSpec."""
-    return select_sources(None)
-
-
 def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale, output_prefix: str | None) -> StepSpec:
     return StepSpec(
         name=f"datakit/embed/{name}",

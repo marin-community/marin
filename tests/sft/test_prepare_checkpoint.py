@@ -4,16 +4,11 @@
 """Tests for the SFT checkpoint-preparation step and its wiring into ``sft_step``."""
 from __future__ import annotations
 
-import dataclasses
-
-import jax.numpy as jnp
 import numpy as np
 import pytest
 from fray.types import ResourceConfig
-from levanter.main.train_lm import preserve_hf_runtime_settings
-from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
-from marin.execution.lazy import lower, materialized_config
+from marin.execution.lazy import materialized_config
 from safetensors.numpy import load, save
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
@@ -167,29 +162,6 @@ def test_hf_model_relative_local_dir_loads_in_place(tmp_path, monkeypatch):
     train_config = materialized_config(step, _PREFIX).train_config
     assert train_config.initialize_from_hf == path
     assert train_config.data.tokenizer == path
-
-
-def test_hf_model_carries_snowball_runtime_settings_and_field_dtype_overrides():
-    """Snowball runtime settings on HFModel/PreparedModel and SFTSpec.field_dtype_overrides reach TrainLmConfig."""
-    path = "gs://bucket/models/snowball"
-    parity_model = SnowballConfig(moe_capacity_factor=8.0, router_dot_fp32=True, fp32_activations=True)
-    default_step = sft_step(_spec(HFModel(path, model=SnowballConfig())), ResourceConfig.with_cpu())
-    parity_spec = dataclasses.replace(
-        _spec(HFModel(path, model=parity_model)),
-        field_dtype_overrides={"router_bias": "float32"},
-    )
-    parity_step = sft_step(parity_spec, ResourceConfig.with_cpu())
-
-    train_config = materialized_config(parity_step, _PREFIX).train_config
-    assert train_config.model == parity_model
-    assert preserve_hf_runtime_settings(SnowballConfig(), train_config.model) == parity_model
-    assert train_config.trainer.field_dtype_overrides == {"router_bias": jnp.dtype("float32")}
-    assert train_config.trainer.use_explicit_mesh_axes is True
-    assert lower(parity_step).hash_attrs["fingerprint"] != lower(default_step).hash_attrs["fingerprint"]
-
-    prep = _prepared_step()
-    prep_step = sft_step(_spec(PreparedModel(prep, model=parity_model)), ResourceConfig.with_cpu())
-    assert materialized_config(prep_step, _PREFIX).train_config.model == parity_model
 
 
 @pytest.mark.parametrize("model_ref", ["Qwen/Qwen3-0.6B", "Qwen/Qwen3-0.6B@main", "Qwen/Qwen3-0.6B@c1899de"])

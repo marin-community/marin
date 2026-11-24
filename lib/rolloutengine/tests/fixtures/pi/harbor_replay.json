@@ -1,0 +1,777 @@
+{
+ "recorded_from": "Harbor's installed Pi agent, marin-community/harbor 9d099696a567 (Harbor 0.8.1) as vendored at Marin commit d23db7690f",
+ "scenarios": {
+  "authentication": {
+   "instruction": "Say done.",
+   "machine": [
+    {
+     "command": "mkdir -p /installed-agent",
+     "cwd": null,
+     "env": {},
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; pi --version",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "0.87.0\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "command": "set -o pipefail; mktemp -d /tmp/harbor-pi.XXXXXXXX",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "/tmp/harbor-pi.Fixture1\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "content": "export HARBOR_PI_API_BASE=http://127.0.0.1:8788/v1\nexport HARBOR_PI_API_KEY=EMPTY\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "content": "const tokenizeUrl = \"http://127.0.0.1:8788/tokenize\";\nconst contextWindow = 32768;\n\nconst tokenizationKeys = [\n  \"chat_template\",\n  \"chat_template_kwargs\",\n  \"documents\",\n  \"mm_processor_kwargs\",\n  \"tools\",\n];\n\nfunction tokenizationPayload(payload) {\n  const request = {\n    model: payload.model,\n    messages: payload.messages,\n    add_generation_prompt: true,\n  };\n  for (const key of tokenizationKeys) {\n    if (payload[key] !== undefined) request[key] = payload[key];\n  }\n  return request;\n}\n\nasync function countPromptTokens(payload) {\n  const response = await fetch(tokenizeUrl, {\n    method: \"POST\",\n    headers: { \"content-type\": \"application/json\" },\n    body: JSON.stringify(tokenizationPayload(payload)),\n  });\n  if (!response.ok) {\n    throw new Error(`vLLM /tokenize returned HTTP ${response.status}: ${await response.text()}`);\n  }\n  const body = await response.json();\n  if (!Array.isArray(body.tokens) || !body.tokens.every(Number.isInteger)) {\n    throw new Error(\"vLLM /tokenize did not return an integer token list\");\n  }\n  return body.tokens.length;\n}\n\nfunction toolTextSlots(messages) {\n  const slots = [];\n  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {\n    const message = messages[messageIndex];\n    if (message?.role !== \"tool\") continue;\n    if (typeof message.content === \"string\") {\n      slots.push({ messageIndex, blockIndex: undefined, text: message.content });\n      continue;\n    }\n    if (!Array.isArray(message.content)) continue;\n    for (let blockIndex = 0; blockIndex < message.content.length; blockIndex++) {\n      const block = message.content[blockIndex];\n      if (block?.type === \"text\" && typeof block.text === \"string\") {\n        slots.push({ messageIndex, blockIndex, text: block.text });\n      }\n    }\n  }\n  return slots.sort((left, right) => right.text.length - left.text.length);\n}\n\nfunction truncateToolText(text, retainedCharacters) {\n  const characters = Array.from(text);\n  if (retainedCharacters >= characters.length) return text;\n  const prefixLength = Math.ceil(retainedCharacters / 2);\n  const suffixLength = Math.floor(retainedCharacters / 2);\n  const omitted = characters.length - retainedCharacters;\n  const marker = `\n...[tool output truncated to fit model context; ${omitted} characters omitted]...\n`;\n  return characters.slice(0, prefixLength).join(\"\") + marker +\n    characters.slice(characters.length - suffixLength).join(\"\");\n}\n\nfunction replaceToolText(messages, slot, text) {\n  const updated = structuredClone(messages);\n  if (slot.blockIndex === undefined) {\n    updated[slot.messageIndex].content = text;\n  } else {\n    updated[slot.messageIndex].content[slot.blockIndex].text = text;\n  }\n  return updated;\n}\n\nasync function fitToolOutputs(payload, promptBudget, promptTokens) {\n  let adjusted = payload;\n  let adjustedTokens = promptTokens;\n  for (const slot of toolTextSlots(payload.messages)) {\n    if (adjustedTokens <= promptBudget) break;\n    const characterCount = Array.from(slot.text).length;\n    let low = 0;\n    let high = characterCount;\n    let bestMessages = replaceToolText(\n      adjusted.messages,\n      slot,\n      truncateToolText(slot.text, 0),\n    );\n    let bestTokens = await countPromptTokens({ ...adjusted, messages: bestMessages });\n    if (bestTokens > promptBudget) {\n      adjusted = { ...adjusted, messages: bestMessages };\n      adjustedTokens = bestTokens;\n      continue;\n    }\n    while (low <= high) {\n      const retained = Math.floor((low + high) / 2);\n      const messages = replaceToolText(\n        adjusted.messages,\n        slot,\n        truncateToolText(slot.text, retained),\n      );\n      const tokens = await countPromptTokens({ ...adjusted, messages });\n      if (tokens <= promptBudget) {\n        bestMessages = messages;\n        bestTokens = tokens;\n        low = retained + 1;\n      } else {\n        high = retained - 1;\n      }\n    }\n    adjusted = { ...adjusted, messages: bestMessages };\n    adjustedTokens = bestTokens;\n  }\n  return { payload: adjusted, promptTokens: adjustedTokens };\n}\n\nexport default function (pi) {\n  pi.on(\"before_provider_request\", async (event) => {\n    const payload = event.payload;\n    if (!payload || typeof payload !== \"object\" || Array.isArray(payload)) {\n      return payload;\n    }\n\n    const maxTokensField = Object.hasOwn(payload, \"max_tokens\")\n      ? \"max_tokens\"\n      : Object.hasOwn(payload, \"max_completion_tokens\")\n        ? \"max_completion_tokens\"\n        : undefined;\n    if (!maxTokensField || !Array.isArray(payload.messages) || typeof payload.model !== \"string\") {\n      return payload;\n    }\n\n    const configuredMaxTokens = payload[maxTokensField];\n    if (!Number.isSafeInteger(configuredMaxTokens) || configuredMaxTokens <= 0) {\n      throw new Error(`${maxTokensField} must be a positive integer`);\n    }\n    let promptTokens = await countPromptTokens(payload);\n    const promptBudget = Math.max(1, contextWindow - configuredMaxTokens);\n    let adjustedPayload = payload;\n    if (promptTokens > promptBudget) {\n      const fitted = await fitToolOutputs(payload, promptBudget, promptTokens);\n      adjustedPayload = fitted.payload;\n      promptTokens = fitted.promptTokens;\n    }\n    const availableOutputTokens = Math.max(1, contextWindow - promptTokens);\n    return {\n      ...adjustedPayload,\n      [maxTokensField]: Math.min(configuredMaxTokens, availableOutputTokens),\n    };\n  });\n}\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; set -e; trap 'rm -rf /tmp/harbor-pi.Fixture1 \"$HOME/.pi/agent/models.json\"' EXIT; set -e -o pipefail; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst compaction = JSON.parse(process.argv[1]);\nconst configPath = path.join(process.env.HOME, process.argv[2]);\nlet settings = {};\nif (fs.existsSync(configPath)) settings = JSON.parse(fs.readFileSync(configPath, \"utf8\"));\nsettings.compaction = { ...(settings.compaction ?? {}), ...compaction };\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(settings));' '{\"enabled\":true,\"reserveTokens\":16384,\"keepRecentTokens\":8192}' .pi/agent/settings.json; . /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst config = JSON.parse(process.argv[1]);\nconst provider = process.argv[2];\nconst baseUrlEnv = process.argv[3];\nconst configRelativePath = process.argv[4];\nconst baseUrl = process.env[baseUrlEnv];\nif (!baseUrl) throw new Error(`${baseUrlEnv} is required`);\nconfig.providers[provider].baseUrl = baseUrl;\nconst configPath = path.join(process.env.HOME, configRelativePath);\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(config));' '{\"providers\":{\"hosted_vllm\":{\"baseUrl\":\"\",\"api\":\"openai-completions\",\"apiKey\":\"HARBOR_PI_API_KEY\",\"compat\":{\"supportsDeveloperRole\":false,\"supportsReasoningEffort\":false,\"requiresReasoningContentOnAssistantMessages\":true,\"thinkingFormat\":\"chat-template\",\"chatTemplateKwargs\":{\"enable_thinking\":{\"$var\":\"thinking.enabled\"}}},\"models\":[{\"id\":\"fixture-model\",\"name\":\"fixture-model\",\"reasoning\":true,\"input\":[\"text\"],\"contextWindow\":32768,\"maxTokens\":16384,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}}}' hosted_vllm HARBOR_PI_API_BASE .pi/agent/models.json; rm -f /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; pi --print --mode json --no-session --provider hosted_vllm --model fixture-model --extension /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js 'Say done.' 2>&1 </dev/null | node -e 'const readline = require(\"readline\");\nlet lastAssistantStopReason;\nlet lastAssistantErrorMessage;\nconst lines = readline.createInterface({ input: process.stdin });\nlines.on(\"line\", (line) => {\n  process.stdout.write(line + \"\\n\");\n  try {\n    const event = JSON.parse(line);\n    const message = event.type === \"message_end\" ? event.message : undefined;\n    if (message?.role === \"assistant\") {\n      lastAssistantStopReason = message.stopReason;\n      lastAssistantErrorMessage = message.errorMessage;\n    }\n  } catch {\n    // Pi can mix diagnostics into its JSON stream. Preserve them without\n    // treating unstructured text as a successful or failed assistant turn.\n  }\n});\nlines.on(\"close\", () => {\n  if (lastAssistantStopReason !== \"error\") return;\n  if (/authentication required|authenticationerror/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_MODEL_AUTHENTICATION_ERROR\\n\");\n  } else if (/maximum context length|context_length_exceeded/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_CONTEXT_LENGTH_EXCEEDED\\n\");\n  }\n  process.exitCode = 1;\n});' | stdbuf -oL tee /logs/agent/pi.txt",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 1,
+     "stderr": "HARBOR_PI_MODEL_AUTHENTICATION_ERROR\n",
+     "stdout": "",
+     "timeout": null,
+     "user": null
+    }
+   ],
+   "mcp_servers": [],
+   "options": {
+    "max_input_tokens": 32768,
+    "max_output_tokens": 16384,
+    "thinking_format": "chat-template"
+   },
+   "outcome": "ModelAuthenticationError"
+  },
+  "bfcl_parity": {
+   "instruction": "Call the right function for the user's request.",
+   "machine": [
+    {
+     "command": "mkdir -p /installed-agent",
+     "cwd": null,
+     "env": {},
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; pi --version",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "0.87.0\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "command": "set -o pipefail; mktemp -d /tmp/harbor-pi.XXXXXXXX",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "/tmp/harbor-pi.Fixture1\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "content": "export HARBOR_PI_API_BASE=http://127.0.0.1:8788/v1\nexport HARBOR_PI_API_KEY=EMPTY\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "content": "const tokenizeUrl = \"http://127.0.0.1:8788/tokenize\";\nconst contextWindow = 32768;\n\nconst tokenizationKeys = [\n  \"chat_template\",\n  \"chat_template_kwargs\",\n  \"documents\",\n  \"mm_processor_kwargs\",\n  \"tools\",\n];\n\nfunction tokenizationPayload(payload) {\n  const request = {\n    model: payload.model,\n    messages: payload.messages,\n    add_generation_prompt: true,\n  };\n  for (const key of tokenizationKeys) {\n    if (payload[key] !== undefined) request[key] = payload[key];\n  }\n  return request;\n}\n\nasync function countPromptTokens(payload) {\n  const response = await fetch(tokenizeUrl, {\n    method: \"POST\",\n    headers: { \"content-type\": \"application/json\" },\n    body: JSON.stringify(tokenizationPayload(payload)),\n  });\n  if (!response.ok) {\n    throw new Error(`vLLM /tokenize returned HTTP ${response.status}: ${await response.text()}`);\n  }\n  const body = await response.json();\n  if (!Array.isArray(body.tokens) || !body.tokens.every(Number.isInteger)) {\n    throw new Error(\"vLLM /tokenize did not return an integer token list\");\n  }\n  return body.tokens.length;\n}\n\nfunction toolTextSlots(messages) {\n  const slots = [];\n  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {\n    const message = messages[messageIndex];\n    if (message?.role !== \"tool\") continue;\n    if (typeof message.content === \"string\") {\n      slots.push({ messageIndex, blockIndex: undefined, text: message.content });\n      continue;\n    }\n    if (!Array.isArray(message.content)) continue;\n    for (let blockIndex = 0; blockIndex < message.content.length; blockIndex++) {\n      const block = message.content[blockIndex];\n      if (block?.type === \"text\" && typeof block.text === \"string\") {\n        slots.push({ messageIndex, blockIndex, text: block.text });\n      }\n    }\n  }\n  return slots.sort((left, right) => right.text.length - left.text.length);\n}\n\nfunction truncateToolText(text, retainedCharacters) {\n  const characters = Array.from(text);\n  if (retainedCharacters >= characters.length) return text;\n  const prefixLength = Math.ceil(retainedCharacters / 2);\n  const suffixLength = Math.floor(retainedCharacters / 2);\n  const omitted = characters.length - retainedCharacters;\n  const marker = `\n...[tool output truncated to fit model context; ${omitted} characters omitted]...\n`;\n  return characters.slice(0, prefixLength).join(\"\") + marker +\n    characters.slice(characters.length - suffixLength).join(\"\");\n}\n\nfunction replaceToolText(messages, slot, text) {\n  const updated = structuredClone(messages);\n  if (slot.blockIndex === undefined) {\n    updated[slot.messageIndex].content = text;\n  } else {\n    updated[slot.messageIndex].content[slot.blockIndex].text = text;\n  }\n  return updated;\n}\n\nasync function fitToolOutputs(payload, promptBudget, promptTokens) {\n  let adjusted = payload;\n  let adjustedTokens = promptTokens;\n  for (const slot of toolTextSlots(payload.messages)) {\n    if (adjustedTokens <= promptBudget) break;\n    const characterCount = Array.from(slot.text).length;\n    let low = 0;\n    let high = characterCount;\n    let bestMessages = replaceToolText(\n      adjusted.messages,\n      slot,\n      truncateToolText(slot.text, 0),\n    );\n    let bestTokens = await countPromptTokens({ ...adjusted, messages: bestMessages });\n    if (bestTokens > promptBudget) {\n      adjusted = { ...adjusted, messages: bestMessages };\n      adjustedTokens = bestTokens;\n      continue;\n    }\n    while (low <= high) {\n      const retained = Math.floor((low + high) / 2);\n      const messages = replaceToolText(\n        adjusted.messages,\n        slot,\n        truncateToolText(slot.text, retained),\n      );\n      const tokens = await countPromptTokens({ ...adjusted, messages });\n      if (tokens <= promptBudget) {\n        bestMessages = messages;\n        bestTokens = tokens;\n        low = retained + 1;\n      } else {\n        high = retained - 1;\n      }\n    }\n    adjusted = { ...adjusted, messages: bestMessages };\n    adjustedTokens = bestTokens;\n  }\n  return { payload: adjusted, promptTokens: adjustedTokens };\n}\n\nexport default function (pi) {\n  pi.on(\"before_provider_request\", async (event) => {\n    const payload = event.payload;\n    if (!payload || typeof payload !== \"object\" || Array.isArray(payload)) {\n      return payload;\n    }\n\n    const maxTokensField = Object.hasOwn(payload, \"max_tokens\")\n      ? \"max_tokens\"\n      : Object.hasOwn(payload, \"max_completion_tokens\")\n        ? \"max_completion_tokens\"\n        : undefined;\n    if (!maxTokensField || !Array.isArray(payload.messages) || typeof payload.model !== \"string\") {\n      return payload;\n    }\n\n    const configuredMaxTokens = payload[maxTokensField];\n    if (!Number.isSafeInteger(configuredMaxTokens) || configuredMaxTokens <= 0) {\n      throw new Error(`${maxTokensField} must be a positive integer`);\n    }\n    let promptTokens = await countPromptTokens(payload);\n    const promptBudget = Math.max(1, contextWindow - configuredMaxTokens);\n    let adjustedPayload = payload;\n    if (promptTokens > promptBudget) {\n      const fitted = await fitToolOutputs(payload, promptBudget, promptTokens);\n      adjustedPayload = fitted.payload;\n      promptTokens = fitted.promptTokens;\n    }\n    const availableOutputTokens = Math.max(1, contextWindow - promptTokens);\n    return {\n      ...adjustedPayload,\n      [maxTokensField]: Math.min(configuredMaxTokens, availableOutputTokens),\n    };\n  });\n}\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; set -e; trap 'rm -rf /tmp/harbor-pi.Fixture1 \"$HOME/.pi/agent/models.json\"' EXIT; set -e -o pipefail; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst compaction = JSON.parse(process.argv[1]);\nconst configPath = path.join(process.env.HOME, process.argv[2]);\nlet settings = {};\nif (fs.existsSync(configPath)) settings = JSON.parse(fs.readFileSync(configPath, \"utf8\"));\nsettings.compaction = { ...(settings.compaction ?? {}), ...compaction };\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(settings));' '{\"enabled\":true,\"reserveTokens\":16384,\"keepRecentTokens\":8192}' .pi/agent/settings.json; . /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst config = JSON.parse(process.argv[1]);\nconst provider = process.argv[2];\nconst baseUrlEnv = process.argv[3];\nconst configRelativePath = process.argv[4];\nconst baseUrl = process.env[baseUrlEnv];\nif (!baseUrl) throw new Error(`${baseUrlEnv} is required`);\nconfig.providers[provider].baseUrl = baseUrl;\nconst configPath = path.join(process.env.HOME, configRelativePath);\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(config));' '{\"providers\":{\"hosted_vllm\":{\"baseUrl\":\"\",\"api\":\"openai-completions\",\"apiKey\":\"HARBOR_PI_API_KEY\",\"compat\":{\"supportsDeveloperRole\":false,\"supportsReasoningEffort\":false,\"requiresReasoningContentOnAssistantMessages\":true,\"thinkingFormat\":\"chat-template\",\"chatTemplateKwargs\":{\"enable_thinking\":{\"$var\":\"thinking.enabled\"}}},\"models\":[{\"id\":\"fixture-model\",\"name\":\"fixture-model\",\"reasoning\":true,\"input\":[\"text\"],\"contextWindow\":32768,\"maxTokens\":16384,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}}}' hosted_vllm HARBOR_PI_API_BASE .pi/agent/models.json; rm -f /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; pi --print --mode json --no-session --provider hosted_vllm --model fixture-model --extension /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js 'Call the right function for the user'\"'\"'s request.' 2>&1 </dev/null | node -e 'const readline = require(\"readline\");\nlet lastAssistantStopReason;\nlet lastAssistantErrorMessage;\nconst lines = readline.createInterface({ input: process.stdin });\nlines.on(\"line\", (line) => {\n  process.stdout.write(line + \"\\n\");\n  try {\n    const event = JSON.parse(line);\n    const message = event.type === \"message_end\" ? event.message : undefined;\n    if (message?.role === \"assistant\") {\n      lastAssistantStopReason = message.stopReason;\n      lastAssistantErrorMessage = message.errorMessage;\n    }\n  } catch {\n    // Pi can mix diagnostics into its JSON stream. Preserve them without\n    // treating unstructured text as a successful or failed assistant turn.\n  }\n});\nlines.on(\"close\", () => {\n  if (lastAssistantStopReason !== \"error\") return;\n  if (/authentication required|authenticationerror/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_MODEL_AUTHENTICATION_ERROR\\n\");\n  } else if (/maximum context length|context_length_exceeded/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_CONTEXT_LENGTH_EXCEEDED\\n\");\n  }\n  process.exitCode = 1;\n});' | stdbuf -oL tee /logs/agent/pi.txt",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "{\"type\":\"agent_settled\"}\n",
+     "timeout": null,
+     "user": null
+    }
+   ],
+   "mcp_servers": [],
+   "options": {
+    "max_input_tokens": 32768,
+    "max_output_tokens": 16384,
+    "thinking_format": "chat-template",
+    "version": "0.87.0"
+   },
+   "outcome": null
+  },
+  "bixbench": {
+   "instruction": "Analyze the data in /workspace.\nAnswer with 'yes' or \"no\"; don't run `rm` or use $HOME.",
+   "machine": [
+    {
+     "command": "mkdir -p /installed-agent",
+     "cwd": null,
+     "env": {},
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; pi --version",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "0.87.0\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "command": "set -o pipefail; mktemp -d /tmp/harbor-pi.XXXXXXXX",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "/tmp/harbor-pi.Fixture1\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "content": "export HARBOR_PI_API_BASE=http://127.0.0.1:8788/v1\nexport HARBOR_PI_API_KEY=EMPTY\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "content": "const tokenizeUrl = \"http://127.0.0.1:8788/tokenize\";\nconst contextWindow = 65536;\n\nconst tokenizationKeys = [\n  \"chat_template\",\n  \"chat_template_kwargs\",\n  \"documents\",\n  \"mm_processor_kwargs\",\n  \"tools\",\n];\n\nfunction tokenizationPayload(payload) {\n  const request = {\n    model: payload.model,\n    messages: payload.messages,\n    add_generation_prompt: true,\n  };\n  for (const key of tokenizationKeys) {\n    if (payload[key] !== undefined) request[key] = payload[key];\n  }\n  return request;\n}\n\nasync function countPromptTokens(payload) {\n  const response = await fetch(tokenizeUrl, {\n    method: \"POST\",\n    headers: { \"content-type\": \"application/json\" },\n    body: JSON.stringify(tokenizationPayload(payload)),\n  });\n  if (!response.ok) {\n    throw new Error(`vLLM /tokenize returned HTTP ${response.status}: ${await response.text()}`);\n  }\n  const body = await response.json();\n  if (!Array.isArray(body.tokens) || !body.tokens.every(Number.isInteger)) {\n    throw new Error(\"vLLM /tokenize did not return an integer token list\");\n  }\n  return body.tokens.length;\n}\n\nfunction toolTextSlots(messages) {\n  const slots = [];\n  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {\n    const message = messages[messageIndex];\n    if (message?.role !== \"tool\") continue;\n    if (typeof message.content === \"string\") {\n      slots.push({ messageIndex, blockIndex: undefined, text: message.content });\n      continue;\n    }\n    if (!Array.isArray(message.content)) continue;\n    for (let blockIndex = 0; blockIndex < message.content.length; blockIndex++) {\n      const block = message.content[blockIndex];\n      if (block?.type === \"text\" && typeof block.text === \"string\") {\n        slots.push({ messageIndex, blockIndex, text: block.text });\n      }\n    }\n  }\n  return slots.sort((left, right) => right.text.length - left.text.length);\n}\n\nfunction truncateToolText(text, retainedCharacters) {\n  const characters = Array.from(text);\n  if (retainedCharacters >= characters.length) return text;\n  const prefixLength = Math.ceil(retainedCharacters / 2);\n  const suffixLength = Math.floor(retainedCharacters / 2);\n  const omitted = characters.length - retainedCharacters;\n  const marker = `\n...[tool output truncated to fit model context; ${omitted} characters omitted]...\n`;\n  return characters.slice(0, prefixLength).join(\"\") + marker +\n    characters.slice(characters.length - suffixLength).join(\"\");\n}\n\nfunction replaceToolText(messages, slot, text) {\n  const updated = structuredClone(messages);\n  if (slot.blockIndex === undefined) {\n    updated[slot.messageIndex].content = text;\n  } else {\n    updated[slot.messageIndex].content[slot.blockIndex].text = text;\n  }\n  return updated;\n}\n\nasync function fitToolOutputs(payload, promptBudget, promptTokens) {\n  let adjusted = payload;\n  let adjustedTokens = promptTokens;\n  for (const slot of toolTextSlots(payload.messages)) {\n    if (adjustedTokens <= promptBudget) break;\n    const characterCount = Array.from(slot.text).length;\n    let low = 0;\n    let high = characterCount;\n    let bestMessages = replaceToolText(\n      adjusted.messages,\n      slot,\n      truncateToolText(slot.text, 0),\n    );\n    let bestTokens = await countPromptTokens({ ...adjusted, messages: bestMessages });\n    if (bestTokens > promptBudget) {\n      adjusted = { ...adjusted, messages: bestMessages };\n      adjustedTokens = bestTokens;\n      continue;\n    }\n    while (low <= high) {\n      const retained = Math.floor((low + high) / 2);\n      const messages = replaceToolText(\n        adjusted.messages,\n        slot,\n        truncateToolText(slot.text, retained),\n      );\n      const tokens = await countPromptTokens({ ...adjusted, messages });\n      if (tokens <= promptBudget) {\n        bestMessages = messages;\n        bestTokens = tokens;\n        low = retained + 1;\n      } else {\n        high = retained - 1;\n      }\n    }\n    adjusted = { ...adjusted, messages: bestMessages };\n    adjustedTokens = bestTokens;\n  }\n  return { payload: adjusted, promptTokens: adjustedTokens };\n}\n\nexport default function (pi) {\n  pi.on(\"before_provider_request\", async (event) => {\n    const payload = event.payload;\n    if (!payload || typeof payload !== \"object\" || Array.isArray(payload)) {\n      return payload;\n    }\n\n    const maxTokensField = Object.hasOwn(payload, \"max_tokens\")\n      ? \"max_tokens\"\n      : Object.hasOwn(payload, \"max_completion_tokens\")\n        ? \"max_completion_tokens\"\n        : undefined;\n    if (!maxTokensField || !Array.isArray(payload.messages) || typeof payload.model !== \"string\") {\n      return payload;\n    }\n\n    const configuredMaxTokens = payload[maxTokensField];\n    if (!Number.isSafeInteger(configuredMaxTokens) || configuredMaxTokens <= 0) {\n      throw new Error(`${maxTokensField} must be a positive integer`);\n    }\n    let promptTokens = await countPromptTokens(payload);\n    const promptBudget = Math.max(1, contextWindow - configuredMaxTokens);\n    let adjustedPayload = payload;\n    if (promptTokens > promptBudget) {\n      const fitted = await fitToolOutputs(payload, promptBudget, promptTokens);\n      adjustedPayload = fitted.payload;\n      promptTokens = fitted.promptTokens;\n    }\n    const availableOutputTokens = Math.max(1, contextWindow - promptTokens);\n    return {\n      ...adjustedPayload,\n      [maxTokensField]: Math.min(configuredMaxTokens, availableOutputTokens),\n    };\n  });\n}\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; set -e; trap 'rm -rf /tmp/harbor-pi.Fixture1 \"$HOME/.pi/agent/models.json\"' EXIT; set -e -o pipefail; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst compaction = JSON.parse(process.argv[1]);\nconst configPath = path.join(process.env.HOME, process.argv[2]);\nlet settings = {};\nif (fs.existsSync(configPath)) settings = JSON.parse(fs.readFileSync(configPath, \"utf8\"));\nsettings.compaction = { ...(settings.compaction ?? {}), ...compaction };\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(settings));' '{\"enabled\":true,\"reserveTokens\":32768,\"keepRecentTokens\":16384}' .pi/agent/settings.json; . /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst config = JSON.parse(process.argv[1]);\nconst provider = process.argv[2];\nconst baseUrlEnv = process.argv[3];\nconst configRelativePath = process.argv[4];\nconst baseUrl = process.env[baseUrlEnv];\nif (!baseUrl) throw new Error(`${baseUrlEnv} is required`);\nconfig.providers[provider].baseUrl = baseUrl;\nconst configPath = path.join(process.env.HOME, configRelativePath);\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(config));' '{\"providers\":{\"hosted_vllm\":{\"baseUrl\":\"\",\"api\":\"openai-completions\",\"apiKey\":\"HARBOR_PI_API_KEY\",\"compat\":{\"supportsDeveloperRole\":false,\"supportsReasoningEffort\":false,\"requiresReasoningContentOnAssistantMessages\":true,\"thinkingFormat\":\"qwen-chat-template\",\"chatTemplateKwargs\":{\"enable_thinking\":{\"$var\":\"thinking.enabled\"}}},\"models\":[{\"id\":\"fixture-model\",\"name\":\"fixture-model\",\"reasoning\":true,\"input\":[\"text\"],\"contextWindow\":65536,\"maxTokens\":16384,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}}}' hosted_vllm HARBOR_PI_API_BASE .pi/agent/models.json; rm -f /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; pi --print --mode json --no-session --provider hosted_vllm --model fixture-model --thinking high --extension /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js 'Analyze the data in /workspace.\nAnswer with '\"'\"'yes'\"'\"' or \"no\"; don'\"'\"'t run `rm` or use $HOME.' 2>&1 </dev/null | node -e 'const readline = require(\"readline\");\nlet lastAssistantStopReason;\nlet lastAssistantErrorMessage;\nconst lines = readline.createInterface({ input: process.stdin });\nlines.on(\"line\", (line) => {\n  process.stdout.write(line + \"\\n\");\n  try {\n    const event = JSON.parse(line);\n    const message = event.type === \"message_end\" ? event.message : undefined;\n    if (message?.role === \"assistant\") {\n      lastAssistantStopReason = message.stopReason;\n      lastAssistantErrorMessage = message.errorMessage;\n    }\n  } catch {\n    // Pi can mix diagnostics into its JSON stream. Preserve them without\n    // treating unstructured text as a successful or failed assistant turn.\n  }\n});\nlines.on(\"close\", () => {\n  if (lastAssistantStopReason !== \"error\") return;\n  if (/authentication required|authenticationerror/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_MODEL_AUTHENTICATION_ERROR\\n\");\n  } else if (/maximum context length|context_length_exceeded/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_CONTEXT_LENGTH_EXCEEDED\\n\");\n  }\n  process.exitCode = 1;\n});' | stdbuf -oL tee /logs/agent/pi.txt",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "{\"type\":\"agent_settled\"}\n",
+     "timeout": null,
+     "user": null
+    }
+   ],
+   "mcp_servers": [],
+   "options": {
+    "compaction_reserve_tokens": 32768,
+    "max_input_tokens": 65536,
+    "max_output_tokens": 16384,
+    "thinking": "high",
+    "thinking_format": "qwen-chat-template"
+   },
+   "outcome": null
+  },
+  "context_length": {
+   "instruction": "Say done.",
+   "machine": [
+    {
+     "command": "mkdir -p /installed-agent",
+     "cwd": null,
+     "env": {},
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; pi --version",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "0.87.0\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "command": "set -o pipefail; mktemp -d /tmp/harbor-pi.XXXXXXXX",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "/tmp/harbor-pi.Fixture1\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "content": "export HARBOR_PI_API_BASE=http://127.0.0.1:8788/v1\nexport HARBOR_PI_API_KEY=EMPTY\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "content": "const tokenizeUrl = \"http://127.0.0.1:8788/tokenize\";\nconst contextWindow = 32768;\n\nconst tokenizationKeys = [\n  \"chat_template\",\n  \"chat_template_kwargs\",\n  \"documents\",\n  \"mm_processor_kwargs\",\n  \"tools\",\n];\n\nfunction tokenizationPayload(payload) {\n  const request = {\n    model: payload.model,\n    messages: payload.messages,\n    add_generation_prompt: true,\n  };\n  for (const key of tokenizationKeys) {\n    if (payload[key] !== undefined) request[key] = payload[key];\n  }\n  return request;\n}\n\nasync function countPromptTokens(payload) {\n  const response = await fetch(tokenizeUrl, {\n    method: \"POST\",\n    headers: { \"content-type\": \"application/json\" },\n    body: JSON.stringify(tokenizationPayload(payload)),\n  });\n  if (!response.ok) {\n    throw new Error(`vLLM /tokenize returned HTTP ${response.status}: ${await response.text()}`);\n  }\n  const body = await response.json();\n  if (!Array.isArray(body.tokens) || !body.tokens.every(Number.isInteger)) {\n    throw new Error(\"vLLM /tokenize did not return an integer token list\");\n  }\n  return body.tokens.length;\n}\n\nfunction toolTextSlots(messages) {\n  const slots = [];\n  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {\n    const message = messages[messageIndex];\n    if (message?.role !== \"tool\") continue;\n    if (typeof message.content === \"string\") {\n      slots.push({ messageIndex, blockIndex: undefined, text: message.content });\n      continue;\n    }\n    if (!Array.isArray(message.content)) continue;\n    for (let blockIndex = 0; blockIndex < message.content.length; blockIndex++) {\n      const block = message.content[blockIndex];\n      if (block?.type === \"text\" && typeof block.text === \"string\") {\n        slots.push({ messageIndex, blockIndex, text: block.text });\n      }\n    }\n  }\n  return slots.sort((left, right) => right.text.length - left.text.length);\n}\n\nfunction truncateToolText(text, retainedCharacters) {\n  const characters = Array.from(text);\n  if (retainedCharacters >= characters.length) return text;\n  const prefixLength = Math.ceil(retainedCharacters / 2);\n  const suffixLength = Math.floor(retainedCharacters / 2);\n  const omitted = characters.length - retainedCharacters;\n  const marker = `\n...[tool output truncated to fit model context; ${omitted} characters omitted]...\n`;\n  return characters.slice(0, prefixLength).join(\"\") + marker +\n    characters.slice(characters.length - suffixLength).join(\"\");\n}\n\nfunction replaceToolText(messages, slot, text) {\n  const updated = structuredClone(messages);\n  if (slot.blockIndex === undefined) {\n    updated[slot.messageIndex].content = text;\n  } else {\n    updated[slot.messageIndex].content[slot.blockIndex].text = text;\n  }\n  return updated;\n}\n\nasync function fitToolOutputs(payload, promptBudget, promptTokens) {\n  let adjusted = payload;\n  let adjustedTokens = promptTokens;\n  for (const slot of toolTextSlots(payload.messages)) {\n    if (adjustedTokens <= promptBudget) break;\n    const characterCount = Array.from(slot.text).length;\n    let low = 0;\n    let high = characterCount;\n    let bestMessages = replaceToolText(\n      adjusted.messages,\n      slot,\n      truncateToolText(slot.text, 0),\n    );\n    let bestTokens = await countPromptTokens({ ...adjusted, messages: bestMessages });\n    if (bestTokens > promptBudget) {\n      adjusted = { ...adjusted, messages: bestMessages };\n      adjustedTokens = bestTokens;\n      continue;\n    }\n    while (low <= high) {\n      const retained = Math.floor((low + high) / 2);\n      const messages = replaceToolText(\n        adjusted.messages,\n        slot,\n        truncateToolText(slot.text, retained),\n      );\n      const tokens = await countPromptTokens({ ...adjusted, messages });\n      if (tokens <= promptBudget) {\n        bestMessages = messages;\n        bestTokens = tokens;\n        low = retained + 1;\n      } else {\n        high = retained - 1;\n      }\n    }\n    adjusted = { ...adjusted, messages: bestMessages };\n    adjustedTokens = bestTokens;\n  }\n  return { payload: adjusted, promptTokens: adjustedTokens };\n}\n\nexport default function (pi) {\n  pi.on(\"before_provider_request\", async (event) => {\n    const payload = event.payload;\n    if (!payload || typeof payload !== \"object\" || Array.isArray(payload)) {\n      return payload;\n    }\n\n    const maxTokensField = Object.hasOwn(payload, \"max_tokens\")\n      ? \"max_tokens\"\n      : Object.hasOwn(payload, \"max_completion_tokens\")\n        ? \"max_completion_tokens\"\n        : undefined;\n    if (!maxTokensField || !Array.isArray(payload.messages) || typeof payload.model !== \"string\") {\n      return payload;\n    }\n\n    const configuredMaxTokens = payload[maxTokensField];\n    if (!Number.isSafeInteger(configuredMaxTokens) || configuredMaxTokens <= 0) {\n      throw new Error(`${maxTokensField} must be a positive integer`);\n    }\n    let promptTokens = await countPromptTokens(payload);\n    const promptBudget = Math.max(1, contextWindow - configuredMaxTokens);\n    let adjustedPayload = payload;\n    if (promptTokens > promptBudget) {\n      const fitted = await fitToolOutputs(payload, promptBudget, promptTokens);\n      adjustedPayload = fitted.payload;\n      promptTokens = fitted.promptTokens;\n    }\n    const availableOutputTokens = Math.max(1, contextWindow - promptTokens);\n    return {\n      ...adjustedPayload,\n      [maxTokensField]: Math.min(configuredMaxTokens, availableOutputTokens),\n    };\n  });\n}\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; set -e; trap 'rm -rf /tmp/harbor-pi.Fixture1 \"$HOME/.pi/agent/models.json\"' EXIT; set -e -o pipefail; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst compaction = JSON.parse(process.argv[1]);\nconst configPath = path.join(process.env.HOME, process.argv[2]);\nlet settings = {};\nif (fs.existsSync(configPath)) settings = JSON.parse(fs.readFileSync(configPath, \"utf8\"));\nsettings.compaction = { ...(settings.compaction ?? {}), ...compaction };\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(settings));' '{\"enabled\":true,\"reserveTokens\":16384,\"keepRecentTokens\":8192}' .pi/agent/settings.json; . /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst config = JSON.parse(process.argv[1]);\nconst provider = process.argv[2];\nconst baseUrlEnv = process.argv[3];\nconst configRelativePath = process.argv[4];\nconst baseUrl = process.env[baseUrlEnv];\nif (!baseUrl) throw new Error(`${baseUrlEnv} is required`);\nconfig.providers[provider].baseUrl = baseUrl;\nconst configPath = path.join(process.env.HOME, configRelativePath);\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(config));' '{\"providers\":{\"hosted_vllm\":{\"baseUrl\":\"\",\"api\":\"openai-completions\",\"apiKey\":\"HARBOR_PI_API_KEY\",\"compat\":{\"supportsDeveloperRole\":false,\"supportsReasoningEffort\":false,\"requiresReasoningContentOnAssistantMessages\":true,\"thinkingFormat\":\"chat-template\",\"chatTemplateKwargs\":{\"enable_thinking\":{\"$var\":\"thinking.enabled\"}}},\"models\":[{\"id\":\"fixture-model\",\"name\":\"fixture-model\",\"reasoning\":true,\"input\":[\"text\"],\"contextWindow\":32768,\"maxTokens\":16384,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}}}' hosted_vllm HARBOR_PI_API_BASE .pi/agent/models.json; rm -f /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; pi --print --mode json --no-session --provider hosted_vllm --model fixture-model --extension /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js 'Say done.' 2>&1 </dev/null | node -e 'const readline = require(\"readline\");\nlet lastAssistantStopReason;\nlet lastAssistantErrorMessage;\nconst lines = readline.createInterface({ input: process.stdin });\nlines.on(\"line\", (line) => {\n  process.stdout.write(line + \"\\n\");\n  try {\n    const event = JSON.parse(line);\n    const message = event.type === \"message_end\" ? event.message : undefined;\n    if (message?.role === \"assistant\") {\n      lastAssistantStopReason = message.stopReason;\n      lastAssistantErrorMessage = message.errorMessage;\n    }\n  } catch {\n    // Pi can mix diagnostics into its JSON stream. Preserve them without\n    // treating unstructured text as a successful or failed assistant turn.\n  }\n});\nlines.on(\"close\", () => {\n  if (lastAssistantStopReason !== \"error\") return;\n  if (/authentication required|authenticationerror/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_MODEL_AUTHENTICATION_ERROR\\n\");\n  } else if (/maximum context length|context_length_exceeded/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_CONTEXT_LENGTH_EXCEEDED\\n\");\n  }\n  process.exitCode = 1;\n});' | stdbuf -oL tee /logs/agent/pi.txt",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 1,
+     "stderr": "HARBOR_PI_CONTEXT_LENGTH_EXCEEDED\n",
+     "stdout": "",
+     "timeout": null,
+     "user": null
+    }
+   ],
+   "mcp_servers": [],
+   "options": {
+    "max_input_tokens": 32768,
+    "max_output_tokens": 16384,
+    "thinking_format": "chat-template"
+   },
+   "outcome": "ContextLengthExceededError"
+  },
+  "killed": {
+   "instruction": "Say done.",
+   "machine": [
+    {
+     "command": "mkdir -p /installed-agent",
+     "cwd": null,
+     "env": {},
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; pi --version",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "0.87.0\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "command": "set -o pipefail; mktemp -d /tmp/harbor-pi.XXXXXXXX",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "/tmp/harbor-pi.Fixture1\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "content": "export HARBOR_PI_API_BASE=http://127.0.0.1:8788/v1\nexport HARBOR_PI_API_KEY=EMPTY\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "content": "const tokenizeUrl = \"http://127.0.0.1:8788/tokenize\";\nconst contextWindow = 32768;\n\nconst tokenizationKeys = [\n  \"chat_template\",\n  \"chat_template_kwargs\",\n  \"documents\",\n  \"mm_processor_kwargs\",\n  \"tools\",\n];\n\nfunction tokenizationPayload(payload) {\n  const request = {\n    model: payload.model,\n    messages: payload.messages,\n    add_generation_prompt: true,\n  };\n  for (const key of tokenizationKeys) {\n    if (payload[key] !== undefined) request[key] = payload[key];\n  }\n  return request;\n}\n\nasync function countPromptTokens(payload) {\n  const response = await fetch(tokenizeUrl, {\n    method: \"POST\",\n    headers: { \"content-type\": \"application/json\" },\n    body: JSON.stringify(tokenizationPayload(payload)),\n  });\n  if (!response.ok) {\n    throw new Error(`vLLM /tokenize returned HTTP ${response.status}: ${await response.text()}`);\n  }\n  const body = await response.json();\n  if (!Array.isArray(body.tokens) || !body.tokens.every(Number.isInteger)) {\n    throw new Error(\"vLLM /tokenize did not return an integer token list\");\n  }\n  return body.tokens.length;\n}\n\nfunction toolTextSlots(messages) {\n  const slots = [];\n  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {\n    const message = messages[messageIndex];\n    if (message?.role !== \"tool\") continue;\n    if (typeof message.content === \"string\") {\n      slots.push({ messageIndex, blockIndex: undefined, text: message.content });\n      continue;\n    }\n    if (!Array.isArray(message.content)) continue;\n    for (let blockIndex = 0; blockIndex < message.content.length; blockIndex++) {\n      const block = message.content[blockIndex];\n      if (block?.type === \"text\" && typeof block.text === \"string\") {\n        slots.push({ messageIndex, blockIndex, text: block.text });\n      }\n    }\n  }\n  return slots.sort((left, right) => right.text.length - left.text.length);\n}\n\nfunction truncateToolText(text, retainedCharacters) {\n  const characters = Array.from(text);\n  if (retainedCharacters >= characters.length) return text;\n  const prefixLength = Math.ceil(retainedCharacters / 2);\n  const suffixLength = Math.floor(retainedCharacters / 2);\n  const omitted = characters.length - retainedCharacters;\n  const marker = `\n...[tool output truncated to fit model context; ${omitted} characters omitted]...\n`;\n  return characters.slice(0, prefixLength).join(\"\") + marker +\n    characters.slice(characters.length - suffixLength).join(\"\");\n}\n\nfunction replaceToolText(messages, slot, text) {\n  const updated = structuredClone(messages);\n  if (slot.blockIndex === undefined) {\n    updated[slot.messageIndex].content = text;\n  } else {\n    updated[slot.messageIndex].content[slot.blockIndex].text = text;\n  }\n  return updated;\n}\n\nasync function fitToolOutputs(payload, promptBudget, promptTokens) {\n  let adjusted = payload;\n  let adjustedTokens = promptTokens;\n  for (const slot of toolTextSlots(payload.messages)) {\n    if (adjustedTokens <= promptBudget) break;\n    const characterCount = Array.from(slot.text).length;\n    let low = 0;\n    let high = characterCount;\n    let bestMessages = replaceToolText(\n      adjusted.messages,\n      slot,\n      truncateToolText(slot.text, 0),\n    );\n    let bestTokens = await countPromptTokens({ ...adjusted, messages: bestMessages });\n    if (bestTokens > promptBudget) {\n      adjusted = { ...adjusted, messages: bestMessages };\n      adjustedTokens = bestTokens;\n      continue;\n    }\n    while (low <= high) {\n      const retained = Math.floor((low + high) / 2);\n      const messages = replaceToolText(\n        adjusted.messages,\n        slot,\n        truncateToolText(slot.text, retained),\n      );\n      const tokens = await countPromptTokens({ ...adjusted, messages });\n      if (tokens <= promptBudget) {\n        bestMessages = messages;\n        bestTokens = tokens;\n        low = retained + 1;\n      } else {\n        high = retained - 1;\n      }\n    }\n    adjusted = { ...adjusted, messages: bestMessages };\n    adjustedTokens = bestTokens;\n  }\n  return { payload: adjusted, promptTokens: adjustedTokens };\n}\n\nexport default function (pi) {\n  pi.on(\"before_provider_request\", async (event) => {\n    const payload = event.payload;\n    if (!payload || typeof payload !== \"object\" || Array.isArray(payload)) {\n      return payload;\n    }\n\n    const maxTokensField = Object.hasOwn(payload, \"max_tokens\")\n      ? \"max_tokens\"\n      : Object.hasOwn(payload, \"max_completion_tokens\")\n        ? \"max_completion_tokens\"\n        : undefined;\n    if (!maxTokensField || !Array.isArray(payload.messages) || typeof payload.model !== \"string\") {\n      return payload;\n    }\n\n    const configuredMaxTokens = payload[maxTokensField];\n    if (!Number.isSafeInteger(configuredMaxTokens) || configuredMaxTokens <= 0) {\n      throw new Error(`${maxTokensField} must be a positive integer`);\n    }\n    let promptTokens = await countPromptTokens(payload);\n    const promptBudget = Math.max(1, contextWindow - configuredMaxTokens);\n    let adjustedPayload = payload;\n    if (promptTokens > promptBudget) {\n      const fitted = await fitToolOutputs(payload, promptBudget, promptTokens);\n      adjustedPayload = fitted.payload;\n      promptTokens = fitted.promptTokens;\n    }\n    const availableOutputTokens = Math.max(1, contextWindow - promptTokens);\n    return {\n      ...adjustedPayload,\n      [maxTokensField]: Math.min(configuredMaxTokens, availableOutputTokens),\n    };\n  });\n}\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; set -e; trap 'rm -rf /tmp/harbor-pi.Fixture1 \"$HOME/.pi/agent/models.json\"' EXIT; set -e -o pipefail; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst compaction = JSON.parse(process.argv[1]);\nconst configPath = path.join(process.env.HOME, process.argv[2]);\nlet settings = {};\nif (fs.existsSync(configPath)) settings = JSON.parse(fs.readFileSync(configPath, \"utf8\"));\nsettings.compaction = { ...(settings.compaction ?? {}), ...compaction };\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(settings));' '{\"enabled\":true,\"reserveTokens\":16384,\"keepRecentTokens\":8192}' .pi/agent/settings.json; . /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst config = JSON.parse(process.argv[1]);\nconst provider = process.argv[2];\nconst baseUrlEnv = process.argv[3];\nconst configRelativePath = process.argv[4];\nconst baseUrl = process.env[baseUrlEnv];\nif (!baseUrl) throw new Error(`${baseUrlEnv} is required`);\nconfig.providers[provider].baseUrl = baseUrl;\nconst configPath = path.join(process.env.HOME, configRelativePath);\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(config));' '{\"providers\":{\"hosted_vllm\":{\"baseUrl\":\"\",\"api\":\"openai-completions\",\"apiKey\":\"HARBOR_PI_API_KEY\",\"compat\":{\"supportsDeveloperRole\":false,\"supportsReasoningEffort\":false,\"requiresReasoningContentOnAssistantMessages\":true,\"thinkingFormat\":\"chat-template\",\"chatTemplateKwargs\":{\"enable_thinking\":{\"$var\":\"thinking.enabled\"}}},\"models\":[{\"id\":\"fixture-model\",\"name\":\"fixture-model\",\"reasoning\":true,\"input\":[\"text\"],\"contextWindow\":32768,\"maxTokens\":16384,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}}}' hosted_vllm HARBOR_PI_API_BASE .pi/agent/models.json; rm -f /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; pi --print --mode json --no-session --provider hosted_vllm --model fixture-model --extension /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js 'Say done.' 2>&1 </dev/null | node -e 'const readline = require(\"readline\");\nlet lastAssistantStopReason;\nlet lastAssistantErrorMessage;\nconst lines = readline.createInterface({ input: process.stdin });\nlines.on(\"line\", (line) => {\n  process.stdout.write(line + \"\\n\");\n  try {\n    const event = JSON.parse(line);\n    const message = event.type === \"message_end\" ? event.message : undefined;\n    if (message?.role === \"assistant\") {\n      lastAssistantStopReason = message.stopReason;\n      lastAssistantErrorMessage = message.errorMessage;\n    }\n  } catch {\n    // Pi can mix diagnostics into its JSON stream. Preserve them without\n    // treating unstructured text as a successful or failed assistant turn.\n  }\n});\nlines.on(\"close\", () => {\n  if (lastAssistantStopReason !== \"error\") return;\n  if (/authentication required|authenticationerror/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_MODEL_AUTHENTICATION_ERROR\\n\");\n  } else if (/maximum context length|context_length_exceeded/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_CONTEXT_LENGTH_EXCEEDED\\n\");\n  }\n  process.exitCode = 1;\n});' | stdbuf -oL tee /logs/agent/pi.txt",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 137,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": null
+    }
+   ],
+   "mcp_servers": [],
+   "options": {
+    "max_input_tokens": 32768,
+    "max_output_tokens": 16384,
+    "thinking_format": "chat-template"
+   },
+   "outcome": "AgentKilledBySignalError"
+  },
+  "mcp_servers": {
+   "instruction": "Find the report.",
+   "machine": [
+    {
+     "command": "mkdir -p /installed-agent",
+     "cwd": null,
+     "env": {},
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; pi --version",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "0.87.0\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "content": "const fs = require(\"node:fs\");\nconst os = require(\"node:os\");\nconst path = require(\"node:path\");\n\nconst [extensionPath, servers, exclusions] = process.argv.slice(2);\nfs.accessSync(extensionPath, fs.constants.R_OK);\nconst excluded = JSON.parse(exclusions);\nconst directory = path.join(os.homedir(), \".pi/agent\");\nfs.mkdirSync(directory, { recursive: true });\nconst settingsPath = path.join(directory, \"settings.json\");\nconst settings = fs.existsSync(settingsPath)\n  ? JSON.parse(fs.readFileSync(settingsPath, \"utf8\"))\n  : {};\nconst wrapperPath = path.join(directory, \"harbor-mcp-filter.js\");\nif (excluded.length) {\n  // Intercept rediscovery too: the Tau3 relay owns conversation control.\n  fs.writeFileSync(wrapperPath, `\nimport mcp from ${JSON.stringify(extensionPath)};\nconst excluded = new Set(${JSON.stringify(excluded)});\nexport default async function (pi) {\n  await mcp({\n    ...pi,\n    registerTool(tool) {\n      if (!excluded.has(tool.name)) pi.registerTool(tool);\n    },\n    setActiveTools(names) {\n      pi.setActiveTools(names.filter(name => !excluded.has(name)));\n    },\n  });\n}\n`);\n} else {\n  fs.rmSync(wrapperPath, { force: true });\n}\nsettings.extensions = [\n  ...(settings.extensions ?? []).filter(entry => entry !== extensionPath && entry !== wrapperPath),\n  excluded.length ? wrapperPath : extensionPath,\n];\nfs.writeFileSync(settingsPath, JSON.stringify(settings));\nfs.writeFileSync(path.join(directory, \"mcp.json\"), servers);\n",
+     "upload": "/installed-agent/pi_configure_mcp.cjs"
+    },
+    {
+     "command": "set -o pipefail; node /installed-agent/pi_configure_mcp.cjs /opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts '{\"mcpServers\": {\"search\": {\"transport\": \"sse\", \"lifecycle\": \"eager\", \"url\": \"http://search:8000/sse\"}, \"files\": {\"transport\": \"streamable-http\", \"lifecycle\": \"eager\", \"url\": \"http://files:9000/mcp\"}}}' '[\"send_message\"]'",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "command": "set -o pipefail; mktemp -d /tmp/harbor-pi.XXXXXXXX",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "/tmp/harbor-pi.Fixture1\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "content": "export HARBOR_PI_API_BASE=http://127.0.0.1:8788/v1\nexport HARBOR_PI_API_KEY=EMPTY\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "content": "const tokenizeUrl = \"http://127.0.0.1:8788/tokenize\";\nconst contextWindow = 32768;\n\nconst tokenizationKeys = [\n  \"chat_template\",\n  \"chat_template_kwargs\",\n  \"documents\",\n  \"mm_processor_kwargs\",\n  \"tools\",\n];\n\nfunction tokenizationPayload(payload) {\n  const request = {\n    model: payload.model,\n    messages: payload.messages,\n    add_generation_prompt: true,\n  };\n  for (const key of tokenizationKeys) {\n    if (payload[key] !== undefined) request[key] = payload[key];\n  }\n  return request;\n}\n\nasync function countPromptTokens(payload) {\n  const response = await fetch(tokenizeUrl, {\n    method: \"POST\",\n    headers: { \"content-type\": \"application/json\" },\n    body: JSON.stringify(tokenizationPayload(payload)),\n  });\n  if (!response.ok) {\n    throw new Error(`vLLM /tokenize returned HTTP ${response.status}: ${await response.text()}`);\n  }\n  const body = await response.json();\n  if (!Array.isArray(body.tokens) || !body.tokens.every(Number.isInteger)) {\n    throw new Error(\"vLLM /tokenize did not return an integer token list\");\n  }\n  return body.tokens.length;\n}\n\nfunction toolTextSlots(messages) {\n  const slots = [];\n  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {\n    const message = messages[messageIndex];\n    if (message?.role !== \"tool\") continue;\n    if (typeof message.content === \"string\") {\n      slots.push({ messageIndex, blockIndex: undefined, text: message.content });\n      continue;\n    }\n    if (!Array.isArray(message.content)) continue;\n    for (let blockIndex = 0; blockIndex < message.content.length; blockIndex++) {\n      const block = message.content[blockIndex];\n      if (block?.type === \"text\" && typeof block.text === \"string\") {\n        slots.push({ messageIndex, blockIndex, text: block.text });\n      }\n    }\n  }\n  return slots.sort((left, right) => right.text.length - left.text.length);\n}\n\nfunction truncateToolText(text, retainedCharacters) {\n  const characters = Array.from(text);\n  if (retainedCharacters >= characters.length) return text;\n  const prefixLength = Math.ceil(retainedCharacters / 2);\n  const suffixLength = Math.floor(retainedCharacters / 2);\n  const omitted = characters.length - retainedCharacters;\n  const marker = `\n...[tool output truncated to fit model context; ${omitted} characters omitted]...\n`;\n  return characters.slice(0, prefixLength).join(\"\") + marker +\n    characters.slice(characters.length - suffixLength).join(\"\");\n}\n\nfunction replaceToolText(messages, slot, text) {\n  const updated = structuredClone(messages);\n  if (slot.blockIndex === undefined) {\n    updated[slot.messageIndex].content = text;\n  } else {\n    updated[slot.messageIndex].content[slot.blockIndex].text = text;\n  }\n  return updated;\n}\n\nasync function fitToolOutputs(payload, promptBudget, promptTokens) {\n  let adjusted = payload;\n  let adjustedTokens = promptTokens;\n  for (const slot of toolTextSlots(payload.messages)) {\n    if (adjustedTokens <= promptBudget) break;\n    const characterCount = Array.from(slot.text).length;\n    let low = 0;\n    let high = characterCount;\n    let bestMessages = replaceToolText(\n      adjusted.messages,\n      slot,\n      truncateToolText(slot.text, 0),\n    );\n    let bestTokens = await countPromptTokens({ ...adjusted, messages: bestMessages });\n    if (bestTokens > promptBudget) {\n      adjusted = { ...adjusted, messages: bestMessages };\n      adjustedTokens = bestTokens;\n      continue;\n    }\n    while (low <= high) {\n      const retained = Math.floor((low + high) / 2);\n      const messages = replaceToolText(\n        adjusted.messages,\n        slot,\n        truncateToolText(slot.text, retained),\n      );\n      const tokens = await countPromptTokens({ ...adjusted, messages });\n      if (tokens <= promptBudget) {\n        bestMessages = messages;\n        bestTokens = tokens;\n        low = retained + 1;\n      } else {\n        high = retained - 1;\n      }\n    }\n    adjusted = { ...adjusted, messages: bestMessages };\n    adjustedTokens = bestTokens;\n  }\n  return { payload: adjusted, promptTokens: adjustedTokens };\n}\n\nexport default function (pi) {\n  pi.on(\"before_provider_request\", async (event) => {\n    const payload = event.payload;\n    if (!payload || typeof payload !== \"object\" || Array.isArray(payload)) {\n      return payload;\n    }\n\n    const maxTokensField = Object.hasOwn(payload, \"max_tokens\")\n      ? \"max_tokens\"\n      : Object.hasOwn(payload, \"max_completion_tokens\")\n        ? \"max_completion_tokens\"\n        : undefined;\n    if (!maxTokensField || !Array.isArray(payload.messages) || typeof payload.model !== \"string\") {\n      return payload;\n    }\n\n    const configuredMaxTokens = payload[maxTokensField];\n    if (!Number.isSafeInteger(configuredMaxTokens) || configuredMaxTokens <= 0) {\n      throw new Error(`${maxTokensField} must be a positive integer`);\n    }\n    let promptTokens = await countPromptTokens(payload);\n    const promptBudget = Math.max(1, contextWindow - configuredMaxTokens);\n    let adjustedPayload = payload;\n    if (promptTokens > promptBudget) {\n      const fitted = await fitToolOutputs(payload, promptBudget, promptTokens);\n      adjustedPayload = fitted.payload;\n      promptTokens = fitted.promptTokens;\n    }\n    const availableOutputTokens = Math.max(1, contextWindow - promptTokens);\n    return {\n      ...adjustedPayload,\n      [maxTokensField]: Math.min(configuredMaxTokens, availableOutputTokens),\n    };\n  });\n}\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; set -e; trap 'rm -rf /tmp/harbor-pi.Fixture1 \"$HOME/.pi/agent/models.json\"' EXIT; set -e -o pipefail; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst compaction = JSON.parse(process.argv[1]);\nconst configPath = path.join(process.env.HOME, process.argv[2]);\nlet settings = {};\nif (fs.existsSync(configPath)) settings = JSON.parse(fs.readFileSync(configPath, \"utf8\"));\nsettings.compaction = { ...(settings.compaction ?? {}), ...compaction };\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(settings));' '{\"enabled\":true,\"reserveTokens\":16384,\"keepRecentTokens\":8192}' .pi/agent/settings.json; . /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst config = JSON.parse(process.argv[1]);\nconst provider = process.argv[2];\nconst baseUrlEnv = process.argv[3];\nconst configRelativePath = process.argv[4];\nconst baseUrl = process.env[baseUrlEnv];\nif (!baseUrl) throw new Error(`${baseUrlEnv} is required`);\nconfig.providers[provider].baseUrl = baseUrl;\nconst configPath = path.join(process.env.HOME, configRelativePath);\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(config));' '{\"providers\":{\"hosted_vllm\":{\"baseUrl\":\"\",\"api\":\"openai-completions\",\"apiKey\":\"HARBOR_PI_API_KEY\",\"compat\":{\"supportsDeveloperRole\":false,\"supportsReasoningEffort\":false,\"requiresReasoningContentOnAssistantMessages\":true,\"thinkingFormat\":\"chat-template\",\"chatTemplateKwargs\":{\"enable_thinking\":{\"$var\":\"thinking.enabled\"}}},\"models\":[{\"id\":\"fixture-model\",\"name\":\"fixture-model\",\"reasoning\":true,\"input\":[\"text\"],\"contextWindow\":32768,\"maxTokens\":16384,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}}}' hosted_vllm HARBOR_PI_API_BASE .pi/agent/models.json; rm -f /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; pi --print --mode json --no-session --provider hosted_vllm --model fixture-model --extension /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js 'Find the report.' 2>&1 </dev/null | node -e 'const readline = require(\"readline\");\nlet lastAssistantStopReason;\nlet lastAssistantErrorMessage;\nconst lines = readline.createInterface({ input: process.stdin });\nlines.on(\"line\", (line) => {\n  process.stdout.write(line + \"\\n\");\n  try {\n    const event = JSON.parse(line);\n    const message = event.type === \"message_end\" ? event.message : undefined;\n    if (message?.role === \"assistant\") {\n      lastAssistantStopReason = message.stopReason;\n      lastAssistantErrorMessage = message.errorMessage;\n    }\n  } catch {\n    // Pi can mix diagnostics into its JSON stream. Preserve them without\n    // treating unstructured text as a successful or failed assistant turn.\n  }\n});\nlines.on(\"close\", () => {\n  if (lastAssistantStopReason !== \"error\") return;\n  if (/authentication required|authenticationerror/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_MODEL_AUTHENTICATION_ERROR\\n\");\n  } else if (/maximum context length|context_length_exceeded/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_CONTEXT_LENGTH_EXCEEDED\\n\");\n  }\n  process.exitCode = 1;\n});' | stdbuf -oL tee /logs/agent/pi.txt",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "{\"type\":\"agent_settled\"}\n",
+     "timeout": null,
+     "user": null
+    }
+   ],
+   "mcp_servers": [
+    {
+     "name": "search",
+     "transport": "sse",
+     "url": "http://search:8000/sse"
+    },
+    {
+     "name": "files",
+     "transport": "streamable-http",
+     "url": "http://files:9000/mcp"
+    }
+   ],
+   "options": {
+    "max_input_tokens": 32768,
+    "max_output_tokens": 16384,
+    "mcp_excluded_tools": [
+     "send_message"
+    ],
+    "thinking_format": "chat-template"
+   },
+   "outcome": null
+  },
+  "nonzero_exit": {
+   "instruction": "Say done.",
+   "machine": [
+    {
+     "command": "mkdir -p /installed-agent",
+     "cwd": null,
+     "env": {},
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; pi --version",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "0.87.0\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "command": "set -o pipefail; mktemp -d /tmp/harbor-pi.XXXXXXXX",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "/tmp/harbor-pi.Fixture1\n",
+     "timeout": null,
+     "user": null
+    },
+    {
+     "content": "export HARBOR_PI_API_BASE=http://127.0.0.1:8788/v1\nexport HARBOR_PI_API_KEY=EMPTY\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "content": "const tokenizeUrl = \"http://127.0.0.1:8788/tokenize\";\nconst contextWindow = 32768;\n\nconst tokenizationKeys = [\n  \"chat_template\",\n  \"chat_template_kwargs\",\n  \"documents\",\n  \"mm_processor_kwargs\",\n  \"tools\",\n];\n\nfunction tokenizationPayload(payload) {\n  const request = {\n    model: payload.model,\n    messages: payload.messages,\n    add_generation_prompt: true,\n  };\n  for (const key of tokenizationKeys) {\n    if (payload[key] !== undefined) request[key] = payload[key];\n  }\n  return request;\n}\n\nasync function countPromptTokens(payload) {\n  const response = await fetch(tokenizeUrl, {\n    method: \"POST\",\n    headers: { \"content-type\": \"application/json\" },\n    body: JSON.stringify(tokenizationPayload(payload)),\n  });\n  if (!response.ok) {\n    throw new Error(`vLLM /tokenize returned HTTP ${response.status}: ${await response.text()}`);\n  }\n  const body = await response.json();\n  if (!Array.isArray(body.tokens) || !body.tokens.every(Number.isInteger)) {\n    throw new Error(\"vLLM /tokenize did not return an integer token list\");\n  }\n  return body.tokens.length;\n}\n\nfunction toolTextSlots(messages) {\n  const slots = [];\n  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {\n    const message = messages[messageIndex];\n    if (message?.role !== \"tool\") continue;\n    if (typeof message.content === \"string\") {\n      slots.push({ messageIndex, blockIndex: undefined, text: message.content });\n      continue;\n    }\n    if (!Array.isArray(message.content)) continue;\n    for (let blockIndex = 0; blockIndex < message.content.length; blockIndex++) {\n      const block = message.content[blockIndex];\n      if (block?.type === \"text\" && typeof block.text === \"string\") {\n        slots.push({ messageIndex, blockIndex, text: block.text });\n      }\n    }\n  }\n  return slots.sort((left, right) => right.text.length - left.text.length);\n}\n\nfunction truncateToolText(text, retainedCharacters) {\n  const characters = Array.from(text);\n  if (retainedCharacters >= characters.length) return text;\n  const prefixLength = Math.ceil(retainedCharacters / 2);\n  const suffixLength = Math.floor(retainedCharacters / 2);\n  const omitted = characters.length - retainedCharacters;\n  const marker = `\n...[tool output truncated to fit model context; ${omitted} characters omitted]...\n`;\n  return characters.slice(0, prefixLength).join(\"\") + marker +\n    characters.slice(characters.length - suffixLength).join(\"\");\n}\n\nfunction replaceToolText(messages, slot, text) {\n  const updated = structuredClone(messages);\n  if (slot.blockIndex === undefined) {\n    updated[slot.messageIndex].content = text;\n  } else {\n    updated[slot.messageIndex].content[slot.blockIndex].text = text;\n  }\n  return updated;\n}\n\nasync function fitToolOutputs(payload, promptBudget, promptTokens) {\n  let adjusted = payload;\n  let adjustedTokens = promptTokens;\n  for (const slot of toolTextSlots(payload.messages)) {\n    if (adjustedTokens <= promptBudget) break;\n    const characterCount = Array.from(slot.text).length;\n    let low = 0;\n    let high = characterCount;\n    let bestMessages = replaceToolText(\n      adjusted.messages,\n      slot,\n      truncateToolText(slot.text, 0),\n    );\n    let bestTokens = await countPromptTokens({ ...adjusted, messages: bestMessages });\n    if (bestTokens > promptBudget) {\n      adjusted = { ...adjusted, messages: bestMessages };\n      adjustedTokens = bestTokens;\n      continue;\n    }\n    while (low <= high) {\n      const retained = Math.floor((low + high) / 2);\n      const messages = replaceToolText(\n        adjusted.messages,\n        slot,\n        truncateToolText(slot.text, retained),\n      );\n      const tokens = await countPromptTokens({ ...adjusted, messages });\n      if (tokens <= promptBudget) {\n        bestMessages = messages;\n        bestTokens = tokens;\n        low = retained + 1;\n      } else {\n        high = retained - 1;\n      }\n    }\n    adjusted = { ...adjusted, messages: bestMessages };\n    adjustedTokens = bestTokens;\n  }\n  return { payload: adjusted, promptTokens: adjustedTokens };\n}\n\nexport default function (pi) {\n  pi.on(\"before_provider_request\", async (event) => {\n    const payload = event.payload;\n    if (!payload || typeof payload !== \"object\" || Array.isArray(payload)) {\n      return payload;\n    }\n\n    const maxTokensField = Object.hasOwn(payload, \"max_tokens\")\n      ? \"max_tokens\"\n      : Object.hasOwn(payload, \"max_completion_tokens\")\n        ? \"max_completion_tokens\"\n        : undefined;\n    if (!maxTokensField || !Array.isArray(payload.messages) || typeof payload.model !== \"string\") {\n      return payload;\n    }\n\n    const configuredMaxTokens = payload[maxTokensField];\n    if (!Number.isSafeInteger(configuredMaxTokens) || configuredMaxTokens <= 0) {\n      throw new Error(`${maxTokensField} must be a positive integer`);\n    }\n    let promptTokens = await countPromptTokens(payload);\n    const promptBudget = Math.max(1, contextWindow - configuredMaxTokens);\n    let adjustedPayload = payload;\n    if (promptTokens > promptBudget) {\n      const fitted = await fitToolOutputs(payload, promptBudget, promptTokens);\n      adjustedPayload = fitted.payload;\n      promptTokens = fitted.promptTokens;\n    }\n    const availableOutputTokens = Math.max(1, contextWindow - promptTokens);\n    return {\n      ...adjustedPayload,\n      [maxTokensField]: Math.min(configuredMaxTokens, availableOutputTokens),\n    };\n  });\n}\n",
+     "upload": "/tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js"
+    },
+    {
+     "command": "set -o pipefail; chown --reference=/tmp/harbor-pi.Fixture1 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js && chmod 600 -- /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; set -e; trap 'rm -rf /tmp/harbor-pi.Fixture1 \"$HOME/.pi/agent/models.json\"' EXIT; set -e -o pipefail; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst compaction = JSON.parse(process.argv[1]);\nconst configPath = path.join(process.env.HOME, process.argv[2]);\nlet settings = {};\nif (fs.existsSync(configPath)) settings = JSON.parse(fs.readFileSync(configPath, \"utf8\"));\nsettings.compaction = { ...(settings.compaction ?? {}), ...compaction };\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(settings));' '{\"enabled\":true,\"reserveTokens\":16384,\"keepRecentTokens\":8192}' .pi/agent/settings.json; . /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; node -e 'const fs = require(\"fs\");\nconst path = require(\"path\");\nconst config = JSON.parse(process.argv[1]);\nconst provider = process.argv[2];\nconst baseUrlEnv = process.argv[3];\nconst configRelativePath = process.argv[4];\nconst baseUrl = process.env[baseUrlEnv];\nif (!baseUrl) throw new Error(`${baseUrlEnv} is required`);\nconfig.providers[provider].baseUrl = baseUrl;\nconst configPath = path.join(process.env.HOME, configRelativePath);\nfs.mkdirSync(path.dirname(configPath), { recursive: true });\nfs.writeFileSync(configPath, JSON.stringify(config));' '{\"providers\":{\"hosted_vllm\":{\"baseUrl\":\"\",\"api\":\"openai-completions\",\"apiKey\":\"HARBOR_PI_API_KEY\",\"compat\":{\"supportsDeveloperRole\":false,\"supportsReasoningEffort\":false,\"requiresReasoningContentOnAssistantMessages\":true,\"thinkingFormat\":\"chat-template\",\"chatTemplateKwargs\":{\"enable_thinking\":{\"$var\":\"thinking.enabled\"}}},\"models\":[{\"id\":\"fixture-model\",\"name\":\"fixture-model\",\"reasoning\":true,\"input\":[\"text\"],\"contextWindow\":32768,\"maxTokens\":16384,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0}}]}}}' hosted_vllm HARBOR_PI_API_BASE .pi/agent/models.json; rm -f /tmp/harbor-pi.Fixture1/harbor-pi-endpoint.env; pi --print --mode json --no-session --provider hosted_vllm --model fixture-model --extension /tmp/harbor-pi.Fixture1/harbor-pi-context-budget.js 'Say done.' 2>&1 </dev/null | node -e 'const readline = require(\"readline\");\nlet lastAssistantStopReason;\nlet lastAssistantErrorMessage;\nconst lines = readline.createInterface({ input: process.stdin });\nlines.on(\"line\", (line) => {\n  process.stdout.write(line + \"\\n\");\n  try {\n    const event = JSON.parse(line);\n    const message = event.type === \"message_end\" ? event.message : undefined;\n    if (message?.role === \"assistant\") {\n      lastAssistantStopReason = message.stopReason;\n      lastAssistantErrorMessage = message.errorMessage;\n    }\n  } catch {\n    // Pi can mix diagnostics into its JSON stream. Preserve them without\n    // treating unstructured text as a successful or failed assistant turn.\n  }\n});\nlines.on(\"close\", () => {\n  if (lastAssistantStopReason !== \"error\") return;\n  if (/authentication required|authenticationerror/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_MODEL_AUTHENTICATION_ERROR\\n\");\n  } else if (/maximum context length|context_length_exceeded/i.test(lastAssistantErrorMessage ?? \"\")) {\n    process.stderr.write(\"HARBOR_PI_CONTEXT_LENGTH_EXCEEDED\\n\");\n  }\n  process.exitCode = 1;\n});' | stdbuf -oL tee /logs/agent/pi.txt",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 2,
+     "stderr": "pi failed\n",
+     "stdout": "EMPTY output",
+     "timeout": null,
+     "user": null
+    }
+   ],
+   "mcp_servers": [],
+   "options": {
+    "max_input_tokens": 32768,
+    "max_output_tokens": 16384,
+    "thinking_format": "chat-template"
+   },
+   "outcome": "NonZeroAgentExitCodeError"
+  },
+  "version_mismatch": {
+   "instruction": "Say done.",
+   "machine": [
+    {
+     "command": "mkdir -p /installed-agent",
+     "cwd": null,
+     "env": {},
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "",
+     "timeout": null,
+     "user": "root"
+    },
+    {
+     "command": "set -o pipefail; pi --version",
+     "cwd": null,
+     "env": {
+      "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+      "OPENAI_API_KEY": "EMPTY",
+      "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1"
+     },
+     "exit_code": 0,
+     "stderr": "",
+     "stdout": "0.86.1\n",
+     "timeout": null,
+     "user": null
+    }
+   ],
+   "mcp_servers": [],
+   "options": {
+    "max_input_tokens": 32768,
+    "max_output_tokens": 16384,
+    "thinking_format": "chat-template",
+    "version": "0.87.0"
+   },
+   "outcome": "RuntimeError"
+  }
+ }
+}

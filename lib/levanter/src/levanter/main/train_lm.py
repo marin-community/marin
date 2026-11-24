@@ -126,6 +126,8 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
     return replace(
         reloaded,
         router_dot_fp32=requested.router_dot_fp32,
+        router_combine_fp32=requested.router_combine_fp32,
+        attention_implementation=requested.attention_implementation,
         moe_implementation=requested.moe_implementation,
         moe_capacity_factor=requested.moe_capacity_factor,
         fp32_activations=requested.fp32_activations,
@@ -236,7 +238,7 @@ def main(config: TrainLmConfig):
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+        return model.next_token_loss_and_metrics(example, key=key, logsumexp_weight=config.z_loss_weight)
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh

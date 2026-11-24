@@ -20,6 +20,7 @@ from pathlib import Path
 from finestore.rl.run_records import read_attempt_metrics, read_attempts
 import ray
 from omegaconf import DictConfig, OmegaConf
+from skyrl_train.config.driver_validation import validate_cfg
 from skyrl_train.config.rollout_validation import validate_rollout_launch
 from skyrl_train.config.utils import get_default_config, normalize_logging_backends
 from skyrl_train.dataset.tasks import SourceTaskDataset
@@ -27,7 +28,6 @@ from skyrl_train.entrypoints.main_base import BasePPOExp, EntrypointOperation
 from skyrl_train.entrypoints.main_generate import EvalOnlyEntrypoint
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.ray_wrapped_inference_engine import RayWrappedInferenceEngine
-from skyrl_train.utils import validate_cfg
 
 from tests.cpu.tiny_training.cpu_backend import CPUInferenceEngine, CPUPolicyWorker
 from tests.cpu.tiny_training.tiny_model import build_tiny_policy, write_gsm8k_dataset

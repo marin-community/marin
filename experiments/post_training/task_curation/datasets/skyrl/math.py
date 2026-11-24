@@ -30,6 +30,10 @@ ASDIV_REVISION = "883f90a9a65bf00304ba8f37423910fe743abc47"
 NUMINA_PROOF_REQUEST = re.compile(r"\b(?:prove|show)\s+that\b", re.IGNORECASE)
 NUMINA_INEQUALITY = re.compile(r"[<>≤≥]|\\(?:leqslant|geqslant|leq|geq|le|ge|lt|gt)\b")
 ASDIV_UNITS = re.compile(r"\s*\([^)]*\)\s*$")
+HARDMATH_SYMBOLIC_SOURCE = "poly1_train"
+HARDMATH_SYMBOLIC_TYPE = "nondimensionalization_symbolic"
+HARDMATH_SYMBOLIC_COEFFICIENTS = ("a_1", "a_2", "a_3")
+HARDMATH_POSITIVE_PREMISE = "Assume $a_1$, $a_2$, and $a_3$ are positive."
 
 REFERENCE_CHECK = (
     "Check that the reference answer solves the complete public problem. Difficulty alone is not a quality defect."
@@ -207,6 +211,21 @@ def convert_gsm8k(row: RawRow, _context: ConversionContext) -> TaskSpec | Import
 
 
 def convert_hardmath(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
+    if row.data.get("question_type") == HARDMATH_SYMBOLIC_TYPE and row.data.get("source") == HARDMATH_SYMBOLIC_SOURCE:
+        question = row.data.get("question")
+        answer = row.data.get("ground_truths")
+        if not isinstance(question, str) or not all(name in question for name in ("a_{1}", "a_{2}", "a_{3}")):
+            return source_defect("invalid_question", "Symbolic nondimensionalization requires the three coefficients")
+        boxed = extract_boxed(answer) if isinstance(answer, str) else None
+        if not boxed or not boxed.startswith(r"\epsilon="):
+            return source_defect("invalid_reference", "Symbolic nondimensionalization requires an epsilon equation")
+        return math_answer_task(
+            row,
+            prompt=f"{question}\n\n{HARDMATH_POSITIVE_PREMISE}",
+            answer=boxed.removeprefix(r"\epsilon="),
+            evidence=_fields(row, ("question", *SOLUTION_FIELDS)),
+            positive_symbols=HARDMATH_SYMBOLIC_COEFFICIENTS,
+        )
     return math_answer_task(
         row,
         prompt=row.data.get("question"),

@@ -34,7 +34,7 @@ more on what should be included rather than tone.
 - Put extended investigation history in a linked comment or source artifact.
 - Do not prescribe an implementation unless the choice is part of the task.
 
-Before publishing, apply [ai-writing-donts.md](ai-writing-donts.md) to the exact
+Before publishing, apply the [prose review](review-prose.md) to the exact
 title and body. Delete any sentence that does not add a symptom, impact,
 reproduction step, observation, expected behavior, or completion criterion.
 

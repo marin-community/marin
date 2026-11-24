@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from pydantic import Field, NonNegativeInt, PositiveInt
 
 from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting
-from .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field
+from .model import CountMap, NumberMap, OpenMap, Section, SectionMap, field, unset_field
 from .sampling import EvalSamplingParams
 
 
@@ -458,6 +458,7 @@ class RolloutBuffer(Section):
     """Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then records
     URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps payloads
     only in Ray's object store."""
+    groups_per_family: CountMap = unset_field()
 
 
 class TeacherScoring(Section):
@@ -597,6 +598,8 @@ class Trainer(Section):
     step_wise_training: bool = field(False)
     mismatch_probe: MismatchProbe = Field(default_factory=MismatchProbe)
     enable_db_registration: bool = field(True)
+    checkpoint_retention: Literal["latest", "best"] | None = field(None)
+    checkpoint_keep_every: PositiveInt | None = field(None)
     hf_hub_repo_id: str | None = field(None)
     hf_hub_private: bool = field(False)
     hf_hub_revision: str = field("main")
@@ -650,7 +653,7 @@ class SpeculatorTraining(Section):
 
 
 class SpeculativeDecoding(Section):
-    method: Literal["eagle3"] = unset_field()
+    method: Literal["eagle3", "dspark"] = unset_field()
     model: SpeculatorModel = unset_field()
     num_speculative_tokens: PositiveInt = unset_field()
     training: SpeculatorTraining | None = field(None)
@@ -816,8 +819,8 @@ class Generator(Section):
     chat_template_kwargs: OpenMap = field({})
     engine_init_kwargs: OpenMap = field({})
     speculative_decoding: SpeculativeDecoding | None = field(None)
-    """Managed EAGLE serving and optional online draft training. vLLM resolves immutable Hugging Face revisions or
-    streams object-store checkpoints through Run:ai."""
+    """Managed speculative decoding with optional online training for EAGLE3. SkyRL mirrors pinned Hugging Face
+    drafts and streams object-store checkpoints into vLLM through Run:ai."""
     override_existing_update_group: Literal["auto", "enable", "disable"] = field("auto")
     sampling_params: SamplingParams = Field(default_factory=SamplingParams)
     """Objectives that consume rollout logprobs use processed probabilities and require full-distribution,

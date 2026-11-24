@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Sequence
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
@@ -533,24 +532,3 @@ MULTILINGUAL_LM_EVAL_LOGPROB_TASKS = (
 )
 
 MULTILINGUAL_LM_EVAL_GENERATIVE_TASKS = MGSM_MULTILINGUAL_TASKS
-
-
-def convert_to_task_metrics(tasks: Sequence[EvalTaskConfig], metric: str) -> list[str]:
-    """
-    Convert a list of EvalTaskConfig to a list of strings corresponding to
-    task metrics that Levanter outputs. These can be used, for instance, as input to the scaling laws analysis.
-    """
-    if not tasks:
-        raise ValueError("Tasks sequence cannot be empty")
-
-    task_metrics = []
-    for task in tasks:
-        if not isinstance(task, EvalTaskConfig):
-            raise TypeError(f"Expected task to be EvalTaskConfig, got {type(task)}")
-
-        if task.task_alias:
-            task_metrics.append(f"lm_eval/{task.task_alias}/{metric}")
-        else:
-            task_metrics.append(f"lm_eval/{task.name}/{metric}")
-
-    return task_metrics

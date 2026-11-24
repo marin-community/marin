@@ -49,6 +49,7 @@ overrides = [
     { name = "flashinfer-python", marker = "sys_platform == 'linux'", specifier = "==0.6.18.post1" },
     { name = "fsspec", specifier = "==2026.4.0" },
     { name = "marin-rigging", extras = ["secrets", "prometheus"], editable = "../../lib/rigging" },
+    { name = "nvidia-nccl-cu13", marker = "sys_platform == 'linux'", specifier = ">=2.32.6" },
     { name = "nvidia-resiliency-ext", marker = "sys_platform == 'never'" },
     { name = "opentelemetry-api", marker = "sys_platform != 'linux'" },
     { name = "opentelemetry-api", marker = "sys_platform == 'linux'", specifier = "==1.44.0" },
@@ -70,17 +71,17 @@ name = "accelerate"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "huggingface-hub", version = "1.26.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "huggingface-hub", version = "1.26.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "packaging", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "psutil", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "pyyaml", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "safetensors", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8d/75/94cd5d389649578aca399e5aa822637eec18319a1dadc400ffe2f9a7493f/accelerate-1.14.0.tar.gz", hash = "sha256:41b9c4377a54e0b460a959b0defa1b736e4ca0a2373252d9a539964c2afe3c8d", size = 412167, upload-time = "2026-06-11T13:45:52.326Z" }
 wheels = [
@@ -648,7 +649,7 @@ version = "3.58.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dulwich", marker = "sys_platform == 'linux'" },
-    { name = "everett", extra = ["ini"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "everett", extra = ["ini"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "jsonschema", marker = "sys_platform == 'linux'" },
     { name = "psutil", marker = "sys_platform == 'linux'" },
     { name = "python-box", marker = "sys_platform == 'linux'" },
@@ -757,7 +758,7 @@ name = "cuda-bindings"
 version = "13.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder", marker = "(platform_machine != 'x86_64' and sys_platform == 'linux') or (sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "cuda-pathfinder", marker = "platform_machine != 'x86_64' and sys_platform == 'linux' or sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/67/5e7dba1ba576dd73da5dee894ca076ca5e959450dfff66d6d510a255d1f7/cuda_bindings-13.3.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c7855c4868aabc0cfae28abbe83d56734bdfbd08f08fc234ac1912a12858bf49", size = 6025351, upload-time = "2026-05-29T23:11:49.685Z" },
@@ -823,37 +824,37 @@ wheels = [
 
 [package.optional-dependencies]
 cublas = [
-    { name = "nvidia-cublas", version = "13.1.0.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cublas", version = "13.1.0.3", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime", version = "13.0.96", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cuda-runtime", version = "13.0.96", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cufft = [
-    { name = "nvidia-cufft", version = "12.0.0.61", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cufft", version = "12.0.0.61", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cufile = [
-    { name = "nvidia-cufile", version = "1.15.1.6", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cufile", version = "1.15.1.6", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", version = "13.0.85", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cuda-cupti", version = "13.0.85", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 curand = [
-    { name = "nvidia-curand", version = "10.4.0.35", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-curand", version = "10.4.0.35", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver", version = "12.0.4.66", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cusolver", version = "12.0.4.66", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", version = "12.6.3.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cusparse", version = "12.6.3.3", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cuda-nvrtc", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", version = "13.0.85", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvtx", version = "13.0.85", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 
 [[package]]
@@ -873,34 +874,34 @@ cccl = [
     { name = "nvidia-cuda-cccl", marker = "sys_platform == 'linux'" },
 ]
 cublas = [
-    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-cuda-nvrtc", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cuda-nvrtc", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cuda-runtime", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cufft = [
-    { name = "nvidia-cufft", version = "12.2.0.57", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cufft", version = "12.2.0.57", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cufile = [
-    { name = "nvidia-cufile", version = "1.17.1.22", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cufile", version = "1.17.1.22", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cuda-cupti", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 curand = [
-    { name = "nvidia-curand", version = "10.4.2.66", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-curand", version = "10.4.2.66", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cusolver = [
-    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-cusolver", version = "12.2.0.11", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-cusparse", version = "12.7.10.12", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cusolver", version = "12.2.0.11", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cusparse", version = "12.7.10.12", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", version = "12.7.10.12", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cusparse", version = "12.7.10.12", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 nvcc = [
     { name = "nvidia-cuda-crt", marker = "sys_platform == 'linux'" },
@@ -909,13 +910,13 @@ nvcc = [
     { name = "nvidia-nvvm", marker = "sys_platform == 'linux'" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cuda-nvrtc", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvtx", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 
 [[package]]
@@ -1383,14 +1384,14 @@ wheels = [
 [package.optional-dependencies]
 standard = [
     { name = "email-validator", marker = "sys_platform == 'linux'" },
-    { name = "fastapi-cli", extra = ["standard"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "fastapi-cli", extra = ["standard"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "fastar", marker = "sys_platform == 'linux'" },
     { name = "httpx", marker = "sys_platform == 'linux'" },
     { name = "jinja2", marker = "sys_platform == 'linux'" },
     { name = "pydantic-extra-types", marker = "sys_platform == 'linux'" },
     { name = "pydantic-settings", marker = "sys_platform == 'linux'" },
     { name = "python-multipart", marker = "sys_platform == 'linux'" },
-    { name = "uvicorn", extra = ["standard"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "uvicorn", extra = ["standard"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 
 [[package]]
@@ -1400,7 +1401,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "rich-toolkit", marker = "sys_platform == 'linux'" },
     { name = "typer", marker = "sys_platform == 'linux'" },
-    { name = "uvicorn", extra = ["standard"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "uvicorn", extra = ["standard"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/33/eb/3b534c6f8e157f9ddbf2a153512307c886cad0b258739c200dd8ff8c4452/fastapi_cli-0.0.32.tar.gz", hash = "sha256:38024d2345275e1b37ce8848727a580d84901b570e96b3256d9d36a9a5039424", size = 26636, upload-time = "2026-07-16T12:16:58.678Z" }
 wheels = [
@@ -1410,7 +1411,7 @@ wheels = [
 [package.optional-dependencies]
 standard = [
     { name = "fastapi-cloud-cli", marker = "sys_platform == 'linux'" },
-    { name = "uvicorn", extra = ["standard"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "uvicorn", extra = ["standard"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 
 [[package]]
@@ -1421,12 +1422,12 @@ dependencies = [
     { name = "detect-installer", marker = "sys_platform == 'linux'" },
     { name = "fastar", marker = "sys_platform == 'linux'" },
     { name = "httpx", marker = "sys_platform == 'linux'" },
-    { name = "pydantic", extra = ["email"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "pydantic", extra = ["email"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "rich-toolkit", marker = "sys_platform == 'linux'" },
     { name = "rignore", marker = "sys_platform == 'linux'" },
     { name = "sentry-sdk", marker = "sys_platform == 'linux'" },
     { name = "typer", marker = "sys_platform == 'linux'" },
-    { name = "uvicorn", extra = ["standard"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "uvicorn", extra = ["standard"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/00/dc/63aaf9913f455e39a7027c27140edd887a87d47d65ac43532d77a51718e5/fastapi_cloud_cli-0.23.0.tar.gz", hash = "sha256:840895bb8d14309aeffc905e0dcd1334d18c6f5da54b735413a8f1cb385e581e", size = 95295, upload-time = "2026-07-28T14:03:33.463Z" }
 wheels = [
@@ -1696,7 +1697,7 @@ name = "gitdb"
 version = "4.0.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "smmap", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "smmap", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/72/94/63b0fc47eb32792c7ba1fe1b694daec9a63620db1e313033d18140c2320a/gitdb-4.0.12.tar.gz", hash = "sha256:5ef71f855d191a3326fcfbc0d5da835f26b13fbcba60c32c21091c349ffdb571", size = 394684, upload-time = "2025-01-02T07:20:46.413Z" }
 wheels = [
@@ -1708,7 +1709,7 @@ name = "gitpython"
 version = "3.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "gitdb", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "gitdb", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6e/2d/6f6e649818da44d4499604802c89329b8d9799687a124e3a5e467a643336/gitpython-3.2.0.tar.gz", hash = "sha256:fb92310af6844d96adc95ca066ed2e617c00e1dbd146a326626c81e72e18cc2e", size = 238091, upload-time = "2026-09-30T09:10:32.65Z" }
 wheels = [
@@ -2027,6 +2028,8 @@ dependencies = [
     { name = "huggingface-hub", version = "1.26.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "jinja2" },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
+    { name = "marin-shellbox" },
     { name = "openai" },
     { name = "orjson" },
     { name = "packaging" },
@@ -2054,14 +2057,14 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.128.0" },
     { name = "gcsfs", marker = "extra == 'runtime'" },
     { name = "harbor", extras = ["analysis", "runtime", "qemu", "shellsim", "datasets", "tinker"], marker = "extra == 'all'" },
-    { name = "harbor", extras = ["archive", "telemetry"], marker = "extra == 'sotopia'" },
-    { name = "harbor", extras = ["archive", "telemetry", "daytona", "sotopia"], marker = "extra == 'runtime'" },
+    { name = "harbor", extras = ["archive"], marker = "extra == 'sotopia'" },
+    { name = "harbor", extras = ["archive", "daytona", "sotopia"], marker = "extra == 'runtime'" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "huggingface-hub", specifier = ">=1.3.2" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "marin-finestore", marker = "extra == 'archive'", editable = "../../lib/finestore" },
-    { name = "marin-rigging", marker = "extra == 'telemetry'", editable = "../../lib/rigging" },
-    { name = "marin-shellbox", marker = "extra == 'runtime'", editable = "../../lib/shellbox" },
+    { name = "marin-rigging", editable = "../../lib/rigging" },
+    { name = "marin-shellbox", editable = "../../lib/shellbox" },
     { name = "marin-shellbox", extras = ["daytona"], marker = "extra == 'daytona'", editable = "../../lib/shellbox" },
     { name = "marin-shellbox", extras = ["qemu"], marker = "extra == 'qemu'", editable = "../../lib/shellbox" },
     { name = "marin-shellbox", extras = ["shellsim"], marker = "extra == 'shellsim'", editable = "../../lib/shellbox" },
@@ -2090,7 +2093,7 @@ requires-dist = [
     { name = "universal-pathlib", specifier = ">=0.2.6" },
     { name = "uvicorn", specifier = ">=0.38.0" },
 ]
-provides-extras = ["runtime", "qemu", "shellsim", "sotopia", "analysis", "archive", "telemetry", "datasets", "daytona", "all", "tinker"]
+provides-extras = ["runtime", "qemu", "shellsim", "sotopia", "analysis", "archive", "datasets", "daytona", "all", "tinker"]
 
 [package.metadata.requires-dev]
 test = [
@@ -2876,9 +2879,9 @@ requires-dist = [
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,!=36.0.0,<37" },
     { name = "marin-finelog", editable = "../../lib/finelog" },
-    { name = "marin-finelog-server", marker = "extra == 'controller'", specifier = ">=0.2.67.dev39325146809" },
+    { name = "marin-finelog-server", marker = "extra == 'controller'", specifier = ">=0.2.87.dev45066332650" },
     { name = "marin-finestore", editable = "../../lib/finestore" },
-    { name = "marin-iris-native", specifier = ">=0.1.15.dev39984932175" },
+    { name = "marin-iris-native", specifier = ">=0.1.17.dev44059082845" },
     { name = "marin-rigging", editable = "../../lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "../../lib/rigging" },
     { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", editable = "../../lib/rigging" },
@@ -2934,13 +2937,13 @@ test = [
 
 [[package]]
 name = "marin-iris-native"
-version = "0.1.15.dev39984932175"
+version = "0.1.17.dev44059082845"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3e/c4/ec267853eac210d691c70fa787e470e8ed916cd7ee3906a633f8684d24ad/marin_iris_native-0.1.15.dev39984932175.tar.gz", hash = "sha256:1d8bda2b6eb9ae3e6faa26809dbb3c072cc8e4112548eab87bd152bce4de5abd", size = 39405, upload-time = "2026-10-23T16:37:13.739Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d1/68/7cc76de1ff0cd48f161fa86ff15c59e5608eb2fa16cc6aa0b8606fe49640/marin_iris_native-0.1.17.dev44059082845.tar.gz", hash = "sha256:cd4c12cd6afc9eef56b843c9693d4720045ec58dfeedec689edcabb73c5b12c9", size = 39411, upload-time = "2026-11-17T10:13:39.364Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/d0/68cc70c828a7647e0c53b65d1633f837557036b8b2b9d324a963dc64ace2/marin_iris_native-0.1.15.dev39984932175-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:458d104dc7a8616dba18fe7313d5c70b86c6e9d1ef9e3e044c9620c0b2fc769a", size = 3360920, upload-time = "2026-10-23T16:37:07.508Z" },
-    { url = "https://files.pythonhosted.org/packages/c8/fa/735642c8e837449defad9405c0fbf6f8ade22ca5309e79cf15704b5f864c/marin_iris_native-0.1.15.dev39984932175-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0d4990f6ae685c898f16d46cc2e22a6bd529311fc622a96d481dae1d4f3cad60", size = 3492010, upload-time = "2026-10-23T16:37:09.459Z" },
-    { url = "https://files.pythonhosted.org/packages/85/62/be55af0a7223c9b381758df82bdaefce7bb49f7361021f3dded22e1f4bff/marin_iris_native-0.1.15.dev39984932175-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:95df32eaa8d0c05b6ea2d236504336a8426fc653f8c52b46c3bcc58468baaf50", size = 3687273, upload-time = "2026-10-23T16:37:11.513Z" },
+    { url = "https://files.pythonhosted.org/packages/49/c9/832581f450333ef3bb7e4572a94da75519f227689b052379e6540c45c894/marin_iris_native-0.1.17.dev44059082845-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:f87f509de16eb3cc52bc111a94141bb54876f497698284f3c4df0a00c84392ea", size = 3367166, upload-time = "2026-11-17T10:13:34.185Z" },
+    { url = "https://files.pythonhosted.org/packages/21/4b/b0e7723fc8bdebfa6af2760da3a54c9850c9f5d256e04470edb8ae8bcc5f/marin_iris_native-0.1.17.dev44059082845-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e5853d02221111d769fd0ecabcf9340f840fb557d33d1995565ccfff2d784b84", size = 3507482, upload-time = "2026-11-17T10:13:35.646Z" },
+    { url = "https://files.pythonhosted.org/packages/38/df/4aabb1000761e9703eaa066b91e2ba00be29d5127736b26438e9a064dbd3/marin_iris_native-0.1.17.dev44059082845-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4c3ab275b27eac301b149f3291400b81dca455da9eaa448647d2324cf5a666d7", size = 3688741, upload-time = "2026-11-17T10:13:37.784Z" },
 ]
 
 [[package]]
@@ -3027,18 +3030,22 @@ name = "marin-rolloutengine"
 version = "0.1.0"
 source = { editable = "../../lib/rolloutengine" }
 dependencies = [
+    { name = "jinja2" },
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "marin-shellbox", editable = "../../lib/shellbox" },
     { name = "marin-taskcompendium", editable = "../../lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6" },
 ]
 
 [package.metadata.requires-dev]
@@ -3057,16 +3064,15 @@ source = { editable = "../../lib/shellbox" }
 dependencies = [
     { name = "bubblewrap-bin", marker = "sys_platform == 'linux'" },
     { name = "httpx" },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "pydantic" },
 ]
 
 [package.optional-dependencies]
 daytona = [
     { name = "daytona" },
-    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
 ]
 shellsim = [
-    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "shellsim", extra = ["pypi"] },
 ]
 
@@ -3076,8 +3082,7 @@ requires-dist = [
     { name = "daytona", marker = "extra == 'daytona'", specifier = "==0.200.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "marin-iris", marker = "extra == 'iris'", editable = "../../lib/iris" },
-    { name = "marin-rigging", marker = "extra == 'daytona'", editable = "../../lib/rigging" },
-    { name = "marin-rigging", marker = "extra == 'shellsim'", editable = "../../lib/rigging" },
+    { name = "marin-rigging", editable = "../../lib/rigging" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "quicksand-qemu", marker = "extra == 'qemu'", specifier = ">=0.5.12,<0.6" },
     { name = "shellsim", extras = ["pypi"], marker = "extra == 'shellsim'", specifier = ">=0.1.38" },
@@ -3129,6 +3134,7 @@ dependencies = [
     { name = "marin-shellbox" },
     { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "tomli" },
     { name = "tomlkit" },
 ]
@@ -3145,6 +3151,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
     { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "tiktoken", marker = "extra == 'pipeline'", specifier = ">=0.8" },
     { name = "tomli", specifier = ">=2.0.1" },
     { name = "tomlkit", specifier = ">=0.13" },
@@ -3264,24 +3271,25 @@ dependencies = [
     { name = "transformers" },
     { name = "uvicorn" },
     { name = "verifiable-instructions" },
-    { name = "wandb", version = "0.27.2", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "wandb", version = "0.27.2", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "wandb", version = "0.28.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
-    { name = "wandb", version = "0.29.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "wandb", version = "0.29.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "xmltodict" },
 ]
 
 [package.optional-dependencies]
 cpu = [
     { name = "accelerate" },
+    { name = "harbor" },
     { name = "peft" },
     { name = "tensordict" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "torchdata" },
 ]
 cuda = [
     { name = "accelerate", marker = "sys_platform == 'linux'" },
-    { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cccl", "nvcc"], marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cccl", "nvcc"], marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "peft", marker = "sys_platform == 'linux'" },
     { name = "tensordict", marker = "sys_platform == 'linux'" },
     { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "sys_platform == 'linux'" },
@@ -3291,7 +3299,7 @@ cuda = [
 megatron = [
     { name = "accelerate", marker = "sys_platform == 'linux'" },
     { name = "causal-conv1d", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cccl", "nvcc"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cccl", "nvcc"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "flash-attn-3", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "flash-attn-4", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "flash-linear-attention", marker = "sys_platform == 'linux'" },
@@ -3305,10 +3313,10 @@ megatron = [
     { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "sys_platform == 'linux'" },
     { name = "torchdata", marker = "sys_platform == 'linux'" },
     { name = "torchvision", marker = "sys_platform == 'linux'" },
-    { name = "transformer-engine", extra = ["pytorch"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "transformer-engine", extra = ["pytorch"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "transformer-engine-cu13", marker = "sys_platform == 'linux'" },
-    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 telemetry = [
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
@@ -3317,13 +3325,13 @@ telemetry = [
 ]
 vllm = [
     { name = "accelerate", marker = "sys_platform == 'linux'" },
-    { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cccl", "nvcc"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cccl", "nvcc"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "flashinfer-cubin", marker = "sys_platform == 'linux'" },
     { name = "flashinfer-python", marker = "sys_platform == 'linux'" },
     { name = "hs-connectors", marker = "sys_platform == 'linux'" },
     { name = "peft", marker = "sys_platform == 'linux'" },
     { name = "quack-kernels", marker = "sys_platform == 'linux'" },
-    { name = "runai-model-streamer", extra = ["gcs", "s3"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "runai-model-streamer", extra = ["gcs", "s3"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "speculators", marker = "sys_platform == 'linux'" },
     { name = "tensordict", marker = "sys_platform == 'linux'" },
     { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "sys_platform == 'linux'" },
@@ -3331,8 +3339,8 @@ vllm = [
     { name = "torchcodec", marker = "sys_platform == 'linux'" },
     { name = "torchdata", marker = "sys_platform == 'linux'" },
     { name = "torchvision", marker = "sys_platform == 'linux'" },
-    { name = "vllm", version = "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132", source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "vllm", version = "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132", source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "vllm", version = "0.0.0.dev20261124+marin.7e9b413a5daf.cu132", source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-7e9b413a5daf/vllm-0.0.0.dev20261124+marin.7e9b413a5daf.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "vllm", version = "0.0.0.dev20261124+marin.7e9b413a5daf.cu132", source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-7e9b413a5daf/vllm-0.0.0.dev20261124+marin.7e9b413a5daf.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 
 [package.dev-dependencies]
@@ -3392,6 +3400,7 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "func-timeout" },
     { name = "harbor", marker = "sys_platform == 'linux' and extra == 'megatron'", editable = "../harbor" },
+    { name = "harbor", marker = "extra == 'cpu'", editable = "../harbor" },
     { name = "hf-transfer" },
     { name = "hs-connectors", marker = "sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/hs_connectors-0.8.0%2Bmarin.1-py3-none-any.whl" },
     { name = "huggingface-hub", specifier = ">=0.34.0" },
@@ -3452,7 +3461,7 @@ requires-dist = [
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'cuda'", specifier = "==2.14.1", index = "https://download.pytorch.org/whl/cu132", conflict = { package = "marinskyrl", extra = "cuda" } },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'megatron'", specifier = "==2.14.1", index = "https://download.pytorch.org/whl/cu132", conflict = { package = "marinskyrl", extra = "megatron" } },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==2.14.1", index = "https://download.pytorch.org/whl/cu132", conflict = { package = "marinskyrl", extra = "vllm" } },
-    { name = "torch", marker = "(platform_machine != 'x86_64' and extra == 'cpu') or (sys_platform != 'linux' and extra == 'cpu')", specifier = "==2.11.0" },
+    { name = "torch", marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'cpu'", specifier = "==2.11.0" },
     { name = "torchaudio", marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==2.11.0+cpu", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torchcodec", marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.17.0+cu132", index = "https://download.pytorch.org/whl/cu132", conflict = { package = "marinskyrl", extra = "vllm" } },
     { name = "torchdata", marker = "sys_platform == 'linux' and extra == 'cuda'" },
@@ -3471,9 +3480,9 @@ requires-dist = [
     { name = "transformers", specifier = "==5.16.1" },
     { name = "uvicorn" },
     { name = "verifiable-instructions", git = "https://github.com/abukharin-nv/verifiable-instructions.git?rev=f46a5ac87b1400a4f8973039844b6be9b56e3faf" },
-    { name = "vllm", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" },
-    { name = "vllm", marker = "platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.0.0.dev20261113+marin.0ac9dcb157ee.cu132" },
-    { name = "vllm", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" },
+    { name = "vllm", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-7e9b413a5daf/vllm-0.0.0.dev20261124+marin.7e9b413a5daf.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" },
+    { name = "vllm", marker = "platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.0.0.dev20261124+marin.7e9b413a5daf.cu132" },
+    { name = "vllm", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-7e9b413a5daf/vllm-0.0.0.dev20261124+marin.7e9b413a5daf.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" },
     { name = "wandb" },
     { name = "xmltodict" },
 ]
@@ -3594,7 +3603,7 @@ dependencies = [
     { name = "mcp-types", marker = "sys_platform == 'linux'" },
     { name = "opentelemetry-api", marker = "sys_platform == 'linux'" },
     { name = "pydantic", marker = "sys_platform == 'linux'" },
-    { name = "pyjwt", extra = ["crypto"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "pyjwt", extra = ["crypto"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "python-multipart", marker = "sys_platform == 'linux'" },
     { name = "sse-starlette", marker = "sys_platform == 'linux'" },
     { name = "starlette", marker = "sys_platform == 'linux'" },
@@ -3655,7 +3664,7 @@ dependencies = [
     { name = "flashinfer-cubin", marker = "sys_platform == 'linux'" },
     { name = "flashinfer-python", marker = "sys_platform == 'linux'" },
     { name = "hydra-core", marker = "sys_platform == 'linux'" },
-    { name = "megatron-core", extra = ["dev", "mlm"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "megatron-core", extra = ["dev", "mlm"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "mistral-common", marker = "sys_platform == 'linux'" },
     { name = "mlflow", marker = "sys_platform == 'linux'" },
     { name = "omegaconf", marker = "sys_platform == 'linux'" },
@@ -3704,11 +3713,11 @@ dev = [
     { name = "flash-linear-attention", marker = "sys_platform == 'linux'" },
     { name = "flashinfer-python", marker = "sys_platform == 'linux'" },
     { name = "hypercorn", marker = "sys_platform == 'linux'" },
-    { name = "megatron-energon", extra = ["av-decode"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "megatron-energon", extra = ["av-decode"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "multi-storage-client", marker = "sys_platform == 'linux'" },
-    { name = "nvidia-modelopt", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-modelopt", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "onnxscript", marker = "sys_platform == 'linux'" },
-    { name = "openai", extra = ["aiohttp"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "openai", extra = ["aiohttp"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "opentelemetry-api", marker = "sys_platform == 'linux'" },
     { name = "orjson", marker = "sys_platform == 'linux'" },
     { name = "quart", marker = "sys_platform == 'linux'" },
@@ -3789,7 +3798,7 @@ dependencies = [
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "pillow", marker = "sys_platform == 'linux'" },
     { name = "pydantic", marker = "sys_platform == 'linux'" },
-    { name = "pydantic-extra-types", extra = ["pycountry"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "pydantic-extra-types", extra = ["pycountry"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "requests", marker = "sys_platform == 'linux'" },
     { name = "tiktoken", marker = "sys_platform == 'linux'" },
     { name = "typing-extensions", marker = "sys_platform == 'linux'" },
@@ -4163,7 +4172,7 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "nvidia-cuda-nvrtc", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cuda-nvrtc", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d0/a0/5cd9d4b08a8320f7ca150ee0d66c97e98092922e338336cb4b62da7500c3/nvidia_cublas-13.4.1.3-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:4eb1472bf92b741e7cf24da7978dde251b58ddec2092d9f6a04f3623eb4e9a15", size = 513048232, upload-time = "2026-07-16T09:45:07.751Z" },
@@ -4294,7 +4303,7 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "nvidia-cublas", version = "13.1.0.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cublas", version = "13.1.0.3", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/84/26025437c1e6b61a707442184fa0c03d083b661adf3a3eecfd6d21677740/nvidia_cudnn_cu13-9.19.0.56-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:6ed29ffaee1176c612daf442e4dd6cfeb6a0caa43ddcbeb59da94953030b1be4", size = 433781201, upload-time = "2026-02-03T20:40:53.805Z" },
@@ -4310,7 +4319,7 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ca/30/7c257e3d5cb4fecb147b93895c66e29c93f8e76d74b45bb418ff0587c4ec/nvidia_cudnn_cu13-9.24.0.43-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:a6812a554a1ff0413e9c52b84c26c050380649ab9615f9c16bded368ce9f421f", size = 650976863, upload-time = "2026-07-02T16:23:39.248Z" },
@@ -4323,7 +4332,7 @@ version = "1.30.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-tvm-ffi", marker = "sys_platform == 'linux'" },
-    { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e4/53/07836d9f74f1416a8768530d428c155f67d7728f283bce3a9b3096b7e18f/nvidia_cudnn_frontend-1.30.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:279d227a226429288ae9e4e88db744ce144ae69605f63a286dc84ae180869a6e", size = 8631629, upload-time = "2026-09-23T03:44:15.265Z" },
@@ -4338,7 +4347,7 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "nvidia-nvjitlink", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/ae/f417a75c0259e85c1d2f83ca4e960289a5f814ed0cea74d18c353d3e989d/nvidia_cufft-12.0.0.61-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:2708c852ef8cd89d1d2068bdbece0aa188813a0c934db3779b9b1faa8442e5f5", size = 214053554, upload-time = "2025-09-04T08:31:38.196Z" },
@@ -4354,7 +4363,7 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/07/8d/f650e6d527f9d22b5ded906c000eaebb037721c06d4ecd906df62f300979/nvidia_cufft-12.2.0.57-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:1ed438568ae1088ba2c25789d10205d4104b8b140b7bd942e39a787947a0fb74", size = 218244742, upload-time = "2026-07-16T09:47:08.76Z" },
@@ -4419,9 +4428,9 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "nvidia-cublas", version = "13.1.0.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-cusparse", version = "12.6.3.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-nvjitlink", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cublas", version = "13.1.0.3", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cusparse", version = "12.6.3.3", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/c3/b30c9e935fc01e3da443ec0116ed1b2a009bb867f5324d3f2d7e533e776b/nvidia_cusolver-12.0.4.66-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:02c2457eaa9e39de20f880f4bd8820e6a1cfb9f9a34f820eb12a155aa5bc92d2", size = 223467760, upload-time = "2025-09-04T08:33:04.222Z" },
@@ -4437,9 +4446,9 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-cusparse", version = "12.7.10.12", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cusparse", version = "12.7.10.12", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/df/9e6b603f1d64040ce3e076e9bce1b78e2d588d0aabc9783f351cecd861ab/nvidia_cusolver-12.2.0.11-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:8be097fca28de6be0990ab216ee9b804dd51077e1d1d83acf6c9850650bdc64d", size = 250383075, upload-time = "2026-07-16T09:50:16.355Z" },
@@ -4454,7 +4463,7 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "nvidia-nvjitlink", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/94/5c26f33738ae35276672f12615a64bd008ed5be6d1ebcb23579285d960a9/nvidia_cusparse-12.6.3.3-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:80bcc4662f23f1054ee334a15c72b8940402975e0eab63178fc7e670aa59472c", size = 162155568, upload-time = "2025-09-04T08:33:42.864Z" },
@@ -4470,7 +4479,7 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvjitlink", version = "13.4.92", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/35/abbd278fb6d039fcfb5175efa10a21007a11878bec59920d84854b47d766/nvidia_cusparse-12.7.10.12-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:597eff2cd83e3ab1d1e3a0dce9c9c879d77cf64ec2659bfdb5af6a5d02e7aaa9", size = 169043093, upload-time = "2026-07-16T09:51:37.058Z" },
@@ -4621,27 +4630,11 @@ wheels = [
 
 [[package]]
 name = "nvidia-nccl-cu13"
-version = "2.28.9"
+version = "2.32.6"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "platform_machine == 'aarch64' and sys_platform == 'linux'",
-]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/55/1920646a2e43ffd4fc958536b276197ed740e9e0c54105b4bb3521591fc7/nvidia_nccl_cu13-2.28.9-py3-none-manylinux_2_18_aarch64.whl", hash = "sha256:01c873ba1626b54caa12272ed228dc5b2781545e0ae8ba3f432a8ef1c6d78643", size = 196561677, upload-time = "2025-11-18T05:49:03.45Z" },
-    { url = "https://files.pythonhosted.org/packages/b0/b4/878fefaad5b2bcc6fcf8d474a25e3e3774bc5133e4b58adff4d0bca238bc/nvidia_nccl_cu13-2.28.9-py3-none-manylinux_2_18_x86_64.whl", hash = "sha256:e4553a30f34195f3fa1da02a6da3d6337d28f2003943aa0a3d247bbc25fefc42", size = 196493177, upload-time = "2025-11-18T05:49:17.677Z" },
-]
-
-[[package]]
-name = "nvidia-nccl-cu13"
-version = "2.30.7"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-    "platform_machine == 'aarch64' and sys_platform == 'linux'",
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/21/a73174c6157101bdf1ffc22b517f76ff0082613989dd9bc8f43e8034caac/nvidia_nccl_cu13-2.30.7-py3-none-manylinux_2_18_aarch64.whl", hash = "sha256:ca786ffa5a647c75d4d1f5cc72a6c4f537947e2ba8823d7c8aaf768e7a7b9f77", size = 215983881, upload-time = "2026-06-09T03:23:15.633Z" },
-    { url = "https://files.pythonhosted.org/packages/3f/34/c500f90c7ae641b8e0f98965b36b8a7ac79cc8b296e8d251fe3eb592ee54/nvidia_nccl_cu13-2.30.7-py3-none-manylinux_2_18_x86_64.whl", hash = "sha256:cefa7fdb9710efd0f39c5f1be1d61ff6fc9a996c451265bd7fbdcf9455ed4b50", size = 215965170, upload-time = "2026-06-09T03:23:39.73Z" },
+    { url = "https://files.pythonhosted.org/packages/98/c5/4ff6cec823fb775df3bb4d1b7ff87ab8b4d45477cff7e88a359f7a22cdac/nvidia_nccl_cu13-2.32.6-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:ee63091d0c00f5a0419e04d7f59f6dd6ebd54b14931cb0f9e3a626b91243233d", size = 206430779, upload-time = "2026-11-11T00:29:32.4Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/80/e15e798abf9d8c1ac0482573d95ba45824f498276e94f5ce6d7cd0540b4e/nvidia_nccl_cu13-2.32.6-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:76e7aad00482092baf01e13e66f441d54c96b5cf1e3f143dee27db7f731d41ba", size = 206592996, upload-time = "2026-11-11T00:29:52.352Z" },
 ]
 
 [[package]]
@@ -5214,17 +5207,17 @@ version = "0.20.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "accelerate", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
-    { name = "huggingface-hub", version = "1.26.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "huggingface-hub", version = "1.26.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "packaging", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "psutil", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "pyyaml", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "safetensors", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "tqdm", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "transformers", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
 ]
@@ -6929,13 +6922,13 @@ dependencies = [
     { name = "cloudpickle", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "importlib-metadata", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "orjson", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "packaging", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
     { name = "pyvers", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b8/77/6edc42425c4cc3755e52df25478f9b2ab7f67063e0bdc6c472a3db783f0a/tensordict-0.13.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:023d19f36b0aef990668033ca9dd721bace95266d0b9650626bdb4e3f2192f13", size = 911682, upload-time = "2026-06-04T14:46:58.304Z" },
@@ -7131,20 +7124,20 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "cuda-bindings", marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "cuda-toolkit", version = "13.0.2", source = { registry = "https://pypi.org/simple" }, extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "filelock", marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "fsspec", marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "jinja2", marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "networkx", marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-cudnn-cu13", version = "9.19.0.56", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-cusparselt-cu13", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-nccl-cu13", version = "2.28.9", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-nvshmem-cu13", marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "setuptools", marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "sympy", marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "triton", version = "3.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "typing-extensions", marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "cuda-bindings", marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "cuda-toolkit", version = "13.0.2", source = { registry = "https://pypi.org/simple" }, extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "filelock", marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "fsspec", marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "jinja2", marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "networkx", marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cudnn-cu13", version = "9.19.0.56", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cusparselt-cu13", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nccl-cu13", marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvshmem-cu13", marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "setuptools", marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "sympy", marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "triton", version = "3.6.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "typing-extensions", marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6f/8b/69e3008d78e5cee2b30183340cc425081b78afc5eff3d080daab0adda9aa/torch-2.11.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:4b5866312ee6e52ea625cd211dcb97d6a2cdc1131a5f15cc0d87eec948f6dd34", size = 80606338, upload-time = "2026-03-23T18:11:34.781Z" },
@@ -7160,13 +7153,13 @@ resolution-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "filelock", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "fsspec", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "jinja2", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "networkx", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "setuptools", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "sympy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "typing-extensions", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "filelock", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "fsspec", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "jinja2", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "networkx", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "setuptools", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "sympy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "typing-extensions", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:70ecb2659af6373b7c5336e692e665605b0201ea21ff51aaea47e1d75ea6b5aa", upload-time = "2026-04-28T00:06:14Z" },
@@ -7182,20 +7175,20 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "cuda-bindings", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "filelock", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "fsspec", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "jinja2", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "networkx", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-cudnn-cu13", version = "9.24.0.43", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-cusparselt-cu13", version = "0.8.1", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-nccl-cu13", version = "2.30.7", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "nvidia-nvshmem-cu13", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "setuptools", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "sympy", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "triton", version = "3.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "typing-extensions", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "cuda-bindings", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "filelock", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "fsspec", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "jinja2", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "networkx", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cudnn-cu13", version = "9.24.0.43", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cusparselt-cu13", version = "0.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nccl-cu13", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-nvshmem-cu13", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "setuptools", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "sympy", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "triton", version = "3.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "typing-extensions", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu132/torch-2.14.1%2Bcu132-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:2ac1397f72096bd31740e2f0c2d9477111d32dbcec54e1f308063365a9dcc7b5", upload-time = "2026-09-30T20:44:50Z" },
@@ -7240,9 +7233,9 @@ version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
-    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and extra == 'extra-10-marinskyrl-cpu') or (sys_platform != 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' or sys_platform != 'linux') and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "urllib3", marker = "sys_platform == 'linux' or extra == 'extra-10-marinskyrl-cpu'" },
 ]
 wheels = [
@@ -7282,8 +7275,8 @@ wheels = [
 
 [package.optional-dependencies]
 pytorch = [
-    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 
 [[package]]
@@ -7578,8 +7571,8 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132"
-source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" }
+version = "0.0.0.dev20261124+marin.7e9b413a5daf.cu132"
+source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-7e9b413a5daf/vllm-0.0.0.dev20261124+marin.7e9b413a5daf.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" }
 resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
@@ -7594,12 +7587,12 @@ dependencies = [
     { name = "compressed-tensors", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "depyf", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "einops", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
-    { name = "fastapi", extra = ["standard"], marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "fastapi", extra = ["standard"], marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "fastsafetensors", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "filelock", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "flashinfer-python", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
-    { name = "humming-kernels", extra = ["cu13"], marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "humming-kernels", extra = ["cu13"], marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "ijson", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "instanttensor", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "jsonschema", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
@@ -7607,14 +7600,14 @@ dependencies = [
     { name = "llguidance", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "lm-format-enforcer", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "mcp", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
-    { name = "mistral-common", extra = ["image"], marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "mistral-common", extra = ["image"], marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "model-hosting-container-standards", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "msgspec", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "ninja", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "numba", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cudnn-frontend", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "nvtx", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "openai", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "openai-harmony", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
@@ -7661,7 +7654,7 @@ dependencies = [
     { name = "xgrammar", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e0a2b9e2bb6b16ba6d4e1821770123cc74f04b86128536c2744e91b59c6e4b6a" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-7e9b413a5daf/vllm-0.0.0.dev20261124+marin.7e9b413a5daf.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:5f476b05eca459fc5eb13acd17a48c6f015386bf0af0914b423d2fd4f150d8d0" },
 ]
 
 [package.metadata]
@@ -7771,8 +7764,8 @@ provides-extras = ["zen", "bench", "tensorizer", "fastsafetensors", "instanttens
 
 [[package]]
 name = "vllm"
-version = "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132"
-source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" }
+version = "0.0.0.dev20261124+marin.7e9b413a5daf.cu132"
+source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-7e9b413a5daf/vllm-0.0.0.dev20261124+marin.7e9b413a5daf.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" }
 resolution-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
@@ -7787,12 +7780,12 @@ dependencies = [
     { name = "compressed-tensors", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "depyf", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "einops", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "fastapi", extra = ["standard"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "fastapi", extra = ["standard"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "fastsafetensors", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "filelock", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "flashinfer-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "humming-kernels", extra = ["cu13"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "humming-kernels", extra = ["cu13"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "ijson", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "instanttensor", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "jsonschema", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -7800,14 +7793,14 @@ dependencies = [
     { name = "llguidance", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "lm-format-enforcer", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "mcp", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "mistral-common", extra = ["image"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "mistral-common", extra = ["image"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "model-hosting-container-standards", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "msgspec", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "ninja", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "numba", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cudnn-frontend", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
     { name = "nvtx", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "openai", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "openai-harmony", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -7854,7 +7847,7 @@ dependencies = [
     { name = "xgrammar", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b8897bde70bf353a08f37450fb89fca5ebf50d768d6756807a43867ef11134f4" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261124-7e9b413a5daf/vllm-0.0.0.dev20261124+marin.7e9b413a5daf.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e4b8697ae5f2bf0b8e433fc1834e66fb3b50ce405e6b3ac0709b10005f1d6e00" },
 ]
 
 [package.metadata]
@@ -7980,16 +7973,16 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "click", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "gitpython", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "packaging", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "platformdirs", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "pydantic", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "pyyaml", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "requests", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "sentry-sdk", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "typing-extensions", marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "click", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "gitpython", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "packaging", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "platformdirs", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "pydantic", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "pyyaml", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "requests", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "sentry-sdk", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "typing-extensions", marker = "sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/14/a2/53ca062f430178e3af48ebc137396481d0ee885fb94a554c0df464cd8afa/wandb-0.27.2.tar.gz", hash = "sha256:c81ff93ab63f4dabc5a27b90ac3d12310fbfa6a14ca99201626921c99b2845be", size = 40300451, upload-time = "2026-06-06T01:47:02.74Z" }
 wheels = [
@@ -8032,17 +8025,17 @@ resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "click", marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "opentelemetry-api", marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "packaging", marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "platformdirs", marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "pydantic", marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "pyyaml", marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "requests", marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "sentry-sdk", marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "typing-extensions", marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "xxhash", marker = "(sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "click", marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "opentelemetry-api", marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "packaging", marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "platformdirs", marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "pydantic", marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "pyyaml", marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "requests", marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "sentry-sdk", marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "typing-extensions", marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "xxhash", marker = "sys_platform == 'linux' and extra == 'extra-10-marinskyrl-cpu' or extra == 'extra-10-marinskyrl-cpu' and (extra == 'extra-10-marinskyrl-cuda' or extra == 'extra-10-marinskyrl-megatron' or extra == 'extra-10-marinskyrl-vllm')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c8/f2/ae1d136972c93c20b87f0caa8cfcacf922d2c650272d0f5af412847955a9/wandb-0.29.0.tar.gz", hash = "sha256:44981b504427ba312e0823fa62c02ff96fb9740a83e4657e693e3e2097cde603", size = 41230058, upload-time = "2026-08-26T23:43:12.669Z" }
 wheels = [

@@ -54,7 +54,7 @@ def unsupported(reason: str, detail: str) -> ImportRejection:
     return ImportRejection(kind=ImportFailureKind.UNSUPPORTED, reason=reason, detail=detail)
 
 
-def _text(value: Any) -> str | None:
+def nonempty_text(value: Any) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
@@ -106,16 +106,24 @@ def math_type(expected: str) -> MathType:
 
 
 def math_answer_task(
-    row: RawRow, *, prompt: Any, answer: Any, evidence: Mapping[str, Any] | None = None
+    row: RawRow,
+    *,
+    prompt: Any,
+    answer: Any,
+    evidence: Mapping[str, Any] | None = None,
+    positive_symbols: tuple[str, ...] = (),
 ) -> TaskSpec | ImportRejection:
-    """Grade a symbolic math answer; a boxed reference is unwrapped."""
-    problem, reference = _text(prompt), _text(answer)
+    """Grade a symbolic math answer; a boxed reference is unwrapped.
+
+    Positive symbols must also be stated in the public prompt.
+    """
+    problem, reference = nonempty_text(prompt), nonempty_text(answer)
     if problem is None:
         return source_defect("missing_prompt", "The problem must be a nonempty string")
     if reference is None:
         return source_defect("invalid_reference", "The reference answer must be a nonempty string")
     expected = extract_boxed(reference) or reference
-    spec = MathSpec(expected=expected, math_type=math_type(expected))
+    spec = MathSpec(expected=expected, math_type=math_type(expected), positive_symbols=positive_symbols)
     try:
         grade_math_candidate(spec, "")
     except InvalidTask as error:
@@ -133,7 +141,7 @@ def numeric_answer_task(
     evidence: Mapping[str, Any] | None = None,
 ) -> TaskSpec | ImportRejection:
     """Grade a numeric literal within absolute and relative tolerances."""
-    problem = _text(prompt)
+    problem = nonempty_text(prompt)
     if problem is None:
         return source_defect("missing_prompt", "The problem must be a nonempty string")
     reference = answer.strip() if isinstance(answer, str) else str(answer) if isinstance(answer, int | float) else None
@@ -156,7 +164,7 @@ def mcq_task(
     row: RawRow, *, prompt: Any, answer: Any, options: int, evidence: Mapping[str, Any] | None = None
 ) -> TaskSpec | ImportRejection:
     """Grade an option letter; ``prompt`` already lists the ``options`` labeled choices."""
-    question, letter = _text(prompt), _text(answer)
+    question, letter = nonempty_text(prompt), nonempty_text(answer)
     if question is None:
         return source_defect("missing_prompt", "The question must be a nonempty string")
     if letter is None or len(letter) != 1 or not "A" <= letter.upper() < chr(65 + options):
@@ -173,10 +181,10 @@ def exact_answer_task(
     evidence: Mapping[str, Any] | None = None,
 ) -> TaskSpec | ImportRejection:
     """Grade an answer equal to one of ``answers`` after whitespace normalization."""
-    question = _text(prompt)
+    question = nonempty_text(prompt)
     if question is None:
         return source_defect("missing_prompt", "The question must be a nonempty string")
-    if not answers or not all(_text(item) for item in answers):
+    if not answers or not all(nonempty_text(item) for item in answers):
         return source_defect("invalid_reference", "Accepted answers must be nonempty strings")
     return answer_task(row, prompt=question, spec=ExactSpec(tuple(answers), ignore_case=ignore_case), evidence=evidence)
 
@@ -189,7 +197,7 @@ def ifeval_task(
     evidence: Mapping[str, Any] | None = None,
 ) -> TaskSpec | ImportRejection:
     """Grade the fraction of instruction-following constraints the reply satisfies."""
-    instruction = _text(prompt)
+    instruction = nonempty_text(prompt)
     if instruction is None:
         return source_defect("missing_prompt", "The instruction must be a nonempty string")
     if not constraints:
@@ -206,7 +214,7 @@ def json_schema_task(
     evidence: Mapping[str, Any] | None = None,
 ) -> TaskSpec | ImportRejection:
     """Grade a reply against ``schema`` (serialized schema text), shipped as the grader's ``schema.json``."""
-    instruction, document = _text(prompt), _text(schema)
+    instruction, document = nonempty_text(prompt), nonempty_text(schema)
     if instruction is None:
         return source_defect("missing_prompt", "The instruction must be a nonempty string")
     if document is None:

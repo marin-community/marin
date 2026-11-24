@@ -21,12 +21,22 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationProfile
-from skyrlrecipe.documents import set_path
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
+from experiments.post_training.rl_agentic_recipe import (
+    NO_AGENTIC_TASKS,
+    NO_IMAGE_SANDBOX,
+    agentic_limits,
+    agentic_preset,
+    shell_tool_preset,
+)
 from experiments.post_training.rl_compose import BATCH_SETTINGS
 from experiments.post_training.rl_presets import (
+    HARBOR_EVALUATION,
+    RL_TRAINING_BASE,
+    SAMPLED_TRAJECTORIES,
+    STOP_TOKEN_IDS,
     UPDATE_SECONDS_METRIC,
     ControlPin,
     Evaluation,
@@ -56,6 +66,15 @@ EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 
+_DSPARK = sections.SpeculativeDecoding(
+    method="dspark",
+    model=sections.SpeculatorModel(
+        source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
+        source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
+    ),
+    num_speculative_tokens=4,
+)
+
 _DEFAULT_MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
         f"models/snowball-datakit-sft-{MODEL_REVISION}", "2026.09.21", MODEL_URI, kind=LevanterCheckpoint
@@ -65,89 +84,47 @@ _DEFAULT_MODEL = ArtifactHfModel(
     relative_path="",
 )
 
-_DEFAULT_PATCH = RecipePatch(
-    context_budget=ContextBudget(request_window_tokens=24576, max_new_tokens_per_turn=8192, max_turns=1),
-    environment=sections.Environment(task_sessions={"local": {}}),
-    data=sections.Data(kind="parquet", shuffle=True),
-    trainer=sections.Trainer(
-        strategy="megatron",
-        flash_attn=False,
-        use_sample_packing=False,
-        gradient_checkpointing=True,
-        offload_optimizer_during_rollouts=False,
-        epochs=50,
-        update_epochs_per_batch=1,
-        eval_batch_size=256,
-        eval_before_train=False,
-        logger=("console", "records", "wandb"),
-        project_name="marin-snowball-rl",
-        tracker_commit_each_step=True,
-        training_metrics=True,
-        rollout_spans=True,
-        policy_train_spans=True,
-        algorithm=sections.Algorithm(
-            advantage_estimator="rloo_n",
-            off_policy_correction="none",
-            policy_loss_type="regular",
-            loss_reduction="token_mean",
-            use_kl_loss=False,
-            kl_estimator_type="k3_unbiased_gradient",
-            eps_clip_low=0.2,
-            eps_clip_high=0.2,
-            group_advantage_min_size=2,
-            advantage_batch_normalize=False,
-            rloo_n_filter_zero_reward_groups=True,
-            use_entropy_loss=False,
-        ),
-        policy=sections.Policy(
-            optimizer_config=sections.PolicyOptimizerConfig(
-                optimizer="AdamW",
-                lr=1e-6,
-                adam_betas=(0.9, 0.999),
-                weight_decay=0.0,
-                max_grad_norm=0.5,
-                scheduler="constant_with_warmup",
-                num_warmup_steps=0,
+_DEFAULT_PATCH = RL_TRAINING_BASE.merge(
+    RecipePatch(
+        context_budget=ContextBudget(request_window_tokens=24576, max_new_tokens_per_turn=8192, max_turns=1),
+        trainer=sections.Trainer(
+            flash_attn=False,
+            use_sample_packing=False,
+            epochs=50,
+            eval_batch_size=256,
+            eval_before_train=False,
+            project_name="marin-snowball-rl",
+            algorithm=sections.Algorithm(
+                off_policy_correction="none",
+                kl_estimator_type="k3_unbiased_gradient",
+                eps_clip_low=0.2,
+                eps_clip_high=0.2,
+                use_entropy_loss=False,
+            ),
+            policy=sections.Policy(
+                optimizer_config=sections.PolicyOptimizerConfig(
+                    optimizer="AdamW",
+                    lr=1e-6,
+                    adam_betas=(0.9, 0.999),
+                    weight_decay=0.0,
+                    max_grad_norm=0.5,
+                    scheduler="constant_with_warmup",
+                    num_warmup_steps=0,
+                ),
             ),
         ),
-        rollout_buffer=sections.RolloutBuffer(object_store_root=None),
-        ckpt_interval=0,
-        hf_save_interval=-1,
-    ),
-    generator=sections.Generator(
-        backend="vllm",
-        vllm_attention_backend="FLASH_ATTN",
-        run_engines_locally=True,
-        weight_sync_backend="nccl",
-        weight_sync_pause=sections.WeightSyncPause(mode="keep", clear_cache=True),
-        weight_sync_transport="expert_block",
-        expert_block_sync=sections.ExpertBlockSync(timeout_seconds=600, verify=False),
-        gpu_memory_utilization=0.75,
-        max_num_seqs=1024,
-        max_num_batched_tokens=8192,
-        enable_prefix_caching=True,
-        trajectory_reward_shaping=sections.TrajectoryRewardShaping(
-            enabled=True,
-            overlong=sections.Overlong(penalty_scale=0.0),
-            reasoning_span=sections.ReasoningSpan(penalty=0.1, target="marker"),
+        generator=sections.Generator(
+            max_num_seqs=1024,
+            enable_prefix_caching=True,
+            enable_chunked_prefill=True,
+            enforce_eager=False,
+            apply_overlong_filtering=False,
+            sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
         ),
-        enable_chunked_prefill=True,
-        enforce_eager=False,
-        enable_http_endpoint=False,
-        chat_template=None,
-        apply_overlong_filtering=False,
-        engine_init_kwargs={"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
-        sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
-    ),
-    trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=1024),
-    extra_env={
-        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-        # The privileged profile below exposes the front-end Ethernet NIC's RoCE functions
-        # (mlx5_*) beside the InfiniBand rails. NCCL routes some channels over them, which fails
-        # with IBV_WC_RETRY_EXC_ERR(12). Pin NCCL to the rails (ibp0-ibp7).
-        "NCCL_IB_HCA": "ibp",
-    },
+        trajectory_runner=sections.TrajectoryRunner(max_concurrent_tasks=1024),
+    )
 )
+
 
 _MODE_KEYS = (
     "trainer.rollout_buffer.max_staleness_steps",
@@ -231,17 +208,9 @@ E8 = replace(
             inference_engine_data_parallel_size=8,
             inference_engine_expert_parallel_size=8,
             n_samples_per_prompt=4,
-        )
+        ),
     ),
 )
-
-_GENERATION_DOCUMENT = {}
-
-for _key, _value in _P40_PLAN.config_values().items():
-    if _key.startswith("trainer."):
-        set_path(_GENERATION_DOCUMENT, _key, _value)
-
-_GENERATION_NATIVE_DEFAULTS = RecipePatch.from_document(_GENERATION_DOCUMENT)
 
 _ASYNC_P40 = Recipe(
     layout=P40,
@@ -256,20 +225,15 @@ _ASYNC_P40 = Recipe(
     ),
 )
 
-_EXPORT_BEST = replace(
-    _ASYNC_P40, config=_ASYNC_P40.config.merge(RecipePatch(trainer=sections.Trainer(hf_export_checkpoint="best")))
-)
+_GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
-_GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH.merge(_GENERATION_NATIVE_DEFAULTS))
-
-_GAPS = ("aaii-coverage", "no-agentic-tasks", "no-image-sandbox")
+_GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
 
 _TASK_SET = EVALUATIONS["eval_lite_100"]
 
 _BATCH_KEYS = frozenset(BATCH_SETTINGS)
 
 _OWNED_KEYS = frozenset(_MODE_KEYS)
-_BEST_EXPORT_KEYS = _OWNED_KEYS | {"trainer.hf_export_checkpoint"}
 
 _SPEED_KEYS = frozenset(
     {"generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering"}
@@ -283,9 +247,10 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.20.3",
+    revision="2026.11.22.3",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
+    default_speculative_decoding=_DSPARK,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",
@@ -296,12 +261,14 @@ _snowball = partial(
 
 _LEARNING_MEDIUM = _snowball(
     held_out_tasks=_DEFAULT_EVAL_LITE,
-    export_hf=True,
+    checkpoints="best",
+    export="best",
     name="learning-medium",
-    recipe=_EXPORT_BEST,
-    owned_keys=_BEST_EXPORT_KEYS,
+    recipe=_ASYNC_P40,
+    owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
+    checkpoint_every=26,
     accepts_init=True,
     publishes=True,
     control_preset="learning-medium",
@@ -315,11 +282,138 @@ _LEARNING_MEDIUM = _snowball(
     budget="asynchronous runtime unmeasured",
 )
 
+
+_TRAIN_LONG = _snowball(
+    held_out_tasks=_DEFAULT_EVAL_LITE,
+    retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
+    checkpoints="best",
+    export="best",
+    name="train-long",
+    recipe=_ASYNC_P40,
+    owned_keys=_OWNED_KEYS,
+    updates=100,
+    measured=range(1, 101),
+    tasks_input="optional",
+    accepts_init=True,
+    publishes=True,
+    checkpoint_every=10,
+    data_settings=frozenset({"shuffle", "sampling"}),
+    evaluations=(replace(_TASK_SET, every=10, at_start=True),),
+)
+
+_AGENTIC_PLAN = replace(
+    _P40_PLAN,
+    policy_num_nodes=10,
+    num_inference_engines=22,
+    train_batch_size=64,
+    policy_mini_batch_size=64,
+    n_samples_per_prompt=8,
+    entrypoint="taskcompendium",
+)
+_AGENTIC_LAYOUT = replace(
+    P40,
+    name="h100x256",
+    workload=Training(_AGENTIC_PLAN),
+    megatron=replace(P40.megatron, context_parallel_size=5),
+    cluster="cw-rno2a",
+    priority="production",
+    # Each job has a 12-hour allocation and resumes from its committed checkpoint.
+    job_timeout_seconds=12 * 3600,
+)
+_AGENTIC_PATCH = RecipePatch(
+    context_budget=ContextBudget(request_window_tokens=102_400, max_new_tokens_per_turn=16_384, max_turns=128),
+    trainer=sections.Trainer(
+        use_sample_packing=True,
+        rollout_buffer=sections.RolloutBuffer(max_in_flight=32),
+        policy=sections.Policy(
+            megatron_config=sections.PolicyMegatronConfig(
+                transformer_config_kwargs={"cp_comm_type": "a2a", "moe_router_fusion": False},
+                moe_router_replay=True,
+            )
+        ),
+        ref=sections.Ref(megatron_config=sections.RefMegatronConfig(transformer_config_kwargs={"cp_comm_type": "a2a"})),
+    ),
+    generator=sections.Generator(
+        max_num_seqs=64,
+        chat_template_kwargs={"enable_thinking": True},
+        sampling_params=sections.SamplingParams(
+            temperature=0.7, stop_token_ids=STOP_TOKEN_IDS, skip_special_tokens=False
+        ),
+        trajectory_retention=SAMPLED_TRAJECTORIES,
+    ),
+)
+
+_TRAIN_LONG_AGENTIC = agentic_preset(
+    replace(
+        _TRAIN_LONG.with_updates(10_000),
+        recipe=replace(_TRAIN_LONG.recipe, layout=_AGENTIC_LAYOUT),
+        data_settings=frozenset({"shuffle"}),
+        evaluations=(replace(_TASK_SET, every=2),),
+        checkpoint_every=2,
+        gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != NO_AGENTIC_TASKS), "harbor-on-daytona"),
+    ),
+    name="train-long-agentic",
+    # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
+    limits=agentic_limits(
+        trial_timeout=5400,
+        agent_timeout=1800,
+        stall_timeout=10_800,
+    ).merge(_AGENTIC_PATCH),
+)
+_TRAIN_MEDIUM_AGENTIC = replace(
+    _TRAIN_LONG_AGENTIC.with_updates(10),
+    name="train-medium-agentic",
+    recipe=replace(
+        _TRAIN_LONG_AGENTIC.recipe,
+        layout=replace(
+            _AGENTIC_LAYOUT,
+            name="h100x88",
+            workload=Training(replace(_AGENTIC_PLAN, num_inference_engines=1)),
+            priority="interactive",
+        ),
+    ),
+)
+
+_TRAIN_MEDIUM_TOOLS = shell_tool_preset(
+    replace(
+        _TRAIN_LONG.with_updates(10),
+        recipe=replace(
+            _TRAIN_LONG.recipe,
+            config=_TRAIN_LONG.recipe.config.merge(
+                RecipePatch(
+                    trainer=sections.Trainer(
+                        policy=sections.Policy(
+                            # A full-window trajectory needs the GPU memory for the policy update, so the
+                            # optimizer state stays on the CPU.
+                            megatron_config=sections.PolicyMegatronConfig(
+                                optimizer_config_kwargs=sections.OptimizerConfigKwargs(
+                                    optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
+                                )
+                            )
+                        )
+                    )
+                )
+            ),
+        ),
+        data_settings=frozenset({"shuffle"}),
+        checkpoints="none",
+        checkpoint_every=None,
+        export="none",
+        budget="40 H100s plus Daytona sandboxes; wall time and cost are unmeasured",
+    ),
+    name="train-medium-tools",
+)
+
 _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="speed-short",
-        recipe=replace(_GENERATING, fixed_reply_tokens=4096),
+        checkpoints="none",
+        recipe=replace(
+            _GENERATING,
+            fixed_reply_tokens=4096,
+            config=_GENERATING.config.merge(RecipePatch(generator=sections.Generator(gpu_memory_utilization=0.80))),
+        ),
         updates=0,
         measured=range(1),
         control_preset="speed-short",
@@ -332,6 +426,7 @@ _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="data-short",
+        checkpoints="none",
         recipe=_GENERATING,
         updates=0,
         measured=range(1),
@@ -347,6 +442,7 @@ _PRESETS = (
     _snowball(
         evaluations=(),
         name="speed-medium",
+        checkpoints="none",
         recipe=replace(
             _ASYNC_P40,
             fixed_reply_tokens=4096,
@@ -363,11 +459,12 @@ _PRESETS = (
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
         gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
-        budget="asynchronous runtime unmeasured",
+        budget="20m12s and 13.5 H100-h in the four-proposal comparison",
     ),
     _snowball(
         evaluations=(),
         name="speed-long",
+        checkpoints="none",
         recipe=_ASYNC_P40,
         updates=20,
         measured=range(3, 21),
@@ -388,21 +485,27 @@ _PRESETS = (
         control_preset=_LEARNING_MEDIUM.name,
         data_settings=frozenset(),
     ),
+    _TRAIN_LONG,
+    _TRAIN_MEDIUM_AGENTIC,
+    _TRAIN_LONG_AGENTIC,
+    _TRAIN_MEDIUM_TOOLS,
+    replace(
+        _TRAIN_LONG,
+        name="train-long-harbor",
+        harbor=HARBOR_EVALUATION,
+        gaps=(*_TRAIN_LONG.gaps, "harbor-on-daytona"),
+    ),
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
-        retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
-        export_hf=True,
-        name="train-long",
-        recipe=_EXPORT_BEST,
-        owned_keys=_BEST_EXPORT_KEYS,
-        updates=100,
-        measured=range(1, 101),
-        tasks_input="optional",
+        name="eval-short",
+        checkpoints="none",
+        recipe=_GENERATING,
+        updates=0,
+        measured=range(1),
         accepts_init=True,
-        publishes=True,
-        checkpoint_every=10,
-        data_settings=frozenset({"shuffle", "sampling"}),
-        evaluations=(replace(_TASK_SET, every=10, at_start=True),),
+        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+        evaluations=(EVALUATIONS["eval_lite"],),
+        budget="8 min; 1.1 H100-h",
     ),
 )
 
@@ -423,4 +526,11 @@ SNOWBALL = ModelPresets(
 )
 
 if __name__ == "__main__":
-    raise SystemExit(rl.main(SNOWBALL))
+
+    def sft_presets():
+        # Load the SFT training dependencies only for --sft.
+        from experiments.post_training.snowball_sft import SNOWBALL_SFT  # noqa: PLC0415
+
+        return SNOWBALL_SFT
+
+    raise SystemExit(rl.main(SNOWBALL, sft_presets=sft_presets))

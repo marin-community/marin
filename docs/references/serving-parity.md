@@ -8,31 +8,7 @@ All measurements in this page compare training against served vLLM (or vLLM agai
 
 ### Levanter Snowball SFT and distillation
 
-Use `VLLM_PARITY_SPEC` in [experiments/sft/configs/snowball_h100.py](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py), or adapt it with `dataclasses.replace`:
-
-```python
-from dataclasses import replace
-
-from levanter.models.snowball import SnowballConfig
-
-from experiments.sft.configs.snowball_h100 import SPEC
-from experiments.sft.launcher import HFModel
-
-assert isinstance(SPEC.model, HFModel)
-VLLM_PARITY_SPEC = replace(
-    SPEC,
-    name="checkpoints/snowball-openthoughts-agent-sft-vllm-parity",
-    model=replace(
-        SPEC.model,
-        model=SnowballConfig(
-            moe_capacity_factor=8.0,  # match the mesh's expert-axis size
-            router_dot_fp32=True,
-            fp32_activations=True,
-        ),
-    ),
-    field_dtype_overrides={"router_bias": "float32"},
-)
-```
+Select `--preset vllm-parity-32k-4node` with the [Snowball SFT launcher](../tutorials/run-snowball-sft-on-h100.md), or import `VLLM_PARITY_SPEC` from `experiments.post_training.snowball_sft`. It sets expert capacity to 8, the size of this mesh's expert axis, and enables FP32 router scoring, router bias, and activations. When adapting it to another mesh, set the capacity to that mesh's expert-axis size.
 
 For recipes that convert checkpoints through `hf_to_levanter` (such as [curriculum SFT](https://github.com/marin-community/marin/blob/main/experiments/post_training/curriculum_sft/trial.py)), pass `compute_dtype=None` so conversion does not round `router_bias` to BF16 before training starts. For direct `TrainLmConfig` launches, set the same fields on `config.model` and `config.trainer.field_dtype_overrides`.
 
@@ -75,7 +51,9 @@ Set `vllm_batch_invariant=True` on `ServeConfig` (exports `VLLM_BATCH_INVARIANT=
 | `hf_overrides: {head_dtype: float32}` on vLLM (default BF16) | Opt-in only (small effect). | Halved vLLM self-repeat gap (`0.01287 -> 0.00692` nats/tok), but pairing with FP32 Megatron head cut train–serve gap by only 0.6% ([issue 11561](https://github.com/marin-community/marin/issues/11561)). | ~12% lower vLLM scoring throughput and `+0.6 GiB/GPU` peak HBM. |
 | `XLA_FLAGS="--xla_allow_excess_precision=false"` (default unset) | Diagnostic only. | Raised layer-0 route agreement with FA4 to 0.9572, but failed max log-prob bound (`2.5058 > 2.5`) and passed fewer layers (`21/26`). | Disables some XLA GPU fusions; throughput delta unmeasured. |
 
-Unmerged follow-ups tracked in [issue 10698](https://github.com/marin-community/marin/issues/10698) and [issue 11561](https://github.com/marin-community/marin/issues/11561): FP32 MoE combine (`router_combine_fp32`, [PR 10686](https://github.com/marin-community/marin/pull/10686); cut max `|Δ log-prob|` from 4.28 to 2.18 nats, rejects `"sonic"` and `"sonic_cute"`), diagnostic `attention_implementation="torch_order"` ([PR 10688](https://github.com/marin-community/marin/pull/10688); quadratic `S × S` FP32 scores, untested above 8K), and Megatron `fp32_lm_head` ([PR 11671](https://github.com/marin-community/marin/pull/11671); TP1 only, negligible train–serve gain).
+FP32 MoE combine (`router_combine_fp32`) cut the maximum log-prob gap from 4.28 to 2.18 nats. It rejects `sonic` and `sonic_cute`. [FP32 MoE combine](https://github.com/marin-community/marin/pull/10686)
+
+Use `attention_implementation="torch_order"` for diagnostics. It stores an FP32 score matrix quadratic in sequence length and was tested through 8K. Megatron's `fp32_lm_head` is a TP1-only option under review. [Torch-order attention](https://github.com/marin-community/marin/pull/10688) · [Megatron FP32 head](https://github.com/marin-community/marin/pull/11671)
 
 ## When parity matters
 

@@ -1,10 +1,10 @@
 # Fine-tune Snowball with Levanter on H100s
 
-The [Snowball SFT recipe](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py) trains Levanter's `SnowballLMHeadModel` directly from the pinned Snowball Hugging Face weights. It uses the shared chat SFT launcher to transform OpenThoughts Agent conversations, supervise assistant tokens, and save native Levanter checkpoints. There is no Grug trainer checkpoint or model-specific conversion job.
+The [Snowball SFT presets](https://github.com/marin-community/marin/blob/main/experiments/post_training/snowball_sft.py) train Levanter's `SnowballLMHeadModel` from pinned Hugging Face weights. The `openthoughts-32k-4node` preset transforms OpenThoughts Agent conversations, supervises assistant tokens, and saves a native Levanter checkpoint and a Hugging Face export.
 
-This is a 32,768-token, ten-step starting recipe on 32 H100s. A prior [Snowball training run](https://github.com/marin-community/marin/pull/9144) demonstrated the 67B model on 32 learner H100s at 4,096 tokens. That run used GRPO; this longer SFT recipe has not completed an end-to-end accelerator run. Do not assume the model's 262K position limit is a validated training length.
+The preset is a 32,768-token, ten-step recipe on 32 H100s. A four-node smoke overrode the step count to five and saved a native checkpoint and Hugging Face export at step 4.
 
-The mesh splits each sequence over four H100s and shards experts across the other eight mesh ranks. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. Snowball supports Levanter's packed-document attention mask; this recipe keeps conversations separate (`pack=False`). Its scan layers are checkpointed during reverse mode to bound activation memory.
+The mesh splits each sequence across four nodes and shards experts across eight H100s within a node. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The OpenThoughts preset puts one conversation in each sequence and keeps its first 32,768 tokens. Its scan layers are checkpointed during reverse mode to bound activation memory.
 
 ## Prepare
 
@@ -23,7 +23,7 @@ export HF_TOKEN=hf_example
 
 ## Launch
 
-Submit a CPU coordinator through Iris. It transforms the data and dispatches the 32-H100 training job through the shared SFT launcher:
+Print the plan by running `python -m experiments.post_training.snowball_sft --preset openthoughts-32k-4node`. To train, submit a CPU coordinator through Iris with `--run`.
 
 ```bash
 uv run iris --cluster=marin job run --job-name snowball-sft-coord \
@@ -31,10 +31,51 @@ uv run iris --cluster=marin job run --job-name snowball-sft-coord \
   --priority interactive --no-wait \
   -e MARIN_PREFIX "$MARIN_PREFIX" -e HF_TOKEN "$HF_TOKEN" \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python -m experiments.sft.configs.snowball_h100 --accelerator 32xH100
+  -- python -m experiments.post_training.snowball_sft --preset openthoughts-32k-4node --run
 ```
 
 The coordinator and workers need the same storage and Hugging Face credentials. The completed training artifact is recorded under `checkpoints/snowball-openthoughts-agent-sft` in `MARIN_PREFIX`. Change the `SFTSpec` fields in the recipe to choose a different step count, batch size, or context length; increasing context length requires a separate memory and attention validation.
+
+## Choose an SFT preset
+
+Preset names use `<data>-<seq-len>-<nodes>`.
+
+### Snowball
+
+| Preset | What it reproduces | Training layout | Measured run | Model returned |
+| --- | --- | --- | --- | --- |
+| `openthoughts-32k-4node` | OpenThoughts Agent SFT with one conversation per sequence. | 4 nodes × 8 H100s | The five-update smoke used 17.0 H100-hours. | Final Levanter HF export. |
+| `mixture-262k-32node` | Snowball SFT with the published [supervised mixture](https://github.com/marin-community/marin/pull/11120) and its packed chat format. | 32 nodes × 8 H100s | The H100 smoke used a five-update override. | Final Levanter HF export with FP32 weights. |
+
+### Mochi
+
+| Preset | What it reproduces | Training layout | Measured run | Model returned |
+| --- | --- | --- | --- | --- |
+| `mixture-262k-16node` | Three updates using the production recipe. | 1 rack, 16 nodes × 4 GB200s | Three default updates used 13.27 GB200-hours and saved native step 393494. A CPU job exported the checkpoint. | With `--export`, a schema-3 BF16 HF model. |
+| `mixture-262k-48node` | Three updates using the production recipe. | 3 racks, 48 nodes × 4 GB200s | CPU plan only. | With `--export`, a schema-3 BF16 HF model. |
+| `mixture-262k-176node` | Full production continuation `hero-sft-fullab-step393k-v2` from its pinned native checkpoint. | 11 racks, 176 nodes × 4 GB200s | 58.0 h of recorded training runtime and 1 h 9 min 53 s of CPU export worker time. | With `--export`, a schema-3 BF16 HF export of step `400407`. |
+
+Run the matching module with `--preset` to print its plan. Add `--run` in the coordinator to execute
+the plan. The preset supplies the training allocation.
+
+```bash
+uv run python -m experiments.post_training.snowball_sft --preset mixture-262k-32node
+uv run python -m experiments.post_training.mochi_sft --preset mixture-262k-16node --steps 3 --export
+```
+
+Use `SFTPreset.model()` to request an export in Python workflows. Snowball's `--run` writes its HF model
+and tokenizer at `<training-output>/hf/step-N`. Mochi's `--run` needs `--export` to write an HF model.
+Run Mochi jobs in a coordinator placed on `cw-us-east-08a`.
+The short Mochi presets train without checkpoints or exports by default. A retry starts from the pinned
+checkpoint. `--steps` sets the number of updates from that point. `--export` saves the final native
+checkpoint and runs a CPU export that writes the weights, pinned tokenizer, and generation config at
+`<export-output>/hf`. The short presets request a 448 GiB CPU worker for export, sized to read a full
+expert bank from the native checkpoint. Short runs use the cluster's `tmp/ttl=3d/` prefix. Set
+`--prefix` to choose another storage root. Set `GIT_COMMIT` to the source commit when exporting from an
+Iris bundle without Git metadata.
+
+The 176-node preset uses the original production training artifact and checkpoint schedule. Pass
+`--export` to request its associated export. Use `--steps` to run a bounded variant in scratch storage.
 
 ## Checkpoints and recovery
 
@@ -50,12 +91,17 @@ from datetime import timedelta
 
 from levanter.checkpoint import CheckpointerConfig
 
-SPEC = replace(
-    SPEC,
-    checkpointer=CheckpointerConfig(
-        save_interval=timedelta(minutes=30),
-        keep_last_temporary_checkpoints=2,
-        keep=[{"every": 1000}],
+from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE, OPENTHOUGHTS_SPEC
+
+preset = replace(
+    OPENTHOUGHTS_32K_4NODE,
+    recipe=replace(
+        OPENTHOUGHTS_SPEC,
+        checkpointer=CheckpointerConfig(
+            save_interval=timedelta(minutes=30),
+            keep_last_temporary_checkpoints=2,
+            keep=[{"every": 1000}],
+        ),
     ),
 )
 ```
@@ -64,16 +110,6 @@ Here `keep` retains a permanent checkpoint every 1,000 steps in addition to the 
 
 ## Match the served vLLM forward
 
-By default, Levanter's Snowball forward differs numerically from served vLLM ([issue 10698](https://github.com/marin-community/marin/issues/10698)), and `moe_capacity_factor=1.0` can drop routed tokens under expert parallelism.
+Select `--preset vllm-parity-32k-4node` in the commands above to use dropless routing and FP32 router scoring and activations. For Python workflows, import `VLLM_PARITY_SPEC` from `experiments.post_training.snowball_sft`.
 
-To enable the serving-parity settings available on `main` without changing the default recipe, import `VLLM_PARITY_SPEC` from [experiments/sft/configs/snowball_h100.py](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py):
-
-```python
-from dataclasses import replace
-
-from experiments.sft.configs.snowball_h100 import VLLM_PARITY_SPEC
-
-SPEC = replace(VLLM_PARITY_SPEC, name="checkpoints/my-snowball-sft")
-```
-
-See [Serving Numerical Parity](../references/serving-parity.md) for the full knob table, SkyRL/Megatron settings, `hf_to_levanter(..., compute_dtype=None)` requirements, and coverage limits.
+See [Serving Numerical Parity](../references/serving-parity.md) for the measured scope and checkpoint conversion settings.
