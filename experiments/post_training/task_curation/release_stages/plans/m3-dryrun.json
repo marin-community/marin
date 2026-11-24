@@ -416,7 +416,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "m3-dryrun",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v14",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v15",
   "scan_regions": {
     "us-east-02a": "s3://marin-us-east-02a/marin/rl-data/atlas/"
   },
