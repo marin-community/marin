@@ -180,11 +180,10 @@ def adopt_regional_parts(output: StoragePath, staged_output: Path) -> set[str]:
     receipts = staged_output / "part-receipts"
     receipts.mkdir(parents=True, exist_ok=True)
     adopted: set[str] = set()
-    try:
-        receipt_paths = sorted((output / "part-receipts").iterdir())
-    except FileNotFoundError:
+    regional_receipts = output / "part-receipts"
+    if not regional_receipts.exists():
         return adopted
-    for receipt_path in receipt_paths:
+    for receipt_path in sorted(regional_receipts.glob("*.json")):
         entry = json.loads(receipt_path.read_text())
         vectors_target = staged_output / "vectors" / entry["vectors"]
         docids_target = staged_output / "docids" / entry["docids"]
