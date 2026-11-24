@@ -9,6 +9,7 @@ import hashlib
 import threading
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from rigging import telemetry
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
@@ -20,6 +21,7 @@ from finestore.layout import (
     FORMAT_VERSION,
     SUPPORTED_MANIFEST_FEATURES,
     ArchiveMetadata,
+    CommitInfo,
     CommitToken,
     FineStoreLayout,
     FormatVersionError,
@@ -51,6 +53,14 @@ _COMMIT_CONFLICTS = telemetry.counter("finestore_commit_conflicts", unit="{confl
 
 class CommitConflict(RuntimeError):
     """A manifest delta can no longer be applied to the current snapshot."""
+
+
+@dataclass(frozen=True)
+class Attribution:
+    """Who makes a commit and why; its manifest records them as ``commit_info``."""
+
+    author: str
+    message: str
 
 
 @dataclass(frozen=True)
@@ -97,6 +107,7 @@ class CommitDelta:
     expected_epoch: int | None = None
     epoch_update: int | None = None
     cache_history_floor: int = 0
+    attribution: Attribution | None = None
 
 
 def _empty_manifest() -> Manifest:
@@ -200,6 +211,17 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
     return ArchiveSnapshot(manifest=manifest, token=token)
 
 
+def _commit_info(attribution: Attribution | None, sequence: int) -> CommitInfo | None:
+    if attribution is None:
+        return None
+    return CommitInfo(
+        author=attribution.author,
+        message=attribution.message,
+        sequence=sequence,
+        created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+    )
+
+
 def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
     if delta.expected_epoch is not None and base.maintainer_epoch != delta.expected_epoch:
         raise CommitConflict(
@@ -266,6 +288,7 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
             "tables": tables,
             "sealed": sealed,
             "maintainer_epoch": base.maintainer_epoch if delta.epoch_update is None else delta.epoch_update,
+            "commit_info": _commit_info(delta.attribution, sequence),
         }
     )
 

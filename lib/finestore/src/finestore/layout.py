@@ -211,6 +211,17 @@ class ManifestTable(_FormatModel):
     shards: tuple[Shard, ...] = ()
 
 
+class CommitInfo(_FormatModel):
+    """Metadata about the transaction that published a commit."""
+
+    author: str
+    message: str
+    # Sequence of the commit this record describes. Older writers copy the parent's record
+    # forward; readers ignore a record whose sequence differs from the manifest's.
+    sequence: int
+    created_at: str
+
+
 class Manifest(_FormatModel):
     """One immutable, complete archive snapshot."""
 
@@ -226,6 +237,7 @@ class Manifest(_FormatModel):
     maintainer_epoch: int = 0
     # Disposable-cache recovery invalidates these commits across descriptor and chunk tables.
     cache_history_floor: int = 0
+    commit_info: CommitInfo | None = None
 
 
 class HeadMetadata(_FormatModel):
