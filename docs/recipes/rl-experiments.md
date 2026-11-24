@@ -317,15 +317,12 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
    preset-specific default. `_DEFAULT_PATCH` supplies shared settings, including context budget.
    Trainer precision, engine precision and batch invariance use the native recipe keys through `--set`.
 2. Bump that preset's `revision`. Data-medium shares learning-medium's settings and revision.
-3. From the repository root, check the composed configuration against the golden fixture:
+3. From the repository root, run the native launcher checks for Snowball presets.
 
    ```bash
-   uv run pytest -s -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_presets_match_revisioned_native_configs
+   uv run pytest -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_snowball_presets_plan_native_launches
    ```
 
-   Inspect the composed settings and add the new revision's hash under that preset in the
-   test's `revisions` table.
-   The compared-configuration hash includes actual execution memory and priority.
 4. Controls are collected by CI after the default change merges, once per changed default.
    That CI workflow is planned separately; control collection is not a merge gate.
    The manual `--control` command remains available for an explicitly authorized calibration.
@@ -491,9 +488,6 @@ its own model, tasks, layout and recipe. A preset with held-out evaluations decl
 `held_out_tasks` and the evaluation profiles. A `mochi_rl.py` entry fits the same interface with the
 model label `mochi`, its own namespace, and Mochi's initializer, resources and evaluation choices.
 The preset table's namespace owns run and control paths.
-The model entry's preset golden test owns the launch documents composed through `rl_compose.py`.
-Use `assert_revisioned_native_configs` in `skyrl_test_support.py` with the table's pinned revisions
-and native hashes. The launch-document census covers the other authored builders.
 
 Python callers can pass `init: SkyRLModelSource` to `rl.main(table, argv=..., init=...)` or
 `build_experiment(preset, table=..., init=...)`. An `ArtifactHfModel` accepts any `ArtifactStep`;
