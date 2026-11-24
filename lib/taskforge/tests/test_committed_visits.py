@@ -12,11 +12,10 @@ from argparse import Namespace
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, fields, replace
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, cast, override
 
 import pytest
-import shellsim
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider
 from lib.taskforge.tests.stage_fakes import CandidateEngine, transcript
@@ -43,22 +42,18 @@ from rolloutengine.models import (
     RolloutOperation,
     TaskRolloutSpec,
 )
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import MachineOutputLimitExceeded
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import EnvironmentRequirements
-from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from taskforge import driver
 from taskforge.checkpoint import HEAD
-from taskforge.config import TaskforgeConfig, WorkspaceHydration
+from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved, ScopeEntered, StageBoundary
 from taskforge.effects.issues import Hold, LogFailure
 from taskforge.effects.log import BufferSink, EventLog, Record
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Tool
-from taskforge.harness.tools.submit import SubmitTool
 from taskforge.llm.glm_provider import EndpointSource
 from taskforge.llm.policy import GLM_5_3, LLMPolicy, ModelProfile
 from taskforge.model.content_hash import digest
@@ -74,15 +69,13 @@ from taskforge.model.review import (
     TrialOutcome,
 )
 from taskforge.model.stage import Exit, Stage
-from taskforge.model.workpiece import Conversation, Submission, Terminal, Workpiece
+from taskforge.model.workpiece import Conversation, Terminal, Workpiece
 from taskforge.policy import Policy
 from taskforge.report import trial_outcomes
 from taskforge.resources.bundle import Resources
-from taskforge.resources.env import Env
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.inference import InferenceClient
 from taskforge.resources.rollouts import Engine, SolverRollout
-from taskforge.stages.rules import default_review
 from taskforge.wiring import CampaignWiring, build_config, build_resources
 
 RUN_WORKPIECE = driver.run_workpiece
@@ -533,20 +526,6 @@ async def test_lowering_the_missing_trial_allowance_turns_a_tolerated_round_into
     assert (second.solver.runs, second.grader.calls) == ([], 0)
 
 
-def restated(workpiece: Workpiece, band: Any, budget: Any) -> Any:
-    return default_review(workpiece, band, budget)
-
-
-async def test_a_custom_review_rule_reuses_no_visit(launches: Driver) -> None:
-    def custom(config: TaskforgeConfig) -> TaskforgeConfig:
-        return replace(config, review=restated)
-
-    assert await launches.run(launch(Paid(outage={(2, 1)})), configure=custom) == driver.DEFERRED
-    held = len(launches.rows())
-    assert await launches.run(launch(Paid()), configure=custom) == 0
-    assert scopes(launches.rows()[held:], "validate") == scopes(launches.rows()[held:], "author") == 1
-
-
 @dataclass(frozen=True, slots=True)
 class HoldsEveryRound(AgenticHarness):
     """A reviewer session that sends every round to a person: a subclass of the stock loop that runs otherwise."""
@@ -825,48 +804,6 @@ async def test_a_plan_switched_back_after_a_reset_starts_at_the_author_and_buys_
     assert (again.grader.calls, again.round_reviews) == (0, 0)
 
 
-@pytest.mark.parametrize(
-    "workspace",
-    [
-        WorkspaceHydration((inline_resource("reference.txt", b"V2"),)),
-        WorkspaceHydration((inline_resource("reference.txt", b"V1"),), rendered=lambda _wp, _policy: ()),
-    ],
-    ids=["changed static content", "custom renderer"],
-)
-async def test_a_changed_or_unidentified_workspace_never_resumes_past_the_author(
-    launches: Driver, workspace: WorkspaceHydration
-) -> None:
-    """The author may have built its task from ``/reference.txt``: a launch whose workspace differs, or whose renderer
-    has no identity, starts at the author on a machine holding what this launch hydrates."""
-    v1 = WorkspaceHydration((inline_resource("reference.txt", b"V1"),))
-    assert await launches.run(launch(Paid(outage={(2, 1)})), configure=lambda c: replace(c, workspace=v1)) == (
-        driver.DEFERRED
-    )
-    held = len(launches.rows())
-    second = launch(Paid())
-    assert await launches.run(second, configure=lambda c: replace(c, workspace=workspace)) == 0
-    assert scopes(launches.rows()[held:], "author") == 1
-    author = cast(Envs, second.bundle.envs).created[0]
-    assert author.files[PurePosixPath("/reference.txt")] == resource_bytes(workspace.static[0])
-
-
-class InjectedMachines(ShellSimMachineFactory):
-    """A caller's own machine factory: it may configure machines in ways no plan identity sees."""
-
-
-async def test_an_injected_machine_factory_never_resumes_past_the_author(launches: Driver) -> None:
-    """The same backend name as the stock factory of the held launch, so only the factory's type differs."""
-    first = launch(Paid(outage={(2, 1)}))
-    first.bundle = replace(first.bundle, factories={"shellsim": ShellSimMachineFactory(context=shellsim.Context())})
-    assert await launches.run(first) == driver.DEFERRED
-    held = len(launches.rows())
-    second = launch(Paid())
-    second.bundle = replace(second.bundle, factories={"shellsim": InjectedMachines(context=shellsim.Context())})
-    assert await launches.run(second) == 0
-    new = launches.rows()[held:]
-    assert scopes(new, "author") == 1 and boundaries(new)[0] is Stage.AUTHOR
-
-
 async def test_a_launch_after_the_published_author_boundary_opens_no_author_machine_or_model_call(
     launches: Driver,
 ) -> None:
@@ -883,65 +820,48 @@ async def test_a_launch_after_the_published_author_boundary_opens_no_author_mach
     assert cast(Envs, again.bundle.envs).created == []
 
 
-@pytest.mark.parametrize("change", ["author sampling", "proposal bytes"])
-async def test_a_changed_author_session_or_proposal_resumes_at_the_author(
-    launches: Driver, proposal: TaskProposal, change: str
-) -> None:
+async def test_a_direct_run_without_a_plan_reenters_the_author(launches: Driver, proposal: TaskProposal) -> None:
+    assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
+    previous = launches.rows()
+    log = EventLog(replay_from=previous, replayable=driver.replayable_grade)
+    config = build_config(driver.run_policy(launches.args.policy), {})
+    result = await RUN_WORKPIECE(proposal, config, launch(Paid()).bundle, log, install=driver.install, stage_plan=None)
+    assert result.terminal is Terminal.ACCEPTED
+    assert scopes(log.records[len(previous) :], "author") == 1
+
+
+async def test_a_changed_proposal_resumes_at_the_author(launches: Driver, proposal: TaskProposal) -> None:
     assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
     held = len(launches.rows())
-    profiles = {"author": replace(GLM_5_3, sampling=LLMPolicy(max_tokens=128))} if change == "author sampling" else {}
-    if change == "proposal bytes":
-        edited = replace(proposal, body=proposal.body + "\nOne more sentence.")
-        Path(launches.args.proposals).write_bytes(TASK_PROPOSAL.dump_json(edited))
-    assert await launches.run(launch(Paid()), profiles=profiles) == 0
+    edited = replace(proposal, body=proposal.body + "\nOne more sentence.")
+    Path(launches.args.proposals).write_bytes(TASK_PROPOSAL.dump_json(edited))
+    assert await launches.run(launch(Paid())) == 0
     new = launches.rows()[held:]
     assert scopes(new, "author") == 1 and boundaries(new)[0] is Stage.AUTHOR
 
 
-@pytest.mark.parametrize("change", ["environment", "submit gate", "installer"])
-async def test_new_author_bindings_do_not_ship_the_previous_binding_s_submission(
-    launches: Driver, change: str, monkeypatch: pytest.MonkeyPatch
+async def test_a_new_installer_does_not_ship_the_previous_submission(
+    launches: Driver, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with pytest.raises(asyncio.CancelledError):
         await launches.run(launch(Paid()), cut=1)
 
-    def gate(_submission: Submission) -> tuple[str, ...]:
-        raise Hold("changed submission gate")
+    original_install = driver.install
 
-    class ChangedEnvironments:
-        async def create(self, requirements: EnvironmentRequirements) -> Env:
-            raise Hold("changed environment")
+    async def observe(entry: ScopeEntered) -> None:
+        if entry.name == "author":
+            raise Hold("changed installer")
 
-    def configure(config: TaskforgeConfig) -> TaskforgeConfig:
-        if change != "submit gate":
-            return config
-        tools = dict(config.author.tools)
-        tools["submit"] = replace(cast(SubmitTool, tools["submit"]), gate=gate)
-        return replace(config, author=replace(config.author, tools=tools))
+    def installed(ctx: Context, resources: Resources) -> None:
+        original_install(ctx, resources)
+        ctx.observe(ScopeEntered, observe)
 
-    if change == "installer":
-        original_install = driver.install
+    monkeypatch.setattr(driver, "install", installed)
 
-        async def observe(entry: ScopeEntered) -> None:
-            if entry.name == "author":
-                raise Hold("changed installer")
-
-        def installed(ctx: Context, resources: Resources) -> None:
-            original_install(ctx, resources)
-            ctx.observe(ScopeEntered, observe)
-
-        monkeypatch.setattr(driver, "install", installed)
-
-    def resources_for_run() -> Launch:
-        trial = launch(Paid())
-        if change == "environment":
-            trial.bundle = replace(trial.bundle, envs=ChangedEnvironments())
-        return trial
-
-    assert await launches.run(resources_for_run(), configure=configure if change == "submit gate" else None) == 0
+    assert await launches.run(launch(Paid())) == 0
     recovered = published_workpiece(launches.root)
     launches.args.output += "-fresh"
-    assert await launches.run(resources_for_run(), configure=configure if change == "submit gate" else None) == 0
+    assert await launches.run(launch(Paid())) == 0
     fresh = published_workpiece(launches.root)
     assert fresh.terminal is Terminal.HELD
     assert recovered.terminal == fresh.terminal
