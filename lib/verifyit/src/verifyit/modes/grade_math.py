@@ -146,6 +146,9 @@ def _parse_reference(text: str) -> tuple[list, bool]:
     def parse_whole() -> tuple[object, bool]:
         normalized = normalize_latex(value, config=latex.normalization_config)
         candidate_strip_units = not symbolic_text_group and (strip_units or normalized == value)
+        if strip_units and _DANGLING_OPERATOR.search(normalized):
+            # A terminal text symbol can be the operand that unit normalization removed.
+            candidate_strip_units = False
         if not candidate_strip_units:
             # Other normalization changes, such as \dfrac -> \frac, do not imply a stripped unit.
             unitless = normalize_latex(value, config=replace(latex.normalization_config, units=False))

@@ -271,6 +271,20 @@ def test_math_adjacent_text_symbols_keep_following_math(reference, candidate, wr
 
 
 @pytest.mark.parametrize(
+    "reference, candidate, wrong_candidate, math_type",
+    [
+        (r"1+\mathrm{x}", r"1+\mathrm{x}", "1", MathType.SCALAR),
+        (r"1+\text{x}", r"1+\text{x}", "1", MathType.SCALAR),
+        (r"[2, 1+\mathrm{x}]", r"[2, 1+\mathrm{x}]", "[2, 1]", MathType.LIST),
+    ],
+)
+def test_math_terminal_text_symbols_after_operators_stay_symbolic(reference, candidate, wrong_candidate, math_type):
+    spec = MathSpec(expected=reference, math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
+
+
+@pytest.mark.parametrize(
     "reference,candidate",
     [("18", r"18 \text{ dollars}"), (r"35 \mathrm{~cm}", "35"), (r"\dfrac{1}{2}", r"0.5\text{ m}")],
 )
