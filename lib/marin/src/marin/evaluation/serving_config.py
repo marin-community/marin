@@ -321,19 +321,6 @@ def inference_config_for_model(
             disk=disk,
             regions=regions,
         )
-        if serve.backend is ServeBackend.VLLM:
-            engine: VllmEngineConfig | LevanterEngineConfig = _vllm_engine_config(
-                serve, accelerator.platform, extra_args
-            )
-            environment = create_environment(
-                setup_scripts=[default_setup_script(packages=["marin-core"])],
-                env_vars={**worker_env, **vllm_environment_variables},
-            )
-        else:
-            engine = LevanterEngineConfig(
-                expert_parallel_size=serve.levanter_expert_parallel_size or DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
-            )
-            environment = create_environment(extras=["gpu"], env_vars=worker_env)
     else:
         if accelerator.tpu_type is None:
             raise ValueError("TPU accelerator choice requires tpu_type")
@@ -344,13 +331,21 @@ def inference_config_for_model(
             disk=disk,
             regions=regions,
         )
-        if serve.backend is ServeBackend.VLLM:
-            engine = _vllm_engine_config(serve, accelerator.platform, extra_args)
-            environment = create_environment(extras=["tpu"], env_vars=worker_env)
-        else:
-            engine = LevanterEngineConfig(
-                expert_parallel_size=serve.levanter_expert_parallel_size or DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
+
+    if serve.backend is ServeBackend.LEVANTER:
+        engine: VllmEngineConfig | LevanterEngineConfig = LevanterEngineConfig(
+            expert_parallel_size=serve.levanter_expert_parallel_size or DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
+        )
+        extra = "gpu" if accelerator.platform is Platform.GPU else "tpu"
+        environment = create_environment(extras=[extra], env_vars=worker_env)
+    else:
+        engine = _vllm_engine_config(serve, accelerator.platform, extra_args)
+        if accelerator.platform is Platform.GPU:
+            environment = create_environment(
+                setup_scripts=[default_setup_script(packages=["marin-core"])],
+                env_vars={**worker_env, **vllm_environment_variables},
             )
+        else:
             environment = create_environment(extras=["tpu"], env_vars=worker_env)
 
     return RemoteInferenceConfig(

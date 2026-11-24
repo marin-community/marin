@@ -254,9 +254,12 @@ def _broker_config(instances: int, broker: BrokerConfig | None) -> BrokerConfig 
     return None
 
 
-def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedModelConfig, int]:
+def _resolved_model(
+    model: ServedModelConfig, iris: IrisConfig, *, expert_parallel_size: int | None = None
+) -> tuple[ServedModelConfig, int]:
     # Resolve serving geometry inside accelerator workers.
     from marin.inference.model_preparation import (  # noqa: PLC0415
+        levanter_tensor_parallel_limit,
         read_attention_heads,
         resolve_model_path,
         select_tensor_parallel_size,
@@ -271,6 +274,9 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     if isinstance(iris.worker_resources.device, TpuConfig):
         num_chips *= iris.worker_resources.device.vm_count()
     geometry = iris.serving_geometry
+    tp_limit = (
+        num_chips if expert_parallel_size is None else levanter_tensor_parallel_limit(num_chips, expert_parallel_size)
+    )
     tensor_parallel_size = geometry.tensor_parallel_size if geometry is not None else model.tensor_parallel_size
     if tensor_parallel_size is None and isinstance(iris.worker_resources.device, TpuConfig):
         if iris.worker_resources.device.vm_count() > 1:
@@ -280,7 +286,7 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     tokenizer_revision = model.effective_tokenizer_revision
     if tensor_parallel_size is None:
         num_attention_heads, num_key_value_heads = read_attention_heads(weights, revision)
-        tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
+        tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, tp_limit, num_key_value_heads)
     return (
         replace(
             model,
@@ -322,7 +328,8 @@ def _prepared_local_inference(
     engine: VllmEngineConfig | LevanterEngineConfig,
     iris: IrisConfig,
 ) -> Iterator[LocalInferenceSession]:
-    resolved_model, num_chips = _resolved_model(model, iris)
+    expert_parallel_size = engine.expert_parallel_size if isinstance(engine, LevanterEngineConfig) else None
+    resolved_model, num_chips = _resolved_model(model, iris, expert_parallel_size=expert_parallel_size)
     resolved_engine = _resolved_engine(engine, iris)
     geometry = iris.serving_geometry
     if geometry is not None and isinstance(resolved_engine, VllmEngineConfig):

@@ -659,6 +659,17 @@ def test_levanter_auto_tensor_parallelism_reserves_expert_devices(monkeypatch):
     assert spec.tensor_parallel_size == 2
 
 
+def test_iris_auto_tensor_parallelism_reserves_expert_devices(tmp_path):
+    (tmp_path / "config.json").write_text('{"model_type": "llama", "num_attention_heads": 32, "num_key_value_heads": 8}')
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-8"),
+        worker_environment=create_environment(extras=["tpu"]),
+    )
+    model, num_chips = _resolved_model(ServedModelConfig(weights=str(tmp_path)), iris, expert_parallel_size=4)
+    assert num_chips == 8
+    assert model.tensor_parallel_size == 2
+
+
 def test_cli_rejects_vllm_flags_under_the_levanter_backend():
     result = CliRunner().invoke(main, ["Qwen/Qwen3-0.6B", "--backend", "levanter", "--vllm-arg", "--enforce-eager"])
     assert result.exit_code != 0

@@ -109,11 +109,19 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_metrics_config": "--vllm-metrics-config",
     "max_num_batched_tokens": "--max-num-batched-tokens",
 }
+LEVANTER_EXPERT_PARALLEL_SIZE_FLAG = "--levanter-expert-parallel-size"
+levanter_expert_parallel_option = click.option(
+    LEVANTER_EXPERT_PARALLEL_SIZE_FLAG,
+    type=click.IntRange(min=1),
+    default=DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
+    help="Number of expert shards for the Levanter backend.",
+)
+
 _LEVANTER_ONLY_OPTIONS = {
     "max_seqs": "--max-seqs",
     "page_size": "--page-size",
     "hbm_utilization": "--hbm-utilization",
-    "levanter_expert_parallel_size": "--levanter-expert-parallel-size",
+    "levanter_expert_parallel_size": LEVANTER_EXPERT_PARALLEL_SIZE_FLAG,
 }
 
 
@@ -411,12 +419,7 @@ def _wait_and_report_endpoint(
 )
 @click.option("--max-seqs", type=int, default=16, help="Levanter backend: concurrent sequence slots.")
 @click.option("--page-size", type=int, default=128, help="Levanter backend: tokens per KV-cache page.")
-@click.option(
-    "--levanter-expert-parallel-size",
-    type=click.IntRange(min=1),
-    default=DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
-    help="Number of expert shards for the Levanter backend.",
-)
+@levanter_expert_parallel_option
 @click.option(
     "--hbm-utilization",
     type=float,

@@ -24,7 +24,12 @@ from transformers import PreTrainedTokenizerBase
 from marin.inference.backend import ModelSpec
 from marin.inference.config import DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE, LevanterEngineConfig
 from marin.inference.dashboard_server import BackgroundServer, bind_serving_socket, serve_app_background
-from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size, tool_chat_template
+from marin.inference.model_preparation import (
+    levanter_tensor_parallel_limit,
+    read_attention_heads,
+    select_tensor_parallel_size,
+    tool_chat_template,
+)
 from marin.inference.vllm_server import (
     JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS,
     JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES,
@@ -110,14 +115,9 @@ class LevanterBackend:
     def _resolved_spec(self, spec: ModelSpec) -> ModelSpec:
         num_chips = spec.num_chips or jax.device_count()
         tensor_parallel_size = spec.tensor_parallel_size
-        expert_parallel_size = self.config.expert_parallel_size
-        chips_per_expert_shard, remainder = divmod(num_chips, expert_parallel_size)
-        if remainder or not chips_per_expert_shard:
-            raise ValueError(f"expert_parallel_size={expert_parallel_size} does not divide the {num_chips}-chip slice.")
+        tp_limit = levanter_tensor_parallel_limit(num_chips, self.config.expert_parallel_size)
         if tensor_parallel_size is None:
             attention_heads, key_value_heads = read_attention_heads(spec.weights, spec.revision)
-            # Only powers of two that divide the remaining slice are valid candidates.
-            tp_limit = chips_per_expert_shard & -chips_per_expert_shard
             tensor_parallel_size = select_tensor_parallel_size(attention_heads, tp_limit, key_value_heads)
         return replace(spec, num_chips=num_chips, tensor_parallel_size=tensor_parallel_size)
 
