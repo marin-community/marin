@@ -4,6 +4,7 @@
 import asyncio
 import json
 import threading
+from collections import Counter
 from dataclasses import dataclass, field
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,7 +15,9 @@ import pytest
 from evalrecords.records import JudgeIdentity, TaskEvidence
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
+from finestore.layout import RESERVED_COLUMNS
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from fray.local_backend import LocalClient
 from marin.rollouts.evaluation import (
     EvaluationInfrastructureError,
@@ -953,6 +956,16 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
     assert json.loads(reader.read_blob(RUN_OBJECT))["config"]["generation_extra_body"] == {"skip_special_tokens": False}
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
     assert len([row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "graded"]) == 13
+    # Both trials of chat/truncated end at the output limit; likelihood scoring has no stop reason.
+    assert Counter(
+        (row["outcome"], row["stop_reason"]) for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"
+    ) == {
+        ("graded", "stop"): 9,
+        ("graded", "length"): 2,
+        ("graded", None): 2,
+        ("infra_error", None): 1,
+        ("invalid_task", None): 1,
+    }
     invalid = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "invalid_task"]
     assert len(invalid) == 1
     assert invalid[0]["retry"] == 0
@@ -1079,6 +1092,55 @@ async def test_generation_failure_archives_provider_body_and_resumes_only_failed
         assert requests[-1] == requests[0]
         await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
         assert len(requests) == 9
+
+
+def save_before_stop_reasons(source: str, output: str) -> None:
+    """Copy the run descriptor, attempts and evidence of a result root as they were saved before stop reasons."""
+    reader = ReadView(source)
+    attempts = reader.scan(ATTEMPTS_TABLE)
+    assert attempts is not None
+    attempts = attempts.select(
+        [name for name in attempts.column_names if name not in RESERVED_COLUMNS and name != "stop_reason"]
+    )
+    with DataStore.open(output) as store:
+        store.table(
+            ATTEMPTS_TABLE,
+            schema=attempts.schema,
+            primary_key=("dataset", "source_row", "trial", "retry", "phase"),
+            schema_version=1,
+        )
+        with store.transaction() as transaction:
+            transaction.write_object(RUN_OBJECT, reader.read_blob(RUN_OBJECT))
+            for row in attempts.to_pylist():
+                transaction.table(ATTEMPTS_TABLE).add(row)
+                if row["result_blob"] is not None:
+                    transaction.write_object(row["result_blob"], reader.read_blob(row["result_blob"]))
+
+
+@pytest.mark.asyncio
+async def test_resume_retries_attempts_saved_before_stop_reasons_were_recorded(tmp_path, published_corpora, run_config):
+    prompts = []
+
+    async def model(request):
+        prompts.append(request.messages[-1]["content"])
+        if len(prompts) == 1:
+            raise ConnectionError("the endpoint closed the connection")
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    current = str(tmp_path / "current")
+    with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
+        await run_evaluation(published_corpora, current, run_config, model, machine_factories={})
+    earlier = str(tmp_path / "earlier")
+    save_before_stop_reasons(current, earlier)
+    await run_evaluation(published_corpora, earlier, run_config, model, machine_factories={})
+    assert len(prompts) == 9
+    assert prompts[-1] == prompts[0]
+    finished = [row for row in ReadView(earlier).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert Counter((row["retry"], row["outcome"], row["stop_reason"]) for row in finished) == {
+        (0, "graded", None): 7,
+        (0, "infra_error", None): 1,
+        (1, "graded", "stop"): 1,
+    }
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,9 @@
 
 """Stored attempt rows and object names of a TaskSpec evaluation archive."""
 
+from collections.abc import Mapping
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 from taskcompendium.grading_result import Outcome
@@ -32,3 +34,13 @@ class Attempt(BaseModel):
     result_blob: str | None
     prompt_tokens: int | None
     completion_tokens: int | None
+    stop_reason: str | None = None
+    """The rollout's stop reason, such as ``"stop"`` or ``"length"``.
+
+    ``None`` on a started row, for likelihood scoring, and in result roots written before this column existed.
+    """
+
+
+def attempt_from_row(row: Mapping[str, Any]) -> Attempt:
+    """Read a stored attempt row, including one that predates a column with a default."""
+    return Attempt.model_validate({name: row[name] for name in Attempt.model_fields if name in row})

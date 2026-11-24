@@ -287,6 +287,9 @@ FineStore stores `samples`, `rollouts_v1`, `evaluation_attempts`, and
 blobs. The run descriptor binds model and driver identities to corpus/protocol
 snapshots and execution settings. Raw evidence retains named metrics, weights,
 extractions, token likelihoods, eligibility decisions, and each rollout's resolved limits.
+Each finished `evaluation_attempts` row also records the rollout's `stop_reason`,
+which is null for likelihood scoring and in result roots written before the
+column existed.
 Infrastructure failures remain unscored; they do not become synthetic zero scores.
 
 An episode that reaches its turn, token, length, or agent deadline is graded on what it
