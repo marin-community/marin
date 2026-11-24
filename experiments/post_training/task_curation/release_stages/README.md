@@ -13,9 +13,11 @@ retired-scripts directory by `inventory.py`) for the retirement mapping.
 The preflight and run modes read the release prefix on object storage, so the
 operating environment must carry the storage credentials the repository's
 storage layer resolves (the operator's secrets environment: `CW_KEY_ID` /
-`CW_KEY_SECRET` for the CoreWeave buckets). Credentials are infrastructure
-access, not pipeline configuration — nothing outside the repository supplies
-any pipeline input.
+`CW_KEY_SECRET` for the CoreWeave buckets). The preflight type-check launches
+`uvx`, which needs a writable uv tool directory (`UV_TOOL_DIR`) and cache
+(`UV_CACHE_DIR`) — in a sandboxed environment point both at writable paths.
+Credentials are infrastructure access, not pipeline configuration — nothing
+outside the repository supplies any pipeline input.
 
 Repository-relative pins (for example the registry index under `plans/`) resolve
 from the checkout root: run `atlas-release` from the checkout.
