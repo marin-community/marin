@@ -99,7 +99,7 @@ class SnowballPublication:
     """
 
     def __init__(self, model: SnowballLMHeadModel, mesh: Mesh):
-        # Cache ownership ends with this publisher, not at interpreter finalization.
+        # Keep compiled stage transforms scoped to this publisher.
         self._stage_transform = lru_cache(maxsize=64)(_stage_transform)
         self.mesh = mesh
         self.devices = dict(enumerate(mesh.devices.flat))
@@ -226,7 +226,7 @@ class SnowballPublication:
         return {"version": version}
 
     def next(self) -> dict | None:
-        """Return the next local source slice or mark the stream exhausted."""
+        """Return the next local source slice, or None at exhaustion."""
         if self.session is None:
             raise RuntimeError("No Snowball publication is in progress")
         payload = next(self.session, None)
@@ -280,7 +280,6 @@ class SnowballPublication:
                         )
                         yield self._payload(version, rank, key, stage.dtype, value)
                         del value
-            # Keep no stage or CPU payload aliases when the next collective starts.
             del shards, array
 
     @staticmethod

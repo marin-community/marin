@@ -45,8 +45,7 @@ class LevanterExpertBlockSender:
 
     ``publication`` is the actor's synchronous child request callback. It accepts
     ``inventory``, ``begin``, ``next`` and ``end`` with a payload dictionary. Each
-    public RPC returns a tuple ordered by global rank; the actor-group facade
-    exposes those as separate Ray returns to the unchanged driver.
+    public RPC returns a tuple ordered by global rank.
     """
 
     def __init__(self, publication: Callable[[str, dict], dict | None]):
@@ -139,8 +138,7 @@ class LevanterExpertBlockSender:
 
         The publication reshard partitions each expert/dense source exactly once,
         so there are no interchangeable trainer replicas to compare. A zero-byte
-        ReplicaReport records that fact; full receiver coverage is checked by the
-        existing driver against receiver parameter bytes, independently of this.
+        ReplicaReport records that fact.
         """
         version = update_info["version"]
         reports = self._send(version)
