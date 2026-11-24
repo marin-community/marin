@@ -621,6 +621,9 @@ after twelve hours without a collection.
 80% current or projected quota use in `#marin-alerts` during the daily 15:00–16:00
 `America/Los_Angeles` window. Its 23-hour repeat interval permits a reminder
 the next afternoon across spring daylight saving time. The
+[CoreWeave viewer](https://cw-s3.oa.dev/?v=time) link in the alert shows bucket
+sizes and growth from its latest scan. The storage operator investigates growing
+prefixes and asks verified owners to review them in the alert thread. The
 [storage runbook](../../scripts/ops/storage/README.md#coreweave-storage-telemetry)
 describes sampling requirements and forecast limits.
 If Loom delivery fails, the bridge keeps returning an error so Grafana retries,

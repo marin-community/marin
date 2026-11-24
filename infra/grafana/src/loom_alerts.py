@@ -86,6 +86,7 @@ class _Tracked:
     linked_session: str | None = None
     resolved: bool = False
     delivery_failed: bool = False
+    failure_notice_posted: bool = False
 
 
 class ThreadLog:
@@ -142,6 +143,7 @@ class ThreadLog:
         if tracked is not None:
             tracked.resolved = True
             tracked.delivery_failed = False
+            tracked.failure_notice_posted = False
             self.mark_posted(key)
 
     def mark_linked(self, key: str, session_id: str) -> None:
@@ -166,18 +168,20 @@ class SlackAnnouncer:
         tracked = self._threads.peek(thread_key)
         if tracked is not None:
             tracked.delivery_failed = False
+            tracked.failure_notice_posted = False
 
     async def report_delivery_failure(
         self, client: httpx.AsyncClient, thread_key: str, error: LoomAlertDeliveryError
     ) -> None:
         """Tell an alert thread once that Loom delivery is failing."""
         tracked = self._threads.peek(thread_key)
-        if tracked is None or tracked.delivery_failed:
+        if tracked is None:
             return
         tracked.delivery_failed = True
+        if tracked.failure_notice_posted:
+            return
         posted = await self.post(client, f"No Loom triage session opened for this alert: {error}", thread=tracked.thread)
-        if posted is None:
-            tracked.delivery_failed = False
+        tracked.failure_notice_posted = posted is not None
 
     async def announce(
         self,
@@ -528,13 +532,14 @@ def _alert_card(payload: object, alerts: list[Mapping[str, object]]) -> str:
         (label, str(alerts[0].get(field, "")))
         for label, field in (("Dashboard", "dashboardURL"), ("Panel", "panelURL"), ("Silence", "silenceURL"))
     ]
+    links.append((first.get("related_label", "More"), first.get("related_url", "")))
     # `<url|label>` gives the url no escape of its own, so a value carrying Slack's
     # link delimiters would rewrite the rest of the message. Drop those outright
     # rather than rendering a mangled link.
     rendered = [
-        f"<{url}|{label}>"
+        f"<{url}|{_slack_escape(_truncate(label, 80))}>"
         for label, url in links
-        if url.startswith(("http://", "https://")) and not set(url) & set("<>|")
+        if url.startswith(("http://", "https://")) and not set(url) & set("<>|") and "|" not in label
     ]
     if rendered:
         lines.append(" · ".join(rendered))

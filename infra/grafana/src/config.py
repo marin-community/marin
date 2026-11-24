@@ -36,6 +36,7 @@ GITHUB_USER_AGENT = "marin-grafana-bridge"
 OPERATOR_BEHAVIOR_LABEL = "operator_behavior"
 DEFAULT_OPERATOR_BEHAVIOR = "default"
 HERO_OPERATOR_BEHAVIOR = "hero"
+STORAGE_OPERATOR_BEHAVIOR = "storage"
 
 
 @dataclasses.dataclass(frozen=True)
