@@ -103,11 +103,11 @@ class GlmInference(InferenceClient):
     @override
     async def complete(self, request: InferenceRequest) -> Completion:
         policy = request.sampling
-        fields: dict[str, object] = {
-            "tools": [
+        fields: dict[str, object] = {}
+        if request.tools:
+            fields["tools"] = [
                 {"type": "function", "function": TOOL_SCHEMA.dump_python(tool, mode="json")} for tool in request.tools
             ]
-        }
         try:
             result = await self.client.complete(
                 tuple(_message(message) for message in request.conversation), policy, fields
