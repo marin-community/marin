@@ -9,6 +9,7 @@ import {
   requestCompletion,
 } from '../lib/api'
 import { chatTemplateRequestFields } from '../lib/chat_template'
+import { COMPOSER_HINT, isSendKey } from '../lib/composer_keys'
 import { CHAT_EXAMPLES } from '../lib/examples'
 import type { ChatExample } from '../lib/examples'
 import { modelMessages } from '../lib/python_tools'
@@ -93,11 +94,9 @@ function resizeComposer() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.isComposing) return
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault()
-    send()
-  }
+  if (!isSendKey(event)) return
+  event.preventDefault()
+  send()
 }
 
 // Follow the stream unless the user scrolled up to read something.
@@ -489,7 +488,7 @@ async function complete(
             ref="composer"
             v-model="draft"
             rows="1"
-            placeholder="Message… (Enter to send, Shift+Enter for a newline)"
+            :placeholder="`Message…${COMPOSER_HINT}`"
             class="max-h-50 min-h-10 flex-1 resize-none rounded-xl border border-surface-border bg-surface-raised px-3.5 py-2.5 text-[0.925rem] leading-relaxed text-text outline-none transition-colors focus:border-accent"
             @input="resizeComposer"
             @keydown="onKeydown"

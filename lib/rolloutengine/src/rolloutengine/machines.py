@@ -5,13 +5,13 @@
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from shellbox.image import RegistryImage
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
     Backend,
     Command,
@@ -25,15 +25,9 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
-from taskcompendium.models import (
-    CommandSemantics,
-    EnvironmentRequirements,
-    TaskResource,
-    TaskSpec,
-    require_resolved_environment,
-)
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskResource, TaskSpec
 from taskcompendium.runtime.environment import prepare_machine_spec
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.resources import resource_bytes, write_build_context
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
 from rolloutengine.models import MachineRuntimeSpec
@@ -71,32 +65,44 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
             await machine.upload(source, f"/{resource.path}")
 
 
-def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
-    require_resolved_environment(requirements)
-    if requirements.docker_image is not None:
-        source = RegistryImage(requirements.docker_image)
-    elif requirements.packages_lock is not None:
-        source = HostImage()
-    elif requirements.package_spec is not None:
-        source = requirements.package_spec
-    elif requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-        source = PackageSpec()
-    else:
-        raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
-    return MachineSpec(
-        source=source,
-        workdir=(
-            requirements.working_directory
-            if requirements.working_directory is not None
-            else "" if requirements.docker_image else "/workspace"
-        ),
-        network=runtime.network,
-        memory_mb=runtime.memory_mb,
-        cpus=runtime.cpus,
-        storage_mb=runtime.storage_mb,
-        gpus=runtime.gpus,
-        startup_timeout=runtime.startup_timeout,
-    )
+@contextmanager
+def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> Iterator[MachineSpec]:
+    """The machine spec for ``requirements`` on the selected runtime.
+
+    A Docker build context becomes a ``DockerfileSource`` in a temporary directory that exists until the
+    context exits: the backend checks it there and builds the image when it creates the machine. An
+    image machine, pulled or built, starts in the image's working directory unless the requirements
+    name one.
+    """
+    with ExitStack() as stack:
+        if requirements.docker_image is not None:
+            source = RegistryImage(requirements.docker_image)
+        elif requirements.docker_build is not None:
+            context = Path(stack.enter_context(TemporaryDirectory(prefix="rollout-build-")))
+            source = DockerfileSource(context, write_build_context(requirements.docker_build, context))
+        elif requirements.packages_lock is not None:
+            source = HostImage()
+        elif requirements.package_spec is not None:
+            source = requirements.package_spec
+        elif requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
+            source = PackageSpec()
+        else:
+            raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
+        image = isinstance(source, RegistryImage | DockerfileSource)
+        yield MachineSpec(
+            source=source,
+            workdir=(
+                requirements.working_directory
+                if requirements.working_directory is not None
+                else "" if image else "/workspace"
+            ),
+            network=runtime.network,
+            memory_mb=runtime.memory_mb,
+            cpus=runtime.cpus,
+            storage_mb=runtime.storage_mb,
+            gpus=runtime.gpus,
+            startup_timeout=runtime.startup_timeout,
+        )
 
 
 async def _discard_machine(creation: asyncio.Task[Machine], cleanup: _Cleanup) -> None:
@@ -146,14 +152,12 @@ async def _prepare_machine(
     if runtime is None:
         return None
     async with asyncio.timeout(runtime.startup_timeout):
-        prepared = await asyncio.to_thread(
-            prepare_machine_spec,
-            requirements,
-            factories[runtime.backend],
-            _machine_spec(requirements, runtime),
-            dict(os.environ),
-        )
-        machine = await _acquire_machine(runtime, prepared, factories, cleanup, owned)
+        # A Docker build context exists only while the machine is created; the built machine no longer reads it.
+        with _machine_spec(requirements, runtime) as spec:
+            prepared = await asyncio.to_thread(
+                prepare_machine_spec, requirements, factories[runtime.backend], spec, dict(os.environ)
+            )
+            machine = await _acquire_machine(runtime, prepared, factories, cleanup, owned)
         await _install_resources(machine, resources)
         for command in requirements.setup_commands:
             result = await machine.run(Command(("sh", "-c", command), timeout=runtime.startup_timeout, user="0"))
@@ -200,6 +204,7 @@ class _AttemptMachineFactory:
     factories: Mapping[str, MachineFactory]
     cleanup: _Cleanup
     owned: AsyncExitStack
+    verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None
 
     @property
     def backend(self) -> Backend:
@@ -210,6 +215,8 @@ class _AttemptMachineFactory:
 
     async def create(self, spec: MachineSpec) -> Machine:
         async with asyncio.timeout(self.runtime.startup_timeout):
+            if self.verifier is not None:
+                return _OwnedMachine(await self.verifier(spec))
             machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
         return _OwnedMachine(machine)
 

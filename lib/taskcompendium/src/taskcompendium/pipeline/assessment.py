@@ -159,7 +159,7 @@ def submission_contract(task: TaskSpec) -> SubmissionContract:
         if answer_path is not None:
             handling += " The runtime also stages the conversation at conversation_path."
     elif isinstance(task.grader, VerifyitGrader):
-        if task.grader.environment is None:
+        if task.grader.placement is None:
             handling = (
                 "In-process Verifyit receives the extracted submission directly; "
                 "answer_file does not require solver file delivery."

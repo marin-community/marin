@@ -31,7 +31,8 @@ def lowered(document: dict) -> LoweredSpec:
     task = dict(document.get("task") or {})
     grader = task.get("grader") or {}
     if grader.get("environment"):
-        grader = {"kind": "script", "argv": ("bash", "/tests/test.sh"), **grader}
+        placement = {"kind": "grader_machine", "environment": grader["environment"]}
+        grader = {"kind": "script", "argv": ("bash", "/tests/test.sh"), "placement": placement}
     else:
         grader = {"kind": "none", "reason": "not measured"}
     completed = {

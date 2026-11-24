@@ -57,7 +57,7 @@ jobs:
           python scripts/ci/package_release.py latest-native-releases \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Advance compatibility floors and lock
+      - name: Advance compatibility floors and locks
         id: bump
         env:
           VERSIONS: ${{ steps.releases.outputs.versions }}
@@ -82,8 +82,14 @@ jobs:
             --push-mode "${{ steps.prepare.outputs.push_mode }}" \
             --github-output "$GITHUB_OUTPUT"
 
+      # The lock guard does not compare environment markers, so a person reviews a marker change.
+      - name: Hold marker changes for review
+        if: steps.bump.outputs.markers_changed == 'true'
+        run: |
+          echo "::warning::uv.lock environment markers changed; review and merge ${{ steps.pull-request.outputs.pr_url }} by hand"
+
       - name: Merge green native package update
-        if: steps.bump.outputs.changed == 'true'
+        if: steps.bump.outputs.changed == 'true' && steps.bump.outputs.markers_changed == 'false'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |

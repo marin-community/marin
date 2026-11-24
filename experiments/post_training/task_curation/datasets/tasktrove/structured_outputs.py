@@ -14,6 +14,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     TaskSpec,
@@ -94,7 +95,7 @@ def convert_structured_outputs(row: RawRow, context: ConversionContext) -> TaskS
     package = verifyit_package(
         converted.spec,
         tuple(inline_resource(path.removeprefix("tests/"), data) for path, data in converted.data_files.items()),
-        environment=required_grader_environment(context),
+        placement=GraderMachine(environment=required_grader_environment(context)),
     )
     task = TaskSpec(
         id=row.id,

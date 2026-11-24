@@ -10,6 +10,7 @@ from taskcompendium.models import (
     CommandSemantics,
     DockerBuildContext,
     EnvironmentRequirements,
+    GraderMachine,
     ResourceGroups,
     ScriptGrader,
     TaskResource,
@@ -101,8 +102,10 @@ def repository_build_task(
     grader = ScriptGrader(
         argv=("bash", "/tests/test.sh"),
         cwd="/",
-        environment=environment,
-        artifacts=(VerifierArtifact(source=WORKSPACE, target=WORKSPACE, kind=ArtifactKind.DIRECTORY),),
+        placement=GraderMachine(
+            environment=environment,
+            artifacts=(VerifierArtifact(source=WORKSPACE, target=WORKSPACE, kind=ArtifactKind.DIRECTORY),),
+        ),
         answer_path=None,
         reward=TEST_SH_REWARD,
     )

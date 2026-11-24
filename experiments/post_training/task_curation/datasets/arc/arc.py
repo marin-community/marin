@@ -24,6 +24,7 @@ from taskcompendium.grader import GraderPackage, grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     TaskSpec,
@@ -165,7 +166,7 @@ def _tasktrove_task(
     if mode == ArcMode.TRANSDUCTIVE:
         package = verifyit_package(
             ExactSpec(expected=(grid_text(record["expected_output"]),)),
-            environment=required_grader_environment(context),
+            placement=GraderMachine(environment=required_grader_environment(context)),
         )
         tags = ("reasoning", "arc-agi", "grid-match", "nemotron")
     else:

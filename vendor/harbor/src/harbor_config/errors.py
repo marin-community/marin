@@ -1,203 +1,129 @@
-"""Stable error taxonomy for Harbor trial failures.
+"""Harbor categories and fresh-job resume policy."""
 
-Harbor persists every trial failure as an :class:`~harbor.models.trial.result.ExceptionInfo`
-carrying the exception's type name (``type(exc).__name__``). Downstream consumers
-such as the MarinSkyRL rollout adapter receive that serialized string, not the
-original Python exception, so they classify by name against locally maintained
-sets. That couples every consumer to Harbor's exception names and silently goes
-stale when Harbor adds a new failure mode.
+from types import MappingProxyType
 
-This module is the shared contract. It maps the stable exception identifiers
-Harbor persists to semantic categories a consumer can translate into
-training-signal treatment *without importing the full Harbor runtime*. Harbor
-owns the taxonomy for a given release; consumers pin an immutable
-``harbor-config`` revision and inherit the complete mapping.
+from rigging.task_errors import (
+    API_CONNECTION_ERROR,
+    API_TIMEOUT_ERROR,
+    INTERNAL_SERVER_ERROR,
+    TRIAL_TIMEOUT_ERROR,
+    ErrorCategory,
+    compose_error_categories,
+)
+from shellbox.task_errors import (
+    DAYTONA_CONFLICT_ERROR,
+    DAYTONA_CONNECTION_ERROR,
+    DAYTONA_DOCKER_SETUP_ERROR,
+    DAYTONA_OUTPUT_UNAVAILABLE,
+    DAYTONA_PROCESS_ERROR,
+    MACHINE_TERMINATED,
+)
+from shellbox.task_errors import (
+    ERROR_CATEGORIES as SHELLBOX_CATEGORIES,
+)
 
-Category semantics:
-
-* :attr:`ErrorCategory.INFRASTRUCTURE` -- the evaluated model never produced a
-  valid answer because Harbor, the sandbox, or the verifier failed. Exclude from
-  the RL baseline (no gradient contribution).
-* :attr:`ErrorCategory.AGENT` -- a real failure attributable to agent behavior;
-  include in the baseline with reward zero so the policy learns to avoid it.
-* :attr:`ErrorCategory.PASSTHROUGH` -- the agent produced partial or real work
-  and a verifier result may still be usable; use the verifier reward.
-* :attr:`ErrorCategory.UNKNOWN` -- no default decision; the consumer must apply
-  an explicit fallback policy and surface the category rather than silently
-  converting it to training signal.
-
-Retryability is a separate axis (an infrastructure failure may be retried at
-the job level while still being excluded from the baseline), so it is exposed
-via :func:`is_resume_retryable` rather than folded into the category enum.
-"""
-
-from enum import StrEnum
-
-__all__ = [
-    "ErrorCategory",
-    "error_category",
-    "errors_by_category",
-    "is_resume_retryable",
-    "known_error_types",
-    "resume_retryable_error_types",
-]
-
-
-class ErrorCategory(StrEnum):
-    """Semantic treatment for a persisted Harbor exception."""
-
-    INFRASTRUCTURE = "infrastructure"
-    AGENT = "agent"
-    PASSTHROUGH = "passthrough"
-    UNKNOWN = "unknown"
+ARTIFACT_PERSISTENCE_ERROR = "ArtifactPersistenceError"
+ARTIFACT_UPLOAD_TIMEOUT_ERROR = "ArtifactUploadTimeoutError"
+ARTIFACT_WRITE_TIMEOUT_ERROR = "ArtifactWriteTimeoutError"
+ARTIFACT_WRITER_BACKLOG_ERROR = "ArtifactWriterBacklogError"
+CONTAINER_REGISTRY_THROTTLED_ERROR = "ContainerRegistryThrottledError"
+CONTEXT_BUDGET_EXCEEDED_ERROR = "ContextBudgetExceededError"
+CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR = "ContextManagementInfrastructureError"
+ENVIRONMENT_STOP_ERROR = "EnvironmentStopError"
+LLM_REQUEST_TIMEOUT_ERROR = "LLMRequestTimeoutError"
+OPEN_AI_TRANSPORT_CONNECT_TIMEOUT_ERROR = "OpenAITransportConnectTimeoutError"
+PHASE_CANCELLATION_ERROR = "PhaseCancellationError"
+RUNTIME_LOG_COLLECTION_ERROR = "RuntimeLogCollectionError"
+RUNTIME_SERVICE_ERROR = "RuntimeServiceError"
+SANDBOX_BUILD_FAILED_ERROR = "SandboxBuildFailedError"
+TAU3_RUNTIME_INFRASTRUCTURE_ERROR = "Tau3RuntimeInfrastructureError"
+TMUX_BATCH_PROTOCOL_ERROR = "TmuxBatchProtocolError"
+TMUX_COMMAND_ERROR = "TmuxCommandError"
+TMUX_EXEC_TIMEOUT_ERROR = "TmuxExecTimeoutError"
+TMUX_SESSION_ENDED_ERROR = "TmuxSessionEndedError"
 
 
-_ERROR_CATEGORIES: dict[str, ErrorCategory] = {
-    # --- Harbor context-management infrastructure (the gap this closes) ---
-    "ContextManagementInfrastructureError": ErrorCategory.INFRASTRUCTURE,
-    # --- Artifact persistence infrastructure ---
-    "ArtifactPersistenceError": ErrorCategory.INFRASTRUCTURE,
-    "ArtifactUploadTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "ArtifactWriteTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "ArtifactWriterBacklogError": ErrorCategory.INFRASTRUCTURE,
-    # --- Environment / sandbox infrastructure ---
-    "EnvironmentStartTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "TrialTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "PhaseCancellationError": ErrorCategory.INFRASTRUCTURE,
-    "RuntimeServiceError": ErrorCategory.INFRASTRUCTURE,
-    "RuntimeLogCollectionError": ErrorCategory.INFRASTRUCTURE,
-    "EnvironmentStopError": ErrorCategory.INFRASTRUCTURE,
-    "SandboxBuildFailedError": ErrorCategory.INFRASTRUCTURE,
-    "SandboxDiskFullError": ErrorCategory.INFRASTRUCTURE,
-    "ContainerRegistryThrottledError": ErrorCategory.INFRASTRUCTURE,
-    "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
-    "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaConflictError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaConnectionError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaOutputUnavailable": ErrorCategory.INFRASTRUCTURE,
-    "MachineTerminated": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaProcessError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaDockerSetupError": ErrorCategory.INFRASTRUCTURE,
-    "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
-    "BridgeOutageError": ErrorCategory.INFRASTRUCTURE,
-    "EnrootMemoryLimitExceededError": ErrorCategory.INFRASTRUCTURE,
-    "MissingExtraError": ErrorCategory.INFRASTRUCTURE,
-    # --- Agent lifecycle infrastructure (model never produced a real answer) ---
-    "AgentKilledBySignalError": ErrorCategory.INFRASTRUCTURE,
-    "AgentSetupTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "ModelAuthenticationError": ErrorCategory.INFRASTRUCTURE,
-    "ContextBudgetExceededError": ErrorCategory.INFRASTRUCTURE,
-    "LLMRequestTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "OpenAITransportConnectTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "InternalServerError": ErrorCategory.INFRASTRUCTURE,
-    "APIConnectionError": ErrorCategory.INFRASTRUCTURE,
-    "APITimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "TmuxBatchProtocolError": ErrorCategory.INFRASTRUCTURE,
-    "TmuxCommandError": ErrorCategory.INFRASTRUCTURE,
-    "TmuxExecTimeoutError": ErrorCategory.INFRASTRUCTURE,
-    "TmuxSessionEndedError": ErrorCategory.INFRASTRUCTURE,
-    "Tau3RuntimeInfrastructureError": ErrorCategory.INFRASTRUCTURE,
-    # --- Verifier infrastructure ---
-    "DownloadVerifierDirError": ErrorCategory.INFRASTRUCTURE,
-    "RewardFileNotFoundError": ErrorCategory.INFRASTRUCTURE,
-    "RewardFileEmptyError": ErrorCategory.INFRASTRUCTURE,
-    "VerifierRuntimeError": ErrorCategory.INFRASTRUCTURE,
-    "VerifierOutputParseError": ErrorCategory.INFRASTRUCTURE,
-    "AddTestsDirError": ErrorCategory.INFRASTRUCTURE,
-    # --- Agent-attributable failures (reward zero) ---
-    "AgentTimeoutError": ErrorCategory.AGENT,
-    "AgentDiskFullError": ErrorCategory.AGENT,
-    "AgentCommandOutputLostError": ErrorCategory.AGENT,
-    "ContextLengthExceededError": ErrorCategory.AGENT,
-    "NonZeroAgentExitCodeError": ErrorCategory.AGENT,
-    "ModelInitiatedTmuxFailure": ErrorCategory.AGENT,
-    # --- Partial / real work; a verifier result may still be usable ---
-    "OutputLengthExceededError": ErrorCategory.PASSTHROUGH,
-    "TurnCapExhaustedError": ErrorCategory.PASSTHROUGH,
-    "MalformedModelResponseError": ErrorCategory.PASSTHROUGH,
-    # --- No safe default; force an explicit consumer decision ---
-    "TrialNotScoredError": ErrorCategory.UNKNOWN,
-    "VerificationNotCompletedError": ErrorCategory.UNKNOWN,
-    "VerifierTimeoutError": ErrorCategory.UNKNOWN,
-}
-
-# Exception types whose on-disk trial result should be RE-RUN on a fresh
-# ``harbor jobs resume`` (a whole new job invocation), rather than kept as a
-# terminal error result. This is the resume-level retry decision and is
-# deliberately DISTINCT from the in-trial retry classification: it is keyed on
-# the persisted exception name and covers only transient, job-level failures.
-_RESUME_RETRYABLE_ERROR_TYPES: frozenset[str] = frozenset(
+HARBOR_ERROR_CATEGORIES = MappingProxyType(
     {
+        "AddTestsDirError": ErrorCategory.INFRASTRUCTURE,
+        "AgentCommandOutputLostError": ErrorCategory.AGENT,
+        "AgentDiskFullError": ErrorCategory.AGENT,
+        "AgentKilledBySignalError": ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_PERSISTENCE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_UPLOAD_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_WRITE_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        ARTIFACT_WRITER_BACKLOG_ERROR: ErrorCategory.INFRASTRUCTURE,
+        "BridgeOutageError": ErrorCategory.INFRASTRUCTURE,
+        CONTAINER_REGISTRY_THROTTLED_ERROR: ErrorCategory.INFRASTRUCTURE,
+        CONTEXT_BUDGET_EXCEEDED_ERROR: ErrorCategory.INFRASTRUCTURE,
+        CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        "DownloadVerifierDirError": ErrorCategory.INFRASTRUCTURE,
+        "EnrootMemoryLimitExceededError": ErrorCategory.INFRASTRUCTURE,
+        "EnvironmentSetupError": ErrorCategory.INFRASTRUCTURE,
+        ENVIRONMENT_STOP_ERROR: ErrorCategory.INFRASTRUCTURE,
+        "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
+        LLM_REQUEST_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        "MalformedModelResponseError": ErrorCategory.PASSTHROUGH,
+        "MissingExtraError": ErrorCategory.INFRASTRUCTURE,
+        "ModelAuthenticationError": ErrorCategory.INFRASTRUCTURE,
+        "ModelInitiatedTmuxFailure": ErrorCategory.AGENT,
+        "NonZeroAgentExitCodeError": ErrorCategory.AGENT,
+        OPEN_AI_TRANSPORT_CONNECT_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        "OutputLengthExceededError": ErrorCategory.PASSTHROUGH,
+        PHASE_CANCELLATION_ERROR: ErrorCategory.INFRASTRUCTURE,
+        RUNTIME_LOG_COLLECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
+        RUNTIME_SERVICE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        SANDBOX_BUILD_FAILED_ERROR: ErrorCategory.INFRASTRUCTURE,
+        "SandboxDiskFullError": ErrorCategory.INFRASTRUCTURE,
+        TAU3_RUNTIME_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_BATCH_PROTOCOL_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_COMMAND_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_EXEC_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
+        TMUX_SESSION_ENDED_ERROR: ErrorCategory.INFRASTRUCTURE,
+        "TrialNotScoredError": ErrorCategory.UNKNOWN,
+        "TurnCapExhaustedError": ErrorCategory.PASSTHROUGH,
+        "VerificationNotCompletedError": ErrorCategory.UNKNOWN,
+    }
+)
+
+ERROR_CATEGORIES = compose_error_categories(SHELLBOX_CATEGORIES, HARBOR_ERROR_CATEGORIES)
+
+RESUME_RETRYABLE_ERROR_TYPES = frozenset(
+    {
+        API_CONNECTION_ERROR,
+        API_TIMEOUT_ERROR,
+        ARTIFACT_PERSISTENCE_ERROR,
+        ARTIFACT_UPLOAD_TIMEOUT_ERROR,
+        ARTIFACT_WRITE_TIMEOUT_ERROR,
+        ARTIFACT_WRITER_BACKLOG_ERROR,
         "CancelledError",
-        "ArtifactPersistenceError",
-        "ArtifactUploadTimeoutError",
-        "ArtifactWriteTimeoutError",
-        "ArtifactWriterBacklogError",
-        "SandboxBuildFailedError",
-        "ContainerRegistryThrottledError",
-        "ContextBudgetExceededError",
-        "ContextManagementInfrastructureError",
-        "DaytonaConflictError",
-        "DaytonaConnectionError",
-        "DaytonaOutputUnavailable",
-        "MachineTerminated",
-        "DaytonaProcessError",
-        "DaytonaDockerSetupError",
-        "LLMRequestTimeoutError",
-        "OpenAITransportConnectTimeoutError",
-        "InternalServerError",
-        "APIConnectionError",
-        "APITimeoutError",
-        "PhaseCancellationError",
-        "RuntimeServiceError",
-        "RuntimeLogCollectionError",
-        "EnvironmentStopError",
-        "TmuxBatchProtocolError",
-        "TmuxCommandError",
-        "TmuxExecTimeoutError",
-        "TmuxSessionEndedError",
-        "Tau3RuntimeInfrastructureError",
-        "TrialTimeoutError",
+        CONTAINER_REGISTRY_THROTTLED_ERROR,
+        CONTEXT_BUDGET_EXCEEDED_ERROR,
+        CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR,
+        DAYTONA_CONFLICT_ERROR,
+        DAYTONA_CONNECTION_ERROR,
+        DAYTONA_DOCKER_SETUP_ERROR,
+        DAYTONA_OUTPUT_UNAVAILABLE,
+        DAYTONA_PROCESS_ERROR,
+        ENVIRONMENT_STOP_ERROR,
+        INTERNAL_SERVER_ERROR,
+        LLM_REQUEST_TIMEOUT_ERROR,
+        MACHINE_TERMINATED,
+        OPEN_AI_TRANSPORT_CONNECT_TIMEOUT_ERROR,
+        PHASE_CANCELLATION_ERROR,
+        RUNTIME_LOG_COLLECTION_ERROR,
+        RUNTIME_SERVICE_ERROR,
+        SANDBOX_BUILD_FAILED_ERROR,
+        TAU3_RUNTIME_INFRASTRUCTURE_ERROR,
+        TMUX_BATCH_PROTOCOL_ERROR,
+        TMUX_COMMAND_ERROR,
+        TMUX_EXEC_TIMEOUT_ERROR,
+        TMUX_SESSION_ENDED_ERROR,
+        TRIAL_TIMEOUT_ERROR,
     }
 )
 
 
-def error_category(exception_type: str) -> ErrorCategory:
-    """Return the semantic category for a persisted exception type name.
-
-    Unrecognized identifiers resolve to :attr:`ErrorCategory.UNKNOWN` so that
-    contract drift is observable rather than silently defaulted.
-    """
-    return _ERROR_CATEGORIES.get(exception_type, ErrorCategory.UNKNOWN)
-
-
-def errors_by_category(category: ErrorCategory) -> frozenset[str]:
-    """Return every persisted exception name mapped to ``category``.
-
-    Consumers derive their default ``mask`` / ``zero`` / ``passthrough`` sets
-    from this rather than duplicating Harbor exception names.
-    """
-    return frozenset(
-        name for name, value in _ERROR_CATEGORIES.items() if value == category
-    )
-
-
 def is_resume_retryable(exception_type: str) -> bool:
     """Whether a persisted exception should be re-run on a fresh job resume."""
-    return exception_type in _RESUME_RETRYABLE_ERROR_TYPES
-
-
-def resume_retryable_error_types() -> frozenset[str]:
-    """The persisted exception names that trigger a fresh-resume re-run."""
-    return _RESUME_RETRYABLE_ERROR_TYPES
-
-
-def known_error_types() -> frozenset[str]:
-    """Every persisted exception name with an explicit category decision.
-
-    A name absent here resolves to :attr:`ErrorCategory.UNKNOWN` via
-    :func:`error_category`, but the absence itself signals contract drift;
-    Harbor's contract test enforces that every persisted exception is present.
-    """
-    return frozenset(_ERROR_CATEGORIES)
+    return exception_type in RESUME_RETRYABLE_ERROR_TYPES
