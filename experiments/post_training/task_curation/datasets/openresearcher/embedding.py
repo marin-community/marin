@@ -307,7 +307,7 @@ def run_workers(
     def upload_until_done() -> None:
         try:
             upload_completed_parts(output, staged_output, uploaded, stop)
-        except BaseException as error:  # noqa: BLE001 - surfaced after the workers finish
+        except BaseException as error:  # surfaced after the workers finish
             uploader_error.append(error)
 
     uploader = threading.Thread(target=upload_until_done, daemon=True)
