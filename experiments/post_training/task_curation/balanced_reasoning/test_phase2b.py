@@ -271,7 +271,7 @@ def test_report_aggregates_bands_resolutions_and_transport(tmp_path: Path, capsy
         json.dumps(
             {
                 "sequence": 1,
-                "wall_time": 1.0,
+                "wall_time": 45.0,
                 "event": {
                     "type": "taskforge.effects.events.Resolved",
                     "payload": {
@@ -279,8 +279,6 @@ def test_report_aggregates_bands_resolutions_and_transport(tmp_path: Path, capsy
                         "fingerprints": [],
                         "value": {
                             "usage": {"prompt_tokens": 100, "completion_tokens": 900},
-                            "decode_time": 30.0,
-                            "wall_time": 45.0,
                             "retries": ["transport_error:None"],
                         },
                     },
