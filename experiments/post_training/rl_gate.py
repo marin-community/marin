@@ -21,6 +21,7 @@ import click
 import pyarrow as pa
 import pyarrow.compute as pc
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
+from finestore.rl.strata import TaskStrata
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
@@ -288,9 +289,9 @@ def _check_control(run: RunMeasurements, pin: ControlPin) -> None:
         raise InvalidComparison(f"control has failed invariants: {run.path}")
 
 
-def _task_labels(table: pa.Table) -> dict[str, dict]:
+def _task_labels(table: pa.Table) -> dict[str, TaskStrata]:
     rows = table.select(["task_digest", *SLICE_COLUMNS]).to_pylist()
-    return {digest: row for row in rows if (digest := row.pop("task_digest")) is not None}
+    return {digest: TaskStrata.model_validate(row) for row in rows if (digest := row.pop("task_digest")) is not None}
 
 
 def _check_protocols(runs: Sequence[RunMeasurements], controls: Sequence[RunMeasurements]) -> None:
@@ -298,12 +299,12 @@ def _check_protocols(runs: Sequence[RunMeasurements], controls: Sequence[RunMeas
         raise InvalidComparison("evaluation protocol differs")
 
 
-def _shared_task_fraction(name: str, shared: set[str], control_labels: Sequence[Mapping[str, dict]]) -> Invariant:
+def _shared_task_fraction(name: str, shared: set[str], control_labels: Sequence[Mapping[str, TaskStrata]]) -> Invariant:
     minimum = 1.0
     for labels in control_labels:
-        families: dict[str | None, set[str]] = {}
+        families: dict[str, set[str]] = {}
         for digest, strata in labels.items():
-            families.setdefault(strata["family"], set()).add(digest)
+            families.setdefault(strata.family, set()).add(digest)
         for label, total in [(name, set(labels)), *((f"{name}/family/{key}", ids) for key, ids in families.items())]:
             accepted = len(shared & total)
             required = max(1, math.ceil(MIN_SHARED_TASK_FRACTION * len(total)))
@@ -316,7 +317,7 @@ def _shared_task_fraction(name: str, shared: set[str], control_labels: Sequence[
     )
 
 
-def _unshared_tasks(
+def _unshared_score(
     name: str,
     runs: Sequence[RunMeasurements],
     extra: Sequence[set[str]],
@@ -341,6 +342,44 @@ def _unshared_tasks(
     )
 
 
+@dataclass(frozen=True)
+class SharedEvaluation:
+    coverage: Invariant
+    final_tasks: int
+    gain_tasks: int
+    same_task_count: bool
+    unshared: Comparison | None
+
+
+def _align_evaluation(
+    evaluation: presets.Evaluation,
+    cohort: Sequence[RunMeasurements],
+    n_runs: int,
+    newest: int,
+) -> tuple[list[RunMeasurements], SharedEvaluation]:
+    name = evaluation.name
+    labels = [_task_labels(run.held_out_answers[name].final) for run in cohort]
+    sets = [set(tasks) for tasks in labels]
+    shared = set.intersection(*sets)
+    coverage = _shared_task_fraction(name, shared, labels[n_runs:])
+    gain = shared.copy()
+    if evaluation.at_start:
+        for member in cohort:
+            gain.intersection_update(member.held_out_answers[name].initial["task_digest"].to_pylist())
+    baseline = set.union(*sets[n_runs:])
+    extra = _unshared_score(name, cohort[:n_runs], [tasks - baseline for tasks in sets[:n_runs]])
+    strata = labels[newest]
+    aligned = [
+        (
+            restrict_evaluation(member, name, shared, gain, strata)
+            if tasks != shared or gain != shared or member_labels != strata
+            else member
+        )
+        for member, tasks, member_labels in zip(cohort, sets, labels, strict=True)
+    ]
+    return aligned, SharedEvaluation(coverage, len(shared), len(gain), len({len(tasks) for tasks in sets}) == 1, extra)
+
+
 def _compare_evaluations(
     preset: presets.Preset,
     runs: Sequence[RunMeasurements],
@@ -352,36 +391,17 @@ def _compare_evaluations(
         range(len(cohort)),
         key=lambda index: recipe.utc_millis(cohort[index].started_at) if cohort[index].started_at else -1,
     )
-    invariants, reported, counts, gain_counts = [], [], {}, {}
-    unavailable = set()
+    shared = {}
     for evaluation in preset.evaluations:
-        if not evaluation.held_out:
-            continue
-        name = evaluation.name
-        labels = [_task_labels(run.held_out_answers[name].final) for run in cohort]
-        sets = [set(tasks) for tasks in labels]
-        shared = set.intersection(*sets)
-        gain = shared.copy()
-        if evaluation.at_start:
-            for member in cohort:
-                gain.intersection_update(member.held_out_answers[name].initial["task_digest"].to_pylist())
-        invariants.append(_shared_task_fraction(name, shared, labels[len(runs) :]))
-        counts[name] = len(shared)
-        gain_counts[name] = len(gain)
-        baseline = set.union(*sets[len(runs) :])
-        extra = [tasks - baseline for tasks in sets[: len(runs)]]
-        if (unshared := _unshared_tasks(name, runs, extra)) is not None:
-            reported.append(unshared)
-        strata = labels[newest]
-        for index, member in enumerate(cohort):
-            if sets[index] != shared or gain != shared or labels[index] != strata:
-                cohort[index] = restrict_evaluation(member, name, shared, gain, strata)
-        if len({len(tasks) for tasks in sets}) > 1:
-            unavailable.update(
-                metric.key
-                for metric in preset.objectives
-                if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR and metric.key.startswith(name + "/")
-            )
+        if evaluation.held_out:
+            cohort, shared[evaluation.name] = _align_evaluation(evaluation, cohort, len(runs), newest)
+    unavailable = {
+        metric.key
+        for metric in preset.objectives
+        if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR
+        and (alignment := shared.get(metric.key.split("/", 1)[0])) is not None
+        and not alignment.same_task_count
+    }
     cohort = [with_objectives(run, preset) for run in cohort]
     if unavailable:
         cohort = [
@@ -390,24 +410,18 @@ def _compare_evaluations(
         ]
     selected_runs = [with_requirements(run, requirements) for run in cohort[: len(runs)]]
     selected_controls = cohort[len(runs) :]
+    invariants = [alignment.coverage for alignment in shared.values()]
     invariants.extend(
         row.model_copy(update={"replicate": index}) for index, run in enumerate(selected_runs) for row in run.invariants
     )
     comparisons = _compare(preset, selected_runs, selected_controls, requirements)
-    return (
-        invariants,
-        [
-            (
-                row.model_copy(
-                    update={"tasks": (gain_counts if "/gain" in row.metric else counts)[row.metric.split("/", 1)[0]]}
-                )
-                if row.metric.split("/", 1)[0] in counts and row.role in (ComparisonRole.GUARD, ComparisonRole.OBJECTIVE)
-                else row
-            )
-            for row in comparisons
-        ]
-        + reported,
-    )
+    for index, row in enumerate(comparisons):
+        alignment = shared.get(row.metric.split("/", 1)[0])
+        if alignment is not None and row.role in (ComparisonRole.GUARD, ComparisonRole.OBJECTIVE):
+            tasks = alignment.gain_tasks if "/gain" in row.metric else alignment.final_tasks
+            comparisons[index] = row.model_copy(update={"tasks": tasks})
+    comparisons.extend(alignment.unshared for alignment in shared.values() if alignment.unshared is not None)
+    return invariants, comparisons
 
 
 def _compare(

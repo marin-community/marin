@@ -5,6 +5,7 @@
 
 import argparse
 import ast
+import json
 import os
 import subprocess
 import sys
@@ -60,8 +61,8 @@ def plan_refresh(table: ModelPresets) -> list[ControlRefresh]:
         if not stale:
             (config,) = rl_gate._compose_plans(preset, (RunInputs(preset_name=preset.name),))
             expected = RecordedLaunch.from_document(config, attempt=config["run"]["attempt_id"])
+            current_tasks = signature(expected, preset)
             try:
-                current_tasks = signature(expected, preset)
                 for index in range(previous.replicates):
                     output = rl_gate.control_path(preset, previous, index, table=table)
                     receipt = read_stored_skyrl_attempt(output)
@@ -200,33 +201,24 @@ def _submit_pin_pr(
         )
 
 
-def main(argv: Sequence[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pull", required=True, type=int)
-    parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args(argv)
-    if args.pull < 1:
-        parser.error("--pull must name a positive PR number")
+def _configured_bot() -> str:
     bot = os.environ.get("RL_CONTROLS_BOT_LOGIN")
-    if not args.dry_run:
-        if not bot or not os.environ.get("RL_CONTROLS_ALLOWED_LOGINS") or not os.environ.get("WANDB_API_KEY"):
-            raise ValueError("control refresh requires configured bot, requester and W&B credentials")
-        login = subprocess.check_output(["gh", "api", "user", "--jq", ".login"], text=True).strip()
-        if login != bot:
-            raise ValueError("control refresh token does not match the configured bot")
-    configure_coreweave_s3()
-    planned = plan_refresh(SNOWBALL)
-    if args.dry_run:
-        names = ", ".join(item.preset.name for item in planned)
-        print(f"Would refresh {names}." if names else "All RL controls match this merge. No collection planned.")
-        return
+    if not bot or not os.environ.get("RL_CONTROLS_ALLOWED_LOGINS") or not os.environ.get("WANDB_API_KEY"):
+        raise ValueError("control refresh requires configured bot, requester and W&B credentials")
+    login = subprocess.check_output(["gh", "api", "user", "--jq", ".login"], text=True).strip()
+    if login != bot:
+        raise ValueError("control refresh token does not match the configured bot")
+    return bot
+
+
+def _refresh_controls(planned: Sequence[ControlRefresh], *, pull: int, bot: str) -> None:
     if not planned:
         subprocess.run(
             [
                 "gh",
                 "pr",
                 "comment",
-                str(args.pull),
+                str(pull),
                 "--body",
                 "🤖 All RL controls match this merge. No refresh is needed.",
             ],
@@ -254,13 +246,28 @@ def main(argv: Sequence[str] | None = None) -> None:
             return
     elif existing.returncode != 2:
         existing.check_returncode()
-    assert bot is not None
     subprocess.run(["git", "config", "user.name", bot], check=True)
     subprocess.run(["git", "config", "user.email", f"{bot}@users.noreply.github.com"], check=True)
     table, reports = qualify_refresh(planned, SNOWBALL, entry_module="experiments.post_training.snowball_rl")
     for error in publish_refresh(reports, table):
         print(f"Control link publication: {error}", file=sys.stderr)
-    _submit_pin_pr(table, reports, source, branch, args.pull, published)
+    _submit_pin_pr(table, reports, source, branch, pull, published)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pull", required=True, type=int)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+    if args.pull < 1:
+        parser.error("--pull must name a positive PR number")
+    bot = None if args.dry_run else _configured_bot()
+    configure_coreweave_s3()
+    planned = plan_refresh(SNOWBALL)
+    if bot is None:
+        print(json.dumps({"refresh": [item.preset.name for item in planned]}))
+        return
+    _refresh_controls(planned, pull=args.pull, bot=bot)
 
 
 if __name__ == "__main__":

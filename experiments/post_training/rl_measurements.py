@@ -20,6 +20,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.rl_progress import Comparison, ComparisonRole, Invariant
 from finestore.rl.run_records import AttemptRecord, read_evaluations
+from finestore.rl.strata import TaskStrata
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
@@ -109,6 +110,7 @@ def read_recorded_task_set(launch: RecordedLaunch, name: str) -> RecordedTaskSet
 
 
 def held_out_identity(preset: presets.Preset, launch: RecordedLaunch) -> str | None:
+    """Return the recorded selection's NAME@VERSION, or None for a preset without held-out evaluation."""
     evaluation = preset.held_out
     if evaluation is None:
         return None
@@ -378,7 +380,7 @@ def _evaluation_values(
 
 
 def restrict_evaluation(
-    run: RunMeasurements, name: str, digests: set[str], gain_digests: set[str], strata: Mapping[str, dict]
+    run: RunMeasurements, name: str, digests: set[str], gain_digests: set[str], strata: Mapping[str, TaskStrata]
 ) -> RunMeasurements:
     """Recompute evaluation metrics on the selected digests with shared strata labels."""
     answers = run.held_out_answers[name]
@@ -392,7 +394,7 @@ def restrict_evaluation(
             selected = selected.set_column(
                 position,
                 ANSWER_SCHEMA.field(position),
-                pa.array([values[column] for values in labels], type=ANSWER_SCHEMA.field(position).type),
+                pa.array([getattr(label, column) for label in labels], type=ANSWER_SCHEMA.field(position).type),
             )
         return selected
 

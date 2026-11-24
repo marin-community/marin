@@ -62,11 +62,11 @@ def test_refresh_dry_run_uses_the_requested_merge_and_plans_only_stale_cohorts(
     monkeypatch.setattr(refresh, "qualify_refresh", lambda *args: pytest.fail("dry run submitted work"))
     args = ("--pull", str(request.pull), "--dry-run")
     refresh.main(args)
-    assert capsys.readouterr().out == "All RL controls match this merge. No collection planned.\n"
+    assert json.loads(capsys.readouterr().out)["refresh"] == []
 
     stale_preset = "learning-medium"
     refresh.main(args)
-    assert capsys.readouterr().out == "Would refresh learning-medium.\n"
+    assert json.loads(capsys.readouterr().out)["refresh"] == ["learning-medium"]
 
 
 def test_comment_requests_wait_for_main_and_require_the_allowlist(monkeypatch, capsys):
