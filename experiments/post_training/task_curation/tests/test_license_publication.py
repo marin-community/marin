@@ -43,11 +43,15 @@ def snapshot_hub(tmp_path, monkeypatch, files):
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     for name, content in files.items():
-        (snapshot / name).write_bytes(content)
+        target = snapshot / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
 
     class SnapshotHub:
         def list_repo_tree(self, repo, *, repo_type, revision, recursive):
-            assert (repo, repo_type, revision, recursive) == (DATASET, "dataset", REVISION, False)
+            # Folder-lineage upstreams keep license documents in subfolders, so the
+            # publication listing is recursive and the fixture names are flat paths.
+            assert (repo, repo_type, revision, recursive) == (DATASET, "dataset", REVISION, True)
             return [RepoFile(path=name, size=len(data), oid="b" * 40) for name, data in files.items()]
 
     def download(repo, name, *, repo_type, revision):
@@ -106,6 +110,35 @@ def test_private_publication_prepares_without_writes_then_checks_uploaded_pin(tm
     assert result.revision == revision and result.license_check["verdict"] == "PASS"
     assert result.license_check["receipt"]["dataset_id"] == repo
     assert result.license_check["receipt"]["revision"] == revision
+
+
+def test_publication_preserves_folder_lineage_license_documents(tmp_path, monkeypatch):
+    """Folder-lineage upstreams keep license documents in per-dataset subfolders."""
+    card = b"# Dataset\n\n## License\nLicensed under Apache License 2.0.\n"
+    folder_notice = b"Folder-lineage attribution.\n"
+    snapshot_hub(
+        tmp_path, monkeypatch, {"README.md": card, "endless_v2/README.md": card, "endless_v2/NOTICE": folder_notice}
+    )
+    url = PREFIX + "endless_v2/README.md"
+    receipt = source_receipt(card).model_copy(
+        update={
+            "evidence": [
+                *source_receipt(card).evidence,
+                license_evidence(url, card, "dataset_card"),
+            ],
+        }
+    )
+    publication = license_publication.prepare_license_publication(receipt, tmp_path / "published", use="train")
+    files = {path.name: path.read_bytes() for path in publication.notice_files}
+    assert files["UPSTREAM_README.md"] == card
+    assert files["UPSTREAM_endless_v2_README.md"] == card
+    assert files["UPSTREAM_endless_v2_NOTICE"] == folder_notice
+    provenance = json.loads(files["publication-provenance.json"])
+    assert {row["filename"]: row["source_url"] for row in provenance["documents"]} == {
+        "UPSTREAM_README.md": PREFIX + "README.md",
+        "UPSTREAM_endless_v2_README.md": PREFIX + "endless_v2/README.md",
+        "UPSTREAM_endless_v2_NOTICE": PREFIX + "endless_v2/NOTICE",
+    }
 
 
 @pytest.mark.parametrize(

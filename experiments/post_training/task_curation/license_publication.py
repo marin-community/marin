@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import quote, urlsplit
 
 import yaml
@@ -211,14 +211,18 @@ def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: s
         raise ValueError("Publication has no checked evidence for its upstream license source")
     output.mkdir(parents=True, exist_ok=True)
     metadata, notices, provenance = {}, [], []
-    for entry in HfApi().list_repo_tree(dataset_id, repo_type="dataset", revision=revision, recursive=False):
+    # Folder-lineage upstreams keep their license documents in per-dataset subfolders
+    # (e.g. endless_v2/README.md), so the listing must be recursive and the preserved
+    # destinations must not collide across folders.
+    for entry in HfApi().list_repo_tree(dataset_id, repo_type="dataset", revision=revision, recursive=True):
         if not isinstance(entry, RepoFile):
             continue
         filename = entry.path
+        basename = PurePosixPath(filename).name
         if (
-            filename != "README.md"
-            and not LICENSE_FILENAME.fullmatch(filename)
-            and not NOTICE_FILENAME.fullmatch(filename)
+            basename != "README.md"
+            and not LICENSE_FILENAME.fullmatch(basename)
+            and not NOTICE_FILENAME.fullmatch(basename)
         ):
             continue
         if entry.size > MAX_EVIDENCE_BYTES:
@@ -229,7 +233,11 @@ def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: s
         evidence_url = prefix + quote(filename, safe="/")
         if any(item.sha256 != digest for item in source_evidence if item.url == evidence_url):
             raise ValueError(f"Upstream license metadata differs from its checked receipt: {filename}")
-        destination = output / ("UPSTREAM_README.md" if filename == "README.md" else filename)
+        if "/" in filename:
+            # Subfolder license documents keep their folder identity in the name.
+            destination = output / ("UPSTREAM_" + filename.replace("/", "_"))
+        else:
+            destination = output / ("UPSTREAM_README.md" if filename == "README.md" else filename)
         if destination.exists() and destination.read_bytes() != content:
             raise ValueError(f"Publication notice destination already contains different bytes: {destination}")
         destination.write_bytes(content)
