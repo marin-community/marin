@@ -218,30 +218,6 @@ class ListAsyncDataset(AsyncDataset[T]):
         return [self.data[i] for i in indices]
 
 
-class RepeatedDataset(AsyncDataset[T_co]):
-    """Repeat a finite dataset for a specified number of epochs."""
-
-    def __init__(self, dataset: AsyncDataset[T_co], epochs: int) -> None:
-        if not dataset.is_finite() or epochs <= 0:
-            raise ValueError("Repetition requires a finite dataset and positive epochs.")
-        self.dataset = dataset
-        self.epochs = epochs
-
-    async def async_len(self) -> int:
-        return self.epochs * await self.dataset.async_len()
-
-    def is_finite(self) -> bool:
-        return True
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
-        if not indices:
-            return []
-        length = await self.dataset.async_len()
-        if any(index < 0 or index >= self.epochs * length for index in indices):
-            raise IndexError("Dataset index exceeds the configured epochs.")
-        return await self.dataset.get_batch([index % length for index in indices])
-
-
 class MappedAsyncDataset(AsyncDataset[U], Generic[T, U]):
     """
     A dataset that applies a function to each item in the dataset.

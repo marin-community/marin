@@ -34,14 +34,14 @@ from transformers import (
     Siglip2Processor,
 )
 
-from levanter.data.dataset import ListAsyncDataset, RepeatedDataset
 from levanter.data.image import (
     ConversationDatasetSourceConfig,
-    ImageMixtureDatasetConfig,
-    image_caption_to_conversation,
-    BatchMultimodalProcessor,
-    ImageDatasetSourceConfig,
+    ImageCaptionDatasetSourceConfig,
+    ImageCaptionProcessor,
+    ImageTextConversationProcessor,
+    ImageTextMixtureDatasetConfig,
     image_source_urls,
+    image_caption_to_conversation,
     load_image,
 )
 
@@ -81,13 +81,13 @@ def test_parquet_image_source_resumes_across_row_groups(tmp_path: Path) -> None:
     path = tmp_path / "records.parquet"
     table = pa.table({"picture": ["a.png", "b.png", "c.png"], "caption": ["a", "b", "c"]})
     pq.write_table(table, path, row_group_size=1)
-    config = ImageDatasetSourceConfig(train_urls=[str(path)], image_key="picture", text_key="caption")
+    config = ImageCaptionDatasetSourceConfig(train_urls=[str(path)], image_key="picture", text_key="caption")
     source = config.get_shard_source("train")
     assert source is not None
     rows = list(source.open_shard_at_row(source.shard_names[0], 1))
     assert rows == [
-        image_caption_to_conversation({"image": "b.png", "text": "b"}),
-        image_caption_to_conversation({"image": "c.png", "text": "c"}),
+        {"image": "b.png", "text": "b"},
+        {"image": "c.png", "text": "c"},
     ]
 
 
@@ -104,7 +104,7 @@ def test_hf_source_iteration_is_lazy(monkeypatch: pytest.MonkeyPatch) -> None:
         return records()
 
     monkeypatch.setattr("levanter.data.image.datasets.load_dataset", load_dataset)
-    iterator = ImageDatasetSourceConfig(id="fixture", stream=True).doc_iterator("train")
+    iterator = ImageCaptionDatasetSourceConfig(id="fixture", stream=True).doc_iterator("train")
     assert consumed == []
     assert next(iterator) == {"image": "0.png", "text": "0"}
     assert consumed == [0]
@@ -153,26 +153,21 @@ def caption_processor():
     return processor
 
 
-@pytest.mark.parametrize("max_length", [6, 7, 8, 10])
-def test_caption_source_preserves_images_and_truncated_targets(tmp_path, caption_processor, max_length):
+@pytest.mark.parametrize("max_length", [1, 2, 4])
+def test_caption_source_preserves_images_and_text_targets(tmp_path, caption_processor, max_length):
     image = tmp_path / "red.png"
     Image.new("RGB", (4, 4), "red").save(image)
     records = tmp_path / "captions.jsonl"
     records.write_text(json.dumps({"image": str(image), "text": "red square"}) + "\n")
-    source = ImageDatasetSourceConfig(train_urls=[str(records)]).get_shard_source("train")
+    source = ImageCaptionDatasetSourceConfig(train_urls=[str(records)]).get_shard_source("train")
+    assert source is not None
     batch = list(source.open_shard(source.shard_names[0]))
-    processed = BatchMultimodalProcessor(caption_processor, max_length=max_length)(batch)[0]
+    processed = ImageCaptionProcessor(caption_processor, max_length=max_length)(batch)[0]
     expected_pixels = caption_processor.image_processor(images=Image.open(image), return_tensors="np")["pixel_values"][
         0
     ]
     np.testing.assert_allclose(processed["pixel_values"][0], expected_pixels)
-    ids = processed["input_ids"]
-    tokenizer = caption_processor.tokenizer
-    expected_mask = np.isin(ids, tokenizer.convert_tokens_to_ids(["red", "square"]))
-    # The assistant terminator is supervised only when it survives truncation.
-    if max_length >= 9:
-        expected_mask[8] = True
-    np.testing.assert_array_equal(processed["loss_mask"], expected_mask)
+    np.testing.assert_array_equal(processed["loss_mask"], processed["attention_mask"])
 
 
 def test_siglip2_caption_preserves_native_patch_inputs(caption_processor):
@@ -181,8 +176,8 @@ def test_siglip2_caption_preserves_native_patch_inputs(caption_processor):
         tokenizer=caption_processor.tokenizer,
     )
     image = Image.new("RGB", (12, 8), "blue")
-    record = image_caption_to_conversation({"image": image, "text": "red square"})
-    processor = BatchMultimodalProcessor(hf_processor, max_length=12)
+    record = {"image": image, "text": "red square"}
+    processor = ImageCaptionProcessor(hf_processor, max_length=12)
     result = processor([record])[0]
     expected = hf_processor(
         images=[image],
@@ -202,7 +197,7 @@ def test_siglip2_caption_preserves_native_patch_inputs(caption_processor):
 def test_assistant_mask_requires_generation_block(caption_processor):
     caption_processor.chat_template = "{{ messages[0].role }}"
     with pytest.raises(ValueError, match="generation block"):
-        BatchMultimodalProcessor(caption_processor, max_length=12)
+        ImageTextConversationProcessor(caption_processor, max_length=12)
 
 
 @pytest.mark.parametrize("tile_size", [4, 8])
@@ -210,13 +205,13 @@ def test_processor_dimensions_match_processed_pixels_and_cache_schema(caption_pr
     caption_processor.image_processor = CLIPImageProcessor(
         size={"shortest_edge": tile_size}, crop_size={"height": tile_size, "width": tile_size}
     )
-    processor = BatchMultimodalProcessor(caption_processor, max_length=12)
-    record = image_caption_to_conversation({"image": Image.new("RGB", (16, 16), "red"), "text": "red"})
+    processor = ImageCaptionProcessor(caption_processor, max_length=12)
+    record = {"image": Image.new("RGB", (16, 16), "red"), "text": "red"}
     output = processor([record])[0]
     pixels = output["pixel_values"]
     exemplar = processor.output_exemplar["pixel_values"]
     assert pixels.shape == exemplar.shape == (1, 3, tile_size, tile_size)
-    expected = caption_processor.image_processor(images=record["images"], return_tensors="np")["pixel_values"][0]
+    expected = caption_processor.image_processor(images=[record["image"]], return_tensors="np")["pixel_values"][0]
     np.testing.assert_allclose(pixels[0], expected)
 
 
@@ -235,10 +230,10 @@ def test_image_mixture_caches_processor_pixels_and_unpadded_targets(
             train_urls=[str(records)], messages_key="dialog", images_key="pictures"
         )
     else:
-        source = ImageDatasetSourceConfig(train_urls=[str(records)])
+        source = ImageCaptionDatasetSourceConfig(train_urls=[str(records)])
     records.write_text("".join(json.dumps(row) + "\n" for row in rows))
     monkeypatch.setattr("transformers.AutoProcessor.from_pretrained", lambda *args, **kwargs: caption_processor)
-    config = ImageMixtureDatasetConfig(
+    config = ImageTextMixtureDatasetConfig(
         processor="local-test-processor",
         configs={"tiny": source},
         train_weights={"tiny": 1},
@@ -254,11 +249,17 @@ def test_image_mixture_caches_processor_pixels_and_unpadded_targets(
     expected_pixels = caption_processor.image_processor(images=Image.open(image), return_tensors="np")["pixel_values"][
         0
     ]
-    for item, length in zip(sorted([first, second], key=lambda item: int(item["attention_mask"].sum())), [8, 9]):
+    expected_lengths = [8, 9] if source_kind == "conversation" else [1, 2]
+    for item, length in zip(
+        sorted([first, second], key=lambda item: int(item["attention_mask"].sum())), expected_lengths
+    ):
         assert item["input_ids"].shape == (length,)
         assert item["pixel_values"].shape == (1, 3, 4, 4)
         np.testing.assert_allclose(item["pixel_values"][0], expected_pixels)
-        np.testing.assert_array_equal(item["loss_mask"], [0] * 6 + [1] * (length - 6))
+        if source_kind == "conversation":
+            np.testing.assert_array_equal(item["loss_mask"], [0] * 6 + [1] * (length - 6))
+        else:
+            np.testing.assert_array_equal(item["loss_mask"], item["attention_mask"])
     restored = config.train_set(options=CacheOptions(batch_size=1))
     np.testing.assert_array_equal(asyncio.run(restored.get_batch([1]))[0]["input_ids"], second["input_ids"])
     if source_kind == "conversation":
@@ -296,7 +297,7 @@ def test_multi_image_expansion_preserves_processor_features_and_assistant_target
             num_additional_image_tokens=0,
             chat_template=caption_processor.chat_template,
         )
-    processor = BatchMultimodalProcessor(hf_processor, max_length=128)
+    processor = ImageTextConversationProcessor(hf_processor, max_length=128)
     images = [Image.new("RGB", (8, 8), color) for color in ("red", "blue")]
     record = image_caption_to_conversation({"image": images[0], "text": "red"})
     record["images"] = images
@@ -313,11 +314,6 @@ def test_multi_image_expansion_preserves_processor_features_and_assistant_target
     assert selected.tolist() == hf_processor.tokenizer.convert_tokens_to_ids(["red", "</turn>"])
 
 
-@pytest.mark.asyncio
-async def test_repetition_crosses_epoch_boundary_and_stops() -> None:
-    source = ListAsyncDataset([{"text": "first"}, {"text": "second"}])
-    repeated = RepeatedDataset(source, epochs=2)
-    assert await repeated.async_len() == 4
-    assert await repeated.get_batch([1, 2, 3]) == [{"text": "second"}, {"text": "first"}, {"text": "second"}]
-    with pytest.raises(IndexError):
-        await repeated.get_batch([4])
+def test_image_source_rejects_hf_id_with_urls() -> None:
+    with pytest.raises(ValueError, match="either a Hugging Face dataset ID or split URLs"):
+        ImageCaptionDatasetSourceConfig(id="org/dataset", train_urls=["records.jsonl"])
