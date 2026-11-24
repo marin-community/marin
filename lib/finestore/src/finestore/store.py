@@ -340,7 +340,7 @@ class DataStore:
         return Transaction(self, max_bytes=transaction_limit, attribution=_attribution(author, message))
 
     def unbounded_transaction(self, *, author: str | None = None, message: str | None = None) -> Transaction:
-        """Create a transaction without an Arrow buffer byte limit."""
+        """Create a transaction without an Arrow buffer byte limit; ``author`` and ``message`` as for ``transaction``."""
         self.raise_if_failed()
         return Transaction(self, max_bytes=None, attribution=_attribution(author, message))
 

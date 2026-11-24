@@ -237,7 +237,7 @@ class Manifest(_FormatModel):
     maintainer_epoch: int = 0
     # Disposable-cache recovery invalidates these commits across descriptor and chunk tables.
     cache_history_floor: int = 0
-    # Written by the commit it describes; never inherited from the parent manifest.
+    # Each commit sets this for itself; ``CommitInfo.sequence`` marks a copy from an older writer.
     commit_info: CommitInfo | None = None
 
 
