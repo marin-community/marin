@@ -26,6 +26,7 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
+from marin.inference.session import InferenceSession
 from marin.inference.types import InferenceBackendState
 
 POLICY = "marin-10197"
@@ -66,7 +67,7 @@ class PolicyJudge:
 
     def __call__(
         self,
-        session: RemoteInferenceSession,
+        session: InferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
         *,

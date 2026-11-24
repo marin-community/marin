@@ -9,9 +9,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Protocol
+from urllib.parse import urlsplit
 
 import draccus
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import is_secret_reference
 
 from marin.inference.config import (
     ObjectStoreLoadMode,
@@ -228,6 +231,98 @@ class ModelConfig:
         """Revision owned by the configured or default tokenizer repository."""
         return resolve_tokenizer_revision(self.revision, self.tokenizer, self.tokenizer_revision)
 
+    @property
+    def resolved_tokenizer(self) -> str:
+        return self.tokenizer or self.location
+
+    @property
+    def resolved_revision(self) -> str:
+        """The weights identity a run records: the pinned revision, else the producer identity or location."""
+        return self.revision or self.identity or self.location
+
+    @property
+    def context_window(self) -> int | None:
+        """The planned served window; the running server reports the window it actually serves."""
+        return self.serve.max_model_len
+
+
+@dataclass(frozen=True)
+class ApiModelConfig:
+    """A model served by an external OpenAI-compatible API instead of a launcher-started server.
+
+    ``provider`` names the API operator (for example ``openrouter``) and ``api_model`` is the model ID
+    requests name. ``api_key`` lists secret references the launcher resolves at submission. The API
+    reports neither a tokenizer nor a context window, so ``tokenizer`` pins the open-weight Hugging
+    Face tokenizer used for prompt admission and ``context_window`` states the window the provider
+    serves.
+    """
+
+    name: str
+    provider: str
+    base_url: str
+    api_model: str
+    api_key: tuple[str, ...]
+    tokenizer: str
+    context_window: int
+    tokenizer_revision: str | None = None
+    generation: GenerationConfig = field(default_factory=GenerationConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
+    evaluation_num_concurrent: int | None = None
+
+    def __post_init__(self) -> None:
+        if "/" in self.name:
+            raise ValueError("model name cannot contain '/'")
+        url = urlsplit(self.base_url)
+        if url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment:
+            raise ValueError("base_url must be an HTTPS URL without credentials")
+        if not self.api_key or not all(is_secret_reference(ref) for ref in self.api_key):
+            raise ValueError("api_key requires secret references")
+        if self.context_window < 2:
+            raise ValueError("context_window must be at least 2")
+        if self.evaluation_num_concurrent is not None and self.evaluation_num_concurrent <= 0:
+            raise ValueError("evaluation_num_concurrent must be positive")
+
+    @property
+    def effective_tokenizer_revision(self) -> str | None:
+        return self.tokenizer_revision
+
+    @property
+    def resolved_tokenizer(self) -> str:
+        return self.tokenizer
+
+    @property
+    def resolved_revision(self) -> str:
+        """The provider-qualified model ID used to distinguish API records."""
+        return f"{self.provider}/{self.api_model}"
+
+
+class EvaluatedModel(Protocol):
+    """The model settings curated evaluation planning reads from a served or API model."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def generation(self) -> GenerationConfig: ...
+
+    @property
+    def agent(self) -> AgentConfig: ...
+
+    @property
+    def evaluation_num_concurrent(self) -> int | None: ...
+
+    @property
+    def effective_tokenizer_revision(self) -> str | None: ...
+
+    @property
+    def resolved_tokenizer(self) -> str: ...
+
+    @property
+    def resolved_revision(self) -> str: ...
+
+    @property
+    def context_window(self) -> int | None: ...
+
 
 def has_vllm_option(args: tuple[str, ...], option: str) -> bool:
     """Whether ``args`` already specifies a vLLM option in either CLI spelling."""
@@ -275,6 +370,12 @@ def load_model_config(path: Path) -> ModelConfig:
     """Load one model catalog file, rejecting fields outside the configuration schema."""
     with StoragePath(str(path)).open("r") as handle:
         return draccus.load(ModelConfig, handle)
+
+
+def load_api_model_config(path: Path) -> ApiModelConfig:
+    """Load one API model file, rejecting fields outside its schema."""
+    with StoragePath(str(path)).open("r") as handle:
+        return draccus.load(ApiModelConfig, handle)
 
 
 def scan_model_configs(root: Path) -> dict[str, ModelConfig]:

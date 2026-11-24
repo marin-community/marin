@@ -21,8 +21,11 @@ from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation.hardware import Platform
 from marin.evaluation.runner import (
+    CANDIDATE_API_KEY,
+    ApiCandidate,
     EvaluationBatch,
     EvaluationError,
+    ServedCandidate,
     SubmittedEvaluation,
     SubmittedEvaluationBatch,
     _record,
@@ -154,7 +157,9 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     assert config.benchmark.n_benchmark == 1
     assert config.verifier_env_keys == ()
     assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {"judge_access": "runtime"}
-    assert batch.judge.api_model == "qwen3-0.6b"
+    assert isinstance(batch.candidate, ServedCandidate)
+    assert batch.candidate.judge is not None
+    assert batch.candidate.judge.api_model == "qwen3-0.6b"
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
@@ -191,7 +196,7 @@ def test_waiting_launch_exits_nonzero_unless_every_evaluation_succeeds(tmp_path,
             group_id=batch.group_id,
             job=job,
             records_prefix=batch.records_prefix,
-            model_name=batch.model.name,
+            model_name=batch.candidate.model.name,
             evaluations=tuple(
                 SubmittedEvaluation(evaluation.identity.run_id, evaluation.identity.eval_ref.name)
                 for evaluation in batch.evaluations
@@ -588,7 +593,7 @@ def test_policy_snapshot_uses_project_python_and_preserves_judge_configuration(t
         [
             "bash",
             "-c",
-            'source "$1"; CONFIG_SNAPSHOT_DIR="$2"; ' 'snapshot_launch_configs --policy-finalization-config "$3"',
+            'source "$1"; CONFIG_SNAPSHOT_DIR="$2"; snapshot_launch_configs --policy-finalization-config "$3"',
             "snapshot",
             str(campaign / "common.sh"),
             str(snapshots),
@@ -629,8 +634,9 @@ def test_policy_judge_startup_failure_preserves_infrastructure_evidence(
     assert result.exit_code == 0, result.output
     batch = submitted_batches[-1]
     # The batch prepares the policy judge's weights beside the candidate; the evaluation serves it.
-    assert batch.judge is None
-    assert [judge.model.location for judge in batch.prepared_judges] == ["MiniMaxAI/MiniMax-M3-MXFP8"]
+    assert isinstance(batch.candidate, ServedCandidate)
+    assert batch.candidate.judge is None
+    assert [judge.model.location for judge in batch.candidate.prepared_judges] == ["MiniMaxAI/MiniMax-M3-MXFP8"]
     executor = batch.evaluations[0].executor
 
     class FailedJob:
@@ -807,3 +813,106 @@ def test_agent_backend_and_harness_revision_are_part_of_run_identity(tmp_path, a
     assert run_id(replace(spec, task_machine_backend=TaskMachineBackend.DOCKER)) != original
     monkeypatch.setattr("experiments.evaluation.curated.EPISODE_HARNESS_REVISIONS", {"terminus-2": "changed"})
     assert run_id(spec) != original
+
+
+@pytest.fixture
+def api_model_config(tmp_path) -> Path:
+    path = tmp_path / "api-model.yaml"
+    path.write_text(
+        "name: nemotron-openrouter\n"
+        "provider: openrouter\n"
+        "base_url: https://openrouter.ai/api/v1\n"
+        "api_model: nvidia/nemotron-3.5-super\n"
+        "api_key: [env:OPENROUTER_API_KEY]\n"
+        "tokenizer: nvidia/nemotron-3.5-super\n"
+        "context_window: 32768\n"
+    )
+    return path
+
+
+def _api_command(tmp_path: Path, api_model_config: Path, *extra: str) -> list[str]:
+    return [
+        "launch",
+        "--api-model-config",
+        str(api_model_config),
+        "--records-prefix",
+        str(tmp_path / "records"),
+        "--limit",
+        "20",
+        "--no-wait",
+        *extra,
+    ]
+
+
+def test_api_model_launch_runs_chat_and_agent_benchmarks_without_serving(
+    tmp_path, api_model_config, agent_selection, submitted_batches, monkeypatch
+):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "local-test-key")
+    chat = tmp_path / "chat.yaml"
+    chat.write_text("evaluations:\n  gsm8k-smoke:\n    benchmark: gsm8k\n")
+
+    result = CliRunner().invoke(
+        cli,
+        _api_command(
+            tmp_path, api_model_config, "--evaluation-config", str(chat), "--evaluation-config", str(agent_selection)
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    (batch,) = submitted_batches
+    assert isinstance(batch.candidate, ApiCandidate)
+    assert batch.secret_env[CANDIDATE_API_KEY] == ("env:OPENROUTER_API_KEY",)
+    assert "openrouter.ai" in batch.egress_allow
+    chat_run, agent_run = batch.evaluations
+    assert chat_run.identity.eval_ref.curated.settings.source_limit == 20
+    # The agent's context limit is the configured window, capped by the protocol.
+    assert agent_run.identity.eval_ref.curated.agent.max_input_tokens == 24576
+
+
+@pytest.mark.parametrize(
+    ("extra", "rejected"),
+    [
+        (("--evals", "mmlu-smoke"), "mmlu-smoke"),
+        (("--evals", "gsm8k-smoke", "--accelerator", "H100x1"), "--accelerator"),
+        (("--evals", "gsm8k-smoke", "--platform", "tpu"), "--platform"),
+    ],
+)
+def test_api_model_launch_rejects_what_needs_a_served_model(
+    tmp_path, api_model_config, submitted_batches, extra, rejected
+):
+    result = CliRunner().invoke(cli, _api_command(tmp_path, api_model_config, *extra))
+
+    assert result.exit_code != 0
+    assert rejected in result.output
+    assert submitted_batches == []
+
+
+def test_api_model_launch_rejects_harnesses_that_tokenize_on_the_server(
+    tmp_path, api_model_config, agent_source, submitted_batches, monkeypatch
+):
+    dataset = agent_source.config
+    pi = dataset.agent.model_copy(update={"harness": PiAgent(version="0.87.0")})
+    pi_source = replace(
+        agent_source, config=replace(dataset, agent=pi, item_builder=partial(dataset.item_builder, agent=pi))
+    )
+    catalog = {**evaluation_benchmarks(), **{benchmark.name: benchmark for benchmark in fixed_benchmarks([pi_source])}}
+    monkeypatch.setattr("experiments.evaluation.curated.evaluation_benchmarks", lambda: catalog)
+    selection = tmp_path / "pi.yaml"
+    selection.write_text("evaluations:\n  terminal-agent:\n    benchmark: terminal-agent\n")
+
+    result = CliRunner().invoke(cli, _api_command(tmp_path, api_model_config, "--evaluation-config", str(selection)))
+
+    assert result.exit_code != 0
+    assert "terminal-agent" in result.output
+    assert submitted_batches == []
+
+
+def test_api_model_launch_rejects_harbor(tmp_path, api_model_config, submitted_batches, harbor_task_workspace):
+    policy = harbor_task_workspace / "policy.json"
+    policy.write_text(json.dumps({"agents": [{"name": "terminus-2"}], "datasets": [{"path": "dataset"}]}))
+
+    result = CliRunner().invoke(cli, _api_command(tmp_path, api_model_config, "--harbor-config", str(policy)))
+
+    assert result.exit_code != 0
+    assert "policy" in result.output
+    assert submitted_batches == []

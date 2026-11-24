@@ -107,7 +107,10 @@ def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(tmp_pat
             _, (batch,), _ = entrypoint.resolve()
             if source_kind == "hf":
                 assert (
-                    read_tool_chat_template(batch.model.tokenizer, batch.model.effective_tokenizer_revision) == template
+                    read_tool_chat_template(
+                        batch.candidate.model.tokenizer, batch.candidate.model.effective_tokenizer_revision
+                    )
+                    == template
                 )
             for evaluation in batch.evaluations:
                 _record(batch, evaluation.identity, RunStatus.SUCCEEDED, None, {}, {}, {})

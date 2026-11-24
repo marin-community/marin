@@ -15,18 +15,21 @@ from evalrecords.records import (
     TaskMachineBackend,
     TaskMachineSettings,
 )
-from marin.evaluation.dataset_evaluator import DatasetEvaluator, runtime_config
+from marin.evaluation.dataset_evaluator import DatasetEvaluator, runtime_config, served_context_window
 from marin.evaluation.hardware import Platform
-from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ServeConfig
+from marin.evaluation.model_config import AgentConfig, ApiModelConfig, GenerationConfig, ModelConfig, ServeConfig
 from marin.evaluation.task_worker import (
     DAYTONA_API_KEY,
     DAYTONA_EGRESS,
     JUDGE_API_KEY,
     JUDGE_ENDPOINT,
+    SOLVER_API_KEY,
+    SOLVER_ENDPOINT,
     DaytonaConnection,
     machine_factories,
 )
-from marin.inference.types import InferenceBackendState
+from marin.inference.session import ApiInferenceSession
+from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from openai import OpenAI
 from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
 
@@ -120,11 +123,12 @@ def test_frontierscience_worker_receives_named_judge(track, tmp_path, created, s
 
 def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_timestamp(created):
     settings = CuratedSettings(max_tokens=8192, source_limit=2, seed=42, judge=None)
-    first = runtime_config(MODEL, settings, SESSION)
+    endpoint = SESSION.model.endpoint
+    first = runtime_config(MODEL, settings, endpoint, served_context_window(endpoint))
     assert first.model.context_window == SERVED_CONTEXT
     assert first.max_tokens == SERVED_CONTEXT - 1
     created[0] += 100
-    assert runtime_config(MODEL, settings, SESSION) == first
+    assert runtime_config(MODEL, settings, endpoint, served_context_window(endpoint)) == first
 
 
 @pytest.mark.parametrize(
@@ -134,7 +138,7 @@ def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_
 def test_runs_take_mini_swe_agents_history_format_from_the_models_agent_arguments(created, agent_kwargs, model_format):
     model = replace(MODEL, agent=AgentConfig(agent_kwargs=agent_kwargs))
 
-    config = runtime_config(model, CuratedSettings(), SESSION)
+    config = runtime_config(model, CuratedSettings(), SESSION.model.endpoint, SERVED_CONTEXT)
 
     assert config.mini_swe_model_format is model_format
     # The default format leaves the identity of runs that predate the setting unchanged.
@@ -168,7 +172,7 @@ def test_daytona_task_machines_get_images_as_the_settings_select(created, image_
     daytona_machine = pytest.importorskip("shellbox.backends.daytona.machine")
     settings = CuratedSettings(task_machine=TaskMachineSettings(image_build=image_build))
 
-    config = runtime_config(MODEL, settings, SESSION)
+    config = runtime_config(MODEL, settings, SESSION.model.endpoint, SERVED_CONTEXT)
     factories = machine_factories(config, DaytonaConnection(api_key="eval-org-key"))
 
     assert factories["daytona"].image_build is daytona_machine.DaytonaImageBuild(image_build.value)
@@ -202,3 +206,35 @@ def test_agent_worker_rejects_a_server_window_other_than_the_planned_one(created
     with pytest.raises(ValueError, match="planned agent window"):
         evaluator(SESSION, "s3://results/agent", {}, backend_state=lambda: InferenceBackendState.READY)
     assert submitted == {}
+
+
+def test_api_model_worker_uses_the_stated_window_and_receives_the_provider_key(submitted, monkeypatch):
+    monkeypatch.setattr("marin.evaluation.dataset_evaluator.OpenAI", lambda **_kwargs: pytest.fail("queried /models"))
+    model = ApiModelConfig(
+        name="nemotron-openrouter",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        api_model="nvidia/nemotron-3.5-super",
+        api_key=("env:OPENROUTER_API_KEY",),
+        tokenizer="nvidia/nemotron-3.5-super",
+        tokenizer_revision="tokenizer-pin",
+        context_window=32768,
+    )
+    session = ApiInferenceSession(
+        RunningModel(OpenAIEndpoint(base_url=model.base_url, model=model.api_model, api_key="provider-key"))
+    )
+    settings = CuratedSettings(task_machine=TaskMachineSettings(backend=TaskMachineBackend.LOCAL))
+    evaluator = DatasetEvaluator(
+        ("s3://corpora/agent",), model, settings, agent=AGENT, stated_context_window=model.context_window
+    )
+
+    evaluator(session, "s3://results/agent", {}, backend_state=session.backend_state)
+
+    _, (_, _, config, _), _ = submitted["entrypoint"].resolve()
+    assert config.model.context_window == 32768
+    assert (config.model.name, config.model.revision) == (
+        "nvidia/nemotron-3.5-super",
+        "openrouter/nvidia/nemotron-3.5-super",
+    )
+    secrets = submitted["environment"].secrets
+    assert (secrets[SOLVER_ENDPOINT], secrets[SOLVER_API_KEY]) == ("https://openrouter.ai/api/v1", "provider-key")

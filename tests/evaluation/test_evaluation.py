@@ -39,8 +39,10 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.model_config import ApiModelConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.runner import (
+    CANDIDATE_API_KEY,
+    ApiCandidate,
     EndpointRoute,
     Evaluation,
     EvaluationBatch,
@@ -50,6 +52,7 @@ from marin.evaluation.runner import (
     HostedJudge,
     InferenceBackendFinished,
     LaunchProvenance,
+    ServedCandidate,
     run_with_inference_recovery,
 )
 from marin.evaluation.serving_config import inference_config_for_model
@@ -290,21 +293,28 @@ def _hosted_judge_batch(tmp_path, evaluations: tuple[Evaluation, ...]) -> Evalua
         version=None,
         description=None,
         records_prefix=str(tmp_path / "records"),
-        model=ModelConfig(name="candidate", location="org/candidate", resource_hint=ResourceHint(hbm_gb=3)),
-        accelerator=accelerator,
+        candidate=ServedCandidate(
+            model=ModelConfig(name="candidate", location="org/candidate", resource_hint=ResourceHint(hbm_gb=3)),
+            accelerator=accelerator,
+            capability_origin="https://iris.example",
+            api_model="candidate",
+            judge=HostedJudge(
+                model=ModelConfig(name="judge", location="org/judge", resource_hint=ResourceHint(hbm_gb=3)),
+                accelerator=accelerator,
+                api_model="judge",
+            ),
+        ),
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        capability_origin="https://iris.example",
-        api_model="candidate",
         evaluations=evaluations,
         provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
         submission_cluster="marin",
         max_concurrent=8,
-        judge=HostedJudge(
-            model=ModelConfig(name="judge", location="org/judge", resource_hint=ResourceHint(hbm_gb=3)),
-            accelerator=accelerator,
-            api_model="judge",
-        ),
     )
+
+
+def _replace_candidate(batch: EvaluationBatch, **changes) -> EvaluationBatch:
+    assert isinstance(batch.candidate, ServedCandidate)
+    return replace(batch, candidate=replace(batch.candidate, **changes))
 
 
 def _run_test_batch(batch: EvaluationBatch) -> list[str]:
@@ -401,7 +411,7 @@ def test_evaluation_steps_share_candidate_and_judge(tmp_path, monkeypatch):
 
 def test_evaluation_restart_skips_completed_step_without_serving(tmp_path, monkeypatch):
     evaluation = _evaluation(tmp_path, "finished", _successful_evaluation)
-    batch = replace(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
+    batch = _replace_candidate(_hosted_judge_batch(tmp_path, (evaluation,)), judge=None)
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
     path = _evaluate_with_session(batch, _remote_session(), orchestrator_job_id="/first")[0]
     original = Path(path).read_bytes()
@@ -422,7 +432,7 @@ def test_evaluation_restart_only_runs_unfinished_evals(tmp_path, monkeypatch):
 
     finished = _evaluation(tmp_path, "finished", executor)
     pending = _evaluation(tmp_path, "pending", executor)
-    batch = replace(_hosted_judge_batch(tmp_path, (finished, pending)), judge=None)
+    batch = _replace_candidate(_hosted_judge_batch(tmp_path, (finished, pending)), judge=None)
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
     _evaluate_with_session(replace(batch, evaluations=(finished,)), _remote_session(), orchestrator_job_id="/first")
     executed.clear()
@@ -467,7 +477,7 @@ def test_evaluation_steps_refresh_direct_endpoint_between_evaluations(tmp_path, 
             client=SimpleNamespace(resolve_endpoint=lambda _name: next(addresses)),
         ),
     )
-    batch = replace(
+    batch = _replace_candidate(
         _hosted_judge_batch(
             tmp_path,
             (
@@ -549,10 +559,10 @@ def test_evaluation_steps_prepare_evaluation_judges_with_the_candidate_and_serve
     hosted = _hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "one", _successful_evaluation),))
     policy_judge = HostedJudge(
         model=ModelConfig(name="policy-judge", location="org/policy-judge", resource_hint=ResourceHint(hbm_gb=3)),
-        accelerator=hosted.accelerator,
+        accelerator=AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1, target_cluster="cw-rno2a"),
         api_model="org/policy-judge",
     )
-    batch = replace(hosted, judge=None, prepared_judges=(policy_judge,))
+    batch = _replace_candidate(hosted, judge=None, prepared_judges=(policy_judge,))
 
     _run_test_batch(batch)
 
@@ -609,16 +619,18 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
         version="v1",
         description=None,
         records_prefix=str(records),
-        model=ModelConfig(
-            name="model",
-            location="org/model",
-            tokenizer="tokenizer",
-            resource_hint=ResourceHint(hbm_gb=3),
+        candidate=ServedCandidate(
+            model=ModelConfig(
+                name="model",
+                location="org/model",
+                tokenizer="tokenizer",
+                resource_hint=ResourceHint(hbm_gb=3),
+            ),
+            accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
+            capability_origin="https://iris.example",
+            api_model="model",
         ),
-        accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        capability_origin="https://iris.example",
-        api_model="model",
         evaluations=(
             _evaluation(tmp_path, "failure", _failed_evaluation),
             _evaluation(tmp_path, "success", _successful_evaluation),
@@ -649,7 +661,7 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
     assert failed.serving == succeeded.serving
     assert succeeded.provenance.eval_runtime == "test-runtime"
     assert succeeded.model.config is not None
-    expected_config = json.loads(json.dumps(asdict(batch.model)))
+    expected_config = json.loads(json.dumps(asdict(batch.candidate.model)))
     # An unset NCCL setting is omitted from records so that earlier records keep their config digests.
     del expected_config["serve"]["vllm_use_nccl_symm_mem"]
     assert succeeded.model.config.model_dump(mode="json") == expected_config
@@ -682,7 +694,7 @@ def test_evaluation_step_gates_transport_failure_coverage(tmp_path, monkeypatch,
             },
         )
 
-    batch = replace(_hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "math500", executor),)), judge=None)
+    batch = _replace_candidate(_hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "math500", executor),)), judge=None)
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
 
     if expected_status is RunStatus.INFRA_FAILED:
@@ -769,19 +781,21 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
         version="v1",
         description=None,
         records_prefix=str(tmp_path / "records"),
-        model=ModelConfig(
-            name="model",
-            location="s3://models/target",
-            identity="target@2026.09.23:def456",
-            tokenizer="org/tokenizer",
-            tokenizer_revision="tokenizer-revision",
-            resource_hint=ResourceHint(gpu={"H100": 1}),
-            serve=ServeConfig(speculative=speculative),
+        candidate=ServedCandidate(
+            model=ModelConfig(
+                name="model",
+                location="s3://models/target",
+                identity="target@2026.09.23:def456",
+                tokenizer="org/tokenizer",
+                tokenizer_revision="tokenizer-revision",
+                resource_hint=ResourceHint(gpu={"H100": 1}),
+                serve=ServeConfig(speculative=speculative),
+            ),
+            accelerator=AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1),
+            capability_origin="https://iris.example",
+            api_model="model",
         ),
-        accelerator=AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1),
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        capability_origin="https://iris.example",
-        api_model="model",
         evaluations=(_evaluation(tmp_path, "measured", _successful_evaluation),),
         provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
         submission_cluster="marin",
@@ -869,8 +883,8 @@ def test_speculative_pipeline_launch_selects_gpu(tmp_path, monkeypatch):
     run_eval_pipeline_step(control_config)
     run_eval_pipeline_step(drafted_config)
 
-    assert submitted_batches[0].accelerator.platform is Platform.TPU
-    assert submitted_batches[1].accelerator.platform is Platform.GPU
+    assert submitted_batches[0].candidate.accelerator.platform is Platform.TPU
+    assert submitted_batches[1].candidate.accelerator.platform is Platform.GPU
 
 
 @pytest.mark.parametrize(
@@ -966,16 +980,18 @@ def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_pa
         version=None,
         description=None,
         records_prefix=str(tmp_path / "records"),
-        model=ModelConfig(
-            name="model",
-            location="org/model",
-            tokenizer="tokenizer",
-            resource_hint=ResourceHint(hbm_gb=3),
+        candidate=ServedCandidate(
+            model=ModelConfig(
+                name="model",
+                location="org/model",
+                tokenizer="tokenizer",
+                resource_hint=ResourceHint(hbm_gb=3),
+            ),
+            accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
+            capability_origin="https://iris.example",
+            api_model="model",
         ),
-        accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        capability_origin="https://iris.example",
-        api_model="model",
         evaluations=(evaluation,),
         provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
         submission_cluster="marin",
@@ -1012,16 +1028,18 @@ def test_launch_group_only_federates_to_a_different_cluster(tmp_path, submission
         version=None,
         description=None,
         records_prefix=str(tmp_path / "records"),
-        model=ModelConfig(name="model", location="org/model", tokenizer="tokenizer"),
-        accelerator=AcceleratorChoice(
-            platform=Platform.GPU,
-            gpu_type="GB200",
-            gpu_count=1,
-            target_cluster="cw-us-east-08a",
+        candidate=ServedCandidate(
+            model=ModelConfig(name="model", location="org/model", tokenizer="tokenizer"),
+            accelerator=AcceleratorChoice(
+                platform=Platform.GPU,
+                gpu_type="GB200",
+                gpu_count=1,
+                target_cluster="cw-us-east-08a",
+            ),
+            capability_origin="https://iris.example",
+            api_model="model",
         ),
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        capability_origin="https://iris.example",
-        api_model="model",
         evaluations=(_evaluation(tmp_path, "eval", _successful_evaluation),),
         provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
         submission_cluster=submission_cluster,
@@ -1095,11 +1113,12 @@ def test_build_evaluation_batch_places_hosted_judge_with_candidate(tmp_path, mon
 
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
-    assert batch.accelerator.target_cluster == "cw-rno2a"
-    assert batch.judge is not None
-    assert batch.judge.accelerator.label == "H100x8"
-    assert batch.judge.accelerator.target_cluster == "cw-rno2a"
-    assert batch.judge.api_model == "qwen3.5-122b-a10b-fp8"
+    assert isinstance(batch.candidate, ServedCandidate)
+    assert batch.candidate.accelerator.target_cluster == "cw-rno2a"
+    assert batch.candidate.judge is not None
+    assert batch.candidate.judge.accelerator.label == "H100x8"
+    assert batch.candidate.judge.accelerator.target_cluster == "cw-rno2a"
+    assert batch.candidate.judge.api_model == "qwen3.5-122b-a10b-fp8"  # gitleaks:allow (model name)
 
 
 def test_build_evaluation_batch_uses_submission_cluster_for_capability_origin(monkeypatch):
@@ -1121,7 +1140,8 @@ def test_build_evaluation_batch_uses_submission_cluster_for_capability_origin(mo
 
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
-    assert batch.capability_origin == "https://custom-controller.example"
+    assert isinstance(batch.candidate, ServedCandidate)
+    assert batch.candidate.capability_origin == "https://custom-controller.example"
 
 
 def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch, tmp_path):
@@ -1261,7 +1281,10 @@ def test_build_evaluation_batch_gives_harbor_the_served_context_limits(tmp_path,
         _PREFLIGHT_MAX_OUTPUT_TOKENS,
     )
     checkpoint_config.unlink()
-    inference = inference_config_for_model(batch.model, batch.accelerator, env_vars={}, priority=batch.priority_band)
+    assert isinstance(batch.candidate, ServedCandidate)
+    inference = inference_config_for_model(
+        batch.candidate.model, batch.candidate.accelerator, env_vars={}, priority=batch.priority_band
+    )
     assert inference.model.max_model_len == served_limits["max_input_tokens"]
 
 
@@ -1329,7 +1352,7 @@ def test_launch_dry_run_accepts_file_backed_model_config(tmp_path, monkeypatch):
     config_path = _write_model_config(tmp_path / "fresh-checkpoint.yaml")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
 
-    model = resolve_model_config(None, config_path)
+    model = resolve_model_config(None, config_path, None)
     assert model.name == "fresh-rl-checkpoint"
     assert model.location == "s3://marin-us-east-02a/marin/exports/rl/fresh-checkpoint/"
     assert model.resource_hint.gpu == {"H100": 8}
@@ -1388,12 +1411,12 @@ def test_resolve_model_config_rejects_registry_and_file_selectors_together(tmp_p
     config_path = _write_model_config(tmp_path / "fresh-checkpoint.yaml")
 
     with pytest.raises(click.BadParameter):
-        resolve_model_config("qwen3-8b", config_path)
+        resolve_model_config("qwen3-8b", config_path, None)
 
 
 def test_resolve_model_config_requires_one_selector():
     with pytest.raises(click.BadParameter):
-        resolve_model_config(None, None)
+        resolve_model_config(None, None, None)
 
 
 def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, monkeypatch):
@@ -1463,7 +1486,7 @@ def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
             group_id=batch.group_id,
             job=SimpleNamespace(job_id="/test/eval"),
             records_prefix=batch.records_prefix,
-            model_name=batch.model.name,
+            model_name=batch.candidate.model.name,
             evaluations=(),
         )
 
@@ -1644,3 +1667,63 @@ def test_inference_readiness_retries_missing_registration_but_preserves_access_e
             session.wait_until_ready()
         assert raised.value.code == Code.PERMISSION_DENIED
         assert not probed
+
+
+def test_api_candidate_runs_against_the_provider_and_records_it_without_its_key(tmp_path, monkeypatch):
+    monkeypatch.setenv(CANDIDATE_API_KEY, "provider-test-key-do-not-persist")
+    monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/orchestrator"))
+    monkeypatch.setattr("marin.evaluation.runner.prepare_inference", lambda _config: pytest.fail("prepared serving"))
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    endpoints: list[OpenAIEndpoint] = []
+
+    def executor(session, output_dir, env_vars, *, backend_state, judge=None):
+        endpoints.append(session.model.endpoint)
+        return _successful_evaluation(session, output_dir, env_vars, backend_state=backend_state)
+
+    model = ApiModelConfig(
+        name="nemotron-openrouter",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        api_model="nvidia/nemotron-3.5-super",
+        api_key=("env:OPENROUTER_API_KEY",),
+        tokenizer="nvidia/nemotron-3.5-super",
+        tokenizer_revision="f" * 40,
+        context_window=32768,
+    )
+    batch = EvaluationBatch(
+        group_id="group",
+        user="tester",
+        version=None,
+        description=None,
+        records_prefix=str(tmp_path / "records"),
+        candidate=ApiCandidate(model=model),
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+        evaluations=(_evaluation(tmp_path, "gsm8k", executor),),
+        provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
+        submission_cluster="marin",
+        max_concurrent=1,
+        secret_env={CANDIDATE_API_KEY: model.api_key},
+    )
+
+    (path,) = _run_test_batch(batch)
+
+    (endpoint,) = endpoints
+    assert (endpoint.base_url, endpoint.model, endpoint.api_key) == (
+        "https://openrouter.ai/api/v1",
+        "nvidia/nemotron-3.5-super",
+        "provider-test-key-do-not-persist",
+    )
+    text = Path(path).read_text()
+    assert "provider-test-key-do-not-persist" not in text
+    assert "OPENROUTER_API_KEY" not in text
+    record = read_record(path)
+    assert record.status is RunStatus.SUCCEEDED
+    assert (record.model.backend, record.model.location, record.model.config) == (
+        "api",
+        "nvidia/nemotron-3.5-super",
+        None,
+    )
+    assert record.model.api is not None and record.model.api.provider == "openrouter"
+    assert (record.hardware.platform, record.hardware.accelerator) == ("api", "openrouter")
+    assert record.serving is not None and record.serving.max_model_len == 32768
