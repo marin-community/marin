@@ -126,7 +126,7 @@ async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: W
     harness = RecordingHarness(Submitted(submission, saved))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
-    result = await author(ctx, workpiece.with_(submission=submission, session=saved), config(harness), bundle)
+    result = await author(ctx, replace(workpiece, submission=submission, session=saved), config(harness), bundle)
     await ctx.drain()
     assert result == harness.result
     assert harness.session == saved
@@ -148,7 +148,7 @@ async def test_author_workspace_holds_caller_files_on_fresh_and_revision_entries
 
     hydration = WorkspaceHydration((inline_resource("workspace/reference/static.txt", b"static"),), proposal_id)
     setup = replace(config(), workspace=hydration)
-    for entry in (workpiece.with_(submission=None), workpiece):
+    for entry in (replace(workpiece, submission=None), workpiece):
         ctx = Context(log=EventLog())
         bundle = resources(ctx)
         await author(ctx, entry, setup, bundle)
@@ -187,7 +187,7 @@ async def test_an_author_visit_failing_before_its_first_model_call_journals_and_
     ctx = Context(log=log)
     bundle = resources(ctx)
     with pytest.raises(Hold if failure == "renderer" else KeyError):
-        await author(ctx, workpiece if revision else workpiece.with_(submission=None), setup, bundle)
+        await author(ctx, workpiece if revision else replace(workpiece, submission=None), setup, bundle)
     await ctx.drain()
     assert [type(record.event) for record in log.records] == rows
     assert isinstance(bundle.envs, Environments) and [env.closed for env in bundle.envs.created] == [True]
@@ -215,7 +215,7 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     author_client = FakeInference(())
     bundle = replace(resources(ctx), role_inference={"solve_review": CleanReviewer(), "author": author_client})
     with pytest.raises(Restart):
-        await author(ctx, workpiece.with_(submission=None), config(harness), bundle)
+        await author(ctx, replace(workpiece, submission=None), config(harness), bundle)
     await ctx.drain()
     assert harness.session is not None
     assert harness.client is author_client
@@ -312,7 +312,8 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     assert finding.grade is not None and finding.grade.reward == float(confirmed)
     assert finding.met is confirmed
     assert isinstance(
-        default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Modify if confirmed else Accept
+        default_review(replace(workpiece, evidence=(evidence,)), setup.band, setup.budget),
+        Modify if confirmed else Accept,
     )
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
     assert bundle.envs.requested[0].docker_image == GRADER_BASE_IMAGE
@@ -343,7 +344,7 @@ async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept
     inconclusive = adversary.findings[0]
     assert inconclusive.claim == "13 earns credit" and inconclusive.grade is None and not inconclusive.met
     assert all(finding.grade is not None for finding in adversary.findings[1:])
-    restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(evidence,))))
+    restored = WORKPIECE.validate_json(WORKPIECE.dump_json(replace(workpiece, evidence=(evidence,))))
     assert isinstance(default_review(restored, setup.band, setup.budget), Incomplete)
 
 
@@ -386,7 +387,7 @@ async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_acc
     assert adversary.status is AdversaryStatus.FAILED and adversary.limit is None
     (finding,) = adversary.findings
     assert (finding.claim, finding.candidate.reply, finding.grade) == ("13 earns credit", "13", None)
-    assert isinstance(default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Incomplete)
+    assert isinstance(default_review(replace(workpiece, evidence=(evidence,)), setup.band, setup.budget), Incomplete)
 
 
 # Review 2026-11-20 (follow-up 1): an infrastructure grade on one of two reproductions raised Hold at the adversary
@@ -413,7 +414,7 @@ async def test_observed_grader_outage_on_one_claim_keeps_both_claims_and_the_sib
     assert (failed.claim, failed.candidate.reply, failed.grade, failed.met) == ("13 earns credit", "13", None, False)
     assert sibling.grade is not None and sibling.grade.reward == 0.0 and not sibling.met
     assert any("grader machine lost" in reason for reason in adversary.reasons)
-    assert isinstance(default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Incomplete)
+    assert isinstance(default_review(replace(workpiece, evidence=(evidence,)), setup.band, setup.budget), Incomplete)
 
 
 # "control" stands for every defect Modify (grader checks, adversary findings): revert keys on placement alone.
@@ -434,7 +435,7 @@ async def test_validate_returns_lowering_failure_without_starting_trials(workpie
                 )
             }
         )
-    workpiece = workpiece.with_(submission=replace(workpiece.submission, task=task))
+    workpiece = replace(workpiece, submission=replace(workpiece.submission, task=task))
     ctx = Context(log=EventLog())
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     result = (await validate(ctx, workpiece, config(harness), resources(ctx))).result
@@ -450,7 +451,7 @@ async def test_validate_returns_lowering_failure_without_starting_trials(workpie
         with pytest.raises(Hold, match="Lowering failed"):
             gate(workpiece.submission)
     assert isinstance(
-        default_review(workpiece.with_(evidence=(result,)), config(harness).band, config(harness).budget),
+        default_review(replace(workpiece, evidence=(result,)), config(harness).band, config(harness).budget),
         Modify if authored else Incomplete,
     )
 
@@ -491,7 +492,7 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
     else:
         result = (await validate(ctx, workpiece, setup, bundle)).result
         assert all(control.cause is cause for control in result.controls)
-        decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+        decision = default_review(replace(workpiece, evidence=(result,)), setup.band, setup.budget)
         assert isinstance(decision, Retry if cause is Cause.NO_GRADE else Modify)
         if cause is Cause.GRADER_TIMEOUT:
             assert isinstance(decision, Modify) and any("grader_timeout" in finding for finding in decision.findings)
@@ -508,7 +509,7 @@ async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Wor
             "resources": task.resources.model_copy(update={"all": (inline_resource("workspace/input.bin", payload),)})
         }
     )
-    workpiece = workpiece.with_(submission=replace(workpiece.submission, task=task))
+    workpiece = replace(workpiece, submission=replace(workpiece.submission, task=task))
     harness = RecordingHarness(Returned("report", AdversaryReport(()), Conversation((), ())))
     setup = adversary_config(harness)
     ctx = Context(log=EventLog())
@@ -545,7 +546,7 @@ async def test_author_hydrates_full_validation_evidence(workpiece: Workpiece) ->
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
-    await author(ctx, workpiece.with_(evidence=(evidence,)), config(harness), bundle)
+    await author(ctx, replace(workpiece, evidence=(evidence,)), config(harness), bundle)
     await ctx.drain()
     assert isinstance(bundle.envs, Environments)
     saved = bundle.envs.created[0].files[PurePosixPath("/workspace/.validation/0.json")]
@@ -574,7 +575,7 @@ async def test_control_and_claim_preemption_restarts_validation(workpiece: Workp
 async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     evidence = ValidationResult(workpiece.submission.digest, (), (), ())
-    current = workpiece.with_(fallback=Fallback(workpiece.submission, BandOutcome.TOO_EASY, 0), evidence=(evidence,))
+    current = replace(workpiece, fallback=Fallback(workpiece.submission, BandOutcome.TOO_EASY, 0), evidence=(evidence,))
     expected = Modify(("Custom reviewer requires another change",))
 
     def custom_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Modify:
@@ -640,7 +641,7 @@ async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures:
             (result,),
         )
         assert not isinstance(
-            default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Incomplete
+            default_review(replace(workpiece, evidence=(evidence,)), setup.band, setup.budget), Incomplete
         )
     await ctx.drain()
     assert run.await_count == 2
@@ -688,7 +689,7 @@ the confirmation step's."""
 
 
 def reviewed(wp: Workpiece, settings: Mapping[str, object] | None = None) -> Workpiece:
-    wp = wp.with_(session=wp.session or Conversation((Message(Role.SYSTEM, "author"),), ()))
+    wp = replace(wp, session=wp.session or Conversation((Message(Role.SYSTEM, "author"),), ()))
     setup = build_config(load_policy(DEFAULTS_DIR).overlaid({**UNCONFIRMED, **(settings or {})}), {})
     return apply_decision(wp, default_review(wp, setup.band, setup.budget), setup.budget, setup.policy)
 
@@ -714,13 +715,13 @@ def test_hardening_accepts_its_placement_or_restores_the_fallback_after_a_fault(
 ) -> None:
     original = workpiece.submission
     assert original is not None
-    pending = reviewed(workpiece.with_(round=1, decisions=(Modify(("repair",)),), evidence=(evidence(3),)))
+    pending = reviewed(replace(workpiece, round=1, decisions=(Modify(("repair",)),), evidence=(evidence(3),)))
     assert pending.round == 2 and pending.fallback == Fallback(original, BandOutcome.TOO_EASY, 0)
     first = pending.decisions[-1]
     assert isinstance(first, Modify) and first.placement is BandOutcome.TOO_EASY and first.fallback == original.digest
     assert "Make the task harder" in first.findings[0] and pending.terminal is None
     updated = revised(original, "harder")
-    final = reviewed(pending.with_(submission=updated, evidence=(evidence(solved, controls_met=controls_met),)))
+    final = reviewed(replace(pending, submission=updated, evidence=(evidence(solved, controls_met=controls_met),)))
     decision = accepted(final)
     assert final.round == 2 and final.submission == (original if restored else updated)
     assert decision.restore == (original.digest if restored else None)
@@ -733,10 +734,10 @@ def test_hardening_accepts_its_placement_or_restores_the_fallback_after_a_fault(
 def test_two_clean_too_hard_waves_accept_the_revision_tagged_too_hard(workpiece: Workpiece) -> None:
     hard = workpiece.submission
     assert hard is not None
-    first = reviewed(workpiece.with_(evidence=(evidence(0),)))
+    first = reviewed(replace(workpiece, evidence=(evidence(0),)))
     assert first.round == 1 and first.fallback == Fallback(hard, BandOutcome.TOO_HARD, 0)
     easier = revised(hard, "easier")
-    final = reviewed(first.with_(submission=easier, evidence=(*first.evidence, evidence(0))))
+    final = reviewed(replace(first, submission=easier, evidence=(*first.evidence, evidence(0))))
     decision = accepted(final)
     assert final.submission == easier and decision.restore is None and final.accepted_with is BandOutcome.TOO_HARD
     assert "accepted_with: too_hard" in decision.reasons
@@ -746,9 +747,9 @@ def test_two_clean_too_hard_waves_accept_the_revision_tagged_too_hard(workpiece:
 def test_a_clean_revision_that_changes_placement_is_accepted_on_its_own_evidence(workpiece: Workpiece) -> None:
     easy = workpiece.submission
     assert easy is not None
-    first = reviewed(workpiece.with_(evidence=(evidence(3),)))
+    first = reviewed(replace(workpiece, evidence=(evidence(3),)))
     harder = revised(easy, "harder")
-    final = reviewed(first.with_(submission=harder, evidence=(*first.evidence, evidence(0))))
+    final = reviewed(replace(first, submission=harder, evidence=(*first.evidence, evidence(0))))
     decision = accepted(final)
     assert final.submission == harder and decision.restore is None and final.accepted_with is BandOutcome.TOO_HARD
     assert "Clean revision placed too_hard, not too_easy: a placement change is tagged, not reverted" in decision.reasons
@@ -757,9 +758,9 @@ def test_a_clean_revision_that_changes_placement_is_accepted_on_its_own_evidence
 def test_a_faulted_revision_restores_the_fallback_by_digest_with_its_band(workpiece: Workpiece) -> None:
     hard = workpiece.submission
     assert hard is not None
-    first = reviewed(workpiece.with_(evidence=(evidence(0),)))
+    first = reviewed(replace(workpiece, evidence=(evidence(0),)))
     broken = revised(hard, "easier")
-    final = reviewed(first.with_(submission=broken, evidence=(*first.evidence, evidence(3, controls_met=False))))
+    final = reviewed(replace(first, submission=broken, evidence=(*first.evidence, evidence(3, controls_met=False))))
     decision = accepted(final)
     assert final.submission == hard and decision.restore == hard.digest and decision.band is BandOutcome.TOO_HARD
     assert final.accepted_with is BandOutcome.TOO_HARD and "accepted_with: too_hard" in decision.reasons
@@ -774,8 +775,12 @@ def test_one_fallback_choice_binds_the_accepted_digest_to_its_band(workpiece: Wo
     # Owner's ruling (2026-11-13): a band change is never a regression; a clean too-easy revision of an in-band
     # fallback is accepted as the revision, tagged, and only a fault restores the fallback (its rounds are spent).
     final = reviewed(
-        workpiece.with_(
-            round=2, submission=current, fallback=Fallback(stored, BandOutcome.IN_BAND, 0), evidence=(evidence(3),)
+        replace(
+            workpiece,
+            round=2,
+            submission=current,
+            fallback=Fallback(stored, BandOutcome.IN_BAND, 0),
+            evidence=(evidence(3),),
         )
     )
     decision = accepted(final)
@@ -787,13 +792,15 @@ def test_one_fallback_choice_binds_the_accepted_digest_to_its_band(workpiece: Wo
     )
     # Out of band on both sides: the later submission.
     assert fallback_for(
-        workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_HARD, 0), evidence=(evidence(3),)),
+        replace(
+            workpiece, submission=current, fallback=Fallback(stored, BandOutcome.TOO_HARD, 0), evidence=(evidence(3),)
+        ),
         BandOutcome.TOO_EASY,
         build_config(load_policy(DEFAULTS_DIR), {}).band,
     ) == Fallback(current, BandOutcome.TOO_EASY, 0)
     # A stored fallback the current policy no longer accepts is not restored.
-    easy = workpiece.with_(submission=current, fallback=Fallback(stored, BandOutcome.TOO_EASY, 0))
-    faulted = reviewed(easy.with_(evidence=(evidence(3, controls_met=False),)), {"band.accept_too_easy": False})
+    easy = replace(workpiece, submission=current, fallback=Fallback(stored, BandOutcome.TOO_EASY, 0))
+    faulted = reviewed(replace(easy, evidence=(evidence(3, controls_met=False),)), {"band.accept_too_easy": False})
     assert faulted.terminal is not Terminal.ACCEPTED and faulted.submission == current and faulted.fallback is None
 
 
@@ -801,19 +808,19 @@ def test_the_coordinator_refuses_a_restore_whose_digest_or_band_disagrees(workpi
     submission = workpiece.submission
     assert submission is not None
     setup = build_config(load_policy(DEFAULTS_DIR), {})
-    wp = workpiece.with_(session=Conversation((Message(Role.SYSTEM, "author"),), ()))
+    wp = replace(workpiece, session=Conversation((Message(Role.SYSTEM, "author"),), ()))
     with pytest.raises(ValueError, match="Cannot restore"):
         apply_decision(wp, Accept(BandOutcome.TOO_EASY, (), "elsewhere"), setup.budget, setup.policy)
     with pytest.raises(ValueError, match="Cannot keep"):
         apply_decision(wp, Modify(("harder",), BandOutcome.TOO_EASY, "elsewhere"), setup.budget, setup.policy)
-    stored = wp.with_(fallback=Fallback(revised(submission, "stored"), BandOutcome.TOO_EASY, 0))
+    stored = replace(wp, fallback=Fallback(revised(submission, "stored"), BandOutcome.TOO_EASY, 0))
     assert stored.fallback is not None
     with pytest.raises(ValueError, match="Cannot restore"):  # the right digest, the wrong band
         apply_decision(
             stored, Accept(BandOutcome.TOO_HARD, (), stored.fallback.submission.digest), setup.budget, setup.policy
         )
     # Two candidates with one digest: the current submission at its own placement, as the review rule chose it.
-    same = wp.with_(fallback=Fallback(submission, BandOutcome.IN_BAND, 0))
+    same = replace(wp, fallback=Fallback(submission, BandOutcome.IN_BAND, 0))
     kept = apply_decision(same, Modify(("x",), BandOutcome.TOO_EASY, submission.digest), setup.budget, setup.policy)
     assert kept.fallback == Fallback(submission, BandOutcome.TOO_EASY, len(same.evidence) - 1)
 
@@ -821,7 +828,7 @@ def test_the_coordinator_refuses_a_restore_whose_digest_or_band_disagrees(workpi
 # Review 2026-11-21: the exhausted-budget acceptance dropped the missing-slot denominator of its Modify.
 def test_an_acceptance_at_the_exhausted_budget_keeps_the_missing_slot_count(workpiece: Workpiece) -> None:
     result = replace(evidence(3), solver=(*evidence(3).solver[:2], TrialResult(2, None, Cause.HELD, "refused")))
-    final = reviewed(workpiece.with_(round=2, evidence=(result,)), {"budget.max_missing_trials": 1})
+    final = reviewed(replace(workpiece, round=2, evidence=(result,)), {"budget.max_missing_trials": 1})
     decision = accepted(final)
     assert "Shared modification budget exhausted" in decision.reasons
     assert "1 of 3 solver trials have no score; placed over 2" in decision.reasons
@@ -834,7 +841,7 @@ def test_a_solver_slot_without_a_score_holds_by_policy_and_is_never_read_as_a_ze
     zero = GradeResult(Outcome.GRADED, 0.0) if cause is Cause.AGENT_TIMEOUT else None  # what a timed-out run graded
     absent = TrialResult(2, zero, cause, "Hold: request rejected" if cause is Cause.HELD else "")
     result = replace(evidence(3), solver=(*evidence(3).solver[:2], absent))
-    wp = workpiece.with_(evidence=(result,))
+    wp = replace(workpiece, evidence=(result,))
     setup = build_config(load_policy(DEFAULTS_DIR), {})
     held = default_review(wp, setup.band, setup.budget)
     assert isinstance(held, Retry if cause is not Cause.HELD else Incomplete)
@@ -856,7 +863,7 @@ def test_holds_beyond_the_missing_allowance_take_precedence_over_a_review_retry(
         TrialResult(1, None, Cause.HELD, "RequestRejected: refused"),
         TrialResult(2, None, Cause.AGENT_TIMEOUT),
     )
-    wp = workpiece.with_(evidence=(replace(evidence(3), solver=solver),))
+    wp = replace(workpiece, evidence=(replace(evidence(3), solver=solver),))
     setup = build_config(load_policy(DEFAULTS_DIR), {})
     held = default_review(wp, setup.band, setup.budget)
     assert isinstance(held, Incomplete) and "solver trial 1: RequestRejected: refused" in held.reasons
@@ -866,10 +873,11 @@ def test_holds_beyond_the_missing_allowance_take_precedence_over_a_review_retry(
 
 @pytest.mark.parametrize("exhausted", [False, True])
 def test_review_budget_precedence(workpiece: Workpiece, exhausted: bool) -> None:
-    current = workpiece.with_(round=2 if exhausted else 0, evidence=(evidence(3),))
+    current = replace(workpiece, round=2 if exhausted else 0, evidence=(evidence(3),))
     if not exhausted:
-        current = current.with_(
-            evidence=(replace(evidence(3, controls_met=False), solver=(TrialResult(0, None, Cause.AGENT_TIMEOUT),)),)
+        current = replace(
+            current,
+            evidence=(replace(evidence(3, controls_met=False), solver=(TrialResult(0, None, Cause.AGENT_TIMEOUT),)),),
         )
     final = reviewed(current)
     if exhausted:
@@ -919,10 +927,11 @@ def test_grader_failure_classification_and_repair(workpiece: Workpiece, failure:
         cause,
     )
     final = reviewed(
-        workpiece.with_(
+        replace(
+            workpiece,
             evidence=(
                 replace(evidence(), adversary=(AdversaryResult("adversary", AdversaryStatus.REPORTED, (finding,)),)),
-            )
+            ),
         )
     )
     assert final.round == 1 and final.terminal is None and final.session is not None
@@ -938,10 +947,10 @@ def test_generation_limit_is_failed_solver_evidence(workpiece: Workpiece, grade:
     result = replace(evidence(), solver=(TrialResult(0, grade, Cause.GENERATION_LIMIT), evidence().solver[0]))
     setup = build_config(load_policy(DEFAULTS_DIR), {})
     band = BandRules(0.5, 0.5, frozenset({BandOutcome.IN_BAND}))
-    assert isinstance(default_review(workpiece.with_(evidence=(result,)), band, setup.budget), Accept)
+    assert isinstance(default_review(replace(workpiece, evidence=(result,)), band, setup.budget), Accept)
     assert result.solver[0].cause is Cause.GENERATION_LIMIT and result.solver[0].grade is grade
     unavailable = replace(result, controls=(ControlResult(0, None, False, Cause.NO_GRADE),))
-    assert isinstance(default_review(workpiece.with_(evidence=(unavailable,)), band, setup.budget), Retry)
+    assert isinstance(default_review(replace(workpiece, evidence=(unavailable,)), band, setup.budget), Retry)
 
 
 @pytest.mark.parametrize("kind,grouped", [(Hold, False), (Hold, True), (Restart, False), (Restart, True)])
@@ -963,7 +972,7 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
             assert caught.value.subgroup(Restart) is not None
     else:
         result = (await validate(ctx, workpiece, setup, bundle)).result
-        restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(result,))))
+        restored = WORKPIECE.validate_json(WORKPIECE.dump_json(replace(workpiece, evidence=(result,))))
         reason = "Hold: unavailable"
         assert restored.evidence[0].adversary == (
             AdversaryResult(
@@ -1012,17 +1021,17 @@ async def test_adversary_window_exhaustion_passes_and_notes_only_an_accept(
         current = replace(current, controls=(replace(current.controls[0], met=False),))
     if verdict is Retry:
         current = replace(current, solver=(TrialResult(0, None, Cause.AGENT_TIMEOUT),))
-    wp = workpiece.with_(evidence=(current,))
+    wp = replace(workpiece, evidence=(current,))
     decision = (await review(ctx, wp, setup, bundle)).decision
     assert isinstance(decision, verdict)
     author = Conversation((Message(Role.SYSTEM, "author"),), ())
-    after = apply_decision(wp.with_(session=author), decision, setup.budget, setup.policy.overlaid(UNCONFIRMED))
+    after = apply_decision(replace(wp, session=author), decision, setup.budget, setup.policy.overlaid(UNCONFIRMED))
     if isinstance(decision, Accept):
         assert f"false_accept: {note}" in decision.reasons and after.terminal is Terminal.ACCEPTED
     if isinstance(decision, Modify):
         assert after.session is not None and after.session.messages[-1].role == Role.USER
         assert not any(note in text for text in (*decision.findings, after.session.messages[-1].content))
-    saved = WORKPIECE.validate_json(WORKPIECE.dump_json(wp.with_(decisions=(decision,))))
+    saved = WORKPIECE.validate_json(WORKPIECE.dump_json(replace(wp, decisions=(decision,))))
     assert saved.decisions[-1] == decision
     assert saved.evidence[-1].adversary[0].status is AdversaryStatus.EXHAUSTED
     assert len(client.requests) == 1

@@ -304,7 +304,7 @@ def test_review_findings_revise_while_a_round_is_left_and_are_notes_after(
     setup = config()
     wp = Workpiece("w", proposal, round=rounds, submission=SUBMISSION)
     review = SolveReview("v", ReviewEnd.REPORTED, (FOUND,))
-    decision = default_review(wp.with_(evidence=(round_with(review),)), setup.band, setup.budget)
+    decision = default_review(replace(wp, evidence=(round_with(review),)), setup.band, setup.budget)
     assert isinstance(decision, expected)
     if isinstance(decision, Modify):  # the reviewed version is the fallback the revision restores on a fault
         assert (decision.review, decision.placement, decision.fallback) == (
@@ -649,7 +649,7 @@ def test_a_restore_carries_the_review_of_the_round_it_restores(proposal: TaskPro
     )
     revision = replace(SUBMISSION, notes="revised")
     assert revision.digest == SUBMISSION.digest
-    decision, shipped = decided(wp.with_(submission=revision, evidence=(*wp.evidence, faulted)), setup)
+    decision, shipped = decided(replace(wp, submission=revision, evidence=(*wp.evidence, faulted)), setup)
     assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest
     assert shipped.submission == SUBMISSION and (decision.notes, decision.missing) == ((FOUND,), ())
 
@@ -659,7 +659,7 @@ def test_a_clean_same_digest_revision_is_the_occurrence_that_ships(proposal: Tas
     wp = reviewed_round(proposal, setup)
     clean = round_with(SolveReview("v1", ReviewEnd.REPORTED))
     revision = replace(SUBMISSION, notes="revised")
-    decision, shipped = decided(wp.with_(submission=revision, evidence=(*wp.evidence, clean)), setup)
+    decision, shipped = decided(replace(wp, submission=revision, evidence=(*wp.evidence, clean)), setup)
     assert isinstance(decision, Accept) and decision.restore is None and shipped.submission == revision
     assert (decision.notes, decision.missing) == ((), ())
 
@@ -687,7 +687,9 @@ def test_a_stored_fallback_leaves_the_remaining_rounds_for_review(proposal: Task
     fresh = ReviewFinding(FindingKind.ANSWER_LEAK, "B", "hide it", ())
     again = replace(SUBMISSION, notes="revised")
     decision, after = decided(
-        wp.with_(submission=again, evidence=(*wp.evidence, round_with(SolveReview("v1", ReviewEnd.REPORTED, (fresh,))))),
+        replace(
+            wp, submission=again, evidence=(*wp.evidence, round_with(SolveReview("v1", ReviewEnd.REPORTED, (fresh,))))
+        ),
         setup,
     )
     assert isinstance(decision, Modify) and decision.review == (fresh,) and after.round == 2
@@ -886,8 +888,10 @@ def test_review_decisions_match_live_forge(
     )
     decisions = (Modify(("2 of 2 trials solved: too_easy",), BandOutcome.TOO_EASY),) * used
     wp = Workpiece("w", proposal, round=len(decisions), submission=SUBMISSION, decisions=decisions)
-    wp = wp.with_(
-        evidence=(round_with(None), current), fallback=Fallback(SUBMISSION, BandOutcome.IN_BAND, 0) if stored else None
+    wp = replace(
+        wp,
+        evidence=(round_with(None), current),
+        fallback=Fallback(SUBMISSION, BandOutcome.IN_BAND, 0) if stored else None,
     )
     budget = replace(setup.budget, max_modify_rounds=wp.round + left)
     decision = default_review(wp, setup.band, budget)
@@ -914,14 +918,14 @@ def test_a_clean_changed_band_after_a_reviewed_round_ships_and_a_defect_round_le
         solver=(TrialResult(0, GradeResult(Outcome.GRADED, 1.0)), TrialResult(1, GradeResult(Outcome.GRADED, 1.0))),
     )
     wp = reviewed_round(proposal, setup)
-    decision, _ = decided(wp.with_(evidence=(*wp.evidence, easy)), setup)
+    decision, _ = decided(replace(wp, evidence=(*wp.evidence, easy)), setup)
     assert isinstance(decision, Accept) and decision.band is BandOutcome.TOO_EASY and decision.restore is None
     defect = replace(easy, review=SolveReview("v0", ReviewEnd.REPORTED, (FOUND,)))
     session = Conversation((Message(Role.SYSTEM, "author"),), ())
     start = Workpiece("w", proposal, submission=SUBMISSION, evidence=(defect,), session=session)
     first, wp = decided(start, setup)
     assert isinstance(first, Modify) and first.review == (FOUND,) and first.placement is BandOutcome.TOO_EASY
-    decision, _ = decided(wp.with_(evidence=(*wp.evidence, easy)), setup)
+    decision, _ = decided(replace(wp, evidence=(*wp.evidence, easy)), setup)
     assert isinstance(decision, Modify) and not decision.review and decision.placement is BandOutcome.TOO_EASY
 
 
@@ -1019,7 +1023,7 @@ def test_a_restore_reports_the_round_that_ships(proposal: TaskProposal, ending: 
             controls=(ControlResult(0, GradeResult(Outcome.GRADED, 0.0), False),),
         )
         revision = replace(SUBMISSION, notes="revised")
-        decision, _ = decided(wp.with_(submission=revision, evidence=(*wp.evidence, faulted)), setup)
+        decision, _ = decided(replace(wp, submission=revision, evidence=(*wp.evidence, faulted)), setup)
     assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest and decision.notes == (FOUND,)
     if ending == "same-digest fault":
         assert "Revision fault: Control 0 violates its expected reward" in decision.reasons
@@ -1073,7 +1077,7 @@ def test_a_restore_for_an_unaccepted_placement_labels_it_a_placement(proposal: T
         round_with(SolveReview("v1", ReviewEnd.REPORTED)),
         solver=tuple(TrialResult(index, GradeResult(Outcome.GRADED, 1.0)) for index in range(3)),
     )
-    decision, _ = decided(wp.with_(evidence=(*wp.evidence, easy)), setup)
+    decision, _ = decided(replace(wp, evidence=(*wp.evidence, easy)), setup)
     assert isinstance(decision, Accept) and decision.restore == SUBMISSION.digest
     line = f"3 of 3 trials solved: too_easy. {INSTRUCTIONS[BandOutcome.TOO_EASY]}"
     assert f"Revision placement: {line}" in decision.reasons

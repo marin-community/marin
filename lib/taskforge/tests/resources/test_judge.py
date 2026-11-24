@@ -15,9 +15,17 @@ import pytest
 from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import Backend, ScriptedProvider, provider_completion, segment
+from lib.taskforge.tests.stage_fakes import SolverEngine, solver_model
 from pydantic import TypeAdapter
 from rolloutengine import grading
-from rolloutengine.models import GradedRollout, GradedRolloutInterrupted, RolloutOperation, TaskRolloutSpec, TraceMode
+from rolloutengine.models import (
+    GradedRollout,
+    GradedRolloutInterrupted,
+    Model,
+    RolloutOperation,
+    TaskRolloutSpec,
+    TraceMode,
+)
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -39,7 +47,7 @@ from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource
 from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.judge import JudgeEngine
-from taskforge.resources.rollouts import SolverRollout
+from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
 from taskforge.wiring import build_resources, install
 
 LABELS = {"PASS": 1.0, "FAIL": 0.0}
@@ -611,3 +619,62 @@ async def test_a_judge_context_refusal_is_asked_again_once_the_provider_recovers
         await ctx.drain()
         calls = len(healthy.requests) if injected else len(backend.calls)
         assert (result.status, result.reward, calls) == (Outcome.GRADED, 1.0, 1)
+
+
+class Falsey:
+    """``engine``, but false: an optional engine that is present though it tests false."""
+
+    def __init__(self, engine: Engine) -> None:
+        self.engine = engine
+
+    def __bool__(self) -> bool:
+        return False
+
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        return await self.engine.run_task(spec, model, run_id=run_id)
+
+
+# Review 2026-11-21: wrapping each engine as ``fresh and JudgeEngine(fresh, ...)`` kept a fresh engine that tests
+# false unwrapped, and grading called it directly: a fresh grade the installed judge passes scored 0.0 with no judge
+# row. A false fresh engine is dropped, and the fresh grade runs on the wrapped engine.
+async def test_a_fresh_engine_that_tests_false_still_grades_through_the_installed_judge() -> None:
+    log = EventLog()
+    ctx = Context(log=log)
+    engine = rollout_engine({}, command_timeout=None)
+    client = FakeInference((done("PASS"),), identity="judge")
+    bundle = replace(
+        resources(ctx),
+        grading=GradingResource(engine, "judge", fresh_engine=Falsey(engine)),
+        role_inference={"solve_review": CleanReviewer(), "judge": client},
+    )
+    install(ctx, bundle)
+    grade = await ctx.emit(GradeCandidate(judged_spec(labels()), Candidate("Twelve"), fresh_verifier=True))
+    await ctx.drain()
+    assert (grade.status, grade.reward, len(client.requests), len(judge_inference(log))) == (Outcome.GRADED, 1.0, 1, 1)
+
+
+class Rebuilt(RolloutResource):
+    """A rollout resource an extension builds from another, whose constructor takes only that one."""
+
+    ran: list[int]
+
+    def __init__(self, inner: RolloutResource) -> None:
+        super().__init__(inner.engine, inner.model, inner.config_digest)
+        object.__setattr__(self, "ran", [])
+
+    async def run(self, event: SolverRollout) -> GradedRollout:
+        self.ran.append(event.trial)
+        return await super().run(event)
+
+
+# Review 2026-11-21: with no judge and no decision model, installation still rebuilt the rollout resource around its
+# engine, so an injected subclass with its own constructor raised TypeError before any handler was registered.
+async def test_an_injected_rollout_resource_is_installed_as_given_when_no_engine_is_wrapped() -> None:
+    ctx = Context(log=EventLog())
+    bundle = resources(ctx)
+    rollouts = Rebuilt(RolloutResource(SolverEngine(1), solver_model, "solver"))  # a wave of one
+    install(ctx, replace(bundle, rollouts=rollouts, role_inference={"solve_review": CleanReviewer()}))
+    spec = lower_with_settings(arithmetic_task(), lowering_settings(load_policy(DEFAULTS_DIR)), {})
+    await ctx.emit(SolverRollout(spec, 0, 0))
+    await ctx.drain()
+    assert rollouts.ran == [0]

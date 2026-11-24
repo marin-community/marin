@@ -71,7 +71,7 @@ class Billing(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class Record:
+class Row[E]:
     """A journal row. Its envelope, outside the event's identity, links sandbox rows: ``opened`` on an environment-open
     row, whose sequence names the attempt; ``attempt`` on a request, naming that row; ``answers`` on an outcome.
     ``billed``, also outside it, names who paid for a plain row's physical resolution; rows from before format 10 and
@@ -79,30 +79,21 @@ class Record:
 
     sequence: int
     wall_time: float
-    event: Event[object]
+    event: E
     opened: Opened | None = None
     attempt: int | None = None
     answers: int | None = None
     billed: Billing | None = None
-
-
-ENVELOPE = ("opened", "attempt", "answers")
 
 
 @dataclass(frozen=True, slots=True)
-class _Row:
-    """A journal line, strictly typed; its event is decoded separately."""
-
-    sequence: int
-    wall_time: float
-    event: dict[str, Any]
-    opened: Opened | None = None
-    attempt: int | None = None
-    answers: int | None = None
-    billed: Billing | None = None
+class Record(Row[Event[object]]):
+    """A decoded journal row."""
 
 
-ROW = TypeAdapter(_Row)
+ENVELOPE = ("opened", "attempt", "answers")
+ROW = TypeAdapter(Row[dict[str, Any]])
+"""A journal line, strictly typed; its event is decoded separately."""
 
 
 def _sandbox(event: Event[object]) -> bool:

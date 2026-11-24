@@ -28,7 +28,7 @@ import sys
 import threading
 import traceback
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -189,14 +189,14 @@ async def one(args: argparse.Namespace) -> int:
     except* (Hold, Restart, Transient, LogFailure) as error:
         if checkpoints.stopped is not None:
             raise  # A stopped writer records nothing more; the failure beside the stop keeps its identity.
-        wp[0] = wp[0].with_(terminal=Terminal.HELD, decisions=(*wp[0].decisions, Incomplete(reasons(error))))
+        wp[0] = replace(wp[0], terminal=Terminal.HELD, decisions=(*wp[0].decisions, Incomplete(reasons(error))))
         await log.record(StageCompleted(None, "", "Held", wp[0].round, Terminal.HELD))
         logging.warning("Taskforge workpiece %s held: %s", proposal.header.id, reasons(error))
     except* Exception as error:
         if checkpoints.stopped is not None:
             raise
         detail = traceback.format_exc()
-        wp[0] = wp[0].with_(terminal=Terminal.HELD, decisions=(*wp[0].decisions, Incomplete((f"bug: {detail}",))))
+        wp[0] = replace(wp[0], terminal=Terminal.HELD, decisions=(*wp[0].decisions, Incomplete((f"bug: {detail}",))))
         await log.record(StageCompleted(None, "", "bug", wp[0].round, Terminal.HELD))
         logging.exception("Taskforge workpiece %s failed", proposal.header.id)
         if len(error.exceptions) == 1:
