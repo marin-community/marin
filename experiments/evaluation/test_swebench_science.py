@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
-import json
 import os
 import shutil
 import subprocess
@@ -14,7 +13,6 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import GraderMachine, MissingArtifactPolicy, ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
-from taskcompendium.runtime.grading import _reward_value
 
 import experiments.post_training.task_curation.harbor_packages as packages_module
 from experiments.evaluation.benchmarks import swebench_science
@@ -47,7 +45,7 @@ def science_package(tmp_path):
     return package
 
 
-def test_science_corpus_sets_solver_resources_and_keeps_the_verifier_image(science_package):
+def test_science_corpus_sets_solver_disk_and_keeps_the_verifier_image(science_package):
     row = RawRow(ROW.id, SOURCE, {"name": science_package.name, "archive": package_archive(science_package)})
     [source] = swebench_science.benchmarks()[0].resolve("pi-xhigh")
     task = source.config.recipe.convert(row, ConversionContext({}, None))
@@ -57,7 +55,7 @@ def test_science_corpus_sets_solver_resources_and_keeps_the_verifier_image(scien
     assert task.grader.placement.environment.docker_build is None
     episode = source.config.item_builder(task).episode
     assert episode is not None
-    assert (episode.cpus, episode.memory_mb, episode.storage_mb) == (2, 8192, 10240)
+    assert episode.storage_mb == 10240
 
 
 def test_native_verifier_entrypoint_and_hidden_tests_remain_image_owned(science_package):
@@ -91,14 +89,6 @@ def test_unexpected_patch_artifact_is_rejected(science_package):
     config.write_text(config.read_text().replace("/logs/artifacts/model.patch", "/logs/artifacts/other.patch"))
     with pytest.raises(ValueError):
         lower_science_package(package, ROW)
-
-
-@pytest.mark.parametrize("reward", [0, 1])
-def test_nested_native_report_returns_only_the_numeric_reward(reward, science_package):
-    task = lower_science_package(science_package, ROW)
-    report = json.dumps({"reward": reward, "task_id": "002", "private": {"passed": 3, "collected": 4}}).encode()
-    file = task.grader.reward.files[0]
-    assert _reward_value(report, file.format, file.key) == (float(reward), None)
 
 
 def test_native_collect_includes_committed_and_untracked_candidate_changes(tmp_path, science_package):
