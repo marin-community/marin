@@ -36,6 +36,7 @@ import experiments.post_training.task_curation.release_stages.alerts as alerts
 from experiments.post_training.task_curation.admission_inventory import inventory_source
 from experiments.post_training.task_curation.calibration_inventory import task_blockers
 from experiments.post_training.task_curation.curriculum_backfill import FrozenCoverageSource, prepare_source
+from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.release_stages.sizing import StageResources, census_sizing
@@ -178,7 +179,12 @@ def measure_source(
             partitions[tuple(sorted(blockers))] += 1
     binding = declaration.actor_census_input
     if binding is None:
-        raise ValueError(f"declared source lacks its exact input census: {row.source_id}")
+        retained = retained_release_receipts().get(row.source_id)
+        if retained is None or retained.source_id != row.source_id:
+            raise ValueError(f"declared source lacks its exact input census: {row.source_id}")
+        # A retained release declares through its retained lineage, not a live actor
+        # census binding; the retained receipt's own actor census is the declared input.
+        binding = retained.actor.input
     if count != inventory.retained_tasks or count != binding.measured_tasks:
         raise ValueError(
             f"census count {count} disagrees with the inventory ({inventory.retained_tasks})"

@@ -33,19 +33,27 @@ def _census_inputs(tmp_path: Path, target: str, population: str) -> ArtifactRef:
 
 
 def _population(tmp_path: Path, target: str, *, task_count: int = 10) -> str:
-    """A local census artifact: the actor record and the sealed contract groups."""
+    """A local population record artifact: a SourceTextPopulation with its contract summary."""
     population = str(tmp_path / "population")
-    actor = {
+    record = {
         "result": {
+            "path": population,
             "source_id": target,
+            "dataset_id": "open-athena/fixture-dataset",
+            "dataset_revision": "d" * 40,
+            "source_version": "fixture-v1",
+            "converter_revision": "c" * 40,
+            "text_renderer_version": "renderer-v1",
             "task_count": task_count,
+            "text_sha256": "t" * 64,
             "task_specs_sha256": "e" * 64,
-            "input_artifact": f"{population}/census",
+            "main_output_dir": f"{population}/outputs/main",
+            "specs_output_dir": f"{population}/specs",
+            "converter_rejections": {},
+            "admission_rejections": {},
         }
     }
-    StoragePath(f"{population}/.artifact.json").write_text(json.dumps(actor), auto_mkdir=True)
-    contracts = {"groups": [{"id": "root-delivery", "count": task_count, "present": True}]}
-    StoragePath(f"{population}/integrity-contracts.json").write_text(json.dumps(contracts), auto_mkdir=True)
+    StoragePath(f"{population}/.artifact.json").write_text(json.dumps(record), auto_mkdir=True)
     return population
 
 
@@ -60,7 +68,12 @@ def _inputs(tmp_path: Path, *, target: str = "Marin:fixture", task_count: int = 
         target=target,
         census_inputs=_census_inputs(tmp_path, target, population),
         grading_environments={target: {"assessed_tasks": task_count, "evidence_url": "s3://bucket/evidence"}},
-        integrity_contracts={target: {"task_specs_sha256": "e" * 64}},
+        integrity_contracts={
+            target: {
+                "task_specs_sha256": "e" * 64,
+                "groups": [{"id": "root-delivery", "count": task_count, "present": True}],
+            }
+        },
         runtime_defaults={"agent": {"network": "allow"}, "grader": {"network": "deny"}},
     )
 
@@ -81,17 +94,30 @@ def test_dry_run_refuses_a_grading_record_that_disagrees_with_the_census(tmp_pat
 
 def test_dry_run_refuses_contract_groups_that_disagree_with_the_census(tmp_path):
     inputs = _inputs(tmp_path)
-    contracts = StoragePath(f"{tmp_path}/population/integrity-contracts.json")
-    document = json.loads(contracts.read_text())
-    document["groups"][0]["count"] = 7
-    contracts.write_text(json.dumps(document), auto_mkdir=True)
-    with pytest.raises(ValueError, match="contract groups cover 7"):
-        stage.run_backend_validation(inputs, dry_run=True, repo_root=tmp_path)
+    broken = dataclasses.replace(
+        inputs,
+        integrity_contracts={
+            "Marin:fixture": {
+                "task_specs_sha256": "e" * 64,
+                "groups": [{"id": "root-delivery", "count": 7, "present": True}],
+            }
+        },
+    )
+    with pytest.raises(ValueError, match="contract record covers 7"):
+        stage.run_backend_validation(broken, dry_run=True, repo_root=tmp_path)
 
 
 def test_dry_run_refuses_specs_that_disagree_with_the_census(tmp_path):
     inputs = _inputs(tmp_path)
-    broken = dataclasses.replace(inputs, integrity_contracts={"Marin:fixture": {"task_specs_sha256": "f" * 64}})
+    broken = dataclasses.replace(
+        inputs,
+        integrity_contracts={
+            "Marin:fixture": {
+                "task_specs_sha256": "f" * 64,
+                "groups": [{"id": "root-delivery", "count": 10, "present": True}],
+            }
+        },
+    )
     with pytest.raises(ValueError, match="pins specs"):
         stage.run_backend_validation(broken, dry_run=True, repo_root=tmp_path)
 
@@ -106,7 +132,7 @@ def test_manifest_binds_the_release_and_the_frozen_population(tmp_path):
     assert manifest["source_revision"] == REVISION
     assert manifest["source_ids"] == ["Marin:fixture"]
     assert manifest["inputs"][0]["expected_tasks"] == 10
-    assert manifest["integrity_contracts"]["Marin:fixture"] == {"task_specs_sha256": "e" * 64}
+    assert manifest["integrity_contracts"]["Marin:fixture"] == inputs.integrity_contracts["Marin:fixture"]
 
 
 def test_missing_census_row_refuses(tmp_path):

@@ -25,6 +25,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 
 MANIFEST_KIND = "atlas-backend-census-inputs"
@@ -87,34 +88,28 @@ def _target_row(inputs: BackendValidationInputs) -> dict:
     return dataclasses.asdict(matches[0])
 
 
-def _actor_record(population_path: str) -> dict:
-    """The target's census artifact record: task count, specs digest, specs location."""
-    document = json.loads(StoragePath(f"{population_path}/.artifact.json").read_text())
-    result = document.get("result")
-    if not isinstance(result, dict):
-        raise ValueError(f"the census artifact at {population_path} carries no result record")
-    for key in ("source_id", "task_count", "task_specs_sha256", "input_artifact"):
-        if not result.get(key):
-            raise ValueError(f"the census artifact result carries no {key!r}")
-    return result
+def _population_record(path: str) -> SourceTextPopulation:
+    """The pinned population record: task count, specs dir, source binding."""
+    result = dict(json.loads(StoragePath(f"{path.rstrip('/')}/.artifact.json").read_text())["result"])
+    result.setdefault("path", path.rstrip("/"))
+    return SourceTextPopulation.model_validate(result)
 
 
-def _specs_parts(population_dir: str) -> list[str]:
+def _specs_parts(specs_dir: str) -> list[str]:
     """The frozen population's task-spec parquet parts, in deterministic order."""
-    entries = StoragePath(f"{population_dir}/specs/").ls()
+    entries = StoragePath(f"{specs_dir.rstrip('/')}/").ls()
     parts = sorted(str(entry) for entry in entries if str(entry).endswith(".parquet"))
     if not parts:
-        raise ValueError(f"the census population at {population_dir} carries no task-spec parquets")
+        raise ValueError(f"the census population at {specs_dir} carries no task-spec parquets")
     return parts
 
 
-def _contract_groups(population_path: str) -> list[dict]:
-    """The population's sealed integrity-contract groups, for the campaign-record check."""
-    document = json.loads(StoragePath(f"{population_path}/integrity-contracts.json").read_text())
-    groups = document.get("groups")
+def _contract_count(contract: dict) -> int:
+    """The campaign integrity-contract record's covered task count."""
+    groups = contract.get("groups")
     if not isinstance(groups, list) or not groups:
-        raise ValueError(f"the population integrity contracts at {population_path} carry no groups")
-    return groups
+        raise ValueError("the integrity-contract record carries no groups")
+    return sum(group["count"] for group in groups)
 
 
 def build_census_manifest(inputs: BackendValidationInputs, *, task_count: int, specs_paths: list[str]) -> dict:
@@ -156,15 +151,14 @@ def run_backend_validation(
     try:
         inputs.validate()
         row = _target_row(inputs)
-        actor = _actor_record(row["population_path"])
-        if actor["source_id"] != inputs.target:
-            raise ValueError(f"the census artifact at {row['population_path']} binds {actor['source_id']!r}")
-        task_count = actor["task_count"]
-        groups = _contract_groups(row["population_path"])
-        measured = sum(group["count"] for group in groups)
-        if measured != task_count:
+        population = _population_record(row["population_path"])
+        if population.source_id != inputs.target:
+            raise ValueError(f"the census population at {row['population_path']} binds {population.source_id!r}")
+        task_count = population.task_count
+        if _contract_count(inputs.integrity_contracts[inputs.target]) != task_count:
             raise ValueError(
-                f"the population's contract groups cover {measured} tasks, the census measured {task_count}"
+                f"the integrity-contract record covers {_contract_count(inputs.integrity_contracts[inputs.target])}"
+                f" tasks, the census measured {task_count}"
             )
         assessed = inputs.grading_environments[inputs.target].get("assessed_tasks")
         if assessed != task_count:
@@ -172,9 +166,10 @@ def run_backend_validation(
                 f"the grading-environment record assesses {assessed} tasks, the census measured {task_count}"
             )
         specs_sha = inputs.integrity_contracts[inputs.target].get("task_specs_sha256")
-        if specs_sha and specs_sha != actor["task_specs_sha256"]:
+        if specs_sha and specs_sha != population.task_specs_sha256:
             raise ValueError(
-                f"the integrity-contract record pins specs {specs_sha}, the census measured {actor['task_specs_sha256']}"
+                f"the integrity-contract record pins specs {specs_sha},"
+                f" the census measured {population.task_specs_sha256}"
             )
         configure_coreweave_s3()
         if dry_run:
@@ -202,7 +197,7 @@ def run_backend_validation(
         workdir = Path(f"{inputs.output_root}/work")
         workdir.mkdir(parents=True, exist_ok=True)
         local_paths: list[str] = []
-        for index, part in enumerate(_specs_parts(actor["input_artifact"])):
+        for index, part in enumerate(_specs_parts(population.specs_output_dir)):
             local = workdir / f"specs-{index:06d}.parquet"
             local.write_bytes(StoragePath(part).read_bytes())
             local_paths.append(str(local))
