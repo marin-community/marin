@@ -36,12 +36,12 @@ def stage_entry(entry: dict, stage_dir: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--manifest", type=str, required=True, help="Manifest path or object-store URI")
     parser.add_argument("--stage-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     configure_coreweave_s3()
-    manifest = json.loads(args.manifest.read_text())
+    manifest = json.loads(StoragePath(args.manifest).read_text())
     inputs = [stage_entry(entry, args.stage_dir) for entry in manifest["inputs"]]
     args.output.write_text(json.dumps({**manifest, "inputs": inputs}, indent=1) + "\n")
 
