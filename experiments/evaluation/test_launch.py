@@ -447,6 +447,15 @@ def _pipeline_spec(tmp_path):
     )
 
 
+def test_frontierscience_named_launches_bind_the_published_judge(tmp_path):
+    tracks = resolve_evaluations("frontierscience-olympiad,frontierscience-research")
+    batch = prepare_evaluation_batch(replace(_pipeline_spec(tmp_path), evals=tracks))
+    for evaluation in batch.evaluations:
+        judge = evaluation.identity.eval_ref.curated.settings.judge
+        assert judge is not None
+        assert (judge.deployment, judge.default_model) == ("together", "openai/gpt-oss-120b")
+
+
 def test_curated_group_submission_authorizes_nested_grader_profile(tmp_path, monkeypatch):
     requests = []
 
