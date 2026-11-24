@@ -1517,7 +1517,7 @@ def test_release_with_release_branch_records_the_branch_and_refuses_unlanded(
             return json_response(
                 {
                     "current_version": 7,
-                    "authenticated_url": "https://applets.example.test/a/00000000-0000-0000-0000-000000000001",
+                    "authenticated_url": "http://localhost:8080/a/00000000-0000-0000-0000-000000000001",
                 }
             )
         package = read_applet_package(kwargs["data"])
@@ -1617,7 +1617,7 @@ def test_release_refuses_a_checkout_behind_the_live_release(
         return json_response(
             {
                 "current_version": 8,
-                "authenticated_url": "https://applets.example.test/a/00000000-0000-0000-0000-000000000001",
+                "authenticated_url": "http://localhost:8080/a/00000000-0000-0000-0000-000000000001",
             }
         )
 
