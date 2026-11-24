@@ -6,6 +6,7 @@
 import argparse
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -21,15 +22,23 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from tokenizers import Tokenizer
 
 from experiments.glm_tool_serving.catalog_loader import load_catalog
-from experiments.glm_tool_serving.ortet_production import read_bulk_token, resolve_relay_base_url, resume_cursor
+from experiments.glm_tool_serving.ortet_production import (
+    giant_row_batch_size,
+    pool_api_key,
+    read_bulk_token,
+    resolve_relay_base_url,
+    resume_cursor,
+)
 from experiments.glm_tool_serving.provenance import emit_receipt, write_provenance
 from experiments.glm_tool_serving.route_gate import gate_result, load_route_gate
 from experiments.tool_normalization.acquire import acquire_shard
 from experiments.tool_normalization.driver import run
+from experiments.tool_normalization.pool_manifest import PoolPlan, refresh_pool
 from experiments.tool_normalization.preflight import classify
 from experiments.tool_normalization.scope import terminus_source
 
 DESTINATION = "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization/h100-scale-20261103"
+POOL_PAUSE_SECONDS = 120
 
 
 def main() -> None:
@@ -43,7 +52,12 @@ def main() -> None:
     parser.add_argument("--artifact-budget", type=int, default=250_000_000_000)
     parser.add_argument("--hours", type=float, default=24)
     args = parser.parse_args()
-    if not 1 <= args.replica <= args.replicas <= 8 or args.slots * args.replicas > 32:
+    if not 1 <= args.replica <= args.replicas <= 8:
+        raise ValueError("Invalid replica ownership or aggregate admission allocation")
+    if not os.environ.get("GLM_POOL_MANIFEST_REF") and args.slots * args.replicas > 32:
+        # Legacy dedicated-pool admission cap: it bounded the RETIRED per-replica serving
+        # pool (8 GPUs x 4 slots). On the manifest path the published fleet-wide budget
+        # (status.total_concurrency, split per pod) governs aggregate admission instead.
         raise ValueError("Invalid replica ownership or aggregate admission allocation")
     configure_coreweave_s3()
     os.environ["AWS_ACCESS_KEY_ID"], os.environ["AWS_SECRET_ACCESS_KEY"] = s3_credentials(StoreType.COREWEAVE)
@@ -71,27 +85,75 @@ def main() -> None:
         evidence["path"] = str(data / evidence["path"])
     cfg["model"]["generation"] = f"{args.destination.rstrip('/').rsplit('/', 1)[-1]}-r{args.replica}"
     # The dedicated per-replica serving pool is retired (four of its eight endpoints died on
-    # 2026-11-13); resolve the shared glm-5.3 relay like the Ortet fleet and authenticate with
-    # the sanctioned bulk token instead of the anonymous placeholder.
-    token = read_bulk_token()
-    cfg["model"]["base_url"] = resolve_relay_base_url(token)
+    # 2026-11-13); the relay fallback path below authenticates with the sanctioned bulk token.
+    # The token is read ONLY on the relay path: manifest-mode pods carry no bulk secret, and
+    # the credential fail-fast must not gate the pool path.
+    # Coordinator-directed pool override: when the dedicated GLM pool is up, its
+    # OpenAI-compatible endpoint(s) + model name arrive via env (serving worker handoff).
+    # GLM_POOL_MANIFEST_REF selects the full manifest client ([{base_url, api_key_ref}] +
+    # status.json; 2026-11-24 handoff contract): manifest AND status re-read at every
+    # batch cycle with pause/reload on a mismatched generation, per-entry rotation on
+    # registry 404/connect/5xx, model/schema errors fatal, fleet-wide budget split by
+    # REPLAY_PODS. GLM_POOL_BASE_URL is the single-endpoint fallback. Exactly-once
+    # bookkeeping (cursor/claims/receipts) is untouched by the endpoint.
+    request_slots = args.slots
+    manifest_ref = os.environ.get("GLM_POOL_MANIFEST_REF")
+    token = None
+    expected_pods = int(os.environ.get("REPLAY_PODS", "1"))
+    # The eight fleet is launched with GLM_POOL_POD_INDEX=23+replica so the 24 ortet pods
+    # own offsets 0-23 and these own 24-31 across the 32-pod fleet.
+    pod_index = int(os.environ.get("GLM_POOL_POD_INDEX", str(23 + args.replica)))
+    pool_plan = None
+
+    def write_capacity(slots: int) -> None:
+        (root / "capacity.json").write_text(
+            json.dumps(
+                {
+                    "generation": cfg["model"]["generation"],
+                    "conversion_slots": slots,
+                    "science_slots": 0,
+                    "expires_at_unix": time.time() + 30 * 3600,
+                }
+            )
+        )
+
+    def apply_pool_plan(plan: PoolPlan) -> None:
+        nonlocal request_slots
+        cfg["model"]["base_url"] = plan.entries[0].base_url
+        cfg["model"]["pool_entries"] = [[e.base_url, str(e.api_key_file), e.api_key_ref] for e in plan.entries]
+        cfg["workers"] = min(args.slots, plan.request_slots)
+        request_slots = plan.request_slots
+        write_capacity(request_slots)
+
+    if manifest_ref:
+        pool_plan = refresh_pool(
+            manifest_ref,
+            root,
+            None,
+            expected_model=os.environ.get("GLM_POOL_MODEL"),
+            expected_pods=expected_pods,
+            pod_index=pod_index,
+            max_attempts=10,
+        )
+        if pool_plan is None:
+            raise RuntimeError("pool manifest unavailable after boot retries; refusing to start")
+        if os.environ.get("GLM_POOL_MODEL"):
+            cfg["model"]["model"] = os.environ["GLM_POOL_MODEL"]
+        apply_pool_plan(pool_plan)
+    else:
+        token = read_bulk_token()
+        cfg["model"]["base_url"] = os.environ.get("GLM_POOL_BASE_URL") or resolve_relay_base_url(token)
+        if os.environ.get("GLM_POOL_MODEL"):
+            cfg["model"]["model"] = os.environ["GLM_POOL_MODEL"]
+        write_capacity(request_slots)
     for key, filename in (
         ("api_key_file", "api-key.txt"),
         ("capacity_file", "capacity.json"),
         ("ledger", "ledger.sqlite3"),
     ):
         cfg["model"][key] = str(root / filename)
-    (root / "api-key.txt").write_text(token)
-    (root / "capacity.json").write_text(
-        json.dumps(
-            {
-                "generation": cfg["model"]["generation"],
-                "conversion_slots": args.slots,
-                "science_slots": 0,
-                "expires_at_unix": time.time() + 30 * 3600,
-            }
-        )
-    )
+    if not manifest_ref:
+        (root / "api-key.txt").write_text(pool_api_key() or token)
     (root / "lineage.json").write_text(
         json.dumps({"cursor_source": cursor_source, "initial_cursor": cursor, "destination": prefix}, indent=2)
     )
@@ -116,7 +178,27 @@ def main() -> None:
                 print(json.dumps({"phase": "allocation_complete", "cursor": cursor}), flush=True)
                 # No batch is open here; avoid library teardown keeping a completed allocation alive.
                 os._exit(0)
-            stop = min(first + 128, shard["rows"])
+            if manifest_ref:
+                # Per-cycle handoff contract: re-read the manifest AND status before every
+                # batch; pause without claiming on an inconsistent publication or a zero
+                # share; adopt a rolled generation for the batches that follow.
+                fresh = refresh_pool(
+                    manifest_ref,
+                    root,
+                    pool_plan,
+                    expected_model=os.environ.get("GLM_POOL_MODEL"),
+                    expected_pods=expected_pods,
+                    pod_index=pod_index,
+                )
+                if fresh is None:
+                    logging.warning("pool unavailable for this cycle; pausing %ds", POOL_PAUSE_SECONDS)
+                    time.sleep(POOL_PAUSE_SECONDS)
+                    continue
+                pool_plan = fresh
+                if os.environ.get("GLM_POOL_MODEL"):
+                    cfg["model"]["model"] = os.environ["GLM_POOL_MODEL"]
+                apply_pool_plan(fresh)
+            stop = min(first + giant_row_batch_size(shard["source"], first, shard["rows"]), shard["rows"])
             name = f"shard-{shard_index:05d}-rows-{first:08d}-{stop:08d}"
             preserved = {}
             recovered_bytes = 0

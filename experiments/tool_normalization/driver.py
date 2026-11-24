@@ -9,6 +9,7 @@ import json
 import sqlite3
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -104,7 +105,11 @@ def run_locked(config_path: Path, manifest_path: Path, root: Path) -> None:
             except Exception as error:
                 # The durable row remains visible; interrupted POSTs are never replayed automatically.
                 status = "length_deferred" if str(error).startswith("length_deferred:") else "infrastructure_deferred"
-                result = {"status": status, "reason": f"{type(error).__name__}: {error}"}
+                result = {
+                    "status": status,
+                    "reason": f"{type(error).__name__}: {error}",
+                    "traceback": traceback.format_exc()[-800:],
+                }
             record = root / "records" / row[0]
             record.mkdir(parents=True, exist_ok=True)
             (record / "result.json").write_text(json.dumps(result, indent=2))

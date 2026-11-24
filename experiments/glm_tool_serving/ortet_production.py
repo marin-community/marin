@@ -6,6 +6,7 @@
 import argparse
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -16,8 +17,10 @@ from collections import Counter
 from pathlib import Path
 
 import fsspec
+import numpy as np
 from iris.client.client import iris_ctx
 from iris.cluster.types import JobName
+from levanter.store.tree_store import TreeStore
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
@@ -28,6 +31,7 @@ from experiments.glm_tool_serving.provenance import emit_receipt, write_provenan
 from experiments.glm_tool_serving.route_gate import gate_result, load_route_gate
 from experiments.tool_normalization.acquire import acquire_shard
 from experiments.tool_normalization.driver import run
+from experiments.tool_normalization.pool_manifest import PoolPlan, refresh_pool
 from experiments.tool_normalization.preflight import classify
 from experiments.tool_normalization.scope import terminus_source
 
@@ -35,6 +39,48 @@ DESTINATION = "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization/or
 RELAY_JOB = "/muchanem/glm53-relay-rno2a-g-20261027T0414Z"
 MAX_REPLICAS = 24
 SECRET_FILE = Path(os.environ.get("RIGGING_SECRETS_DIR", "/run/rigging/secrets")) / "GLM_BULK_TOKEN"
+POOL_PAUSE_SECONDS = 120
+
+
+def giant_row_batch_size(
+    shard_source: str, first: int, shard_rows: int, default: int = 128, cap: int = 32, threshold: int = 40_000
+) -> int:
+    """Size the batch so commits land ~hourly on giant-row segments.
+
+    Rows of 40k+ tokens convert at minutes-per-row; a 128-row batch of such rows takes
+    4-6h to commit. Peek the token lengths of the next default-sized range and shrink
+    the batch when any row is giant. Deterministic for a given store state, so recovery
+    re-runs compute the same batch boundaries. Exactly-once semantics unchanged: the
+    claim/cursor/receipt flow is identical, only the claimed range shrinks.
+    """
+    try:
+        store = TreeStore.open({"input_ids": np.zeros(0, dtype=np.int32)}, shard_source, mode="r", cache_metadata=True)
+        ids = store.tree["input_ids"].get_batch_sync(list(range(first, min(first + default, shard_rows))))
+        if any(len(a) >= threshold for a in ids):
+            return cap
+    except Exception as error:
+        logging.warning("batch-size peek failed (%r); using default %d", error, default)
+    return default
+
+
+def pool_api_key():
+    """Credential for the dedicated pool endpoint (coordinator-approved auth contract).
+
+    GLM_POOL_API_KEY_REF names an S3 object whose content is the endpoint-scoped
+    capability JWT; it is fetched in-pod and written to api-key.txt. The reference (not
+    the credential) travels via env. Returns None on the relay path.
+    """
+    ref = os.environ.get("GLM_POOL_API_KEY_REF")
+    if not ref or not os.environ.get("GLM_POOL_BASE_URL"):
+        return None
+
+    with fsspec.open(ref, "rb") as stream:
+        material = stream.read().strip()
+    if not material:
+        # Fail fast on an empty pool credential (pool-era 401 storm lesson).
+        raise RuntimeError(f"GLM_POOL_API_KEY_REF {ref!r} yielded an EMPTY credential")
+    os.environ["GLM_POOL_API_KEY"] = material.decode()
+    return material.decode()
 
 
 def resolve_relay_base_url(token: str) -> str:
@@ -63,7 +109,12 @@ def read_bulk_token() -> str:
     token = os.environ.get("GLM_BULK_TOKEN", "").strip()
     if token:
         return token
-    raise RuntimeError("GLM_BULK_TOKEN not provided via secret file or environment")
+    # Fail fast on an empty credential: a missing/empty Bearer produced the silent
+    # pool-era 401 storm (coordinator directive 2026-11-24). Never boot with one.
+    raise RuntimeError(
+        "GLM_BULK_TOKEN not provided via secret file or environment "
+        "(fail-fast: empty credentials caused the pool-era HTTP 401 storm)"
+    )
 
 
 def resume_cursor(prefix: str, predecessor: str | None, catalog_hash: str) -> tuple[dict, str, str]:
@@ -124,26 +175,70 @@ def main() -> None:
         cfg[key] = str(data / cfg[key])
     for evidence in cfg["adapter_evidence"]:
         evidence["path"] = str(data / evidence["path"])
-    cfg["model"]["base_url"] = resolve_relay_base_url(read_bulk_token())
+    # Coordinator-directed pool override: when the dedicated GLM pool is up, its
+    # OpenAI-compatible endpoint(s) + model name arrive via env (serving worker handoff).
+    # GLM_POOL_MANIFEST_REF selects the full manifest client ([{base_url, api_key_ref}] +
+    # status.json; 2026-11-24 handoff contract): manifest AND status re-read at every
+    # batch cycle with pause/reload on a mismatched generation, per-entry rotation on
+    # registry 404/connect/5xx, model/schema errors fatal, fleet-wide budget split by
+    # REPLAY_PODS. GLM_POOL_BASE_URL is the single-endpoint fallback. Exactly-once
+    # bookkeeping (cursor/claims/receipts) is untouched by the endpoint.
     cfg["model"]["generation"] = f"ortet-24-r{args.replica}-20261112"
+    request_slots = args.slots
+    manifest_ref = os.environ.get("GLM_POOL_MANIFEST_REF")
+    expected_pods = int(os.environ.get("REPLAY_PODS", "1"))
+    pod_index = int(os.environ.get("GLM_POOL_POD_INDEX", str(args.replica - 1)))
+    pool_plan = None
+
+    def write_capacity(slots: int) -> None:
+        (root / "capacity.json").write_text(
+            json.dumps(
+                {
+                    "generation": cfg["model"]["generation"],
+                    "conversion_slots": slots,
+                    "science_slots": 0,
+                    "expires_at_unix": time.time() + 80 * 3600,
+                    "endpoint": cfg["model"]["base_url"],
+                }
+            )
+        )
+
+    def apply_pool_plan(plan: PoolPlan) -> None:
+        nonlocal request_slots
+        cfg["model"]["base_url"] = plan.entries[0].base_url
+        cfg["model"]["pool_entries"] = [[e.base_url, str(e.api_key_file), e.api_key_ref] for e in plan.entries]
+        cfg["workers"] = min(args.slots, plan.request_slots)
+        request_slots = plan.request_slots
+        write_capacity(request_slots)
+
+    if manifest_ref:
+        pool_plan = refresh_pool(
+            manifest_ref,
+            root,
+            None,
+            expected_model=os.environ.get("GLM_POOL_MODEL"),
+            expected_pods=expected_pods,
+            pod_index=pod_index,
+            max_attempts=10,
+        )
+        if pool_plan is None:
+            raise RuntimeError("pool manifest unavailable after boot retries; refusing to start")
+        if os.environ.get("GLM_POOL_MODEL"):
+            cfg["model"]["model"] = os.environ["GLM_POOL_MODEL"]
+        apply_pool_plan(pool_plan)
+    else:
+        cfg["model"]["base_url"] = os.environ.get("GLM_POOL_BASE_URL") or resolve_relay_base_url(read_bulk_token())
+        if os.environ.get("GLM_POOL_MODEL"):
+            cfg["model"]["model"] = os.environ["GLM_POOL_MODEL"]
+        write_capacity(request_slots)
     for key, filename in (
         ("api_key_file", "api-key.txt"),
         ("capacity_file", "capacity.json"),
         ("ledger", "ledger.sqlite3"),
     ):
         cfg["model"][key] = str(root / filename)
-    (root / "api-key.txt").write_text(read_bulk_token())
-    (root / "capacity.json").write_text(
-        json.dumps(
-            {
-                "generation": cfg["model"]["generation"],
-                "conversion_slots": args.slots,
-                "science_slots": 0,
-                "expires_at_unix": time.time() + 80 * 3600,
-                "endpoint": cfg["model"]["base_url"],
-            }
-        )
-    )
+    if not manifest_ref:
+        (root / "api-key.txt").write_text(pool_api_key() or read_bulk_token())
     (root / "lineage.json").write_text(
         json.dumps({"cursor_source": cursor_source, "initial_cursor": cursor, "destination": prefix}, indent=2)
     )
@@ -168,7 +263,27 @@ def main() -> None:
                 print(json.dumps({"phase": "allocation_complete", "cursor": cursor}), flush=True)
                 # No batch is open here; avoid library teardown keeping a completed allocation alive.
                 os._exit(0)
-            stop = min(first + 128, shard["rows"])
+            if manifest_ref:
+                # Per-cycle handoff contract: re-read the manifest AND status before every
+                # batch; pause without claiming on an inconsistent publication or a zero
+                # share; adopt a rolled generation for the batches that follow.
+                fresh = refresh_pool(
+                    manifest_ref,
+                    root,
+                    pool_plan,
+                    expected_model=os.environ.get("GLM_POOL_MODEL"),
+                    expected_pods=expected_pods,
+                    pod_index=pod_index,
+                )
+                if fresh is None:
+                    logging.warning("pool unavailable for this cycle; pausing %ds", POOL_PAUSE_SECONDS)
+                    time.sleep(POOL_PAUSE_SECONDS)
+                    continue
+                pool_plan = fresh
+                if os.environ.get("GLM_POOL_MODEL"):
+                    cfg["model"]["model"] = os.environ["GLM_POOL_MODEL"]
+                apply_pool_plan(fresh)
+            stop = min(first + giant_row_batch_size(shard["source"], first, shard["rows"]), shard["rows"])
             name = f"shard-{shard_index:05d}-rows-{first:08d}-{stop:08d}"
             preserved = {}
             recovered_bytes = 0

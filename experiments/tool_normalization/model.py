@@ -5,8 +5,10 @@
 
 import hashlib
 import json
+import os
 import random
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,11 +17,13 @@ import httpx
 import jsonschema
 from transformers import PreTrainedTokenizerBase
 
+from experiments.tool_normalization.pool_manifest import PoolManifestError, fetch_credential
 from experiments.tool_normalization.review_encoding import ENCODING_INSTRUCTIONS, encode_payload
 
 RETRY_BACKOFF_BASE_SECONDS = 2.0
 RETRY_BACKOFF_CAP_SECONDS = 120.0
 RETRY_JITTER_FRACTION = 0.2
+POOL_KEY_REFRESH_LIMIT = 2
 
 
 class TransientRequestError(RuntimeError):
@@ -48,6 +52,54 @@ class ModelConfig:
     request_timeout: int
     capacity_file: Path
     ledger: Path
+    # Pool manifest entries as (base_url, api_key_file, api_key_ref) triples; empty on
+    # the single-endpoint relay path. Requests round-robin across entries and rotate on
+    # per-entry registry 404/connect/5xx (2026-11-24 serving handoff contract).
+    pool_entries: tuple[tuple[str, str, str], ...] = ()
+
+    def __post_init__(self):
+        # Config JSON round-trips entries as lists; normalize to tuples once.
+        if self.pool_entries and any(isinstance(entry, list) for entry in self.pool_entries):
+            object.__setattr__(self, "pool_entries", tuple(tuple(entry) for entry in self.pool_entries))
+
+
+_POOL_LOCK = threading.Lock()
+_POOL_COUNTER = 0
+_POOL_KEY_REFRESHES: dict[str, int] = {}
+_LAST_ENTRY: tuple[str, str, str] | None = None
+
+
+def _select_entry(config: ModelConfig) -> tuple[str, Path]:
+    """Pick the next pool entry (round-robin with a deterministic per-pod offset).
+
+    Each call advances the rotation so a retry after a transient failure lands on the
+    next validated entry, per the 2026-11-24 serving handoff contract.
+    """
+    global _POOL_COUNTER, _LAST_ENTRY
+    if not config.pool_entries:
+        return config.base_url, config.api_key_file
+    offset = int(os.environ.get("GLM_POOL_RR_OFFSET", "0") or 0)
+    with _POOL_LOCK:
+        index = (offset + _POOL_COUNTER) % len(config.pool_entries)
+        _POOL_COUNTER += 1
+        _LAST_ENTRY = config.pool_entries[index]
+    base_url, key_file, _ = _LAST_ENTRY
+    return base_url, Path(key_file)
+
+
+def refresh_pool_key(config: ModelConfig) -> None:
+    """Re-fetch the just-401'd entry's credential ref; fatal once the bound is spent."""
+    if not config.pool_entries or _LAST_ENTRY is None:
+        raise PermanentRequestError("401 without a pool credential to refresh")
+    _, key_file, key_ref = _LAST_ENTRY
+    used = _POOL_KEY_REFRESHES.get(key_ref, 0)
+    if used >= POOL_KEY_REFRESH_LIMIT:
+        raise PermanentRequestError(f"401 persists after {used} credential refreshes of {key_ref}")
+    try:
+        fetch_credential(key_ref, Path(key_file))
+    except PoolManifestError as error:
+        raise PermanentRequestError(str(error)) from error
+    _POOL_KEY_REFRESHES[key_ref] = used + 1
 
 
 def initialize_ledger(config: ModelConfig) -> None:
@@ -130,7 +182,9 @@ def complete(
             "json_schema": {"name": "conversion", "strict": True, "schema": schema},
         },
     }
-    directory.mkdir(parents=True, exist_ok=False)
+    # Retry-safe: the model client re-POSTs the same request on transport failures; the
+    # stage directory holds the last attempt's request/receipt/response evidence.
+    directory.mkdir(parents=True, exist_ok=True)
     request_file = directory / "request.json"
     request_file.write_text(json.dumps(body, ensure_ascii=False, indent=2))
     identity = str(directory.resolve())
@@ -151,11 +205,14 @@ def complete(
     raw_file = directory / "response.sse"
     terminal = False
     backoff = RETRY_BACKOFF_BASE_SECONDS
+    blank_retries = 0
     try:
         while True:
             # Reset per-attempt state; partial artifacts from a failed attempt must not survive.
+            base_url, key_file = _select_entry(config)
             receipt.update(
                 {
+                    "base_url": base_url,
                     "http_status": None,
                     "finish_reason": None,
                     "done": False,
@@ -170,14 +227,32 @@ def complete(
                     (directory / "post-started.json").write_text(json.dumps({"at": time.time()}))
                     with client.stream(
                         "POST",
-                        config.base_url.rstrip("/") + "/chat/completions",
+                        base_url.rstrip("/") + "/chat/completions",
                         json=body,
-                        headers={"Authorization": "Bearer " + config.api_key_file.read_text().strip()},
+                        headers={"Authorization": "Bearer " + key_file.read_text().strip()},
                     ) as response:
                         receipt["http_status"] = response.status_code
                         if response.status_code == 429 or response.status_code >= 500:
                             raw.write(response.read())
                             raise TransientRequestError(f"relay returned HTTP {response.status_code}")
+                        if response.status_code == 404 and config.pool_entries:
+                            # A crashed/restarting replica unregisters its endpoint: the proxy
+                            # answers 404 while others stay healthy. A JSON error body means the
+                            # endpoint itself rejected the request (model-name contract break,
+                            # fatal); a plain proxy 404 means the entry is gone (rotate).
+                            body_bytes = response.read()
+                            raw.write(body_bytes)
+                            try:
+                                error_payload = json.loads(body_bytes.decode())
+                            except (UnicodeDecodeError, json.JSONDecodeError):
+                                error_payload = None
+                            if isinstance(error_payload, dict) and "error" in error_payload:
+                                terminal = True
+                                raise PermanentRequestError(f"endpoint rejected request: {str(error_payload)[:200]}")
+                            raise TransientRequestError("registry 404: entry unavailable; rotating")
+                        if response.status_code == 401 and config.pool_entries:
+                            refresh_pool_key(config)
+                            raise TransientRequestError("401: credential refreshed; retrying")
                         if response.status_code != 200:
                             raw.write(response.read())
                             terminal = True
@@ -203,8 +278,41 @@ def complete(
                                     terminal = True
                 if not receipt["done"] or receipt["finish_reason"] != "stop":
                     raise TransientRequestError("Incomplete model result")
-                value = json.loads(receipt["content"])
-                jsonschema.validate(value, schema)
+                if config.pool_entries and not receipt["content"].strip() and receipt["reasoning"].strip():
+                    usage = receipt.get("usage") or {}
+                    if usage.get("completion_tokens", 0) > 0:
+                        # Completed reasoning-only empty answer (confirmed pool failure class,
+                        # 2026-11-24 full-32-r2): the stream finished with stop + positive
+                        # completion usage but produced no content. Retry EXACTLY once with
+                        # entry rotation; a second blank is fatal. Count-only metadata for
+                        # every blank attempt stays in the terminal receipt so a recovered
+                        # failure is never hidden.
+                        receipt.setdefault("blank_attempts", []).append(
+                            {
+                                "at": time.time(),
+                                "base_url": base_url,
+                                "model": config.model,
+                                "finish_reason": receipt["finish_reason"],
+                                "content_chars": len(receipt["content"]),
+                                "reasoning_chars": len(receipt["reasoning"]),
+                                "usage": usage,
+                            }
+                        )
+                        if blank_retries < 1:
+                            blank_retries += 1
+                            raise TransientRequestError("blank answer: reasoning-only; retrying once with rotation")
+                        terminal = True
+                        raise PermanentRequestError("blank answer persisted after one retry")
+                try:
+                    value = json.loads(receipt["content"])
+                    jsonschema.validate(value, schema)
+                except (json.JSONDecodeError, jsonschema.ValidationError) as error:
+                    if config.pool_entries:
+                        # A 200 with a malformed payload breaks the serving contract
+                        # (schema errors are fatal, no rotation): surface instead of retrying.
+                        terminal = True
+                        raise PermanentRequestError(f"schema violation: {error}") from error
+                    raise
                 (directory / "value.json").write_text(json.dumps(value, ensure_ascii=False, indent=2))
                 return value
             except PermanentRequestError:

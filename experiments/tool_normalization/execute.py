@@ -32,7 +32,8 @@ async def execute(calls: list[dict], config: ExecutionConfig, directory: Path) -
     """Return observed tool messages; retain receipts even when a replay fails."""
     if "@sha256:" not in config.image:
         raise ValueError("Execution image must be digest-pinned")
-    directory.mkdir(parents=True, exist_ok=False)
+    # Retry-safe: the execution may re-run the same call list after a transport failure.
+    directory.mkdir(parents=True, exist_ok=True)
     code = Path(__file__).with_name("native_tools.py")
     call_file = directory / "calls.json"
     call_file.write_text(json.dumps(calls, ensure_ascii=False))

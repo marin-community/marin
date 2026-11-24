@@ -1,0 +1,31 @@
+{
+  "batch": "shard-00017-rows-00013312-00013440",
+  "cursor": {
+    "shard": 17,
+    "row": 13312,
+    "batches": 1796,
+    "artifact_bytes": 3179872571,
+    "counts": {
+      "structure_unresolved": 18660,
+      "mapped_calls": 6421,
+      "tool_free": 144052,
+      "conversion_rule_converted_adapter_checked": 460,
+      "conversion_converted_adapter_checked": 709,
+      "requires_resolved_outcome_provenance": 23632,
+      "glm_mapping_residue": 11514,
+      "conversion_audit_hold": 1326,
+      "conversion_infrastructure_deferred": 12658,
+      "conversion_mapping_unresolved": 2485,
+      "conversion_proposal_hold": 297,
+      "out_of_scope_deterministic": 24635
+    },
+    "catalog_sha256": "2a7faf70ea4eafbb2a00583e92a999ab789f4fd6890abd93c9809cd72ab9696d",
+    "updated_at": 1795472258.8465443
+  },
+  "preserved": {},
+  "eligible_unsubmitted_ids": [],
+  "archive_sha256": "dd13d595b95ecab22237ecc6c7b4a10a3b098c029d3e18f42a6e00422665a89b",
+  "archive_bytes": 1924232,
+  "reconciled_at": "2026-11-24T14:20Z",
+  "reason": "Orphaned claim from the pool-era 401 outage: the archive was uploaded but the claim-clear and cursor update were interrupted. All 14 mapped_calls rows are infrastructure_deferred (nothing committed); the 114 preflight-terminal rows re-classify deterministically. Full re-run is safe and converts the 14 deferred rows on the healthy pool."
+}
