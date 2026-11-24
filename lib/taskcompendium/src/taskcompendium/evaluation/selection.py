@@ -301,6 +301,12 @@ def select_cases(
             if policy.order is CohortOrder.SOURCE and policy.limit_stage is LimitStage.ELIGIBLE:
                 rank = len(eligible)
             decision = _context_decision(case, rendering, dataset_id, context_window, max_tokens, tokenizer, rank)
+            if (
+                protocol.context_policy is not None
+                and protocol.context_policy.overflow == "error"
+                and decision.record.status is SelectionStatus.EXCLUDED
+            ):
+                raise ValueError(f"{protocol.benchmark}: {case.item.source_row} cannot fit: {decision.record.reason}")
             decisions[case.item.source_row] = decision.record
             if decision.case is not None:
                 eligible.append(case.item.source_row)

@@ -26,6 +26,7 @@ from marin.rollouts.evaluation import (
     EvaluationRunConfig,
     ModelIdentity,
     episode_turn,
+    generation_turn,
     grading_limits,
     run_evaluation,
     run_identity,
@@ -98,6 +99,48 @@ from zephyr.context import ZephyrContext
 def convert(row: RawRow, _context: ConversionContext):
     task = exact_answer_task(row, prompt=row.data["question"], answers=("red",), ignore_case=False)
     return task.model_copy(update={"tags": ("eval",)})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "tool_calls"])
+async def test_provider_response_preserves_failures_without_executing_tools(finish_reason):
+    requests = []
+    message = {
+        "role": "assistant",
+        "content": "FINAL: 2",
+        "reasoning_content": "reasoning",
+        "refusal": "provider refused",
+        "tool_calls": [{"id": "call", "type": "function", "function": {"name": "unexpected", "arguments": "{}"}}],
+    }
+
+    async def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "response",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "fixture",
+                "choices": [{"index": 0, "finish_reason": finish_reason, "message": message}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+            },
+        )
+
+    prompt = ({"role": "system", "content": "frozen system"}, {"role": "user", "content": "frozen question"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        async with openai.AsyncOpenAI(base_url="http://fixture/v1", api_key="fixture", http_client=http) as client:
+            turn = await generation_turn(
+                ModelRequest(prompt, {"extra_body": {"tool_choice": "auto"}}),
+                model=ChatModel(client, "fixture", 16),
+                operation=ChatGeneration(response_selection="provider_response"),
+            )
+    assert requests[0]["messages"] == list(prompt)
+    assert requests[0]["tools"] is None
+    assert requests[0]["tool_choice"] == "none"
+    assert json.loads(turn.text) == {"message": message, "finish_reason": finish_reason}
+    assert "tool_calls" not in turn.message
+    assert turn.metadata["evaluation_raw_message"] == message
 
 
 @pytest.fixture
@@ -189,27 +232,33 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "update", [{"source_limit": 1}, {"task_machine": machine_runtime(backend="shellsim")}], ids=["selection", "backend"]
-)
-async def test_driver_resume_rejects_a_different_selection_or_machine_backend(
-    tmp_path, published_corpora, run_config, update
+@pytest.mark.parametrize("changed_setting", ["selection", "backend", "turn_budget", "token_budget"])
+async def test_driver_resume_rejects_different_scoring_settings(
+    tmp_path, published_corpora, run_config, changed_setting
 ):
     async def model(_request):
         return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
 
     output = str(tmp_path / "results")
     await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
+    updates = {
+        "selection": {"source_limit": 1},
+        "backend": {"task_machine": machine_runtime(backend="shellsim")},
+        "turn_budget": {"limits": run_config.limits.model_copy(update={"max_turns": 2})},
+        "token_budget": {"limits": run_config.limits.model_copy(update={"max_total_tokens": 128})},
+    }
     with pytest.raises(ValueError, match="Resume requires"):
         await run_evaluation(
-            published_corpora, output, run_config.model_copy(update=update), model, machine_factories={}
+            published_corpora,
+            output,
+            run_config.model_copy(update=updates[changed_setting]),
+            model,
+            machine_factories={},
         )
 
 
 @pytest.mark.asyncio
-async def test_driver_resumes_partial_archive_after_request_concurrency_and_task_evidence_change(
-    tmp_path, published_corpora, run_config
-):
+async def test_driver_resumes_partial_archive_after_operational_settings_change(tmp_path, published_corpora, run_config):
     calls = 0
     recovered = False
 
@@ -233,7 +282,15 @@ async def test_driver_resumes_partial_archive_after_request_concurrency_and_task
     await run_evaluation(
         published_corpora,
         output,
-        run_config.model_copy(update={"concurrency": 3, "task_evidence": TaskEvidence.REFERENCE}),
+        run_config.model_copy(
+            update={
+                "concurrency": 3,
+                "task_evidence": TaskEvidence.REFERENCE,
+                "limits": run_config.limits.model_copy(
+                    update={"model_turn_timeout": 60, "total_turn_timeout": 60, "attempt_timeout": 90}
+                ),
+            }
+        ),
         model,
         machine_factories={},
     )
