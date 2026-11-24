@@ -15,9 +15,11 @@ dependencies = [
     # The runtime staging copies tomli's package directory for the 3.10 grader machines.
     "tomli>=2.0.1",
     "tomlkit>=0.13",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
+pdbthink = ["pdbthink @ https://github.com/Open-Athena/pdbthink/archive/1bf06a464b2eab2f1e16c4dd16714314f225e196.tar.gz"]
 pipeline = [
     "ijson>=3.3",
     "tiktoken>=0.8",
@@ -29,7 +31,10 @@ pipeline = [
 ]
 
 [dependency-groups]
-test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "marin-shellbox[shellsim]"]
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "marin-shellbox[shellsim]", "pdbthink @ https://github.com/Open-Athena/pdbthink/archive/1bf06a464b2eab2f1e16c4dd16714314f225e196.tar.gz"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]
@@ -59,8 +64,7 @@ disable-project-excludes-heuristics = true
 use-ignore-files = false
 project-includes = ["src/**/*.py"]
 project-excludes = [
-    # Canonical upstream instruction checkers; wrappers remain checked.
-    "src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    # Vendored IFBench instruction checkers; wrappers remain checked.
     "src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
 ]
 search-path = ["src", "../verifyit/src", "../rigging/src", "src/taskcompendium/importers/evalchemy/assets"]

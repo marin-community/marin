@@ -75,7 +75,7 @@ pub struct TableRuntime {
     object_state_active: AtomicBool,
     /// Per-table retention overrides; `None` fields inherit the cluster-wide
     /// [`CompactionConfig`] caps.
-    pub(super) storage_policy: Mutex<StoragePolicy>,
+    storage_policy: Mutex<StoragePolicy>,
     /// Leveled-compaction tuning: the scheduler reads `check_interval`, the
     /// planner reads `level_targets`/`max_segments_per_level`.
     pub(super) compaction_config: CompactionConfig,
@@ -320,6 +320,12 @@ impl TableRuntime {
     /// Swap in a new retention policy (re-register). Picked up next eviction.
     pub fn update_policy(&self, policy: StoragePolicy) {
         *self.storage_policy.lock().unwrap() = policy;
+    }
+
+    /// A copy of the retention policy. The lock is released on return, so a
+    /// caller cannot hold it across eviction's wait for query readers.
+    pub(super) fn storage_policy(&self) -> StoragePolicy {
+        self.storage_policy.lock().unwrap().clone()
     }
 
     /// Swap in the operating policy a new specification resolves to.
@@ -835,7 +841,10 @@ mod tests {
     use super::*;
 
     use crate::store::segment::discover_segments;
+    use crate::store::table::maintenance::{self, TableWork};
     use crate::store::table::test_tables::*;
+
+    const EVICTION_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// Seal the buffer the way the maintenance scheduler would, then wait for the
     /// durability high-water mark. These tests open a runtime directly, so no
@@ -846,6 +855,64 @@ mod tests {
             .await_persisted(target, Duration::from_secs(10))
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn policy_update_completes_while_eviction_waits_for_a_reader() {
+        let dir = tempdir();
+        let remote = dir.join("remote");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let table = open_table_remote(
+            "iris.worker",
+            worker_schema(),
+            Some(dir.join("iris.worker")),
+            catalog,
+            remote.to_str().unwrap(),
+            StoragePolicy::default(),
+        );
+        write_one(&table).await;
+        maintenance::run(
+            &table,
+            TableWork::Cycle {
+                force_compact_l0: true,
+            },
+        )
+        .await
+        .unwrap();
+        table.update_policy(StoragePolicy {
+            max_segments: Some(0),
+            ..Default::default()
+        });
+
+        let reader = table.query_visibility.read().await;
+        let eviction = {
+            let table = Arc::clone(&table);
+            tokio::spawn(async move { maintenance::run(&table, TableWork::Eviction).await })
+        };
+        // Tokio rejects new readers once eviction queues its visibility writer.
+        tokio::time::timeout(EVICTION_WAIT_TIMEOUT, async {
+            while table.query_visibility.try_read().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("eviction did not wait for the active reader");
+
+        let mut update = {
+            let table = Arc::clone(&table);
+            tokio::task::spawn_blocking(move || table.update_policy(StoragePolicy::default()))
+        };
+        let updated = tokio::time::timeout(EVICTION_WAIT_TIMEOUT, &mut update).await;
+        // Release the reader before an assertion so a regression cannot hang teardown.
+        drop(reader);
+        eviction.await.unwrap().unwrap();
+        updated
+            .expect("policy update blocked behind eviction")
+            .unwrap();
+
+        assert_eq!(table.stats().segment_count, 0);
+        assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]

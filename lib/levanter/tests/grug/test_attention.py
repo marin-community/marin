@@ -14,6 +14,8 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import (
     xla_flash_attention,
     AttentionMask,
+    RotaryConfig,
+    apply_rotary_embedding,
     attention,
     fa4_cute_segment_bounds,
     reference_attention,
@@ -30,6 +32,21 @@ def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 
     k = jax.random.normal(k_key, (batch, k_len, kv_heads, 8), dtype=jnp.float32)
     v = jax.random.normal(v_key, (batch, k_len, kv_heads, 8), dtype=jnp.float32)
     return q, k, v
+
+
+@pytest.mark.parametrize("per_batch", [False, True])
+def test_rotary_embedding_at_absolute_positions_matches_full_sequence(per_batch):
+    q, k, _ = _make_qkv(q_len=12, k_len=12)
+    rope = RotaryConfig()
+    head_dim = q.shape[-1]
+    full = apply_rotary_embedding(q, k, seq_len=12, head_dim=head_dim, rope=rope)
+    positions = jnp.array([[3, 8, 9], [4, 7, 11]]) if per_batch else jnp.array([3, 8, 9])
+    batch = jnp.arange(q.shape[0])[:, None]
+    cropped = apply_rotary_embedding(
+        q[batch, positions], k[batch, positions], seq_len=3, head_dim=head_dim, rope=rope, position_ids=positions
+    )
+    for actual, expected in zip(cropped, full, strict=True):
+        np.testing.assert_allclose(actual, expected[batch, positions], atol=1e-6, rtol=1e-6)
 
 
 def test_reference_attention_matches_manual_segment_mask():

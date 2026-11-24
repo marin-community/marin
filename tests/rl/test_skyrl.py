@@ -7,6 +7,7 @@ import dataclasses
 import io
 import json
 import os
+import platform
 import shlex
 import shutil
 import subprocess
@@ -148,6 +149,21 @@ def test_nested_launcher_does_not_inherit_parent_python_environment(
     assert real_uv is not None
     real_uv = str(Path(real_uv).resolve())
     python_version = list(sys.version_info[:2])
+    image_python = tmp_path / "image-python"
+    managed_root = tmp_path / "managed-python"
+    operating_system = "macos" if sys.platform == "darwin" else "linux"
+    architecture = "aarch64" if platform.machine() == "arm64" else platform.machine()
+    libc = "none" if sys.platform == "darwin" else "gnu"
+    managed_python = managed_root / f"cpython-{platform.python_version()}-{operating_system}-{architecture}-{libc}"
+    for interpreter in (image_python, managed_python):
+        (interpreter / "bin").mkdir(parents=True)
+        shutil.copy2(
+            Path(sys.base_prefix) / "bin" / f"python{sys.version_info.major}.{sys.version_info.minor}",
+            interpreter / "bin" / f"python{sys.version_info.major}.{sys.version_info.minor}",
+        )
+        (interpreter / "lib").symlink_to(Path(sys.base_prefix) / "lib", target_is_directory=True)
+    monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", str(managed_root))
+    monkeypatch.setenv("UV_PYTHON_PREFERENCE", "managed")
     workspace = tmp_path / "workspace"
     project = workspace / "vendor" / "skyrl"
     project.mkdir(parents=True)
@@ -176,16 +192,19 @@ def test_nested_launcher_does_not_inherit_parent_python_environment(
     dispatcher = binaries / "uv"
     dispatcher.write_text(
         "#!/bin/sh\nset -eu\n"
+        "python_preference=managed\n"
         'while [ "$#" -gt 0 ]; do\n'
         '  case "$1" in\n'
-        f'    --python) {shlex.quote(real_uv)} python find "$2" --no-python-downloads >/dev/null; shift 2 ;;\n'
+        '    --python-preference) python_preference="$2"; shift 2 ;;\n'
+        f'    --python) {shlex.quote(real_uv)} python find "$2" '
+        '--python-preference "$python_preference" --no-python-downloads >/dev/null; shift 2 ;;\n'
         f'    uv) shift; exec {shlex.quote(real_uv)} "$@" ;;\n'
         "    *) shift ;;\n"
         "  esac\n"
         "done\n"
     )
     dispatcher.chmod(0o755)
-    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("PATH", os.pathsep.join((str(binaries), str(image_python / "bin"), os.environ["PATH"])))
     monkeypatch.setattr("marin.rl.skyrl.__file__", str(workspace / "lib/marin/src/marin/rl/skyrl.py"))
     monkeypatch.setattr(sys, "executable", str(tmp_path / "incompatible-parent-python"))
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
@@ -196,7 +215,8 @@ def test_nested_launcher_does_not_inherit_parent_python_environment(
             "python",
             "-c",
             "import json, os, sys; from pathlib import Path; "
-            "print(json.dumps({'python': list(sys.version_info[:2]), 'cwd': str(Path.cwd()), "
+            "print(json.dumps({'python': list(sys.version_info[:2]), 'base_prefix': sys.base_prefix, "
+            "'cwd': str(Path.cwd()), "
             "'environment': {key: os.environ.get(key) for key in "
             "['PYTHONPATH', 'PYTHONHOME', 'UV_PROJECT_ENVIRONMENT', 'VIRTUAL_ENV']}}))",
         )
@@ -204,6 +224,7 @@ def test_nested_launcher_does_not_inherit_parent_python_environment(
     assert result.returncode == 0
     assert json.loads(result.stdout) == {
         "python": python_version,
+        "base_prefix": str(image_python.resolve()),
         "cwd": str(workspace),
         "environment": {
             "PYTHONPATH": None,
@@ -716,6 +737,29 @@ def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
     )
     with pytest.raises(ValueError, match="distinct data artifacts share a staging directory"):
         skyrl_step(dataclasses.replace(spec, validation_data=(conflicting_source,)), _execution()).fingerprint()
+
+
+@pytest.mark.parametrize(
+    ("cluster", "explicit_hca", "expected_hca"),
+    [
+        ("cw-us-east-02a", None, "ibp"),
+        ("cw-us-east-02a", "custom_hca", "custom_hca"),
+        ("cw-us-east-08a", None, None),
+    ],
+)
+def test_skyrl_child_request_selects_east02a_ib_rails(
+    cluster: str, explicit_hca: str | None, expected_hca: str | None
+) -> None:
+    spec = _spec()
+    if explicit_hca is not None:
+        recipe = yaml.safe_load(spec.config_yaml)
+        recipe["extra_env"] = {"NCCL_IB_HCA": explicit_hca}
+        spec = dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe))
+
+    step = skyrl_step(spec, _execution(cluster))
+    launch = yaml.safe_load(materialized_config(step, prefix="s3://test").launch_config_yaml)
+
+    assert launch["runtime"]["task_env"].get("NCCL_IB_HCA") == expected_hca
 
 
 def test_starting_checkpoint_binds_identity_and_rejects_cached_output_reuse(tmp_path: Path, monkeypatch) -> None:

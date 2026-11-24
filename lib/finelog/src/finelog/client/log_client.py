@@ -80,8 +80,17 @@ if not logger.handlers:
 LOG_NAMESPACE = "log"
 DEFAULT_FLUSH_INTERVAL = 1.0
 DEFAULT_BATCH_ROWS = 10_000
-# Per-Table queue cap in bytes. Matches WriteRows max body size.
+# Per-Table queue cap in bytes.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
+# Bounds of one WriteRows request. The server refuses a body above 160 MiB or 1,000,000 rows, so the client
+# sends at most MAX_REQUEST_BYTES of encoded rows in a request and drops a single row above that.
+MAX_REQUEST_BYTES = 128 * 1024 * 1024
+MAX_REQUEST_ROWS = 1_000_000
+# The flush thread takes the rows of one request by their estimated size, which counts one byte for each
+# character of a string and 8 bytes for any other value. The server acknowledges a request below its 100 MiB
+# segment size about once each second for a table, so a table sends about this much each second. A larger
+# target sends faster, and the producer then holds a larger encoded copy of the rows for each request.
+SEND_TARGET_BYTES = 32 * 1024 * 1024
 
 _FINELOG_ZSTD_LEVEL = 1
 _SEND_COMPRESSION = ZstdCompression(level=_FINELOG_ZSTD_LEVEL)
@@ -266,8 +275,8 @@ class Table:
         registration_key: RegistrationKey | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         batch_rows: int = DEFAULT_BATCH_ROWS,
-        max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
-        max_buffer_rows: int = DEFAULT_BATCH_ROWS,
+        max_buffer_bytes: int | None = None,
+        max_buffer_rows: int | None = None,
         thread_name: str | None = None,
     ) -> None:
         self._namespace = namespace
@@ -286,8 +295,11 @@ class Table:
         self._registered_generation = 0 if registrar is None else -1
         self._flush_interval = flush_interval
         self._batch_rows = batch_rows
-        self._max_buffer_bytes = max_buffer_bytes
-        self._max_buffer_rows = max_buffer_rows
+        # ``None`` is a bound that no caller set; it uses the default until a later ``get_table`` call sets it.
+        self._requested_buffer_rows = max_buffer_rows
+        self._requested_buffer_bytes = max_buffer_bytes
+        self._max_buffer_rows = DEFAULT_BATCH_ROWS if max_buffer_rows is None else max_buffer_rows
+        self._max_buffer_bytes = DEFAULT_MAX_BUFFER_BYTES if max_buffer_bytes is None else max_buffer_bytes
 
         self._cond = threading.Condition()
         self._queue: deque[_PendingItem] = deque()
@@ -437,10 +449,22 @@ class Table:
                 self._processed_seq = max_dropped_seq
                 self._cond.notify_all()
 
-    def _take_queue_locked(self) -> list[_PendingItem]:
-        items = list(self._queue)
-        self._queue.clear()
-        self._queue_bytes = 0
+    def _take_request_locked(self) -> list[_PendingItem]:
+        """Take the rows of the next request from the head of the queue.
+
+        The rows that stay keep their place under the buffer bounds and count as pending in ``flush`` and
+        ``close``.
+        """
+        items: list[_PendingItem] = []
+        size = 0
+        while self._queue and len(items) < MAX_REQUEST_ROWS:
+            item = self._queue[0]
+            # A row above the target goes out alone.
+            if items and size + item.size_bytes > SEND_TARGET_BYTES:
+                break
+            items.append(self._queue.popleft())
+            size += item.size_bytes
+        self._queue_bytes -= size
         return items
 
     def _rebuffer_at_head_locked(self, items: list[_PendingItem]) -> None:
@@ -454,9 +478,10 @@ class Table:
             with self._cond:
                 while not self._closing and not self._queue:
                     self._cond.wait(timeout=self._flush_interval)
-                if not self._queue:
+                # After ``close`` gave up on the drain, the caller can close the transport of the requests.
+                if not self._queue or self._closed:
                     return
-                items = self._take_queue_locked()
+                items = self._take_request_locked()
 
             sent_max_seq, unsent, dropped = self._send(items)
             with self._cond:
@@ -484,18 +509,17 @@ class Table:
                     self._cond.wait(timeout=remaining)
 
     def _send(self, items: list[_PendingItem]) -> tuple[int, list[_PendingItem], int]:
-        """Send ``items`` via the flusher. Returns ``(max_sent_seq, unsent, dropped)``.
+        """Send ``items`` in one request via the flusher. Returns ``(max_sent_seq, unsent, dropped)``.
 
-        Builds the entire batch's RecordBatch in one pass on the bg thread,
-        amortizing Arrow construction across the whole queue rather than
-        per-row at write time.
+        Builds the request's RecordBatch in one pass on the bg thread, amortizing Arrow construction across
+        the rows rather than per-row at write time.
         """
-        if not items:
-            return 0, [], 0
-        rows = [item.payload for item in items]
         try:
             self._ensure_registered()
-            batch = _rows_to_record_batch(rows, self._arrow_schema, self._schema)
+            batch = _rows_to_record_batch([item.payload for item in items], self._arrow_schema, self._schema)
+            if batch.nbytes > MAX_REQUEST_BYTES:
+                # The estimate counted too little for these rows, as it does for bytes, list and map values.
+                return self._send_halves(items, batch.nbytes)
             self._flusher(self._namespace, batch)
         except Exception as exc:
             namespace_missing = self._registrar is not None and (
@@ -522,6 +546,32 @@ class Table:
                 return items[-1].seq, [], len(items)
             return 0, items, 0
         return items[-1].seq, [], 0
+
+    def _send_halves(self, items: list[_PendingItem], encoded_bytes: int) -> tuple[int, list[_PendingItem], int]:
+        """Send rows that encode above ``MAX_REQUEST_BYTES`` as two requests, each halved again if needed."""
+        if len(items) == 1:
+            # The server refuses this row, or fails it with a retryable error that would hold the rows behind it.
+            logger.warning(
+                "Table(%s) dropped a row of %d encoded bytes, above the request bound", self._namespace, encoded_bytes
+            )
+            return items[0].seq, [], 1
+        middle = len(items) // 2
+        sent_seq, unsent, dropped = self._send(items[:middle])
+        if unsent:
+            return sent_seq, unsent + items[middle:], dropped
+        later_seq, unsent, later_dropped = self._send(items[middle:])
+        return max(sent_seq, later_seq), unsent, dropped + later_dropped
+
+    def _update_buffer_bounds(self, max_buffer_rows: int | None, max_buffer_bytes: int | None) -> None:
+        """Apply the bounds of another ``get_table`` call: ``None`` keeps a bound, and a bound set twice must agree."""
+        with self._cond:
+            rows = _agreed_bound(self._namespace, "max_buffer_rows", self._requested_buffer_rows, max_buffer_rows)
+            size = _agreed_bound(self._namespace, "max_buffer_bytes", self._requested_buffer_bytes, max_buffer_bytes)
+            self._requested_buffer_rows = rows
+            self._requested_buffer_bytes = size
+            self._max_buffer_rows = DEFAULT_BATCH_ROWS if rows is None else rows
+            self._max_buffer_bytes = DEFAULT_MAX_BUFFER_BYTES if size is None else size
+            self._trim_oldest_locked()
 
     def _update_registration(self, registration_key: RegistrationKey, registrar: Callable[[], Schema]) -> None:
         """Schedule a changed registration before this handle's next send."""
@@ -745,6 +795,8 @@ class LogClient:
         *,
         storage_policy: StoragePolicy = StoragePolicy(),
         table_spec: TableSpec | None = None,
+        max_buffer_rows: int | None = None,
+        max_buffer_bytes: int | None = None,
     ) -> Table:
         """Return a Table handle for ``namespace``, registering it lazily.
 
@@ -764,6 +816,16 @@ class LogClient:
         ``table_spec`` opts the namespace into versioned layout management.
         The server accepts only the current version or ``current + 1``; a new
         version that changes source layout is migrated in the background.
+
+        ``max_buffer_rows`` and ``max_buffer_bytes`` bound the rows that wait in
+        the queue; past either bound the oldest rows are dropped. The rows of the
+        request in flight are not counted. A producer that writes bursts larger
+        than the defaults raises them. A queue larger than one request goes out
+        in several requests. ``Table.close`` waits about 10 seconds for the
+        queue, so such a producer calls ``Table.flush`` with its own timeout
+        before it closes. ``None`` keeps the bound that an earlier call set for
+        the namespace, or the default; a call that sets another value than an
+        earlier call raises ``ValueError``.
         """
         if namespace == LOG_NAMESPACE:
             raise InvalidNamespaceError("use write_batch/query for the privileged 'log' namespace")
@@ -780,6 +842,7 @@ class LogClient:
             existing = self._tables.get(namespace)
             registration_key = (requested, storage_policy, table_spec)
             if existing is not None:
+                existing._update_buffer_bounds(max_buffer_rows, max_buffer_bytes)
                 existing._update_registration(
                     registration_key,
                     lambda: self._register_table(namespace, requested, storage_policy, table_spec),
@@ -792,6 +855,8 @@ class LogClient:
                 querier=self._stats_query,
                 registrar=lambda: self._register_table(namespace, requested, storage_policy, table_spec),
                 registration_key=registration_key,
+                max_buffer_rows=max_buffer_rows,
+                max_buffer_bytes=max_buffer_bytes,
             )
             self._tables[namespace] = table
             return table
@@ -1029,6 +1094,15 @@ def _estimate_row_size(row: Any, columns: tuple[Column, ...]) -> int:
         else:
             total += 8
     return total
+
+
+def _agreed_bound(namespace: str, name: str, current: int | None, requested: int | None) -> int | None:
+    """Return the buffer bound after a ``get_table`` call asks for ``requested``; ``None`` sets no value."""
+    if requested is None:
+        return current
+    if current is not None and current != requested:
+        raise ValueError(f"Table({namespace}) already has {name}={current}, not {requested}")
+    return requested
 
 
 def _log_entries_to_rows(key: str, messages: Sequence[logging_pb2.LogEntry]) -> list[Any]:

@@ -589,6 +589,22 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     document["skyrl"]["trainer"]["logger"] = backends
     document["skyrl"]["entrypoint"] = entrypoint
     document["artifacts"]["export_root"] = str(tmp_path / "exports")
+    selection_identity = "fixture@2026.11.19.1"
+    selection_path = tmp_path / "staged-selection"
+    if entrypoint == "standard":
+        document["skyrl"]["data"] = {"kind": "parquet"}
+        document["inputs"].update(
+            data_kind="parquet",
+            train_data=[
+                {
+                    "kind": "directory",
+                    "uri": "s3://fixture/selection",
+                    "identity": selection_identity,
+                    "local_path": str(selection_path),
+                    "relative_path": "train.parquet",
+                }
+            ],
+        )
     contents = yaml.safe_dump(document).encode()
 
     path = materialize_launch_config(
@@ -619,6 +635,9 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     def workload(config):
         assert read_attempt(export_root, "attempt-1") is not None
         assert config.runtime.iris_job_id == "/tests/bootstrap-trainer"
+        if entrypoint == "standard":
+            assert config.runtime.prepared_task_cache.identity == selection_identity
+            assert config.runtime.prepared_task_cache.path == str(selection_path / "train.parquet")
         if fail:
             raise RuntimeError("workload initialization failed")
         with Tracking("project", "display-name", config.trainer.logger, config) as tracker:
@@ -654,6 +673,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     attempt = read_attempt(export_root, "attempt-1")
     assert attempt is not None
     runtime = attempt.native.config["skyrl"]["runtime"]
+    assert "prepared_task_cache" not in runtime
     assert {key: runtime[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")} == {
         "run_id": "smoke",
         "attempt_id": "attempt-1",
@@ -669,6 +689,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(
     skyrl_entrypoint.run_config(destination)
     final = read_attempt(export_root, "attempt-1")
     assert final is not None
+    assert final.native.config == attempt.native.config
     if not records_enabled:
         assert final.iris_job_id == "/tests/bootstrap-trainer" and final.metrics_started_at is None
         assert read_attempt_metrics(export_root, "attempt-1") == {}

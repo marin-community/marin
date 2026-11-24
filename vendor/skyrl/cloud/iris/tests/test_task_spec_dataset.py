@@ -20,6 +20,7 @@ from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.task_inputs import task_messages
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import (
+    GraderMachine,
     CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
@@ -30,7 +31,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource
-from tests.cpu.task_specs import SHELL_ENVIRONMENT, machine_runtime, text_task
+from tests.cpu.task_specs import NATIVE_ENVIRONMENT, SHELL_ENVIRONMENT, machine_runtime, text_task
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
@@ -76,6 +77,28 @@ def test_a_dataset_machine_attaches_only_to_rows_that_need_one(tmp_path: Path):
         validate_spec(spec, {"shellsim": ShellSimMachineFactory()})
 
 
+def test_command_semantics_select_the_machine_for_a_mixed_dataset(tmp_path: Path):
+    simulated = text_task("simulated-task", source="mixed").model_copy(
+        update={"environment_requirements": SHELL_ENVIRONMENT}
+    )
+    linux = text_task("linux-task", source="mixed").model_copy(
+        update={"environment_requirements": NATIVE_ENVIRONMENT}
+    )
+    reply = text_task("reply-task", source="mixed")
+    shellsim, daytona = machine_runtime("shellsim"), machine_runtime("daytona")
+    loaded = _load(
+        tmp_path,
+        (simulated, linux, reply),
+        task_machine_by_command_semantics={
+            CommandSemantics.SHELL_SIMULATOR.value: shellsim.model_dump(),
+            CommandSemantics.LINUX_PROCESS.value: daytona.model_dump(),
+        },
+    )
+    assert [spec.task_machine for spec in loaded] == [shellsim, daytona, None]
+    for spec in loaded:
+        validate_spec(spec, {"shellsim": ShellSimMachineFactory(), **FACTORIES})
+
+
 def test_dataset_harness_binding_keeps_harbor_and_assistant_prefix_execution(tmp_path: Path):
     harbor = text_task("harbor-task", source="harbor-source")
     ordinary = text_task("ordinary-task", source="ordinary-source")
@@ -100,10 +123,10 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
         update={
             "grader": ScriptGrader(
                 argv=("sh", "/tests/grade.sh"),
-                environment=EnvironmentRequirements(
+                placement=GraderMachine(environment=EnvironmentRequirements(
                     command_semantics=CommandSemantics.LINUX_PROCESS,
                     docker_image="fixture@sha256:" + "0" * 64,
-                ),
+                )),
             )
         }
     )
@@ -114,10 +137,10 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             ),
             "grader": ScriptGrader(
                 argv=("python", "/tests/grade.py"),
-                environment=EnvironmentRequirements(
+                placement=GraderMachine(environment=EnvironmentRequirements(
                     command_semantics=CommandSemantics.LINUX_PROCESS,
                     packages_lock="s3://fixture/grader.lock",
-                ),
+                )),
             ),
         }
     )

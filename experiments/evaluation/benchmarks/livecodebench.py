@@ -18,6 +18,7 @@ import zlib
 from pathlib import Path
 from typing import Any
 
+from evalrecords.records import TaskEvidence
 from taskcompendium.convert.answers import source_defect, source_evidence, unsupported
 from taskcompendium.convert.code import THREAD_ENVIRONMENT
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
@@ -208,6 +209,8 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
             ),
             item_builder=livecodebench_item,
             protocol_name="official",
+            # Each task carries up to 1 MB of compressed hidden tests; attempts keep a corpus reference instead.
+            task_evidence=TaskEvidence.REFERENCE,
         ),
         pipeline=prepare_evaluation,
     )

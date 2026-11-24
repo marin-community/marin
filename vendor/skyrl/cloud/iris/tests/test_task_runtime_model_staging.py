@@ -32,7 +32,7 @@ from cloud.iris.launch_config import load_launch_config
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
-from marinskyrl.hf_model import HuggingFaceModelCache
+from skyrlrecipe.model_staging import HuggingFaceModelCache
 from marinskyrl.resource_locator import RolloutModelLoading
 
 

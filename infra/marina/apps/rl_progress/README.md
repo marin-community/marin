@@ -13,6 +13,9 @@ A run-only link (`#run=<run_id>`) selects its latest attempt. Add
 run URL; the Grafana link uses the recorded native execution window. The Model column can filter by
 the recorded model. The issue number links to GitHub, and the opt-out is shown in the attempt details.
 Linked EvalDash evaluations open the recorded run IDs. The detail view includes per-step family, AAII-category and difficulty means and scored/attempted answer counts.
+The attempt details link to a grader report when one was published. It shows
+training and evaluation success rates, verification coverage, failures and
+latencies by environment and task source.
 
 Malformed records are skipped individually and named in a visible note.
 

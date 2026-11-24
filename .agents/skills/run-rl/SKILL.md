@@ -95,7 +95,7 @@ in order:
 
 ## Never
 
-- Stop or restart an Iris cluster, or cancel/resubmit a job without authorization.
+- Stop or restart an Iris cluster, or cancel/resubmit unrelated jobs without authorization.
 - Collect controls or edit pins, a preset revision or `GATE_REVISION` unless asked in the current thread.
 - Edit a preset, guard or tolerance to make a candidate pass.
 - Set `generator.enforce_eager=true` without a request; CUDA graphs affect speed measurement.
