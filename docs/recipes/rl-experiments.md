@@ -209,11 +209,15 @@ family, AAII category and difficulty, and links to the run's Grafana window.
 
 The publishing presets also save grader diagnostics in
 `exports/grader_reports/<attempt_id>/grader_report.json`. The report groups
-training rollouts and each named evaluation by environment and task source.
-Success rates use verified responses and are null when no verdict is available.
+training rollouts and each named evaluation by task subset. Each task's
+`subset_id` label supplies the subset, with the source dataset as a fallback.
+The report also records success and coverage by task ID. Success rates use
+verified responses and are null when no verdict is available.
 Open **Grader stats** from the published attempt's details to see coverage,
-failure counts and grading latency alongside success rates. The trainer logs
-reporting errors and continues, so an attempt may have a partial or missing report.
+failure counts and grading latency. Expand **Individual tasks** for task results.
+Exported evaluation responses include `task_id` and `subset_id`.
+The trainer logs reporting errors and continues, so an attempt may have a partial
+or missing report.
 
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
 data-medium, train-long and train-long-harbor attempts using the caller's Marina login. The row shows the model and

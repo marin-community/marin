@@ -63,10 +63,6 @@ class _EvaluationRollouts:
     example_batch: TrajectoryBatch
 
     @property
-    def env_classes(self) -> List[str]:
-        return [row.metric_class for row in self.metadata]
-
-    @property
     def data_sources(self) -> List[str | None]:
         return [row.data_source for row in self.metadata]
 
@@ -357,11 +353,16 @@ def _dump_eval_results(
 ) -> None:
     if cfg.trainer.get("dump_grader_report", False):
         stats = GraderStats()
-        stats.add(rollouts.batch, zip(rollouts.env_classes, rollouts.data_sources, strict=True))
+        stats.add(rollouts.batch, rollouts.metadata)
+        summary = stats.summary()
         key = "eval_only" if global_step is None else str(global_step)
         if val_set_name is not None:
             key = f"{val_set_name}/{key}"
-        write_grader_report(str(cfg.trainer.grader_report_dir), key, {"evaluation": stats.summary()})
+        write_grader_report(
+            str(cfg.trainer.grader_report_dir),
+            key,
+            {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]},
+        )
     if not cfg.trainer.dump_eval_results:
         return
     with Timer("dump_eval_results"):
@@ -373,8 +374,7 @@ def _dump_eval_results(
             data_save_dir,
             tokenizer,
             rollouts.batch,
-            rollouts.data_sources,
-            rollouts.env_classes,
+            rollouts.metadata,
             metrics,
             rollouts.uids,
             attempt_id=str(cfg.runtime.attempt_id),
