@@ -7,22 +7,40 @@ Release tooling and metadata are MIT licensed. Task sources retain their upstrea
 the default selection follows the release's unrestricted manifest.
 """
 
-from functools import partial
+import re
+import shlex
+import shutil
+import tomllib
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
+import tomlkit
 from taskcompendium.evaluation.spec import MiniSweAgent, PiAgent
-from taskcompendium.importers.harbor.package import JobSettings
-from taskcompendium.importers.harbor.science import lower_science_package
-from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportRejection, RawRow
+from taskcompendium.importers.harbor.config import TASK_CONFIG
+from taskcompendium.importers.harbor.package import (
+    REWARD_JSON_PATH,
+    HarborTask,
+    JobSettings,
+    PackageTests,
+    lower_package,
+)
+from taskcompendium.models import (
+    ArtifactKind,
+    FileReward,
+    GraderMachine,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    VerifierArtifact,
+)
+from taskcompendium.pipeline.models import RawRow
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.benchmarks.harbor import (
     MAX_OUTPUT_TOKENS,
     PI_MAX_OUTPUT_TOKENS,
     HarborDataset,
-    convert_package_row,
-    harbor_evaluation_source,
+    harbor_source,
     pi_install,
 )
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
@@ -32,7 +50,7 @@ from experiments.post_training.task_curation.source import RlDataSource
 
 DATASET = "OpenMOSS-Team/SWE-bench-Science"
 REVISION = "997408298e8e4d09978b1120b95c4540d1a71bcb"
-VERSION = "2026.11.24.2"
+VERSION = "2026.11.24.3"
 BENCHMARK = "swebench-science"
 # Exact selections/default-96.json in the pinned release.
 TASK_IDS = tuple(
@@ -50,8 +68,61 @@ HOSTED_TASK_IDS = (*TASK_IDS, *"003 020 021 023 032 057 066 074 075 082 083 084 
 PI = PiAgent(version="0.87.0", thinking="xhigh", setup_timeout=360)
 
 
-def convert(row: RawRow, _context: ConversionContext, *, job: JobSettings) -> TaskSpec | ImportRejection:
-    return convert_package_row(row, partial(lower_science_package, task_id=row.id, source=row.source, job=job))
+PATCH = "/logs/artifacts/model.patch"
+
+
+def _harbor_config(directory: Path) -> dict:
+    """Translate the supported Pier release fields into their Harbor 1.2 equivalents."""
+    config = tomllib.loads((directory / TASK_CONFIG).read_text())
+    verifier = config["verifier"]
+    if config["schema_version"] != "1.3" or verifier["environment_mode"] != "separate":
+        raise ValueError("Expected SWE-bench Science's schema 1.3 separate-verifier release")
+    if config.get("artifacts") != [PATCH]:
+        raise ValueError(f"Expected the sole Science artifact to be {PATCH}")
+    for environment in (config["environment"], verifier["environment"]):
+        if environment["allow_internet"] or "@sha256:" not in environment["docker_image"]:
+            raise ValueError("SWE-bench Science requires offline digest-pinned images")
+        # Skopeo's docker transport accepts repository@digest, including registries with ports.
+        environment["docker_image"] = re.sub(r":[^/:@]+(?=@)", "", environment["docker_image"])
+    if config["agent"]["network_mode"] != "no-network" or verifier["network_mode"] != "no-network":
+        raise ValueError("SWE-bench Science requires the native no-network protocol")
+    hook = (directory / "pre_artifacts.sh").read_text()
+    command = f"cd {shlex.quote(config['environment']['workdir'])} && sh -c {shlex.quote(hook)}"
+    # This release's 1.3 fields have 1.2 equivalents: offline environment
+    # declarations plus an explicit collection command replace Pier's hook.
+    config["schema_version"] = "1.2"
+    verifier["collect"] = [{"command": command, "timeout_sec": 300.0}]
+    return config
+
+
+def lower_science_package(directory: Path, row: RawRow, job: JobSettings) -> HarborTask:
+    """Convert a Pier 1.3 science package to a Harbor task with isolated patch grading."""
+    config = _harbor_config(directory)
+    with TemporaryDirectory(prefix="swe-science-package-") as temporary:
+        prepared = Path(temporary) / directory.name
+        (prepared / "environment").mkdir(parents=True)
+        (prepared / "tests").mkdir()
+        shutil.copyfile(directory / "instruction.md", prepared / "instruction.md")
+        shutil.copyfile(directory / "tests/grader.py", prepared / "tests/grader.py")
+        (prepared / TASK_CONFIG).write_text(tomlkit.dumps(config))
+        lowered = lower_package(
+            prepared, task_id=row.id, source=row.source, rule=PackageTests(), image_digests={}, job=job
+        )
+    grader = lowered.task.grader
+    assert isinstance(grader, ScriptGrader)
+    assert isinstance(grader.placement, GraderMachine)
+    placement = grader.placement.model_copy(
+        update={"artifacts": (VerifierArtifact(source=PATCH, target=PATCH, kind=ArtifactKind.FILE),)}
+    )
+    # JSON mode reads the native reward field without treating nested diagnostic
+    # reports as numeric metrics. The original report is not rewritten.
+    grader = grader.model_copy(
+        update={
+            "placement": placement,
+            "reward": FileReward(files=(RewardFile(path=REWARD_JSON_PATH, format=RewardFileFormat.JSON),)),
+        }
+    )
+    return HarborTask(lowered.task.model_copy(update={"grader": grader}), lowered.episode)
 
 
 def science_source(
@@ -71,13 +142,13 @@ def science_source(
         count=len(task_ids),
         attempt_timeout=10800,
     )
-    return harbor_evaluation_source(
+    return harbor_source(
         dataset,
         harness,
-        partial(convert, job=job),
+        lower=lower_science_package,
+        job=job,
         max_input_tokens=65536 if pi else None,
         max_output_tokens=PI_MAX_OUTPUT_TOKENS if pi else MAX_OUTPUT_TOKENS,
-        trials=1,
         protocol=protocol_name,
     )
 

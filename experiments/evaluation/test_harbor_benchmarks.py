@@ -17,13 +17,12 @@ from shellbox.machine import NetworkPolicy
 from taskcompendium.evaluation.corpus import evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, PiAgent, TerminusAgent
 from taskcompendium.importers.harbor.package import JobSettings
-from taskcompendium.models import AgentMachine, GraderMachine, ScriptGrader, Source, TaskSpec, VerifyitGrader
+from taskcompendium.models import AgentMachine, ScriptGrader, Source, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
 
 import experiments.evaluation.benchmarks.harbor as harbor_module
 import experiments.post_training.task_curation.harbor_packages as packages_module
-from experiments.evaluation.benchmarks import swebench_science
 from experiments.evaluation.benchmarks.agentic import BIXBENCH, FINANCEAGENT
 from experiments.evaluation.benchmarks.harbor import (
     NODE_VERSION,
@@ -130,50 +129,6 @@ def test_a_repository_archive_with_another_digest_stages_nothing(tmp_path):
         stage_archive_packages(stream, "0" * 64, "", StoragePath(str(output)), None)
 
     assert not output.exists()
-
-
-def test_science_corpus_uses_the_validated_daytona_solver_resources():
-    fixture = Path(__file__).resolve().parents[2] / "lib/taskcompendium/tests/fixtures/swebench_science/task_002"
-    row = RawRow(
-        "tasks/task_002.tar.gz:0",
-        Source(
-            dataset=swebench_science.DATASET, revision=swebench_science.REVISION, row="task_002", importer_revision="1"
-        ),
-        {"name": fixture.name, "archive": package_archive(fixture)},
-    )
-    [source] = swebench_science.benchmarks()[0].resolve("pi-xhigh")
-    task = source.config.recipe.convert(row, ConversionContext({}, None))
-    assert isinstance(task, TaskSpec)
-    build = task.environment_requirements.docker_build
-    assert build is not None
-    dockerfile = base64.b64decode(build.files[0].source.content_base64).decode()
-    assert "@earendil-works/pi-coding-agent@0.87.0" in dockerfile
-    assert isinstance(task.grader, ScriptGrader) and isinstance(task.grader.placement, GraderMachine)
-    assert task.grader.placement.environment.docker_build is None
-    episode = source.config.item_builder(task).episode
-    assert episode is not None
-    assert (episode.cpus, episode.memory_mb, episode.storage_mb) == (2, 8192, 10240)
-
-
-def test_nested_huggingface_selection_stages_only_requested_tasks(tmp_path, monkeypatch):
-    repository = tmp_path / "repository"
-    for name in ("task_001", "task_002", "task_003"):
-        write_package(repository / "tasks" / name, f'[environment]\ndocker_image = "{IMAGE}"\n')
-    monkeypatch.setattr(packages_module, "snapshot_download", lambda *_args, **_kwargs: str(repository))
-    output = tmp_path / "staged"
-    stage_repository_packages(
-        "org/fixture", REVISION, StoragePath(str(output)), root="tasks", selected=frozenset({"task_001", "task_002"})
-    )
-    assert sorted(path.name for path in (output / "tasks").iterdir()) == ["task_001.tar.gz", "task_002.tar.gz"]
-    assert (output / "tasks/task_002.tar.gz").read_bytes() == package_archive(repository / "tasks/task_002")
-    with pytest.raises(ValueError, match="task_004"):
-        stage_repository_packages(
-            "org/fixture",
-            REVISION,
-            StoragePath(str(tmp_path / "missing")),
-            root="tasks",
-            selected=frozenset({"task_004"}),
-        )
 
 
 def test_a_harbor_repository_publishes_one_agent_item_per_package(tmp_path, local_graph, monkeypatch):

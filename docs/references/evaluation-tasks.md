@@ -266,49 +266,16 @@ process exit. Shellbox provides the sandbox and bounds the whole grader command.
 
 ### SWE-bench Science
 
-The curated catalog exposes two selections from the
-[pinned SWE-bench Science release](https://huggingface.co/datasets/OpenMOSS-Team/SWE-bench-Science/tree/997408298e8e4d09978b1120b95c4540d1a71bcb).
-`swebench-science` runs the upstream unrestricted 96.
-`swebench-science-hosted114` adds the 18 reviewed opt-in packages. Tasks 019,
-026, 035, 101 and 102 remain outside the hosted selection. Release tooling
-and metadata are MIT licensed. Individual task materials retain their upstream licenses.
+`swebench-science` selects the upstream unrestricted 96 tasks.
+`swebench-science-hosted114` adds 18 reviewed opt-in tasks. Both use Pi 0.87.0
+at `xhigh` with a 65,536-token context cap and a 16,384-token reply cap,
+subject to the served model's limits. The 96-task selection also supports Mini-SWE-Agent.
 
-Both named evaluations use Pi 0.87.0 with explicit `xhigh`, one attempt per
-task, up to 16 concurrent attempts, a 65,536-token context cap and a
-16,384-token reply cap. The served model must support Pi's thinking format.
-Its context and generation settings can lower these limits.
-The 96-task benchmark also exposes the `mini-swe-agent` protocol with its
-8,192-token reply limit. Pi is installed when building the solver image
-from the release digest using the shared Harbor Pi installation recipe.
-
-The adapter preserves each instruction and both digest-pinned images. It
-translates Pier's `pre_artifacts.sh` into a collect command, then transfers
-only `model.patch` to a fresh verifier. A missing patch is an infrastructure
-failure; a clean solver produces an explicit empty patch. The release's
-`grader.py` overlays the verifier image, as upstream does, but the public
-`test.sh` stub is not uploaded: the image's native entrypoint applies the
-patch, rebuilds and invokes the grader. The numeric `reward` field is read
-from the original JSON report without interpreting nested diagnostics as
-metrics.
-
-The release requests two CPUs, 8 GiB RAM and 20 GiB storage. The adapter
-requests 10 GiB solver storage on Daytona. The curated runner uses a fresh
-local Shellbox verifier on the remote evaluator worker. The validation runs
-used separate Daytona solver and verifier machines. The package deadlines
-are preserved and the attempt backstop is three hours. Both machines deny
-external networking. Model requests run through the host.
-
-Smoke-test the launch plan with:
-
-```bash
-uv run python -m experiments.evaluation.cli launch \
-  --model qwen3.6-35b-a3b --evals swebench-science --limit 1 --dry-run
-```
-
-Report the selection, harness, effective token budgets and verifier backend.
-The [benchmark adoption issue](https://github.com/marin-community/marin/issues/12108)
-records native-grader controls, model runs and comparisons with the authors'
-119-task leaderboard on matching task IDs.
+The solver exports its patch with the release's collection hook. A fresh
+digest-pinned verifier applies the patch and runs its native private tests.
+The catalog uses 10 GiB of solver storage on Daytona and a local Shellbox verifier.
+The [adoption issue](https://github.com/marin-community/marin/issues/12108)
+records the license decisions, verifier controls and model comparisons.
 
 ## Published corpus and raw results
 
