@@ -785,7 +785,7 @@ def test_gate_rejects_changed_candidate_configuration(recorded_runs, preset_tabl
         with edit_receipt(recorded_runs(preset.name, name, inputs=inputs)) as receipt:
             set_path(receipt, path, value)
         report = compare(preset.name, "--candidate", name)
-        assert report["verdict"] == "invalid" and all(reason in report["reason"] for reason in reasons), report
+        assert report["verdict"] == "invalid" and all(reason in report["reason"] for reason in reasons), (case, report)
 
     name = "users/test/config-evaluation-cadence"
     with edit_receipt(recorded_runs(preset.name, name, inputs=inputs)) as receipt:
@@ -796,7 +796,7 @@ def test_gate_rejects_changed_candidate_configuration(recorded_runs, preset_tabl
         )
         evaluation["eval_steps"] = 17
     report = compare(preset.name, "--candidate", name)
-    assert report["verdict"] == "invalid" and "eval_steps" in report["reason"], report
+    assert report["verdict"] == "invalid" and "eval_steps" in report["reason"], ("evaluation-cadence", report)
 
 
 def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):

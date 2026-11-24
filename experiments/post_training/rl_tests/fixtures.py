@@ -87,12 +87,6 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value))
 
 
-def printed_status(output):
-    # CliRunner merges stderr into result.output; status is on result.stdout.
-    marker = output.rfind("\npreset:")
-    return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
-
-
 def shrink_recorded_panel(binding: str) -> None:
     """Keep one task per fixture family in the panel, including its membership records."""
     panel = Path(recipe.selection_artifact(binding).path())
