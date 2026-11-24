@@ -185,7 +185,8 @@ def _drill_step(make_step, faults: _Faults):
                 host_step[0] = int(state.step)
             step = host_step[0]
             if faults.fire("damage", step):
-                batch = dataclasses.replace(batch, tokens=batch.tokens.at[0, :16].set(FLOAT_BITS))
+                damaged = batch.tokens.at[0, :16].set(FLOAT_BITS, out_sharding=batch.tokens.sharding)
+                batch = dataclasses.replace(batch, tokens=damaged)
             if faults.fire("nan", step):
                 state = dataclasses.replace(
                     state,
