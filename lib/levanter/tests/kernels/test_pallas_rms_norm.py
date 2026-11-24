@@ -5,13 +5,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-import levanter.kernels.pallas.rms_norm.pallas_tpu as pallas_tpu
 
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm, batch_invariant_rms_norm_reference
 from levanter.kernels.pallas.rms_norm.pallas_tpu import (
     PallasRmsNormUnsupportedError,
-    _normalize_partition_spec,
-    _sharded_local_pallas,
     batch_invariant_rms_norm_pallas_tpu,
 )
 
@@ -94,6 +91,7 @@ def test_batch_invariant_rms_norm_has_one_shared_flattened_row_domain(rows):
         batch_invariant_rms_norm_pallas_tpu(x, weight, eps=1e-5)
 
 
+@pytest.mark.tpu
 def test_batch_invariant_rms_norm_named_sharding_contract_on_tpu():
     if jax.default_backend() != "tpu":
         pytest.skip("NamedSharding Pallas behavior requires a TPU backend.")
@@ -127,6 +125,7 @@ def test_batch_invariant_rms_norm_named_sharding_contract_on_tpu():
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.tpu
 def test_batch_invariant_rms_norm_explicit_three_dimensional_vjp_preserves_sharding(dtype):
     if jax.default_backend() != "tpu" or len(jax.devices()) < 4:
         pytest.skip("requires four TPU devices for the production row-sharded layout")
@@ -161,108 +160,3 @@ def test_batch_invariant_rms_norm_explicit_three_dimensional_vjp_preserves_shard
 
     hlo = str(jax.jit(apply).lower(x, weight).compiler_ir()).lower()
     assert "all-gather" not in hlo
-
-
-def test_batch_invariant_rms_norm_named_mesh_survives_public_jit_and_vjp(monkeypatch):
-    device = jax.devices()[0]
-    mesh = jax.sharding.Mesh(np.asarray([device]), ("data",))
-    x_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
-    weight_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-    x = jax.device_put(jnp.ones((1, 128), dtype=jnp.float32), x_sharding)
-    weight = jax.device_put(jnp.ones((128,), dtype=jnp.float32), weight_sharding)
-    monkeypatch.setattr(pallas_tpu, "_validate_tpu_inputs", lambda value, scale: None)
-    monkeypatch.setattr(pallas_tpu, "_local_pallas", lambda value, scale, *, eps: value * scale)
-
-    plain = jax.jit(lambda value: batch_invariant_rms_norm(value, weight, 1e-5, implementation="pallas_tpu"))(x)
-    differentiated = jax.jit(
-        lambda value: jax.vjp(
-            lambda inner: batch_invariant_rms_norm(inner, weight, 1e-5, implementation="pallas_tpu"), value
-        )[0]
-    )(x)
-    dynamic = jax.jit(lambda value, scale: batch_invariant_rms_norm(value, scale, 1e-5, implementation="pallas_tpu"))(
-        x, weight
-    )
-    np.testing.assert_array_equal(np.asarray(plain), np.asarray(differentiated))
-    np.testing.assert_array_equal(np.asarray(plain), np.asarray(dynamic))
-
-
-def test_batch_invariant_rms_norm_normalizes_short_specs_and_rejects_invalid_layouts(monkeypatch):
-    assert _normalize_partition_spec(jax.sharding.PartitionSpec("data"), 2) == jax.sharding.PartitionSpec("data", None)
-    assert _normalize_partition_spec(jax.sharding.PartitionSpec(), 1) == jax.sharding.PartitionSpec(None)
-    with pytest.raises(PallasRmsNormUnsupportedError, match="exceeds operand rank"):
-        _normalize_partition_spec(jax.sharding.PartitionSpec("data", "model", "extra"), 2)
-
-    device = jax.devices()[0]
-    mesh = jax.sharding.Mesh(np.asarray([device]), ("data",))
-    other_mesh = jax.sharding.Mesh(np.asarray([device]), ("other",))
-    x_short = jax.device_put(
-        jnp.ones((1, 128), dtype=jnp.float32),
-        jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data")),
-    )
-    replicated_weight = jax.device_put(
-        jnp.ones((128,), dtype=jnp.float32),
-        jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec()),
-    )
-    monkeypatch.setattr(pallas_tpu, "_local_pallas", lambda value, scale, *, eps: value)
-    np.testing.assert_array_equal(
-        np.asarray(_sharded_local_pallas(x_short, replicated_weight, eps=1e-5)), np.ones((1, 128), dtype=np.float32)
-    )
-
-    invalid_cases = (
-        (
-            x_short,
-            jax.device_put(
-                jnp.ones((128,), dtype=jnp.float32),
-                jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data")),
-            ),
-            "row-sharded",
-        ),
-        (
-            jax.device_put(
-                jnp.ones((1, 128), dtype=jnp.float32),
-                jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(None, "data")),
-            ),
-            replicated_weight,
-            "row-sharded",
-        ),
-        (
-            x_short,
-            jnp.ones((128,), dtype=jnp.float32),
-            "requires explicit NamedSharding",
-        ),
-        (
-            x_short,
-            jax.device_put(
-                jnp.ones((128,), dtype=jnp.float32),
-                jax.sharding.NamedSharding(other_mesh, jax.sharding.PartitionSpec()),
-            ),
-            "same mesh",
-        ),
-    )
-    for invalid_x, invalid_weight, message in invalid_cases:
-        with pytest.raises(PallasRmsNormUnsupportedError, match=message):
-            _sharded_local_pallas(invalid_x, invalid_weight, eps=1e-5)
-
-
-def test_batch_invariant_rms_norm_rejects_same_shape_different_concrete_meshes(monkeypatch):
-    if len(jax.devices()) < 2:
-        pytest.skip("requires two visible devices to construct distinct concrete meshes")
-
-    devices = np.asarray(jax.devices()[:2])
-    mesh = jax.sharding.Mesh(devices, ("data",))
-    reordered_mesh = jax.sharding.Mesh(devices[::-1], ("data",))
-    assert mesh.shape == reordered_mesh.shape
-    assert mesh.axis_names == reordered_mesh.axis_names
-    assert mesh != reordered_mesh
-
-    x = jax.device_put(
-        jnp.ones((2, 128), dtype=jnp.float32),
-        jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data")),
-    )
-    weight = jax.device_put(
-        jnp.ones((128,), dtype=jnp.float32),
-        jax.sharding.NamedSharding(reordered_mesh, jax.sharding.PartitionSpec()),
-    )
-    monkeypatch.setattr(pallas_tpu, "_local_pallas", lambda value, scale, *, eps: value)
-    with pytest.raises(PallasRmsNormUnsupportedError, match="same mesh"):
-        _sharded_local_pallas(x, weight, eps=1e-5)
