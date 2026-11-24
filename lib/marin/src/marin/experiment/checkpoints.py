@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
-from typing import Any
 
 import draccus
 from fray.types import ResourceConfig
@@ -125,14 +124,15 @@ class HfToLevanterCheckpoint:
     model: LmConfig
 
 
-def _omit_encoded_legacy_values(config: object, encoded: Any) -> Any:
+def _omit_fingerprint_fields(config: object, encoded: object) -> object:
+    """Remove opted-in fields from an encoded config before hashing."""
     if isinstance(encoded, list) and isinstance(config, list | tuple):
-        return [_omit_encoded_legacy_values(item, value) for item, value in zip(config, encoded, strict=True)]
+        return [_omit_fingerprint_fields(item, value) for item, value in zip(config, encoded, strict=True)]
     if not isinstance(encoded, dict):
         return encoded
 
     omitted: set[str] = set()
-    values: Mapping[Any, object]
+    values: Mapping[object, object]
     if is_dataclass(config) and not isinstance(config, type):
         omitted = fingerprint_omitted_fields(config)
         values = {item.name: getattr(config, item.name) for item in fields(config)}
@@ -142,7 +142,7 @@ def _omit_encoded_legacy_values(config: object, encoded: Any) -> Any:
         return encoded
 
     return {
-        key: _omit_encoded_legacy_values(values[key], value) if key in values else value
+        key: _omit_fingerprint_fields(values[key], value) if key in values else value
         for key, value in encoded.items()
         if key not in omitted
     }
@@ -169,7 +169,8 @@ def hf_to_levanter(
     tokenizer_revision = tokenizer_revision or hf_revision
     model_config = resolve_lm_config(model_type, hf_id, hf_revision)
     model_config_json = draccus.encode(model_config)
-    fingerprint_model_config_json = _omit_encoded_legacy_values(model_config, model_config_json)
+    fingerprint_model_config_json = _omit_fingerprint_fields(model_config, model_config_json)
+    assert isinstance(fingerprint_model_config_json, dict)
     name = f"checkpoints/hf-to-levanter/{get_directory_friendly_name(hf_id)}-{model_type}"
 
     def build_config(ctx: StepContext) -> HfToLevanterConfig:

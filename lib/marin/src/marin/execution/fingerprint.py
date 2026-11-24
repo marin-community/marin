@@ -39,6 +39,8 @@ from marin.utilities.json_encoder import scalar_dtype
 
 logger = logging.getLogger(__name__)
 
+_FINGERPRINT_OMIT_VALUE = "fingerprint_omit_value"
+
 # Custom canonical encoders, keyed by type, consulted before the best-effort fallback.
 _REGISTRY: dict[type, Callable[[Any], object]] = {}
 
@@ -96,8 +98,8 @@ def fingerprint_omitted_fields(config: object) -> set[str]:
     return {
         field.name
         for field in dataclasses.fields(config)
-        if "fingerprint_omit_value" in field.metadata
-        and getattr(config, field.name) == field.metadata["fingerprint_omit_value"]
+        if _FINGERPRINT_OMIT_VALUE in field.metadata
+        and getattr(config, field.name) == field.metadata[_FINGERPRINT_OMIT_VALUE]
     }
 
 
