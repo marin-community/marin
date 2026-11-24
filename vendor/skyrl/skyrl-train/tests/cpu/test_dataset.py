@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 from dataclasses import replace
@@ -202,6 +203,18 @@ def test_prepared_selection_rebuilds_a_damaged_cache(prepared_selection, monkeyp
     )
     assert [recovered[i] for i in range(len(recovered))] == [original[i] for i in range(len(original))]
     assert pq.read_table(cache_file)[PROMPT_LENGTH_COLUMN].null_count == 0
+
+
+def test_prepared_selection_surfaces_driver_scratch_write_failure(prepared_selection, monkeypatch):
+    cache, configs = prepared_selection
+    SourceTaskDataset([cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache)
+
+    def no_space(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(pa.ipc, "new_stream", no_space)
+    with pytest.raises(OSError, match="No space left on device"):
+        SourceTaskDataset([cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache)
 
 
 def test_prepared_selection_recomputes_lengths_when_installed_lowering_changes(

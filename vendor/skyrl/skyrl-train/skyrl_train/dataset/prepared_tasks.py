@@ -2,8 +2,8 @@
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping
-from contextlib import nullcontext
+from collections.abc import Generator, Iterable, Mapping
+from contextlib import closing, nullcontext
 from importlib.metadata import version
 from importlib.util import find_spec
 from pathlib import Path
@@ -140,7 +140,28 @@ def _tokenizer_key(tokenizer: PreTrainedTokenizerBase, chat_template_kwargs: dic
 def load_prepared_tasks(
     path: StoragePath, key: str, required_columns: set[str], row_count: int, arrow_path: Path
 ) -> Dataset | None:
-    """Decode a complete cache object into a local memory-mapped dataset in batches."""
+    """Return a disk-backed dataset, or None if the shared cache is missing or invalid."""
+    with closing(_read_prepared_task_batches(path, key, required_columns, row_count)) as batches:
+        first = next(batches, None)
+        if first is None:
+            return None
+        with pa.ipc.new_stream(arrow_path, first.schema) as writer:
+            writer.write_batch(first)
+            rows_written = first.num_rows
+            del first
+            for batch in batches:
+                writer.write_batch(batch)
+                rows_written += batch.num_rows
+    # A corrupt file can fail after yielding valid batches.
+    if rows_written != row_count:
+        arrow_path.unlink()
+        return None
+    return Dataset.from_file(str(arrow_path), in_memory=False)
+
+
+def _read_prepared_task_batches(
+    path: StoragePath, key: str, required_columns: set[str], row_count: int
+) -> Generator[pa.RecordBatch, None, None]:
     try:
         filesystem, filename = filesystem_for(str(path))
         with nullcontext() if path.is_local else TemporaryDirectory() as directory:
@@ -159,18 +180,14 @@ def load_prepared_tasks(
                 lengths_index = schema.get_field_index(PROMPT_LENGTH_COLUMN)
                 if schema.field(lengths_index).type != pa.int64():
                     raise ValueError("prepared task cache contains invalid prompt lengths")
-                with pa.ipc.new_stream(arrow_path, schema) as writer:
-                    for batch in parquet.iter_batches(batch_size=PREPARED_TASK_BATCH_SIZE):
-                        if batch.column(lengths_index).null_count:
-                            raise ValueError("prepared task cache contains null prompt lengths")
-                        writer.write_batch(batch)
-        return Dataset.from_file(str(arrow_path), in_memory=False)
+                for batch in parquet.iter_batches(batch_size=PREPARED_TASK_BATCH_SIZE):
+                    if batch.column(lengths_index).null_count:
+                        raise ValueError("prepared task cache contains null prompt lengths")
+                    yield batch
     except FileNotFoundError:
-        return None
+        return
     except (OSError, ValueError, MissingCredentials) as error:
         logger.warning("Could not read prepared task cache {}: {}", path, error)
-        arrow_path.unlink(missing_ok=True)
-        return None
 
 
 def write_prepared_tasks(path: StoragePath, key: str, schema: pa.Schema, arrow_shards: Iterable[str]) -> None:

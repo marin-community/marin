@@ -381,7 +381,8 @@ class SourceTaskDataset(TaskDataset):
         if prepared is None:
             logger.info("Prepared task cache miss: {}", path)
             prepared = self._prepare_cached_rows(arrow_path)
-            write_prepared_tasks(path, key, prepared.data.schema, (file["filename"] for file in prepared.cache_files))
+            # Dataset.map returns the contiguous worker shards in source order.
+            write_prepared_tasks(path, key, prepared.data.schema, (shard["filename"] for shard in prepared.cache_files))
         else:
             logger.info("Prepared task cache hit: {}", path)
         self._prepared_directory = directory
