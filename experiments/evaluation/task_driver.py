@@ -14,15 +14,12 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from marin.evaluation.task_worker import (
     DAYTONA_API_KEY,
-    DAYTONA_API_URL,
-    DAYTONA_TARGET,
     DEFAULT_MAX_ATTEMPTS,
     JUDGE_API_KEY,
     JUDGE_ENDPOINT,
     SOLVER_API_KEY,
     SOLVER_ENDPOINT,
     WORKER_TIMEOUT,
-    daytona_connection,
     execute_with_retries,
     execution_config,
     machine_backends,
@@ -35,6 +32,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from rigging.timing import Duration
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.machine import Backend
 from verifyit.modes.grade_judge import JudgeConnection
 
@@ -120,7 +118,7 @@ def main() -> None:
     api_key = require_secret(arguments.api_key_env)
     daytona = None
     if Backend.DAYTONA in machine_backends(execution_config(config)):
-        daytona = daytona_connection(require_secret(arguments.daytona_api_key_env))
+        daytona = DaytonaConnection(api_key=require_secret(arguments.daytona_api_key_env))
         # Reject an incomplete account before any worker starts.
         daytona.client_factory()
     if arguments.local:
@@ -145,11 +143,9 @@ def main() -> None:
         return
     secrets = {SOLVER_ENDPOINT: base_url, SOLVER_API_KEY: api_key}
     secrets.update({name: require_secret(name) for name in config.task_secrets})
-    env_vars = {}
     if daytona is not None:
-        assert daytona.api_key is not None and daytona.api_url is not None and daytona.target is not None
+        assert daytona.api_key is not None
         secrets[DAYTONA_API_KEY] = daytona.api_key
-        env_vars = {DAYTONA_API_URL: daytona.api_url, DAYTONA_TARGET: daytona.target}
     if arguments.judge_endpoint:
         secrets[JUDGE_ENDPOINT] = arguments.judge_endpoint
         secrets[JUDGE_API_KEY] = require_secret(arguments.judge_api_key_env)
@@ -163,7 +159,6 @@ def main() -> None:
             resources=ResourceSpec(cpu=arguments.cpu, memory=arguments.memory, disk=arguments.disk),
             timeout=arguments.timeout,
             secrets=secrets,
-            env_vars=env_vars,
             max_attempts=arguments.max_attempts,
         )
         print(job.job_id)

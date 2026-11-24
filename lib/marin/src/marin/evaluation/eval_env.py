@@ -6,12 +6,9 @@
 import os
 
 DAYTONA_EVAL_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
-DAYTONA_TARGET_ENV = "DAYTONA_TARGET"
-DAYTONA_RUNTIME_ENV_KEYS = ("DAYTONA_API_URL", DAYTONA_TARGET_ENV)
 
 # Credentials and W&B metadata propagated from an eval orchestrator into its serve and mechanism children.
 EVAL_RUNTIME_ENV_KEYS: tuple[str, ...] = (
-    *DAYTONA_RUNTIME_ENV_KEYS,
     "WANDB_API_KEY",
     "WANDB_ENTITY",
     "WANDB_PROJECT",

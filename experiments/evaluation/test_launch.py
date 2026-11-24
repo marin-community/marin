@@ -55,7 +55,6 @@ from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST
 def submitted_batches(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "local-test-key")
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     batches: list[EvaluationBatch] = []
 
     class Client:
@@ -272,7 +271,6 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
 def test_daytona_launch_uses_the_eval_org_key_not_an_exported_daytona_key(tmp_path, monkeypatch, harbor_task_workspace):
     monkeypatch.setenv("DAYTONA_API_KEY", "rl-org-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "eval-org-key")
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
     submitted_env = []
 
@@ -668,7 +666,6 @@ def agent_selection(tmp_path, agent_source, monkeypatch) -> Path:
         **{benchmark.name: benchmark for benchmark in fixed_benchmarks([agent_source])},
     }
     monkeypatch.setattr("experiments.evaluation.curated.evaluation_benchmarks", lambda: catalog)
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     path = tmp_path / "agent.yaml"
     path.write_text("evaluations:\n  terminal-agent:\n    benchmark: terminal-agent\n")
     return path
@@ -733,16 +730,6 @@ def test_agent_launch_binds_daytona_credentials_only_to_daytona_task_machines(ag
     assert (batch.secret_env.get(DAYTONA_API_KEY) == DAYTONA_SECRET_ENV[DAYTONA_API_KEY]) is daytona
     assert (DAYTONA_API_KEY in evaluation.secret_env_keys) is daytona
     assert set(DAYTONA_EGRESS).issubset(batch.egress_allow) is daytona
-
-
-def test_a_daytona_launch_without_a_target_fails_before_submission(agent_command, submitted_batches, monkeypatch):
-    monkeypatch.delenv("DAYTONA_TARGET")
-
-    result = CliRunner().invoke(cli, agent_command)
-
-    assert result.exit_code != 0
-    assert "Daytona task machines, which require DAYTONA_TARGET" in result.output
-    assert submitted_batches == []
 
 
 def test_agent_launch_budgets_the_window_the_server_runs(agent_command, submitted_batches, monkeypatch):

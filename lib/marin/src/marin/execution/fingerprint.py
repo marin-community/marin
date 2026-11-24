@@ -39,6 +39,8 @@ from marin.utilities.json_encoder import scalar_dtype
 
 logger = logging.getLogger(__name__)
 
+_FINGERPRINT_OMIT_VALUE = "fingerprint_omit_value"
+
 # Custom canonical encoders, keyed by type, consulted before the best-effort fallback.
 _REGISTRY: dict[type, Callable[[Any], object]] = {}
 
@@ -89,6 +91,18 @@ def _unfingerprintable(o: object, why: str) -> str:
     )
 
 
+def fingerprint_omitted_fields(config: object) -> set[str]:
+    """Return fields that hold their explicitly marked legacy value."""
+    if not dataclasses.is_dataclass(config) or isinstance(config, type):
+        raise TypeError("Expected a dataclass configuration")
+    return {
+        field.name
+        for field in dataclasses.fields(config)
+        if _FINGERPRINT_OMIT_VALUE in field.metadata
+        and getattr(config, field.name) == field.metadata[_FINGERPRINT_OMIT_VALUE]
+    }
+
+
 class _FingerprintEncoder(json.JSONEncoder):
     """Canonical JSON for config fingerprints.
 
@@ -98,7 +112,8 @@ class _FingerprintEncoder(json.JSONEncoder):
 
     def default(self, o):
         if dataclasses.is_dataclass(o) and not isinstance(o, type):
-            return dataclasses.asdict(o)
+            omitted = fingerprint_omitted_fields(o)
+            return {field.name: getattr(o, field.name) for field in dataclasses.fields(o) if field.name not in omitted}
         if isinstance(o, Enum):
             return o.value
         if isinstance(o, timedelta):
@@ -163,7 +178,12 @@ def _canonical_key(o: object) -> str:
 
 
 def canonical_json(config: object) -> str:
-    """The canonical, deterministic JSON for ``config`` — the bytes a fingerprint hashes."""
+    """Encode configuration deterministically for hashing.
+
+    Set ``fingerprint_omit_value`` in a new dataclass field's metadata to the
+    constant value that preserves the pre-field behavior. Keep that value
+    fixed when changing the field's default.
+    """
     return json.dumps(config, sort_keys=True, cls=_FingerprintEncoder)
 
 

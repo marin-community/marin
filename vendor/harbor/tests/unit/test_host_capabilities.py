@@ -20,9 +20,7 @@ def test_host_capabilities_resolve_without_the_daytona_sdk() -> None:
 
         capabilities = host_capabilities_from_environment({}, model_authentication={})
         assert capabilities.daytona is not None
-        connection = DaytonaConnection(
-            api_key="synthetic-secret-key", api_url="https://fixture.invalid/api", target="fixture"
-        )
+        connection = DaytonaConnection(api_key="synthetic-secret-key")
         assert callable(connection.client_factory())
         print("resolved")
         """

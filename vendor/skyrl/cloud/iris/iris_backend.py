@@ -859,8 +859,6 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
     # authentication. Iris bundles HF/W&B credentials as files; these provider
     # clients still consume explicitly forwarded environment values.
     for k in (
-        "DAYTONA_API_URL",
-        "DAYTONA_TARGET",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",

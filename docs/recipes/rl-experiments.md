@@ -151,6 +151,9 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-short --ve
 ```
 
 Plans and host-side submissions run the native driver checks on CPU before Iris submission.
+The rollout worker count times its CPUs per worker must fit the driver task's Iris CPU request.
+Static preference training with `trainer.evaluation_runner=training` skips this check because it starts
+no inference rollout pool.
 A plan without `--require` uses the declared control pin. With `--require`, planning also validates the pin
 and checks that control r0 recorded the requested metric. Gated execution and comparison require the pin's revision to match
 the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
@@ -387,6 +390,11 @@ identifies one native execution, including a resumed execution. In `resolved-lau
 are `config.run.id` and `config.run.attempt_id`. Pair them with the output path and source revision
 when recording a result.
 
+For quick-loop training time, use `elapsed_excluding_eval_seconds` from the
+`Training run completed` line in the SkyRL training driver logs. The timer runs from
+tracker setup through shutdown and subtracts all inline evaluation time, including
+step-zero and final evaluations when enabled.
+
 | Sink | Where to find the run |
 |---|---|
 | W&B | Open the attempt's `wandb_url` from status. The Snowball project is `marin-snowball-rl` in the launch's W&B team. The model tag identifies Snowball runs in that project. |
@@ -401,7 +409,7 @@ The dashboards are available through the [RL Grafana dashboard](https://grafana.
 ## Agentic checkpoint evaluation
 
 `train-long-checkpoint-eval` evaluates 30 pinned tasks each from BFCL, SWE-bench Verified
-and OpenThoughts-TBLite. Set `DAYTONA_EVAL_API_KEY` and `DAYTONA_TARGET` before submitting.
+and OpenThoughts-TBLite. Set `DAYTONA_EVAL_API_KEY` before submitting.
 The cohorts share SkyRL's evaluation pool with EvalLite. Up to 90 agent episodes can run
 concurrently across the three cohorts. Daytona builds the pinned task environments in
 declarative mode, and Terminus-2 evaluates the same frozen policy as EvalLite.

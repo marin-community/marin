@@ -35,9 +35,9 @@ export DAYTONA_EVAL_API_KEY="$(gcloud secrets versions access latest \
 The Marin RL coordinator allowlist forwards both names. Under
 `environment.task_sessions.daytona`, set `api_key_env: DAYTONA_RL_API_KEY`,
 `eval_api_key_env: DAYTONA_EVAL_API_KEY`, and `eval_image_build: declarative`.
-The task launcher reads those fields and rejects missing credentials. Set
-`DAYTONA_TARGET` to the provider target for both accounts. These paths are
-relative to `skyrl` in the generated launch config.
+The task launcher reads those fields and rejects missing credentials. These
+paths are relative to `skyrl` in the generated launch config. Shellbox fixes the
+provider endpoint and target for both accounts.
 
 With [the explicit coordinator-secret declaration](https://github.com/marin-community/marin/pull/10333),
 also set `IrisSkyRLExecution.required_env_vars` to
@@ -100,15 +100,13 @@ to the SDK's ambient account selection:
 ```bash
 # RL account used by training.
 : "${DAYTONA_RL_API_KEY:?Load the dedicated RL key through the configured secret provider}"
-export DAYTONA_TARGET="<the configured target>"
 
 uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
   --api-key-env DAYTONA_RL_API_KEY inventory
 ```
 
 Pass `--api-key-env DAYTONA_EVAL_API_KEY` to inventory or purge the eval account
-used for validation builds. `--target` overrides `DAYTONA_TARGET`. `--api-url`
-overrides `DAYTONA_API_URL`.
+used for validation builds.
 
 Read the account's current quota and inventory before submission. Snapshot quota
 and live sandbox capacity are separate limits. A successful GPU allocation proves
