@@ -66,9 +66,12 @@ class InvalidLikelihoodRequest(ValueError):
 
 
 def encode_pair(
-    tokenizer: Tokenizer, context: str, continuation: str, *, prefix_token_id: int
+    tokenizer: Tokenizer, context: str, continuation: str, *, prefix_token_id: int, bos_token_id: int | None
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """Move trailing context whitespace into the jointly encoded continuation."""
+    """Move trailing context whitespace into the jointly encoded continuation.
+
+    An empty context becomes ``prefix_token_id``; a nonempty one starts with ``bos_token_id`` when given.
+    """
     if not context:
         return (prefix_token_id,), tuple(tokenizer.encode(continuation, add_special_tokens=False))
     spaces = len(context) - len(context.rstrip())
@@ -77,14 +80,16 @@ def encode_pair(
         context = context[:-spaces]
     whole = tokenizer.encode(context + continuation, add_special_tokens=False)
     prefix = tokenizer.encode(context, add_special_tokens=False)
-    return tuple(prefix), tuple(whole[len(prefix) :])
+    bos = () if bos_token_id is None else (bos_token_id,)
+    return (*bos, *prefix), tuple(whole[len(prefix) :])
 
 
 @dataclass(frozen=True)
 class VllmLikelihood:
     """Score full continuation tokens with a one-token output reserve.
 
-    The caller owns the client and pins the tokenizer revision and prefix token.
+    The caller owns the client and pins the tokenizer revision, the empty-context prefix token and the
+    BOS token that starts nonempty contexts, if the model expects one.
     """
 
     client: AsyncOpenAI
@@ -92,10 +97,15 @@ class VllmLikelihood:
     tokenizer: Tokenizer
     context_size: int
     prefix_token_id: int
+    bos_token_id: int | None
 
     def prepare(self, context: str, continuation: str) -> EncodedLikelihood:
         context_tokens, continuation_tokens = encode_pair(
-            self.tokenizer, context, continuation, prefix_token_id=self.prefix_token_id
+            self.tokenizer,
+            context,
+            continuation,
+            prefix_token_id=self.prefix_token_id,
+            bos_token_id=self.bos_token_id,
         )
         maximum_prompt = self.context_size - 1
         removed = max(0, len(context_tokens) + len(continuation_tokens) - maximum_prompt)

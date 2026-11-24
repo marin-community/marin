@@ -9,7 +9,7 @@ import httpx
 import openai
 import pytest
 
-from rolloutengine.likelihood import LikelihoodTransportError, VllmLikelihood
+from rolloutengine.likelihood import LikelihoodTransportError, VllmLikelihood, encode_pair
 
 
 class CharacterTokenizer:
@@ -54,10 +54,37 @@ async def test_malformed_nonfinite_likelihood_retains_json_safe_wire_evidence_wi
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(serve)),
     ) as client:
         with pytest.raises(LikelihoodTransportError) as failure:
-            await VllmLikelihood(client, "fixture", CharacterTokenizer(), 64, 0)("c", "A", seed=None)
+            await VllmLikelihood(client, "fixture", CharacterTokenizer(), 64, 0, None)("c", "A", seed=None)
     evidence = failure.value.evidence
     assert requests == [evidence["request"]]
     assert evidence["response"]["id"] == "invalid-number"
     assert evidence["response"]["choices"][0]["logprobs"]["token_logprobs"][1] is None
     assert "NaN" in evidence["response_json"]
     json.dumps(evidence, allow_nan=False)
+
+
+BOS = 1
+
+
+@pytest.mark.parametrize(
+    ("context", "bos_token_id", "expected_context"),
+    [
+        # A nonempty context starts with the model's BOS, and the continuation keeps the trailing space.
+        ("Q: x? ", BOS, (BOS, *map(ord, "Q: x?"))),
+        ("Q: x? ", None, tuple(map(ord, "Q: x?"))),
+        # An empty context is only the prefix token, whatever the BOS policy.
+        ("", BOS, (0,)),
+    ],
+)
+def test_context_starts_with_bos_only_when_the_model_expects_one(context, bos_token_id, expected_context):
+    context_tokens, continuation_tokens = encode_pair(
+        CharacterTokenizer(), context, "yes", prefix_token_id=0, bos_token_id=bos_token_id
+    )
+    assert context_tokens == expected_context
+    assert continuation_tokens == tuple(map(ord, " yes" if context else "yes"))
+
+
+def test_bos_counts_as_context_so_only_continuation_tokens_are_scored():
+    prepared = VllmLikelihood(None, "fixture", CharacterTokenizer(), 64, 0, BOS).prepare("ab", "c")
+    assert prepared.prompt_token_ids == (BOS, ord("a"), ord("b"), ord("c"))
+    assert (prepared.context_tokens, prepared.continuation_tokens) == (3, 1)
