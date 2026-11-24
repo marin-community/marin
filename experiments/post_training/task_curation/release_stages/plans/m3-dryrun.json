@@ -8,10 +8,10 @@
   "expected_contract_count": 4,
   "expected_contract_tasks": 51879,
   "expected_panels": 234,
-  "expected_population_tasks": 4362969,
+  "expected_population_tasks": 4363214,
   "expected_prior_sources": 332,
   "expected_selected_panels": 227,
-  "expected_source_count": 335,
+  "expected_source_count": 337,
   "gpu_runtime": null,
   "kind": "atlas-release-plan",
   "measured": {
@@ -416,7 +416,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "m3-dryrun",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v11",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v12",
   "scan_regions": {
     "us-east-02a": "s3://marin-us-east-02a/marin/rl-data/atlas/"
   },
@@ -430,11 +430,9 @@
   },
   "slice_output_root": "",
   "snapshot_id": "assembly-r39-admissions-20261123-v2",
-  "source_revision": "cee02b3ea363db7f475ca1c7527473aaa6570942",
+  "source_revision": "0853be004bfaae75f1c562c190e353f0baa0bbeb",
   "strict_audit_local": false,
   "targets": [
-    "Lego-X:Terminal-Lego-15k",
-    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@backfilled-20261122",
-    "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2@backfilled-20261122"
+    "Lego-X:Terminal-Lego-15k"
   ]
 }
