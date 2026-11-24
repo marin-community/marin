@@ -227,12 +227,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inputs", type=Path, required=True, help="Path to a JSON ValidationInputs document")
     parser.add_argument("--mode", choices=("dry-run", "write"), default="dry-run")
+    parser.add_argument(
+        "--local-disk-root",
+        type=Path,
+        help="Probe ext4 loop/overlay enforcement on this privileged worker; the local checker "
+        "records its disk-pool evidence from this pool",
+    )
     args = parser.parse_args()
     document = json.loads(args.inputs.read_text(encoding="utf-8"))
     document["manifest"] = ArtifactRef(**document["manifest"])
     inputs = ValidationInputs(**document)
     repo_root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
-    receipt = run_validation(inputs, dry_run=args.mode == "dry-run", repo_root=repo_root)
+    receipt = run_validation(
+        inputs,
+        dry_run=args.mode == "dry-run",
+        repo_root=repo_root,
+        disk_pool_root=args.local_disk_root,
+    )
     label = "BACKEND-VALIDATION-DRY-RUN" if args.mode == "dry-run" else "BACKEND-VALIDATION-SEALED"
     print(f"{label} {json.dumps(receipt)}", flush=True)
 
