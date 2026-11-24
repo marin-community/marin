@@ -14,11 +14,14 @@ import json
 import logging
 import math
 import os
+import shutil
+import site
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+import venv
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -542,21 +545,6 @@ def _base_preset_revision(module: str, index: RunIndexIdentity) -> str | None:
     """Read the main-base preset revision, or None if it cannot be determined."""
     root = recipe.REPO_ROOT
     preset = index.preset
-    program = """
-import sys
-from importlib import import_module
-from pathlib import Path
-from experiments.post_training.rl_presets import ModelPresets
-
-module, model, preset = sys.argv[1:]
-entry = import_module(module)
-if not Path(entry.__file__).resolve().is_relative_to(Path.cwd()):
-    raise ImportError(f"{module} did not load from the main snapshot")
-revisions = {value.by_name[preset].revision for value in vars(entry).values()
-             if isinstance(value, ModelPresets) and value.model == model and preset in value.by_name}
-if len(revisions) == 1:
-    print(revisions.pop())
-"""
     try:
         base = git_output(["merge-base", index.source_revision, "origin/main"], cwd=root, timeout=4)
     except (OSError, RuntimeError):
@@ -594,21 +582,37 @@ if len(revisions) == 1:
             path = Path(directory)
             with tarfile.open(fileobj=io.BytesIO(snapshot)) as archive:
                 archive.extractall(path, filter="data")
+            # The launcher owns the JSON protocol, including for bases that predate it.
+            cli = Path(__file__).with_name("rl_preset_cli.py")
+            shutil.copyfile(cli, path / "experiments/post_training" / cli.name)
+            # Isolated Python reads paths from its venv rather than the shell environment.
+            builder = venv.EnvBuilder(symlinks=True)
+            environment = builder.ensure_directories(path / ".venv")
+            builder.create_configuration(environment)
+            builder.setup_python(environment)
+            sources = [path, *sorted(path.glob("lib/*/src")), *site.getsitepackages([sys.prefix, sys.exec_prefix])]
+            (Path(environment.lib_path) / "archive.pth").write_text("\n".join(map(str, sources)) + "\n")
             result = subprocess.run(
-                [sys.executable, "-c", program, module, index.model, preset],
+                [
+                    environment.env_exec_cmd,
+                    "-I",
+                    "-m",
+                    "experiments.post_training.rl_preset_cli",
+                    "describe",
+                    module,
+                    index.model,
+                    preset,
+                ],
                 text=True,
                 capture_output=True,
                 check=True,
                 cwd=path,
-                env={
-                    "PATH": os.defpath,
-                    "PYTHONNOUSERSITE": "1",
-                    "PYTHONPATH": os.pathsep.join(str(source) for source in sorted(path.glob("lib/*/src"))),
-                },
+                env={"PATH": os.defpath},
                 timeout=30,
             )
-            return result.stdout.strip() or None
-    except (OSError, subprocess.SubprocessError, tarfile.TarError) as error:
+            revision = json.loads(result.stdout)
+            return revision if isinstance(revision, str) else None
+    except (OSError, subprocess.SubprocessError, tarfile.TarError, json.JSONDecodeError) as error:
         logger.debug("Could not load preset %s from main commit %s (%s)", preset, base, type(error).__name__)
         return None
 
