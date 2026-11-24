@@ -399,7 +399,7 @@ def fetch_package_versions(package: str, token: str) -> dict[str, str] | None:
     The returned mapping is tag name -> manifest digest (the version's name). ``None``
     means the listing is unavailable and callers fall back to per-tag registry reads.
     """
-    repository = package.removeprefix("ghcr.io/")
+    repository = package.split("/")[-1]
     token = token.strip()
     versions: dict[str, str] = {}
     page = 1
