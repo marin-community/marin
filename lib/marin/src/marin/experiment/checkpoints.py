@@ -126,23 +126,26 @@ class HfToLevanterCheckpoint:
 
 
 def _omit_encoded_defaults(config: object, encoded: Any) -> Any:
-    if isinstance(encoded, dict):
-        if is_dataclass(config) and not isinstance(config, type):
-            omitted = default_fields_omitted_from_fingerprint(config)
-            values = {item.name: getattr(config, item.name) for item in fields(config)}
-            return {
-                name: _omit_encoded_defaults(values[name], value) if name in values else value
-                for name, value in encoded.items()
-                if name not in omitted
-            }
-        if isinstance(config, Mapping):
-            return {
-                key: _omit_encoded_defaults(config[key], value) if key in config else value
-                for key, value in encoded.items()
-            }
     if isinstance(encoded, list) and isinstance(config, list | tuple):
         return [_omit_encoded_defaults(item, value) for item, value in zip(config, encoded, strict=True)]
-    return encoded
+    if not isinstance(encoded, dict):
+        return encoded
+
+    omitted: set[str] = set()
+    values: Mapping[Any, object]
+    if is_dataclass(config) and not isinstance(config, type):
+        omitted = default_fields_omitted_from_fingerprint(config)
+        values = {item.name: getattr(config, item.name) for item in fields(config)}
+    elif isinstance(config, Mapping):
+        values = config
+    else:
+        return encoded
+
+    return {
+        key: _omit_encoded_defaults(values[key], value) if key in values else value
+        for key, value in encoded.items()
+        if key not in omitted
+    }
 
 
 def hf_to_levanter(

@@ -90,7 +90,7 @@ def _unfingerprintable(o: object, why: str) -> str:
 
 
 def default_fields_omitted_from_fingerprint(config: object) -> set[str]:
-    """Return the names of opt-in dataclass fields that have their default value."""
+    """Return names of opted-in fields that equal their declared literal default."""
     if not dataclasses.is_dataclass(config) or isinstance(config, type):
         raise TypeError("Expected a dataclass configuration")
     return {
