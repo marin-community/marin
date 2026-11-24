@@ -763,7 +763,10 @@ def _submit_from_launcher(
     if not module:
         raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
     submitted_at = datetime.now(UTC).isoformat()
-    index = context.meta["rl_index"].model_copy(update={"submitted_at": submitted_at})
+    index: RunIndexIdentity = context.meta["rl_index"]
+    index = index.model_copy(
+        update={"submitted_at": submitted_at, "base_preset_revision": _base_preset_revision(module, index)}
+    )
     runs = _from_handles(rl_handles).runs
     indexed_runs = {
         step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id: index for step in runs
