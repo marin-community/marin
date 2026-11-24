@@ -11,7 +11,7 @@ import random
 import tarfile
 import time
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 
 import httpx
@@ -58,6 +58,10 @@ class RequestOutcome:
     finish_reason: str | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    stream_done: bool = False
+    content_characters: int = 0
+    reasoning_characters: int = 0
+    request_index: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -145,6 +149,7 @@ async def request_outcome(client: httpx.AsyncClient, target: Target, body: dict)
     usage = {}
     done = False
     finish_reason = None
+    reasoning_characters = 0
     headers = {"Authorization": f"Bearer {target.token}"}
     try:
         async with client.stream("POST", target.base_url + "/chat/completions", headers=headers, json=body) as response:
@@ -161,9 +166,11 @@ async def request_outcome(client: httpx.AsyncClient, target: Target, body: dict)
                 if "error" in event:
                     return RequestOutcome(target.endpoint, RequestState.STREAM_ERROR, 200)
                 for choice in event.get("choices", []):
-                    text = choice.get("delta", {}).get("content")
+                    delta = choice.get("delta", {})
+                    text = delta.get("content")
                     if text:
                         content.append(text)
+                    reasoning_characters += len(delta.get("reasoning") or delta.get("reasoning_content") or "")
                     finish_reason = choice.get("finish_reason") or finish_reason
                 usage = event.get("usage") or usage
         valid = done and bool(content) and usage.get("completion_tokens", 0) > 0 and finish_reason == "stop"
@@ -176,12 +183,29 @@ async def request_outcome(client: httpx.AsyncClient, target: Target, body: dict)
             finish_reason=finish_reason,
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
+            stream_done=done,
+            content_characters=sum(len(part) for part in content),
+            reasoning_characters=reasoning_characters,
         )
     except httpx.HTTPError as error:
         # Exception text can contain response data or credentials.
-        return RequestOutcome(target.endpoint, RequestState.TRANSPORT_ERROR, error=type(error).__name__)
+        return RequestOutcome(
+            target.endpoint,
+            RequestState.TRANSPORT_ERROR,
+            error=type(error).__name__,
+            stream_done=done,
+            content_characters=sum(len(part) for part in content),
+            reasoning_characters=reasoning_characters,
+        )
     except ValueError as error:
-        return RequestOutcome(target.endpoint, RequestState.INVALID_OUTPUT, error=type(error).__name__)
+        return RequestOutcome(
+            target.endpoint,
+            RequestState.INVALID_OUTPUT,
+            error=type(error).__name__,
+            stream_done=done,
+            content_characters=sum(len(part) for part in content),
+            reasoning_characters=reasoning_characters,
+        )
 
 
 async def check_models(client: httpx.AsyncClient, targets: list[Target]) -> None:
@@ -203,7 +227,7 @@ async def prove(targets: list[Target], bodies: list[dict], concurrency: int) -> 
         async def run(index: int, body: dict) -> None:
             async with semaphore:
                 outcome = await request_outcome(client, targets[index % len(targets)], body)
-                outcomes.append(outcome)
+                outcomes.append(replace(outcome, request_index=index))
                 if len(outcomes) % 25 == 0:
                     print(
                         json.dumps({"completed": len(outcomes), "passed": sum(item.ok for item in outcomes)}), flush=True
@@ -233,7 +257,7 @@ async def sustained_load(
                 original = bodies[index % len(bodies)]
                 body = {**original, "cache_salt": f"{original['cache_salt']}-load-{index // len(bodies)}"}
                 outcome = await request_outcome(client, target, body)
-                outcomes.append(outcome)
+                outcomes.append(replace(outcome, request_index=index))
                 if not outcome.ok:
                     stopped.set()
                 if len(outcomes) % 100 == 0:

@@ -33,7 +33,7 @@ def test_real_request_proof_requires_authorized_complete_json(monkeypatch, statu
             return httpx.Response(200, json={"data": [{"id": "glm-5.3"}]})
         observed.append(json.loads(request.content))
         event = {
-            "choices": [{"delta": {"content": content}, "finish_reason": finish}],
+            "choices": [{"delta": {"content": content, "reasoning": "fixture thought"}, "finish_reason": finish}],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5},
         }
         if content is None:
@@ -53,6 +53,11 @@ def test_real_request_proof_requires_authorized_complete_json(monkeypatch, statu
     outcomes = asyncio.run(prove_replicas.prove([target], bodies, concurrency=1))
     assert observed == bodies
     assert outcomes[0].ok is expected
+    if status == 200 and content is not None:
+        assert outcomes[0].stream_done is done
+        assert outcomes[0].content_characters == len(content)
+        assert outcomes[0].reasoning_characters == len("fixture thought")
+        assert outcomes[0].request_index == 0
 
 
 def test_sustained_load_stops_after_engine_error(monkeypatch):
