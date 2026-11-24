@@ -127,6 +127,11 @@ For example, `resource_hint.gpu: {H100: 8}`, `data_parallel_size: 8`, and `insta
 DP8 servers on two H100x8 Iris tasks and exposes one load-balanced endpoint. This provides 16
 independent data-parallel replicas; it does not create one 16-GPU model replica.
 
+After a serving replica becomes ready, Iris checks both its native vLLM `/health`
+endpoint and HTTP process liveness. An unhealthy EngineCore fails the serving task
+even if the HTTP process remains alive. Configure Iris failure retries to replace
+failed replicas.
+
 Set `serve.pipeline_parallel_size` to the number of Iris tasks in one vLLM serving gang.
 Each task runs one pipeline stage. For example, `resource_hint.gpu: {H100: 8}` with
 `tensor_parallel_size: 8`, `pipeline_parallel_size: 2`, and `data_parallel_size: 1`
