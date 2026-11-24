@@ -50,6 +50,7 @@ from taskcompendium.models import (
     JsonValueAnswer,
     NoGrader,
     ProviderRequirement,
+    ReplayStage,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -97,6 +98,7 @@ from rolloutengine.models import (
     ModelTurn,
     ModelTurnCompleted,
     Prompt,
+    Rollout,
     RolloutContractError,
     RolloutEnded,
     RolloutEvent,
@@ -437,6 +439,32 @@ async def test_declared_outputs_return_in_the_record_and_reach_the_grader():
     )
     assert record.rollout.outputs == {"/workspace/out/task.json": b'{"id": 1}\n'}
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_grade_saved_program_runs_only_the_replay_and_grader():
+    replay = ReplayStage(
+        environment=GRADER_ENVIRONMENT,
+        argv=("sh", "/workspace/solution.sh"),
+        cwd="/workspace",
+        timeout=10,
+        artifacts=(VerifierArtifact(source="/workspace/result", target="/workspace/result", kind=ArtifactKind.FILE),),
+    )
+    task = file_task(
+        b'test "$(cat /workspace/result)" = "archived" && echo 1 || echo 0',
+        output_paths=("/workspace/solution.sh",),
+        grader=workspace_grader(argv=("sh", "/tests/grade.sh"), replay=replay),
+    )
+    factory = RecordingShellSimFactory()
+    runner = RolloutEngine({"local": factory}, {})
+    saved = Rollout(
+        run_id="first-attempt",
+        conversations=(),
+        stop_reason="stop",
+        outputs={"/workspace/solution.sh": b"echo archived > /workspace/result"},
+    )
+    result = await runner.grade_saved_outputs(rollout_spec(task, verifier_machine=machine_runtime()), saved)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1), result
+    assert len(factory.machines) == 2
 
 
 class OutputWritingEpisode:

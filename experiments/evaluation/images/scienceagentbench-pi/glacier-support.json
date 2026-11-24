@@ -1,0 +1,47 @@
+[
+  {
+    "cache_path": ".salem_cache/salem-sample-data-454bf696324000d198f574a1bf5bc56e3e489051/shapes/world_borders/world_borders.dbf",
+    "url": "https://raw.githubusercontent.com/fmaussion/salem-sample-data/454bf696324000d198f574a1bf5bc56e3e489051/shapes/world_borders/world_borders.dbf",
+    "sha256": "6c0c2882e5ee64c7aa06cf291f39a7f4a05d5020d6c406e37a82e67e5345e29a"
+  },
+  {
+    "cache_path": ".salem_cache/salem-sample-data-454bf696324000d198f574a1bf5bc56e3e489051/shapes/world_borders/world_borders.prj",
+    "url": "https://raw.githubusercontent.com/fmaussion/salem-sample-data/454bf696324000d198f574a1bf5bc56e3e489051/shapes/world_borders/world_borders.prj",
+    "sha256": "98aaf3d1c0ecadf1a424a4536de261c3daf4e373697cb86c40c43b989daf52eb"
+  },
+  {
+    "cache_path": ".salem_cache/salem-sample-data-454bf696324000d198f574a1bf5bc56e3e489051/shapes/world_borders/world_borders.shp",
+    "url": "https://raw.githubusercontent.com/fmaussion/salem-sample-data/454bf696324000d198f574a1bf5bc56e3e489051/shapes/world_borders/world_borders.shp",
+    "sha256": "f5e8cb04e3e9611cc0b91d89ae5119775aac054ec8045f8840d0cb3e83305097"
+  },
+  {
+    "cache_path": ".salem_cache/salem-sample-data-454bf696324000d198f574a1bf5bc56e3e489051/shapes/world_borders/world_borders.shx",
+    "url": "https://raw.githubusercontent.com/fmaussion/salem-sample-data/454bf696324000d198f574a1bf5bc56e3e489051/shapes/world_borders/world_borders.shx",
+    "sha256": "659e9bccd04e2f675306a46458ee32bad9a91c15ba5ce08b2b698d4863442167"
+  },
+  {
+    "cache_path": ".oggm/oggm-sample-data-2ad86c93f9235e40edea506f13f6f489adeee805/rgi_meta/rgi62_areas.csv",
+    "url": "https://raw.githubusercontent.com/OGGM/oggm-sample-data/2ad86c93f9235e40edea506f13f6f489adeee805/rgi_meta/rgi62_areas.csv",
+    "sha256": "c86fe99f2ea99c54cc6dc60872cf227ce339189f144d2a997e268163e4ce38d8"
+  },
+  {
+    "cache_path": ".oggm/oggm-sample-data-2ad86c93f9235e40edea506f13f6f489adeee805/rgi_meta/rgi6_ids_conn_lvl2.csv",
+    "url": "https://raw.githubusercontent.com/OGGM/oggm-sample-data/2ad86c93f9235e40edea506f13f6f489adeee805/rgi_meta/rgi6_ids_conn_lvl2.csv",
+    "sha256": "8db86b89e6a28a1167aa12da264728aeedb411a63b397ee5a60aee63432e866e"
+  },
+  {
+    "cache_path": ".oggm/oggm-sample-data-2ad86c93f9235e40edea506f13f6f489adeee805/rgi_meta/rgi_regions.csv",
+    "url": "https://raw.githubusercontent.com/OGGM/oggm-sample-data/2ad86c93f9235e40edea506f13f6f489adeee805/rgi_meta/rgi_regions.csv",
+    "sha256": "799543659f800dd70066b89158da21bcbd1e467ff5723f12776d50f86c255f46"
+  },
+  {
+    "cache_path": ".oggm/oggm-sample-data-2ad86c93f9235e40edea506f13f6f489adeee805/rgi_meta/rgi_subregions_V5.csv",
+    "url": "https://raw.githubusercontent.com/OGGM/oggm-sample-data/2ad86c93f9235e40edea506f13f6f489adeee805/rgi_meta/rgi_subregions_V5.csv",
+    "sha256": "ee12156c77b0e981be678043ded9b847bc00fd30131f2a3d5131e44d5aad1092"
+  },
+  {
+    "cache_path": ".oggm/oggm-sample-data-2ad86c93f9235e40edea506f13f6f489adeee805/rgi_meta/rgi_subregions_V6.csv",
+    "url": "https://raw.githubusercontent.com/OGGM/oggm-sample-data/2ad86c93f9235e40edea506f13f6f489adeee805/rgi_meta/rgi_subregions_V6.csv",
+    "sha256": "a2ef288b33e2c78616182d082875de2dc03f586bf6ff5aa42f67a1a6455d22eb"
+  }
+]

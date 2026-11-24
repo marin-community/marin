@@ -1,0 +1,1530 @@
+{
+  "1": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/clintox_nn_eval.py",
+      "sha256": "cd7c27a79008249ca7ee3d55923447175311e961f515260c2b41d50d0363f3e4",
+      "size": 634
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/clintox_gold.csv",
+        "sha256": "9499712c6b67e8a9a0b483ef6f4c87436a1c36f973dd39088ed10c7edd7a93b3",
+        "size": 18911
+      }
+    ],
+    "visual": false
+  },
+  "2": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_mat_feature_select.py",
+      "sha256": "315170153181d325fb290dc3a60335afa42a4402066db72e9a03ba582f636427",
+      "size": 482
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/mat_diffusion_features_gold.csv",
+        "sha256": "84c974403434046ed575107ddc31def3d27fc47477c0f79ec63b4151d337cdef",
+        "size": 158865
+      }
+    ],
+    "visual": false
+  },
+  "3": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_bulk_modulus.py",
+      "sha256": "f2cdaa7ae91a7849f11d2ad1f365bf8b29f8d8b3cd8ad787f16c12bfde627ea5",
+      "size": 668
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/compound_elastic_properties_gold.csv",
+        "sha256": "68fa49678e19e41f6ae83d02040314a2ac7f27e1e02a911ee490b4582688bf37",
+        "size": 169251
+      }
+    ],
+    "visual": false
+  },
+  "4": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_elk_analysis.py",
+      "sha256": "99dcccb8b045a06e44e71590e5752102009e6c8d97ed5c70eecaa5f572bfe451",
+      "size": 428
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/Elk_Analysis_gold.png",
+        "sha256": "7ae3a05984a9f58891c9bc44a83cfe47ecb4220afd0a9b76f637512d2a6161f8",
+        "size": 128525
+      }
+    ],
+    "visual": true
+  },
+  "5": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_dkpes_model_development_1.py",
+      "sha256": "fa1c38bd7803ee083897ce185add7269194131c1c868cf591af93b0874319326",
+      "size": 619
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/dkpes_test_gold.csv",
+        "sha256": "a6ab40ce7cb1fc2ee128ec50213187535109b3ee0237344242f6696d2def909c",
+        "size": 183
+      }
+    ],
+    "visual": false
+  },
+  "6": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_dkpes_visualization_1.py",
+      "sha256": "195fb5e4b1175b2b8244064b840ba047d5f937fcb03a5c5ac3dbccd8b868f325",
+      "size": 457
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/dkpes_molecular_analysis_gold.png",
+        "sha256": "47a166d3ad95e108e70da1615a76e2ce907d0d8fd547c374c35ea246fff59249",
+        "size": 20493
+      }
+    ],
+    "visual": true
+  },
+  "7": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_dkpes_visualization_2.py",
+      "sha256": "74f649530551d0f6c72e8e9573f6c1afa87ba7054abbcc21f6d0936822b4836f",
+      "size": 475
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/dkpes_molecular_activity_analysis_gold.png",
+        "sha256": "45da67b9539185449f269694ab7e9f9b22f7668056446a67068a097d4cb4ca4f",
+        "size": 56871
+      }
+    ],
+    "visual": true
+  },
+  "8": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_dkpes_visualization_3.py",
+      "sha256": "8daf648462f4e4cd14ee57c5807921cce759db8efcb20eed7effee06c0003709",
+      "size": 473
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/dkpes_feature_selection_analysis_gold.png",
+        "sha256": "348e1488f3a246f8353e93d5db48c1c15d5d0b8f5243ae5a5737475776b722df",
+        "size": 22670
+      }
+    ],
+    "visual": true
+  },
+  "9": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/FACTORS_correlations_eval.py",
+      "sha256": "efdd3dd594415e08df5048fd4fdd0f2a2d900ae4590895df65fa8abab5d2d4ab",
+      "size": 444
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/Factors_correlations_gold.png",
+        "sha256": "3e8f6104e4d7d1eed04c81660e90f1c2772b29a4352bd7a143637f9c41c2d088",
+        "size": 21305
+      }
+    ],
+    "visual": true
+  },
+  "10": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_toronto_fire.py",
+      "sha256": "7309821367858fda96e4fe27cf76b8413ce54c638356db3c36e3dbe6af9fd234",
+      "size": 446
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/Fire_Service_Analysis_gold.png",
+        "sha256": "41820b042c6d063edc4680f12b4b29905e531a8a76aa642e007aab87644a103c",
+        "size": 81534
+      }
+    ],
+    "visual": true
+  },
+  "11": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/BBBC002_cell_count_eval.py",
+      "sha256": "9f2b3635f4f580e5af614409dcf19e0488a499163c00905e06dbdb86abbb6e27",
+      "size": 423
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/cell-count_gold.csv",
+        "sha256": "29cd715be4426544c63c028c83517c5cd7ed4e2abae06b2f7cd67fe6953b5e2c",
+        "size": 60
+      }
+    ],
+    "visual": false
+  },
+  "12": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/davis_dti_eval.py",
+      "sha256": "f2b0b4095ba7c8347ec69a41ed287a67e7b00bed9d551590c34ed4034f913227",
+      "size": 680
+    },
+    "gold": [],
+    "visual": false
+  },
+  "13": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/drug_property_eval.py",
+      "sha256": "4859e31405a76dd8c824dd15a79a4020b513eaa4655cb0969947f7813577f7a1",
+      "size": 621
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/HIV_gold.csv",
+        "sha256": "cb0e864188056df9592b404ecc02df9f209ea134db6b5249f9fa5ab97965fef1",
+        "size": 210572
+      }
+    ],
+    "visual": false
+  },
+  "14": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_flooding_gpd.py",
+      "sha256": "958ae1ad18db5be2c2854239807410a5a840e9ce1f062f4dabfb0ec5cfb4c2bc",
+      "size": 438
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/flooding_analysis_gold.png",
+        "sha256": "c6726fcbddd8eee6c07a2d4f023dcb0b973b1ac5721915868f71792193826464",
+        "size": 255721
+      }
+    ],
+    "visual": true
+  },
+  "15": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/admet_ai_eval.py",
+      "sha256": "21457f39d8f5cbf371ec234588560c7da24aab19854d79f2c11b6266d5bb64b5",
+      "size": 577
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/admet_ai_gold.csv",
+        "sha256": "7407a905e42dfe0bd6d50ab507923f205134439ed337c262bea7b39909bbe8a9",
+        "size": 75617
+      }
+    ],
+    "visual": false
+  },
+  "16": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/antibioticsai_filter_eval.py",
+      "sha256": "216935482b08427dc5c713f4c4b0a83f46eb637846c7f847cfab44cf270bf873",
+      "size": 645
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/antibioticsai_filter_gold_results.txt",
+        "sha256": "bad3cea5b4017bf0b6b082c32ba5d4c71c1cd9429c91d531902e60ca217a7ca4",
+        "size": 73147
+      }
+    ],
+    "visual": false
+  },
+  "17": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/drugex_vis_eval.py",
+      "sha256": "04500c99b13baedfdb43f99b5a89e91c888855080458382dbcacc5f13d5974c4",
+      "size": 429
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/drugex_vis_gold.png",
+        "sha256": "a1e06e15d41acb084c912855e1c6394ce9641a108dd33a22d217206950d21b91",
+        "size": 240628
+      }
+    ],
+    "visual": true
+  },
+  "18": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_DILI_RF.py",
+      "sha256": "dde640c8f94430eaa7b2ba2cb3b3d1be4bc4726ac98f73d69c1ef3ffaeebd03e",
+      "size": 1031
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/test_DILI_gold.csv",
+        "sha256": "4b29f29affc7a6c59153b5e4778441e47f1b9e80bbaf9b56ae5541c1cb38ec5b",
+        "size": 2891
+      }
+    ],
+    "visual": false
+  },
+  "19": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_DILI_SVM.py",
+      "sha256": "4873740e3d1af0c34bd335c03322c90e97a5d13aee7b705e3d320dccde09548b",
+      "size": 1024
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/test_DILI_gold.csv",
+        "sha256": "4b29f29affc7a6c59153b5e4778441e47f1b9e80bbaf9b56ae5541c1cb38ec5b",
+        "size": 2891
+      }
+    ],
+    "visual": false
+  },
+  "20": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_tdc_visualization.py",
+      "sha256": "709ee084696b3b7f1a09b85d79f40bc0eb947451708e76ebf47ad41f26fdbb2c",
+      "size": 454
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/tdc_results_visualization_gold.png",
+        "sha256": "0ea0ea123b0f791ee0a27c1a0163519db7ae0298d0da98a0ae124e86e1821ec9",
+        "size": 74890
+      }
+    ],
+    "visual": true
+  },
+  "21": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_deforestation.py",
+      "sha256": "c1b2ca7c15c1f2b4ba3520e9d89e35a5656a1c98e63cfac58f63221b46f49819",
+      "size": 438
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/deforestation_rate_gold.csv",
+        "sha256": "d4bcb2ac0c76bfcdb8795c178ba12924f92778a1016c823e03784da870d3ca1b",
+        "size": 45
+      }
+    ],
+    "visual": false
+  },
+  "22": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_papyrus.py",
+      "sha256": "b774ae08365e3a9d39289d850b55a950c8227e2453c43c1d02066fe19fb22105",
+      "size": 870
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/papyrus_filtered_gold.pkl",
+        "sha256": "03fe2f9c82dccce3856423a4d88eead63495be0abd6211c8ededd306c8d94645",
+        "size": 268735
+      }
+    ],
+    "visual": false
+  },
+  "23": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_deforestation_predict.py",
+      "sha256": "f4409c1a994de1ab4482b29b42946310cdbcf9aecbb31b7d94a516bc56795a19",
+      "size": 440
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/predictedRiskyArea_gold.png",
+        "sha256": "5aebca524d22380eca66197dafc48e321c9768eccc8690323702e9ee624ac7cb",
+        "size": 338720
+      }
+    ],
+    "visual": true
+  },
+  "24": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_biopsykit_ecg_processing_vis1.py",
+      "sha256": "df2adb19f7a7cdef4ce9a01410914492b1a7bd1a04c9900b6281862cc4f67eea",
+      "size": 475
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/biopsykit_ecg_processing_vis1_gold_result.png",
+        "sha256": "e3a3217af94b52fb423ee7ce3faba47615d8eecf7152d15d7cb309f3d24baeb9",
+        "size": 84525
+      }
+    ],
+    "visual": true
+  },
+  "25": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_biopsykit_ecg_processing_vis2.py",
+      "sha256": "2634313313607c949e624a3f30aed87cf66f32e1cae231b6b6148058ff76c861",
+      "size": 475
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/biopsykit_ecg_processing_vis2_gold_result.png",
+        "sha256": "4d0b5d6ab406c8953e24d478dddfa3d9b55c6d213a8f22a30cb16fe1497b5c7a",
+        "size": 141839
+      }
+    ],
+    "visual": true
+  },
+  "26": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_fingerprint.py",
+      "sha256": "b241d0dd2d82e362d8c552d413a33ae592c9cc69534ddbd0cc02f633267c2024",
+      "size": 584
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/ligand_fingerprint_gold.csv",
+        "sha256": "30616737d9dd914cfe0ffe752ef0442ada73c8c1109b5a2eba25ef704515845f",
+        "size": 18019
+      }
+    ],
+    "visual": false
+  },
+  "27": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_plots_similarity.py",
+      "sha256": "a0975540fd6f1d15d34b51b12a18b5d267c12a03d08e65c64aa99f86863855c6",
+      "size": 436
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/similarity_plot_gold.png",
+        "sha256": "c72bea08f1f34cf40f4e1b673f32721e279cd969116b5c7c49d6c0755634f8d7",
+        "size": 30252
+      }
+    ],
+    "visual": true
+  },
+  "28": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_pymatgen_charge_density_difference.py",
+      "sha256": "c13d83aa40f3af555632cab5ae67ba9c306af549fbd38bf6dda99473dfdb10ba",
+      "size": 455
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/charge_density_difference_gold.png",
+        "sha256": "328516658b751acffc9f414b4e7de4e38ece0a25b26e3f7effe8da5632b403a6",
+        "size": 55131
+      }
+    ],
+    "visual": true
+  },
+  "29": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_bio_eventrelated_analyze.py",
+      "sha256": "40f4302283db3bd3da25e55c832c82c76394d4a9dd4b129126a66e4a323a4bec",
+      "size": 1027
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/bio_eventrelated_100hz_analysis_gold.csv",
+        "sha256": "b10b3de5aeb1737f41b0608ce5f51c42d624d51fc26481647735c15dc504bf89",
+        "size": 3572
+      }
+    ],
+    "visual": false
+  },
+  "30": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_pymatgen_plot_phonon_band_structure.py",
+      "sha256": "d9866ed62876ab9ccd49f3351adcfc5818d22e5b6f230f24e1e15ce5823d77f6",
+      "size": 445
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/phonon_bandstructure_gold.png",
+        "sha256": "8c097608e7a25ca7f8d48dd79791fb5b722382a19cd752766cd0d70ff29100cc",
+        "size": 58599
+      }
+    ],
+    "visual": true
+  },
+  "31": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_pymatgen_plot_phonon_dos.py",
+      "sha256": "03ce7d270abf226e3608000c297c5c8cd83753492b7b83a13352831c955ccad7",
+      "size": 425
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/phonon_dos_gold.png",
+        "sha256": "727c204721f1b83ad7441d3289ced261fdbcda7c9f2d72cf640fb4fd75eb4d64",
+        "size": 48365
+      }
+    ],
+    "visual": true
+  },
+  "32": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/coral_sponge_eval.py",
+      "sha256": "2eaf79537b3ae99948260bdbc0934f6f02bf5e6d44974c0ebc34611e08eecdf4",
+      "size": 427
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/CoralandSponge.png",
+        "sha256": "89998e3a5c3859518a2928f1daf7d116c43e38cc0da182ea4e9b589eb6595fc0",
+        "size": 66279
+      }
+    ],
+    "visual": true
+  },
+  "33": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/transit_access_eval.py",
+      "sha256": "b16679160b6fc5cbfb704ca4651f631cdc40d90a084599313b73c466d6993433",
+      "size": 427
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/transit_access.png",
+        "sha256": "64b30de3071f415c3789b1e7498c9d0fa50de2b539cae5f3b2de790dfcf8b45a",
+        "size": 889521
+      }
+    ],
+    "visual": true
+  },
+  "34": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_HRV_analyze.py",
+      "sha256": "29f51299148d83077e9648a121897d980f7084e1b402b9a377d9873eae5aec87",
+      "size": 556
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/hrv_analysis_gold.csv",
+        "sha256": "1eeec86e6f6fc5f8542cf84d1e7addfe163295e897558454e5a1bd984ca574a5",
+        "size": 2606
+      }
+    ],
+    "visual": false
+  },
+  "35": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_RRV_analyze.py",
+      "sha256": "fdd1865eb53ba1ea9aa8717ca239690466d05293e09e2dfe1dc0d7cd56f1f410",
+      "size": 556
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/rrv_analysis_gold.csv",
+        "sha256": "b82910a71c9c000e5956475b757b8aed9df242ae982db92a29a3375eef6d99c4",
+        "size": 549
+      }
+    ],
+    "visual": false
+  },
+  "36": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_biopsykit_eeg_processing_vis1.py",
+      "sha256": "6d9ec6a715660b3a1113a78ff2ffd414bf28c79d415de28cf873d40c29ed1dba",
+      "size": 461
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/biopsykit_eeg_processing_vis1_gold.png",
+        "sha256": "e22f4fe24f25b40d22b553c03d081cb37056bad81b41ca7ea6327339c71532bc",
+        "size": 116672
+      }
+    ],
+    "visual": true
+  },
+  "37": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_biopsykit_cft.py",
+      "sha256": "ce2cf840c683c7b5439d1d92c8e4399ff6000a84f126e1fa7aa5b68a9356e965",
+      "size": 635
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/biopsykit_cft_gold_results.json",
+        "sha256": "aaf8325ecda1dc4591950f40ae8b48a9197c3b579bddb1d0ebad0beb5002907a",
+        "size": 118
+      }
+    ],
+    "visual": false
+  },
+  "38": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/fingerprint_similarity_vis_eval.py",
+      "sha256": "a6ef9939b9e02f56d2c16cd702906d709a135e579d57739e6a27c5760e4aeb26",
+      "size": 444
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/ligand_similarity_gold.png",
+        "sha256": "815ba3c6ff610a4cab32c7faff32d75d7ea36a685bf2ea601f33fe3da2c5738d",
+        "size": 25102
+      }
+    ],
+    "visual": true
+  },
+  "39": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/protein_protein_fingerprint_similarity_vis_eval.py",
+      "sha256": "022238a3f7db15fa90d5c37ff0b01858bb773facc27639449e82ad1d097f025a",
+      "size": 462
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/protein_protein_similarity_gold.png",
+        "sha256": "de0f73de029ceb6f4f7494aec973de05885416f7a790b1e0bd47ab5d8b2acecb",
+        "size": 24942
+      }
+    ],
+    "visual": true
+  },
+  "40": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_MD_RF.py",
+      "sha256": "0265388407cbaefb27a95412b496e95ebfc409c9f8f69b13389dc7f8fdfb691d",
+      "size": 646
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/MD_gold.csv",
+        "sha256": "75c58871f66d20afbf6330340b96a5175de2565404e4fb1b4e57dd6cc7aabbfe",
+        "size": 869295
+      }
+    ],
+    "visual": false
+  },
+  "41": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_MD_KNN.py",
+      "sha256": "c8ebb374add7f25fb6020d73586742cc777a492879bfeafe036c06ea460b1155",
+      "size": 651
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/MD_gold.csv",
+        "sha256": "75c58871f66d20afbf6330340b96a5175de2565404e4fb1b4e57dd6cc7aabbfe",
+        "size": 869295
+      }
+    ],
+    "visual": false
+  },
+  "42": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_EDR_analyze.py",
+      "sha256": "dcb093985839f0163d5ac1b09839205304534ad88085417761d8614d7973e11a",
+      "size": 431
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/EDR_analyze_gold.png",
+        "sha256": "de516c0503f2e796425faa6fdb51b4c2b263c6da921830681d066a8f22c0668c",
+        "size": 118482
+      }
+    ],
+    "visual": true
+  },
+  "43": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_EOG_analyze.py",
+      "sha256": "d5abc3deaa41c7c71b0bdbb0e5379a42bbb1fa15fc58c76da04ebab6288932a7",
+      "size": 431
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/EOG_analyze_gold.png",
+        "sha256": "fcc43261bcf5226809a24562f414cd3810aba8f22215d4025fe151bad94a933a",
+        "size": 210785
+      }
+    ],
+    "visual": true
+  },
+  "44": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/biopsykit_imu_eval.py",
+      "sha256": "7637f47cfebdf615d713a0c592e5401ee5cbac908bec52acdbf8891896897947",
+      "size": 820
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/biopsykit_imu_gold.json",
+        "sha256": "4d10dd62be3eb7dd6007b6164ed67d240cdb85d61bebf91f31dec045ca159dd9",
+        "size": 116
+      }
+    ],
+    "visual": false
+  },
+  "45": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/biopsykit_questionnaire_eval.py",
+      "sha256": "489aec82424459ef743a0a10d9d76379774e5af4c93de76a3bdf373b30842928",
+      "size": 832
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/biopsykit_questionnaire_gold.csv",
+        "sha256": "e9840f03986d3a9190fc866effe22a9daa58ef9188c35f06d982b2900ea09562",
+        "size": 164
+      }
+    ],
+    "visual": false
+  },
+  "46": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/mountainLion1_eval.py",
+      "sha256": "24d326f0c2b60ab274268828a3aa707dadd4f987a65e784f653e71204b39a513",
+      "size": 424
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/ruggedness_gold.png",
+        "sha256": "a7ddc78bc60f0bea2de78be7210335d46fae90469f4f1b08025286f41363cb2d",
+        "size": 512410
+      }
+    ],
+    "visual": true
+  },
+  "47": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/mountainLion2_eval.py",
+      "sha256": "6a42f4590641b2d1de10eb39b339601d1e5c310ce5387e4caa1a03faf1e6e328",
+      "size": 442
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/distance_to_habitat_gold.png",
+        "sha256": "de55c824061ef7025bd928d50500ab446380bad0863a79cf992636f66cfd30df",
+        "size": 360880
+      }
+    ],
+    "visual": true
+  },
+  "48": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_sst_visualization.py",
+      "sha256": "4dae8f13455fbcf299f70c396f3c66b2b7cb249bdeb57834bbaf08d5f3371d33",
+      "size": 443
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/sst_visualization_gold.png",
+        "sha256": "f9fa7138a3dcd0060fc7ec6a024938b21fd4350d92b34da04226bf96d72bb0e4",
+        "size": 23796
+      }
+    ],
+    "visual": true
+  },
+  "49": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/EOF_standard_hgt_plot_eval.py",
+      "sha256": "fdc95a1cafe16fca8d864383706cbaf450e69295569f3aafce21aae910d20f73",
+      "size": 438
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/EOF_standard_hgt_plot_gold.png",
+        "sha256": "2de21c063083f130f7a3cdba83a16129d1a6c66d98912536c57b7cde1c524fc1",
+        "size": 77433
+      }
+    ],
+    "visual": true
+  },
+  "50": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/EOF_xarray_sst_plot_eval.py",
+      "sha256": "21f5b6752648cc1c2ad997be7b1b6faf7cdcf0760fe583c138f9455eb44f359a",
+      "size": 438
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/EOF_xarray_sst_plot_gold.png",
+        "sha256": "6b28d938444977cb69d8c291e89da174a13be4555e0f0713e0f4974e9f8cf28a",
+        "size": 32812
+      }
+    ],
+    "visual": true
+  },
+  "51": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_brain_blood_qsar.py",
+      "sha256": "41088af81f933fb99cd357b61b194726334da98d6b65c41b40e36a6c68fc0314",
+      "size": 438
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/brain_blood_qsar_gold.csv",
+        "sha256": "88242bbe7b93c6e839f69c8399ddd42ba8b7e9cee9d40fd8aa0d70f621bec2d0",
+        "size": 162
+      }
+    ],
+    "visual": false
+  },
+  "52": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_aquatic_toxicity_qsar_vis.py",
+      "sha256": "386386d73c9f023b4adfcbcde8d8dc0734d3435b18e08d223411e255260aef7d",
+      "size": 454
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/aquatic_toxicity_qsar_vis_gold.png",
+        "sha256": "d55df1a7d278ba5e78f0b09d2d243b7f841d7b87e8bdd472c70e45bdd755a756",
+        "size": 58179
+      }
+    ],
+    "visual": true
+  },
+  "53": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/mountainLion3_eval.py",
+      "sha256": "580a2ffea5a49a040471bb01709ccbd151a31f4028ca49642fb5f9d1201c41c7",
+      "size": 1306
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/landCover_reclassified_gold.tif",
+        "sha256": "80192ac3c077914abfaaedc3bd484e53b1c8e21ea6b0cb99b310fc6fd5f3f03e",
+        "size": 7867570
+      },
+      {
+        "member": "benchmark/eval_programs/gold_results/protected_status_reclassified_gold.tif",
+        "sha256": "cf5eb79904667c3747a2a70912a2b16334bcb0fd78ff37c1ba427857f5a66a79",
+        "size": 7867570
+      }
+    ],
+    "visual": false
+  },
+  "54": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/mountainLionCorridor_eval.py",
+      "sha256": "ec9627c344f91cf5ac7cdd0de9d196decf18fcae52ba742c183e246ab0695ef7",
+      "size": 444
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/mountainLionCorridor_gold.png",
+        "sha256": "7552a91361099792cd1bd6cef4839c3b8b02c9504bdbf1428f1183f7b77d7a0d",
+        "size": 782595
+      }
+    ],
+    "visual": true
+  },
+  "55": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_plot_ocean_profiles.py",
+      "sha256": "f32f79d212b906cba384ee866338aad1a7c86ae9daedb232555cb127583fc0e7",
+      "size": 440
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/ocean_profiles_vis_gold.png",
+        "sha256": "9be3beab014ac99c0996c7d5236b34a9ed8c0c042af9d1134f1d512c746dadc9",
+        "size": 30970
+      }
+    ],
+    "visual": true
+  },
+  "56": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_plot_temperature_statistic.py",
+      "sha256": "dd93d1d47905669382b9e3a1cbda84ed446e23e8ee8081406000be5a3bd1877d",
+      "size": 453
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/temperature_statistic_vis_gold.png",
+        "sha256": "8c823640cdfa2ad5d7ae70cbddc8f1e9dc66abc3601c3d7c31afa3fd9c3bdcf8",
+        "size": 57394
+      }
+    ],
+    "visual": true
+  },
+  "57": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_syllogistic_nvc_plot_ind.py",
+      "sha256": "cefb0fdc7d6bddd3488e1a6d58f24828312f11f4441f265d2135d01e9692954f",
+      "size": 426
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/indiv_table_gold.png",
+        "sha256": "5f0da36fa1fef5159eef56d20e34b7afcec423af0c35be08e0256edf7341fcd9",
+        "size": 44411
+      }
+    ],
+    "visual": true
+  },
+  "58": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_syllogistic_nvc_gen_ind.py",
+      "sha256": "1c0adb7a9a7908c9a226909f698681c7288ff03a485896ab7ac0c6c5a84db868",
+      "size": 1083
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/individuals_gold.csv",
+        "sha256": "d999b11482d882a71de19a43bfb6e3329e57ca93b58e0f7a918e103e4de882bc",
+        "size": 871
+      }
+    ],
+    "visual": false
+  },
+  "59": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_syllogistic_nvc_heatmap.py",
+      "sha256": "2b7f94ad0386e19b960ef7011cd703b1dcee80725924ed2e39e13f9e0aa7e547",
+      "size": 426
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/nvc_heatmap_gold.png",
+        "sha256": "d6eb8bf5431fb0a44a2b948056e58fd70c9cc19c0a01eb655c5302c9378b80ae",
+        "size": 42084
+      }
+    ],
+    "visual": true
+  },
+  "60": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_syllogistic_nvc_accuracies.py",
+      "sha256": "5192b404c91e656564ab3ccab9876e580c21733d0a28c0b7ad404dff04950658",
+      "size": 750
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/accuracies_gold.csv",
+        "sha256": "a72b4e3be1aeb16b36e408a8372a6cbd0b000826ccc6ff325b5d245210d25332",
+        "size": 138363
+      }
+    ],
+    "visual": false
+  },
+  "61": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_syllogistic_nvc_stackbar_plain_prediction.py",
+      "sha256": "be6ab44a46b07ed49a20a8331ea63064c1bb166f7afcda4505f9224e7fb919a6",
+      "size": 459
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/stackedbar_plain_prediction_gold.png",
+        "sha256": "2fa84da5109f4eb284fca1c72151155ed4bca84c32cd4a56712d2c3446623bbb",
+        "size": 42570
+      }
+    ],
+    "visual": true
+  },
+  "62": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_syllogistic_nvc_stackbar_prediction.py",
+      "sha256": "ebf05a733633fad562993b3b675198ddeaabb7d9371587151478cf9b901fc084",
+      "size": 447
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/stackedbar_prediction_gold.png",
+        "sha256": "e6c6666f1b8b7fde39017ba0e19a60f00395eebc90b90097686ada3a9c6782b0",
+        "size": 40468
+      }
+    ],
+    "visual": true
+  },
+  "63": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_bio_interval_analyze.py",
+      "sha256": "f03e745b5a4a36b957404236dc342c03619311235d28b6b8ad0318b7fdd1557f",
+      "size": 746
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/bio_ecg_plot_gold.png",
+        "sha256": "f4cdeb7c1e1f0b63d870f56ef71a7800f28f00ea12200672e194ebaee66d691c",
+        "size": 106839
+      },
+      {
+        "member": "benchmark/eval_programs/gold_results/bio_rsp_plot_gold.png",
+        "sha256": "bc95826b44931b0e4fd22d27b7870e2ec94eada289c84f5637a5f5e0784291e3",
+        "size": 105370
+      }
+    ],
+    "visual": true
+  },
+  "64": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_oggm_plotting_flowline_mb_elevation.py",
+      "sha256": "6a32c64c5dd2839d39936b3f5138a1e8a5fb429afecabae23adb3af2824433ab",
+      "size": 474
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/oggm_plotting_flowline_mb_elevation_gold.png",
+        "sha256": "2bf80224b786159845f13b6a7220966ce7869c33096f16a3d273956896808f8d",
+        "size": 27485
+      }
+    ],
+    "visual": true
+  },
+  "65": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_oggm_plotting_surface_mass.py",
+      "sha256": "4f67953cfc9c1386a77660275be12740502799f3211130bd9d8841e69b7b5f97",
+      "size": 456
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/oggm_plotting_surface_mass_gold.png",
+        "sha256": "21ea5ebc040cb0947734e56be1d6d4d4ce4388ab4a3cc7998fa2feafdfab5455",
+        "size": 38214
+      }
+    ],
+    "visual": true
+  },
+  "66": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/CogSci_pattern_high_sim_plot_eval.py",
+      "sha256": "5943c22ffa95455e9be8e6a3e8e3ba7c3a3133cb13464d5aa3ad723661239c1b",
+      "size": 466
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/CogSci_pattern_high_sim_plot_gold.png",
+        "sha256": "41bab3cb7cd5f380e42d7b7a01938a1622e1b4cad3d82d8537c5611dcef40802",
+        "size": 112383
+      }
+    ],
+    "visual": true
+  },
+  "67": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/CogSci_pattern_high_sim_eval.py",
+      "sha256": "865a01fb9d0461d06bbd00a88180b33abb98bed98a9955213547f8fe83145a12",
+      "size": 628
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/CogSci_pattern_high_sim_data_gold.csv",
+        "sha256": "7681b49b3ec340aca60e16e0f56d12ada70a70a91bfb43f26c87f64f6f08e135",
+        "size": 360
+      }
+    ],
+    "visual": false
+  },
+  "68": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/CogSci_pattern_high_com_low_plot_eval.py",
+      "sha256": "abac6aeaf9378e81e33dc64582ea67a308e438fb075e4fa6b06869c6c7a1735a",
+      "size": 484
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/CogSci_pattern_high_com_low_plot_data_gold.png",
+        "sha256": "de43da5878acc9e33e85a65392d61e5dea07a5d92a0bfa4e5167a95b24e7864a",
+        "size": 50918
+      }
+    ],
+    "visual": true
+  },
+  "69": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_single_cell_analysis_pca.py",
+      "sha256": "508f0c7bd377ba4fa6748450105f07f88674a59173e90e46d46c27b6f1d24710",
+      "size": 438
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/hca_cell_type_pca_gold.png",
+        "sha256": "0ff21b5e052155aa7634eb0f0e3d807b2b9eb0f4739613734f4bd88d1c67dfbd",
+        "size": 91213
+      }
+    ],
+    "visual": true
+  },
+  "70": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_single_cell_analysis_de.py",
+      "sha256": "c4b9fd34f763a6ebd1c6a110080a86cedf664949746fed85b1a774620eb176ec",
+      "size": 436
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/hca_cell_type_de_gold.png",
+        "sha256": "00ca4b48b30ee998543f7933b2caffbe1fcc783e81dba7388d1cc9937e24a8e8",
+        "size": 91192
+      }
+    ],
+    "visual": true
+  },
+  "71": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_eeg2eeg_linear.py",
+      "sha256": "61dea5bd13a91f851c7ddb8eb987cff7887b57587861d686553f415c8c5228d4",
+      "size": 834
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/sub03.npy",
+        "sha256": "0be141e6c498144f372f63a62ff86a5ad341ca5026930d2a65441d0ffe977851",
+        "size": 5440128
+      }
+    ],
+    "visual": false
+  },
+  "72": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_eeg2eeg.py",
+      "sha256": "712380969320bb695191abdfad6c37fa28972f64164840e373cc6819a1d9a919",
+      "size": 831
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/sub03.npy",
+        "sha256": "0be141e6c498144f372f63a62ff86a5ad341ca5026930d2a65441d0ffe977851",
+        "size": 5440128
+      }
+    ],
+    "visual": false
+  },
+  "73": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_eeg2eeg_vis.py",
+      "sha256": "b3697675ac154c835d167891e1a3947610aeb5c8761df611d0eb000fe3e5db07",
+      "size": 431
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/eeg2eeg_vis_gold.png",
+        "sha256": "fbd7452afb8bbb81c58222e50b85d311ae26ca1a2dad22114450aced203010ca",
+        "size": 94216
+      }
+    ],
+    "visual": true
+  },
+  "74": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_oggm_plotting_glacier_area_and_thickness_change.py",
+      "sha256": "92adc82e535d52866fd15302f606aae7f9afdb8da66d5f879bc2f1daa6042f33",
+      "size": 503
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/oggm_plotting_glacier_area_and_thickness_change_gold.png",
+        "sha256": "8da5637c1beec6179448e014091f8d1d34317f18a669ea9b48769d2581bd4e94",
+        "size": 59803
+      }
+    ],
+    "visual": true
+  },
+  "75": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_topic_modeling_LDA.py",
+      "sha256": "fe4f73196e4d33c3b49b6be9ccf76a49b7b11e63041196c2f3d2fcb9f1d67631",
+      "size": 437
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/topic_modeling_gold.png",
+        "sha256": "2261f858753679a2e5962fd0c4224cd727971a99ce5c08bbe5e3a0828057f7c2",
+        "size": 986173
+      }
+    ],
+    "visual": true
+  },
+  "76": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/mineralProspectivityEval.py",
+      "sha256": "b0d6353b2e6925c989e775d36bc2f8ceb3b29b09c17c2b22ebd00455c1495f9a",
+      "size": 446
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/mineral_prospectivity_gold.png",
+        "sha256": "532afc2f9947d8f0b3a54a061b795b64e508a1f29fd099ff57937b096d2c57e6",
+        "size": 149624
+      }
+    ],
+    "visual": true
+  },
+  "77": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/WaterQuality_eval.py",
+      "sha256": "8f667f4acecdd02d532011346c8139735f88607aa84b4db795c3c2410be1052d",
+      "size": 456
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/interpolated_water_quality_gold.png",
+        "sha256": "eb82c871fb180e07a06764f0c2cf734d11f5c900f86efec77060f213428224ad",
+        "size": 71271
+      }
+    ],
+    "visual": true
+  },
+  "78": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_protein_stability.py",
+      "sha256": "015deb5c4af05aa8f33cf2a09911ae14aab7d2f9c3b9c73c91706d9964a797d5",
+      "size": 431
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/pucci-proteins_test_gold.csv",
+        "sha256": "e842b1c86bc79d0c4167cf91d91f82139ab684edcdee61547c28c7089949ac6f",
+        "size": 1217
+      }
+    ],
+    "visual": false
+  },
+  "79": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_violin.py",
+      "sha256": "14f935e7419f451ca25a7b264ade91cc523aff273d0c221b3776b06148736a50",
+      "size": 418
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/violin_gold.png",
+        "sha256": "1114a0ddb65fc03f62125b7557aefa7bcd9f13e6a1770eb4d4d4d6c48a9a176b",
+        "size": 172427
+      }
+    ],
+    "visual": true
+  },
+  "80": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_gene_scatter.py",
+      "sha256": "307096d339b3441fcce81fef6c9f506d9330398cecfd081889ea0893f238253b",
+      "size": 432
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/genes_scatter_gold.png",
+        "sha256": "afe775c5d9e6879309c17534380c7088f6cfdc3c14ce34ec91a7af5ab6fe6895",
+        "size": 98396
+      }
+    ],
+    "visual": true
+  },
+  "81": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_umap.py",
+      "sha256": "227225e954b4a489dfb019d252ed10ff7f449e1758f8ca412d8e09a01dedba9c",
+      "size": 414
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/umap_gold.png",
+        "sha256": "7954f25f70c415d354b6bf196828366bc742b0cf55ecccfefd029aa05a61e355",
+        "size": 281548
+      }
+    ],
+    "visual": true
+  },
+  "82": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_dendrogram.py",
+      "sha256": "0788c731dd18d773f3f28879f1e910580b59843bebee3d914723d6617aaec22f",
+      "size": 426
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/dendrogram_gold.png",
+        "sha256": "d2dd87baf501d920d53b8becaa8552500568a41600192cfec8f7a574c9b55bb8",
+        "size": 47345
+      }
+    ],
+    "visual": true
+  },
+  "83": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/UrbanHeat_eval.py",
+      "sha256": "9c3172aff2bc5d5d3f4b1f5c8b9fc55c958fc2fd964df949c7c2cd038879155d",
+      "size": 450
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/interpolated_urban_heat_gold.png",
+        "sha256": "2631a74abbb53642fc5bbc41b4891fcf57ed09c8661c614c549a4d23c63f6966",
+        "size": 142381
+      }
+    ],
+    "visual": true
+  },
+  "84": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/BurnScar_eval.py",
+      "sha256": "2585e7ae3be21bdc7a3e76d8e93e0d1b7f4d9d75115fb8f00767b2e2d298f0ab",
+      "size": 440
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/burn_scar_analysis_gold.png",
+        "sha256": "acba05c131ee04ef25ebd3c3165bde8cd29ea10594256cb85f179b1f6061818e",
+        "size": 309607
+      }
+    ],
+    "visual": true
+  },
+  "85": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/biopsykit_saliva_eval.py",
+      "sha256": "31920bb30c6926d2598c00ae8a1bd6d80158ed2afe3ed96ca8bb982f8858ceef",
+      "size": 1011
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/biopsykit_saliva_gold.json",
+        "sha256": "23ee04300efec5e1b3a6c1821be0caa7e959f31b187742486caf2c2961a78eac",
+        "size": 2923
+      }
+    ],
+    "visual": false
+  },
+  "86": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_plot_TEC.py",
+      "sha256": "5aab5721d05979a9ef9bb321d941045583f5a45739b0033ea69abb88131e9f4b",
+      "size": 418
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/TEC_vis_gold.png",
+        "sha256": "f4d928eb28ce4f0bd079bb7fddd82d4d7964a22c3ab3eb740fab9c034bcaacf0",
+        "size": 92692
+      }
+    ],
+    "visual": true
+  },
+  "87": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_polynomial_fit.py",
+      "sha256": "538d5247853e8da4ce98897e4ff566d1a52bc49e323adea770a4c6345bc1a6a5",
+      "size": 560
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/polynomial_fit_gold.csv",
+        "sha256": "9e07ed908834f932f357b74b8107d17e6c894e33a5c96ba6eb192f7752bf974c",
+        "size": 5858
+      }
+    ],
+    "visual": false
+  },
+  "88": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_plot_collisions_map.py",
+      "sha256": "80902a5c4c620cfb7a82831bf4eed74771341b8517af3c7d1327b0e9b77321c9",
+      "size": 440
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/collisions_map_vis_gold.png",
+        "sha256": "bfe9512ab2212bb3ab1c93eb6914c3707ea025a89e10c3fdf50490470f167575",
+        "size": 60716
+      }
+    ],
+    "visual": true
+  },
+  "89": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_plot_trees_count.py",
+      "sha256": "64b6460e459bbe1766ea50ae6794f2160121a0bb64b0ca0e0e90b93d7f8cc8cd",
+      "size": 434
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/trees_count_vis_gold.png",
+        "sha256": "d3f3d7d769298cefeb8b0a855bfd700470e4ae3c10a232a1bf556299c7350573",
+        "size": 51263
+      }
+    ],
+    "visual": true
+  },
+  "90": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_jnmf.py",
+      "sha256": "d7790063a10f6ea1639bdac70a36c338e1ca28c1b5043be23fecff4337c97317",
+      "size": 1077
+    },
+    "gold": [],
+    "visual": false
+  },
+  "91": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_jnmf_plot_patterns.py",
+      "sha256": "d6e975140ff55a9120f448c95b05114f2b72a0fdcf8f5bf67ca967fea9441901",
+      "size": 458
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/patterns_conscientiousness_gold.png",
+        "sha256": "84e0271a1aa2dfe5312d5c57d6e4fda0b9b724a17e16918d7bd248bf107ae71f",
+        "size": 50894
+      }
+    ],
+    "visual": true
+  },
+  "92": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_h_importances.py",
+      "sha256": "d93e5a5cf474343f67c32fe38304a757f02d8ab23bb76b86a17f60d71f4765ba",
+      "size": 462
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/jnmf_h_importances_gold.json",
+        "sha256": "e5311ce66af7cbabba95dc75a350cbd47ff7cefbfe6fd8ccbbd23d140679530b",
+        "size": 238
+      }
+    ],
+    "visual": false
+  },
+  "93": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_h_distribution.py",
+      "sha256": "206c392cfdcefbab58ddda54bb0f735bb69a9101511e46f194ff12ec63388e7e",
+      "size": 470
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/H_distribution_conscientiousness_gold.png",
+        "sha256": "17bace7ad008579bf94f4b058911818f0ada68bb2f947862e8188289c577e1aa",
+        "size": 23470
+      }
+    ],
+    "visual": true
+  },
+  "94": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_polyverse_visualize_molecules.py",
+      "sha256": "0c3465f789c8c05215d11160f3eaa1b97496c6c741b12924ffef9592f461db45",
+      "size": 467
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/polyverse_visualize_molecules_gold.png",
+        "sha256": "0a10709b7e04c7888395efa1bf8746e14a3773480cc1820d1eff918125bbd58d",
+        "size": 30092
+      }
+    ],
+    "visual": true
+  },
+  "95": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_synthetic_feasibility_modeling.py",
+      "sha256": "35e0c5ef3a92fa58b9d6ee6100652f2ea4f1057bbfaab725af5dd175cbaab34f",
+      "size": 494
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/tox21_mol_scscores_gold.npy",
+        "sha256": "463004890d3ac6a7b8a5d4876b1f12e0fbbeed084c055ac92ef65004909792e8",
+        "size": 6396
+      }
+    ],
+    "visual": false
+  },
+  "96": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/scanpy_scatter_eval.py",
+      "sha256": "f28ce716dc502c2dabb417e63933a62a6c6de9696f64eeaa466a8e336a0da91d",
+      "size": 434
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/scanpy_scatter_gold.png",
+        "sha256": "6bf75624c0c1d97926101f06256e2375f9f473bf0f0b7c3379a7c1bb4a7f416e",
+        "size": 32567
+      }
+    ],
+    "visual": true
+  },
+  "97": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_formation_energy_prediction.py",
+      "sha256": "aee98aa394bf52b805ae26b3b72cf2829a92f2a219048d7caf0121d84ed78776",
+      "size": 513
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/formation_energy_prediction_gold.txt",
+        "sha256": "05a3e181db2eac6fa2fb030ee13a4892268759343defeb8c856542190f4efd95",
+        "size": 47332
+      }
+    ],
+    "visual": false
+  },
+  "98": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/scirpy_3k_eval.py",
+      "sha256": "78b0c0ad430cb8bed39d9df4328309546c39a7f6f2a7142b51882ea1bfb98e7c",
+      "size": 425
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/scirpy_3k_gold.png",
+        "sha256": "4798f79196498467fe69dd2c686bec1a69449cf3b0a645f33198ff2a50ac8180",
+        "size": 30741
+      }
+    ],
+    "visual": true
+  },
+  "99": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/scanpy_spatial_eval.py",
+      "sha256": "e92d80c4dd75876a6edf0ba2f31e189a46e0dc1d8afec22fe632e8b4ccba2678",
+      "size": 434
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/scanpy_spatial_gold.png",
+        "sha256": "e0dac75548b0c28c50c4f2ded7fcff99ef7e13f26c8c2072e2242290c8c8898e",
+        "size": 513708
+      }
+    ],
+    "visual": true
+  },
+  "100": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/scanpy_spatial_2_eval.py",
+      "sha256": "498c1dd7156baeb848f7c404320a252792fd5b8c4a5a68a2f561791802793376",
+      "size": 438
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/scanpy_spatial_2_gold.png",
+        "sha256": "7af5b17c46d935d699f7a74c251a48d15abdfa963dc31f84e592bed87d47e323",
+        "size": 738652
+      }
+    ],
+    "visual": true
+  },
+  "101": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_experimental_band_gap_prediction.py",
+      "sha256": "d3b44aa30389046988a9a463482d1a9665981e1e93a555fdf2777c089f67a9a4",
+      "size": 369
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/experimental_band_gap_prediction_gold.csv",
+        "sha256": "b08d721b493943732eaaad7ca6f864dae4ab371aa92b14b2e527ba78b894487a",
+        "size": 5102
+      }
+    ],
+    "visual": false
+  },
+  "102": {
+    "evaluator": {
+      "member": "benchmark/eval_programs/eval_refractive_index_prediction.py",
+      "sha256": "43d8c4276c6235a51a57ddacff2dbebb7a67fc47f107835a356a979bcf8a6c8c",
+      "size": 358
+    },
+    "gold": [
+      {
+        "member": "benchmark/eval_programs/gold_results/ref_index_predictions_gold.csv",
+        "sha256": "3205430c75e948d8e6aba1837776a182514cec1867900b811b8111ad5439f785",
+        "size": 1327606
+      }
+    ],
+    "visual": false
+  }
+}

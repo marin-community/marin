@@ -9,7 +9,7 @@ from tempfile import SpooledTemporaryFile
 from typing import Any
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec, grader_environment
+from taskcompendium.models import PublisherFile, TaskSpec, grader_environment
 from taskcompendium.pipeline.conversion import ConvertedRow, convert_record
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
@@ -49,7 +49,7 @@ def task_resource_bytes(task: TaskSpec) -> int:
         for resource in build.files
     )
     return sum(
-        len(resource_bytes(resource))
+        resource.source.size if isinstance(resource.source, PublisherFile) else len(resource_bytes(resource))
         for resource in (*resources.all, *resources.worker, *resources.oracle, *resources.verifier, *build_files)
     )
 

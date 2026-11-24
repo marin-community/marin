@@ -1,0 +1,13 @@
+numpy==1.26.4
+pandas==1.5.3
+matplotlib==3.7.5
+scipy<1.14
+scikit-learn==1.7.2
+rdkit==2023.9.5
+torch @ https://download.pytorch.org/whl/cpu/torch-2.3.0%2Bcpu-cp310-cp310-linux_x86_64.whl
+qsprpred==3.2.1
+swifter==1.4.0
+dash<=2.10
+chemprop==1.6.1
+DeepPurpose==0.1.5
+descriptastorus==2.8.0

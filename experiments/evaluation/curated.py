@@ -216,7 +216,9 @@ def settings_for(
     concurrency_bounds = [bound for bound in (model.evaluation_num_concurrent, run.concurrency) if bound is not None]
     return CuratedSettings(
         concurrency=min(concurrency_bounds, default=DEFAULT_EVALUATION_CONCURRENCY),
+        metered_judge_concurrency=run.metered_judge_concurrency,
         max_tokens=run.max_tokens,
+        max_attempts_per_trial=run.max_attempts_per_trial,
         source_limit=limit if limit is not None else run.limit,
         seed=explicit_seed if explicit_seed is not None else default_seed,
         judge=run.judge,
@@ -238,7 +240,9 @@ def record_ref_for(
         source_digest="sha256:"
         + canonical_sha256(
             {
-                "selection": selection.model_dump(mode="json", exclude={"run": {"concurrency"}}),
+                "selection": selection.model_dump(
+                    mode="json", exclude={"run": {"concurrency", "metered_judge_concurrency"}}
+                ),
                 "settings": scoring_settings(settings.model_dump(mode="json")),
             }
         ),

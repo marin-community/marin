@@ -26,6 +26,7 @@ from evalrecords.records import (
     DEFAULT_RECORDS_PREFIX,
     EvalRef,
     EvaluationSelection,
+    JudgeIdentity,
     ModelConfigRef,
     ModelRef,
     PromptFormat,
@@ -89,6 +90,7 @@ from experiments.evaluation.curated import (
     corpus_steps,
     pinned_model,
     record_ref_for,
+    requires_judge,
     resolve_selection,
     runs_agent,
     settings_for,
@@ -302,6 +304,19 @@ def _resolve_definitions(
             settings = settings_for(
                 definition, protocol, model, limit, seed, default_seed, task_machine_backend, task_evidence
             )
+            if judge_model is not None:
+                if not requires_judge(definition):
+                    raise ValueError(f"{name} does not declare a judge")
+                if definition.run.judge or definition.run.judge_endpoint or definition.run.judge_api_key:
+                    raise ValueError(f"{name} cannot combine hosted and external judge settings")
+                if not re.fullmatch(r"[0-9a-f]{40}", judge_model.revision or ""):
+                    raise ValueError("A hosted curated judge requires a full Hub commit as its revision")
+                identity = JudgeIdentity(
+                    deployment=judge_model.location,
+                    models={judge_model.location: judge_model.revision},
+                    default_model=judge_model.location,
+                )
+                settings = settings.model_copy(update={"judge": identity})
             secret_env: dict[str, SecretSpec] = {
                 **definition.run.task_secrets,
                 **({JUDGE_API_KEY: definition.run.judge_api_key} if definition.run.judge is not None else {}),
@@ -476,8 +491,12 @@ def build_evaluation_batch(
         )
         if violations:
             raise ValueError(f"{spec.version} pre-submit check failed for {name}: {'; '.join(violations)}")
-    if judge is not None and any(definition.record_ref.curated is not None for _, definition in definitions):
-        raise ValueError("--judge-model serves Harbor verifiers only; configure judges in the evaluation run settings")
+    if judge is not None and has_curated_definitions:
+        if spec.policy_finalization is not None or any(
+            isinstance(definition, HarborDefinition) for _, definition in requested_definitions
+        ):
+            raise ValueError("A hosted curated judge requires a curated-only batch without a second policy judge")
+        judge = replace(judge, api_model=judge.model.location)
     records_prefix = records_prefix_for(accelerator, spec)
     group_id = spec.run_id or _group_id(model.name, spec.cache_key)
     created_at = datetime.now(UTC).isoformat()

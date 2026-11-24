@@ -1,0 +1,2172 @@
+{
+  "archive_sha256": "46e715d3b2196d459d2dff52aa487f506a95ec44b44262e82208d086ea879610",
+  "datasets": {
+    "benchmark/datasets/clintox": [
+      {
+        "member": "benchmark/datasets/clintox/clintox_test.csv",
+        "size": 18911,
+        "sha256": "3f68a05792aae9ce21bf7bd01875936547aa4073dbea0cfa781a4be524b89cac"
+      },
+      {
+        "member": "benchmark/datasets/clintox/clintox_train.csv",
+        "size": 76294,
+        "sha256": "e92939b4ef0bb3f2e026118303735a75cf8f8ed7cfcfa2d214685ff2f342331f"
+      }
+    ],
+    "benchmark/datasets/mat_diffusion": [
+      {
+        "member": "benchmark/datasets/mat_diffusion/diffusion_data_nofeatures_new.xlsx",
+        "size": 18943,
+        "sha256": "e8da796a2123104043f18170354aea50690da0ec230ddacd89cb45e8993568ac"
+      }
+    ],
+    "benchmark/datasets/crystalline_compound": [
+      {
+        "member": "benchmark/datasets/crystalline_compound/compound_elastic_properties_test.csv",
+        "size": 166458,
+        "sha256": "e7d49e00341dbc5e0ba85ab63e83390ed44def45d12078156541ffc32583d96e"
+      },
+      {
+        "member": "benchmark/datasets/crystalline_compound/compound_elastic_properties_train.csv",
+        "size": 710089,
+        "sha256": "d8c2c76f04407a8603c79c2f735748cb13945407f808256c726f5e6b08c3b14c"
+      }
+    ],
+    "benchmark/datasets/ElkMovement": [
+      {
+        "member": "benchmark/datasets/ElkMovement/Elk_in_Southwestern_Alberta_2009.geojson",
+        "size": 88758365,
+        "sha256": "241c2ef840943d2c630bf5800a352c4a64a01caada0d8d85392b13d1c5368af0"
+      }
+    ],
+    "benchmark/datasets/dkpes": [
+      {
+        "member": "benchmark/datasets/dkpes/dkpes_test.csv",
+        "size": 1973,
+        "sha256": "111058c8572865fd1907e9475a3af86d91fa0aea1f99ae2ed302858326a5eeea"
+      },
+      {
+        "member": "benchmark/datasets/dkpes/dkpes_train.csv",
+        "size": 6501,
+        "sha256": "5ba8cb90d0a65d97ddda56c8a0bbf678d4f54af13a66d0ec64cc7d612e9f5de9"
+      }
+    ],
+    "benchmark/datasets/FACTORS": [
+      {
+        "member": "benchmark/datasets/FACTORS/FACTORS_training_disguised_combined_full.csv",
+        "size": 40519564,
+        "sha256": "69a2cb0508925299109b2d220d7909bcbddf2bc0759bf5f04fc361aa110635e3"
+      },
+      {
+        "member": "benchmark/datasets/FACTORS/scripts/FACTORS_features.py",
+        "size": 157245,
+        "sha256": "5c33112319c89e3351dece96b62bc037f0f917d7388758d17ee3f0b1cbf919d0"
+      },
+      {
+        "member": "benchmark/datasets/FACTORS/scripts/FACTORS_datasets.py",
+        "size": 4446,
+        "sha256": "061982d684640f62c0589e18fefcc23b57c819b5eb06dfc499d8ddb8ca748e22"
+      },
+      {
+        "member": "benchmark/datasets/FACTORS/FACTORS_test1_disguised_combined.csv",
+        "size": 6554383,
+        "sha256": "9e5a173200f1e7b60665f267c7e5f18f581bc27709aac13c172a294f16e6b580"
+      },
+      {
+        "member": "benchmark/datasets/FACTORS/FACTORS_test2_disguised_combined.csv",
+        "size": 6679608,
+        "sha256": "76a60b1bfcb4d798550cbd6e5095c7a033fdc2b4fa59231619988b9527bed101"
+      }
+    ],
+    "benchmark/datasets/Toronto_fire": [
+      {
+        "member": "benchmark/datasets/Toronto_fire/etobicoke.geojson",
+        "size": 236128,
+        "sha256": "fe3f1a3fe23ac13c08f508eca930c3fc85af63cf0ec26ba2f6a8e82850ff5485"
+      },
+      {
+        "member": "benchmark/datasets/Toronto_fire/fire_station.geojson",
+        "size": 21618,
+        "sha256": "cf13c07f5feb4389640ea6458f0e9f263aca4127d13adca6347797bfcc895aad"
+      }
+    ],
+    "benchmark/datasets/BBBC002": [
+      {
+        "member": "benchmark/datasets/BBBC002/test/BBBC002_v1_counts.txt",
+        "size": 472,
+        "sha256": "95ef503514bed319872e97bbf50f68cf01dcf742f3c0163b05096e18b2e71ea7"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/test/drosophila_kc167_1_images/CPvalid1_Anillin_40x_Tiles_p1069DAPI.TIF",
+        "size": 264318,
+        "sha256": "637a08ce58e17b8bd3154e690b1d128319ac2619e7cf562948826f31cf7b0d0e"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/test/drosophila_kc167_1_images/CPvalid1_nodsRNA_40x_Tiles_p1745DAPI.TIF",
+        "size": 264318,
+        "sha256": "46aec81e4f4ee54995391376d9ca52ccb079d5c4d50ae16d13c6465a15efbf70"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/test/drosophila_kc167_1_images/CPvalid1_48_40x_Tiles_p1394DAPI.TIF",
+        "size": 264318,
+        "sha256": "538225e23dd2f3736fcb4d204659ebccc97d4465bebba79cd79c4ea8d420d404"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/test/drosophila_kc167_1_images/CPvalid1_340_40x_Tiles_p1175DAPI.TIF",
+        "size": 264318,
+        "sha256": "2ee4f5b1d6acb287a3aeba0a6e818210f255fa2f936007a0c99e952d386740df"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/test/drosophila_kc167_1_images/CPvalid1_mad2_40x_Tiles_p0907DAPI.TIF",
+        "size": 264318,
+        "sha256": "485dcfa50e14910ea58d2c37a6485d6f893ceea8200ed70eca8666bb0b879a85"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/test/drosophila_kc167_1_images/CPvalid1_nodsRNA_40x_Tiles_p1730DAPI.TIF",
+        "size": 264318,
+        "sha256": "305efc3fbb34566ddc0fdd7f4364783fa16001503018ed3776b3070a457002e4"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/test/drosophila_kc167_1_images/CPvalid1_48_40x_Tiles_p1583DAPI.TIF",
+        "size": 264318,
+        "sha256": "cc73122fbab86b6a03d4597c8e330380f5a30cd3abfcb09c4a2e1cc1f5be4eb3"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/test/drosophila_kc167_1_images/CPvalid1_340_40x_Tiles_p1365DAPI.TIF",
+        "size": 264318,
+        "sha256": "9d6f05ebd18e6aabdec0fa031478842713d51a9ae03daf63184c49ddeb15e1fc"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/test/drosophila_kc167_1_images/CPvalid1_mad2_40x_Tiles_p1072DAPI.TIF",
+        "size": 264318,
+        "sha256": "c2aaffb14465312a5d2d9e84c2f9c3f31638cfda029232fde3a0c5e3671b9dd1"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/test/drosophila_kc167_1_images/CPvalid1_Anillin_40x_Tiles_p1286DAPI.TIF",
+        "size": 264318,
+        "sha256": "5ff7d1b368cbfa15920b9a51f6f33d05b382986786b8326755c6369d24227be1"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/BBBC002_v1_counts.txt",
+        "size": 1767,
+        "sha256": "c36ee62066a84f135a0ace1d9d683940946a3f30875f1345c3d47dd3ebcf5c7c"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_mad2_40x_Tiles_p0880DAPI.TIF",
+        "size": 264318,
+        "sha256": "53ccc655f7a4a7cd5d0e480f99d2c0681755f4d559b94d25e60bb532c020e2d7"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_340_40x_Tiles_p0540DAPI.TIF",
+        "size": 264318,
+        "sha256": "3b9db7778944f1e9ae56d0250e5b222a790fff6282eb389945ccb212d823cdc0"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_Anillin_40x_Tiles_p0190DAPI.TIF",
+        "size": 264318,
+        "sha256": "3b35332551315a9544bdb911d399526f11bbf4a78f2530d45a6595640f9d1ea5"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_48_40x_Tiles_p1016DAPI.TIF",
+        "size": 264318,
+        "sha256": "ad2e383c589a7d6c3f88404a99286c06a8fb9e92edfb1bcbaefb06478964efc3"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_340_40x_Tiles_p0702DAPI.TIF",
+        "size": 264318,
+        "sha256": "095fb1669be4eb902fbaf5361f33215922194abbfba51bd7b86ffd706fad35f6"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_Anillin_40x_Tiles_p0447DAPI.TIF",
+        "size": 264318,
+        "sha256": "623b5caf3e1ce598edfcfcb60c435bafdf0d6e6bd4e11f273c2cbe0c7fbfecc9"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_Anillin_40x_Tiles_p0717DAPI.TIF",
+        "size": 264318,
+        "sha256": "d6d4c075233e816628f1ab5ae1fa4e41d7e773f6bbb4f8a9d3cb994874a5a6c2"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_mad2_40x_Tiles_p0853DAPI.TIF",
+        "size": 264318,
+        "sha256": "202b7cb2636c2f27ae7f0fe3aeeed392f1c9b92e4c24bcb7c3e3301c7851ce62"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_340_40x_Tiles_p0865DAPI.TIF",
+        "size": 264318,
+        "sha256": "e4ffc0a9ecd3681796b20cc37d5a18ea3b756660db6a6f0170ddc8eaf001774d"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_340_40x_Tiles_p0002DAPI.TIF",
+        "size": 264318,
+        "sha256": "58f5b22b37d3ccb681fa48c7e51f41df0d1ce85bbe9502f66c92fd52b36045a9"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_48_40x_Tiles_p0881DAPI.TIF",
+        "size": 264318,
+        "sha256": "b1d468bebe06017707ed675f0ca0df755494ec60fa8a147f96912923d94cbcd7"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_mad2_40x_Tiles_p0125DAPI.TIF",
+        "size": 264318,
+        "sha256": "99a4d8bd74b10bee59b3005cb7733fc8faa1c2d027f1ffd83d6a193f6e0097d9"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_nodsRNA_40x_Tiles_p0151DAPI.TIF",
+        "size": 264318,
+        "sha256": "a38f46c2339aba75b475d8ae2cc6461c77e636d5c099231657c0ddafdc3cab17"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_48_40x_Tiles_p0719DAPI.TIF",
+        "size": 264318,
+        "sha256": "b52908fc46e0cc8422ad20bacf0fd6677e5ffe5244de3b315eb9fa18ac6d0477"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_Anillin_40x_Tiles_p0081DAPI.TIF",
+        "size": 264318,
+        "sha256": "9feb0572153aff5ec9e7f9bbd725a78ec55a3c47bf862728bbe818050d39025b"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_mad2_40x_Tiles_p0841DAPI.TIF",
+        "size": 264318,
+        "sha256": "e166e30a8d0b1755fb22fd838aa53c0aeffb1d87395b8ba6404f77600166c871"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_nodsRNA_40x_Tiles_p0016DAPI.TIF",
+        "size": 264318,
+        "sha256": "bf12977d67c901cae58c03172f25448be88a90190a51ff45df343153d9278c3b"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_mad2_40x_Tiles_p0044DAPI.TIF",
+        "size": 264318,
+        "sha256": "215543aa23bce7fcc7d20869878478fc5f363744ec1c6c102bf904b92c3eed7e"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_nodsRNA_40x_Tiles_p1540DAPI.TIF",
+        "size": 264318,
+        "sha256": "69b70fda8c31704aa8f343753d08d3855ae8034f8b42b52dc2409333288cb9d3"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_nodsRNA_40x_Tiles_p1703DAPI.TIF",
+        "size": 264318,
+        "sha256": "4bf8965937f04b555555e0608b8382fd31bb997b0a569cf32ccedac4e45f86e8"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_nodsRNA_40x_Tiles_p0219DAPI.TIF",
+        "size": 264318,
+        "sha256": "253d411440c5eb302f9897f4469a16005ef314fb1932e8c9c1902464079836e9"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_48_40x_Tiles_p0529DAPI.TIF",
+        "size": 264318,
+        "sha256": "a10aaa4ce93fef02bd24630f68fbc7913d3580f88064abea5cf1f573da5a4f9b"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_nodsRNA_40x_Tiles_p0098DAPI.TIF",
+        "size": 264318,
+        "sha256": "b8598e4a6de63df52c8757e314925db7f7ffb2a9e41a067fae18aed84dcb9167"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_48_40x_Tiles_p0003DAPI.TIF",
+        "size": 264318,
+        "sha256": "7ff54d3f431ab70e727c130138b32d963d994580a417579fd508d8684251a535"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_340_40x_Tiles_p0109DAPI.TIF",
+        "size": 264318,
+        "sha256": "13698ef66ce626c9ed56db98355810dff65b91c4a374344fbb96bdf7bc43f446"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_Anillin_40x_Tiles_p0852DAPI.TIF",
+        "size": 264318,
+        "sha256": "67a02155341e38a39339b2a9bd3bb1f4dfdb431fe374ad7bf5e4836e31b96e6b"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_mad2_40x_Tiles_p0004DAPI.TIF",
+        "size": 264318,
+        "sha256": "d244cbe7cbddee69eb96a50d4546f48c2fee8f3fdb06fed927c19d77e494de36"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_48_40x_Tiles_p0151DAPI.TIF",
+        "size": 264318,
+        "sha256": "fa50ee3efb3471603f67f5c74ce4e8b0e95720d99821c52e977af7cf4ac85675"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_nodsRNA_40x_Tiles_p1648DAPI.TIF",
+        "size": 264318,
+        "sha256": "94b547a5d8043177e750ec7ff9338e14da77a0fe29477ca6792cbacce3b52f1a"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_Anillin_40x_Tiles_p0338DAPI.TIF",
+        "size": 264318,
+        "sha256": "c9478de7b10c0b635806147b67dc0a894921a3538eec5a97def507cd50c2d73a"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_nodsRNA_40x_Tiles_p0003DAPI.TIF",
+        "size": 264318,
+        "sha256": "40b007ba724b599385803ddc35a047bb81b758e24b2ccdfbd5c4b3d459264bab"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_340_40x_Tiles_p0378DAPI.TIF",
+        "size": 264318,
+        "sha256": "158b64070a70fd25d24918fd01945668f2f9ed4e795c0b714dcb2964541f5cb5"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_Anillin_40x_Tiles_p0002DAPI.TIF",
+        "size": 264318,
+        "sha256": "89637bfa29c562ff23d84a349512384652aa2e176e327f740d105751f861a0d8"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_mad2_40x_Tiles_p0260DAPI.TIF",
+        "size": 264318,
+        "sha256": "6138b6f6cfb67d6a4d0c8d6c0cce201253a5da598dce50d300bbbb847b848147"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_48_40x_Tiles_p0313DAPI.TIF",
+        "size": 264318,
+        "sha256": "949eea17e38c68a44cb1ca4ba6fb8e9fe06d42838ac3a7254a5a135d7240f07a"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_340_40x_Tiles_p0244DAPI.TIF",
+        "size": 264318,
+        "sha256": "95b2c68bf1707d80c230f20efb079a03db459bbfb14e7aa94a0b71f42b0fdb5e"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_340_40x_Tiles_p1013DAPI.TIF",
+        "size": 264318,
+        "sha256": "4737b0e0bdeb8fa3b271965cbd3adce9f7b95d80f5bbf726818000af55d94e03"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_mad2_40x_Tiles_p0394DAPI.TIF",
+        "size": 264318,
+        "sha256": "44d2740f0ba18aac6bf655309cb7aa0374570cd2708b641193c8444064b837b4"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_Anillin_40x_Tiles_p0582DAPI.TIF",
+        "size": 264318,
+        "sha256": "9c833a59a07b958437c4f0969de88058584b643d093e506ad06da5ee15ade06d"
+      },
+      {
+        "member": "benchmark/datasets/BBBC002/train/drosophila_kc167_1_images/CPvalid1_48_40x_Tiles_p1205DAPI.TIF",
+        "size": 264318,
+        "sha256": "1bf44ca23796de9d8896e268276a43bf83143565a31a608264278f5ea9239018"
+      }
+    ],
+    "benchmark/datasets/dti": [
+      {
+        "member": "benchmark/datasets/dti/DAVIS/drug_train.txt",
+        "size": 3471,
+        "sha256": "5a8ac5b44f62c9af3dbd4ae96e1c94864c77284a7e57260074cdfa2a85e1368b"
+      },
+      {
+        "member": "benchmark/datasets/dti/DAVIS/affinity_val.csv",
+        "size": 41120,
+        "sha256": "688396687ca7625c691db34ea6837d66df37b6b38dadd6f3170edc15d8799a1f"
+      },
+      {
+        "member": "benchmark/datasets/dti/DAVIS/drug_val.txt",
+        "size": 864,
+        "sha256": "01f4a144fad48598aecb45a4be0c9b216ccd0c874bb2cbea2511428e0cabbcb7"
+      },
+      {
+        "member": "benchmark/datasets/dti/DAVIS/target_seq.json",
+        "size": 355211,
+        "sha256": "187cedeee10cd3b58af915a2861a5ed0c4ff42a2d728f4dea5e0b47e3d75b291"
+      },
+      {
+        "member": "benchmark/datasets/dti/DAVIS/affinity_train.csv",
+        "size": 159824,
+        "sha256": "cb9c713ba23198d1f028b98c9ed790306ae865557994add44248eee1a5313f77"
+      },
+      {
+        "member": "benchmark/datasets/dti/covid_seq.txt",
+        "size": 329,
+        "sha256": "ced437a7429321c61f79faf98e45ebaa56d2384cfdd50645836f4e8a2be1741b"
+      },
+      {
+        "member": "benchmark/datasets/dti/antiviral_drugs.tab",
+        "size": 6645,
+        "sha256": "f89261a118d330b3b57f54c66931fe7a9cb1874388e6e5e1309abf9a8da35253"
+      }
+    ],
+    "benchmark/datasets/hiv": [
+      {
+        "member": "benchmark/datasets/hiv/HIV_README",
+        "size": 837,
+        "sha256": "e777de9c420ad65a36a501f72173d97b5d943e01cf802dcf83a2107754a07cd4"
+      },
+      {
+        "member": "benchmark/datasets/hiv/HIV_train.csv",
+        "size": 1689606,
+        "sha256": "c3f23a745d922e05eae31b7bdd8c25644098fd70d091f2bf0bff669214db0c4b"
+      },
+      {
+        "member": "benchmark/datasets/hiv/HIV_dev.csv",
+        "size": 211239,
+        "sha256": "a1458bf9ba9a21f86e8893f6b79ec791dbb5b54b1af8f682e38edef51910c6d7"
+      },
+      {
+        "member": "benchmark/datasets/hiv/HIV_test.csv",
+        "size": 210572,
+        "sha256": "9290419da5a78184bc838c6ec0f3903501a8ca6dcff03efe70c0617e31e00e8f"
+      }
+    ],
+    "benchmark/datasets/Flooding": [
+      {
+        "member": "benchmark/datasets/Flooding/StudyAreaBuildings.prj",
+        "size": 428,
+        "sha256": "b9515dfdb5a4827fb262b1c4f848e2e777bf1b36e85c4fd693339d90b12b6518"
+      },
+      {
+        "member": "benchmark/datasets/Flooding/StudyAreaBuildings.sbn",
+        "size": 91428,
+        "sha256": "53900702c9aa3be1b08efcadd5b8b0d7a4076f820c1ab6a35d67f2bd88fd8d9c"
+      },
+      {
+        "member": "benchmark/datasets/Flooding/StudyAreaBuildings.cpg",
+        "size": 5,
+        "sha256": "3ad3031f5503a4404af825262ee8232cc04d4ea6683d42c5dd0a2f2a27ac9824"
+      },
+      {
+        "member": "benchmark/datasets/Flooding/StudyAreaBuildings.shp",
+        "size": 3619284,
+        "sha256": "c00585493ae052aec0e574432f5ba6d75b889d89c1f588f429cfc54cdfbc980b"
+      },
+      {
+        "member": "benchmark/datasets/Flooding/StudyAreaBuildings.sbx",
+        "size": 4204,
+        "sha256": "21908499264577d169264e8a50d8f777c1c39db4f911b0d5f67402de2ea67c2e"
+      },
+      {
+        "member": "benchmark/datasets/Flooding/StudyAreaBuildings.shx",
+        "size": 72644,
+        "sha256": "3e1ca087a1dfc6c4c7e2af0816124b24d41596a2a92244756f4b1ebc7d1e34d1"
+      },
+      {
+        "member": "benchmark/datasets/Flooding/StudyAreaBuildings.dbf",
+        "size": 353750,
+        "sha256": "605a2338a16810789d66f472ae67c955caba2c8ecb3113728b5a8c890c5db216"
+      },
+      {
+        "member": "benchmark/datasets/Flooding/Elevation_2050.tfw",
+        "size": 89,
+        "sha256": "cee29750c6e2b24bcc0a69cb37aa20c1d91ce95fcdcdf0182498fd75c63a5162"
+      },
+      {
+        "member": "benchmark/datasets/Flooding/Elevation_2050.tif.aux.xml",
+        "size": 1994,
+        "sha256": "f8ef3eda22c88623e8b81a3d41d45cd537cc031afdd1caad35ba80bb06696a5b"
+      },
+      {
+        "member": "benchmark/datasets/Flooding/Elevation_2050.tif",
+        "size": 4591102,
+        "sha256": "2bb6db6f59025bf3183aa0dbeb40dfec8819cf3f9c87a7eae305d6a549b06ebe"
+      },
+      {
+        "member": "benchmark/datasets/Flooding/StudyAreaBuildings.shp.xml",
+        "size": 19245,
+        "sha256": "56dcac2a7de75fa91bfedebef4894c592e6906c94590d6e1daf7e5f330383580"
+      }
+    ],
+    "benchmark/datasets/ames": [
+      {
+        "member": "benchmark/datasets/ames/train.npz",
+        "size": 1162032,
+        "sha256": "6fa8a7d21df7f110d6c1b5fb9cf014264eb476d15f7412cef0c0ed110a177b1a"
+      },
+      {
+        "member": "benchmark/datasets/ames/val.csv",
+        "size": 39481,
+        "sha256": "ad7fc6833d61511421b333ff8fde2353497bf41f93a5c27a663f0a7d3dd35535"
+      },
+      {
+        "member": "benchmark/datasets/ames/test.csv",
+        "size": 77075,
+        "sha256": "55c2eb45eb3d29676bdf11f80d7e4bce12377cf7803ff249702d5791392514de"
+      },
+      {
+        "member": "benchmark/datasets/ames/test.npz",
+        "size": 313366,
+        "sha256": "27eae5369bff35e657c2ba3f85110853219e25a8b9e31019c21c01102caae58d"
+      },
+      {
+        "member": "benchmark/datasets/ames/val.npz",
+        "size": 159814,
+        "sha256": "e9b3d14f15de9e2f03d15fdbc112b0ec7d09a4016045b0cadb86d88ccff1a428"
+      },
+      {
+        "member": "benchmark/datasets/ames/train.csv",
+        "size": 233283,
+        "sha256": "31e7ba0c258f32e22b49408c2ff22117051095a98a33978aa04f38c08a33aa39"
+      }
+    ],
+    "benchmark/datasets/compound_filter": [
+      {
+        "member": "benchmark/datasets/compound_filter/hits.csv",
+        "size": 298481,
+        "sha256": "89311c6292378cd89029875752fe913c4371e83024c079760f9972e7df74552b"
+      },
+      {
+        "member": "benchmark/datasets/compound_filter/train.csv",
+        "size": 3155144,
+        "sha256": "4fcfc9ccc4d8b2ad4bb3b0612e40eedfb886258cb394878ef7d2a0b06a8c13a1"
+      }
+    ],
+    "benchmark/datasets/papyrus_vis": [
+      {
+        "member": "benchmark/datasets/papyrus_vis/A2AR_LIGANDS.tsv",
+        "size": 3059187,
+        "sha256": "2a46a36466740bb1573980c2d54811fb23a50054d8b419e0bb124e725726cf19"
+      }
+    ],
+    "benchmark/datasets/dili": [
+      {
+        "member": "benchmark/datasets/dili/test.csv",
+        "size": 2608,
+        "sha256": "c0367d7d80dbcbeb69cd110dbeaa41a504d42dbd0fb7866f41a1a13398d371cc"
+      },
+      {
+        "member": "benchmark/datasets/dili/train.csv",
+        "size": 80524,
+        "sha256": "587b5127bb8cf5f5834956eaadec1391173a6fb2c7a3df63ad437e91c525407b"
+      }
+    ],
+    "benchmark/datasets/TDC_ADMET": [
+      {
+        "member": "benchmark/datasets/TDC_ADMET/TDC_Single_Multi_Regression.csv",
+        "size": 2086,
+        "sha256": "1f1125dcd0c88a04c2b4c53a695f6ce9a845d8e9638d2531c1c8ae1d0f3208c8"
+      }
+    ],
+    "benchmark/datasets/deforestation": [
+      {
+        "member": "benchmark/datasets/deforestation/roads.geojson",
+        "size": 14959869,
+        "sha256": "0b29c97f5dc6e08950d7cfd9c36cc614cb3418d1c28454d9956e9ce2e4ae80f6"
+      },
+      {
+        "member": "benchmark/datasets/deforestation/deforestedArea.geojson",
+        "size": 21033068,
+        "sha256": "fb69e7ae0cbc23984d742a8782c56bb28e6f9875e46ff6614dcfd477fd478577"
+      }
+    ],
+    "benchmark/datasets/papyrus": [
+      {
+        "member": "benchmark/datasets/papyrus/papyrus_unfiltered.pkl",
+        "size": 15809896,
+        "sha256": "582e289ed403ccfaed9c788f12f8f3535eff61c7ee4389a0df9c10e09fedb96b"
+      },
+      {
+        "member": "benchmark/datasets/papyrus/papyrus_protein_set.pkl",
+        "size": 5338407,
+        "sha256": "d59df5540a46523c523bb3440c9239481e6a6f207369c61d29e49a1aec1be967"
+      }
+    ],
+    "benchmark/datasets/PredictDeforestation": [
+      {
+        "member": "benchmark/datasets/PredictDeforestation/roads.geojson",
+        "size": 14959869,
+        "sha256": "0b29c97f5dc6e08950d7cfd9c36cc614cb3418d1c28454d9956e9ce2e4ae80f6"
+      },
+      {
+        "member": "benchmark/datasets/PredictDeforestation/deforestedArea.geojson",
+        "size": 21033068,
+        "sha256": "fb69e7ae0cbc23984d742a8782c56bb28e6f9875e46ff6614dcfd477fd478577"
+      },
+      {
+        "member": "benchmark/datasets/PredictDeforestation/planned_road.geojson",
+        "size": 6578,
+        "sha256": "009e92b9a1acd890aa3d9608ba785b884e341a6fd39131cf954e8c2088e7269a"
+      },
+      {
+        "member": "benchmark/datasets/PredictDeforestation/protectedForest.geojson",
+        "size": 7246230,
+        "sha256": "ee5148437d0894461f2c9119505bd8b01cc61af3b304ea4a1f5dd483e6617db7"
+      }
+    ],
+    "benchmark/datasets/ecg_processing_data": [
+      {
+        "member": "benchmark/datasets/ecg_processing_data/sampling_rate.txt",
+        "size": 5,
+        "sha256": "7bc9058a1df9b36fdbbac3c1f79d18eb92304b219e5e254e33ed496565e906df"
+      },
+      {
+        "member": "benchmark/datasets/ecg_processing_data/ecg_data.pkl",
+        "size": 2517512,
+        "sha256": "1d99c930cf3845b021de572cc18de4a2404e3a87e73e7a9ab20ce56966acd6f5"
+      }
+    ],
+    "benchmark/datasets/ligand_protein": [
+      {
+        "member": "benchmark/datasets/ligand_protein/traj.xtc",
+        "size": 4835056,
+        "sha256": "fbaa07a24a3550bf85a6dab6435768a1da5b3fde65deb37abf47f1899a0dabdf"
+      },
+      {
+        "member": "benchmark/datasets/ligand_protein/.traj.xtc_offsets.lock",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "member": "benchmark/datasets/ligand_protein/top.pdb",
+        "size": 512613,
+        "sha256": "387ec524c3e82b7c891e9a7aa317222c9651a73ecdb61f67a872a9f87fdaa76a"
+      },
+      {
+        "member": "benchmark/datasets/ligand_protein/.traj.xtc_offsets.npz",
+        "size": 3020,
+        "sha256": "fb217ea4266f35d68e4443b511d678c8a7b678663809dd20422d7d12dacba2fe"
+      }
+    ],
+    "benchmark/datasets/dili_visualization": [
+      {
+        "member": "benchmark/datasets/dili_visualization/standardized_compounds_excl_ambiguous.csv",
+        "size": 72940,
+        "sha256": "448c201b4afcc88ad5faa90a9216dfd7eac0dc94c4ae9961f9b0b8a06ba275b2"
+      },
+      {
+        "member": "benchmark/datasets/dili_visualization/mcnc_ttsplits_te.pkl",
+        "size": 3722,
+        "sha256": "b26f8c14117f7b6d4d7bbdafd374c6c3c1b623c1327a151657b0740c7cdb149c"
+      },
+      {
+        "member": "benchmark/datasets/dili_visualization/tanimoto_similarities.txt",
+        "size": 24981492,
+        "sha256": "8899451e90cf55cd40f0f607ec46c06be3da57b5fabe937cc2d15a457f3dc17c"
+      },
+      {
+        "member": "benchmark/datasets/dili_visualization/result_loocv_svm_processed.csv",
+        "size": 632,
+        "sha256": "e88948a375dd61c3d264aeac6e18b26d7ed2a0d7a45638a18b7950fea6e28816"
+      }
+    ],
+    "benchmark/datasets/materials_genomics": [
+      {
+        "member": "benchmark/datasets/materials_genomics/LiMoS2_CHGCAR",
+        "size": 6833176,
+        "sha256": "5033adadca9476ed09859683ab47d129b34e850d50bdcd5e65fd64d699ebf1df"
+      },
+      {
+        "member": "benchmark/datasets/materials_genomics/F_CHGCAR",
+        "size": 6796730,
+        "sha256": "8f3d0ef4486ba774a16854a2e74a6d1446aa29deeeeb8f9cc5e7abc7ce7a61f7"
+      },
+      {
+        "member": "benchmark/datasets/materials_genomics/LiMoS2_F_CHGCAR",
+        "size": 6836583,
+        "sha256": "21e072603841a14d1071e6bb9f03b5e650d0cc473e85d8b17b57f039ddfb5cea"
+      },
+      {
+        "member": "benchmark/datasets/materials_genomics/vasprun.dfpt.phonon.xml.gz",
+        "size": 187323,
+        "sha256": "dc32da6149f4f7c2b1230071ee6fc0a9f2241b17159dd81b60dad8ba2473c79c"
+      }
+    ],
+    "benchmark/datasets/biosignals": [
+      {
+        "member": "benchmark/datasets/biosignals/eog_100hz.csv",
+        "size": 266369,
+        "sha256": "d8bc2ccc97cadbd39a60efbf4ebeadf0e959008ece1c27dc27c8917615ccd0e7"
+      },
+      {
+        "member": "benchmark/datasets/biosignals/ecg_1000hz.csv",
+        "size": 612903,
+        "sha256": "de566d677f935df096e33aa734ba131d0922de397e874a1b055b5278af65a36d"
+      },
+      {
+        "member": "benchmark/datasets/biosignals/bio_resting_5min_100hz.csv",
+        "size": 1699767,
+        "sha256": "4f56db06e032c6caadf1a2bf1f89d2c6fe15befa26063c9d3eddb5f243acb121"
+      },
+      {
+        "member": "benchmark/datasets/biosignals/bio_eventrelated_100hz.csv",
+        "size": 864994,
+        "sha256": "bc808946aa70e46f205f7787011cded1c9eeebfdc0d8812450f7721bdef76d08"
+      }
+    ],
+    "benchmark/datasets/CoralSponge": [
+      {
+        "member": "benchmark/datasets/CoralSponge/CatalinaBathymetry.tif.aux.xml",
+        "size": 2064,
+        "sha256": "0904ca760c9e05a397024f065d73266ab43dc6cfd899c8a8f57da9697ef274d1"
+      },
+      {
+        "member": "benchmark/datasets/CoralSponge/CatalinaBathymetry.tif.vat.dbf",
+        "size": 60368,
+        "sha256": "cc73ed4cac803fd17b6f74607fcf110853c379f65d3d531858ba98ec7638e0c9"
+      },
+      {
+        "member": "benchmark/datasets/CoralSponge/CatalinaBathymetry.tfw",
+        "size": 92,
+        "sha256": "ae9ac67eb620063208ee7b364f8cecb211d44f7f56882212f114e0764cb3dbd1"
+      },
+      {
+        "member": "benchmark/datasets/CoralSponge/CatalinaBathymetry.tif",
+        "size": 2755621,
+        "sha256": "3f47cab80951849b54c958d204db8624743e5904db57275efdbd32032fbb0705"
+      },
+      {
+        "member": "benchmark/datasets/CoralSponge/CatalinaBathymetry.tif.vat.cpg",
+        "size": 5,
+        "sha256": "3ad3031f5503a4404af825262ee8232cc04d4ea6683d42c5dd0a2f2a27ac9824"
+      },
+      {
+        "member": "benchmark/datasets/CoralSponge/CoralandSpongeCatalina.geojson",
+        "size": 6167125,
+        "sha256": "e9ef5dde17c12df7f12c22d0d5e9c1b139d68fafbac0e4a1a052da66d705bb8b"
+      }
+    ],
+    "benchmark/datasets/TransitAccessDemographic": [
+      {
+        "member": "benchmark/datasets/TransitAccessDemographic/BusServiceArea.geojson",
+        "size": 293989,
+        "sha256": "92a36af0161f7f340e7405bd973efc1e0cdba52afb41121a46d430159649dfef"
+      },
+      {
+        "member": "benchmark/datasets/TransitAccessDemographic/HamiltonDemographics.geojson",
+        "size": 3934974,
+        "sha256": "0c02cef0da0d5a4cfe8d9e1381b0e6cbd8729495ec64be1929d246ab0f51a9b5"
+      }
+    ],
+    "benchmark/datasets/eeg_processing": [
+      {
+        "member": "benchmark/datasets/eeg_processing/eeg_muse_example.csv",
+        "size": 909508,
+        "sha256": "44d10d857a9a16c5029062c84aec3186cc48e52da0a233b55c5a1d7d1a8c5ac4"
+      }
+    ],
+    "benchmark/datasets/mist_hr": [
+      {
+        "member": "benchmark/datasets/mist_hr/hr_sample_mist.xlsx",
+        "size": 172697,
+        "sha256": "86ebb40b8cf92fa71adababb3da2ce23409d8d7c0af33586887fbabc7c1fef8f"
+      }
+    ],
+    "benchmark/datasets/protein_protein": [
+      {
+        "member": "benchmark/datasets/protein_protein/traj.xtc",
+        "size": 4835056,
+        "sha256": "fbaa07a24a3550bf85a6dab6435768a1da5b3fde65deb37abf47f1899a0dabdf"
+      },
+      {
+        "member": "benchmark/datasets/protein_protein/.traj.xtc_offsets.lock",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "member": "benchmark/datasets/protein_protein/top.pdb",
+        "size": 512613,
+        "sha256": "387ec524c3e82b7c891e9a7aa317222c9651a73ecdb61f67a872a9f87fdaa76a"
+      },
+      {
+        "member": "benchmark/datasets/protein_protein/.traj.xtc_offsets.npz",
+        "size": 3020,
+        "sha256": "b41fc7cf79296764befc58cd581d7b190a6603b10f1dc851543f6a242bd9557c"
+      }
+    ],
+    "benchmark/datasets/dili_MD": [
+      {
+        "member": "benchmark/datasets/dili_MD/mol_descriptors_training.csv",
+        "size": 14406225,
+        "sha256": "a8e9891f05b29c740766227da01673864911b371262e001bb87fbda010aea406"
+      },
+      {
+        "member": "benchmark/datasets/dili_MD/test.csv",
+        "size": 871049,
+        "sha256": "c44212cf093e1421c8631b4f5cda60a4126f168c0b68c30f5cf100f727242697"
+      },
+      {
+        "member": "benchmark/datasets/dili_MD/standardized_compounds_excl_ambiguous_cluster.csv",
+        "size": 80524,
+        "sha256": "587b5127bb8cf5f5834956eaadec1391173a6fb2c7a3df63ad437e91c525407b"
+      }
+    ],
+    "benchmark/datasets/sleep_imu_data": [
+      {
+        "member": "benchmark/datasets/sleep_imu_data/sleep_data.pkl",
+        "size": 226707727,
+        "sha256": "669358f83f92a985d49ae86d027bd5e9c50368a13b4cbe272361a481750ccecb"
+      }
+    ],
+    "benchmark/datasets/biopsykit_questionnaire_data": [
+      {
+        "member": "benchmark/datasets/biopsykit_questionnaire_data/questionnaire_data.pkl",
+        "size": 8451,
+        "sha256": "a2a179031a7635059e67ba9580a936928758f66dd4d15366c412b2796f5906ab"
+      }
+    ],
+    "benchmark/datasets/MountainLionNew": [
+      {
+        "member": "benchmark/datasets/MountainLionNew/Protected_Status.tif.ovr",
+        "size": 78396,
+        "sha256": "f9fd7ea23d810930f2f9f7eef8e4f92541eb09783b42a934306eb38a9158c582"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/distance.tif",
+        "size": 7867570,
+        "sha256": "bf5510bd2a63c596251155ac8a31fb7f851b6e07a541937ec61b548404e261ef"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/Mountain_Lion_Habitat.geojson",
+        "size": 3362,
+        "sha256": "017b747e4ad36efd6ea94199523949f93d32d9e6408c50b83b8855bd071a029a"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/distance_to_roads.tif",
+        "size": 30561834,
+        "sha256": "201097bfebbd7ef9c9d2b660475d0abb6b74c3f309b425f43916d3332c8a9a95"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/Elevation.tif",
+        "size": 31468285,
+        "sha256": "0fdbce8937a025c0df1f6541103028458f51b21cd6bf5755b79199f0264071d4"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/Elevation.tfw",
+        "size": 92,
+        "sha256": "226599f3da67764f3c78c6903c4f0f5517e8352bdf4cdd46da7b2a659bf1372d"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/landcover_reclassified.tif",
+        "size": 7867570,
+        "sha256": "80192ac3c077914abfaaedc3bd484e53b1c8e21ea6b0cb99b310fc6fd5f3f03e"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/landCover.tif",
+        "size": 7876684,
+        "sha256": "27d3435decc658215b07ad5b9fd15ffe4e95c0deb2daec0eed95b44ffec61cda"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/landCover.tfw",
+        "size": 92,
+        "sha256": "226599f3da67764f3c78c6903c4f0f5517e8352bdf4cdd46da7b2a659bf1372d"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/landCover.tif.ovr",
+        "size": 551750,
+        "sha256": "1698615a0285cfcb8eb45f9914ba44736ac61e3cd20912e02c40ea746b9e8189"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/Protected_Status.tif",
+        "size": 7876571,
+        "sha256": "0c261ccbe669981211d55b518ead0718d9b325fbcb9959dae9d372ae6bff27b2"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/Protected_Status.tif.vat.cpg",
+        "size": 5,
+        "sha256": "3ad3031f5503a4404af825262ee8232cc04d4ea6683d42c5dd0a2f2a27ac9824"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/Protected_Status.tfw",
+        "size": 92,
+        "sha256": "226599f3da67764f3c78c6903c4f0f5517e8352bdf4cdd46da7b2a659bf1372d"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/landCover.tif.vat.cpg",
+        "size": 5,
+        "sha256": "3ad3031f5503a4404af825262ee8232cc04d4ea6683d42c5dd0a2f2a27ac9824"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/ruggedness_calculated.tif",
+        "size": 31461518,
+        "sha256": "9740948f1f5c3e804a494a2c17a19071260fbd1647248a3dc310a6ad8556c157"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/Elevation.tif.ovr",
+        "size": 4134797,
+        "sha256": "4fe773c33a3aa16238ecd82c0f11ea8bc93a67ef7a0d0d59bd76dc68f2f758e0"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/landCover.tif.aux.xml",
+        "size": 1505,
+        "sha256": "db71fdc42b32c84368cfd7c125120a2572f21c038255c4dd339d08d72d7f10bd"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/landCover.tif.vat.dbf",
+        "size": 2281,
+        "sha256": "6867cf84f9d27d5f86e0a7006f6092a1eb519583a755e15a60d70fcaf49ad6c9"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/Elevation.tif.aux.xml",
+        "size": 8386,
+        "sha256": "676930ba9944a99c8b6ffcfb694b8f93a76494587936a1e34466d98e50cc8f14"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/Protected_Status.tif.vat.dbf",
+        "size": 1266,
+        "sha256": "88f80cd8dcf79509620ea328bcb3c2afc993a175bd547dc4545c9391ede5a753"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/road.geojson",
+        "size": 53307388,
+        "sha256": "5d926ea2271038da6070cb0dab462ad10984fb39b8b53a499f96e72f04adf8d4"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/protected_status_reclassified.tif",
+        "size": 7867570,
+        "sha256": "cf5eb79904667c3747a2a70912a2b16334bcb0fd78ff37c1ba427857f5a66a79"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/Protected_Status.tif.aux.xml",
+        "size": 1458,
+        "sha256": "e473e451cefac1596df44869a63adc6867206f945a35644d4c5403eb8f9fd982"
+      },
+      {
+        "member": "benchmark/datasets/MountainLionNew/ruggedness.tif",
+        "size": 125833364,
+        "sha256": "7750842ed4e63a112890e4c535a03765eb908be1acfc534e40fda78a6c64aba6"
+      }
+    ],
+    "benchmark/datasets/sea_surface_temperature": [
+      {
+        "member": "benchmark/datasets/sea_surface_temperature/sst_anom.nc",
+        "size": 219316,
+        "sha256": "7b85c04e272d020d72d35c3eb9c720e03cb030920a779947de810e5d1dc7252c"
+      }
+    ],
+    "benchmark/datasets/EOF_standard": [
+      {
+        "member": "benchmark/datasets/EOF_standard/hgt_djf.nc",
+        "size": 743444,
+        "sha256": "2023b8194390343ebeb7d534a6e675ba56e9c8f013cc07a3fb0abadce48efee2"
+      }
+    ],
+    "benchmark/datasets/EOF_xarray_sst": [
+      {
+        "member": "benchmark/datasets/EOF_xarray_sst/sst_ndjfm_anom.nc",
+        "size": 219316,
+        "sha256": "7b85c04e272d020d72d35c3eb9c720e03cb030920a779947de810e5d1dc7252c"
+      }
+    ],
+    "benchmark/datasets/brain-blood": [
+      {
+        "member": "benchmark/datasets/brain-blood/logBB_test.sdf",
+        "size": 81179,
+        "sha256": "bbc05c0c6ea2b4f5e7a94bf63474f4f00cdbebed2e7c95110d745e12eb352732"
+      },
+      {
+        "member": "benchmark/datasets/brain-blood/logBB.sdf",
+        "size": 485309,
+        "sha256": "cb7759bde36e462e6b86815c1b78c505eb2c240073b8aa286e5f52ab22c94f8c"
+      }
+    ],
+    "benchmark/datasets/aquatic_toxicity": [
+      {
+        "member": "benchmark/datasets/aquatic_toxicity/tox21/processed/pre_transform.pt",
+        "size": 864,
+        "sha256": "bed90159f346b7ee0fa80e1d287e0ebe46264111c1e928ef341d926aae6a075c"
+      },
+      {
+        "member": "benchmark/datasets/aquatic_toxicity/tox21/processed/pre_filter.pt",
+        "size": 864,
+        "sha256": "bed90159f346b7ee0fa80e1d287e0ebe46264111c1e928ef341d926aae6a075c"
+      },
+      {
+        "member": "benchmark/datasets/aquatic_toxicity/tox21/processed/data.pt",
+        "size": 23609276,
+        "sha256": "5a2d888e6878cb8f738940b3888e922e01a4a5cb49dbec883f94b3055ffb33ef"
+      },
+      {
+        "member": "benchmark/datasets/aquatic_toxicity/tox21/raw/tox21.csv",
+        "size": 525119,
+        "sha256": "7d7e7facd853a63e79ddce4e9c3fcb7a0d83a1c300b603031c0f2c64fbe77761"
+      },
+      {
+        "member": "benchmark/datasets/aquatic_toxicity/Tetrahymena_pyriformis_OCHEM_test_ex.sdf",
+        "size": 705,
+        "sha256": "9586b4c75eed94f8dd5aa1f261d0f2cd67900048a497ff6c6dde0cd2461fe825"
+      },
+      {
+        "member": "benchmark/datasets/aquatic_toxicity/Tetrahymena_pyriformis_OCHEM.sdf",
+        "size": 1672463,
+        "sha256": "e73db5ddcedcdf4c84c583dcad35a7f2775bc156fb1fa6529140f90da7a612a8"
+      }
+    ],
+    "benchmark/datasets/ocean_profiles": [
+      {
+        "member": "benchmark/datasets/ocean_profiles/atlantic_profiles.nc",
+        "size": 34783,
+        "sha256": "252920313593de4e4c8786f4c2390c983017d272969d54813fdf44cfe4b11f04"
+      }
+    ],
+    "benchmark/datasets/temperature_statistic": [
+      {
+        "member": "benchmark/datasets/temperature_statistic/E1_north_america.nc",
+        "size": 1824028,
+        "sha256": "f6124a1a745dfc016a383cb1b95b74378f078664edc86cd2a67672c2b49e9567"
+      }
+    ],
+    "benchmark/datasets/nvc": [
+      {
+        "member": "benchmark/datasets/nvc/ind_data_for_plot.csv",
+        "size": 871,
+        "sha256": "d999b11482d882a71de19a43bfb6e3329e57ca93b58e0f7a918e103e4de882bc"
+      },
+      {
+        "member": "benchmark/datasets/nvc/valid_syllogisms.csv",
+        "size": 629,
+        "sha256": "cc5c31df1a7d3cb43a15436d94848c4ec3b3c2018adefe5e0d1973498315a111"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/models/PSYCOP.csv",
+        "size": 769,
+        "sha256": "7d582d175b89646d3ac3ecffaa3cb7f554277a98744d1b9eaaaaf3d8ebbd81fe"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/models/Matching.csv",
+        "size": 1045,
+        "sha256": "ac7b073c210e03e586b67827c86fa4ada262a19ec53d045157b53a634cea9c0e"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/models/VerbalModels.csv",
+        "size": 757,
+        "sha256": "7cb0698c4f4f208ab70de3f7f6b3b59b4e3b27deba2d407d302477e1e5470803"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/models/MMT.csv",
+        "size": 1185,
+        "sha256": "1906da96f14ffc3933953bb34337ff759b9719e35163581db33fab98fda6d93b"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/models/Conversion.csv",
+        "size": 613,
+        "sha256": "d61bcdda97765b827847b8e0b05f316b655cf1dd4a1ea7f0d4f1a3354e686993"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/models/PHM.csv",
+        "size": 917,
+        "sha256": "d0dcbb33b700915ad93700e16654931d8174d460ebe837256049bb57e86d9a40"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/models/Atmosphere.csv",
+        "size": 789,
+        "sha256": "514c3a45c84a06075bb861dc459674a35993cc4291e586b7995eae40ec1b0eaa"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/rules/negativity.py",
+        "size": 672,
+        "sha256": "6446f300775cc156ce7a0d3a46aeffb92fb120106041aac61ca4f9d7ab3a2906"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/rules/figural.py",
+        "size": 555,
+        "sha256": "fb7efdeb8a3086df74d0e72d61d002f590c05752f874d74cd17f72ecf44d5f11"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/rules/__init__.py",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/rules/emptystart.py",
+        "size": 937,
+        "sha256": "80c0ab53493647258c7605618bca7250d6719f45fc3d86c2e1225481ab9c573a"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/rules/particularity.py",
+        "size": 690,
+        "sha256": "9659866a2e94cf50d2656c5242c48289124997fa55a9d877decb7ec1a2fe572f"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/rules/atmosphere.py",
+        "size": 1182,
+        "sha256": "f88cedac0033cfa72b15ed737e89868b912d96c6e4b70aee37d41a1720c017e1"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/rules/partneg.py",
+        "size": 578,
+        "sha256": "4ca4e15299b002a7afa73b5b1d48c5eb00ede2b7235cde1d2b6ed432a58c1d10"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/indiv_table/pred_results/indiv_table.png",
+        "size": 49519,
+        "sha256": "e232edf3ccb3ffefb18af8ee7a03b7565a79edbc2a5e58b47f750a2326573da8"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/models/PSYCOP.csv",
+        "size": 769,
+        "sha256": "7d582d175b89646d3ac3ecffaa3cb7f554277a98744d1b9eaaaaf3d8ebbd81fe"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/models/Matching.csv",
+        "size": 1045,
+        "sha256": "ac7b073c210e03e586b67827c86fa4ada262a19ec53d045157b53a634cea9c0e"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/models/VerbalModels.csv",
+        "size": 757,
+        "sha256": "7cb0698c4f4f208ab70de3f7f6b3b59b4e3b27deba2d407d302477e1e5470803"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/models/MMT.csv",
+        "size": 1185,
+        "sha256": "1906da96f14ffc3933953bb34337ff759b9719e35163581db33fab98fda6d93b"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/models/Conversion.csv",
+        "size": 613,
+        "sha256": "d61bcdda97765b827847b8e0b05f316b655cf1dd4a1ea7f0d4f1a3354e686993"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/models/PHM.csv",
+        "size": 917,
+        "sha256": "d0dcbb33b700915ad93700e16654931d8174d460ebe837256049bb57e86d9a40"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/models/Atmosphere.csv",
+        "size": 789,
+        "sha256": "514c3a45c84a06075bb861dc459674a35993cc4291e586b7995eae40ec1b0eaa"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/rules/negativity.py",
+        "size": 672,
+        "sha256": "6446f300775cc156ce7a0d3a46aeffb92fb120106041aac61ca4f9d7ab3a2906"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/rules/figural.py",
+        "size": 555,
+        "sha256": "fb7efdeb8a3086df74d0e72d61d002f590c05752f874d74cd17f72ecf44d5f11"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/rules/__init__.py",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/rules/emptystart.py",
+        "size": 937,
+        "sha256": "80c0ab53493647258c7605618bca7250d6719f45fc3d86c2e1225481ab9c573a"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/rules/particularity.py",
+        "size": 690,
+        "sha256": "9659866a2e94cf50d2656c5242c48289124997fa55a9d877decb7ec1a2fe572f"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/rules/atmosphere.py",
+        "size": 1182,
+        "sha256": "f88cedac0033cfa72b15ed737e89868b912d96c6e4b70aee37d41a1720c017e1"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/prediction_errors/rules/partneg.py",
+        "size": 578,
+        "sha256": "4ca4e15299b002a7afa73b5b1d48c5eb00ede2b7235cde1d2b6ed432a58c1d10"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/nvc_prediction/rules/negativity.py",
+        "size": 672,
+        "sha256": "6446f300775cc156ce7a0d3a46aeffb92fb120106041aac61ca4f9d7ab3a2906"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/nvc_prediction/rules/figural.py",
+        "size": 555,
+        "sha256": "fb7efdeb8a3086df74d0e72d61d002f590c05752f874d74cd17f72ecf44d5f11"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/nvc_prediction/rules/__init__.py",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/nvc_prediction/rules/emptystart.py",
+        "size": 937,
+        "sha256": "80c0ab53493647258c7605618bca7250d6719f45fc3d86c2e1225481ab9c573a"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/nvc_prediction/rules/particularity.py",
+        "size": 690,
+        "sha256": "9659866a2e94cf50d2656c5242c48289124997fa55a9d877decb7ec1a2fe572f"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/nvc_prediction/rules/atmosphere.py",
+        "size": 1182,
+        "sha256": "f88cedac0033cfa72b15ed737e89868b912d96c6e4b70aee37d41a1720c017e1"
+      },
+      {
+        "member": "benchmark/datasets/nvc/scripts/nvc_prediction/rules/partneg.py",
+        "size": 578,
+        "sha256": "4ca4e15299b002a7afa73b5b1d48c5eb00ede2b7235cde1d2b6ed432a58c1d10"
+      },
+      {
+        "member": "benchmark/datasets/nvc/accuracies_data_for_plot.csv",
+        "size": 138044,
+        "sha256": "ca643792c25a693c1db0be114e6f5efd060ff77dc9e1a0bf58e1c55350308799"
+      },
+      {
+        "member": "benchmark/datasets/nvc/Ragni2016.csv",
+        "size": 2531840,
+        "sha256": "9cb59c33816727a173d3eed202e3f663ddc3e6ae294bc4da705ada04113efd18"
+      }
+    ],
+    "benchmark/datasets/ocean_glacier": [
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/downstream_line.pkl",
+        "size": 2005,
+        "sha256": "d857a702b639350e499a2a182e9d32cd2aeb0a3585050878ece792557654c538"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/elevation_band_flowline.csv",
+        "size": 911,
+        "sha256": "f167894e436e0c2e24aa23aea9595dd69f331dfa9fd8278ddaa623d0e5207cc8"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/inversion_output.pkl",
+        "size": 1166,
+        "sha256": "d7b5df5e2ac13d577bcdf874a887831b7573be4090a1b6ddc63981de3cf2b27d"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/gridded_data.nc",
+        "size": 135889,
+        "sha256": "e8e7dd51eec7cc9c39ed3895161f90cf4a435531d66276e7df5a814ea9ae9848"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/outlines.tar.gz",
+        "size": 1864,
+        "sha256": "c94c5668eb04a068cb3631f3d47b87d713ff73c5726c8f87f6ebb666ed9eecae"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/inversion_input.pkl",
+        "size": 907,
+        "sha256": "b0537e6c001b31c95d540fc8cd770e94250d3373ea86582832d87c4c0f56685f"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/diagnostics.json",
+        "size": 1097,
+        "sha256": "09bfe18ee3baebbfa129bfb245fb9290796bd8246caaa56877acaf561a405cbc"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/fl_diagnostics_historical.nc",
+        "size": 58318,
+        "sha256": "d2253cfbbb101020e1339db737a011dc3b8f56a38a595627c9c140082e0f5a4c"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/model_flowlines_dyn_melt_f_calib.pkl",
+        "size": 2940,
+        "sha256": "5b358244589c1aeadf9e6ef2bc58f316a782c88539812080d2a4bc1d482fb53e"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/glacier_grid.json",
+        "size": 217,
+        "sha256": "3a1f1964e7ebea86c462095d530110e10e9def0cc49d093e2fd954abf529f2fb"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/climate_historical.nc",
+        "size": 40265,
+        "sha256": "c499b20b778e04a84d9d9cbaa3d60f4afc7ba2ec45cd07d8252d40f5f09f407f"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/fl_diagnostics_spinup_historical.nc",
+        "size": 70725,
+        "sha256": "5c59ca96346df92d7e770416299017b27fee6cf64a6799d10a27800152a6e82b"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/log.txt",
+        "size": 4692,
+        "sha256": "64b717ebf5650f3b58a484257a816de824e469564c1e77d1cf66eefec2ea872b"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/dem_source.txt",
+        "size": 407,
+        "sha256": "dbb2c5b69c8453d11ac6e7230c866596d54590383bbb1495e679b68b37335e95"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/model_flowlines.pkl",
+        "size": 2918,
+        "sha256": "e91f29ea98d57ebab6509bd118f660078675f4196ae8288ea85780a559bbc375"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/model_geometry_spinup_historical.nc",
+        "size": 56620,
+        "sha256": "2f0656629c6d972d233770d56c5d6b53dde067f98d232d55dd4d68c3d94c2e23"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/inversion_flowlines.pkl",
+        "size": 1068,
+        "sha256": "582664445c55dd6fd67521a1450048c9b2b70ee7b1d8c72f8d03fc1b56649a70"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/model_diagnostics_spinup_historical.nc",
+        "size": 21891,
+        "sha256": "e2dc217041e5217da7da6aca26db097a67198901cc84f2b19cefda240c97f51e"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/model_geometry_historical.nc",
+        "size": 51282,
+        "sha256": "22b45d144732ca4a68c16469262b50407aaa2fe57415370fd2af2ba5bd296a8b"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/model_diagnostics_historical.nc",
+        "size": 18067,
+        "sha256": "c3b1fbe609b42ce0bd0b0a084b9b3513a20ba0e9f2ad3a57a857ff46ea126e45"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/mb_calib.json",
+        "size": 389,
+        "sha256": "4c7982172d0c55cff710592df101dc323e9f840f5b3bb0903afe7a1e9051be91"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/RGI60-11.00001/dem.tif",
+        "size": 70475,
+        "sha256": "c635fbe2e90c32019c8e9263a6279f02d4b30fb18ba73f4c024676e83e47e1f0"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/per_glacier/RGI60-15/RGI60-15.04/RGI60-15.04847.tar.gz",
+        "size": 517351,
+        "sha256": "25f17135dbeb6193c62cb6ae23dd202b3f20226d9bac15077890030364b6019e"
+      },
+      {
+        "member": "benchmark/datasets/ocean_glacier/per_glacier/RGI60-11/RGI60-11.00/RGI60-11.00001.tar.gz",
+        "size": 252993,
+        "sha256": "6c276c73ef43089ef94f73ad9d702057c438f1d965acc44440ef2cdde40e5f7d"
+      }
+    ],
+    "benchmark/datasets/CogSci_pattern_high_sim_plot_data": [
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_sim_plot_data/CogSci_pattern_high_sim_plot.csv",
+        "size": 360,
+        "sha256": "7681b49b3ec340aca60e16e0f56d12ada70a70a91bfb43f26c87f64f6f08e135"
+      }
+    ],
+    "benchmark/datasets/CogSci_pattern_high_sim_data": [
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_sim_data/fit_result_openness_W_high.npy",
+        "size": 9344,
+        "sha256": "1122ded337344dc8b4a7803b128d633222915a5ddc47e5d3c388d01ce95a072d"
+      },
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_sim_data/PSYCOP.csv",
+        "size": 769,
+        "sha256": "7d582d175b89646d3ac3ecffaa3cb7f554277a98744d1b9eaaaaf3d8ebbd81fe"
+      },
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_sim_data/Matching.csv",
+        "size": 1045,
+        "sha256": "ac7b073c210e03e586b67827c86fa4ada262a19ec53d045157b53a634cea9c0e"
+      },
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_sim_data/VerbalModels.csv",
+        "size": 757,
+        "sha256": "7cb0698c4f4f208ab70de3f7f6b3b59b4e3b27deba2d407d302477e1e5470803"
+      },
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_sim_data/fit_result_conscientiousness_W_high.npy",
+        "size": 9344,
+        "sha256": "a29d7565bb42ad7efc6eb378109141ebb6c9dc061555665cf4bae87cca289713"
+      },
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_sim_data/MMT.csv",
+        "size": 1185,
+        "sha256": "1906da96f14ffc3933953bb34337ff759b9719e35163581db33fab98fda6d93b"
+      },
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_sim_data/Conversion.csv",
+        "size": 613,
+        "sha256": "d61bcdda97765b827847b8e0b05f316b655cf1dd4a1ea7f0d4f1a3354e686993"
+      },
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_sim_data/PHM.csv",
+        "size": 917,
+        "sha256": "d0dcbb33b700915ad93700e16654931d8174d460ebe837256049bb57e86d9a40"
+      },
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_sim_data/Atmosphere.csv",
+        "size": 789,
+        "sha256": "514c3a45c84a06075bb861dc459674a35993cc4291e586b7995eae40ec1b0eaa"
+      }
+    ],
+    "benchmark/datasets/CogSci_pattern_high_com_low_plot_data": [
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_com_low_plot_data/fit_result_conscientiousness_W_low.npy",
+        "size": 9344,
+        "sha256": "3e43e222555d942be2e8c2ebf9d2fd0af5e0091ea3dfb568cf514efc8f11b63f"
+      },
+      {
+        "member": "benchmark/datasets/CogSci_pattern_high_com_low_plot_data/fit_result_conscientiousness_W_high.npy",
+        "size": 9344,
+        "sha256": "a29d7565bb42ad7efc6eb378109141ebb6c9dc061555665cf4bae87cca289713"
+      }
+    ],
+    "benchmark/datasets/hca": [
+      {
+        "member": "benchmark/datasets/hca/hca_subsampled_20k.h5ad",
+        "size": 65713707,
+        "sha256": "4a54acfa72faf108473f8c2705894eea2194b45a2b5e21b7630bdd32eaf1e808"
+      }
+    ],
+    "benchmark/datasets/thingseeg2": [
+      {
+        "member": "benchmark/datasets/thingseeg2/test/sub01.npy",
+        "size": 5440128,
+        "sha256": "b2348e1418f4158accfbab1ebef44de5e197b8df8f6f11d8f85795138cc66797"
+      },
+      {
+        "member": "benchmark/datasets/thingseeg2/train/sub01.npy",
+        "size": 449888128,
+        "sha256": "4a5d6f5a997d0e6cda7f2e5d82b8abeb1629f7fe850c1c2d08023ee74a0c4df0"
+      },
+      {
+        "member": "benchmark/datasets/thingseeg2/train/sub03.npy",
+        "size": 449888128,
+        "sha256": "1480652271386d0232911bcee0ba66627cc661b4537f41f69949d4a4d1d228d9"
+      }
+    ],
+    "benchmark/datasets/eeg2eeg_vis": [
+      {
+        "member": "benchmark/datasets/eeg2eeg_vis/fake_sub03.npy",
+        "size": 2720128,
+        "sha256": "d8b33d9b5916841ee48ec76d617ec9d8e21f7c8ddbf06994f032ef6241df31fe"
+      },
+      {
+        "member": "benchmark/datasets/eeg2eeg_vis/sub03.npy",
+        "size": 5440128,
+        "sha256": "0be141e6c498144f372f63a62ff86a5ad341ca5026930d2a65441d0ffe977851"
+      }
+    ],
+    "benchmark/datasets/pbmc": [
+      {
+        "member": "benchmark/datasets/pbmc/pbmc_10k_protein_v3.h5ad",
+        "size": 24937137,
+        "sha256": "5f08b8575febf9e04b209b94eb43f6335f1e33b0985cdcf44adf7320f6243c69"
+      }
+    ],
+    "benchmark/datasets/MineralProspectivity": [
+      {
+        "member": "benchmark/datasets/MineralProspectivity/tasrad_K_pct.tif",
+        "size": 19774372,
+        "sha256": "8fd256eef570184d4ec78ae079a618abffea5c6ab46918bae44616a55181e8d0"
+      },
+      {
+        "member": "benchmark/datasets/MineralProspectivity/sn_w_minoccs.gpkg",
+        "size": 299008,
+        "sha256": "da692d6d2540987511bb5b203d08d0110cafb1aeae6bf07cd2a6fd9e05a77a71"
+      },
+      {
+        "member": "benchmark/datasets/MineralProspectivity/tasmag_TMI.tif",
+        "size": 19774207,
+        "sha256": "f307ce2721487494c739780278fc626b5b3cbf365b08a9ee5c2ab6c94eb9f35d"
+      },
+      {
+        "member": "benchmark/datasets/MineralProspectivity/tasrad_Th_ppm.tif",
+        "size": 19774372,
+        "sha256": "2dfd08abad3b1ae32b7e4cb1e2d6ddf499fcf3e8ea7b604b96d5b33779327783"
+      },
+      {
+        "member": "benchmark/datasets/MineralProspectivity/tasgrav_IR.tif",
+        "size": 19774207,
+        "sha256": "36a05754026a620d666b25f81d51713baec2b5e9852734a8a3894eb520c59a5c"
+      },
+      {
+        "member": "benchmark/datasets/MineralProspectivity/tasmag_TMI_1VD.tif",
+        "size": 19774207,
+        "sha256": "e926363729402982bdae9b4d04ef0a250781c4d49ba4a3582f644ab66dbca39c"
+      },
+      {
+        "member": "benchmark/datasets/MineralProspectivity/tasrad_U_ppm.tif",
+        "size": 19774372,
+        "sha256": "90427b4a690e83e5c01cb4d782ba6ed45ae7ad45b8fbf87bfc6f02aa01a1c2b2"
+      },
+      {
+        "member": "benchmark/datasets/MineralProspectivity/tasgrav_IR_1VD.tif",
+        "size": 19774207,
+        "sha256": "421f21ecd7062f8a322fb3288d8cfc64da5f8c521240fc43105c8f4f21b250a8"
+      }
+    ],
+    "benchmark/datasets/WaterQuality": [
+      {
+        "member": "benchmark/datasets/WaterQuality/DissolvedO2.geojson",
+        "size": 18490482,
+        "sha256": "129adf5320f3f432b875b689b5c6c8c5b972e74a4b331871afa78be108fedf9d"
+      },
+      {
+        "member": "benchmark/datasets/WaterQuality/Bay.geojson",
+        "size": 9831,
+        "sha256": "41bf66f09535aaa03536e62bb4b9dabb9e07c0ba502eae860ac76a9f1a9ab65e"
+      }
+    ],
+    "benchmark/datasets/pucci": [
+      {
+        "member": "benchmark/datasets/pucci/pucci-proteins_dev.csv",
+        "size": 15325,
+        "sha256": "aa76b4b7c38d7af889d734b1881a7b8d0b9f909f55474f78f1d0a207f9aed025"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1lhm.pdb",
+        "size": 91649,
+        "sha256": "733ea3adc853dad06993e91f128c0fde29bcd85311b456b2eadb9d71ba0c22cb"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1olr.pdb",
+        "size": 364713,
+        "sha256": "4ccd8cd59720e02be18b746c03426b41de88d2c397744b546e88b3d58bfe33a1"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1azp.pdb",
+        "size": 94814,
+        "sha256": "a5225bce93825939782daa7ebe2014aa8bb959021013259a76914b1d92546f2c"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1i4n.pdb",
+        "size": 332205,
+        "sha256": "016c635155c2c304f3eb89967418e0c844f70d4785d9fc0b41d082b14dd2a201"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1gv5.pdb",
+        "size": 40274,
+        "sha256": "ef9054ff207f14a4c742dfcc9e6a369d2cbbc25aa687a6a20630a41225f71763"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/2trx.pdb",
+        "size": 144805,
+        "sha256": "a1f242e3d666ddba761f3f4fb00a7cb7f2262604af3757cbcb79cdffe4bc6e2c"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1avr.pdb",
+        "size": 221147,
+        "sha256": "1aa4361d6eebe85ed2c23c5a5ecf0b90b63e1b350128663e4916c81bfc8b0ff8"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1ttq.pdb",
+        "size": 413819,
+        "sha256": "9dcf5cb41ebb30432cfff0787afdac5b842ce581d1fdbb41a4ce261f1c922a7f"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1poh.pdb",
+        "size": 59228,
+        "sha256": "66b7c08dded7ad9feb7a2e7e0758ac4963cbdc7b521fe38c4cd29955e905e0fa"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1g5a.pdb",
+        "size": 470222,
+        "sha256": "00e99c2da303947fe8670cfc509ca0b395251223f010c87fca8fa3d402dcd4d4"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/3d2c.pdb",
+        "size": 1432691,
+        "sha256": "ab394cc48b89ddfd9217fe9b0d649ccda2badda14b176f72e7e1ef84aa9d5b88"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/2a01.pdb",
+        "size": 524924,
+        "sha256": "358b11b6d284bd94f19e737445f07d0ab362fdfa446d14a4aadabce9a7d04761"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1c52.pdb",
+        "size": 147356,
+        "sha256": "3a756f7c68d59f3ffb7908a70f57fcfa93bd645c92c40735ddb1096dfa5c8a70"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1c8c.pdb",
+        "size": 119276,
+        "sha256": "32c6cf014d9effccd03e537dc83a036473d6c6e3b0cb397301f60d98859f55a5"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1cyo.pdb",
+        "size": 70568,
+        "sha256": "add877f3180d1bce8cc0c1f203e6d2e0f4e96b4c22162580d73c85fa0c021f5a"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/3sil.pdb",
+        "size": 283794,
+        "sha256": "7ac668e9a52679681546ac3327d5254666e2f0c1bb8dfdea48e3077934c288a8"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1yea.pdb",
+        "size": 75428,
+        "sha256": "89a2b2af6aa707bc82fc25385ab4fd1e9534eed70220699b15f6862fd0c0326e"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/4u2b.pdb",
+        "size": 162017,
+        "sha256": "a0d43164d6e92ac0dcf03c47c4ad79ea891a9caef6690f91ecfb0970622ed417"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/2hbb.pdb",
+        "size": 36062,
+        "sha256": "14fe8ec49058e6301a0bf28e194088ae38a5efc061d2b88a32137ffa31751286"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1tpk.pdb",
+        "size": 171989,
+        "sha256": "cf2417dedd495879343c2ef286940d4c365fb3c1497e3d2c6527a6e6dfa55586"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1aky.pdb",
+        "size": 199439,
+        "sha256": "340ea039bb95ce305c78823c638110a748d3d4553cc1dcd1dcbca32c63ecd16f"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/2ov0.pdb",
+        "size": 83042,
+        "sha256": "70123e69530968bd4fa505e1652f72e892ba4185c520c351982879a3556f17b0"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1kf5.pdb",
+        "size": 95895,
+        "sha256": "4ed2569f7912778b2f0d7543f93a26207efbb8a92884aa13ea369d73a29db4b3"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/3ks3.pdb",
+        "size": 205109,
+        "sha256": "155a845952b7cf61f6b25c61930da70e11a833c3d7cc7006f2785d73a0104387"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/2rn2.pdb",
+        "size": 118682,
+        "sha256": "f503ff41d1868b56ec1e07a2389a79ffefbca386ce7b59c714138c3f515e48e5"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1kfw.pdb",
+        "size": 309228,
+        "sha256": "0117f245788109243edfa892c23e79de59db0c5e3e3d6165176cc3621e20d6a7"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1sup.pdb",
+        "size": 172871,
+        "sha256": "62d5866f1da7e86d125e31a86212852bf96f6160d77a5bc825135ae331e9014c"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1qlp.pdb",
+        "size": 261890,
+        "sha256": "0151a316b93855c8b478eb96fc35f194456a0a465c8c0a82f34072bb4dc2f794"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1ju3.pdb",
+        "size": 406070,
+        "sha256": "7e64bfcce595bad6b1d0f259d6e3425ca7c16ff06cd6552cd497d33150b47deb"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1kf2.pdb",
+        "size": 97110,
+        "sha256": "3954de00d3ba94f95bf15df153d6f0501bb59e6182921b39ac0331bcbc596f4d"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1l63.pdb",
+        "size": 117548,
+        "sha256": "4c57fd73494c264521ec85407c746b6544c7363aa9804c589943b1ddeac49c18"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1lni.pdb",
+        "size": 166270,
+        "sha256": "beba02d59f6e9264e3bfeae850ec4657f420811e76ff9b1ab351519ea7f4c2ab"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1pga.pdb",
+        "size": 37115,
+        "sha256": "ea9e45ef5f7e8cb68d574748e4e617d130359e8dd0a716c4bd22b58c5accf4c7"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1kf3.pdb",
+        "size": 97110,
+        "sha256": "5a324da9e6d233cd0f767d8375f360a13d23ec6ca59625cf367b17fd79c348b7"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/3uue.pdb",
+        "size": 200526,
+        "sha256": "3522a279e90119682c3c80501d93ade7bc70555d56dfd49b9f98d3f87eca1040"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/4lyz.pdb",
+        "size": 89577,
+        "sha256": "bf4499d38d2117f13542e783ef188312b2a5262c8e351c833257a47d54dea97b"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1fna.pdb",
+        "size": 67706,
+        "sha256": "8e4566a95711d38f7eb7a2655faac7738b6e0b00ee0c20e4b5da55b6c91c301c"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/2hip.pdb",
+        "size": 99053,
+        "sha256": "0d532ed9314de1cff23297567f48824e1330434730d90274287c54301d7a5394"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1e21.pdb",
+        "size": 93141,
+        "sha256": "73c3aa6695c7620eeace81bc72fc16d258c7f2cee1ff2dcb469685237ceedc5f"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1bvc.pdb",
+        "size": 123542,
+        "sha256": "4142e3f7df2ba2c8a2c82daa629b416dd5c0c5c1221e1ff7477ad358ad208c6a"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1ynr.pdb",
+        "size": 211751,
+        "sha256": "c86662ab2b5ef90292ae7ba6336d389f279e9edec2f4626e2ae34822d395e617"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1ycc.pdb",
+        "size": 78182,
+        "sha256": "5f1ffa77bf6e767b45d390b270c26bd9f1b8ed97498e8167124676cdc38448f8"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1mjc.pdb",
+        "size": 44729,
+        "sha256": "79cdb4fd80ad1d6a48e4fe82a33cce523076becddfd47995df3db6e0bf47a9e8"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1mj5.pdb",
+        "size": 431828,
+        "sha256": "3f3b9dfcbe4b7fdbc4923e8ae75c9abdf07ca49886e17ef7df5fa6c1d4b0706e"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1zdr.pdb",
+        "size": 233027,
+        "sha256": "5d846e57211f4178274d6b2dff752f951dde6b358878b887488930074356d466"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1fvk.pdb",
+        "size": 261445,
+        "sha256": "f1adaa571733f9137a283522b52d36d50b0836d2ee896882dc96cbc3f87cab03"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/4blm.pdb",
+        "size": 364085,
+        "sha256": "dfa6875d21d910167663196a36fddad70bd5d92b03ff735702d2fdb9d0abd04a"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1bni.pdb",
+        "size": 231137,
+        "sha256": "94b783ee2bb5000b3b1e28f85b8abdf8e7a377dd974a457c291455e6ecec1267"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1ihb.pdb",
+        "size": 216908,
+        "sha256": "b10a6b813c63528e7826232bf7800656ff3fd5f8bc62b710b585d4779d1cb53f"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1aqh.pdb",
+        "size": 399564,
+        "sha256": "cc6674583622ccee8520b1317d62887e70187ad1902bdbe8fef868da9b00187a"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1iro.pdb",
+        "size": 68786,
+        "sha256": "22ca194dfa3557a6d745ec9d3a9756eb9cc432644d24ce5c8fe6708fff8a5217"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1e0w.pdb",
+        "size": 230206,
+        "sha256": "3787cc9ec6dfe280110c3c1953bd3997ce77a34a033b22d26732a8f7ad194f4a"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/5pti.pdb",
+        "size": 72506,
+        "sha256": "352b5ceb8bb196182db958ed34f04c53eb830afd42f503c782b685e83301f706"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1rro.pdb",
+        "size": 77048,
+        "sha256": "804d8ccfc8be0cf31120d88285d9f0e798aefb4ba4a2b034cf871bb071c57a73"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1esf.pdb",
+        "size": 323977,
+        "sha256": "03a385bbb858d9f7bddb768686cd2758b949f5773691558709cc09bc71130714"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/2cth.pdb",
+        "size": 141497,
+        "sha256": "3b51efacab432a2eef4416bb3a56aa620e251951899f67f92239aa9d92c8d9ce"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1chk.pdb",
+        "size": 299204,
+        "sha256": "1a978505103347726ac2c9df678daead15482ca09aa4ad7cbb72b4afb52ab580"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/2cnc.pdb",
+        "size": 275174,
+        "sha256": "c9925187b56fbda217429419736aaf982e4363331a0ae164daf3c036f3262da3"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1h7m.pdb",
+        "size": 70730,
+        "sha256": "45ba9f7edd7a781930c086cb620b8fa10c2e342330752711f5612349f5be04bd"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/5dfr.pdb",
+        "size": 112607,
+        "sha256": "7ea166d3f3c12685826e4f1a5d20dd7e5e24466c57b86492e18701f69c710afc"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1ke4.pdb",
+        "size": 483884,
+        "sha256": "bbbf1c7a72683883829e59d14563f18a688884d3e65b12ed6807bd705da3f7b7"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1lz1.pdb",
+        "size": 83637,
+        "sha256": "9186c44ccf1b3250e2f88a3d3cc1cb7e16dbdfd2cdd2c2500184f64fcfe7a247"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1h8v.pdb",
+        "size": 903803,
+        "sha256": "3e4896cc086b1ac0a5016d5177ab13708e032a53da17947021a396d46109cc0f"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1f6r.pdb",
+        "size": 497390,
+        "sha256": "56ccfe97c9d72a2d0c40460124a0fae206dc3aade34686db3165d76f0106424d"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1csp.pdb",
+        "size": 45620,
+        "sha256": "5bbe741bfcc19475968ec4205f70f418cf5a3ec4b2edd81be96d10a10f6880bf"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/2lzm.pdb",
+        "size": 115766,
+        "sha256": "95472c0628f3e7f261cd92fdf55fb635331f31aa18398a2daf1b1e3478d4790c"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1io2.pdb",
+        "size": 154484,
+        "sha256": "943210d92ee6af09a20c95f56454c057bc7eab02727c7933713626413832341f"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1tca.pdb",
+        "size": 211691,
+        "sha256": "46a907b85baac76bb53ebd6a38d0ad4183bef8ecc3f00802d40756cbe80cbe24"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1ank.pdb",
+        "size": 372914,
+        "sha256": "cc3cb354b6ac3cd8a77133edd7fbd2f1c85e716d2384d31bc8ae8c0597fa0bf4"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1e65.pdb",
+        "size": 329337,
+        "sha256": "902b16ae8252d212b9334d3f487fca2f5c491d276de148cc9aa06bd45d0b1e0d"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1ey0.pdb",
+        "size": 102644,
+        "sha256": "f34d043c8858fef235fc035e733bc584c33128c8b36f06f8d7fc42740ea5a8bf"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1brf.pdb",
+        "size": 48698,
+        "sha256": "2f61ac39ced7108d5f4f26b978270355d02ef296bf7faae940b6bb94f4a6b959"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1fhl.pdb",
+        "size": 215430,
+        "sha256": "d6b7f1458dd0ac8dd5b2e25d8f71f8a48390e979a16623e836f5292dbf9ff6d5"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1c9o.pdb",
+        "size": 106505,
+        "sha256": "2ee264a868ce444256ac70c0977e8903cc3154b626472e67fc4c9c4febed493b"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1shg.pdb",
+        "size": 41300,
+        "sha256": "d36baf85cac4cf7ba913fb509fbd2f6a287f74f4b50a8e14845122764d62b67e"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/2cpp.pdb",
+        "size": 281897,
+        "sha256": "f11d667bd1af1cdf23fe37cb726a0f3bd6f0754d8c55775171dc88eeb80da4ab"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1ayf.pdb",
+        "size": 145142,
+        "sha256": "b6cdfd694affaaf2cb837bbe92c7638336bd2e10423178b2ed3f7a7d4da462d3"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1shf.pdb",
+        "size": 77615,
+        "sha256": "253cc35cece844790562e0323a40ba12aca5a5f5f1c82eec2e0c4586f2916c1a"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1am7.pdb",
+        "size": 315296,
+        "sha256": "2e8bbc4ca4f2f3cac5df4cda3c497231b6c96b8769a8fe1201cf59594b9c2d9e"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1rbp.pdb",
+        "size": 131987,
+        "sha256": "b40060a0ddef0db68d795de05d80248a478aa8a56ca53bf1dc8e9541c0b92bfc"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1ezm.pdb",
+        "size": 202261,
+        "sha256": "94415756212f5edd235862a888eaf66167d6c772bb2033aa93f581781fcf226b"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1wq5.pdb",
+        "size": 343916,
+        "sha256": "05b156c762fc03a4eb4947ad5cf0487fdd6a6390ea93279f8f4094ee6a2794b5"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/3mbp.pdb",
+        "size": 253061,
+        "sha256": "ee2bfd650ac54904ccc15442d04af339200ab06fa2ca74170ee0bb792c123ed9"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1t69.pdb",
+        "size": 237968,
+        "sha256": "0bf89785bd8cfe15496cbd70be11da978016f8e2906ef12b0a065a7543a76f1c"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/451c.pdb",
+        "size": 55502,
+        "sha256": "5028fffbe652747be2b8c276e137544e3c7fadfbd4e1155f13127c82db2b4e60"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1onc.pdb",
+        "size": 75159,
+        "sha256": "26a682b71d9417c99874ef18dcbdf9bec274f4f6eb4526ac5646c476c8922fe3"
+      },
+      {
+        "member": "benchmark/datasets/pucci/PDBs/1hfy.pdb",
+        "size": 167203,
+        "sha256": "570ae049bfea8a576c94f45e43386759c79decab4f8ab22c063ffac82bbb970d"
+      },
+      {
+        "member": "benchmark/datasets/pucci/pucci-proteins_train.csv",
+        "size": 119874,
+        "sha256": "35bf635903ea1e3b8dcd07881cb7f22dee721fc17458811da560e5570c52e83c"
+      },
+      {
+        "member": "benchmark/datasets/pucci/pucci-proteins_test.csv",
+        "size": 12800,
+        "sha256": "c248990e3df0f0a987a0f64199af7f6cceb4c65c406b0ea509d058e195f22262"
+      }
+    ],
+    "benchmark/datasets/violin": [
+      {
+        "member": "benchmark/datasets/violin/violin.h5ad",
+        "size": 215356816,
+        "sha256": "a6df7ab8e4f106c3d99abbd698671212546ec8284e8e3c623ab3c11d2d8b5169"
+      }
+    ],
+    "benchmark/datasets/pbmc_umap": [
+      {
+        "member": "benchmark/datasets/pbmc_umap/pbmc.h5ad",
+        "size": 4456492,
+        "sha256": "a52057b570339d076481a1ad0512c9c49cea712c97a88f0712aca9df2a9a4bb9"
+      }
+    ],
+    "benchmark/datasets/UrbanHeat": [
+      {
+        "member": "benchmark/datasets/UrbanHeat/Temperature.geojson",
+        "size": 34610,
+        "sha256": "c025adacbde74ed13ac96302b193c26ece25419de0a783598a2f80b41e8b1cf2"
+      },
+      {
+        "member": "benchmark/datasets/UrbanHeat/block.geojson",
+        "size": 518712,
+        "sha256": "aceed10a506c7201f6a4d0c509facd6ce299b2a2f56f64198f8a337237f48f17"
+      }
+    ],
+    "benchmark/datasets/BurnScar": [
+      {
+        "member": "benchmark/datasets/BurnScar/G_2015.tif.aux.xml",
+        "size": 18584,
+        "sha256": "44cbc5d900b1f39af4c1dfd0037468c5c65117ec47ce3f00fa3793d37d6783eb"
+      },
+      {
+        "member": "benchmark/datasets/BurnScar/G_2015.tif.xml",
+        "size": 755,
+        "sha256": "a9c758f66fa9a4448e1c3ed9b73bcd08943089c59c4c3d8e8d33640b05ba5196"
+      },
+      {
+        "member": "benchmark/datasets/BurnScar/G_2014.tif.xml",
+        "size": 755,
+        "sha256": "5da7f6de5e22cea6c71d1a2c4597f2f552c7b752972ea0969663822ac8c98c6c"
+      },
+      {
+        "member": "benchmark/datasets/BurnScar/G_2015.tif",
+        "size": 57676149,
+        "sha256": "3426e50c28baca31b8c5ac116fc0d2df87758ec3a19f73b09537606bf276dbbd"
+      },
+      {
+        "member": "benchmark/datasets/BurnScar/G_2014.tfw",
+        "size": 92,
+        "sha256": "aeee9eae4805a001a976e5eaba52197ec943fd7023822712e6df2a25b503dc96"
+      },
+      {
+        "member": "benchmark/datasets/BurnScar/G_2015.tfw",
+        "size": 92,
+        "sha256": "aeee9eae4805a001a976e5eaba52197ec943fd7023822712e6df2a25b503dc96"
+      },
+      {
+        "member": "benchmark/datasets/BurnScar/G_2014.tif",
+        "size": 57676149,
+        "sha256": "af9fc1ba3f016630f122c8b53362520c8ed4a36e22dfaab08f1d929d157707dd"
+      },
+      {
+        "member": "benchmark/datasets/BurnScar/G_2015.tif.ovr",
+        "size": 8760266,
+        "sha256": "efc9991bcf0d01853527a475d337b5898205d00d4be994710c78389088b7eae1"
+      },
+      {
+        "member": "benchmark/datasets/BurnScar/G_2014.tif.aux.xml",
+        "size": 18652,
+        "sha256": "661bac0d5c52e7103afe6491e52408f44626e472de8aa1bbbe98026f7a39ebfa"
+      },
+      {
+        "member": "benchmark/datasets/BurnScar/G_2014.tif.ovr",
+        "size": 8913384,
+        "sha256": "a2380837088fa4ce369e2a7d8f3c41df9c24d761db4e3c9abe94a974b76206cc"
+      }
+    ],
+    "benchmark/datasets/saliva_data": [
+      {
+        "member": "benchmark/datasets/saliva_data/data.pkl",
+        "size": 2913,
+        "sha256": "7dcdc8315c0d47c5b5dc6fec0814d47999cabf1dd48716778a5afab4b300663f"
+      }
+    ],
+    "benchmark/datasets/total_electron_content": [
+      {
+        "member": "benchmark/datasets/total_electron_content/space_weather.nc",
+        "size": 248208,
+        "sha256": "399765383d44a0e3f3c4a7a471923e93a184fb6265311b3c015e3448fd0c9aff"
+      }
+    ],
+    "benchmark/datasets/polynomial_fit": [
+      {
+        "member": "benchmark/datasets/polynomial_fit/A1B_north_america.nc",
+        "size": 1824028,
+        "sha256": "5f728a78bfc2d2503e26ab6faab82c23313eefd56bfae244ccc04b9d41b71816"
+      }
+    ],
+    "benchmark/datasets/nyc_collisions_map": [
+      {
+        "member": "benchmark/datasets/nyc_collisions_map/fatal_collisions.geojson",
+        "size": 13159,
+        "sha256": "2ed72f0dcadd6ae5754664b6dc81ac0f52555d68f285f5f15267bea05d8496a5"
+      },
+      {
+        "member": "benchmark/datasets/nyc_collisions_map/nyc_boroughs.geojson",
+        "size": 3077124,
+        "sha256": "ba883b9d8a194028cb83f2fc75fedbc88cc072bfa863337a554bf972f4d604d5"
+      }
+    ],
+    "benchmark/datasets/sfo_trees_count": [
+      {
+        "member": "benchmark/datasets/sfo_trees_count/sfo_boroughs.geojson",
+        "size": 7603,
+        "sha256": "289436e3dd0c7b133d893247ba75857c774b07d3a761ffd5d7c5e8640811b893"
+      },
+      {
+        "member": "benchmark/datasets/sfo_trees_count/street_trees_sample.geojson",
+        "size": 4404998,
+        "sha256": "db252c4a4856ef9628a4836e7c2372085486dcd1083000c09bd8bc4253fec01b"
+      }
+    ],
+    "benchmark/datasets/jnmf_data": [
+      {
+        "member": "benchmark/datasets/jnmf_data/X1_conscientiousness.npy",
+        "size": 212096,
+        "sha256": "dcb1a8549044d112bf50b0e787a3f0f8066a4196c835468d31efba62648a88ee"
+      },
+      {
+        "member": "benchmark/datasets/jnmf_data/X2_conscientiousness.npy",
+        "size": 276608,
+        "sha256": "a83c45f32a82d1f8ee4fccfbad4322bd6154c3230fe4fb24a1d8993e0c186344"
+      }
+    ],
+    "benchmark/datasets/jnmf_visualization": [
+      {
+        "member": "benchmark/datasets/jnmf_visualization/fit_result_conscientiousness_W_low.npy",
+        "size": 9344,
+        "sha256": "f8c55b02626676510cea0dce871b86678aedaef72772b7c05b4ab611e79c2435"
+      },
+      {
+        "member": "benchmark/datasets/jnmf_visualization/fit_result_conscientiousness_H_low.npy",
+        "size": 1088,
+        "sha256": "fd2cc91ec4e9b3b6d50e8061ea6f0c33fdbad83c4468aab986acc75d91482bf9"
+      },
+      {
+        "member": "benchmark/datasets/jnmf_visualization/fit_result_conscientiousness_W_high.npy",
+        "size": 9344,
+        "sha256": "6dd64969d2f5caf72b643c3a06108e2bd02845a2c960e13e22f93eade571f36c"
+      },
+      {
+        "member": "benchmark/datasets/jnmf_visualization/fit_result_conscientiousness_H_high.npy",
+        "size": 864,
+        "sha256": "419f55a0acfdc0d33112354828d960e248839e9310e392f5d7780164d1225ced"
+      }
+    ],
+    "benchmark/datasets/polyverse_viz": [
+      {
+        "member": "benchmark/datasets/polyverse_viz/molecule_ZINC001754572633.pkl",
+        "size": 372,
+        "sha256": "cdab82e4fede195e5c45c00bf8c7cb0a25032e6a4a3c661ce75b932576d66a17"
+      }
+    ],
+    "benchmark/datasets/tox21": [
+      {
+        "member": "benchmark/datasets/tox21/train_mols.pkl",
+        "size": 1904043,
+        "sha256": "9651509cde1a23c33f299dfd28867df6da51531b3d1814de009afeed004d9561"
+      },
+      {
+        "member": "benchmark/datasets/tox21/test_mols.pkl",
+        "size": 474686,
+        "sha256": "d19f111676a78d6ab88cd102caab5bad15448bf6bb2c7ab2d9a09a5992f8c1a4"
+      }
+    ],
+    "benchmark/datasets/pbmc68k": [
+      {
+        "member": "benchmark/datasets/pbmc68k/pbmc68k_reduced.h5ad",
+        "size": 4456492,
+        "sha256": "a52057b570339d076481a1ad0512c9c49cea712c97a88f0712aca9df2a9a4bb9"
+      }
+    ],
+    "benchmark/datasets/perovskite": [
+      {
+        "member": "benchmark/datasets/perovskite/perovskite_train.pkl",
+        "size": 370921416,
+        "sha256": "137ad6f10cac5c5f9ec95a759d5c5725b11be0afcc6afa91d20af196438395e4"
+      },
+      {
+        "member": "benchmark/datasets/perovskite/perovskite_test.pkl",
+        "size": 46364117,
+        "sha256": "146002478404c95acc58bada91b681883682b92abbd52a3bf17825c3042e3917"
+      }
+    ],
+    "benchmark/datasets/cell_3k": [
+      {
+        "member": "benchmark/datasets/cell_3k/3kdata.h5mu",
+        "size": 35765332,
+        "sha256": "e360188fdb01cf3b09755a34b303eb2f21144bb8880694d4e869344ed31a3ae5"
+      }
+    ],
+    "benchmark/datasets/lymph": [
+      {
+        "member": "benchmark/datasets/lymph/lymph_node.h5ad",
+        "size": 235043524,
+        "sha256": "2dd9434bff0d19483eff5c699d7770f6f47811e0a35890514bfd25aae1627b5d"
+      }
+    ],
+    "benchmark/datasets/experimental_band_gap": [
+      {
+        "member": "benchmark/datasets/experimental_band_gap/matbench_expt_gap_train",
+        "size": 10472664,
+        "sha256": "1f95e898bd072e7c677ebf840a3dd75f296718a0cf186c93c2494eea118c2d80"
+      },
+      {
+        "member": "benchmark/datasets/experimental_band_gap/matbench_expt_gap_test",
+        "size": 1532982,
+        "sha256": "e5473f2ac7a5142d8dffe022c02c5fb3ac1e4270d77231c284ddcdb0077fcafe"
+      }
+    ],
+    "benchmark/datasets/ref_index": [
+      {
+        "member": "benchmark/datasets/ref_index/md_ref_index_train",
+        "size": 54339751,
+        "sha256": "5adb0836b53af78bd30d99fceb61dd4d286bff701f5a9df0285de743f58a0d32"
+      },
+      {
+        "member": "benchmark/datasets/ref_index/MP_2018.6",
+        "size": 91487229,
+        "sha256": "8fd81f4810f6cc87ff9a3233769075cdb340d29a5c81623ed730b97a27d19792"
+      }
+    ]
+  }
+}

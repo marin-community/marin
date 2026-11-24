@@ -33,6 +33,7 @@ from experiments.evaluation.benchmarks import (
     physics_verified,
     question_answering,
     reasoning,
+    scienceagentbench,
     simpleqa,
     supergpqa,
 )
@@ -70,6 +71,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             financebench,
             facts_grounding,
             genomeqa,
+            scienceagentbench,
             simpleqa,
             multichallenge,
             econevals,

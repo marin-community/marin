@@ -197,10 +197,13 @@ def command_script(command: str) -> str:
 
 
 class LocalFiles:
-    async def upload_file_stream(self, data: bytes, target: str) -> None:
+    async def upload_file_stream(self, data: bytes | str, target: str) -> None:
         path = Path(target)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        if isinstance(data, str):
+            shutil.copyfile(data, path)
+        else:
+            path.write_bytes(data)
 
     async def download_file(self, source: str) -> bytes:
         return Path(source).read_bytes()
@@ -255,7 +258,7 @@ def test_daytona_large_argument_preserves_process_contract(tmp_path: Path, shell
         def __init__(self):
             self.staging = set()
 
-        async def upload_file_stream(self, data: bytes, target: str) -> None:
+        async def upload_file_stream(self, data: bytes | str, target: str) -> None:
             self.staging.add(Path(target).parent)
             await super().upload_file_stream(data, target)
 
@@ -1445,8 +1448,9 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
 
         class GuestFiles:
             async def upload_file_stream(self, data, target):
+                payload = Path(data).read_bytes() if isinstance(data, str) else data
                 result = await guest.run(
-                    Command(("/bin/sh", "-c", '/bin/cat > "$1"', "upload", target), stdin=data, user="root")
+                    Command(("/bin/sh", "-c", '/bin/cat > "$1"', "upload", target), stdin=payload, user="root")
                 )
                 assert result.exit_code == 0
 

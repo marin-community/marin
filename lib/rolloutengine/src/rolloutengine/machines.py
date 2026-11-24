@@ -25,9 +25,9 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskResource, TaskSpec
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, PublisherFile, TaskResource, TaskSpec
 from taskcompendium.runtime.environment import prepare_machine_spec
-from taskcompendium.runtime.resources import resource_bytes, write_build_context
+from taskcompendium.runtime.resources import ResourceReader, write_build_context
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
 from rolloutengine.models import MachineRuntimeSpec
@@ -55,14 +55,16 @@ class _UserMachine:
 
 
 async def _install_resources(machine: Machine, resources: tuple[TaskResource, ...]) -> None:
-    with TemporaryDirectory(prefix="rollout-files-") as directory:
+    publisher_files = (resource.source for resource in resources if isinstance(resource.source, PublisherFile))
+    with TemporaryDirectory(prefix="rollout-files-") as directory, ResourceReader(publisher_files) as reader:
         for index, resource in enumerate(resources):
             source = Path(directory) / str(index)
-            source.write_bytes(resource_bytes(resource))
+            await asyncio.to_thread(reader.write_resource, resource, source)
             source.chmod(0o644 if resource.mode is None else int(resource.mode, 8))
             if resource.mtime_ns is not None:
                 os.utime(source, ns=(resource.mtime_ns, resource.mtime_ns))
             await machine.upload(source, f"/{resource.path}")
+            source.unlink()
 
 
 @contextmanager
@@ -179,9 +181,11 @@ async def _prepare_machine(
 
 @dataclass(frozen=True)
 class _OwnedMachine:
-    """A machine the attempt closes; closing it early would bypass bounded cleanup."""
+    """A grading stage can release its machine early using the attempt's bounded cleanup."""
 
     machine: Machine
+    resources: AsyncExitStack
+    cleanup: _Cleanup
 
     async def run(self, command: Command) -> Result:
         return await self.machine.run(command)
@@ -193,7 +197,10 @@ class _OwnedMachine:
         await self.machine.download(source, target)
 
     async def close(self) -> None:
-        pass
+        errors = len(self.cleanup.errors)
+        await self.resources.aclose()
+        if len(self.cleanup.errors) != errors:
+            raise RuntimeError("Could not close the grading machine")
 
 
 @dataclass(frozen=True)
@@ -214,11 +221,12 @@ class _AttemptMachineFactory:
         self.factories[self.runtime.backend].check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> Machine:
+        stage = await self.owned.enter_async_context(AsyncExitStack())
         async with asyncio.timeout(self.runtime.startup_timeout):
             if self.verifier is not None:
-                return _OwnedMachine(await self.verifier(spec))
-            machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
-        return _OwnedMachine(machine)
+                return _OwnedMachine(await self.verifier(spec), stage, self.cleanup)
+            machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, stage)
+        return _OwnedMachine(machine, stage, self.cleanup)
 
 
 @asynccontextmanager

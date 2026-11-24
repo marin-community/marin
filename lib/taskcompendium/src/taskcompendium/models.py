@@ -45,7 +45,7 @@ from verifyit.spec import (
     upgrade_judge_table,
 )
 
-SCHEMA_VERSION = "0.31"
+SCHEMA_VERSION = "0.32"
 UPGRADABLE_SCHEMA_VERSION = "0.30"
 """The one earlier TaskSpec schema that readers upgrade; every other version is rejected."""
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
@@ -286,13 +286,46 @@ class InlineFile(BaseModel):
         return value
 
 
-class TaskResource(BaseModel):
-    """One inline regular file in a workspace or build context."""
+class PublisherFile(BaseModel):
+    """A checksum-pinned member of the ScienceAgentBench release."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    member: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size: int = Field(ge=0, strict=True)
+
+
+class ScienceAgentBenchFile(PublisherFile):
+    kind: Literal["scienceagentbench_file"] = "scienceagentbench_file"
+
+    @field_validator("member")
+    @classmethod
+    def validate_dataset_member(cls, value: str) -> str:
+        validate_relative_file_path(value)
+        if not value.startswith("benchmark/datasets/"):
+            raise ValueError("ScienceAgentBench worker inputs must come from the release datasets directory")
+        return value
+
+
+class ScienceAgentBenchVerifierFile(PublisherFile):
+    kind: Literal["scienceagentbench_verifier_file"] = "scienceagentbench_verifier_file"
+
+    @field_validator("member")
+    @classmethod
+    def validate_verifier_member(cls, value: str) -> str:
+        validate_relative_file_path(value)
+        if not value.startswith("benchmark/eval_programs/"):
+            raise ValueError("Private verifier inputs must come from the publisher's evaluation directory")
+        return value
+
+
+class ResourceDestination(BaseModel):
+    """One regular file in a workspace or build context."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: str
-    source: InlineFile
     mode: str | None = Field(default=None, pattern=r"^[0-7]{3,4}$")
     mtime_ns: int | None = Field(default=None, strict=True)
 
@@ -301,6 +334,14 @@ class TaskResource(BaseModel):
     def validate_path(cls, value: str) -> str:
         validate_relative_file_path(value)
         return value
+
+
+class TaskResource(ResourceDestination):
+    source: InlineFile | ScienceAgentBenchFile
+
+
+class PrivateVerifierResource(ResourceDestination):
+    source: ScienceAgentBenchVerifierFile
 
 
 DOCKERFILE = "Dockerfile"
@@ -334,7 +375,7 @@ class ResourceGroups(BaseModel):
     all: tuple[TaskResource, ...] = ()
     worker: tuple[TaskResource, ...] = ()
     oracle: tuple[TaskResource, ...] = ()
-    verifier: tuple[TaskResource, ...] = ()
+    verifier: tuple[TaskResource | PrivateVerifierResource, ...] = ()
 
     @model_validator(mode="after")
     def validate_destinations(self) -> "ResourceGroups":
@@ -717,6 +758,33 @@ def verifyit_spec(grader: VerifyitGrader) -> Spec:
         raise ValueError(f"Invalid {grader.mode!r} verifier parameters: {error}") from error
 
 
+class ReplayStage(BaseModel):
+    """Run submitted files in a fresh image before exposing outputs to a grader.
+
+    Only shared/worker resources, replay helpers, and captured submissions enter this machine.
+    ``artifacts`` selects its outputs for the subsequent grading machine.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    environment: EnvironmentRequirements
+    argv: tuple[str, ...] = Field(min_length=1)
+    cwd: str
+    timeout: float = Field(gt=0)
+    artifacts: tuple[VerifierArtifact, ...] = Field(min_length=1)
+    resources: tuple[TaskResource, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_replay(self) -> "ReplayStage":
+        if self.environment.docker_image is None and self.environment.docker_build is None:
+            raise ValueError("Replay requires a digest-pinned image or Docker build context")
+        normalized_absolute_path(self.cwd)
+        validate_output_paths(tuple(artifact.source for artifact in self.artifacts))
+        validate_output_paths(tuple(artifact.target for artifact in self.artifacts))
+        validate_relative_file_paths(resource.path for resource in self.resources)
+        return self
+
+
 class ScriptGrader(BaseModel):
     """A command run in the machine ``placement`` selects; ``reward`` says how it scores.
 
@@ -729,6 +797,10 @@ class ScriptGrader(BaseModel):
     ``judge`` declares a required service contract, staged as ``/tests/judge.toml``. The runtime
     supplies endpoint credentials only to the grading command's machine. ``empty_output`` permits scripts
     to grade blank plain-text submissions when the source requires per-item metrics for them.
+
+    With ``replay``, submitted files first execute in a separate reference-free machine.
+    Only declared replay outputs reach the grader, and ``timeout`` bounds the entire
+    replay/preparation/grading operation instead of only the grading command.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
@@ -744,6 +816,7 @@ class ScriptGrader(BaseModel):
     timeout: float = Field(default=600.0, gt=0)
     empty_output: EmptyOutputPolicy = EmptyOutputPolicy.ZERO
     judge: JudgeSpec | None = None
+    replay: ReplayStage | None = None
 
     @model_validator(mode="after")
     def validate_grader(self) -> "ScriptGrader":
@@ -761,6 +834,13 @@ class ScriptGrader(BaseModel):
                 raise ValueError("The answer path must lie outside /tests and /logs/verifier")
             if self.answer_path == self.conversation_path:
                 raise ValueError("The answer and conversation paths must differ")
+        if self.replay is not None and (
+            self.answer_path is not None
+            or not isinstance(self.placement, GraderMachine)
+            or self.placement.collect
+            or self.placement.artifacts
+        ):
+            raise ValueError("Replay grades captured files and cannot also collect original actor artifacts or text")
         return self
 
 
@@ -1055,22 +1135,16 @@ def _upgraded_grader(grader: dict[str, Any]) -> dict[str, Any]:
     elif grader.get("kind") == "verifyit":
         if grader.get("mode") == "judge" and isinstance(grader.get("parameters"), dict):
             grader["parameters"] = upgrade_judge_table(grader["parameters"])
+        if "placement" in grader:
+            return grader
         environment = grader.pop("environment", None)
         grader["placement"] = None if environment is None else {"kind": "grader_machine", "environment": environment}
     return grader
 
 
 def upgrade_task_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Upgrade a decoded schema 0.30 TaskSpec payload to the current schema; return others unchanged.
-
-    Schema 0.30 is the only upgradable version. Its graders named a fresh grading machine with
-    ``environment``, ``collect`` and ``artifacts``; the upgrade moves them into a ``GraderMachine``
-    placement, and a verifyit grader without an environment keeps grading in process. Its judge
-    specs, a verifyit judge's parameters and a script grader's ``judge``, carried
-    ``strip_candidate_reasoning_blocks`` and top-level ``temperature``. The upgrade moves them
-    into ``candidate_steps`` and ``sampling``.
-    """
-    if payload.get("schema_version") != UPGRADABLE_SCHEMA_VERSION:
+    """Upgrade 0.30 and both pre-merge 0.31 grader layouts to explicit placement with optional replay."""
+    if payload.get("schema_version") not in (UPGRADABLE_SCHEMA_VERSION, "0.31"):
         return payload
     grader = payload.get("grader")
     return {
@@ -1123,6 +1197,11 @@ class TaskSpec(BaseModel):
         if self.answer_type in CONVERSATION_ANSWERS and not self.answer_format.supports(self.answer_type):
             raise ValueError(f"Answer format {self.answer_format.kind} cannot carry a {self.answer_type} answer")
         validate_output_paths(self.output_paths)
+        if any(isinstance(resource, PrivateVerifierResource) for resource in self.resources.verifier):
+            if not isinstance(self.grader, (ScriptGrader, VerifyitGrader)) or not isinstance(
+                self.grader.placement, GraderMachine
+            ):
+                raise ValueError("Private publisher verifier files require a separate grading machine")
         if isinstance(self.grader, VerifyitGrader) and self.grader.placement is None:
             if self.answer_type == AnswerType.WORKSPACE_STATE:
                 raise ValueError(f"A {self.answer_type} answer requires a grader placement")
@@ -1132,6 +1211,13 @@ class TaskSpec(BaseModel):
             if self.answer_type in CONVERSATION_ANSWERS and verifyit_answer_file(verifyit_spec(self.grader)) is None:
                 raise ValueError(f"Workspace verifier {self.grader.mode} cannot grade a {self.answer_type} answer")
         if isinstance(self.grader, ScriptGrader):
+            if self.grader.replay is not None and self.answer_type not in (AnswerType.FILE, AnswerType.WORKSPACE_STATE):
+                raise ValueError("Replay requires captured file or workspace submissions")
+            if self.grader.replay is not None:
+                validate_relative_file_paths(
+                    resource.path
+                    for resource in self.resources.all + self.resources.worker + self.grader.replay.resources
+                )
             if self.grader.answer_path is not None and self.answer_type not in CONVERSATION_ANSWERS:
                 raise ValueError(f"A {self.answer_type} answer has no extracted answer to write")
             installed = {f"/tests/{resource.path}" for resource in self.resources.verifier}

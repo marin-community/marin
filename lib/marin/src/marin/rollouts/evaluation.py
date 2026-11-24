@@ -6,7 +6,7 @@
 import asyncio
 import dataclasses
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from types import MappingProxyType
@@ -37,7 +37,7 @@ from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore, Transaction
 from openai import APIError, APIStatusError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
 from rolloutengine.agents.pi.agent import AgentKilledBySignalError, ModelAuthenticationError, PiThinkingFormat
 from rolloutengine.agents.terminus.tmux_session import TmuxBatchProtocolError, TmuxCommandError, TmuxSessionEndedError
@@ -46,6 +46,7 @@ from rolloutengine.harness.core import Harness
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
 from rolloutengine.models import (
+    ConversationRecord,
     GradedRolloutInterrupted,
     MachineRuntimeSpec,
     Model,
@@ -60,7 +61,7 @@ from rolloutengine.models import (
     TraceMode,
 )
 from rolloutengine.validation import task_machine_reason
-from shellbox.machine import MachineDiskFull, MachineFactory, MachineTerminated, NetworkPolicy
+from shellbox.machine import Backend, MachineDiskFull, MachineFactory, MachineTerminated, NetworkPolicy
 from taskcompendium.evaluation.corpus import EvaluationCase, evaluation_protocol, text_prompt
 from taskcompendium.evaluation.metrics import likelihood_metrics
 from taskcompendium.evaluation.response import completion_text
@@ -100,8 +101,10 @@ from taskcompendium.runtime.environment import host_variables
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 
+from marin.rollouts.judge_budget import JudgeBudget
+
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.05.1"
+EVALUATION_EXECUTION_REVISION = "2026.11.18.1"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -155,12 +158,14 @@ class ModelIdentity(RunModel):
 
 
 class EvaluationRunConfig(RunModel):
+    max_attempts_per_trial: int | None = Field(default=None, gt=0, exclude_if=lambda value: value is None)
     model: ModelIdentity
     max_tokens: int = Field(gt=0)
     generation_extra_body: dict[str, Any] = Field(default_factory=dict)
     chat_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
     thinking_off_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
     concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
+    metered_judge_concurrency: int | None = Field(default=None, gt=0, exclude_if=lambda value: value is None)
     limits: RolloutLimits
     source_limit: int | None = Field(default=None, gt=0)
     seed: int | None = None
@@ -312,6 +317,57 @@ def _grading_retry_turn(reader: ReadView, old: Attempt | None) -> ModelTurn | No
     )
 
 
+def _submission_path(attempt: Attempt) -> str:
+    trial = dict(dataset=attempt.dataset, source_row=attempt.source_row, trial=attempt.trial, retry=attempt.retry)
+    return f"evaluation/submissions/{canonical_sha256(trial)}"
+
+
+def _checkpoint_submission(attempt: Attempt, rollout: Rollout, transaction: Transaction) -> None:
+    path = _submission_path(attempt)
+    refs = {}
+    for name, content in rollout.outputs.items():
+        key = f"{path}/files/{canonical_sha256(dict(path=name))}"
+        transaction.write_object(key, content)
+        refs[name] = key
+    raw = {
+        "replay_outputs": refs,
+        "conversations": [dataclasses.asdict(record) for record in rollout.conversations],
+        "stop_reason": rollout.stop_reason,
+    }
+    transaction.write_object(f"{path}.json", json.dumps(raw, allow_nan=False).encode())
+
+
+def _saved_file_rollout(reader: ReadView, old: Attempt | None) -> Rollout | None:
+    if old is None:
+        return None
+    if old.phase == AttemptPhase.STARTED:
+        path = f"{_submission_path(old)}.json"
+        saved = reader.read_blob(path)
+        if saved is None:
+            return None
+        raw = json.loads(saved)
+    elif old.outcome == Outcome.INFRA_ERROR:
+        assert old.result_blob is not None
+        path = old.result_blob
+        saved = reader.read_blob(path)
+        assert saved is not None
+        raw = json.loads(saved)
+        if raw["failure"] and raw["failure"]["diagnostics"]["operation"] != RolloutOperation.GRADE:
+            return None
+    else:
+        return None
+    refs = raw.get("replay_outputs")
+    if not refs:
+        return None
+    blobs = reader.read_blobs(tuple(refs.values()))
+    return Rollout(
+        run_id=path,
+        conversations=TypeAdapter(tuple[ConversationRecord, ...]).validate_python(raw["conversations"]),
+        stop_reason=raw["stop_reason"],
+        outputs={path: blobs[key] for path, key in refs.items()},
+    )
+
+
 async def _saved_model_turn(_request: ModelRequest, turn: ModelTurn) -> ModelTurn:
     return turn
 
@@ -409,6 +465,7 @@ async def _save_attempt(
     error: str | None,
     prompt_tokens: int | None,
     completion_tokens: int | None,
+    replay_outputs: Mapping[str, bytes] | None = None,
 ) -> None:
     trial_id = f"{attempt.dataset}/{attempt.trial}/{attempt.retry}"
     blob = f"evaluation/attempts/{canonical_sha256(attempt.model_dump(mode='json'))}.json"
@@ -428,7 +485,15 @@ async def _save_attempt(
         transaction.table(ARCHIVE_SAMPLES_TABLE).add(sample_to_archive_row(sample, trial_id=trial_id))
         for record in rollout_records_from_sample(sample, trial_id=trial_id):
             transaction.table(ARCHIVE_ROLLOUTS_TABLE).add(record.model_dump(mode="json"))
-        transaction.write_object(blob, json.dumps(raw, allow_nan=False).encode())
+        payload = raw
+        if replay_outputs:
+            saved = {}
+            for path, content in replay_outputs.items():
+                output_key = f"{blob}.files/{canonical_sha256(dict(path=path))}"
+                transaction.write_object(output_key, content)
+                saved[path] = output_key
+            payload = {**raw, "replay_outputs": saved}
+        transaction.write_object(blob, json.dumps(payload, allow_nan=False).encode())
 
     await writer.commit(write)
 
@@ -550,7 +615,12 @@ async def _score_rollout(
     harnesses: Mapping[str, HarnessFactory],
     judge_connection: JudgeConnection | None,
     retry_turn: ModelTurn | None,
-) -> Outcome:
+    saved_files: Rollout | None,
+    before_judge: Callable[[], Awaitable[None]] | None = None,
+) -> tuple[Outcome, GradeResult]:
+    async def checkpoint(rollout: Rollout) -> None:
+        await writer.commit(partial(_checkpoint_submission, attempt, rollout))
+
     task = case.task
     options = generation_options(protocol, config, attempt.trial)
     options["max_tokens"] = max_tokens
@@ -560,7 +630,16 @@ async def _score_rollout(
         window = config.model.context_window
         budget = EpisodeBudget(min(operation.max_input_tokens or window, window), max_tokens, window)
         harness = operation.harness.kind
-        engine = RolloutEngine(machine_factories, {harness: harnesses[harness](operation.harness, budget)})
+        engine = RolloutEngine(
+            machine_factories,
+            {harness: harnesses[harness](operation.harness, budget)},
+            before_judge=before_judge,
+            save_submission=(
+                checkpoint
+                if config.metered_judge_concurrency and isinstance(task.grader, ScriptGrader) and task.grader.replay
+                else None
+            ),
+        )
         task_machine = episode_machine(config.task_machine, case.item.episode)
         limits = episode_limits(config.limits, operation, case.item.episode)
         # Pi and mini-swe-agent send their own sampling and output limit, and Pi its thinking switch, as they do
@@ -573,7 +652,9 @@ async def _score_rollout(
         )
     else:
         assert isinstance(operation, ChatGeneration | TextGeneration)
-        engine = RolloutEngine(machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)})
+        engine = RolloutEngine(
+            machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)}, before_judge=before_judge
+        )
         harness = EXACT_CHAT_HARNESS
         # A mixed run's task machine serves only the generation tasks that need one.
         task_machine = config.task_machine if task_machine_reason(task) is not None else None
@@ -590,6 +671,18 @@ async def _score_rollout(
         else grader_environment(task.grader)
     )
     verifier = config.verifier_machine if grader_build is not None else None
+    if (
+        isinstance(task.grader, ScriptGrader)
+        and task.grader.replay is not None
+        and grader_build is not None
+        and grader_build.docker_build is not None
+        and verifier is not None
+        and verifier.backend == Backend.LOCAL
+        and task_machine is not None
+        and task_machine.backend in (Backend.DOCKER, Backend.DAYTONA)
+    ):
+        # The local worker cannot build a Dockerfile. Start a fresh machine on the selected image backend.
+        verifier = task_machine.model_copy(update={"network": NetworkPolicy.DENY})
     if (
         verifier is not None
         and grader_build is not None
@@ -612,10 +705,26 @@ async def _score_rollout(
     permanent_error = None
     agent_filled_disk = False
     try:
-        result = await engine.run_task(spec, policy_model)
-        rollout, grade = result.rollout, result.grade
+        if saved_files is None:
+            result = await engine.run_task(spec, policy_model)
+            rollout, grade = result.rollout, result.grade
+        else:
+            rollout = saved_files
+            if config.metered_judge_concurrency:
+                await checkpoint(rollout)
+            try:
+                grade = await engine.grade_saved_outputs(spec, rollout)
+            except RETRYABLE_ERRORS as error:
+                grade = GradeResult(Outcome.INFRA_ERROR, None, str(error))
     except GradedRolloutInterrupted as error:
         rollout, grade = error.rollout, error.grade
+        if error.operation in (
+            RolloutOperation.START,
+            RolloutOperation.PREPARE,
+            RolloutOperation.MODEL,
+            RolloutOperation.ADVANCE,
+        ):
+            grade = dataclasses.replace(grade, diagnostics={**grade.diagnostics, "grader_started": False})
         cause = error.__cause__
         if isinstance(cause, ModelResponseError):
             failure_evidence = {"response": cause.response, "response_json": cause.response_json}
@@ -651,6 +760,7 @@ async def _score_rollout(
         "failure_evidence": failure_evidence,
         "options": options,
         "limits": limits.model_dump(mode="json"),
+        "reused_file_submission_from_retry": attempt.retry - 1 if saved_files is not None else None,
         "reused_response_from_retry": attempt.retry - 1 if retry_turn is not None else None,
     }
     prompt_tokens = (
@@ -661,7 +771,7 @@ async def _score_rollout(
         if turns
         else None
     )
-    if retry_turn is not None:
+    if retry_turn is not None or saved_files is not None:
         prompt_tokens = completion_tokens = 0
     await _save_attempt(
         writer,
@@ -672,10 +782,11 @@ async def _score_rollout(
         grade.error,
         prompt_tokens,
         completion_tokens,
+        rollout.outputs if isinstance(task.grader, ScriptGrader) and task.grader.replay is not None else None,
     )
     if permanent_error is not None:
         raise permanent_error
-    return outcome
+    return outcome, grade
 
 
 def _latest_attempts(reader: ReadView) -> dict[tuple[str, str, int], Attempt]:
@@ -803,6 +914,11 @@ async def run_evaluation(
             asyncio.Queue(maxsize=config.concurrency * 2)
         )
         failures = 0
+        budget = (
+            JudgeBudget(store, config.judge.budget, concurrency=config.metered_judge_concurrency, commit=writer.commit)
+            if config.judge and config.judge.budget
+            else None
+        )
 
         async def produce() -> None:
             for root, protocol, manifest in corpora:
@@ -847,6 +963,9 @@ async def run_evaluation(
                             and old.outcome in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE, Outcome.INVALID_TASK)
                         ):
                             continue
+                        if old is not None and config.max_attempts_per_trial is not None:
+                            if old.retry + 1 >= config.max_attempts_per_trial:
+                                raise RuntimeError(f"Attempt limit reached for {case.item.source_row}, trial {trial}")
                         await queue.put(
                             (
                                 case,
@@ -888,6 +1007,11 @@ async def run_evaluation(
                     prompt_tokens=None,
                     completion_tokens=None,
                 )
+                metered = budget is not None and grades_with_judge(task.grader)
+                key = canonical_sha256(attempt.model_dump(mode="json"))
+                before_judge = (
+                    partial(budget.reserve, key, int(task.labels["max_judge_calls"])) if metered and budget else None
+                )
                 await writer.append_rows(ATTEMPTS_TABLE, [attempt.model_dump(mode="json")])
                 if isinstance(case.item.operation, ChoiceLikelihood | ContinuationLikelihood):
                     assert likelihood is not None
@@ -898,19 +1022,36 @@ async def run_evaluation(
                     continue
                 transport = completion_model if isinstance(case.item.operation, TextGeneration) else model
                 assert transport is not None and selection.max_tokens is not None
-                outcome = await _score_rollout(
-                    case,
-                    protocol,
-                    config,
-                    transport,
-                    writer,
-                    attempt,
-                    selection.max_tokens,
-                    machine_factories=machine_factories,
-                    harnesses=harnesses,
-                    judge_connection=judge_connection,
-                    retry_turn=retry_turn,
-                )
+                grade = None
+                try:
+                    outcome, grade = await _score_rollout(
+                        case,
+                        protocol,
+                        config,
+                        transport,
+                        writer,
+                        attempt,
+                        selection.max_tokens,
+                        machine_factories=machine_factories,
+                        harnesses=harnesses,
+                        judge_connection=judge_connection,
+                        before_judge=before_judge,
+                        retry_turn=retry_turn,
+                        saved_files=(
+                            _saved_file_rollout(
+                                reader, latest.get(_attempt_key(selection.dataset, case.item.source_row, trial))
+                            )
+                            if retry
+                            and isinstance(case.item.operation, AgentEpisode)
+                            and isinstance(task.grader, ScriptGrader)
+                            and task.grader.replay is not None
+                            else None
+                        ),
+                    )
+                finally:
+                    if metered:
+                        assert budget is not None
+                        await budget.finish(key, grade)
                 failures += outcome is Outcome.INFRA_ERROR
 
         async with asyncio.TaskGroup() as group:

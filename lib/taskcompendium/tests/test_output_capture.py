@@ -29,7 +29,8 @@ from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellFactory
 
-from .test_runtime import EXITED, FileMachine, FileMachines, finished
+from .grading_machines import EXITED, completed_trace
+from .test_runtime import FileMachine, FileMachines
 
 SOLUTION_PATHS = ("/app/solution.py", "/app/solution.cpp")
 
@@ -92,7 +93,7 @@ async def test_recursive_submission_stages_only_declared_files(executable_task):
         "/solution/secret.py": b"tampered",
         "/application/other.py": b"outside",
     }
-    await grade_in_sandbox(task, GradingAttempt(finished(task), files), machines, MachineSpec(DockerImage(IMAGE)))
+    await grade_in_sandbox(task, GradingAttempt(completed_trace(task), files), machines, MachineSpec(DockerImage(IMAGE)))
     uploaded = machines.machines[0].files
     assert uploaded["/app/package/solution.py"] == b"print(7)"
     assert all(path not in uploaded for path in ("/tests/reference.py", "/solution/secret.py", "/application/other.py"))
@@ -108,7 +109,7 @@ async def test_private_capture_root_rejected_before_acquisition_and_staging(exec
     with pytest.raises(ValueError, match="private"):
         await grade_in_sandbox(
             task,
-            GradingAttempt(finished(task), {root + "/file": b"tampered"}),
+            GradingAttempt(completed_trace(task), {root + "/file": b"tampered"}),
             machines,
             MachineSpec(DockerImage(IMAGE)),
         )
@@ -122,7 +123,7 @@ async def test_submission_traversal_rejected_before_grader_acquisition(executabl
     with pytest.raises(ValueError, match="normalized"):
         await grade_in_sandbox(
             task,
-            GradingAttempt(finished(task), {"/app/../tests/reference.py": b"tampered"}),
+            GradingAttempt(completed_trace(task), {"/app/../tests/reference.py": b"tampered"}),
             machines,
             MachineSpec(DockerImage(IMAGE)),
         )

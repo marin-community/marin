@@ -164,7 +164,7 @@ async def upload_resources(
         target = f"/tmp/taskcompendium-resources-{uuid.uuid4().hex}.tar"
         # Batch resources into one upload to avoid a machine RPC for every file.
         # File-only entries preserve existing guest directory ownership and modes.
-        write_archive(archive, resource_files(resources, ""), [])
+        await asyncio.to_thread(write_archive, archive, resource_files(resources, ""), [])
         await machine.upload(archive, target)
         for arguments in (("tar", "-xf", target, "-C", "/"), ("rm", "-f", target)):
             result = await machine.run(Command(arguments, cwd="/", timeout=timeout, user=user))

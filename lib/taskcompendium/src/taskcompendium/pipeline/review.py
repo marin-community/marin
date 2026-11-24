@@ -15,7 +15,7 @@ from typing import Any, Protocol
 from zephyr import counters
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, TaskSpec, grader_environment
+from taskcompendium.models import NoGrader, PublisherFile, TaskSpec, grader_environment
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, chat_output
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 from taskcompendium.pipeline.query_cache import (
@@ -339,6 +339,16 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
     manifest = []
     text_previews: list[dict[str, Any]] = []
     for role, resource in resources:
+        if isinstance(resource.source, PublisherFile):
+            manifest.append(
+                {
+                    "role": role,
+                    "path": resource.path,
+                    "sha256": resource.source.sha256,
+                    "byte_count": resource.source.size,
+                }
+            )
+            continue
         data = resource_bytes(resource)
         signature = {
             "role": role,

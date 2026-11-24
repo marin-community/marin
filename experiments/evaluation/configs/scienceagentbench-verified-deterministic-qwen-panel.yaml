@@ -1,0 +1,23 @@
+evaluations:
+  scienceagentbench-verified-deterministic-knowledge-off:
+    benchmark: scienceagentbench-verified-deterministic-knowledge-off
+    protocol: pi
+    run:
+      concurrency: 32
+      max_attempts_per_trial: 11
+      max_tokens: 16384
+      task_machine:
+        backend: daytona
+        image_build: snapshot
+        storage_mb: 10240
+  scienceagentbench-verified-deterministic-knowledge-on:
+    benchmark: scienceagentbench-verified-deterministic-knowledge-on
+    protocol: pi
+    run:
+      concurrency: 32
+      max_attempts_per_trial: 11
+      max_tokens: 16384
+      task_machine:
+        backend: daytona
+        image_build: snapshot
+        storage_mb: 10240

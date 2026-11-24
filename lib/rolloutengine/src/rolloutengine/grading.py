@@ -69,6 +69,7 @@ async def _grade_rollout(
     *,
     stop_reason: str,
     verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None,
+    before_judge: Callable[[], Awaitable[None]] | None = None,
 ) -> GradeResult:
     """Grade locally, through the judge service, in the task machine, or in a verifier machine.
 
@@ -82,6 +83,8 @@ async def _grade_rollout(
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     attempt = GradingAttempt(chat_conversation(list(messages)), outputs, stop_reason=stop_reason)
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
+        if before_judge is not None:
+            await before_judge()
         return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
     placement = grader.placement
     if placement is None:
@@ -89,6 +92,8 @@ async def _grade_rollout(
     judge = judge_connection(spec) if grades_with_judge(grader) else None
     if isinstance(placement, AgentMachine):
         assert machine is not None
+        if before_judge is not None and judge is not None:
+            await before_judge()
         return await grade_in_agent_machine(
             task, attempt, machine, timeout=spec.limits.verifier_timeout, judge_connection=judge
         )
@@ -104,4 +109,6 @@ async def _grade_rollout(
             task_machine=machine,
             timeout=spec.limits.verifier_timeout,
             judge_connection=judge,
+            before_judge=before_judge,
+            final_machine_owner="attempt",
         )

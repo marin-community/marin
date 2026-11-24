@@ -79,6 +79,9 @@ uv run python -m experiments.evaluation.cli launch \
   --federated_cluster cw-rno2a --limit 2
 ```
 
+A curated batch can use the same hosted-judge flags when every selected protocol requires a judge.
+The judge config pins the revision, and graders request the model by its repository name.
+
 Curated evaluations that need an external judge declare its deployment and model
 identity in `judge`, its URL in `judge_endpoint`, and ordered secret references in
 `judge_api_key`. Records omit secret references and resolved credentials.
@@ -275,3 +278,16 @@ for the proposed paired re-score.
 To read a past run's policy, pass the `policy_reference` from its
 `canonical-evaluation.json` to `read_micro210_policy` in the policy module.
 Mini840 keeps its existing judge policy.
+
+
+## ScienceAgentBench Verified
+
+ScienceAgentBench uses a native TaskSpec importer and the Pi agent episode through the curated launcher.
+The deterministic and visual configurations each select separate expert-knowledge conditions.
+The verifier replays a submitted program in a fresh sandbox before inspecting its outputs.
+The visual panel supplies its own judge deployment and per-condition budget.
+
+Use the [curated agent evaluation reference](../../docs/references/evaluation-tasks.md) for
+corpus identity, execution and resume semantics. The November 2026 Qwen evidence uses the
+earlier pinned corpus and run roots. New corpora built on the merged agent runtime use the
+November 24 recipe revision. [Protocol and archived results](https://github.com/marin-community/marin/issues/11592)

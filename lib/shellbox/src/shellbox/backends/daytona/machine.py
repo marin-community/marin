@@ -626,7 +626,7 @@ class DaytonaMachine:
                 with tarfile.open(archive.name, "w:gz") as tar:
                     tar.add(source, arcname=".")
                 remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
-                await self.sandbox.fs.upload_file_stream(Path(archive.name).read_bytes(), remote_archive)
+                await self.sandbox.fs.upload_file_stream(archive.name, remote_archive)
             result = await self.sandbox.process.exec(
                 _control_command(
                     f"mkdir -p {shlex.quote(target)} && tar xzf {shlex.quote(remote_archive)} -C {shlex.quote(target)}"
@@ -641,7 +641,7 @@ class DaytonaMachine:
             )
             if result.exit_code:
                 raise RuntimeError(f"Failed to create {parent}: {result.result}")
-            await self.sandbox.fs.upload_file_stream(source.read_bytes(), target)
+            await self.sandbox.fs.upload_file_stream(str(source), target)
             mode = stat.S_IMODE(source.stat().st_mode)
             result = await self.sandbox.process.exec(
                 _control_command(f"chmod {mode:o} {shlex.quote(target)}"), cwd=CONTROL_CWD
