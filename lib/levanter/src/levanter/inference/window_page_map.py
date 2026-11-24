@@ -16,7 +16,7 @@ from levanter.inference.utils import INVALID, purge_raw
 
 
 class WindowPageMap(eqx.Module):
-    """Share one compact page map across the model's sliding-window layers."""
+    """Track logical pages assigned to a sliding-window KV pool."""
 
     logical_to_window: jax.Array
     window_to_logical: jax.Array
