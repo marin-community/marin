@@ -30,7 +30,7 @@ architecture. Dataset changes can usually reuse an existing heuristic.
 
 ```
 experiments/grug/moe/heuristic.py              # MuonH MoE heuristic — use as template
-experiments/references/completed_adamh.py      # AdamH heuristic (no create_isoflop_sweep_steps)
+experiments/references/completed_adamh.py      # AdamH heuristic
 
 experiments/references/
     reference_hyperparameter_sweep.py  # Vizier hparam tuning at fixed scale
@@ -76,9 +76,9 @@ protocol. See `experiments/grug/moe/heuristic.py` for the canonical example (Muo
 and `experiments/references/completed_adamh.py` for the AdamH dense-model heuristic.
 
 The protocol requires `name`, `vocab_size`, `estimate_memory_bytes()`, and
-`candidates_for_budget()`. A **candidate** is a specific `(model_config, token_count,
-optimizer_config)` triple — for a given FLOP budget, `candidates_for_budget()` generates
-candidates spanning different model sizes, each with hyperparameters from the scaling rules.
+`candidates_for_budget()`. Each `CandidateConfig` includes a model and optimizer
+configuration, batch size, training steps, token count, and FLOP budget. For a given
+budget, `candidates_for_budget()` generates candidates spanning different model sizes.
 
 ```python
 @dataclass(frozen=True)
@@ -119,42 +119,19 @@ Before launching a sweep, print the candidate grids for a few budgets and check 
 
 ### 4) Run an IsoFLOP sweep
 
-Create a standalone script (modelled on `experiments/references/reference_scaling_suite.py`)
-that holds the isoflop runs as an `ArtifactStep` analysis plus optimal-training steps:
+Create a standalone script modelled on `experiments/references/reference_scaling_suite.py`.
+Its `_analysis_step()` builds an `ArtifactStep[IsoFlopAnalysisArtifact]` from completed
+checkpoint paths. `run_isoflop_analysis()` reads their `tracker_metrics.jsonl` files,
+with WandB backfill, fits the scaling laws, and returns an
+`IsoFlopAnalysisArtifact`. The fitted values are stored in the artifact's
+`scaling_fits` result field; `fit_curves.json` is a sidecar for inspection.
+Use that artifact as a dependency of the optimal-training steps, as the reference
+suite does.
 
-```python
-# List the GCS paths of completed isoflop runs:
-_ISOFLOP_RUNS: tuple[str, ...] = (
-    "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d512-L6-B32-my-heuristic-v1",
-    # ...
-)
-
-def run_isoflop_analysis(config: IsoFlopAnalysisConfig) -> None:
-    raw = read_eval_records(config.training_runs, ...)
-    records = transform_levanter_metrics(raw, config.metric_key, ...)
-    result = fit_scaling_laws(records)
-    save_isoflop_analysis_result(result, config.output_path)
-
-def build(*, version: str = "dev") -> list[ArtifactStep[Artifact]]:
-    analysis = ArtifactStep(
-        name=user_namespaced_name("my-scaling-suite-analysis", version),
-        ...
-        run=remote(run_isoflop_analysis, resources=ResourceConfig.with_cpu()),
-        build_config=lambda ctx: IsoFlopAnalysisConfig(
-            training_runs=_ISOFLOP_RUNS, output_path=ctx.output_path
-        ),
-    )
-    # ... optimal training steps ...
-    return [analysis, *optimal_runs]
-
-if __name__ == "__main__":
-    StepRunner().run([s.lower() for s in build()])
-```
-
-Metrics are read from `tracker_metrics.jsonl` with WandB fallback via `read_eval_records`.
-Submit individual isoflop candidate runs as separate `ArtifactStep` objects (see
-`reference_scaling_suite.py` for how the existing AdamH isoflop paths are hard-coded and
-read retroactively).
+Submit individual isoflop candidate runs as separate `ArtifactStep` objects. The
+reference suite only analyzes hard-coded paths from completed AdamH runs; it does
+not build candidate training steps. A maintained candidate sweep example is tracked
+in [issue #10675](https://github.com/marin-community/marin/issues/10675).
 
 What to check after the sweep:
 - No loss spikes or divergence at any candidate size.
@@ -165,7 +142,8 @@ What to check after the sweep:
 
 Train compute-optimal models at larger budgets (modelled on `reference_scaling_suite.py`):
 
-1. Analysis step reads existing isoflop runs and writes `isoflop_analysis_result.json`.
+1. Analysis step reads completed isoflop runs and returns an `IsoFlopAnalysisArtifact`
+   with `scaling_fits` for downstream steps; it also writes `fit_curves.json`.
 2. `predict_optimal_config()` for each target budget.
 3. Use `candidate.optimizer_config` or recompute via `build_optimizer_config()` when
    batch size must be overridden for available hardware.
