@@ -18,12 +18,13 @@ from iris.cluster.types import JobName
 from omegaconf import OmegaConf
 from safetensors.numpy import save
 
-from cloud.iris import export_hf_checkpoint, hf_model_cache, task_runtime
+from cloud.iris import export_hf_checkpoint, hf_model_cache, launch, task_runtime
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.task_runtime import prepare_draft_model
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
 from cloud.iris.hf_model_cache import HuggingFaceSnapshot, load_model_manifest
 from cloud.iris.launch import LaunchOutcome, LaunchState, execute_launch
+from cloud.iris.launch_config import load_launch_config
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from cloud.iris.iris_backend import supervise_iris_job
@@ -31,6 +32,9 @@ from iris.resources.state import JobState
 from rigging.timing import Timestamp
 from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, HF_EXPORT_REQUEST_FILENAME, policy_export_path
 from skyrl_train.trainer import RayPPOTrainer
+from skyrl_train.checkpoint_listing import ROLLOUT_STATE_FILENAME
+from skyrl_train.hf_export import write_hf_export_request
+from skyrl_train.hf_export_schema import HFExportRequest, TRAINER_STATE_FILENAME
 
 
 @dataclass
@@ -140,6 +144,8 @@ class LocalLaunchBackend:
 
     export_jobs: list[str] = field(default_factory=list)
     outcome: LaunchOutcome = LaunchOutcome("/user/training", "succeeded", 0)
+    checkpoint_marker: str | None = "3\n"
+    export_step: int = 3
 
     def validate(self, _config_path: Path) -> None:
         raise AssertionError("this lifecycle test submits training")
@@ -151,8 +157,9 @@ class LocalLaunchBackend:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_bytes(config_path.read_bytes())
         checkpoint_root = Path(artifacts["checkpoint_root"])
-        checkpoint_root.mkdir(parents=True)
-        (checkpoint_root / CHECKPOINT_MARKER_FILENAME).write_text("3\n")
+        checkpoint_root.mkdir(parents=True, exist_ok=True)
+        if self.checkpoint_marker is not None:
+            (checkpoint_root / CHECKPOINT_MARKER_FILENAME).write_text(self.checkpoint_marker)
         status = SimpleNamespace(
             state=JobState(self.outcome.job_state),
             started_at=Timestamp.from_seconds(datetime(2026, 11, 7, 1, tzinfo=timezone.utc).timestamp()),
@@ -162,7 +169,9 @@ class LocalLaunchBackend:
 
     def export_terminal_policy(self, config_path: Path) -> None:
         config = yaml.safe_load(config_path.read_text())
-        output = policy_export_path(config["artifacts"]["export_root"], 3)
+        checkpoint_root = config["artifacts"]["checkpoint_root"]
+        assert (Path(checkpoint_root) / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "3"
+        output = policy_export_path(config["artifacts"]["export_root"], self.export_step)
         self.export_jobs.append(output)
         root = Path(output)
         root.mkdir(parents=True)
@@ -227,21 +236,157 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
         assert not (tmp_path / "exports/global_step_3").exists()
 
 
-@pytest.mark.parametrize("initializer_wins", [True, False], ids=["step-zero", "none-eligible"])
-def test_launch_publishes_the_selected_best_policy(tmp_path: Path, initializer_wins: bool):
+@pytest.fixture
+def completed_run_checkpoints(tmp_path):
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text())
-    initializer_uri = config["inputs"]["model"]["uri"]
-    config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3, hf_export_checkpoint="best")
+    config["run"]["export_hf"] = False
+    config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3, checkpoint_retention="best")
     path.write_text(yaml.safe_dump(config))
-    checkpoint_root = tmp_path / "checkpoints"
-    checkpoint = checkpoint_root / "global_step_3"
+    root = tmp_path / "checkpoints"
+    for step in (1, 2, 3, 4):
+        checkpoint = root / f"global_step_{step}"
+        checkpoint.mkdir(parents=True)
+        (checkpoint / TRAINER_STATE_FILENAME).touch()
+        (checkpoint / ROLLOUT_STATE_FILENAME).touch()
+    return path, root
+
+
+@dataclass(frozen=True)
+class RetentionCase:
+    kept: tuple[int, ...]
+    retention: str | None = "best"
+    keep_every: int | None = None
+    best_format: str | None = "native"
+    export_hf: bool = False
+    job_state: str = "succeeded"
+    missing_rollout_step: int | None = None
+    marker: str | None = "3"
+    expected_marker: str | None = "3"
+    pending_exports: tuple[int, ...] = ()
+    inventory_error: bool = False
+
+
+@pytest.mark.parametrize("case", [
+    pytest.param(RetentionCase((1,), export_hf=True, expected_marker="1"), id="best-after-export"),
+    pytest.param(RetentionCase((1, 2), keep_every=2, expected_marker="2"), id="periodic-newer-than-best"),
+    pytest.param(RetentionCase((1, 3), keep_every=1, missing_rollout_step=2), id="missing-rollout"),
+    pytest.param(RetentionCase((2,), keep_every=2, best_format="hf", expected_marker="2"), id="hf-with-periodic"),
+    pytest.param(RetentionCase((3,), best_format=None), id="no-winner"),
+    pytest.param(RetentionCase((2, 3), retention="latest", keep_every=2, best_format=None), id="latest"),
+    pytest.param(RetentionCase((1, 2, 3, 4), retention=None), id="legacy-config"),
+    pytest.param(RetentionCase((1, 2, 3, 4), job_state="failed"), id="failed"),
+    pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker=None, expected_marker=None), id="no-marker"),
+    pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker="invalid", expected_marker="invalid"), id="unreadable-marker"),
+    pytest.param(RetentionCase((1, 2, 4), pending_exports=(2, 4), expected_marker="2"), id="pending-exports"),
+    pytest.param(
+        RetentionCase((1, 2, 3, 4), keep_every=2, best_format="hf", inventory_error=True),
+        id="checkpoint-storage-error",
+    ),
+])
+def test_launch_prunes_checkpoints_after_the_terminal_receipt(completed_run_checkpoints, case, monkeypatch):
+    path, root = completed_run_checkpoints
+    config = yaml.safe_load(path.read_text())
+    config["run"]["export_hf"] = case.export_hf
+    trainer = config["skyrl"]["trainer"]
+    if case.retention is None:
+        trainer.pop("checkpoint_retention")
+    else:
+        trainer.update(checkpoint_retention=case.retention, checkpoint_keep_every=case.keep_every)
+    if case.export_hf:
+        trainer["hf_export_checkpoint"] = "best"
+    path.write_text(yaml.safe_dump(config))
+
+    if case.missing_rollout_step is not None:
+        (root / f"global_step_{case.missing_rollout_step}" / ROLLOUT_STATE_FILENAME).unlink()
+    if case.best_format is not None:
+        (root / BEST_CHECKPOINT_FILENAME).write_text(
+            json.dumps({"step": 1 if case.best_format == "native" else 0, "model_format": case.best_format})
+        )
+    if case.pending_exports:
+        training = load_launch_config(path)
+        for step in case.pending_exports:
+            write_hf_export_request(HFExportRequest.from_trainer(
+                training.skyrl.trainer, step=step, checkpoint_root=str(root), export_root=training.artifacts.export_root
+            ))
+    if case.inventory_error:
+        listing = launch.checkpoint_io.list_dir
+
+        def fail_first_listing(checkpoint_path):
+            if checkpoint_path == str(root):
+                monkeypatch.setattr(launch.checkpoint_io, "list_dir", listing)
+                raise OSError("checkpoint storage unavailable")
+            return listing(checkpoint_path)
+
+        monkeypatch.setattr(launch.checkpoint_io, "list_dir", fail_first_listing)
+
+    backend = LocalLaunchBackend(
+        outcome=LaunchOutcome("/user/training", case.job_state, int(case.job_state == "failed")),
+        export_step=1,
+        checkpoint_marker=case.marker,
+    )
+    result = execute_launch(path, backend=backend)
+
+    assert result.state.value == case.job_state
+    assert {path.name for path in root.glob("global_step_*")} == {f"global_step_{step}" for step in case.kept}
+    if case.job_state == "succeeded":
+        terminal = Path(config["artifacts"]["terminal_manifest_uri"])
+        assert json.loads(terminal.read_text())["result"]["state"] == "succeeded"
+    marker = root / CHECKPOINT_MARKER_FILENAME
+    assert (marker.read_text().strip() if marker.exists() else None) == case.expected_marker
+    if case.export_hf:
+        assert result.model is not None and result.model.global_step == 1
+
+
+def test_checkpoint_export_launch_preserves_training_checkpoints(completed_run_checkpoints, tmp_path):
+    path, root = completed_run_checkpoints
+    training = load_launch_config(path)
+    request = HFExportRequest.from_trainer(
+        training.skyrl.trainer, step=1, checkpoint_root=str(root), export_root=training.artifacts.export_root
+    )
+    spec = export_hf_checkpoint.ExportJobSpec(
+        request=request, cluster="cw-rno2a", priority="batch", gpu_variant="H100", job_name="export", timeout=7200,
+        no_wait=False,
+    )
+    export_path = tmp_path / "export.yaml"
+    OmegaConf.save(export_hf_checkpoint.checkpoint_export_launch_config(training, request, spec), export_path)
+    (root / CHECKPOINT_MARKER_FILENAME).write_text("3\n")
+    before = set(root.glob("global_step_*"))
+
+    result = execute_launch(export_path, backend=LocalLaunchBackend(checkpoint_marker=None))
+
+    assert result.state is LaunchState.SUCCEEDED
+    assert set(root.glob("global_step_*")) == before
+    assert (root / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "3"
+
+
+def test_checkpoint_pruning_waits_for_the_terminal_receipt(completed_run_checkpoints, monkeypatch):
+    path, root = completed_run_checkpoints
+    before = set(root.glob("global_step_*"))
+
+    def fail_terminal_write(_uri, _payload):
+        raise OSError("terminal receipt storage is unavailable")
+
+    monkeypatch.setattr(launch, "write_json", fail_terminal_write)
+    with pytest.raises(OSError, match="terminal receipt storage is unavailable"):
+        execute_launch(path, backend=LocalLaunchBackend())
+
+    assert set(root.glob("global_step_*")) == before
+    assert (root / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "3"
+
+
+@pytest.mark.parametrize("initializer_wins", [True, False], ids=["step-zero", "none-eligible"])
+def test_launch_publishes_the_selected_best_policy(completed_run_checkpoints, tmp_path: Path, initializer_wins: bool):
+    path, checkpoint_root = completed_run_checkpoints
+    config = yaml.safe_load(path.read_text())
+    initializer_uri = config["inputs"]["model"]["uri"]
+    config["run"]["export_hf"] = True
+    config["skyrl"]["trainer"]["hf_export_checkpoint"] = "best"
+    path.write_text(yaml.safe_dump(config))
 
     class BestCheckpointBackend(LocalLaunchBackend):
         def launch(self, config_path: Path) -> LaunchOutcome:
             outcome = super().launch(config_path)
-            checkpoint.mkdir()
-            (checkpoint / "trainer_state.pt").write_bytes(b"complete")
             if initializer_wins:
                 (checkpoint_root / BEST_CHECKPOINT_FILENAME).write_text(
                     json.dumps({"step": 0, "model_format": "hf", "model_uri": initializer_uri})
@@ -251,6 +396,7 @@ def test_launch_publishes_the_selected_best_policy(tmp_path: Path, initializer_w
             trainer.global_step = 3
             trainer.all_timings = {}
             trainer.handle_hf_export()
+            assert not list(checkpoint_root.glob(f"global_step_*/{HF_EXPORT_REQUEST_FILENAME}"))
             return outcome
 
         def export_terminal_policy(self, config_path: Path) -> None:
@@ -264,6 +410,8 @@ def test_launch_publishes_the_selected_best_policy(tmp_path: Path, initializer_w
         assert result.model is not None and result.model.global_step == 0
         assert (terminal_model["global_step"], terminal_model["policy_export_uri"]) == (0, initializer_uri)
         assert terminal_model["tokenizer_uri"] == config["inputs"]["model"]["tokenizer_uri"]
+        assert not list(checkpoint_root.glob("global_step_*"))
+        assert not (checkpoint_root / CHECKPOINT_MARKER_FILENAME).exists()
     else:
         assert terminal_model is result.model is None
     assert not list(checkpoint_root.glob(f"global_step_*/{HF_EXPORT_REQUEST_FILENAME}"))

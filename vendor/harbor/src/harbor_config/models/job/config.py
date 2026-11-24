@@ -13,6 +13,7 @@ from pydantic import (
     model_validator,
 )
 from upath import UPath
+from rigging.task_errors import RetrySettings
 
 from harbor_config.models.metric.config import MetricConfig
 from harbor_config.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
@@ -295,36 +296,6 @@ class DatasetConfig(BaseModel):
         ]
 
 
-class RetryConfig(BaseModel):
-    max_retries: int = Field(
-        default=0, description="Maximum number of retry attempts", ge=0
-    )
-    include_exceptions: set[str] | None = Field(
-        default=None,
-        description="Exception types to retry on. If None, retries all exceptions.",
-    )
-    exclude_exceptions: set[str] | None = Field(
-        default_factory=lambda: {
-            "AgentTimeoutError",
-            "VerifierTimeoutError",
-            "RewardFileNotFoundError",
-            "RewardFileEmptyError",
-            "VerifierOutputParseError",
-        },
-        description="Exception types to NOT retry on. Takes precedence over "
-        "include_exceptions.",
-    )
-    wait_multiplier: float = Field(
-        default=1.0, description="Multiplier for exponential backoff wait time"
-    )
-    min_wait_sec: float = Field(
-        default=1.0, description="Minimum wait time in seconds between retries"
-    )
-    max_wait_sec: float = Field(
-        default=60.0, description="Maximum wait time in seconds between retries"
-    )
-
-
 _TELEMETRY_FIELD_MAX_LENGTH = 4096
 
 
@@ -398,7 +369,7 @@ class JobConfig(BaseModel):
     )
     telemetry: TelemetryConfig | None = Field(default=None, exclude=True, repr=False)
     archive: ArchiveConfig | None = Field(default=None, repr=False)
-    retry: RetryConfig = Field(default_factory=RetryConfig)
+    retry: RetrySettings = Field(default_factory=RetrySettings)
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     metrics: list[MetricConfig] = Field(default_factory=list)

@@ -5,32 +5,47 @@ import asyncio
 import json
 import threading
 from dataclasses import dataclass, field
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 import openai
 import pytest
-from evalrecords.records import JudgeIdentity
+from evalrecords.records import JudgeIdentity, TaskEvidence
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
-from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity, run_evaluation
+from marin.rollouts.evaluation import (
+    EvaluationInfrastructureError,
+    EvaluationRunConfig,
+    ModelIdentity,
+    episode_turn,
+    run_evaluation,
+)
+from rolloutengine.agents.environment import ExecResult
+from rolloutengine.agents.pi.agent import AgentKilledBySignalError
+from rolloutengine.agents.terminus.tmux_session import TmuxCommandError
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
+from rolloutengine.harness.external import AgentHarness
+from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.likelihood import VllmLikelihood
-from rolloutengine.models import ModelTurn, RolloutLimits, TokenUsage
+from rolloutengine.models import ModelRequest, ModelTurn, Prompt, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import PackageSpec
+from shellbox.machine import MachineDiskFull, MachineSpec, NetworkPolicy, PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
-from taskcompendium.evaluation.corpus import chat_item, evaluation_protocol
+from taskcompendium.evaluation.corpus import chat_item, evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
 from taskcompendium.evaluation.spec import (
+    AgentEpisode,
     ChatGeneration,
     ChatPromptVariant,
     ChoiceLikelihood,
     ContinuationLikelihood,
+    EpisodeInputs,
+    EpisodeLimits,
     EvaluationItem,
     EvaluationProtocol,
     LikelihoodMetric,
@@ -38,7 +53,10 @@ from taskcompendium.evaluation.spec import (
     LikelihoodRequest,
     Metric,
     MetricKind,
+    MiniSweAgent,
+    PiAgent,
     Sampling,
+    ShellAgent,
     SummaryKind,
     TextGeneration,
     TrialPolicy,
@@ -49,9 +67,11 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
+    GraderMachine,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
+    TaskSpec,
     TextMessage,
 )
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -161,7 +181,12 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
 
 
 @pytest.mark.asyncio
-async def test_driver_resume_rejects_a_different_model_or_selection(tmp_path, published_corpora, run_config):
+@pytest.mark.parametrize(
+    "update", [{"source_limit": 1}, {"task_machine": machine_runtime(backend="shellsim")}], ids=["selection", "backend"]
+)
+async def test_driver_resume_rejects_a_different_selection_or_machine_backend(
+    tmp_path, published_corpora, run_config, update
+):
     async def model(_request):
         return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
 
@@ -169,12 +194,14 @@ async def test_driver_resume_rejects_a_different_model_or_selection(tmp_path, pu
     await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
     with pytest.raises(ValueError, match="Resume requires"):
         await run_evaluation(
-            published_corpora, output, run_config.model_copy(update={"source_limit": 1}), model, machine_factories={}
+            published_corpora, output, run_config.model_copy(update=update), model, machine_factories={}
         )
 
 
 @pytest.mark.asyncio
-async def test_driver_resumes_partial_archive_after_request_concurrency_changes(tmp_path, published_corpora, run_config):
+async def test_driver_resumes_partial_archive_after_request_concurrency_and_task_evidence_change(
+    tmp_path, published_corpora, run_config
+):
     calls = 0
     recovered = False
 
@@ -196,7 +223,11 @@ async def test_driver_resumes_partial_archive_after_request_concurrency_changes(
     completed = successful[0]
     recovered = True
     await run_evaluation(
-        published_corpora, output, run_config.model_copy(update={"concurrency": 3}), model, machine_factories={}
+        published_corpora,
+        output,
+        run_config.model_copy(update={"concurrency": 3, "task_evidence": TaskEvidence.REFERENCE}),
+        model,
+        machine_factories={},
     )
     samples = list(ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE))
     assert sum(row["grading"]["score"] == 1 for row in samples) == 8
@@ -232,8 +263,10 @@ def convert_mixed_row(row: RawRow, _context: ConversionContext):
                         *verdicts,
                     ),
                     reward=FileReward(files=(RewardFile(path="/app/verdict.json", format=RewardFileFormat.JSON),)),
-                    environment=EnvironmentRequirements(
-                        command_semantics=CommandSemantics.SHELL_SIMULATOR, package_spec=PackageSpec()
+                    placement=GraderMachine(
+                        environment=EnvironmentRequirements(
+                            command_semantics=CommandSemantics.SHELL_SIMULATOR, package_spec=PackageSpec()
+                        )
                     ),
                 )
             }
@@ -245,9 +278,11 @@ def convert_mixed_row(row: RawRow, _context: ConversionContext):
                     argv=("sh", "-c", 'test "$(cat /app/answer.txt)" = red'),
                     answer_path="/app/answer.txt",
                     reward=ExitCodeReward(),
-                    environment=EnvironmentRequirements(
-                        command_semantics=CommandSemantics.SHELL_SIMULATOR,
-                        package_spec=PackageSpec(),
+                    placement=GraderMachine(
+                        environment=EnvironmentRequirements(
+                            command_semantics=CommandSemantics.SHELL_SIMULATOR,
+                            package_spec=PackageSpec(),
+                        )
                     ),
                 )
             }
@@ -511,7 +546,10 @@ async def test_driver_zero_shot_fallback_reduces_output_cap_and_records_oversize
 
 
 @pytest.mark.asyncio
-async def test_driver_multimetric_submission_failure_saves_raw_response_without_component_scores(tmp_path, run_config):
+@pytest.mark.parametrize("task_evidence", list(TaskEvidence))
+async def test_driver_multimetric_submission_failure_saves_raw_response_without_component_scores(
+    tmp_path, run_config, task_evidence
+):
     corpus = publish_policy_corpus(tmp_path, [{"prompt": "Return an answer"}])
     raw_message = {
         "role": "assistant",
@@ -525,7 +563,9 @@ async def test_driver_multimetric_submission_failure_saves_raw_response_without_
         return ModelTurn(raw_message, (), (), None, "tool_calls", usage=TokenUsage(10, 1))
 
     output = str(tmp_path / "results")
-    config = run_config.model_copy(update={"verifier_machine": machine_runtime(backend="shellsim")})
+    config = run_config.model_copy(
+        update={"verifier_machine": machine_runtime(backend="shellsim"), "task_evidence": task_evidence}
+    )
     machines = {"shellsim": ShellSimMachineFactory()}
     await run_evaluation((corpus,), output, config, model, machine_factories=machines)
     reader = ReadView(output)
@@ -534,6 +574,13 @@ async def test_driver_multimetric_submission_failure_saves_raw_response_without_
     assert terminal[0]["outcome"] == "submission_failure"
     raw = json.loads(reader.read_blob(terminal[0]["result_blob"]))
     assert raw["conversations"][0]["steps"][0]["turn"]["metadata"]["evaluation_raw_message"] == raw_message
+    # Evidence always names its task in the immutable corpus; only embedded evidence copies it.
+    (case,) = evaluation_cases(corpus, source_rows={raw["item"]["source_row"]})
+    assert case.task.id == raw["item"]["task_id"]
+    if task_evidence is TaskEvidence.EMBEDDED:
+        assert TaskSpec.model_validate(raw["task"]) == case.task
+    else:
+        assert "task" not in raw
     assert raw["grade"]["status"] == "submission_failure"
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
     assert len(samples) == 1
@@ -549,6 +596,8 @@ def convert_judged_row(row, _context):
         references=("2",),
         model=row.data.get("model", ""),
         rubric="labels",
+        transport_attempts=1,
+        parse_attempts=1,
         exact_gate=False,
         prompt_template="Reference: {reference}\nCandidate: {candidate}",
         label_scores={"A": 1, "B": 0},
@@ -566,8 +615,10 @@ def convert_judged_row(row, _context):
             update={
                 "grader": ScriptGrader(
                     argv=("true",),
-                    environment=EnvironmentRequirements(
-                        package_spec=PackageSpec(), command_semantics=CommandSemantics.SHELL_SIMULATOR
+                    placement=GraderMachine(
+                        environment=EnvironmentRequirements(
+                            package_spec=PackageSpec(), command_semantics=CommandSemantics.SHELL_SIMULATOR
+                        )
                     ),
                     judge=judge,
                 ),
@@ -1064,3 +1115,317 @@ async def test_model_rendering_overrides_preserve_published_corpus_identity(tmp_
     )
     saved = json.loads(ReadView(output).read_blob(RUN_OBJECT))
     assert saved["datasets"][0]["protocol"] == published.model_dump(mode="json")
+
+
+STALL = "episode/stall"
+
+
+def convert_episode_row(row: RawRow, _context: ConversionContext):
+    task = exact_answer_task(row, prompt=row.data["question"], answers=("red",), ignore_case=False)
+    environment = EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell",))
+    return task.model_copy(update={"tags": ("eval",), "environment_requirements": environment})
+
+
+def episode_item(task, agent=ShellAgent()):
+    limits = EpisodeLimits(
+        max_turns=4,
+        max_total_tokens=None,
+        model_turn_timeout=20,
+        total_turn_timeout=20,
+        verifier_timeout=10,
+        attempt_timeout=60,
+    )
+    stalls = task.context.events[0].content == STALL
+    return EvaluationItem(
+        task_id=task.id,
+        source_row=task.source.row,
+        operation=AgentEpisode(harness=agent, limits=limits),
+        episode=EpisodeInputs(agent_timeout=0.5 if stalls else None, memory_mb=512, network=NetworkPolicy.DENY),
+    )
+
+
+def convert_keyed_episode_row(row: RawRow, context: ConversionContext):
+    task = convert_episode_row(row, context)
+    environment = task.environment_requirements.model_copy(
+        update={"environment_variables": {"SEARCH_API_KEY": "${SEARCH_API_KEY}"}}
+    )
+    return task.model_copy(update={"environment_requirements": environment})
+
+
+def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row):
+    source = tmp_path / "episodes"
+    source.mkdir()
+    (source / "rows.jsonl").write_text("".join(json.dumps({"question": question}) + "\n" for question in questions))
+    recipe = SourceRecipe(
+        name="episodes",
+        version="1",
+        source=SourceFiles("episodes", "pinned", ("rows.jsonl",), SourceFormat.JSONL),
+        convert=convert,
+        rubric=None,
+        controls=None,
+        intended_use=IntendedUse.EVAL,
+    )
+    protocol = EvaluationProtocol(
+        benchmark="episodes",
+        version="1",
+        operation="agent_episode",
+        sampling=Sampling(temperature=0.7, top_p=None, top_k=None, max_tokens=8, stop=(), chat_template_kwargs={}),
+        trials=TrialPolicy(count=1, seed=3),
+        metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
+        primary_metric="accuracy",
+        summary=SummaryKind.MEAN,
+        expected_population=len(questions),
+    )
+    output = tmp_path / "episodes-published"
+    client = LocalClient()
+    try:
+        with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+            item = partial(episode_item, agent=agent)
+            publish_evaluation_corpus(recipe, protocol, item, context, str(source), str(output))
+    finally:
+        client.shutdown()
+    return str(output)
+
+
+@pytest.fixture
+def episode_corpus(tmp_path):
+    return publish_episodes(tmp_path, ("episode/flaky", STALL, "episode/solve"), ShellAgent())
+
+
+class FlakyProviderFactory(ShellSimMachineFactory):
+    """ShellSim machines whose first creation fails as a sandbox provider outage would."""
+
+    def __init__(self):
+        super().__init__()
+        self.failures = 1
+        self.created: list[MachineSpec] = []
+
+    async def create(self, spec):
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError("sandbox provider unavailable")
+        self.created.append(spec)
+        return await super().create(spec)
+
+
+@pytest.mark.asyncio
+async def test_agent_episodes_grade_turn_deadlines_and_retry_machine_start_failures(
+    tmp_path, episode_corpus, run_config
+):
+    requests = []
+
+    async def model(request):
+        requests.append(request)
+        question = request.messages[0]["content"]
+        observed = any(message["role"] == "tool" for message in request.messages)
+        if observed and question == STALL:
+            await asyncio.Event().wait()
+        message = {"role": "assistant", "content": "red"}
+        if not observed:
+            arguments = json.dumps({"command": "echo red"})
+            call = {"id": "write", "type": "function", "function": {"name": "shell", "arguments": arguments}}
+            message = {"role": "assistant", "content": "", "tool_calls": [call]}
+        return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    factory = FlakyProviderFactory()
+    config = run_config.model_copy(
+        update={
+            "concurrency": 1,
+            "source_limit": None,
+            "task_machine": machine_runtime(backend="shellsim"),
+            "agent_extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+        }
+    )
+    arguments = {
+        "machine_factories": {"shellsim": factory},
+        "harnesses": {"shell": lambda _agent, _budget: ShellHarness(command_timeout=None)},
+    }
+    output = str(tmp_path / "results")
+    with pytest.raises(EvaluationInfrastructureError):
+        await run_evaluation((episode_corpus,), output, config, model, **arguments)
+    await run_evaluation((episode_corpus,), output, config, model, **arguments)
+
+    reader = ReadView(output)
+    finished = {
+        (row["source_row"], row["retry"]): (row["outcome"], json.loads(reader.read_blob(row["result_blob"])))
+        for row in reader.iter_rows(ATTEMPTS_TABLE)
+        if row["phase"] == "finished"
+    }
+    # The stalled episode ends at its task's agent deadline and is scored on its last, unanswered command.
+    assert {key: outcome for key, (outcome, _) in finished.items()} == {
+        ("rows.jsonl:0", 0): "infra_error",
+        ("rows.jsonl:0", 1): "graded",
+        ("rows.jsonl:1", 0): "submission_failure",
+        ("rows.jsonl:2", 0): "graded",
+    }
+    assert finished["rows.jsonl:0", 0][1]["failure"]["diagnostics"]["operation"] == "start"
+    stalled = finished["rows.jsonl:1", 0][1]
+    assert (stalled["stop_reason"], stalled["limits"]["total_turn_timeout"]) == ("total_turn_timeout", 0.5)
+    samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
+    assert sorted(sample.grading.score for sample in samples if sample.grading.score is not None) == [0, 1, 1]
+    assert {(spec.memory_mb, spec.network) for spec in factory.created} == {(512, NetworkPolicy.DENY)}
+    assert all(request.options["temperature"] == 0.7 and request.options["tools"] for request in requests)
+    # The model's agent request body replaces the protocol's chat template arguments, as under Harbor.
+    assert all(
+        request.options["extra_body"]["chat_template_kwargs"] == {"enable_thinking": True} for request in requests
+    )
+
+
+@pytest.mark.asyncio
+async def test_task_machines_read_only_host_variables_the_run_supplies(tmp_path, run_config, monkeypatch):
+    corpus = publish_episodes(tmp_path, ("episode/solve",), ShellAgent(), convert=convert_keyed_episode_row)
+    monkeypatch.setenv("SEARCH_API_KEY", "search-key")
+    factory = FlakyProviderFactory()
+    factory.failures = 0
+
+    async def model(_request):
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 1))
+
+    config = run_config.model_copy(update={"source_limit": None, "task_machine": machine_runtime(backend="shellsim")})
+    arguments = {
+        "machine_factories": {"shellsim": factory},
+        "harnesses": {"shell": lambda _agent, _budget: ShellHarness(command_timeout=None)},
+    }
+    # The worker's environment holds the variable, but the run has not declared it.
+    with pytest.raises(ExceptionGroup) as unsupplied:
+        await run_evaluation((corpus,), str(tmp_path / "unsupplied"), config, model, **arguments)
+    assert any("does not supply: ['SEARCH_API_KEY']" in str(error) for error in unsupplied.value.exceptions)
+    assert factory.created == []
+
+    supplied = config.model_copy(update={"task_secrets": ("SEARCH_API_KEY",)})
+    await run_evaluation((corpus,), str(tmp_path / "supplied"), supplied, model, **arguments)
+
+    assert [spec.env["SEARCH_API_KEY"] for spec in factory.created] == ["search-key"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent", [PiAgent(), MiniSweAgent()], ids=lambda agent: agent.kind)
+async def test_agents_that_send_their_own_request_options_reach_the_model_without_the_protocols(
+    tmp_path, run_config, agent
+):
+    corpus = publish_episodes(tmp_path, ("episode/solve",), agent)
+    requests = []
+
+    async def model(request):
+        requests.append(request)
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(
+        update={"concurrency": 1, "source_limit": None, "task_machine": machine_runtime(backend="shellsim")}
+    )
+    await run_evaluation(
+        (corpus,),
+        str(tmp_path / "results"),
+        config,
+        model,
+        machine_factories={"shellsim": ShellSimMachineFactory()},
+        # The shell harness stands in for the agent: its requests carry only its tools.
+        harnesses={agent.kind: lambda _agent, _budget: ShellHarness(command_timeout=None)},
+    )
+
+    [request] = requests
+    assert set(request.options) == {"tools"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        AgentKilledBySignalError("pi was killed", signal_number=9, result=ExecResult("", "", 137)),
+        TmuxCommandError("tmux capture failed: return_code=1, stderr='server exited unexpectedly'"),
+    ],
+    ids=["pi-signal", "tmux-server-exit"],
+)
+async def test_harness_infrastructure_failures_are_retried_on_resume_instead_of_stopping_the_run(
+    tmp_path, run_config, failure
+):
+    corpus = publish_episodes(tmp_path, ("episode/solve",), PiAgent())
+    failures = [failure]
+
+    async def run_pi(context, complete):
+        if failures:
+            raise failures.pop()
+        await complete(Prompt(({"role": "user", "content": "Solve."},), {}))
+
+    async def model(request):
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(
+        update={"concurrency": 1, "source_limit": None, "task_machine": machine_runtime(backend="shellsim")}
+    )
+    arguments = {
+        "machine_factories": {"shellsim": ShellSimMachineFactory()},
+        "harnesses": {"pi": lambda _agent, _budget: AgentHarness(run_pi)},
+    }
+    output = str(tmp_path / "results")
+    with pytest.raises(EvaluationInfrastructureError):
+        await run_evaluation((corpus,), output, config, model, **arguments)
+    await run_evaluation((corpus,), output, config, model, **arguments)
+
+    outcomes = [row["outcome"] for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert outcomes == ["infra_error", "graded"]
+
+
+class FullDiskFactory(ShellSimMachineFactory):
+    """ShellSim machines whose first creation finds the disk full."""
+
+    def __init__(self):
+        super().__init__()
+        self.failures = 1
+
+    async def create(self, spec):
+        if self.failures:
+            self.failures -= 1
+            raise MachineDiskFull("The sandbox is full")
+        return await super().create(spec)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filled_by_agent", "outcomes"),
+    [(False, ["infra_error", "graded"]), (True, ["submission_failure"])],
+    ids=["before-the-agent", "by-the-agent"],
+)
+async def test_a_full_disk_is_retried_only_when_the_agent_did_not_fill_it(
+    tmp_path, run_config, filled_by_agent, outcomes
+):
+    corpus = publish_episodes(tmp_path, ("episode/solve",), PiAgent())
+
+    async def run_pi(context, complete):
+        if filled_by_agent:
+            raise MachineDiskFull("The sandbox is full")
+        await complete(Prompt(({"role": "user", "content": "Solve."},), {}))
+
+    async def model(request):
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(
+        update={"concurrency": 1, "source_limit": None, "task_machine": machine_runtime(backend="shellsim")}
+    )
+    arguments = {
+        "machine_factories": {"shellsim": ShellSimMachineFactory() if filled_by_agent else FullDiskFactory()},
+        "harnesses": {"pi": lambda _agent, _budget: AgentHarness(run_pi)},
+    }
+    output = str(tmp_path / "results")
+    if not filled_by_agent:
+        with pytest.raises(EvaluationInfrastructureError):
+            await run_evaluation((corpus,), output, config, model, **arguments)
+    await run_evaluation((corpus,), output, config, model, **arguments)
+
+    finished = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert [row["outcome"] for row in finished] == outcomes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("requested", "sent"), [(4096, 4096), (None, 8192), (16384, 8192)])
+async def test_episode_requests_keep_a_smaller_output_limit_than_the_protocols(requested, sent):
+    received = []
+
+    async def model(request):
+        received.append(request.options)
+
+    options = {} if requested is None else {"max_tokens": requested}
+    request = ModelRequest(({"role": "user", "content": "Summarize."},), {**options, "extra_body": {"a": 1}})
+    await episode_turn(request, model=model, options={"max_tokens": 8192, "temperature": 0.6, "extra_body": {"b": 2}})
+
+    assert received == [{"max_tokens": sent, "temperature": 0.6, "extra_body": {"a": 1, "b": 2}}]

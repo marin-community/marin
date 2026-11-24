@@ -23,6 +23,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/SampleViewerPage.vue'),
     props: true,
   },
+  { path: '/reports', name: 'reports', component: () => import('@/pages/ReportsPage.vue') },
+  {
+    path: '/reports/:reportId',
+    name: 'report',
+    component: () => import('@/pages/ReportDetailPage.vue'),
+    props: true,
+  },
   { path: '/inspect', name: 'inspect', component: () => import('@/pages/InspectPage.vue') },
   { path: '/debug', name: 'debug', component: () => import('@/pages/DebugPage.vue') },
 ]

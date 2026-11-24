@@ -15,7 +15,7 @@ from harbor.models.trial.result import TrialResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.trial.trial import Trial
 from rolloutengine.harness.core import HarnessContext, ModelSession
-from rolloutengine.harness.external import AgentCompletion
+from rolloutengine.harness.external import AgentCompletion, complete_agent_prompt
 from rolloutengine.models import ContextRecovery, LimitReached, ModelTurn, Prompt, RolloutEnded, RolloutLimits
 from taskcompendium.models import TaskSpec
 from skyrl_gym.task_records import StepReward
@@ -143,18 +143,8 @@ class HarborTrialHarness:
             async with lock:
                 if stopped is not None:
                     raise AgentGenerationStopped(stopped)
-                if last is not None and prompt == last[0]:
-                    return last[1]
-                history = () if last is None else (*last[0].messages, last[1].message)
                 try:
-                    if (
-                        last is not None
-                        and prompt.options == last[0].options
-                        and prompt.messages[: len(history)] == history
-                    ):
-                        turn = await session.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
-                    else:
-                        turn = await session.start(prompt)
+                    turn = await complete_agent_prompt(session, prompt, last)
                 except LimitReached as error:
                     stopped = error.stop_reason
                     raise AgentGenerationStopped(stopped) from error

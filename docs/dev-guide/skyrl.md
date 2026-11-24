@@ -48,8 +48,57 @@ Run the
 [train, resume, and evaluation smoke](#train-resume-and-evaluate-through-marin)
 to check runtime behavior after dependency changes.
 
+When checking an NCCL upgrade, read the loaded library version. Torch's
+`torch.cuda.nccl.version()` returns the version used to build Torch, so it can
+remain older after a dependency override. In the frozen CUDA runtime, run:
+
+```bash
+python - <<'PYTHON'
+import ctypes
+from pathlib import Path
+import torch
+
+paths = {
+    line.split()[-1]
+    for line in Path("/proc/self/maps").read_text().splitlines()
+    if "libnccl.so" in line and line.split()[-1].startswith("/")
+}
+assert len(paths) == 1, paths
+library = ctypes.CDLL(paths.pop())
+version = ctypes.c_int()
+status = library.ncclGetVersion(ctypes.byref(version))
+assert status == 0, status
+print("Loaded NCCL:", version.value, "Torch build NCCL:", torch.cuda.nccl.version())
+PYTHON
+```
+
+NCCL 2.32.6 reports `23206`. Set `NCCL_DEBUG=VERSION` before a collective test
+and capture its stdout and stderr to save the version banner with the numerical
+results.
+
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
+
+## Task errors
+
+[rigging.task_errors](https://github.com/marin-community/marin/blob/main/lib/rigging/src/rigging/task_errors.py)
+owns `ErrorCategory`, `RetrySettings` and names shared by task producers and SDKs.
+Each framework owns its remaining categories: Shellbox owns machine and Daytona
+errors, Harbor owns its native errors, and SkyRL owns its rollout errors.
+SkyRL composes the shared, Shellbox and SkyRL maps, plus Harbor's map when Harbor
+is installed. Composition rejects names assigned by more than one owner.
+
+SkyRL maps categories to training treatment in `skyrl_train.task_error_handling`:
+infrastructure failures are excluded, agent failures receive zero reward, and
+passthrough failures retain available verifier output. Unknown names use the
+configured fallback and emit an error log.
+
+Add a new persisted exception name to its producer's category map. Put a name
+used by several producers in the shared map once. Per-name training overrides
+belong in `ErrorHandlingConfig`.
+
+SkyRL retains passthrough terminal results with usable verifier output. Native
+Harbor may retry when environment teardown is unconfirmed.
 
 ## Run records
 

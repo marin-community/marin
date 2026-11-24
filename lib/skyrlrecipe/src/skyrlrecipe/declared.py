@@ -136,11 +136,18 @@ class ReferenceLikelihoodCallback(Section):
     batch_size: PositiveInt = unset_field()
 
 
+class HarborEvaluationCohort(Section):
+    name: str
+    job: OpenMap
+    reward_key: str
+
+
 class HarborEvaluationCallback(Section):
     type: Literal["harbor_evaluation"]
-    cohorts: tuple[OpenMap, ...]
+    cohorts: tuple[HarborEvaluationCohort, ...]
     timeout: int | float
     minimum_coverage: int | float
+    minimum_native_coverage: int | float
     daytona_api_key_env: str
 
 

@@ -16,17 +16,17 @@ from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
+from skyrl_train.config.rollout_validation import FAMILY_COLUMN
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
-    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
-    VerifyitGrader,
+    grader_environment,
     grades_with_judge,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
@@ -230,24 +230,23 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     if task.source.dataset in config["max_turns_by_dataset"]:
         session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
     machine = config["task_machine_by_dataset"].get(task.source.dataset)
+    if machine is None:
+        # A dataset mixing shell-simulator and Linux tasks binds machines by command semantics. The binding has
+        # no default-config entry, so it appears in a native configuration only when a launch sets it.
+        by_semantics = config.get("task_machine_by_command_semantics", {})
+        machine = by_semantics.get(task.environment_requirements.command_semantics)
     task_machine = (
         MachineRuntimeSpec.model_validate(machine)
         if machine is not None and task_machine_reason(task) is not None
         else None
     )
     verifier = None
-    grader = task.grader
-    if (
-        isinstance(grader, ScriptGrader | VerifyitGrader)
-        and grader.environment is not None
-        and not grades_with_judge(grader)
-    ):
-        machine = (
-            config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
-        )
+    grader_build = grader_environment(task.grader)
+    if grader_build is not None and not grades_with_judge(task.grader):
+        machine = config["image_verifier"] if grader_build.docker_image is not None else config["package_verifier"]
         verifier = MachineRuntimeSpec.model_validate(machine)
     lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
-    return _stored_prompt(lowered)
+    return {**_stored_prompt(lowered), FAMILY_COLUMN: row.get(FAMILY_COLUMN)}
 
 
 def write_tasks(path: Path, records: Iterable[TaskRolloutSpec]) -> None:
