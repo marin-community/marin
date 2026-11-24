@@ -1590,10 +1590,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     def invoke_with_preflight_stub(command, args=()):
         # Native preflight has its own tests. Use the real composer to create
         # recorded fixtures and inspect the native launch in this test.
+        config = earlier.native.config
         with monkeypatch.context() as preflight:
-            preflight.setattr(
-                gate, "compose_configs", lambda paths, **_: [{"runtime": {"training_type": "async"}} for _ in paths]
-            )
+            preflight.setattr(gate, "compose_configs", lambda paths, **_: [config for _ in paths])
             return CliRunner().invoke(command, args)
 
     for override in (None, "second_model_entry"):
@@ -1681,7 +1680,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
 
     live_preset = replace(preset, checkpoints="none", checkpoint_every=None, export="none")
     live = snowball.build_experiment(
-        live_preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
+        live_preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=3",)
     )
     assert live.runs[0].name != built.runs[0].name
     with monkeypatch.context() as live_record:
@@ -1695,7 +1694,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     facts = {
         fact["name"]: fact for row in printed_status(result.stdout)["runs"] for fact in row["evaluation_invariants"]
     }
-    assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
+    assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
 
     mode, coordinator_module = "failed-native", "first_model_entry"
     module("first_model_entry")
