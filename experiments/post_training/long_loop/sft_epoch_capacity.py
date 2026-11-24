@@ -15,6 +15,7 @@ import jax
 import numpy as np
 from fray.types import CpuConfig, ResourceConfig
 from haliax import Axis
+from iris.cluster.client.job_info import get_job_info
 from levanter.data.dataset import PermutationDataset, SlicedAsyncDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.utils.thread_utils import blocking_wait
@@ -131,7 +132,11 @@ def main(
         remote(
             measure_capacity,
             resources=ResourceConfig(
-                device=CpuConfig(), cpu=8, ram="64GB", disk="64GB", target_cluster="cw-us-east-08a"
+                device=CpuConfig(),
+                cpu=8,
+                ram="64GB",
+                disk="64GB",
+                target_cluster=None if get_job_info() is not None else "cw-us-east-08a",
             ),
             timeout=Duration.from_hours(2),
         ),

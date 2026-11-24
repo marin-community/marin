@@ -229,7 +229,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     gate_router_weight_decay: float = 0.0
     expert_normalization: ExpertNormalization = ExpertNormalization.ALL_EXPERTS
     schedule_extension: ScheduleExtension | None = None
-    # A leading layer axis makes stacked expert banks 4D; excluding 4 routes them to AdamH.
+    # A leading layer axis makes stacked expert banks 4D; excluding 4 routes them to Adam.
     muonh_param_ndims: tuple[int, ...] = (2, 3, 4)
 
     def __post_init__(self):
