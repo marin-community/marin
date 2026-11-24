@@ -144,8 +144,11 @@ def _parse_reference(text: str) -> tuple[list, bool]:
         normalized = normalize_latex(value, config=latex.normalization_config)
         candidate_strip_units = not symbolic_text_group and (strip_units or normalized == value)
         if not candidate_strip_units:
-            # Default unit normalization also removes trailing symbolic factors.
-            normalized = normalize_latex(value, config=replace(latex.normalization_config, units=False))
+            # Other normalization changes, such as \dfrac -> \frac, do not imply a stripped unit.
+            unitless = normalize_latex(value, config=replace(latex.normalization_config, units=False))
+            candidate_strip_units = not symbolic_text_group and normalized == unitless
+            if not candidate_strip_units:
+                normalized = unitless
         parsed = latex2sympy(
             normalized,
             is_real=not should_treat_as_complex(normalized),

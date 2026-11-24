@@ -265,7 +265,7 @@ def test_math_adjacent_text_symbols_keep_following_math(reference, candidate, wr
 
 @pytest.mark.parametrize(
     "reference,candidate",
-    [("18", r"18 \text{ dollars}"), (r"35 \mathrm{~cm}", "35")],
+    [("18", r"18 \text{ dollars}"), (r"35 \mathrm{~cm}", "35"), (r"\dfrac{1}{2}", r"0.5\text{ m}")],
 )
 def test_math_candidate_units_match_reference_policy(reference, candidate):
     assert grade_math.grade_math_candidate(MathSpec(expected=reference), candidate).reward == 1.0
@@ -281,6 +281,12 @@ def test_math_list_uses_each_references_unit_policy_for_candidates():
     spec = MathSpec(expected=r"[2 s, 5 \text{ m}]", math_type=MathType.LIST)
     assert grade_math.grade_math_candidate(spec, "[2 s, 5]").reward == 1.0
     assert grade_math.grade_math_candidate(spec, "[2, 5]").reward == 0.0
+
+
+def test_math_list_candidate_units_ignore_unrelated_reference_normalization():
+    spec = MathSpec(expected=r"[\dfrac{1}{2}, 2 s]", math_type=MathType.LIST)
+    assert grade_math.grade_math_candidate(spec, r"[0.5\text{ m}, 2 s]").reward == 1.0
+    assert grade_math.grade_math_candidate(spec, r"[0.5\text{ m}, 2]").reward == 0.0
 
 
 def test_math_grades_from_a_worker_thread(tmp_path):
