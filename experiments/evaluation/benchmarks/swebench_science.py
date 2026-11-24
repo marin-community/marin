@@ -81,7 +81,7 @@ def _offline_image(env: dict) -> str:
     return re.sub(r":[^/:@]+(?=@)", "", env["docker_image"])
 
 
-def lower_science_package(directory: Path, row: RawRow) -> TaskSpec:
+def lower_package(directory: Path, row: RawRow) -> TaskSpec:
     """Build a TaskSpec directly from a pinned SWE-bench Science release package."""
     config = tomllib.loads((directory / "task.toml").read_text())
     agent, verifier = config["agent"], config["verifier"]
@@ -89,7 +89,7 @@ def lower_science_package(directory: Path, row: RawRow) -> TaskSpec:
     if config["schema_version"] != "1.3" or verifier["environment_mode"] != "separate":
         raise ValueError("Expected SWE-bench Science's schema 1.3 separate-verifier release")
     if config.get("artifacts") != [PATCH]:
-        raise ValueError(f"Expected the sole Science artifact to be {PATCH}")
+        raise ValueError(f"Expected the sole SWE-bench Science artifact to be {PATCH}")
     if any(role["network_mode"] != "no-network" for role in (agent, verifier)):
         raise ValueError("SWE-bench Science requires the native no-network protocol")
 
@@ -154,10 +154,10 @@ def lower_science_package(directory: Path, row: RawRow) -> TaskSpec:
 
 
 def convert(row: RawRow, _context: ConversionContext) -> TaskSpec:
-    with TemporaryDirectory(prefix="swe-science-") as root:
+    with TemporaryDirectory(prefix=f"{BENCHMARK}-") as root:
         package = Path(root) / row.data["name"]
         extract_package(row.data["archive"], package)
-        return lower_science_package(package, row)
+        return lower_package(package, row)
 
 
 def benchmarks() -> list[EvaluationBenchmark]:

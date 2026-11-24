@@ -17,7 +17,6 @@ from taskcompendium.pipeline.models import RawRow
 
 import experiments.post_training.task_curation.harbor_packages as packages_module
 from experiments.evaluation.benchmarks import swebench_science
-from experiments.evaluation.benchmarks.swebench_science import lower_science_package
 from experiments.post_training.task_curation.harbor_packages import package_archive, stage_repository_packages
 
 # Task 002's MIT-licensed manifest and collection hook are copied from DATASET at REVISION.
@@ -30,11 +29,11 @@ SOURCE = Source(
 )
 
 
-ROW = RawRow("science-002", SOURCE, {})
+ROW = RawRow("swebench-science-002", SOURCE, {})
 
 
 @pytest.fixture
-def science_package(tmp_path):
+def swebench_science_package(tmp_path):
     package = tmp_path / "task_002"
     tests = package / "tests"
     tests.mkdir(parents=True)
@@ -46,15 +45,17 @@ def science_package(tmp_path):
     return package
 
 
-def test_science_corpus_sets_solver_disk_and_keeps_the_verifier_image(science_package):
-    row = RawRow(ROW.id, SOURCE, {"name": science_package.name, "archive": package_archive(science_package)})
+def test_corpus_sets_solver_disk_and_keeps_the_verifier_image(swebench_science_package):
+    row = RawRow(
+        ROW.id, SOURCE, {"name": swebench_science_package.name, "archive": package_archive(swebench_science_package)}
+    )
     [source] = swebench_science.benchmarks()[0].resolve("pi-xhigh")
     task = source.config.recipe.convert(row, ConversionContext({}, None))
     assert isinstance(task, TaskSpec)
     build = task.environment_requirements.docker_build
     assert build is not None
     dockerfile = next(file for file in build.files if file.path == "Dockerfile")
-    manifest = tomllib.loads((science_package / "task.toml").read_text())
+    manifest = tomllib.loads((swebench_science_package / "task.toml").read_text())
     assert dockerfile_images(base64.b64decode(dockerfile.source.content_base64).decode()) == (
         manifest["environment"]["docker_image"].replace(":v0.1.0@", "@"),
     )
@@ -65,17 +66,17 @@ def test_science_corpus_sets_solver_disk_and_keeps_the_verifier_image(science_pa
     assert episode.storage_mb == 10240
 
 
-def test_native_verifier_entrypoint_and_hidden_tests_remain_image_owned(science_package):
-    task = lower_science_package(science_package, ROW)
-    config = tomllib.loads((science_package / "task.toml").read_text())
-    assert task.context.events[0].content == (science_package / "instruction.md").read_text()
+def test_native_verifier_entrypoint_and_hidden_tests_remain_image_owned(swebench_science_package):
+    task = swebench_science.lower_package(swebench_science_package, ROW)
+    config = tomllib.loads((swebench_science_package / "task.toml").read_text())
+    assert task.context.events[0].content == (swebench_science_package / "instruction.md").read_text()
     assert "network" not in task.environment_requirements.capabilities
     assert not task.resources.worker
     assert not task.resources.oracle
     assert [resource.path for resource in task.resources.verifier] == ["grader.py"]
     assert (
         base64.b64decode(task.resources.verifier[0].source.content_base64)
-        == (science_package / "tests/grader.py").read_bytes()
+        == (swebench_science_package / "tests/grader.py").read_bytes()
     )
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
@@ -89,16 +90,16 @@ def test_native_verifier_entrypoint_and_hidden_tests_remain_image_owned(science_
     assert grader.placement.artifacts[0].missing == MissingArtifactPolicy.ERROR
 
 
-def test_unexpected_patch_artifact_is_rejected(science_package):
-    package = science_package
+def test_unexpected_patch_artifact_is_rejected(swebench_science_package):
+    package = swebench_science_package
     config = package / "task.toml"
     config.write_text(config.read_text().replace("/logs/artifacts/model.patch", "/logs/artifacts/other.patch"))
     with pytest.raises(ValueError):
-        lower_science_package(package, ROW)
+        swebench_science.lower_package(package, ROW)
 
 
-def test_native_collect_includes_committed_and_untracked_candidate_changes(tmp_path, science_package):
-    package = science_package
+def test_native_collect_includes_committed_and_untracked_candidate_changes(tmp_path, swebench_science_package):
+    package = swebench_science_package
     repo, artifacts = tmp_path / "repo", tmp_path / "artifacts"
     repo.mkdir()
     env = {**os.environ, "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"), "ENV_ARTIFACTS_PATH": str(artifacts)}
@@ -115,7 +116,7 @@ def test_native_collect_includes_committed_and_untracked_candidate_changes(tmp_p
     baseline = git("rev-parse", "HEAD").stdout.decode().strip()
     config = package / "task.toml"
     config.write_text(config.read_text().replace("/app/task_002", str(repo)))
-    task = lower_science_package(package, ROW)
+    task = swebench_science.lower_package(package, ROW)
     hook = task.grader.placement.collect[0]
     subprocess.run(hook.argv, env=env, check=True, capture_output=True)
     assert (artifacts / "model.patch").read_bytes() == b""
