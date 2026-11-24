@@ -38,17 +38,15 @@ RESEARCH_METRICS = (
 )
 
 
-def sources(output_fit: OutputFit = OutputFit.REQUIRE) -> list[RlDataSource[EvaluationCorpusRecipe]]:
-    result = []
+def benchmarks() -> list[EvaluationBenchmark]:
+    sources: list[RlDataSource[EvaluationCorpusRecipe]] = []
     version = "2026.11.24.2"
-    if output_fit is OutputFit.SHRINK:
-        version += "-remaining-context"
     for track, count, convert, metrics, scorer_revision, grader in (
         ("olympiad", 100, convert_olympiad, (Metrics.ACCURACY,), None, None),
         ("research", 60, convert_research, RESEARCH_METRICS, RESEARCH_SCORER_REVISION, JUDGE_GRADER),
     ):
         name = f"frontierscience-{track}"
-        result.append(
+        sources.append(
             RlDataSource(
                 info=SourceInfo(
                     id=name,
@@ -69,13 +67,12 @@ def sources(output_fit: OutputFit = OutputFit.REQUIRE) -> list[RlDataSource[Eval
                         grader=grader,
                         intended_use=IntendedUse.EVAL,
                     ),
-                    protocol_name="evalchemy" if output_fit is OutputFit.REQUIRE else "remaining-context",
                     protocol=EvaluationProtocol(
                         benchmark=name,
                         version=version,
                         operation=OperationKind.CHAT_GENERATION,
                         requires_judge=True,
-                        context_policy=ContextPolicy(output_fit=output_fit),
+                        context_policy=ContextPolicy(output_fit=OutputFit.REQUIRE),
                         sampling=Sampling(
                             temperature=None, top_p=None, top_k=None, max_tokens=None, stop=(), chat_template_kwargs={}
                         ),
@@ -90,8 +87,4 @@ def sources(output_fit: OutputFit = OutputFit.REQUIRE) -> list[RlDataSource[Eval
                 pipeline=prepare_evaluation,
             )
         )
-    return result
-
-
-def benchmarks() -> list[EvaluationBenchmark]:
-    return fixed_benchmarks([*sources(), *sources(OutputFit.SHRINK)])
+    return fixed_benchmarks(sources)
