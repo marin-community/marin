@@ -285,6 +285,7 @@ def regional_scan(inputs: TextScanInputs, region: str, *, dry_run: bool, feeds: 
         totals, bad, fields, unsupported = aggregate_results(results)
         receipt = {
             "kind": f"atlas-{inputs.release_id}-{REGIONAL_RECEIPT_SUFFIX}",
+            "release_id": inputs.release_id,
             "region": region,
             "codec": catalog_text.CATALOG_TEXT_CODEC,
             "codec_sha256": codec_sha256(),
@@ -393,6 +394,7 @@ def merge_region_receipts(
             raise ValueError(f"the sealed documents carry {len(manifest_fields)} unsupported text fields")
         report = {
             "kind": f"atlas-{inputs.release_id}-{MERGED_RECEIPT_SUFFIX}",
+            "release_id": inputs.release_id,
             "status": "PASS" if unsupported == 0 and not manifest_fields else "FAIL",
             "codec": catalog_text.CATALOG_TEXT_CODEC,
             "codec_sha256": module_digest,

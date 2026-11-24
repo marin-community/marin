@@ -274,6 +274,7 @@ def plan_qc_browse(
         plan_ref = None if dry_run else seal(f"{inputs.output_root}/{BROWSE_DIR}/plan.json", plan)
         proof: dict[str, Any] = {
             "kind": plan["kind"],
+            "release_id": inputs.release_id,
             "plan": plan,
             "panels": len(panels),
             "excluded": len(inputs.exclusions),

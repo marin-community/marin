@@ -848,7 +848,9 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         ("curriculum_compose", "text_scan_region[*]"),
         False,
     ),
-    "qc_browse_plan": StageSpec("qc_browse_plan", "qc_browse_plan", qc_browse_stage.__name__, ("declarations",), True),
+    "qc_browse_plan": StageSpec(
+        "qc_browse_plan", "qc_browse_plan", qc_browse_stage.__name__, ("declarations",), True, receipt_key="plan_ref"
+    ),
     "qc_browse": StageSpec(
         "qc_browse", "qc_browse", qc_browse_stage.__name__, ("qc_browse_plan",), True, receipt_key="completion"
     ),

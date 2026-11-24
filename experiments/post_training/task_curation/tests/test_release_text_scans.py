@@ -139,6 +139,7 @@ def test_regional_scan_seals_region_receipt_with_counts(tmp_path):
     assert proof["receipt"]["uri"] == str(receipt_path)
     document = json.loads(receipt_path.read_text())
     assert document["kind"] == f"atlas-{RELEASE_ID}-regional-text-scan"
+    assert document["release_id"] == RELEASE_ID
     assert document["region"] == REGION_A
     assert document["rows"] == {SOURCE_ALPHA: 2}
     assert document["bad_rows"] == {SOURCE_ALPHA: 1}

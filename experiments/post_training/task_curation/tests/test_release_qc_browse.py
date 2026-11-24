@@ -329,6 +329,7 @@ def test_plan_write_seals_once_and_rerun_is_byte_identical(tmp_path):
     inputs, fake = make_inputs(tmp_path, panels, declarations)
     feed = tmp_path / FEED_NAME
     first = plan_qc_browse(inputs, query=fake, dry_run=False, feeds=(feed,))
+    assert first["release_id"] == inputs.release_id
     path = tmp_path / "release/prior-qc-browse/plan.json"
     raw = path.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == first["plan_ref"]["sha256"]
