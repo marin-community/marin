@@ -31,6 +31,7 @@ DEPENDENCIES = {
     "genomeqa": ("genomeqa.py",),
     "gsm8k_cot": ("math.py", "minerva.py", "amc.py", "relations.py"),
     "minerva_math": ("math.py", "minerva.py", "amc.py", "relations.py"),
+    "gsm8k_first_hash": ("hinted.py",),
     "bbh_cot": ("choices.py",),
     "boxed_math": ("math.py", "amc.py", "minerva.py", "relations.py"),
     "amc": ("amc.py",),

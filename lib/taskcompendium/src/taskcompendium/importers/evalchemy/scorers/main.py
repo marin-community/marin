@@ -27,6 +27,10 @@ def score(scorer: str, config: dict[str, Any], response: str, judge: JudgeSpec |
         from .math import grade_gsm8k_cot
 
         return grade_gsm8k_cot(config["document"], response)
+    if scorer == "gsm8k_first_hash":
+        from .hinted import grade_gsm8k_first_hash
+
+        return grade_gsm8k_first_hash(config["expected"], response)
     if scorer == "minerva_math":
         from .math import grade_minerva_completion
 
