@@ -23,9 +23,10 @@ EXPECTED = [[1, 2], [3, 4]]
         ("[[1.0, 2], [3, 4]]", 0),
         ('[[1, 2], [3, 4]] {"note": 1}', 0),
         ("[[1, 2], [3, 4]", 0),
-        # Non-finite numbers are not grids, so the verdict stays valid JSON.
+        # Non-finite cells are invalid grids; a boxed one is still the answer, as in the reference parser.
         ("[[NaN, 2], [3, 4]]", 0),
         ("\\boxed{[[1e309, 2], [3, 4]]}", 0),
+        ("\\boxed{[[NaN, 2], [3, 4]]} later [[1, 2], [3, 4]]", 0),
         ("no grid here", 0),
     ],
 )
