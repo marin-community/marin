@@ -144,6 +144,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--warm-run", action="store_true", help="Launch one engine instead of the full pool.")
     parser.add_argument(
+        "--instances",
+        type=int,
+        default=None,
+        help="Engine count (default: the full pool; --warm-run overrides to 1).",
+    )
+    parser.add_argument(
         "--mtp",
         type=int,
         default=None,
@@ -184,7 +190,7 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="[launch-pool] %(message)s")
-    instances = pool.WARM_RUN_INSTANCES if args.warm_run else pool.POOL_INSTANCES
+    instances = args.instances or (pool.WARM_RUN_INSTANCES if args.warm_run else pool.POOL_INSTANCES)
     extra_args: tuple[str, ...] = ()
     if args.mtp is not None:
         if args.mtp < 1:
