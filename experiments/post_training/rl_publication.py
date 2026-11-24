@@ -213,7 +213,7 @@ def build_record(
     tracking = attempt_tracking(attempt, launch)
     started, finished = result.started_at, result.finished_at
     index = attempt.index
-    terminal = result.state in {"succeeded", "failed"}
+    terminal = result.state.is_terminal
     if not terminal and unfinished_status is None:
         raise ValueError("A progress record requires a terminal native attempt")
     measured = (
@@ -308,7 +308,7 @@ def publish_running(
     try:
         for attempt in _coordinator_attempts(path, coordinator).values():
             key = (attempt.index_run_id, attempt.attempt_id)
-            if key in published or attempt.native.result.state in {"succeeded", "failed"}:
+            if key in published or attempt.native.result.state.is_terminal:
                 continue
             url = publish_result(
                 build_record(path, preset, table=table, attempt=attempt, unfinished_status="running"), service_url
@@ -319,19 +319,24 @@ def publish_running(
         logger.warning("Running row publication will retry for %s (%s)", path, type(error).__name__)
 
 
-def _publication_attempts(
-    path: str, failed_coordinator: str | None
-) -> tuple[str | None, dict[str, AttemptRecord], set[str]]:
+@dataclass(frozen=True)
+class _OutputAttempts:
+    current: str | None
+    records: dict[str, AttemptRecord]
+    interrupted: set[str]
+
+
+def _publication_attempts(path: str, failed_coordinator: str | None) -> _OutputAttempts:
     current, attempts = read_stored_skyrl_attempts(path)
     interrupted = set()
     if failed_coordinator is not None:
         for key, record in _coordinator_attempts(path, failed_coordinator).items():
-            if record.native.result.state not in {"succeeded", "failed"}:
+            if not record.native.result.state.is_terminal:
                 interrupted.add(key)
             attempts.setdefault(key, record)
             if current is None:
                 current = key
-    return current, attempts, interrupted
+    return _OutputAttempts(current, attempts, interrupted)
 
 
 def _read_publication_gate(
@@ -378,12 +383,13 @@ def publish_runs(
     report = None
     report_error = None
     try:
-        current_ids = tuple(current for current, attempts, _ in snapshots.values() if current in attempts)
+        current_ids = tuple(snapshot.current for snapshot in snapshots.values() if snapshot.current in snapshot.records)
         report = _read_publication_gate(gate_path, current_ids, len(outputs))
     except Exception as error:
         report = None
         report_error = str(error)
-    for path, (current_id, attempts, interrupted) in snapshots.items():
+    for path, snapshot in snapshots.items():
+        current_id, attempts = snapshot.current, snapshot.records
         if current_id not in attempts:
             result.unserved_records.append(path)
             result.errors.append(f"No stored native receipt at {path} for current attempt {current_id}")
@@ -417,7 +423,7 @@ def publish_runs(
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     evaldash_run_ids=evaldash_run_ids,
-                    unfinished_status="failed" if selected_id in interrupted else None,
+                    unfinished_status="failed" if selected_id in snapshot.interrupted else None,
                     gate_failure=missing_gate,
                 )
                 url = publish_result(record, service_url)

@@ -39,6 +39,10 @@ class LaunchState(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
 
+    @property
+    def is_terminal(self) -> bool:
+        return self in (LaunchState.SUCCEEDED, LaunchState.FAILED)
+
 
 class ExportedPolicy(BaseModel):
     policy_export_uri: str

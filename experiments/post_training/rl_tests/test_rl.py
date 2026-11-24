@@ -821,7 +821,7 @@ def test_submission_exit_codes_and_publication_retries(
         assert cached["issue"] == 73
 
 
-def test_ungated_launch_indexes_prepared_then_terminal_attempt(preset_table, recorded_runs, monkeypatch):
+def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(preset_table, recorded_runs, monkeypatch):
     table = snowball_model.SNOWBALL
     preset = replace(table.by_name["train-long"].with_updates(2), checkpoint_every=None, evaluations=())
     table = preset_table(preset)
@@ -834,6 +834,18 @@ def test_ungated_launch_indexes_prepared_then_terminal_attempt(preset_table, rec
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
     publications = []
     fake_publication(monkeypatch, publications.append, "https://progress.test")
+    followers = []
+    monkeypatch.setattr(
+        snowball,
+        "subprocess",
+        SimpleNamespace(
+            run=subprocess.run,
+            SubprocessError=subprocess.SubprocessError,
+            DEVNULL=subprocess.DEVNULL,
+            STDOUT=subprocess.STDOUT,
+            Popen=lambda argv, **kwargs: followers.append(argv[3:]),
+        ),
+    )
 
     def native_prepared(**kwargs):
         index = RunIndexIdentity.model_validate_json(kwargs["environment"].env_vars[RUN_INDEX_ENV])
@@ -866,8 +878,11 @@ def test_ungated_launch_indexes_prepared_then_terminal_attempt(preset_table, rec
     running_observed = False
     client.submit.side_effect = native_prepared
     client.job.return_value.state_only.side_effect = state
-    arguments = ["--preset", preset.name, "--version", preset.revision, "--run", "--wait"]
+    arguments = ["--preset", preset.name, "--version", preset.revision, "--run"]
     result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments), entry_module=__name__), arguments)
+    assert result.exit_code == 0, (result.output, result.exception)
+    [follower] = followers
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(follower), entry_module=__name__), follower)
     assert result.exit_code == 0, (result.output, result.exception)
     running, terminal = [row for row in publications if row.attempt_id == "native-indexed"]
     assert running.status == "running" and terminal.status == "succeeded"
@@ -950,7 +965,13 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     recorded_runs, preset_table, tmp_path, monkeypatch
 ):
     preset = snowball_model.SNOWBALL.by_name["train-long"]
-    preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")))
+    preset = replace(
+        preset,
+        checkpoint_every=2,
+        evaluations=(replace(preset.evaluations[0], every=2),),
+        recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")),
+    )
+    monkeypatch.setattr(snowball, "_branch_pr_number", lambda provenance: None)
     table = preset_table(preset)
     initializer = ArtifactHfModel(
         ArtifactStep.adopt("tests/python-init", "2026.11.17", "s3://marin-test/models/python-init", kind=Artifact),
@@ -964,10 +985,10 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     fake_s3(monkeypatch, "marin-test/models/python-init")
     built = snowball.build_experiment(
-        preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
+        preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=3",)
     )
     source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint(), inputs=built.inputs)
-    _json(source / "exports/best_checkpoint.json", {"step": 10})
+    _json(source / "exports/best_checkpoint.json", {"step": 2})
     staged = source.with_name("before-native-execution")
     source.rename(staged)
     native_calls = []
@@ -1005,7 +1026,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         response = stored["result"]
         response["model"] = dict(
             policy_export_uri=str(source / "policy"),
-            global_step=12,
+            global_step=3,
             tokenizer_uri="tests/python-tokenizer",
             tokenizer_revision="python-tokenizer-revision",
             checkpoint_root=str(source / "checkpoints"),
@@ -1029,7 +1050,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "--max-concurrent",
         "3",
         "--set",
-        "trainer.max_steps=12",
+        "trainer.max_steps=3",
     ]
     client, job = fake_iris(monkeypatch, "train-coordinator")
     mode, coordinator_module = "valid", "first_model_entry"
@@ -1109,10 +1130,10 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             module(override)
         result = CliRunner().invoke(entry)
         assert result.exit_code == 0, (result.output, result.exception)
-        assert "best_checkpoint_step: 10" in result.output and f"{preset.evaluations[0].name}@12/scored" in result.output
+        assert "best_checkpoint_step: 2" in result.output and f"{preset.evaluations[0].name}@3/scored" in result.output
         assert "http://127.0.0.1:55777/" in result.output and "test-initializer-credential" not in result.output
     assert len(native_calls) == 1
-    assert published[-1].optimizer_steps == published[-1].planned_updates == 12
+    assert published[-1].optimizer_steps == published[-1].planned_updates == 3
     assert (published[-1].model, published[-1].issue) == ("snowball", None)
 
     for mode in (
@@ -1151,7 +1172,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
                 }
             )
             for row in evaluations
-            if row.step != 10
+            if row.step != 2
         ],
     )
     (source / "exports/best_checkpoint.json").unlink()
@@ -1159,7 +1180,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         receipt["result"]["model"] = None
     step = built.runs[0]
     write_skyrl_run_record(source, step.name, step.version, fingerprint=step.fingerprint(), global_step=None)
-    planning_args = ["--preset", preset.name, "--version", preset.revision, "--set", "trainer.max_steps=12"]
+    planning_args = ["--preset", preset.name, "--version", preset.revision, "--set", "trainer.max_steps=3"]
     result = CliRunner().invoke(
         snowball.command(table, argv=tuple(planning_args), init=initializer, forward_env=("HF_TEST_KEY",)),
         planning_args,
@@ -1168,7 +1189,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     [status] = printed_status(result.output)["runs"]
     assert status["best_checkpoint_step"] == "none eligible"
     facts = {fact["name"]: fact for fact in status["evaluation_invariants"]}
-    assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
+    assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
     assert not facts[f"{preset.evaluations[0].name}/task_coverage"]["holds"]
 
     mode, coordinator_module = "valid", "first_model_entry"

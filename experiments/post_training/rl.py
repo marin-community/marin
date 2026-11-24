@@ -76,7 +76,6 @@ from experiments.post_training.rl_measurements import (
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
-_FOLLOW_JOB_ENV = "MARIN_RL_FOLLOW_JOB"
 _PUBLICATION_POLL_SECONDS = 10
 _IRIS_DASHBOARD_URL = "https://iris.oa.dev"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
@@ -433,9 +432,9 @@ def run_index(
 def _follow_detached(module: str, argv: tuple[str, ...], job: JobName, provenance: Provenance) -> str:
     """Start the caller's publication watcher and return its local log path."""
     with tempfile.NamedTemporaryFile(prefix="marin-rl-publication-", suffix=".log", delete=False) as log:
+        follow = json.dumps({"job": str(job), "source": provenance.to_json()})
         subprocess.Popen(
-            [sys.executable, "-m", module, *argv],
-            env={**os.environ, _FOLLOW_JOB_ENV: json.dumps({"job": str(job), "source": provenance.to_json()})},
+            [sys.executable, "-m", module, "--follow-submission", follow, *argv],
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -497,6 +496,45 @@ def _wait_for_run(
     raise click.exceptions.Exit(EXIT_CODES[verdict])
 
 
+def _submit_from_launcher(
+    module: str | None,
+    argv: tuple[str, ...],
+    handles: list[ArtifactStep],
+    max_concurrent: int,
+    context: click.Context,
+) -> JobName:
+    if module is None:
+        specification = sys.modules["__main__"].__spec__
+        module = specification.name if specification is not None else None
+    if not module:
+        raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
+    submitted_at = datetime.now(UTC).isoformat()
+    index = context.meta["rl_index"].model_copy(update={"submitted_at": submitted_at})
+    job = submit_or_run(
+        module, handles, max_concurrent, {**os.environ, RUN_INDEX_ENV: index.model_dump_json()}, argv=argv
+    )
+    submitted = [
+        {
+            "name": step.name,
+            "grafana_links": {
+                "run": grafana_url(index.run_id, execution.cluster, context.meta["rl_training_type"], submitted_at)
+            },
+        }
+        for step in _from_handles(handles).runs
+        if (execution := skyrl_execution(step)) is not None
+    ]
+    result = {
+        "coordinator_job_id": str(job),
+        "iris_url": job.dashboard_url(_IRIS_DASHBOARD_URL),
+        "submitted_at": submitted_at,
+        "runs": submitted,
+    }
+    if not context.params["wait"]:
+        result["publication_log"] = _follow_detached(module, argv, job, context.meta["rl_provenance"])
+    _print_status(result)
+    return job
+
+
 def _run_command(
     table: presets.ModelPresets,
     argv: tuple[str, ...],
@@ -510,54 +548,17 @@ def _run_command(
         return function(*args, **kwargs)
 
     def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
-        options = click.get_current_context().params
-        preset = table.by_name[options["preset_name"]]
-        if get_job_info() is None:
-            if follow := os.environ.get(_FOLLOW_JOB_ENV):
-                job = JobName.from_wire(json.loads(follow)["job"])
-                _wait_for_run(job, handles, preset, table=table, service_url=options["url"])
-                return
-            module = entry_module
-            if module is None:
-                specification = sys.modules["__main__"].__spec__
-                module = specification.name if specification is not None else None
-            if not module:
-                raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
-            submitted_at = datetime.now(UTC).isoformat()
-            meta = click.get_current_context().meta
-            index = meta["rl_index"].model_copy(update={"submitted_at": submitted_at})
-            job = submit_or_run(
-                module, handles, max_concurrent, {**os.environ, RUN_INDEX_ENV: index.model_dump_json()}, argv=argv
-            )
-            submitted = [
-                {
-                    "name": step.name,
-                    "grafana_links": {
-                        "run": grafana_url(
-                            index.run_id,
-                            execution.cluster,
-                            meta["rl_training_type"],
-                            submitted_at,
-                        )
-                    },
-                }
-                for step in _from_handles(handles).runs
-                if (execution := skyrl_execution(step)) is not None
-            ]
-            result = {
-                "coordinator_job_id": str(job),
-                "iris_url": job.dashboard_url(_IRIS_DASHBOARD_URL),
-                "submitted_at": submitted_at,
-                "runs": submitted,
-            }
-            if not options["wait"]:
-                result["publication_log"] = _follow_detached(module, argv, job, meta["rl_provenance"])
-            _print_status(result)
-        else:
+        if get_job_info() is not None:
             validate_coordinator_graph(handles)
             _run_graph(handles, max_concurrent)
-            job = None
-        if options["wait"] and job is not None:
+            return
+        context = click.get_current_context()
+        options = context.params
+        preset = table.by_name[options["preset_name"]]
+        job = context.meta.get("rl_follow_job")
+        if job is None:
+            job = _submit_from_launcher(entry_module, argv, handles, max_concurrent, context)
+        if options["wait"] or context.meta.get("rl_follow_job") is not None:
             _wait_for_run(job, handles, preset, table=table, service_url=options["url"])
 
     return click.command(
@@ -574,6 +575,7 @@ def command(
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
     @partial(_run_command, table, argv, entry_module)
+    @click.option("--follow-submission", hidden=True)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
     @click.option("--check-pin", is_flag=True, help="Check the composed candidate and its pinned controls on CPU.")
@@ -654,8 +656,10 @@ def command(
         issue: int | None,
         plan: bool,
         check_pin: bool,
+        follow_submission: str | None,
     ) -> tuple[ArtifactStep, ...]:
-        do_run = click.get_current_context().params["do_run"]
+        context = click.get_current_context()
+        do_run = context.params["do_run"]
         if plan and do_run:
             raise click.UsageError("Choose either --plan or --run")
         preset = table.by_name[preset_name]
@@ -664,9 +668,13 @@ def command(
         missing = [name for name in forward_env if name not in os.environ]
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
-        from_launcher = get_job_info() is None
-        follow = os.environ.get(_FOLLOW_JOB_ENV) if from_launcher else None
-        provenance = Provenance.from_json(json.loads(follow)["source"]) if follow else _provenance(control=control)
+        follow = json.loads(follow_submission) if follow_submission else None
+        if follow is not None:
+            if not do_run or get_job_info() is not None:
+                raise click.UsageError("A detached launcher needs --run on the submitting host")
+            context.meta["rl_follow_job"] = JobName.from_wire(follow["job"])
+        from_launcher = follow is None and get_job_info() is None
+        provenance = Provenance.from_json(follow["source"]) if follow is not None else _provenance(control=control)
         run = build_experiment(
             preset,
             table=table,
@@ -678,10 +686,13 @@ def command(
             control=control,
             requirements=requirements,
             issue=issue,
-            validate_plan=from_launcher and not follow,
+            validate_plan=from_launcher,
             provenance=provenance,
         )
-        if (do_run or check_pin) and from_launcher and not follow:
+        handles = (*run.runs, *((run.gate,) if run.gate else ()))
+        if follow is not None:
+            return handles
+        if from_launcher and (do_run or check_pin):
             assert run.inputs is not None
             validated = rl_gate.validate_candidate(
                 preset,
@@ -690,19 +701,16 @@ def command(
                 table=table,
             )
             if do_run:
-                meta = click.get_current_context().meta
-                meta["rl_training_type"] = validated["runtime"]["training_type"]
-                meta["rl_index"] = run_index(validated, preset, table, provenance, user=username_segment())
-                meta["rl_provenance"] = provenance
-        if follow:
-            return (*run.runs, *((run.gate,) if run.gate else ()))
+                context.meta["rl_training_type"] = validated["runtime"]["training_type"]
+                context.meta["rl_index"] = run_index(validated, preset, table, provenance, user=username_segment())
+                context.meta["rl_provenance"] = provenance
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
         _print_status(snapshot)
         if not do_run and _evaluation_failed(snapshot, preset):
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
         if not do_run and "verdict" in snapshot:
             raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])
-        return (*run.runs, *((run.gate,) if run.gate else ()))
+        return handles
 
     return run_command
 

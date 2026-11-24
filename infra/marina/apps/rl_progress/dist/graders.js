@@ -20,8 +20,8 @@ const successColumns = [
 ];
 
 const subsetColumns = [
-  ['Subset', (row) => row.subset_id ?? row.data_source ?? row.environment],
-  ['Task source', (row) => row.data_sources?.join(', ') || row.data_source],
+  ['Subset', (row) => row.subset_id],
+  ['Task source', (row) => row.data_sources.join(', ')],
   ...successColumns,
   ['Grader failures', (row) => counts(row.grading_failures)],
   ['Rollout failures', (row) => counts(row.rollout_failures)],

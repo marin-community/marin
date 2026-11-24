@@ -168,9 +168,9 @@ class GraderReportSections(TypedDict, total=False):
     evaluation_tasks: list[TaskSummary]
 
 
-def write_grader_report(export_path: str, key: str, sections: GraderReportSections) -> None:
+def write_grader_report(report_dir: str, key: str, sections: GraderReportSections) -> None:
     """Store the diagnostic report without interrupting the workload."""
-    path = join_resource_path(export_path, GRADER_REPORT_FILENAME)
+    path = join_resource_path(report_dir, GRADER_REPORT_FILENAME)
     try:
         try:
             report = json.loads(io.read_bytes(path))
