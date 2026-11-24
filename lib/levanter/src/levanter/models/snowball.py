@@ -240,14 +240,14 @@ class SnowballConfig(HFCompatConfig):
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
     projection_implementation: Literal["native", "fixed_schedule"] = dataclasses.field(
-        default="native", metadata={"fingerprint_omit_default": True}
+        default="native", metadata={"fingerprint_omit_value": "native"}
     )
     """Use fixed per-row dense projections in both learner and serving paths on TPUv4."""
     replay_precision: Literal["standard", "zero_kl"] = dataclasses.field(
-        default="standard", metadata={"fingerprint_omit_default": True}
+        default="standard", metadata={"fingerprint_omit_value": "standard"}
     )
     shared_attention_implementation: Literal["native", "fixed_schedule"] = dataclasses.field(
-        default="native", metadata={"fingerprint_omit_default": True}
+        default="native", metadata={"fingerprint_omit_value": "native"}
     )
     """Use the bounded shared TPUv4 schedule for both paged attention and learner forward."""
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
