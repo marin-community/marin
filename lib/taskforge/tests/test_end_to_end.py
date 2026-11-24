@@ -26,13 +26,15 @@ from botocore.exceptions import ClientError, IncompleteReadError
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from lib.taskforge.tests.effect_fakes import local_records
+from lib.taskforge.tests.llm.fake_glm import serving
 from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
+from lib.taskforge.tests.resources.inference_fakes import Act, LoopTime, ScriptedProvider, Time, chunk, report, segment
 from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, Injection, LocalController, local_iris_machine
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
 from rigging.filesystem.conditional_object import ConditionalWriteError, LocalConditionalObject, VersionedBytes
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
+from rolloutengine.models import Graded, GradedRollout, Model, Rollout, RolloutEvent, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from shellbox.machine import Command, ExitReason, GuestHelperFailed, Machine, Result
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -66,7 +68,10 @@ from taskforge.effects.issues import (
 )
 from taskforge.effects.log import EventLog, JsonlSink, Opened, Record, Status, decode, fold
 from taskforge.harness.protocol import Stopped, StopReason
-from taskforge.llm.glm_client import EndpointSource
+from taskforge.llm.client import AttemptFailed, AttemptOutcome, ModelClient, Progress, Provider, Segment
+from taskforge.llm.glm_provider import EndpointSource, FixedEndpoint, GlmEndpoint, GlmProvider, Pool
+from taskforge.llm.policy import GLM_5_3, ModelProfile
+from taskforge.lowering import rollout_engine
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Message, Role, ToolCall
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
@@ -83,18 +88,18 @@ from taskforge.model.review import (
 )
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
-from taskforge.policy import Policy, load_policy
+from taskforge.policy import Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
 from taskforge.resources.env import CommandResult, EnvFactory, ReadFile, RunCommand, ShellboxEnv, WriteFile
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids, NewId
-from taskforge.resources.inference import InferenceClient, InferenceRequest
-from taskforge.resources.rollouts import Engine, RolloutResource
+from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
+from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
 from taskforge.resources.verifier import RoundVerifier
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.rules import default_review
-from taskforge.wiring import build_config, install
+from taskforge.wiring import build_config, build_resources, install, retry_policy, solver_turn
 
 
 def published(destination: Path) -> Journal:
@@ -317,6 +322,71 @@ async def test_stage_replay_budget_restarts_after_each_completed_stage(proposal:
     wp = await run_workpiece(proposal, replace(config(), review=retry_once), bundle, EventLog(), install=install)
     assert [type(decision) for decision in wp.decisions] == [Retry, Accept]
     assert wp.terminal == Terminal.ACCEPTED and not any(solver.failures.values())
+
+
+def caller_providers() -> dict[str, ScriptedProvider]:
+    author = ScriptedProvider(tuple(segment(c.content, c.tool_calls, FinishReason.TOOL_CALLS) for c in script()))
+    return {
+        "author": author,
+        "solver": ScriptedProvider((segment("12"), segment("9"))),
+        "adversary": ScriptedProvider(()),
+    }
+
+
+async def run_on(
+    proposal: TaskProposal, providers: Mapping[str, Provider], profiles: Mapping[str, ModelProfile], log: EventLog
+) -> Workpiece:
+    """A workpiece through the public wiring on ``providers`` and ``profiles``, with fake machines and graders."""
+    models = {f"{role}.model": provider.model for role, provider in providers.items()}
+    policy = load_policy(DEFAULTS_DIR).overlaid({**SETTINGS, **models})
+    built = build_resources(policy, providers, {}, FakeWeb({}, {}), profiles)
+    bundle = replace(
+        built,
+        envs=Envs(),
+        rollouts=replace(built.rollouts, engine=CandidateEngine()),
+        grading=GradingResource(CandidateEngine(), "grader"),
+    )
+    return await run_workpiece(proposal, build_config(policy, {}, profiles), bundle, log, install=install)
+
+
+async def test_a_workpiece_runs_end_to_end_on_a_caller_provider_and_profile(proposal: TaskProposal) -> None:
+    """The library's GLM provider and GLM-5.3 profile are defaults: a caller passes its own per role through wiring."""
+    providers = caller_providers()
+    profiles = {"author": replace(GLM_5_3, name="glm-5.3/output-4096", max_output_tokens=4096)}
+    wp = await run_on(proposal, providers, profiles, EventLog())
+    assert wp.terminal == Terminal.ACCEPTED
+    assert [body["max_tokens"] for body in providers["author"].bodies] == [4096] * len(script())
+    solver = providers["solver"].bodies
+    assert len(solver) == 2 and not any("max_tokens" in body for body in solver)
+
+
+# Review 2026-11-21: a result recorded without an output limit replayed under a profile with one.
+@pytest.mark.parametrize(
+    ("change", "calls"), [("none", 0), ("output-limit", len(script()) + 2), ("formatter", len(script()) + 2)]
+)
+async def test_a_journal_replays_model_calls_only_under_the_profile_that_recorded_them(
+    proposal: TaskProposal, tmp_path: Path, change: str, calls: int
+) -> None:
+    profile = {
+        "none": GLM_5_3,
+        "output-limit": replace(GLM_5_3, name="glm-5.3/output-4", max_output_tokens=4),
+        "formatter": replace(GLM_5_3, name="glm-5.3/spaced", replay_arguments=lambda arguments: f" {arguments}"),
+    }[change]
+    sink = JsonlSink(str(tmp_path / "events.jsonl"))
+    assert (await run_on(proposal, caller_providers(), {}, EventLog(sink=sink))).terminal == Terminal.ACCEPTED
+    providers = caller_providers()
+    log = EventLog(replay_from=local_records(sink), sink=sink)
+    await run_on(proposal, providers, {"author": profile, "solver": profile}, log)
+    assert sum(len(provider.bodies) for provider in providers.values()) == calls
+
+
+# Review 2026-11-21: the harness and the inference effect both applied the formatter, so the wire got it twice.
+async def test_a_profile_formatter_shapes_a_replayed_tool_call_once(proposal: TaskProposal) -> None:
+    spaced = replace(GLM_5_3, name="glm-5.3/spaced", replay_arguments=lambda arguments: f" {arguments}")
+    providers = caller_providers()
+    await run_on(proposal, providers, {"author": spaced}, EventLog())
+    [replayed] = [message for message in providers["author"].bodies[1]["messages"] if message.get("tool_calls")]
+    assert replayed["tool_calls"][0]["function"]["arguments"] == f" {script()[0].tool_calls[0].arguments}"
 
 
 @pytest.fixture
@@ -756,6 +826,251 @@ async def test_a_collision_at_a_checkpoint_digest_exits_corrupt_and_publishes_no
     assert driver.exit_code(raised.value) == driver.CORRUPT
     head = published(Path(driver_args.output) / driver.proposal_key(driver_args.proposals)).head
     assert (head.chunks, head.status, head.workpiece) == ((), Status(), None)
+
+
+STALL_TIMEOUT = 600.0
+TOKEN_INTERVAL = 10.0
+
+
+class Fleet(Provider):
+    """A solver fleet on a virtual clock. While it is up, requests get ``acts`` in order; ``lose`` takes every worker
+    away, after which each request is refused with a 503 and ``/health`` reports the pool empty.
+
+    As the rollout engine's observer, it sets ``served`` once a trial is graded, so a sibling act that advances the
+    clock cannot move the healthy trial's grading deadline while its grader still runs."""
+
+    def __init__(self, time: LoopTime, acts: Sequence[Act]) -> None:
+        self.time, self.acts, self.alive = time, list(acts), True
+        self.requests = 0
+        self.served = asyncio.Event()
+
+    @property
+    @override
+    def model(self) -> str:
+        return "glm-5.3"
+
+    @override
+    async def stream(self, body: Mapping[str, Any], progress: Progress) -> Segment:
+        self.requests += 1
+        if not self.alive:
+            raise AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, "no workers", 503)
+        return await self.acts.pop(0)(progress)
+
+    @override
+    async def no_workers(self) -> bool:
+        return not self.alive
+
+    async def answer(self, _progress: Progress) -> Segment:
+        return segment("12")
+
+    async def on_event(self, event: RolloutEvent) -> None:
+        if isinstance(event.payload, Graded) and event.payload.status is Outcome.GRADED:
+            self.served.set()
+
+    async def silent(self, seconds: float) -> None:
+        for _ in range(int(seconds / TOKEN_INTERVAL)):
+            await self.time.sleep(TOKEN_INTERVAL)
+
+    async def generate(self, progress: Progress, seconds: float) -> None:
+        for _ in range(int(seconds / TOKEN_INTERVAL)):
+            await self.time.sleep(TOKEN_INTERVAL)
+            report(progress, chunk(content="x"))
+
+    async def stall(self) -> Segment:
+        await self.silent(STALL_TIMEOUT)
+        raise AttemptFailed(AttemptOutcome.STALLED, f"no token for {STALL_TIMEOUT}s")
+
+    async def loses_workers_late(self, progress: Progress) -> Segment:
+        """A healthy generation whose workers all go away at second 4,000 of the 4,140-second bound."""
+        await self.served.wait()
+        await self.generate(progress, 4000)
+        self.alive = False
+        return await self.stall()
+
+    async def stalls_in_a_tool_call(self, progress: Progress) -> Segment:
+        await self.served.wait()
+        report(progress, chunk(role="assistant"))
+        report(progress, chunk(tool_calls=[{"index": 0, "id": "c", "function": {"name": "shell"}}]))
+        return await self.stall()
+
+    async def streams_a_tool_delta_then_loses_workers(self, progress: Progress) -> Segment:
+        report(progress, chunk(tool_calls=[{"index": 0, "function": {"arguments": "{"}}]))
+        self.alive = False
+        return await self.stall()
+
+    async def streams_empty_tool_deltas(self, progress: Progress) -> Segment:
+        """Eleven tool-call frames 415 seconds apart, carrying only an index or empty arguments: no generated text."""
+        await self.served.wait()
+        for frame in range(11):
+            if frame:
+                await self.time.sleep(415)
+            report(
+                progress, chunk(tool_calls=[{"index": 0, "function": {"arguments": ""}} if frame % 2 else {"index": 0}])
+            )
+        self.alive = False
+        return await self.stall()
+
+    async def aborts_past_the_bound(self, progress: Progress) -> Segment:
+        """Content every 10 seconds past the bound; at second 4,160 a chunk carries content and the server's abort."""
+        await self.served.wait()
+        await self.generate(progress, 4150)
+        await self.time.sleep(TOKEN_INTERVAL)
+        report(progress, json.dumps({"choices": [{"index": 0, "delta": {"content": "x"}, "finish_reason": "abort"}]}))
+        self.alive = False
+        raise AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
+
+    async def delivers_a_buffered_token_past_the_bound(self, progress: Progress) -> Segment:
+        """A token buffered at second 4,139.5 of the bound arrives at 4,140.5 from a worker that died meanwhile, while
+        another replica keeps ``/health`` positive; then the stream ends."""
+        await self.served.wait()
+        await self.generate(progress, 4140)
+        await self.time.sleep(TOKEN_INTERVAL + 0.5)
+        report(progress, chunk(content="x"))
+        self.alive = False
+        raise AttemptFailed(AttemptOutcome.INCOMPLETE_STREAM, "stream lacked finish_reason or usage")
+
+    async def tails_past_the_bound(self, progress: Progress) -> Segment:
+        """The worker exits at second 4,140 of the bound; its queued output keeps arriving past the bound, two frames
+        1.2 s apart."""
+        await self.served.wait()
+        await self.generate(progress, 4140)
+        for delay in (TOKEN_INTERVAL + 0.5, 1.2):
+            await self.time.sleep(delay)
+            report(progress, chunk(content="x"))
+        raise AssertionError("the second frame past the bound confirms it")
+
+    async def generates_past_the_bound(self, progress: Progress) -> Segment:
+        await self.served.wait()
+        await self.generate(progress, 8400)
+        raise AssertionError("the generation bound ends this stream")
+
+
+FLEET_FAULTS = {
+    "late-fleet-loss": lambda fleet: (fleet.loses_workers_late, fleet.answer),
+    "second-tool-stall": lambda fleet: (
+        fleet.stalls_in_a_tool_call,
+        fleet.answer,
+        fleet.streams_a_tool_delta_then_loses_workers,
+    ),
+    "empty-tool-deltas": lambda fleet: (fleet.streams_empty_tool_deltas, fleet.answer),
+    "abort-past-the-bound": lambda fleet: (fleet.aborts_past_the_bound, fleet.answer),
+    "buffered-token-past-the-bound": lambda fleet: (fleet.delivers_a_buffered_token_past_the_bound, fleet.answer),
+}
+
+
+def fleet_resources(policy: Policy, fleet: Fleet) -> Resources:
+    """The production solver path (RolloutEngine, ``solver_turn``, ``ModelClient``) on ``fleet`` and its clock."""
+    author = ScriptedProvider(
+        tuple(segment(c.content, c.tool_calls, FinishReason.TOOL_CALLS) for c in script()),
+        policy.setting("author.model", str),
+    )
+    adversary = ScriptedProvider((), policy.setting("adversary.model", str))
+    built = build_resources(policy, {"author": author, "solver": fleet, "adversary": adversary}, {}, FakeWeb({}, {}))
+    model = ModelClient(
+        fleet, GLM_5_3, retry_policy(policy, "solver"), role="solver", clock=fleet.time.clock, sleep=fleet.time.sleep
+    )
+    engine = rollout_engine({}, command_timeout=None)
+    engine.observer = fleet
+    rollouts = replace(
+        built.rollouts,
+        engine=engine,
+        model=partial(solver_turn, model, sampling(policy, GLM_5_3.sampling)),
+    )
+    return replace(built, envs=Envs(), rollouts=rollouts, grading=GradingResource(CandidateEngine(), "grader"))
+
+
+def solver_slots(destination: Path) -> list[Resolved[object]]:
+    """The solver trials the journal resolved by running them; a stage replay serves them again as replayed."""
+    return [
+        record.event
+        for record in history(destination)
+        if isinstance(record.event, Resolved)
+        and isinstance(record.event.request, SolverRollout)
+        and not record.event.replayed
+    ]
+
+
+# Review 2026-11-21: each fault journaled a failed solver slot and published ACCEPTED at 1/2. The faults also include
+# empty tool deltas, an abort past the bound, and a buffered token delivered past it from a dead worker.
+@pytest.mark.parametrize("fault", FLEET_FAULTS)
+async def test_a_fleet_fault_during_a_solver_turn_records_no_failed_trial_and_holds(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    fleet = Fleet(LoopTime(), ())
+    fleet.acts = list(FLEET_FAULTS[fault](fleet))
+    policy = driver.run_policy(driver_args.policy)
+    serve(monkeypatch, fleet_resources(policy, fleet))
+    await driver.one(driver_args)
+    destination = tmp_path / "out" / driver.proposal_key(driver_args.proposals)
+    [solved] = solver_slots(destination)
+    assert cast(GradedRollout, solved.value).grade.reward == 1
+    workpiece = published_workpiece(destination)
+    assert (workpiece.terminal, workpiece.evidence) == (Terminal.HELD, ())
+
+
+# Review 2026-11-21: a confirmed tail from an exited worker is still charged (a known limit of the
+# client-side bound, which consults no pool state).
+@pytest.mark.parametrize("tail", [False, True], ids=["live", "exited-worker-tail"])
+async def test_a_solver_generation_sustained_past_its_bound_is_a_failed_trial(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tail: bool
+) -> None:
+    fleet = Fleet(LoopTime(), ())
+    past = fleet.tails_past_the_bound if tail else fleet.generates_past_the_bound
+    fleet.acts = [past, fleet.answer]
+    serve(monkeypatch, fleet_resources(driver.run_policy(driver_args.policy), fleet))
+    await driver.one(driver_args)
+    destination = tmp_path / "out" / driver.proposal_key(driver_args.proposals)
+    assert len(solver_slots(destination)) == 2 and fleet.requests == 2
+    workpiece = published_workpiece(destination)
+    [evidence] = workpiece.evidence
+    assert sorted(str(trial.cause) for trial in evidence.solver) == ["None", str(Cause.GENERATION_LIMIT)]
+    assert workpiece.terminal == Terminal.ACCEPTED
+
+
+CUT_SEEN = 30.0
+"""Seconds within which the fake router's next write sees that the client closed a connection."""
+
+
+# Review 2026-11-21: a model 503 whose body trickled whitespace every 5 ms kept the author call pending
+# (1 POST, 0 GETs, nothing resolved) under a 50 ms stall timeout and a 100 ms availability window.
+async def test_a_trickling_error_body_holds_the_workpiece_within_the_availability_window(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The window's clock moves only when the client backs off: each window holds two attempts and one health poll.
+    window = {
+        "provider.unavailable_wait": 3600.0,
+        "provider.backoff_initial": 1800.0,
+        "provider.backoff_maximum": 1800.0,
+    }
+    policy = driver.run_policy(driver_args.policy).overlaid(window)
+    clock = Time()
+    with serving() as fake:
+        for _ in range(100):
+            fake.status(503, "busy", trickle=400)  # each body takes 2 s to arrive; the stall timeout is 50 ms
+        source = FixedEndpoint(GlmEndpoint(fake.base_url, "token", Pool.HIGH))
+        async with GlmProvider(source, policy.setting("author.model", str), 0.05, 8) as author:
+            roles = ("solver", "adversary")
+            providers = {role: ScriptedProvider((), policy.setting(f"{role}.model", str)) for role in roles}
+            built = build_resources(policy, {**providers, "author": author}, {}, FakeWeb({}, {}))
+            retry = retry_policy(policy, "author")
+            client = GlmInference(
+                ModelClient(author, GLM_5_3, retry, role="author", clock=clock.clock, sleep=clock.sleep), "author"
+            )
+            serve(
+                monkeypatch,
+                replace(built, envs=Envs(), inference=client, role_inference={**built.role_inference, "author": client}),
+            )
+            await driver.one(driver_args)
+        # Every attempt was cut before its body completed (test_provider pins the configured deadline).
+        assert all(fake.cut.acquire(timeout=CUT_SEEN) for _ in fake.requests), "an error body was read to its end"
+    destination = tmp_path / "out" / driver.proposal_key(driver_args.proposals)
+    workpiece = published_workpiece(destination)
+    assert (workpiece.terminal, solver_slots(destination)) == (Terminal.HELD, [])
+    resolved = [record.event for record in history(destination) if isinstance(record.event, Resolved)]
+    assert not [event for event in resolved if isinstance(event.request, InferenceRequest)]
+    # Each stage attempt ended when its window closed, not when a body completed.
+    assert (len(fake.requests), fake.health_polls) == (2 * STAGE_REPLAY_ATTEMPTS, STAGE_REPLAY_ATTEMPTS)
+    assert clock.waits == [1800.0] * 2 * STAGE_REPLAY_ATTEMPTS
 
 
 def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources, workspace: WorkspaceHydration | None = None) -> None:

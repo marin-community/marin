@@ -27,14 +27,12 @@ class Retries:
         self.events.append(event)
 
 
-@pytest.mark.parametrize("transport_retry", [True, False])
-async def test_retry_telemetry_preserves_wire_and_completion_values(transport_retry: bool) -> None:
+async def test_retry_telemetry_preserves_wire_and_completion_values() -> None:
     attempts = (
         Attempt(0, AttemptOutcome.RETRYABLE_STATUS, 10, 0, 1, 503, "private", ()),
         Attempt(0, AttemptOutcome.COMPLETED, 10, 1, 1, 200, "", ()),
     )
-    completion = provider_completion(() if transport_retry else attempts)
-    backend = Backend((ModelRequestRejected(503, "private", ()), completion) if transport_retry else (completion,))
+    backend = Backend((provider_completion(attempts),))
     broken = '{"findings": '
     event = request()
     event = replace(
@@ -52,7 +50,7 @@ async def test_retry_telemetry_preserves_wire_and_completion_values(transport_re
     messages, policy, fields = backend.calls[-1]
     assert messages[0]["reasoning_content"] == "thought" and messages[1]["tool_call_id"] == "previous"
     wire = json.loads(json.dumps(messages[0]))
-    assert broken in json.loads(wire["tool_calls"][0]["function"]["arguments"]).values()
+    assert wire["tool_calls"][0]["function"]["arguments"] == broken  # the harness shapes arguments when it records
     assert event.messages[0].tool_calls[0].arguments == broken
     assert policy.max_tokens == 100
     assert fields == {
@@ -65,16 +63,13 @@ async def test_retry_telemetry_preserves_wire_and_completion_values(transport_re
     }
     assert [(retry.request, retry.attempt) for retry in retries.events] == [(event, 1)]
     assert "private" not in retries.events[0].cause
-    if not transport_retry:
-        assert result.retries == ("retryable_status:503",)
-    assert len(backend.calls) == (2 if transport_retry else 1)
+    assert result.retries == ("retryable_status:503",)
+    assert len(backend.calls) == 1
 
 
 @pytest.mark.parametrize(
     "error,expected,calls,retry_count",
     [
-        (ModelRequestRejected(429, "private", ()), Restart, 3, 2),
-        (ModelRequestRejected(503, "private", ()), Restart, 3, 2),
         (
             ModelUnavailable(
                 "private", (Attempt(0, AttemptOutcome.RETRYABLE_STATUS, 10, 0, 1, 503, "private", ()),) * 2

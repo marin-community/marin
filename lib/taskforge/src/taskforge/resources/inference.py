@@ -1,27 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Taskforge values at the boundary of the existing GLM transport and continuation engine."""
+"""Recorded inference requests and their executor in front of the model client."""
 
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Protocol, override
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, Retrying, digest
 from taskforge.effects.issues import ContextExceeded, Hold, Restart, Transient
-from taskforge.llm.client import (
-    RETRYABLE_STATUSES,
-    Attempt,
-    AttemptOutcome,
-    ContextExhausted,
-    ModelRequestRejected,
-    ModelUnavailable,
-)
+from taskforge.llm.client import Attempt, AttemptOutcome, ContextExhausted, ModelUnavailable
 from taskforge.llm.client import Completion as ProviderCompletion
-from taskforge.llm.policy import LLMPolicy
-from taskforge.llm.wire import replay_arguments
-from taskforge.model.llm import TOOL_SCHEMA, Completion, FinishReason, Message, ToolCall, ToolSchema, Usage
-from taskforge.resources.execution import Notify, retry_effect
+from taskforge.llm.policy import LLMPolicy, ModelProfile
+from taskforge.model.llm import TOOL_SCHEMA, Completion, Message, ToolSchema
+from taskforge.resources.execution import Notify
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,10 +52,12 @@ class InferenceClient(Protocol):
 
 
 class CompletionBackend(Protocol):
-    """The subset of GlmClient used here, injectable without a network connection."""
+    """The subset of ``ModelClient`` used here, injectable without a network connection."""
 
     @property
     def model(self) -> str: ...
+    @property
+    def profile(self) -> ModelProfile: ...
     async def complete(
         self,
         messages: Sequence[dict[str, object]],
@@ -73,6 +67,7 @@ class CompletionBackend(Protocol):
 
 
 def _message(message: Message) -> dict[str, object]:
+    """``message`` on the wire; the harness already shaped its tool-call arguments with the profile's formatter."""
     wire: dict[str, object] = {"role": message.role, "content": message.content}
     if message.reasoning:
         wire["reasoning_content"] = message.reasoning
@@ -83,7 +78,7 @@ def _message(message: Message) -> dict[str, object]:
             {
                 "id": call.id,
                 "type": "function",
-                "function": {"name": call.name, "arguments": replay_arguments(call.arguments)},
+                "function": {"name": call.name, "arguments": call.arguments},
             }
             for call in message.tool_calls
         ]
@@ -92,14 +87,16 @@ def _message(message: Message) -> dict[str, object]:
 
 @dataclass(frozen=True, slots=True)
 class GlmInference(InferenceClient):
-    """Translate retryable transport failures; invalid requests remain typed bugs."""
+    """Translate an unavailable provider into a stage restart; other rejections remain typed bugs."""
 
     client: CompletionBackend
     role: str
 
     @override
     def fingerprint(self) -> Fingerprint:
-        return Fingerprint("inference", digest((self.client.model, self.role)), ReplayPolicy.CACHE)
+        profile = self.client.profile.replay_identity()
+        identity = (self.client.model, self.role) + (() if profile is None else (profile,))
+        return Fingerprint("inference", digest(identity), ReplayPolicy.CACHE)
 
     @override
     async def complete(self, request: InferenceRequest) -> Completion:
@@ -110,26 +107,16 @@ class GlmInference(InferenceClient):
             ]
         }
         try:
-            result = await self.client.complete(
-                tuple(_message(message) for message in request.conversation), policy, fields
-            )
+            result = await self.client.complete(tuple(map(_message, request.conversation)), policy, fields)
         except ModelUnavailable as error:
-            raise Restart(
-                "GLM transport exhausted its retry or hold budget", retries=_retries(error.attempts)
-            ) from error
+            raise Restart(str(error), retries=_retries(error.attempts)) from error
         except ContextExhausted as error:
             raise ContextExceeded(error.body, retries=_retries(error.attempts)) from error
-        except ModelRequestRejected as error:
-            if error.status not in RETRYABLE_STATUSES:
-                raise
-            raise Transient(
-                f"GLM request rejected with status {error.status}", retries=_retries(error.attempts)
-            ) from error
         return Completion(
             result.content,
-            tuple(ToolCall(call.id, call.name, call.arguments) for call in result.tool_calls),
-            FinishReason(result.finish_reason),
-            Usage(**asdict(result.usage)),
+            result.tool_calls,
+            result.finish_reason,
+            result.usage,
             result.continuations,
             result.reasoning,
             _retries(result.attempts),
@@ -145,15 +132,13 @@ def _retries(attempts: Sequence[Attempt]) -> tuple[str, ...]:
 
 
 async def complete(event: InferenceRequest, client: InferenceClient, *, notify: Notify) -> Completion:
-    async def attempt() -> Completion:
-        try:
-            result = await client.complete(event)
-        except (Transient, Restart, Hold, ContextExceeded) as error:
-            for index, cause in enumerate(error.retries, 1):
-                notify(Retrying(event, index, str(cause)))
-            raise
-        for index, cause in enumerate(result.retries, 1):
-            notify(Retrying(event, index, cause))
-        return result
-
-    return await retry_effect(event, attempt, notify)
+    """Run ``event`` once: the model client owns its retries, which are reported as ``Retrying`` notes."""
+    try:
+        result = await client.complete(event)
+    except (Transient, Restart, Hold, ContextExceeded) as error:
+        for index, cause in enumerate(error.retries, 1):
+            notify(Retrying(event, index, str(cause)))
+        raise
+    for index, cause in enumerate(result.retries, 1):
+        notify(Retrying(event, index, cause))
+    return result

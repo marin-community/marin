@@ -14,12 +14,12 @@ from types import MappingProxyType
 from typing import override
 
 import httpx
+from connectrpc.errors import ConnectError
 from iris.client.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import JobName
-from iris.rpc.errors import DEFAULT_RETRY_MAX_ELAPSED
-from pydantic import TypeAdapter
-from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn
+from iris.rpc.errors import DEFAULT_RETRY_MAX_ELAPSED, is_retryable_error
+from rolloutengine.models import GenerationLimitReached, GradedRollout, ModelRequest, ModelTurn
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult
@@ -31,8 +31,17 @@ from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import Hold
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.tools import adversary_tools, standard_tools
-from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
-from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
+from taskforge.llm.client import ContextExhausted, GenerationTimedOut, ModelClient, Provider
+from taskforge.llm.glm_provider import (
+    CONNECT_TIMEOUT,
+    EndpointSource,
+    EndpointUnavailable,
+    FixedEndpoint,
+    GlmEndpoint,
+    GlmProvider,
+    Pool,
+)
+from taskforge.llm.policy import GLM_5_3, LLMPolicy, ModelProfile, RetryPolicy
 from taskforge.llm.wire import model_turn
 from taskforge.lowering import (
     InvalidTaskSpec,
@@ -56,7 +65,6 @@ from taskforge.resources.grading import GradeCandidate, GradingResource, grade
 from taskforge.resources.ids import Ids, NewId, new_id
 from taskforge.resources.inference import CompletionBackend, GlmInference, InferenceRequest, complete
 from taskforge.resources.judge import JudgeEngine
-from taskforge.resources.provider import WaitingBackend
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from taskforge.resources.sandbox.factories import (
     SANDBOX_SCHEDULING_TIMEOUT,
@@ -66,10 +74,20 @@ from taskforge.resources.verifier import RoundVerifier
 from taskforge.resources.web import ParallelWeb, WebClient, WebFetch, WebSearch, fetch, search
 from taskforge.stages.rules import default_review
 
+SOLVER_TURN_MARGIN = 60.0
+"""Seconds by which a solver generation ends before ``solver.turn_timeout``, so that the engine records it as a stop at
+the generation limit rather than interrupting the rollout at its model-turn deadline (cancelling a stream takes time)."""
+DEFAULT_PROFILES: Mapping[str, ModelProfile] = MappingProxyType({})
+NO_PROVIDERS: Mapping[str, Provider] = MappingProxyType({})
+
 
 @dataclass(frozen=True, slots=True)
 class RelayEndpoint(EndpointSource):
-    """The endpoint that the Iris relay job ``job`` registers for ``model``, resolved on every call."""
+    """The endpoint that the Iris relay job ``job`` registers for ``model``, resolved on every call.
+
+    A relay with no endpoint, as while a fresh Iris controller waits for relays to re-register, or a controller that
+    stays unavailable through the lookup's retries is ``EndpointUnavailable``: the model client waits it out.
+    """
 
     job: str
     token: str = field(repr=False)
@@ -80,10 +98,15 @@ class RelayEndpoint(EndpointSource):
     def current(self) -> GlmEndpoint:
         client = iris_ctx().client
         if client is None:
-            raise RuntimeError("Iris client is unavailable inside the task")
-        endpoints = client.resolver_for_job(JobName.from_string(self.job)).resolve(self.model).endpoints
+            raise EndpointUnavailable("Iris client is unavailable inside the task")
+        try:
+            endpoints = client.resolver_for_job(JobName.from_string(self.job)).resolve(self.model).endpoints
+        except ConnectError as error:
+            if not is_retryable_error(error):
+                raise
+            raise EndpointUnavailable(f"Iris endpoint lookup failed: {error}") from error
         if not endpoints:
-            raise RuntimeError(f"GLM relay {self.job} has no registered endpoint for {self.model}")
+            raise EndpointUnavailable(f"GLM relay {self.job} has no registered endpoint for {self.model}")
         url = endpoints[0].url.rstrip("/")
         return GlmEndpoint(url if url.endswith("/v1") else f"{url}/v1", self.token, self.pool)
 
@@ -154,33 +177,72 @@ class Environments(EnvFactory):
 
 
 async def solver_turn(client: CompletionBackend, sampling: LLMPolicy, request: ModelRequest) -> ModelTurn:
+    """One solver turn. Only positive evidence that the model ran out ends the rollout at the generation limit, a
+    failed trial that is graded and counted: a recognised context overflow, or generation sustained past the turn
+    deadline less its margin (``taskforge.llm.client``). Every outage propagates, so no trial is recorded."""
     if request.continuation is not None or request.prompt_token_ids is not None:
         raise ValueError("GLM solver requires messages trace")
-    return model_turn(await client.complete(request.messages, sampling, request.options))
+    try:
+        completion = await client.complete(request.messages, sampling, request.options)
+    except (ContextExhausted, GenerationTimedOut) as error:
+        raise GenerationLimitReached(()) from error
+    return model_turn(completion)
+
+
+def retry_policy(policy: Policy, role: str) -> RetryPolicy:
+    """The provider settings of ``policy``; only a solver generation is bounded, by its turn deadline."""
+    turn = policy.setting("solver.turn_timeout", float)
+    return RetryPolicy(
+        policy.setting("provider.unavailable_wait", float),
+        policy.setting("provider.backoff_initial", float),
+        policy.setting("provider.backoff_maximum", float),
+        policy.setting("provider.backoff_factor", float),
+        generation_timeout=turn - SOLVER_TURN_MARGIN if role == "solver" else None,
+    )
 
 
 def build_resources(
-    policy: Policy, clients: Mapping[str, CompletionBackend], factories: Mapping[str, MachineFactory], web: WebClient
+    policy: Policy,
+    providers: Mapping[str, Provider],
+    factories: Mapping[str, MachineFactory],
+    web: WebClient,
+    profiles: Mapping[str, ModelProfile] = DEFAULT_PROFILES,
 ) -> Resources:
+    """Executors for ``policy``: each role's model through the one model client, over its ``providers`` entry.
+
+    ``profiles`` overrides the model profile per role; a role without one uses ``GLM_5_3``. Each provider must serve
+    its role's declared ``<role>.model``, the model that replay keys record.
+    """
+    for role, provider in providers.items():
+        if provider.model != (declared := policy.setting(f"{role}.model", str)):
+            raise ValueError(f"{role} provider serves {provider.model!r}, policy declares {role}.model={declared!r}")
+    clients = {
+        role: ModelClient(provider, profiles.get(role, GLM_5_3), retry_policy(policy, role), role=role)
+        for role, provider in providers.items()
+    }
     settings = lowering_settings(policy)
     command_timeout = policy.setting("solver.command_timeout", float)
     base_engine = rollout_engine(factories, command_timeout=command_timeout)
     verifiers = RoundVerifier(base_engine, settings.limits.cleanup_timeout)
     # Solver trials and candidate grades run on the same machines, whose ShellSim output cap can fail either.
     execution = digest((settings, command_timeout, policy.setting("sandbox.output_budget_mb", int)))
-    sampling = policy_sampling(policy)
-    # Transport settings (provider.*, pools, context limits) shape how a request is served, not what it
-    # returns, so replay keys carry only the model, the role and what the request itself records.
+    solver = clients["solver"]
+    sampling = policy_sampling(policy, solver.profile.sampling)
+    # Replay keys carry the model, role, request and non-default profile identity. Rollout and grade keys also carry
+    # non-default profiles of roles whose inference a replayed outer result skips.
     inference = {role: GlmInference(client, role) for role, client in clients.items()}
+    profile = solver.profile.replay_identity()
+    judge = clients["judge"].profile.replay_identity() if "judge" in clients else None
+    judged = () if judge is None else (("judge", judge),)
     return Resources(
         Environments(factories, settings),
         inference["author"],
         RolloutResource(
             verifiers.rollouts,
-            partial(solver_turn, clients["solver"], sampling),
-            digest((clients["solver"].model, sampling, execution)),
+            partial(solver_turn, solver, sampling),
+            digest((solver.model, sampling, execution) + (() if profile is None else (profile,)) + judged),
         ),
-        GradingResource(verifiers.grades, execution, base_engine),
+        GradingResource(verifiers.grades, digest((execution, *judged)) if judged else execution, base_engine),
         Ids(),
         factories,
         web,
@@ -203,29 +265,28 @@ def submit_gate(
     return ()
 
 
-def prompt_limit(policy: Policy, role: str = "author") -> int:
-    """Use the served model context without reserving an output allowance."""
-    return policy.setting(f"{role}.context_tokens", int)
-
-
-def build_config(policy: Policy, factories: Mapping[str, MachineFactory]) -> TaskforgeConfig:
-    settings = lowering_settings(policy)
-    sampling = policy_sampling(policy)
-    author = AgenticHarness(
-        prompt_limit(policy),
-        sampling,
-        policy.prompt("author.nudge").template,
+def agentic_harness(policy: Policy, role: str, profile: ModelProfile) -> AgenticHarness:
+    """The ``role`` session: the prompt limit is ``<role>.context_tokens``, without an output allowance."""
+    limit = policy.setting(f"{role}.context_tokens", int)
+    if limit > profile.context_tokens:
+        raise ValueError(f"{role}.context_tokens {limit} exceeds the model window {profile.context_tokens}")
+    return AgenticHarness(
+        limit,
+        policy_sampling(policy, profile.sampling),
+        policy.prompt(f"{role}.nudge").template,
         policy.setting("tools.output_chars", int),
+        profile.replay_arguments,
     )
-    adversaries = {
-        name: AgenticHarness(
-            prompt_limit(policy, "adversary"),
-            sampling,
-            policy.prompt("adversary.nudge").template,
-            policy.setting("tools.output_chars", int),
-        )
-        for name in policy.setting("adversary.roster", tuple)
-    }
+
+
+def build_config(
+    policy: Policy, factories: Mapping[str, MachineFactory], profiles: Mapping[str, ModelProfile] = DEFAULT_PROFILES
+) -> TaskforgeConfig:
+    """The run's sessions and rules; ``profiles`` overrides the model profile per role, as in ``build_resources``."""
+    settings = lowering_settings(policy)
+    author = agentic_harness(policy, "author", profiles.get("author", GLM_5_3))
+    adversary = agentic_harness(policy, "adversary", profiles.get("adversary", GLM_5_3))
+    adversaries = {name: adversary for name in policy.setting("adversary.roster", tuple)}
     root = PurePosixPath(policy.setting("author.workdir", str))
     task_path, controls_path = str(root / "task.json"), str(root / "controls.json")
     tools = {
@@ -269,8 +330,12 @@ def provider_policy(policy: Policy) -> Policy:
     """Reject deadlines that expire before the declared provider availability window."""
     window = policy.setting("provider.unavailable_wait", float)
     turn = policy.setting("solver.turn_timeout", float)
-    if turn < window + policy.setting("provider.stall_timeout", float):
+    stall = policy.setting("provider.stall_timeout", float)
+    if turn < window + stall:
         raise ValueError("solver.turn_timeout must cover provider.unavailable_wait plus provider.stall_timeout")
+    if turn - SOLVER_TURN_MARGIN <= stall + CONNECT_TIMEOUT:
+        # Otherwise a first attempt still waiting for its first token could be taken for a long generation.
+        raise ValueError("solver.turn_timeout less its margin must exceed provider.stall_timeout plus connecting")
     if policy.setting("solver.attempt_timeout", float) < 2 * turn:
         raise ValueError("solver.attempt_timeout must cover two solver.turn_timeout windows")
     return policy
@@ -278,8 +343,18 @@ def provider_policy(policy: Policy) -> Policy:
 
 @asynccontextmanager
 async def runtime(
-    policy: Policy, source: EndpointSource, parallel_api_key: str
+    policy: Policy,
+    source: EndpointSource,
+    parallel_api_key: str,
+    *,
+    providers: Mapping[str, Provider] = NO_PROVIDERS,
+    profiles: Mapping[str, ModelProfile] = DEFAULT_PROFILES,
 ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+    """The process-boundary bindings for ``policy``.
+
+    Each role reaches ``<role>.model`` through a ``GlmProvider`` on ``source`` unless ``providers`` names one for it,
+    and uses ``GLM_5_3`` unless ``profiles`` does. The caller owns the providers it passes.
+    """
     policy = provider_policy(policy)
     declared = load_policy(DEFAULTS_DIR)
     logging.info("\n".join(resolution_lines(declared, policy)))
@@ -289,13 +364,6 @@ async def runtime(
         policy.setting("provider.unavailable_wait", float),
         DEFAULT_RETRY_MAX_ELAPSED,
     )
-    provider_fields = {
-        key.removeprefix("provider."): value
-        for key, value in policy.entries.items()
-        if key.startswith("provider.") and key not in ("provider.unavailable_wait", "provider.pool")
-    }
-    # The wrapper owns both busy retries and empty-pool waits under one deadline.
-    provider_fields.update(max_attempts=1, hold_timeout=0)
     job = get_job_info()
     controller = os.environ.get("IRIS_CONTROLLER_URL") or (job.controller_address if job else None)
     if not controller:
@@ -307,28 +375,20 @@ async def runtime(
     }
     headers = {"x-api-key": parallel_api_key}
     async with AsyncExitStack() as owned:
-        clients: dict[str, CompletionBackend] = {}
-        roles = (
-            ("author", "solver", "adversary", "judge")
-            if policy.setting("judge.model", str)
-            else ("author", "solver", "adversary")
-        )
-        for role in roles:
+        resolved = dict(providers)
+        roles = ("author", "solver", "adversary") + (("judge",) if policy.setting("judge.model", str) else ())
+        stall = policy.setting("provider.stall_timeout", float)
+        connections = policy.setting("provider.max_connections", int)
+        for role in (role for role in roles if role not in providers):
             model = policy.setting(f"{role}.model", str)
-            provider = TypeAdapter(LLMProviderConfig).validate_python({**provider_fields, "model": model})
             role_source = replace(source, model=model) if isinstance(source, RelayEndpoint) else source
             if role == "judge":
                 role_source = PooledEndpoint(role_source, Pool(policy.setting("judge.pool", str)))
-            logging.info("MODEL role=%s model=%s endpoint=%s", role, model, role_source.current().base_url)
-            client = await owned.enter_async_context(GlmClient(role_source, provider, limit_output=False))
-            clients[role] = WaitingBackend(
-                client,
-                policy.setting("provider.unavailable_wait", float),
-                provider.backoff_initial,
-                provider.backoff_maximum,
-                provider.backoff_factor,
-            )
+            # The endpoint resolves at the first request, inside the model client's availability window.
+            logging.info("MODEL role=%s model=%s endpoint=%r", role, model, role_source)
+            resolved[role] = await owned.enter_async_context(GlmProvider(role_source, model, stall, connections))
         http = await owned.enter_async_context(
             httpx.AsyncClient(base_url="https://api.parallel.ai/v1/", headers=headers, timeout=60)
         )
-        yield build_config(policy, factories), build_resources(policy, clients, factories, ParallelWeb(http))
+        web = ParallelWeb(http)
+        yield build_config(policy, factories, profiles), build_resources(policy, resolved, factories, web, profiles)

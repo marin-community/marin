@@ -11,7 +11,7 @@ prompt file ends with one newline, which the loader drops; templates render with
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated
@@ -128,7 +128,7 @@ def resolution_lines(declared: Policy, resolved: Policy) -> list[str]:
     ]
 
 
-def sampling(policy: Policy) -> LLMPolicy:
-    return TypeAdapter(LLMPolicy).validate_python(
-        {key.removeprefix("sampling."): value for key, value in policy.entries.items() if key.startswith("sampling.")}
-    )
+def sampling(policy: Policy, defaults: LLMPolicy) -> LLMPolicy:
+    """``defaults`` (a model profile's sampling) under the policy's ``sampling.*`` keys."""
+    keys = {key.removeprefix("sampling."): value for key, value in policy.entries.items() if key.startswith("sampling.")}
+    return TypeAdapter(LLMPolicy).validate_python({**asdict(defaults), **keys})

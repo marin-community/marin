@@ -16,7 +16,8 @@ from shellbox.machine import (
 )
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy
-from taskforge.effects.issues import OutputBudgetExhausted, Restart, Transient, describe_exception
+from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient, describe_exception
+from taskforge.llm.client import ModelRequestRejected
 from taskforge.resources.execution import Notify, retry_effect
 
 
@@ -32,8 +33,8 @@ class Engine(Protocol):
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout: ...
 
 
-def interruption(error: RolloutInterrupted) -> Transient | Restart:
-    """Retry startup and confirmed pre-command websocket setup failures."""
+def interruption(error: RolloutInterrupted) -> Transient | Restart | Hold:
+    """Retry startup and confirmed pre-command websocket setup failures; hold on a request the model server rejects."""
     chain: list[BaseException] = [error]
     while (cause := chain[-1].__cause__) is not None and all(cause is not seen for seen in chain):
         chain.append(cause)
@@ -43,6 +44,8 @@ def interruption(error: RolloutInterrupted) -> Transient | Restart:
     def caused(*kinds: type[BaseException]) -> bool:
         return any(isinstance(cause, kinds) for cause in chain)
 
+    if rejected := next((cause for cause in chain if isinstance(cause, ModelRequestRejected)), None):
+        return Hold(str(rejected))  # the same request would be rejected again, and is no evidence about the model
     if error.operation is RolloutOperation.ADVANCE and caused(MachineOutputLimitExceeded):
         return OutputBudgetExhausted("output budget exhausted")
     if caused(MachineCancelled, MachineUnavailable):
