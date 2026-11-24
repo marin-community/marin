@@ -527,6 +527,15 @@ class _EvaluationWriter:
 
         await self._run(commit_transaction)
 
+    async def commit_attempt(self, write: Callable[[Transaction], object]) -> None:
+        """Commit one attempt's evidence, which long agent episodes can make larger than a batch's byte limit."""
+
+        def commit_transaction() -> None:
+            with self.store.unbounded_transaction() as transaction:
+                write(transaction)
+
+        await self._run(commit_transaction)
+
     async def append_rows(self, table: str, rows: list[dict]) -> None:
         await self.commit(lambda transaction: transaction.table(table).extend(rows))
 
@@ -564,7 +573,7 @@ async def _save_attempt(
             transaction.table(ARCHIVE_ROLLOUTS_TABLE).add(record.model_dump(mode="json"))
         transaction.write_object(blob, json.dumps(raw, allow_nan=False).encode())
 
-    await writer.commit(write)
+    await writer.commit_attempt(write)
 
 
 async def _score_likelihood(
