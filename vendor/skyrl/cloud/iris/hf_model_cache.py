@@ -16,7 +16,7 @@ from huggingface_hub.hf_api import RepoFile
 from loguru import logger
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
-from skyrlrecipe.model_staging import immutable_model_cache_key
+from skyrlrecipe.model_staging import model_cache_key
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -578,7 +578,7 @@ def ensure_hugging_face_model_cache(
     cache_identity = model_id if tokenizer_mode == "embedded" else f"{model_id}#tokenizer={tokenizer_mode}"
     cache_uri = marin_temp_bucket(
         ttl_days,
-        prefix=f"{_CACHE_PREFIX}/{immutable_model_cache_key(cache_identity, revision)}",
+        prefix=f"{_CACHE_PREFIX}/{model_cache_key(cache_identity, revision)}",
         source_prefix=source_prefix,
     ).rstrip("/")
     if manifest := _cached_manifest(cache_uri, model_id, revision, tokenizer_mode):

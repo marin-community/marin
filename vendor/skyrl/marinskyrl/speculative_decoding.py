@@ -291,7 +291,9 @@ class SpeculativeDecodingConfig:
 
         raw_training = mapping.get("training")
         if raw_training is not None and method != SpeculativeDecodingMethod.EAGLE3:
-            raise SpeculativeDecodingConfigError(f"{context}.training is supported only for eagle3")
+            raise SpeculativeDecodingConfigError(
+                f"{context}.training is supported only for {SpeculativeDecodingMethod.EAGLE3}"
+            )
         training = (
             None
             if raw_training is None

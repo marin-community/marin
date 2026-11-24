@@ -402,6 +402,9 @@ def utc_millis(value: str) -> int:
 
 
 def _recipe_config_for_model(preset: presets.Preset, model: SkyRLModelSource | ResolvedModelLocator) -> RecipePatch:
+    workload = preset.recipe.layout.workload
+    if isinstance(workload, presets.Training) and workload.plan.colocate_all:
+        return preset.recipe.config
     draft = preset.default_speculative_decoding
     if draft is not None and (
         model == preset.model

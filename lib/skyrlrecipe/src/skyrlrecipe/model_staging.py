@@ -21,11 +21,11 @@ class HuggingFaceModelCache:
     resolved_revision: str
 
 
-def immutable_model_cache_key(source: str, identity: str) -> str:
-    """Return the stable cache digest for a model source and immutable identity."""
+def model_cache_key(source: str, identity: str) -> str:
+    """Hash a model source and its revision or artifact identity."""
     return hashlib.sha256(f"{source}@{identity}".encode()).hexdigest()
 
 
 def model_metadata_relative_path(source: str, identity: str) -> PurePosixPath:
     """Return the metadata path relative to the worker's temporary directory."""
-    return PurePosixPath("marinskyrl", "model_metadata", immutable_model_cache_key(source, identity))
+    return PurePosixPath("marinskyrl", "model_metadata", model_cache_key(source, identity))

@@ -248,7 +248,8 @@ Placement, data bindings, retention, evaluation and measurement settings belong 
 Learning and train-long can change task sampling, optimizer, schedule and batch shape.
 Data presets require `--tasks` and refuse `--set`.
 
-Snowball presets using the pinned 09.21 Datakit initializer load the frozen Dr. Doom DSpark draft.
+Snowball generation and disaggregated training presets using the pinned 09.21 Datakit initializer
+load the frozen Dr. Doom DSpark draft.
 DSpark uses probabilistic drafting and standard verification. Use
 `--set generator.speculative_decoding=null` for plain decoding on presets that accept settings.
 Snowball uses four proposals. The `speed-short` burst preset uses a 0.80 vLLM GPU memory
