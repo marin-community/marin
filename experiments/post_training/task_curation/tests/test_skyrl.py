@@ -344,7 +344,14 @@ def eurus2_stdin_row(statement: str) -> dict:
             "This is an interactive problem. Unlike a non-interactive problem, flush after each query.",
             "interactive_problem",
         ),
+        ("If there are several optimal solutions, he is fine with any of them.", "any_valid_output"),
+        ("Your answer will be accepted if the absolute error is less than 10^\u22126.", "float_tolerance"),
         ("You don't need to read input. Complete the function sum2().", "function_template_with_example_tests"),
+        (
+            "You don't have to take any input. Just complete the provided function findExtra() that takes array A[], "
+            "B[] and size of A[] and return the valid index (0 based indexing).",
+            "function_template_with_example_tests",
+        ),
         (
             "Example 1:\nInput:\nN = 5\nOutput:\n25\nYour Task:\nComplete the function square() which returns N * N.",
             "function_template_with_example_tests",
@@ -371,6 +378,11 @@ def test_eurus2_row_that_one_stored_output_cannot_check_is_rejected(statement, r
         "Print a/b with two digits after the point. Your answer is considered correct if it equals a/b.\n\n"
         "Example output: 0.50",
         "Complete the function solve() to read an integer and print its square.\n\n### Input\n\nOne integer n.",
+        "Print YES if there are multiple edges between any pair of vertices, otherwise print NO.",
+        "But if there are multiple cities in the sequence, then for any pair of adjacent cities c_i and c_{i + 1}, the "
+        "condition c_{i + 1} - c_i = b_{c_{i + 1}} - b_{c_i} must hold. Print the maximum beauty value of a journey.",
+        "Read two integers a and b. Print the absolute error |a-b| as an integer.",
+        "You don't need to read input. Print 42.",
     ],
 )
 def test_eurus2_row_with_one_right_output_stays(statement):
