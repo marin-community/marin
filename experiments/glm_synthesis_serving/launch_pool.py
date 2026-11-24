@@ -80,11 +80,14 @@ def submit_coordinator_job(
     suffix: str,
     extra_args: tuple[str, ...] = (),
     endpoint_name: str | None = None,
+    worker_env_vars: tuple[tuple[str, str], ...] = (),
 ):
     """Submit the serving coordinator (broker + engine workers + endpoint registration)."""
     entrypoint_args: tuple = (instances, extra_args)
-    if endpoint_name is not None:
-        entrypoint_args = (instances, extra_args, endpoint_name)
+    if endpoint_name is not None or worker_env_vars:
+        entrypoint_args = (*entrypoint_args, endpoint_name)
+    if worker_env_vars:
+        entrypoint_args = (*entrypoint_args, worker_env_vars)
     return client.submit(
         entrypoint=Entrypoint.from_callable(serve_pool.serve, *entrypoint_args),
         name=f"{pool.JOB_PREFIX}-{suffix}",
@@ -153,6 +156,13 @@ def main() -> None:
         help="Extra raw vLLM argument appended to the engine config (repeatable; variant benching).",
     )
     parser.add_argument(
+        "--worker-env",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help="Environment variable added to the engine workers (repeatable; stability variants).",
+    )
+    parser.add_argument(
         "--endpoint-name",
         default=None,
         help="Register this endpoint instead of the pool's (variant benching).",
@@ -182,6 +192,13 @@ def main() -> None:
         extra_args = ("--speculative-config", f'{{"method":"mtp","num_speculative_tokens":{args.mtp}}}')
     if args.engine_arg:
         extra_args = (*extra_args, *args.engine_arg)
+    worker_env_vars: tuple[tuple[str, str], ...] = ()
+    if args.worker_env:
+        worker_env_vars = tuple(
+            (pair.partition("=")[0], pair.partition("=")[2]) for pair in args.worker_env
+        )
+        if any(not key for key, _ in worker_env_vars):
+            raise SystemExit("--worker-env entries must be KEY=VALUE")
     suffix = args.tag or uuid.uuid4().hex[:6]
     endpoint_name = args.endpoint_name
     workspace = find_project_root()
@@ -211,7 +228,12 @@ def main() -> None:
                 logger.info("weights staged")
 
             coordinator = submit_coordinator_job(
-                client, instances=instances, suffix=suffix, extra_args=extra_args, endpoint_name=endpoint_name
+                client,
+                instances=instances,
+                suffix=suffix,
+                extra_args=extra_args,
+                endpoint_name=endpoint_name,
+                worker_env_vars=worker_env_vars,
             )
             logger.info("coordinator job %s (instances=%d)", coordinator.job_id, instances)
 

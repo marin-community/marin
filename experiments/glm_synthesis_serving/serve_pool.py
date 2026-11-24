@@ -17,14 +17,20 @@ from marin.inference.iris import run_iris_service
 from experiments.glm_synthesis_serving.pool import POOL_INSTANCES, WARM_RUN_INSTANCES, service
 
 
-def serve(instances: int = POOL_INSTANCES, extra_args: tuple[str, ...] = (), endpoint_name: str | None = None) -> None:
+def serve(
+    instances: int = POOL_INSTANCES,
+    extra_args: tuple[str, ...] = (),
+    endpoint_name: str | None = None,
+    worker_env_vars: tuple[tuple[str, str], ...] = (),
+) -> None:
     """Run the brokered serving service for `instances` engines until its timeout.
 
     `extra_args` extends the engine arguments (warm-run variants such as MTP
     speculative decoding); `endpoint_name` overrides the registered endpoint so a
-    variant can bench on its own URL.
+    variant can bench on its own URL; `worker_env_vars` adds engine-worker
+    environment variables (stability variants).
     """
-    service_config = service(instances, engine_extra_args=extra_args)
+    service_config = service(instances, engine_extra_args=extra_args, worker_env_vars=worker_env_vars)
     if endpoint_name is not None:
         service_config = replace(service_config, endpoint_name=endpoint_name)
     run_iris_service(service_config)

@@ -161,7 +161,7 @@ def worker_resources() -> ResourceConfig:
     )
 
 
-def iris_config() -> IrisConfig:
+def iris_config(worker_env_vars: tuple[tuple[str, str], ...] = ()) -> IrisConfig:
     # Startup patience: "placed" includes a K8s-Pending pod, so on a saturated
     # cluster the budget must cover queueing for preempted capacity plus the
     # engine boot (~30 min with in-region streaming). PRODUCTION preemption is
@@ -171,7 +171,7 @@ def iris_config() -> IrisConfig:
         worker_resources=worker_resources(),
         # The default environment bundles the launching checkout's workspace, matching
         # `marin-serve iris` GPU serving.
-        worker_environment=create_environment(),
+        worker_environment=create_environment(env_vars=dict(worker_env_vars)),
         endpoint_ready_timeout_seconds=ready_timeout_seconds,
         endpoint_health_timeout_seconds=ready_timeout_seconds,
         max_retries_preemption=MAX_RETRIES_PREEMPTION,
@@ -183,17 +183,20 @@ def service(
     instances: int,
     *,
     engine_extra_args: tuple[str, ...] = (),
+    worker_env_vars: tuple[tuple[str, str], ...] = (),
     timeout_hours: float = COORDINATOR_TIMEOUT_HOURS,
 ) -> IrisServiceConfig:
     """The brokered serving service for `instances` engines behind one endpoint.
 
     `engine_extra_args` extends the engine arguments (e.g. a speculative-decoding
     variant measured by the warm run); it never carries topology flags.
+    `worker_env_vars` adds environment variables to the engine workers (stability
+    variants).
     """
     return IrisServiceConfig(
         model=model(),
         engine=engine(engine_extra_args),
-        iris=iris_config(),
+        iris=iris_config(worker_env_vars),
         endpoint_name=ENDPOINT_NAME,
         instances=instances,
         broker=broker(),
