@@ -17,12 +17,12 @@ typed binary protocol for rollout replay and isolated worker commands.
 | --- | --- | --- |
 | Megatron learner with vLLM | The frozen control completed 25 updates on 40 H100s. It passed 208 receiver checks, committed step 25 and scored 0.1902 to 0.2700 on the fixed panel. | Use the frozen control to evaluate changes to the maintained learner. |
 | Levanter learner with vLLM | The frozen 25-update arm scored 0.2310 to 0.3201 on 40 H100s. Its median warm update took 3.0 times the Megatron control’s wall time. The maintained two-update H100 arm also passed exact restore and all 24 receiver checks. | Profile maintained publication and run a longer comparison before changing the learner default. |
-| Learner port based on `main` | The port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Four deployed learner hosts applied two updates, including exact continuation after restart, with vLLM serving. | Finish the matched native arm with the same learner. |
+| Learner port based on `main` | The port covers SPMD scoring, Snowball precision and positions, the SkyRL adapter, and synchronous BATCH presets. Four deployed learner hosts applied two updates, including exact continuation after restart, with vLLM serving. | Profile warm updates and publication on the maintained Levanter/vLLM path. |
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | — |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. On eight H100s, one pinned 67B diagnostic passed weight swap, a real tool turn, and all 32,768 full-context fused scorer targets. [Passing diagnostic][native-passing-diagnostic-evidence] | Repeat the 67B diagnostic before promoting native serving. Earlier diagnostics crossed the scorer's ratio bounds. |
-| Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Verify the deployed handoff from four learner hosts to one serving host at 67B. |
-| Native inventory backend | The 40-H100 vLLM control completed both updates and both panels at 0.331 lease seconds per admitted group. A native arm completed one update and exact restore before preemption. The latest native retry passed rollout startup and matched all 100 baseline prompts token for token. The mean verifier score was 0.10 for native and 0.21 for vLLM. [Accepted control][iris-held-vllm-validation-replacement] | Complete both native updates and the policy-2 panel in the latest retry. Compare lease seconds per admitted group, update time and fixed-panel reward. |
-| Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Verify the full native handoff at 67B. The frozen H100 comparison uses its original worker transport. |
+| Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Qualify the current port with the full 67B inventory workload. |
+| Native inventory backend | Both 40-H100 arms completed two updates and two prompt-identical panels. Native took 35.73 lease seconds per admitted group, compared with 0.331 for vLLM. Policy-2 mean verifier scores were 0.08 and 0.20, respectively. | Keep vLLM serving for the quick loop. Measure native batching and tool-call termination changes in a separate H100 arm. |
+| Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Evaluate carrying the typed batch envelope across Ray. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
 [TPUv4 queue and cache proof][iris-native-install] · [TPUv4 separate-process proof][iris-native-runtime-reference] ·
@@ -2353,8 +2353,8 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   policy. Under the same fixture, the previous source fed the learner
   opposite group orders and produced different model and optimizer
   hashes. This tests exact restart with the same selected groups.
-  The sealed H100 comparison uses its originally prepared source.
-  Live throughput and reward still require the completed native run.
+  Measure the changes to training draws and batch order against the completed
+  H100 comparison in a separate arm.
 
   The integrated candidate combines persisted draw IDs and deterministic
   batch ordering with evaluation stopping at a complete tool call when
@@ -2479,8 +2479,9 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   evaluator completed the two-prompt fixture without opening a training
   lease or running an optimizer update. Its terminal receipt retained the
   original checkpoint index, ETag and owner. The audit checks that
-  lineage before accepting a recovered 100-task panel. Regional H100
-  recovery and the full native match remain unverified.
+  lineage before accepting a recovered 100-task panel. The native H100
+  comparison completed in a single allocation. Recovering the final
+  evaluation after a regional H100 interruption remains unverified.
   [Final evaluation recovery proof][held-native-final-panel-recovery]
 
   The earlier prompt-aligned replacement and the held vLLM control both
@@ -2669,17 +2670,14 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   attempts. For each native panel, join the driver's evaluation policy
   ID to the install and publication for that step. The typed serving
   client checks that each reply echoes that ID. For a resumed run,
-  check the successor's startup evaluation binding too. The original
-  native step-0 capture passed this check.
+  check the successor's startup evaluation binding too.
 
   Match the model digest, layout digest and addressable bytes before
   the first update on each of the four logical JAX learner ranks.
-  Archived native and vLLM captures matched on all four ranks, and the
-  sealed run needs its own receipts. Collect logs from the successful
-  rank-zero attempt in each exact Iris GPU job. Match the receipts and
-  panel paths to those attempts, and recheck the attempt identities
-  after collection. Compare
-  step 2 separately because step 1 includes the learner
+  Collect logs from the successful rank-zero attempt in each Iris GPU job.
+  Match the receipts and panel paths to those attempts, and recheck the
+  attempt identities after collection. Compare step 2 separately because
+  step 1 includes the learner
   subprocess checkpoint round trip. Both maintained arms log
   `timing/rollout_admission_window_seconds`
   and `rollout/admission_window_groups` for fresh, full batches at zero
@@ -2696,6 +2694,39 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   update 2 as the successor's first training window and report requeue,
   restore, and resumed evaluation separately. Use trajectory timings
   to distinguish generation, tool execution and grading.
+
+  The completed native H100 arm used reference-blocked attention. All five
+  original tasks succeeded. The pre-update model digest, layout and
+  addressable bytes matched the vLLM control on all four learners. The
+  same native attempt applied both updates, verified exact learner restore,
+  installed policy versions 0 through 2, and committed both checkpoint
+  generations. All 100 prompt token sequences matched across both backends
+  and both evaluation steps. [Accepted vLLM control][iris-held-vllm-validation-replacement]
+
+  | Measurement | Levanter/vLLM | Levanter/Snowball |
+  | --- | ---: | ---: |
+  | Update 1 admission, seconds per group | 0.357 | 36.492 |
+  | Update 2 admission, seconds per group | 0.305 | 34.975 |
+  | Pooled admission, seconds per group | 0.331 | 35.734 |
+  | Update 1 wall, seconds | 1,544.8 | 3,383.0 |
+  | Update 2 wall, seconds | 183.8 | 1,667.9 |
+  | Update 2 wall excluding checkpoint time, seconds | 183.8 | 1,481.9 |
+  | Policy-0 mean verifier score | 0.21 | 0.10 |
+  | Policy-2 mean verifier score | 0.20 | 0.08 |
+
+  Each arm admitted 64 groups at zero policy staleness across two updates.
+  The lease windows totaled 21.185 seconds for vLLM and 2,286.953 seconds
+  for native. The native arm checkpointed after each update. Its learner
+  and serving hosts shared a leaf group. The vLLM serving host occupied a
+  different leaf group from its learners. The table covers one attempt per
+  backend.
+
+  Tool use accounts for seven points of the eleven-point baseline score
+  gap. All 11 native tool-use responses reached the 512-token cap. On
+  replay of their saved tokens, the prepared evaluation stop rule found
+  eight complete calls at 63 to 223 tokens. The existing grader accepted
+  three. Use a separate H100 arm to measure the stop rule and native
+  batching changes on the same prompts.
 
 The prior FP8 comparison reported a 13% reduction in mean decode time
 and 5.7 minutes longer to reach a mean verifier score of 0.2901, the
