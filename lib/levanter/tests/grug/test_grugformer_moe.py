@@ -58,7 +58,6 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
-from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.devices import use_cpu_devices, use_test_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -2607,8 +2606,9 @@ def test_combine_in_fp32_matches_an_fp32_combine_reference_on_eight_devices():
             )
 
 
+@pytest.mark.multidevice
 def test_small_ep_decode_matches_ring_with_a_padded_token():
-    with use_cpu_devices(2), jax.set_mesh(compact_grug_mesh(expert_axis_size=2)):
+    with use_test_devices(2) as devices, jax.set_mesh(Mesh(devices, ("expert",), axis_types=(AxisType.Explicit,))):
         mesh = jax.sharding.get_abstract_mesh()
         mlp = MoEExpertMlp.init(
             num_experts=4,
