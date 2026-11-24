@@ -132,9 +132,7 @@ def test_daytona_task_machines_get_images_as_the_settings_select(created, image_
     settings = CuratedSettings(task_machine=TaskMachineSettings(image_build=image_build))
 
     config = runtime_config(MODEL, settings, SESSION)
-    factories = machine_factories(
-        config, DaytonaConnection(api_key="eval-org-key", api_url="https://daytona", target="us")
-    )
+    factories = machine_factories(config, DaytonaConnection(api_key="eval-org-key"))
 
     assert factories["daytona"].image_build is daytona_machine.DaytonaImageBuild(image_build.value)
 
