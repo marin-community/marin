@@ -1,14 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Declaration-only metadata rows for known-but-rejected upstreams.
+"""Policy-excluded upstreams without a registered catalog population.
 
-These sources have no catalog conversion and never will from their current
-pins: the user has rejected them. They are published as Excluded rows with
-typed claims and evidence so the Atlas shows the rejection instead of silence.
-A metadata row never downloads, converts, hosts or mirrors upstream data; it
-carries only identity metadata, its exclusion claims and the upstream pin the
-ruling was made against.
+Rows carry identity metadata, typed claims and the upstream pin covered by the
+ruling. Offline conversion evidence may remain archived for an excluded source;
+these declarations register no conversion or selectable tasks.
 """
 
 from dataclasses import dataclass
@@ -48,6 +45,43 @@ MAI_GYM_PIN = "dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9"
 MIROVERSE_PIN = "11fbf325f6eda37b34f519d1ba7268f40f469ac6"
 
 METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
+    MetadataExclusion(
+        id="Nemotron:Nemotron-RL-knowledge-web_search-mcqa",
+        origin="Nemotron",
+        upstream_dataset="nvidia/Nemotron-RL-knowledge-web_search-mcqa",
+        upstream_url="https://huggingface.co/datasets/nvidia/Nemotron-RL-knowledge-web_search-mcqa",
+        dataset_id="nvidia/Nemotron-RL-knowledge-web_search-mcqa",
+        dataset_revision="41028dbc9e06eb388ba99f9fb7a0078123b564c3",
+        notes=(
+            "Excluded under the 2026-11-23 third-party credential ruling; design issue "
+            "https://github.com/marin-community/marin/issues/12082. The native Google Search server "
+            "requires google_api_key and google_cx. No credentials or substitute search tool are provisioned. "
+            "Offline conversion retained all 2,929 rows; the unchanged native verifier scored all correct "
+            "boxed answers 1 and wrong boxed answers 0. Blank replies produced native parsed_option "
+            "validation errors, preserved as errors. Offline evidence admits no tasks: "
+            "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemo-gym-remaining/2026.11.24.1/"
+            "native-web-search-conversion-v1/result.json "
+            "(SHA-256 1c8770707d536e1728eb4c37a17416807c08ee43bd178b41db763b1e9476922e)."
+        ),
+        claims=(
+            ExclusionClaim(
+                reason=ExclusionReason.THIRD_PARTY_CREDENTIALS_REQUIRED,
+                evidence=ExclusionEvidence(
+                    kind=ExclusionEvidenceKind.RECEIPT,
+                    uri="https://github.com/NVIDIA-NeMo/Gym/blob/"
+                    "39d2bde61e426f93e4bc00c0255fc1d839f859e6/"
+                    "resources_servers/google_search/configs/google_search.yaml",
+                    sha256="bde849d0b28a4ba24bbb7fdb2c3c951f14c9bfc66727940acba322dbd7e8f848",
+                    message=(
+                        "The pinned config binds this dataset to the google_search resource server. "
+                        "Its app.py requires google_api_key and google_cx and calls Google Custom Search JSON API; "
+                        "app SHA-256 76f8ccd53e0346fdd791c283f6b5be2585f4efc61e9d57b8058ee19ddf919ceb. "
+                        "No live credential provisioning is approved; design and clearing criteria are in #12082."
+                    ),
+                ),
+            ),
+        ),
+    ),
     MetadataExclusion(
         id="GPUMODE:kernelbot-data",
         origin="GPUMODE",

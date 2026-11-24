@@ -166,6 +166,7 @@ class ExclusionReason(StrEnum):
     NO_SUPPORTED_BACKEND = "no-supported-backend"
     GRADER_JUDGE_UNAVAILABLE = "grader-judge-unavailable"
     INVALID_REFERENCE = "invalid-reference"
+    THIRD_PARTY_CREDENTIALS_REQUIRED = "third-party-credentials-required"
 
 
 class ReasonExplanation(BaseModel):
@@ -307,6 +308,12 @@ REASON_EXPLANATIONS: dict[ExclusionReason, ReasonExplanation] = {
         label="Invalid reference",
         meaning="The population references an expected target that does not exist in its frozen sample.",
         clears="A faithfully repaired private remediation version whose references resolve.",
+    ),
+    ExclusionReason.THIRD_PARTY_CREDENTIALS_REQUIRED: ReasonExplanation(
+        label="Third-party credentials required",
+        meaning="Tasks call live third-party services whose credentials are not provisioned.",
+        clears="An approved credential-provisioning design tracked in #12082 and a qualifier run "
+        "with fixture credentials bound only to owned verifier/service jobs.",
     ),
 }
 

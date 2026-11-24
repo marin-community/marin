@@ -382,6 +382,22 @@ def test_reason_explanations_cover_every_typed_reason():
         assert explanation["label"] and explanation["meaning"] and explanation["clears"]
 
 
+def test_credential_dependent_source_renders_as_excluded_with_pinned_evidence():
+    rows = source_status.metadata_rows()
+    source_status.require_typed_rows(rows)
+    row = next(item for item in rows if item["id"] == "Nemotron:Nemotron-RL-knowledge-web_search-mcqa")
+    assert row["status"] == SourceStatus.EXCLUDED.value
+    assert row["dataset_revision"] == "41028dbc9e06eb388ba99f9fb7a0078123b564c3"
+    claim = ExclusionClaim.model_validate(row["reasons"][0])
+    assert claim.reason is ExclusionReason.THIRD_PARTY_CREDENTIALS_REQUIRED
+    assert claim.evidence.kind is ExclusionEvidenceKind.RECEIPT
+    assert claim.evidence.uri.endswith("/resources_servers/google_search/configs/google_search.yaml")
+    assert claim.evidence.sha256 == "bde849d0b28a4ba24bbb7fdb2c3c951f14c9bfc66727940acba322dbd7e8f848"
+    explanation = source_status.reason_explanations()[claim.reason.value]
+    assert explanation["label"] == "Third-party credentials required"
+    assert "#12082" in explanation["clears"]
+
+
 def test_metadata_exclusion_pins_match_the_license_check_fixtures():
     fixtures = json.loads(LICENSE_CHECKS.read_text())
     by_id = {row["source_id"]: row for row in fixtures}
