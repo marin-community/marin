@@ -72,7 +72,11 @@ from experiments.post_training.skyrl_test_support import (
     with_fixture_control_pins,
     write_training_families,
 )
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
+from experiments.post_training.task_curation.selection import (
+    FULL_VALIDATION_FILENAME,
+    TASK_MANIFEST_FILENAME,
+    VALIDATION_FILENAME,
+)
 
 SELECTION_IDENTITY = "fixture-selection@2026.11.10"
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
@@ -81,6 +85,18 @@ NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_t
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
+
+
+def shrink_recorded_panel(binding: str) -> None:
+    """Keep one task per fixture family in the panel, including its membership records."""
+    panel = Path(recipe.selection_artifact(binding).path())
+    for filename in (VALIDATION_FILENAME, TASK_MANIFEST_FILENAME):
+        path = panel / filename
+        pq.write_table(pq.read_table(path).slice(0, 2), path)
+    summary_path = panel / recipe.SUMMARY_FILENAME
+    summary = json.loads(summary_path.read_text())
+    summary.update(validation_rows=2, full_validation_rows=2)
+    write_json(summary_path, summary)
 
 
 def cache_native_compositions(monkeypatch) -> None:
@@ -558,6 +574,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         default, selected = recipe.task_selections(
             preset, recipe.selection_artifact(inputs.tasks) if inputs.tasks else None
         )
+        evaluations = []
         for index, evaluation in enumerate(preset.evaluations):
             source = recipe.evaluation_source(evaluation, selected, default, preset.held_out_tasks)
             sources = (
@@ -582,6 +599,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 sessions = [(step, score) for step in range(evaluation.every, max_steps, evaluation.every)] + sessions
             if evaluation.at_start:
                 sessions.insert(0, (0, initial_score))
+            manifest = read_selection_manifest(str(directory))
             for step, average in sessions:
                 rows = [
                     answer(
@@ -593,14 +611,15 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     for sample in range(evaluation.answers)
                 ]
                 evaluation_name = f"eval/{evaluation.name}/" if index else "eval/"
-                task_rows = evaluation_task_rows(
-                    rows,
-                    attempt_id=attempt,
-                    step=step,
-                    evaluation=evaluation_name,
-                    selection=read_selection_manifest(str(directory)),
+                evaluations.extend(
+                    evaluation_task_rows(
+                        rows,
+                        attempt_id=attempt,
+                        step=step,
+                        evaluation=evaluation_name,
+                        selection=manifest,
+                    )
                 )
-                write_evaluations(str(root / "exports"), task_rows)
                 values = stored_metrics.setdefault(max(step, 0), {"step": max(step, 0)})
                 prefix = f"eval/{evaluation.name}/all/outcome/" if index else "eval/all/outcome/"
                 values.update(
@@ -609,6 +628,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                         for value in (*Outcome, "rollout_failure")
                     }
                 )
+        if evaluations:
+            write_evaluations(str(root / "exports"), evaluations)
         for values in stored_metrics.values():
             values.update(metrics or {})
             values["attempt_id"] = attempt

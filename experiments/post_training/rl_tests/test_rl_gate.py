@@ -54,6 +54,7 @@ from experiments.post_training.rl_tests.fixtures import (
     evaluation_task_rows,
     fake_s3,
     fake_s3_checkpoint,
+    shrink_recorded_panel,
     write_metrics,
     write_receipt,
     write_skyrl_run_record,
@@ -868,6 +869,9 @@ def test_python_run_saves_typed_inputs_for_comparison(
     preset = replace(preset, model=local)
     table = preset_table(preset)
     if preset_name == "learning-medium":
+        cache_native_compositions(monkeypatch)
+        assert preset.held_out_tasks is not None
+        shrink_recorded_panel(preset.held_out_tasks)
         cluster = "cw-rno2a"
         monkeypatch.setattr(
             recipe, "artifact_prefix", lambda name: str(tmp_path / "reno" if name == cluster else tmp_path)
