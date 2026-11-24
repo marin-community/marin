@@ -56,7 +56,15 @@ WARM_RUN_INSTANCES = 1
 # Driver context contract (production_data/config-1.json: context_tokens 262144,
 # output_tokens 32768; the driver enforces prompt + output <= context).
 MAX_MODEL_LEN = 262_144
-MAX_NUM_SEQS = 256
+# Concurrency cap that keeps peak KV demand inside the cache: p99 prompts are
+# ~114k tokens + 32k output, so worst-case concurrent demand at N seqs is
+# ~146k x N tokens; the engine's KV pool holds ~2M (fp8 KV). Above ~16 seqs the
+# scheduler starts preempting, and preemption crashes these workers with
+# CUDA_ERROR_ILLEGAL_ADDRESS (17/32 workers died when 24 seqs ran on halved
+# bf16-KV pools). Throughput is prefill-bound (~37k tok/s/engine at c=24
+# measured the same as at c=8), so the cap moves queueing to the broker instead
+# of cutting rows/h. Do not raise without re-validating crash behavior.
+MAX_NUM_SEQS = 16
 MAX_NUM_BATCHED_TOKENS = 32_768
 GPU_MEMORY_UTILIZATION = 0.90
 
