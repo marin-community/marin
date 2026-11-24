@@ -18,7 +18,7 @@ from enum import StrEnum
 
 import numpy as np
 import pyarrow as pa
-from marin.datakit.decon_keys import MAX_DOC_CHARS, KeyTable, pieces, record_pairs
+from marin.datakit.decon_keys import MAX_DOC_CHARS, KeyTable, long_record_pairs, record_pairs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.dataset import ShardInfo
 from zephyr.input_file import InputFileSpec
@@ -45,26 +45,37 @@ def _index(output: str) -> tuple[KeyTable, pa.Table]:
     return KeyTable(locators.column("key1_hash").to_numpy(), rows), locators
 
 
-def long_record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table, width: int) -> list[dict]:
-    """``record_pairs`` over the pieces of a record over ``MAX_DOC_CHARS``: one pair per item, the first found."""
-    found: dict[str, dict] = {}
-    for piece in pieces(text):
-        for pair in record_pairs(record_id, piece, table, locators, width):
-            found.setdefault(pair["item"], pair | {"record_chars": len(text)})
-    return list(found.values())
+def done_marker(path: str, records: Records) -> bool:
+    """Whether a shard's stats marker exists; raises when it records another ``--records`` choice, since a scan
+    into the same output with other records would skip shards it has not read."""
+    marker = StoragePath(path)
+    if not marker.exists():
+        return False
+    read = json.loads(marker.read_text()).get("read")
+    if read != records:
+        raise ValueError(f"{path} was written by a scan with --records {read}, not {records}; use a new output")
+    return True
 
 
 def make_scan(output: str, width: int, records: Records):
     def scan(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
         for path in paths:
             name = shard_name(path)
-            done = StoragePath(prefix_join(output, f"stats/{name}.json"))
-            if done.exists():
+            done = prefix_join(output, f"stats/{name}.json")
+            if done_marker(done, records):
                 yield {"path": path, "skipped": True}
                 continue
             table, locators = _index(output)
             started = time.monotonic()
-            stats = {"path": path, "records": 0, "chars": 0, "candidate_records": 0, "pairs": 0, "oversized": []}
+            stats = {
+                "path": path,
+                "read": str(records),
+                "records": 0,
+                "chars": 0,
+                "candidate_records": 0,
+                "pairs": 0,
+                "oversized": [],
+            }
             pairs = []
             for record in load_file(InputFileSpec(path=path, columns=["id", "text"])):
                 text = str(record.get("text") or "")
@@ -87,7 +98,7 @@ def make_scan(output: str, width: int, records: Records):
                     pair["path"] = path
                 write_table(pa.Table.from_pylist(pairs), prefix_join(output, f"pairs/{name}.parquet"))
             stats["seconds"] = time.monotonic() - started
-            done.write_text(json.dumps(stats))
+            StoragePath(done).write_text(json.dumps(stats))
             yield {"path": path, "pairs": stats["pairs"]}
 
     return scan

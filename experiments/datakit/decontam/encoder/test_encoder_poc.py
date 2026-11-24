@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import random
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from marin.datakit.decon_keys import (
     window_hashes,
 )
 
-from experiments.datakit.decontam.encoder import rarest_key
+from experiments.datakit.decontam.encoder import candidates, rarest_key
 from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
 from experiments.datakit.decontam.encoder.planted import holds_key, negative_forms, positive_forms
 from experiments.datakit.decontam.encoder.synthetic import context_pairs, generic_pairs
@@ -300,3 +301,12 @@ def test_two_key_streams_of_one_item_count_as_one_holder_of_a_shared_window():
     ids = np.array(["gsm8k-0", "gsm8k-0"], dtype=object)
     windows = Windows(hashes, owners, offsets, ids, np.array([KeyStream.QUESTION, KeyStream.UNLETTERED], dtype=object))
     assert set(rarest_key.tie_values(windows, rarest_key.Tie.SHARED).tolist()) == {1}
+
+
+def test_a_scan_refuses_an_output_written_with_other_records(tmp_path):
+    marker = tmp_path / "shard.json"
+    assert not candidates.done_marker(str(marker), candidates.Records.ALL)
+    marker.write_text(json.dumps({"read": "short"}))
+    assert candidates.done_marker(str(marker), candidates.Records.SHORT)
+    with pytest.raises(ValueError):
+        candidates.done_marker(str(marker), candidates.Records.ALL)

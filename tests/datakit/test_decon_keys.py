@@ -21,6 +21,7 @@ from marin.datakit.decon_keys import (
     item_stream,
     key_streams,
     keys_table,
+    long_record_pairs,
     pieces,
     record_hit_indices,
     record_pairs,
@@ -311,11 +312,31 @@ def test_keys_from_outside_the_eval_template_find_a_copy_without_the_template():
 def test_pieces_hold_every_stretch_up_to_the_overlap_in_one_piece(length):
     text = "".join(chr(ord("a") + k % 26) for k in range(length))
     size, overlap = 30, 8
-    starts, at = [], 0
+    spans, at = [], 0
     for piece in pieces(text, size, overlap):
         assert len(piece) <= size
         at = text.index(piece, at)
-        starts.append(at)
+        spans.append((at, at + len(piece)))
+    assert spans[-1][1] == len(text)
     for begin in range(len(text)):
         end = min(begin + overlap, len(text))
-        assert any(s <= begin and end <= s + size for s in starts), (begin, end)
+        assert any(start <= begin and end <= stop for start, stop in spans), (begin, end)
+
+
+def test_a_key_spread_over_a_run_of_spaces_at_a_piece_edge_lies_in_one_piece():
+    key = "abcdefghijklmnopqrst"
+    text = "z" * 50 + key[:10] + " " * 12 + key[10:] + "y" * 50
+    assert any(key in text_stream(piece) for piece in pieces(text, size=64, overlap=8))
+
+
+def test_a_long_record_keeps_the_whole_excerpt_of_a_hit_near_a_piece_edge():
+    table, locators = _index(*LONG)
+    question, choices = LONG
+    copy = f"{question} A) {choices[0]} B) {choices[1]} C) {choices[2]}"
+    filler = "lorem ipsum dolor sit amet. " * 1000
+    text = filler[:11_000] + copy + filler[: 30_000 - 11_000]
+    whole = record_pairs("r", text, table, locators)
+    pieced = long_record_pairs("r", text, table, locators, size=12_000, overlap=4_600)
+    assert [p["item"] for p in pieced] == ["item-0"]
+    assert pieced[0]["right"] == whole[0]["right"]
+    assert pieced[0]["record_chars"] == len(text)

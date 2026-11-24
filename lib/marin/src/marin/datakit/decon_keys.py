@@ -460,13 +460,44 @@ def excerpt(
     return reading.text[max(0, start - BEFORE) : start + question_chars + AFTER], reading.stream, at
 
 
-def pieces(text: str, size: int = MAX_DOC_CHARS, overlap: int = PIECE_OVERLAP) -> Iterator[str]:
-    """Pieces of *text* of at most *size* characters such that every stretch of up to *overlap* characters
-    lies inside one piece."""
-    if size <= overlap:
-        raise ValueError(f"piece size {size} must exceed the overlap {overlap}")
-    for start in range(0, max(len(text) - overlap, 1), size - overlap):
-        yield text[start : start + size]
+def pieces(text: str, size: int = MAX_DOC_CHARS, overlap: int = PIECE_OVERLAP, width: int = WINDOW) -> Iterator[str]:
+    """Pieces of *text* of at most *size* characters. Consecutive pieces share at least *overlap* characters, so
+    every stretch that long lies inside one piece, and the shared part widens (up to half a piece) until its text
+    stream holds *width* characters, so a key window whose letters are spread over a long run of spaces or
+    punctuation also lies inside one piece. Each piece starts at least half a piece after the one before."""
+    if size <= 2 * overlap:
+        raise ValueError(f"piece size {size} must exceed twice the overlap {overlap}")
+    start = 0
+    while True:
+        end = min(start + size, len(text))
+        yield text[start:end]
+        if end == len(text):
+            return
+        shared = overlap
+        while len(text_stream(text[end - shared : end])) < width and shared < size // 2:
+            shared = min(2 * shared, size // 2)
+        start = end - shared
+
+
+def long_record_pairs(
+    record_id: str,
+    text: str,
+    table: KeyTable,
+    locators: pa.Table,
+    width: int = WINDOW,
+    size: int = MAX_DOC_CHARS,
+    overlap: int = PIECE_OVERLAP,
+) -> list[dict]:
+    """``record_pairs`` over the ``pieces`` of a long record: one pair per item, the one with the longest excerpt
+    (a hit near a piece's edge has its context cut there and whole in the next piece), and ``record_chars`` of the
+    whole record."""
+    found: dict[str, dict] = {}
+    for piece in pieces(text, size, overlap, width):
+        for pair in record_pairs(record_id, piece, table, locators, width):
+            best = found.get(pair["item"])
+            if best is None or len(pair["right"]) > len(best["right"]):
+                found[pair["item"]] = pair | {"record_chars": len(text)}
+    return list(found.values())
 
 
 def record_pairs(record_id: str, text: str, table: KeyTable, locators: pa.Table, width: int = WINDOW) -> list[dict]:
