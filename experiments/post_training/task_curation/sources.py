@@ -16,6 +16,7 @@ from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     crosscode_python_repair,
     native_releases,
+    nemo_structured,
     repair_releases,
     structure_closure,
     terminus_pivot,
@@ -80,7 +81,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import qa as tas
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
 from experiments.post_training.task_curation.datasets.terminal_lego import tasks as terminal_lego
-from experiments.post_training.task_curation.datasets.terminalworld import tasks as terminalworld
+from experiments.post_training.task_curation.datasets.terminalworld import qualified as terminalworld
 from experiments.post_training.task_curation.derived_contract_tags import bind_derived_contract_tags
 from experiments.post_training.task_curation.grading_binding import bind_grading_census
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
@@ -124,7 +125,6 @@ OUT_OF_REGION_PENDING_IDS = frozenset(
 )
 
 PENDING_MEASUREMENT_SOURCES = (
-    *terminalworld.sources(),
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *lean_proofs.sources(),
     *lean_numina.sources(),
@@ -141,6 +141,7 @@ def configured_sources() -> list[RlDataSource]:
     """Return source populations registered for Atlas evidence binding."""
     return [
         *litecoder.sources(),
+        *terminalworld.sources(),
         *mcp_atlas_easy.sources(),
         *eval_code.sources(),
         *eval_harness.sources(),
@@ -174,6 +175,7 @@ def configured_sources() -> list[RlDataSource]:
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
+        *nemo_structured.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),
         *ifbench.sources(),
         *openresearcher.sources(),

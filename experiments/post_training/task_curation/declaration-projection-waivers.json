@@ -11,6 +11,7 @@
     "Lego-X:Terminal-Lego-15k",
     "Lite-Coder:LiteCoder-Terminal-RL-preview",
     "Marin:forge-main-20261117",
+    "Nemotron:Nemotron-RL-instruction_following-structured_outputs",
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
@@ -22,6 +23,7 @@
     "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@backfilled-20261122",
     "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2@backfilled-20261122",
     "TaskTrove:laion__nemotron-gym-identity-following-v4@repaired-20261123",
+    "TerminalWorld:TerminalWorld",
     "di-zhang-fdu:aime_1983_2024",
     "marin-community:mcp-atlas-easy"
   ]

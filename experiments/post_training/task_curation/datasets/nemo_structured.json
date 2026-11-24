@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "73613f629ce4d5d3738c42ca8bad8253d2fcaaf0",
+  "path": "experiments/post_training/task_curation/datasets/nemo_structured.json",
+  "sha256": "abe9468105c70edfeee4e9fb2f3023f35b5174e477b193d2fd5e6b32a3564052"
+}
