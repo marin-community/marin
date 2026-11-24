@@ -253,6 +253,24 @@ ASDiv, HumanEval, PIQA, GSM8K, MRPC, HellaSwag, MedQA, CoLA, BBQ and FDA (12-20 
 that hold 22,362 removals, among them SQuAD 0.54, RACE 0.58, SST-2 0.59, DROP 0.35, TurBLiMP 0.35, HLE
 0.33, QNLI 0.32, simple co-occurrence bias 0.11, SciCode 0.06 and QQP 0.05.
 
+**Whole catalog with the template-free keys.** A second run read every shard with `prepare --windows
+content` and `choose --tie shared` keys (oversized records in pieces, in the same pass): 0.256% of records
+got a candidate, 76.5 million pairs, all scored by iteration 16. Its removal check (set 26) drew 20 removed
+records per family and band uniformly within each, so it measures every cutoff from 0.5 up: 0.5 reaches
+0.731 [0.666] and fails the floor; 0.6, the lowest passing cutoff, reaches 0.783 [0.714]. A fresh check of
+0.6 (set 27: 1,544 removed records sharing no record or item with set 26) gives 0.852 [0.818].
+
+| Removal list | Records | Characters | Precision [5% bound] | Clear copies removed |
+|---|---|---|---|---|
+| Earlier keys, 0.5, both passes | 264,702 | 0.093% | 0.789 [0.758] (set 20, corrected) | 78.7% |
+| Template-free keys, 0.6 | 315,887 | 0.096% | 0.852 [0.818] (set 27) | 98.1% (GSM8K 99.7%) |
+
+"Clear copies" are the 3,020 records of 2,000 sampled shards that the block rule of PR #10836 marks. The
+two lists share 204,465 records; 60,237 are only on the earlier list, and in set 20 about 0.64 of such
+records were copies (mostly MedConceptsQA, FDA, ARC and MMLU items that share a real question opening). Sets 26
+and 27 give 17 of 55 families at least 50 labeled removals at 0.6, holding 87% of the removals; QQP (0.02),
+Toxigen (0.05), QNLI (0.31), MedConceptsQA (0.36), SQuAD (0.41) and FDA (0.43) are the low ones.
+
 **Exact rules on the same pairs.** On the real test pairs and on the earlier validation set, the block
 rule (`marin.datakit.item_match` in PR #10836: question, then every choice) finds 45% and 68% of the
 copies, and the exact question rule 52% and 69%, both at lower precision than the classifier at 0.9.
@@ -271,8 +289,7 @@ a copy.
   --windows content`, `choose --tie shared`); on the same 2,000 shards they raise the share to 99.0% (GSM8K 100%,
   MMLU 98%) at 1.44 times the candidate pairs. `--windows content` leaves out of the candidate windows the prefix
   and suffix that all of an eval's streams share; `--tie shared` breaks ties among equally rare windows by
-  the number of other items that hold the window. The catalog run above used the earlier keys; a rescan
-  with the new keys (`catalog-v11-full`) needs scoring and a removal check.
+  the number of other items that hold the window. The second catalog run uses them (see above).
 - **Candidate load concentrates on shared question stems.** One Nemotron formal-logic shard holds 886,186
   candidate pairs: 260 MMLU formal-logic and MMLU-Pro items keyed on one question stem ("which of the
   following propositions is an immediate (one-step) consequence"), which 48,133 of its records hold.
