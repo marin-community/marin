@@ -181,29 +181,6 @@ def validate_prepared_moe_route_capture(
     )
 
 
-def validate_moe_route_capture(
-    capture: MoERouteCapture | PreparedMoERouteCapture,
-    *,
-    num_experts: int,
-    num_experts_per_token: int,
-) -> None:
-    """Validate a capture's values before serialization or replay preparation."""
-    if isinstance(capture, PreparedMoERouteCapture):
-        validate_prepared_moe_route_capture(
-            capture,
-            capture.token_valid,
-            num_experts=num_experts,
-            num_experts_per_token=num_experts_per_token,
-        )
-        return
-    prepare_moe_route_capture(
-        capture,
-        capture.token_valid,
-        num_experts=num_experts,
-        num_experts_per_token=num_experts_per_token,
-    )
-
-
 def moe_routing_stats(
     selected_experts: Int[Array, "T K"],
     router_probs: Float[Array, "T E"],

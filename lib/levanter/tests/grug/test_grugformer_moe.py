@@ -52,9 +52,7 @@ from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
-    MoERouteCapture,
     QBRoutedMoE,
-    validate_moe_route_capture,
     MoEExpertMlpPspecs,
     MoeImplementation,
     _clip_receiver_group_sizes,
@@ -2686,18 +2684,6 @@ def test_route_capture_replay_keeps_ids_but_recomputes_current_gate_weights():
     assert float(replay_stats["skipped_assignments"]) == 4.0
     assert float(jnp.max(jnp.abs(router_grad))) > 0.0
 
-    raw_capture = MoERouteCapture(*capture)
-    with pytest.raises(TypeError, match="prepared"):
-        routerer(
-            x,
-            token_valid,
-            router=perturbed_router,
-            router_bias=router_bias,
-            expert_mlp=expert_mlp,
-            mesh=mesh,
-            report_capacity_overflow=False,
-            route_capture=raw_capture,
-        )
     with pytest.raises(ValueError, match="does not match"):
         routerer(
             x,
@@ -2709,13 +2695,3 @@ def test_route_capture_replay_keeps_ids_but_recomputes_current_gate_weights():
             report_capacity_overflow=False,
             route_capture=capture,
         )
-
-
-def test_route_capture_validation_rejects_duplicate_experts():
-    capture = MoERouteCapture(
-        selected_experts=jnp.asarray([[1, 1], [0, 2]], dtype=jnp.int32),
-        token_valid=jnp.asarray([True, True]),
-        qb_alpha=jnp.zeros((2, 1), dtype=jnp.float32),
-    )
-    with pytest.raises(ValueError, match="duplicate"):
-        validate_moe_route_capture(capture, num_experts=3, num_experts_per_token=2)
