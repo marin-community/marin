@@ -424,15 +424,19 @@ class DaytonaMachine:
             failure.add_note(f"Daytona machine cleanup failed: {cleanup_error!r}")
 
     async def _cleanup_cancelled_command(
-        self, prefix: str, pidfile: str, completed_path: str, started: bool, cancellation: asyncio.CancelledError
+        self,
+        prefix: str,
+        pidfile: str,
+        completed_path: str,
+        launch_requested: bool,
+        cancellation: asyncio.CancelledError,
     ) -> None:
         try:
-            if started:
+            if launch_requested:
                 await finish_owned(own_cleanup(self._stop_command(pidfile, completed_path)))
-                await finish_owned(own_cleanup(self._remove_command_files(prefix)))
-            else:
-                lost = MachineTerminated("A Daytona command was cancelled while it was being started")
-                await finish_owned(own_cleanup(self._close_after(lost)))
+            # Cancellation during staging leaves only private files. Keeping the machine
+            # available lets the verifier grade work from commands that already finished.
+            await finish_owned(own_cleanup(self._remove_command_files(prefix)))
         except BaseException as cleanup_error:
             cancellation.add_note(f"Daytona command cancellation cleanup failed ({type(cleanup_error).__name__})")
             try:
@@ -477,7 +481,7 @@ class DaytonaMachine:
         stdin_path, stdout_path, stderr_path = (f"{prefix}/{part}" for part in ("in", "out", "err"))
         script_path = f"{prefix}/command.sh"
         pidfile, completed_path, claim_path = f"{prefix}/pid", f"{prefix}/completed", f"{prefix}/claimed"
-        started = False
+        launch_requested = False
         primary_error = None
         exit_code = None
         diagnostic = ""
@@ -524,7 +528,7 @@ class DaytonaMachine:
                     # Nested shell quoting can exceed execve's single-argument limit
                     # even when every original command argument fits.
                     await retry_transient(lambda: self.sandbox.fs.upload_file_stream(script.encode(), script_path))
-                    started = True
+                    launch_requested = True
 
                     def request():
                         return self.sandbox.process.exec(
@@ -566,13 +570,13 @@ class DaytonaMachine:
             if not deadline.expired():
                 primary_error = error
                 raise
-            if not started:
+            if not launch_requested:
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             try:
                 await self._stop_command(pidfile, completed_path)
             except asyncio.CancelledError as cancellation:
                 primary_error = cancellation
-                await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
+                await self._cleanup_cancelled_command(prefix, pidfile, completed_path, launch_requested, cancellation)
                 raise
             except Exception as error:
                 # Closing the machine ends it, so the caller sees the machine as terminated.
@@ -586,7 +590,7 @@ class DaytonaMachine:
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except asyncio.CancelledError as cancellation:
             primary_error = cancellation
-            await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
+            await self._cleanup_cancelled_command(prefix, pidfile, completed_path, launch_requested, cancellation)
             raise
         except BaseException as error:
             primary_error = error
