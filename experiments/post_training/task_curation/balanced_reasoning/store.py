@@ -24,7 +24,7 @@ import pyarrow.parquet as pq
 from marin.datakit.chat_normalize import CHAT_SCHEMA
 from marin.datakit.download.rollout_transforms import openai_chat_document
 from rigging.filesystem.factory import open_url
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT, publish_once
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import url_protocol
@@ -313,10 +313,10 @@ def read_bytes(path: str) -> bytes:
 
 def publish_store(store_dir: str, destination: str) -> list[str]:
     """Upload the built store files to the versioned artifact prefix; returns the URIs."""
-    prefix = prefix_join(CANONICAL_ARTIFACT_ROOT, destination.strip("/"))
+    prefix = StoragePath.parse(prefix_join(CANONICAL_ARTIFACT_ROOT, destination.strip("/")))
     files = {
         name: read_bytes(f"{store_dir.rstrip('/')}/{name}")
         for name in ("rows.parquet", "receipts.jsonl", "manifest.json")
     }
     publish_once(prefix, files)
-    return [prefix_join(prefix, name) for name in files]
+    return [str(prefix / name) for name in files]
