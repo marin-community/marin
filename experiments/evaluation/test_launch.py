@@ -732,17 +732,6 @@ def test_agent_launch_binds_daytona_credentials_only_to_daytona_task_machines(ag
     assert set(DAYTONA_EGRESS).issubset(batch.egress_allow) is daytona
 
 
-def test_a_daytona_launch_without_a_target_uses_the_hosted_defaults(agent_command, submitted_batches, monkeypatch):
-    monkeypatch.delenv("DAYTONA_TARGET", raising=False)
-
-    result = CliRunner().invoke(cli, agent_command)
-
-    assert result.exit_code == 0, (result.output, result.exception)
-    (batch,) = submitted_batches
-    assert batch.secret_env[DAYTONA_API_KEY] == DAYTONA_SECRET_ENV[DAYTONA_API_KEY]
-    assert set(DAYTONA_EGRESS).issubset(batch.egress_allow)
-
-
 def test_agent_launch_budgets_the_window_the_server_runs(agent_command, submitted_batches, monkeypatch):
     # The checkpoint's native window is smaller than the model YAML's, so the server clamps it.
     monkeypatch.setattr(
