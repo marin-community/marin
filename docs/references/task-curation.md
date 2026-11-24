@@ -242,10 +242,11 @@ panel measured 19.2%.
 
 To change the panel:
 
-1. Edit the parts of
-   [`recipes/eval-lite.json`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/eval-lite.json)
-   (`source_id`, `family`, `count`, `fast_counts`) and its `version`. A new source
-   is a `SourceInfo` plus `CurationRecipe(HfSource(...), convert,
+1. Use
+   [`recipes/eval-lite-next.json`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/eval-lite-next.json)
+   for the next panel's parts (`source_id`, `family`, `count`, `fast_counts`) and version.
+   Its parent is the published panel and its exclusions include the current default Snowball
+   training selection. A new source is a `SourceInfo` plus `CurationRecipe(HfSource(...), convert,
    intended_use=IntendedUse.EVAL)` registered in `sources.py`, as in
    [`nemo_tool_calls.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/nemo_tool_calls.py).
    Its tasks need the `eval` tag and an in-process or package grader.
@@ -254,7 +255,7 @@ To change the panel:
    ```bash
    uv run --package marin-core --extra cpu python -m experiments.post_training.task_curation.driver \
      --corpus "$CORPUS_URI" \
-     --eval-lite experiments/post_training/task_curation/recipes/eval-lite.json --run
+     --eval-lite experiments/post_training/task_curation/recipes/eval-lite-next.json --run
    ```
 
 3. Measure the starting model with eight answers per task (temperature 1.0,
