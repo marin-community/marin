@@ -840,6 +840,8 @@ def test_submission_exit_codes_and_publication_retries(
     preset = snowball_model.SNOWBALL.by_name[preset_name]
     if preset_name == "learning-medium":
         preset = small_learning_trial(preset)
+        # The planning and refusal tests own native driver validation.
+        monkeypatch.setattr(gate, "validate_plan", lambda *_: None)
     if case == "child":
         model = "s3://marin-test/models/child-model"
         preset = replace(
