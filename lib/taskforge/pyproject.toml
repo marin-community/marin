@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2.7",
     "httpx>=0.27,<1",
     "openai",
+    "s3fs>=2024.0.0",
     "typing_extensions>=4.10",
 ]
 
