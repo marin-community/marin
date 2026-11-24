@@ -72,8 +72,8 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
-# Pin the RunAI loader for both CUDA variants. The upstream vllm[runai] extra allows a compatible
-# range, while the Marin git fork does not bundle it.
+# The Marin wheel does not bundle the RunAI loader. Upstream's runai extra owns
+# its compatible loader range; callers can pin it through extra_requirements.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
 _PYTORCH_WHEEL_INDEX_BASE = "https://download.pytorch.org/whl"
@@ -276,10 +276,9 @@ class IsolatedCudaVllm:
             "uvx",
             "--from",
             install.requirement,
-            "--with",
-            _RUNAI_STREAMER_REQUIREMENT,
         ]
         if self.source is VllmType.MARIN_FORK:
+            command.extend(("--with", _RUNAI_STREAMER_REQUIREMENT))
             # The promoted release records the CUDA torch build; pin it so a conflict cannot select CPU torch.
             command.extend(("--with", f"torch=={self.release.torch_version}"))
         for package in _CUDA_TOOLCHAIN_PACKAGES:
