@@ -188,7 +188,9 @@ def publish_conversion(
         licensed_dataset_card(body, publication, pretty_name="Harbor cohort TaskSpec conversion release")
     )
     api = HfApi()
-    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=False)
+    # A preempted attempt may have created the repo already; the retry adopts it
+    # and the upload overwrites its files with this conversion's artifacts.
+    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
     if not api.repo_info(repo, repo_type="dataset").private:
         raise ValueError("Conversion destination must be private")
     filenames = ["tasks.parquet", "manifest.json", RECEIPTS_FILENAME, "README.md"]
