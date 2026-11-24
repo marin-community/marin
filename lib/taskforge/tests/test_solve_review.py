@@ -728,7 +728,9 @@ async def test_a_cold_driver_resume_buys_no_second_review(
     attempts = iter((live, cold))
 
     @asynccontextmanager
-    async def fake_runtime(policy: Policy, *_: object) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+    async def fake_runtime(
+        policy: Policy, *_: object, **_wiring: object
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), next(attempts)
 
     async def preempted(*_: object) -> None:

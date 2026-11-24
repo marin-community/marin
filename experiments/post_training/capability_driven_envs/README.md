@@ -14,7 +14,7 @@ From the repository root, with the policy overlay already on S3:
 uv run --frozen experiments/post_training/capability_driven_envs/launch.py \
   --proposals s3://<bucket>/<proposals>/sample.json --ranks "$(seq -s, 0 31 | sed 's/,$//')" \
   --output s3://<bucket>/<root>/out --policy s3://<bucket>/<root>/policy.json --job-prefix <prefix> \
-  --drivers 7 --concurrency 4 --cpu 8 --memory 32GB --disk 100GB
+  --drivers 7 --concurrency 4 --cpu 8 --memory 32GB --disk 100GB --glm-relay-job /<user>/<relay-job>
 ```
 
 `--drivers N` splits the 4096 buckets evenly; `--driver-range a:b` launches only those driver indices. To replace
@@ -23,14 +23,14 @@ a new job prefix: the same 3072:4096 span, with no other driver, output path or 
 is `/<user>/<prefix>-<driver-index>` on `--target-cluster` (default `cw-rno2a`), with `--max-retries 3`,
 `--sync-package marin-taskforge`, and `OMP_NUM_THREADS`, `RAYON_NUM_THREADS`, `CARGO_BUILD_JOBS` and
 `CMAKE_BUILD_PARALLEL_LEVEL` pinned to `--cpu`. `--resume-held` is forwarded to the drivers only when given; use it
-under a new job prefix after an infrastructure outage.
+under a new job prefix after an infrastructure outage. Exactly one of `--glm-relay-job` (the Iris relay job) or
+`--glm-base-url` (a direct endpoint) names the model gateway; it is forwarded to every driver.
 
 ## Environment
 
 Export in the launching shell: `CW_KEY_ID`, `CW_KEY_SECRET` (your own CoreWeave storage key), `GLM_API_KEY`, and
-`PARALLEL_API_KEY` (optional, the author's web tools), plus exactly one of `GLM_RELAY_JOB` (the Iris relay job) or
-`GLM_BASE_URL` (a direct endpoint). The keys go to Iris as `--secret NAME env:NAME`, never as values on the command
-line; only the endpoint variable is passed by value.
+`PARALLEL_API_KEY` (optional, the author's web tools). The keys go to Iris as `--secret NAME env:NAME`, never as
+values on the command line.
 
 ## Exit codes
 

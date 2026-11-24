@@ -5,7 +5,6 @@
 
 import logging
 import math
-import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, fields, replace
@@ -128,7 +127,7 @@ class RelayEndpoint(EndpointSource):
 
 def endpoint_source(base_url: str | None, relay_job: str | None, token: str, model: str, pool: str) -> EndpointSource:
     if bool(base_url) == bool(relay_job):
-        raise ValueError("Set exactly one of GLM_RELAY_JOB and GLM_BASE_URL")
+        raise ValueError("Pass exactly one of --glm-base-url and --glm-relay-job")
     if relay_job:
         return RelayEndpoint(relay_job, token, Pool(pool), model)
     assert base_url is not None
@@ -426,12 +425,14 @@ async def runtime(
     providers: Mapping[str, Provider] = NO_PROVIDERS,
     profiles: Mapping[str, ModelProfile] = DEFAULT_PROFILES,
     decision_model: DecisionModelReader | None = None,
+    controller_url: str | None = None,
 ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
     """The process-boundary bindings for ``policy``.
 
     Each role reaches ``<role>.model`` through a ``GlmProvider`` on ``source`` unless ``providers`` names one for it,
     and uses ``GLM_5_3`` unless ``profiles`` does. A configured ``decision_model.model`` reads through
-    ``decision_model``, by default Clef on ``source`` at ``decision_model.route``. The caller owns what it passes.
+    ``decision_model``, by default Clef on ``source`` at ``decision_model.route``. Iris sandboxes reach
+    ``controller_url``, by default the controller of the Iris job this process runs in. The caller owns what it passes.
     """
     policy = provider_policy(policy)
     declared = load_policy(DEFAULTS_DIR)
@@ -443,7 +444,7 @@ async def runtime(
         DEFAULT_RETRY_MAX_ELAPSED,
     )
     job = get_job_info()
-    controller = os.environ.get("IRIS_CONTROLLER_URL") or (job.controller_address if job else None)
+    controller = controller_url or (job.controller_address if job else None)
     if not controller:
         raise ValueError("Iris sandboxes require a controller URL or an Iris job context")
     container = IrisMachineFactory(controller_url=controller, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT)

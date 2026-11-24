@@ -65,7 +65,8 @@ def argv(command: str, directory: Path, work: str = "work") -> list[str]:
     source = directory / ("manifest.txt" if command == "run" else "test.proposal.json")
     options = {"proposals": source, "output": directory / "out", "policy": directory / "policy.json"}
     flags = [item for name, value in options.items() for item in (f"--{name}", str(value))]
-    return [command, *flags, "--work-dir", str(directory / work), *(["--concurrency", "2"] if command == "run" else [])]
+    flags += ["--work-dir", str(directory / work), "--glm-base-url", "http://fake/v1"]
+    return [command, *flags, *(["--concurrency", "2"] if command == "run" else [])]
 
 
 def roots(directory: Path, sources: list[Path]) -> list[Path]:
@@ -370,6 +371,7 @@ async def test_a_run_cancelled_during_cleanup_closes_its_pipe_and_its_child_foll
         bucket_range=None,
         ranks=(),
         resume_held=False,
+        glm_relay_job=None,
     )
     launch = asyncio.create_task(driver.run(args))
     try:
@@ -422,14 +424,12 @@ def test_an_interrupted_run_stops_its_children_as_before(proposal: TaskProposal,
 def serving(monkeypatch: pytest.MonkeyPatch, bundle: Resources) -> None:
     @asynccontextmanager
     async def runtime(
-        policy: Policy, _source: EndpointSource, _key: str
+        policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         yield build_config(policy, {}), bundle
 
     monkeypatch.setattr(driver, "runtime", runtime)
-    monkeypatch.setenv("GLM_BASE_URL", "http://fake/v1")
     monkeypatch.setenv("GLM_API_KEY", "fake")
-    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
 
 
 # Control: without any signal a refusal still publishes its hold.
@@ -441,7 +441,7 @@ async def test_an_unsignalled_refusal_still_holds_the_workpiece(
     serving(monkeypatch, replace(built, inference=FakeInference((Hold("the host refused the request"),))))
     flags = dict(zip(argv("one", tmp_path)[1::2], argv("one", tmp_path)[2::2], strict=True))
     args = Namespace(**{name.removeprefix("--").replace("-", "_"): value for name, value in flags.items()})
-    assert await driver.one(Namespace(**vars(args), resume_held=False)) == 0
+    assert await driver.one(Namespace(**vars(args), resume_held=False, glm_relay_job=None)) == 0
     held = published_workpiece(roots(tmp_path, sources)[0])
     last = held.decisions[-1]
     assert held.terminal is Terminal.HELD and isinstance(last, Incomplete)
