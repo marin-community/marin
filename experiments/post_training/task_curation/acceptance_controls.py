@@ -56,8 +56,17 @@ class ControlOutcome:
 
 
 def recorded_bug_rewards(original_repo: str, original_revision: str) -> dict[str, float]:
-    """The recorded Harbor bug-control rewards, keyed by the controls' own task ids."""
-    path = Path(hf_hub_download(original_repo, "controls.jsonl", repo_type="dataset", revision=original_revision))
+    """The recorded Harbor bug-control rewards, keyed by the controls' own task ids.
+
+    Some cohort families recorded no per-task controls.jsonl (their negative
+    control is the campaign's verifier-liveness sample — an empty submission
+    scores 0.0, recorded in the recipe QA history); an empty mapping means the
+    acceptance expects 0.0 for every task.
+    """
+    try:
+        path = Path(hf_hub_download(original_repo, "controls.jsonl", repo_type="dataset", revision=original_revision))
+    except Exception:
+        return {}
     rewards = {}
     with path.open() as stream:
         for line in stream:
@@ -69,16 +78,16 @@ def recorded_bug_rewards(original_repo: str, original_revision: str) -> dict[str
                     f"The recorded bug control for {row.get('task_id')} is not scored: {bug.get('status')!r}"
                 )
             rewards[row["task_id"]] = float(bug["reward"])
-    if not rewards:
-        raise ValueError(f"No recorded bug controls at {original_repo}@{original_revision[:12]}")
     return rewards
 
 
 def original_pin(cohort_repo: str, cohort_revision: str) -> tuple[str, str]:
-    """The original release pin the cohort manifest records."""
+    """The original release pin the cohort manifest records (top-level or under ``plan``)."""
     manifest_path = Path(hf_hub_download(cohort_repo, "manifest.json", repo_type="dataset", revision=cohort_revision))
     manifest = json.loads(manifest_path.read_bytes())
-    source_id, source_revision = manifest.get("source_dataset_id"), manifest.get("source_revision")
+    plan = manifest.get("plan") or {}
+    source_id = manifest.get("source_dataset_id") or plan.get("source_dataset_id")
+    source_revision = manifest.get("source_revision") or plan.get("source_revision")
     if not source_id or not source_revision:
         raise ValueError(f"The cohort manifest names no original release: {cohort_repo}@{cohort_revision[:12]}")
     return source_id, source_revision
@@ -147,6 +156,9 @@ async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
 
 
 def _expected_reward(task_id: str, rewards: dict[str, float]) -> float:
+    """The recorded bug reward for the task; families without controls.jsonl expect 0.0."""
+    if not rewards:
+        return 0.0
     if task_id in rewards:
         return rewards[task_id]
     matches = {reward: key for key, reward in rewards.items() if key.startswith(task_id) or task_id.startswith(key)}
