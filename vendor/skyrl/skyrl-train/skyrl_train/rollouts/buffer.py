@@ -15,6 +15,7 @@ import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from itertools import repeat
 from typing import Protocol
 
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY, BatchPolicy

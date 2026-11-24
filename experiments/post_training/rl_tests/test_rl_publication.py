@@ -61,14 +61,14 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
     "case, expected_updates, expected_time, expected_facts",
     [
         ("native-composed", 2, 3600, []),
-        ("versioned-missing-evaluation", None, None, ["evaluation_records_available"]),
+        ("versioned-missing-evaluation", None, 3600, ["evaluation_records_available"]),
         ("checkpoint-lineage", 2, 7200, []),
         ("lineage-unknown-grandparent", None, None, []),
-        ("lineage-unknown-allocation", 2, 7200, []),
+        ("lineage-unknown-allocation", 2, None, []),
         (
             "untracked-native",
             None,
-            None,
+            3600,
             ["eval_lite/grader_error_fraction", "eval_lite/initial/grader_error_fraction"],
         ),
         ("updates-override", 1, 3600, []),
@@ -143,6 +143,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
             config=native_ancestor.config,
             result=native_ancestor.result,
             metrics_started_at=native_ancestor.result.started_at,
+            elapsed_excluding_eval_seconds=123.0,
         )
         if case == "lineage-unknown-grandparent":
             records["ancestor"] = records["ancestor"].model_copy(
@@ -156,6 +157,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         records["native-attempt"] = records["native-attempt"].model_copy(
             update={
                 "resumed_step": 1,
+                "elapsed_excluding_eval_seconds": 321.0,
                 "parent": CheckpointReference(export_root=str(source / "exports"), attempt_id="ancestor", step=1),
             }
         )
@@ -211,6 +213,8 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert row["failed_facts"] == expected_facts, (row["failed_facts"], row["evidence"])
     if case in {"checkpoint-lineage", "lineage-unknown-grandparent", "lineage-unknown-allocation"}:
         assert lineage_gpu_hours(attempt, recorded_launch(attempt)) == (80.0 if case == "checkpoint-lineage" else None)
+    if case == "checkpoint-lineage":
+        assert row["elapsed_excluding_eval_seconds"] == 444.0
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
         assert row["grader_report"] == report
