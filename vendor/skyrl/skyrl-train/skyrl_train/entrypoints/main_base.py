@@ -742,18 +742,22 @@ class BasePPOExp:
             if trainer is not None:
                 elapsed = time.monotonic() - started - trainer.evaluation_wall_time
                 logger.info("Training run completed: elapsed_excluding_eval_seconds={:.3f}", elapsed)
-                runtime = self.cfg.runtime
+                runtime = self.cfg.get("runtime") or {}
                 try:
                     write_attempt(
                         str(self.cfg.trainer.export_path),
                         AttemptRecord(
-                            run_id=runtime.run_id,
-                            attempt_id=runtime.attempt_id,
+                            run_id=runtime["run_id"],
+                            attempt_id=runtime["attempt_id"],
                             elapsed_excluding_eval_seconds=elapsed,
                         ),
                     )
                 except Exception as error:
-                    logger.warning("Could not store trainer completion time: {}", type(error).__name__)
+                    logger.warning(
+                        "Could not store trainer completion time for attempt {} ({})",
+                        runtime.get("attempt_id", "unknown"),
+                        type(error).__name__,
+                    )
 
 
 @ray.remote(num_cpus=1, max_retries=0)

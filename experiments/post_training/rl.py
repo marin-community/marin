@@ -432,9 +432,8 @@ def run_index(
 def _follow_detached(module: str, argv: tuple[str, ...], job: JobName, provenance: Provenance) -> str:
     """Start the caller's publication watcher and return its local log path."""
     with tempfile.NamedTemporaryFile(prefix="marin-rl-publication-", suffix=".log", delete=False) as log:
-        follow = json.dumps({"job": str(job), "source": provenance.to_json()})
         subprocess.Popen(
-            [sys.executable, "-m", module, "--follow-submission", follow, *argv],
+            [sys.executable, "-m", module, "--follow-submission", str(job), provenance.to_json(), *argv],
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -575,7 +574,7 @@ def command(
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
     @partial(_run_command, table, argv, entry_module)
-    @click.option("--follow-submission", hidden=True)
+    @click.option("--follow-submission", type=(str, str), hidden=True)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
     @click.option("--check-pin", is_flag=True, help="Check the composed candidate and its pinned controls on CPU.")
@@ -656,7 +655,7 @@ def command(
         issue: int | None,
         plan: bool,
         check_pin: bool,
-        follow_submission: str | None,
+        follow_submission: tuple[str, str] | None,
     ) -> tuple[ArtifactStep, ...]:
         context = click.get_current_context()
         do_run = context.params["do_run"]
@@ -668,13 +667,15 @@ def command(
         missing = [name for name in forward_env if name not in os.environ]
         if missing:
             raise click.UsageError(f"missing required environment variables: {', '.join(missing)}")
-        follow = json.loads(follow_submission) if follow_submission else None
-        if follow is not None:
+        if follow_submission is not None:
             if not do_run or get_job_info() is not None:
                 raise click.UsageError("A detached launcher needs --run on the submitting host")
-            context.meta["rl_follow_job"] = JobName.from_wire(follow["job"])
-        from_launcher = follow is None and get_job_info() is None
-        provenance = Provenance.from_json(follow["source"]) if follow is not None else _provenance(control=control)
+            follow_job, source = follow_submission
+            context.meta["rl_follow_job"] = JobName.from_wire(follow_job)
+            provenance = Provenance.from_json(source)
+        else:
+            provenance = _provenance(control=control)
+        from_launcher = follow_submission is None and get_job_info() is None
         run = build_experiment(
             preset,
             table=table,
@@ -690,7 +691,7 @@ def command(
             provenance=provenance,
         )
         handles = (*run.runs, *((run.gate,) if run.gate else ()))
-        if follow is not None:
+        if follow_submission is not None:
             return handles
         if from_launcher and (do_run or check_pin):
             assert run.inputs is not None

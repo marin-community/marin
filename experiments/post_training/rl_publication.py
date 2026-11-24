@@ -156,6 +156,8 @@ def _terminal_measurements(
         if complete_history and all(duration is not None for duration in trainer_durations)
         else None
     )
+    if elapsed_excluding_eval is None and isinstance(preset.recipe.layout.workload, presets.Training):
+        evidence.append("Training time excluding evaluation is unknown for this checkpoint lineage.")
     return _TerminalMeasurements(failed, evaluations, optimizer_steps, elapsed, elapsed_excluding_eval)
 
 
