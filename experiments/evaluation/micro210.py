@@ -305,7 +305,9 @@ def micro210_artifact_step(
         "marin-community/marin-tokenizer-tools",
         "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
     )
-    binding = micro210_evaluation(fingerprint_model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>")
+    binding = micro210_evaluation(
+        fingerprint_model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>", route=route
+    )
     frozen = binding.policy()
     policy = frozen["evaluation"]
     inputs = ArtifactStep.adopt(
