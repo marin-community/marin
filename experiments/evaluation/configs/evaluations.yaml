@@ -111,6 +111,9 @@ evaluations:
   truthfulqa-6shot:
     benchmark: truthfulqa
     num_fewshot: 6
+  truthfulqa-binary-chat:
+    benchmark: truthfulqa-binary
+    protocol: chat
   mmlu-0shot:
     benchmark: mmlu
     num_fewshot: 0
