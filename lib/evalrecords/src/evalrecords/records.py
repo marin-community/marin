@@ -367,23 +367,11 @@ class TaskMachineBackend(StrEnum):
     LOCAL = "local"
 
 
-class TaskImageBuild(StrEnum):
-    """How Daytona task machines get their images.
-
-    ``SNAPSHOT`` builds each distinct image once into a named account snapshot, which persists and
-    counts against the account's snapshot quota. ``DECLARATIVE`` builds the image for every machine
-    and creates no snapshot; the account must permit declarative builds.
-    """
-
-    SNAPSHOT = "snapshot"
-    DECLARATIVE = "declarative"
-
-
 class TaskMachineSettings(BaseModel):
     """Where agent task machines run, and their resources when a task declares none.
 
     Unset resources take the backend's defaults. ``startup_timeout`` bounds machine creation,
-    including an online image build. ``image_build`` applies to Daytona machines only.
+    including an online image build.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
@@ -393,15 +381,6 @@ class TaskMachineSettings(BaseModel):
     memory_mb: int | None = Field(default=None, gt=0)
     storage_mb: int | None = Field(default=None, gt=0)
     startup_timeout: float = Field(default=600, gt=0)
-    image_build: TaskImageBuild = Field(
-        default=TaskImageBuild.SNAPSHOT, exclude_if=lambda value: value is TaskImageBuild.SNAPSHOT
-    )
-
-    @model_validator(mode="after")
-    def validate_image_build(self) -> "TaskMachineSettings":
-        if self.image_build is not TaskImageBuild.SNAPSHOT and self.backend is not TaskMachineBackend.DAYTONA:
-            raise ValueError("image_build applies only to Daytona task machines")
-        return self
 
 
 class EvaluationOverrides(BaseModel):

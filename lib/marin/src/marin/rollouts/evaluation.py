@@ -17,7 +17,6 @@ from evalrecords.records import (
     JudgeIdentity,
     TaskEvidence,
     TaskEvidenceSetting,
-    TaskImageBuild,
     scoring_settings,
 )
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
@@ -166,10 +165,6 @@ class EvaluationRunConfig(RunModel):
     seed: int | None = None
     task_machine: MachineRuntimeSpec | None = None
     """The backend and default resources of task machines; agent episodes require one."""
-    image_build: TaskImageBuild = Field(
-        default=TaskImageBuild.SNAPSHOT, exclude_if=lambda value: value is TaskImageBuild.SNAPSHOT
-    )
-    """How Daytona task machines get their images."""
     verifier_machine: MachineRuntimeSpec | None = None
     judge: JudgeIdentity | None = None
     agent_extra_body: dict[str, Any] = Field(default_factory=dict)

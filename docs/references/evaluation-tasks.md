@@ -214,9 +214,9 @@ limits; the run still supplies `tool_turn_timeout` and `cleanup_timeout`. Machin
 settings are part of the run identity, so changing the backend requires a new result
 root. The worker builds factories for the `local`, `docker`, and `daytona` backends that
 the task and verifier machines select, and rejects others. Daytona uses the eval
-account: the CLI reads its key from `DAYTONA_EVAL_API_KEY` (or `--daytona-api-key-env`)
-and `DAYTONA_TARGET`, then passes the key to the Iris worker as `DAYTONA_API_KEY`
-and installs `marin-core`'s `daytona` extra. Harness names resolve through
+account: the CLI reads its key from `DAYTONA_EVAL_API_KEY` (or `--daytona-api-key-env`),
+passes it to the Iris worker as `DAYTONA_API_KEY`, forwards `DAYTONA_V2_API_URL` when it
+is set, and installs `marin-core`'s `daytona` extra. Harness names resolve through
 `marin.evaluation.task_worker.episode_harnesses`; library callers pass their own
 `harnesses` mapping to `run_evaluation`.
 

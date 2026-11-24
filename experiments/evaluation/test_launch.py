@@ -636,7 +636,6 @@ def agent_selection(tmp_path, agent_source, monkeypatch) -> Path:
         **{benchmark.name: benchmark for benchmark in fixed_benchmarks([agent_source])},
     }
     monkeypatch.setattr("experiments.evaluation.curated.evaluation_benchmarks", lambda: catalog)
-    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     path = tmp_path / "agent.yaml"
     path.write_text("evaluations:\n  terminal-agent:\n    benchmark: terminal-agent\n")
     return path
@@ -664,10 +663,10 @@ def agent_command(tmp_path, agent_selection, monkeypatch) -> list[str]:
 
 
 @pytest.mark.parametrize("backend", ["docker", "local"])
-def test_a_backend_override_drops_the_daytona_image_build(agent_command, agent_selection, submitted_batches, backend):
+def test_a_backend_override_keeps_the_task_machine_resources(agent_command, agent_selection, submitted_batches, backend):
     agent_selection.write_text(
         "evaluations:\n  terminal-agent:\n    benchmark: terminal-agent\n"
-        "    run:\n      task_machine:\n        image_build: declarative\n        cpus: 2\n"
+        "    run:\n      task_machine:\n        cpus: 2\n"
     )
 
     result = CliRunner().invoke(cli, [*agent_command, "--task-machine-backend", backend])
@@ -701,16 +700,6 @@ def test_agent_launch_binds_daytona_credentials_only_to_daytona_task_machines(ag
     assert (batch.secret_env.get(DAYTONA_API_KEY) == DAYTONA_SECRET_ENV[DAYTONA_API_KEY]) is daytona
     assert (DAYTONA_API_KEY in evaluation.secret_env_keys) is daytona
     assert set(DAYTONA_EGRESS).issubset(batch.egress_allow) is daytona
-
-
-def test_a_daytona_launch_without_a_target_fails_before_submission(agent_command, submitted_batches, monkeypatch):
-    monkeypatch.delenv("DAYTONA_TARGET")
-
-    result = CliRunner().invoke(cli, agent_command)
-
-    assert result.exit_code != 0
-    assert "Daytona task machines, which require DAYTONA_TARGET" in result.output
-    assert submitted_batches == []
 
 
 def test_agent_launch_budgets_the_window_the_server_runs(agent_command, submitted_batches, monkeypatch):

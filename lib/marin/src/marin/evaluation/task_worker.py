@@ -5,7 +5,6 @@
 
 import asyncio
 import logging
-import os
 from collections.abc import Mapping
 from types import MappingProxyType
 
@@ -25,7 +24,7 @@ from rolloutengine.harness.core import Harness
 from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.likelihood import VllmLikelihood
 from rolloutengine.models import MachineRuntimeSpec
-from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy
@@ -50,8 +49,6 @@ JUDGE_ENDPOINT = "EVALUATION_JUDGE_ENDPOINT"
 JUDGE_API_KEY = "EVALUATION_JUDGE_API_KEY"
 DAYTONA_API_KEY = "DAYTONA_API_KEY"
 """The worker secret holding the Daytona eval-org key; launchers resolve it from ``DAYTONA_EVAL_API_KEY``."""
-DAYTONA_API_URL = "DAYTONA_API_URL"
-DAYTONA_TARGET = "DAYTONA_TARGET"
 # Daytona v2: the API and its event websocket, the regional sandbox proxies
 # (proxy.<zone>.<region>.daytona.app), and the bucket Dockerfile build contexts upload to.
 DAYTONA_EGRESS = ("api.daytona.com", "*.*.*.daytona.app", "prod-rlp-contexts.s3.us-east-1.amazonaws.com")
@@ -160,15 +157,6 @@ def worker_egress(config: EvaluationRunConfig) -> tuple[str, ...]:
     return DAYTONA_EGRESS if Backend.DAYTONA in machine_backends(config) else ()
 
 
-def daytona_connection(api_key: str) -> DaytonaConnection:
-    """The Daytona account for ``api_key``, with the API URL and target forwarded to evaluation jobs."""
-    return DaytonaConnection(
-        api_key=api_key,
-        api_url=os.environ.get(DAYTONA_API_URL, DEFAULT_DAYTONA_API_URL),
-        target=os.environ.get(DAYTONA_TARGET),
-    )
-
-
 def machine_factories(config: EvaluationRunConfig, daytona: DaytonaConnection | None) -> dict[str, MachineFactory]:
     """Construct the factory of each backend the run selects."""
     factories: dict[str, MachineFactory] = {}
@@ -182,11 +170,9 @@ def machine_factories(config: EvaluationRunConfig, daytona: DaytonaConnection | 
                 if daytona is None:
                     raise ValueError("Daytona machines require an explicit Daytona connection")
                 # The Daytona SDK is optional; marin-core's daytona extra installs it.
-                from shellbox.backends.daytona.machine import DaytonaImageBuild, DaytonaMachineFactory  # noqa: PLC0415
+                from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
 
-                factories[backend] = DaytonaMachineFactory(
-                    client_factory=daytona.client_factory(), image_build=DaytonaImageBuild(config.image_build)
-                )
+                factories[backend] = DaytonaMachineFactory(client_factory=daytona.client_factory())
             case _:
                 raise ValueError(f"Evaluation workers have no factory for {backend!r}")
     return factories
@@ -261,7 +247,9 @@ def run_worker(datasets: tuple[str, ...], output: str, config: EvaluationRunConf
     judge_endpoint = get_secret(JUDGE_ENDPOINT)
     judge = JudgeConnection(judge_endpoint, require_secret(JUDGE_API_KEY)) if judge_endpoint else None
     daytona = (
-        daytona_connection(require_secret(DAYTONA_API_KEY)) if Backend.DAYTONA in machine_backends(config) else None
+        DaytonaConnection(api_key=require_secret(DAYTONA_API_KEY))
+        if Backend.DAYTONA in machine_backends(config)
+        else None
     )
     execute_with_retries(
         datasets,
