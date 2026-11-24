@@ -8,6 +8,6 @@ Run one scheduled Marin Belay pass.
    If `sync` fails, still run the check; report the failure in the final line.
 3. If it prints `work:`, run `uv run python -m experiments.belay claim`, then
    follow `experiments/belay/RUNBOOK.md` with the events file it prints: work
-   through the events, then the drain loop (`wait --session <id>`) until it
-   prints `drained:`. End with section 7, then report it with the `finish`
-   command that `claim` printed.
+   through the claimed events, end with section 7, then report it with the
+   `finish` command that `claim` printed. Exit after reporting; events queued
+   during this pass remain for the next scheduled pass.
