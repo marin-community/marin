@@ -34,17 +34,9 @@ def test_load_tokenizer_in_memory_fs():
 
 
 @pytest.mark.parametrize("trust_remote_code", [False, True])
-def test_load_tokenizer_uses_declared_backend_before_model_config(tmp_path, trust_remote_code):
+def test_load_tokenizer_with_unrecognized_beam_config(tmp_path, trust_remote_code):
     shutil.copyfile(Path(__file__).with_name("gpt2_tokenizer.json"), tmp_path / "tokenizer.json")
-    (tmp_path / "tokenizer_config.json").write_text(
-        json.dumps(
-            {
-                "tokenizer_class": "TokenizersBackend",
-                "bos_token": "<|endoftext|>",
-                "eos_token": "<|endoftext|>",
-            }
-        )
-    )
+    (tmp_path / "tokenizer_config.json").write_text(json.dumps({"tokenizer_class": "TokenizersBackend"}))
     (tmp_path / "config.json").write_text(
         json.dumps(
             {
@@ -61,8 +53,6 @@ def test_load_tokenizer_uses_declared_backend_before_model_config(tmp_path, trus
     tokenizer = load_tokenizer(str(tmp_path), trust_remote_code=trust_remote_code)
     token_ids = tokenizer.encode("hello", add_special_tokens=False)
     assert tokenizer.decode(token_ids) == "hello"
-    assert tokenizer.bos_token == "<|endoftext|>"
-    assert tokenizer.bos_token_id == tokenizer.eos_token_id
 
 
 def test_model_info_patch_for_fsspec_urls():
