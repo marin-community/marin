@@ -67,8 +67,20 @@ def main() -> None:
                 with httpx.Client(timeout=600.0) as http:
                     with http.stream("POST", target, json=_body(seed), headers=headers) as response:
                         if response.status_code == 200:
-                            chunks = sum(1 for line in response.iter_lines() if line.startswith("data:"))
-                            outcome = {"status": 200, "chunks": chunks}
+                            chunks = 0
+                            done = False
+                            stream_error = False
+                            for line in response.iter_lines():
+                                if not line.startswith("data:"):
+                                    continue
+                                data = line.removeprefix("data:").strip()
+                                if data == "[DONE]":
+                                    done = True
+                                    break
+                                chunks += 1
+                                if json.loads(data).get("error"):
+                                    stream_error = True
+                            outcome = {"status": 200, "chunks": chunks, "ok": done and not stream_error}
                         else:
                             outcome = {
                                 "status": response.status_code,
@@ -84,8 +96,8 @@ def main() -> None:
             thread.start()
         for thread in threads:
             thread.join()
-        ok = sum(1 for o in outcomes if o.get("status") == 200)
-        results[name] = {"ok": ok, "of": len(outcomes), "failures": [o for o in outcomes if o.get("status") != 200][:6]}
+        ok = sum(1 for o in outcomes if o.get("ok"))
+        results[name] = {"ok": ok, "of": len(outcomes), "failures": [o for o in outcomes if not o.get("ok")][:6]}
     payload = {"resolved": resolved, **results}
     configure_coreweave_s3()
 

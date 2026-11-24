@@ -19,6 +19,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.timing import Duration
 
 from experiments.glm_synthesis_serving import pool, warmup_bench
+from experiments.glm_synthesis_serving.launch_pool import wait_for_endpoint
 
 SOURCE_ROOT = "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization"
 SOURCE_FLEETS = (("ortet-24-20261112", 24), ("h100-eight-20261105", 8))
@@ -128,6 +129,8 @@ async def request_outcome(client: httpx.AsyncClient, target: Target, body: dict)
 
 async def prove(targets: list[Target], bodies: list[dict], concurrency: int) -> list[dict]:
     semaphore = asyncio.Semaphore(concurrency)
+    completed = 0
+    passed = 0
     limits = httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency)
     async with httpx.AsyncClient(timeout=1800, limits=limits) as client:
         for target in targets:
@@ -138,8 +141,14 @@ async def prove(targets: list[Target], bodies: list[dict], concurrency: int) -> 
                 raise RuntimeError(f"{target.endpoint}: /models lacks {pool.SERVED_MODEL_NAME}")
 
         async def run(index: int, body: dict) -> dict:
+            nonlocal completed, passed
             async with semaphore:
-                return await request_outcome(client, targets[index % len(targets)], body)
+                outcome = await request_outcome(client, targets[index % len(targets)], body)
+                completed += 1
+                passed += outcome["ok"]
+                if completed % 25 == 0 or completed == len(bodies):
+                    print(json.dumps({"completed": completed, "passed": passed, "total": len(bodies)}), flush=True)
+                return outcome
 
         return await asyncio.gather(*(run(index, body) for index, body in enumerate(bodies)))
 
@@ -156,6 +165,7 @@ def main() -> None:
     parser.add_argument("--requests", type=int, default=200)
     parser.add_argument("--concurrency", type=int, default=24)
     parser.add_argument("--duration", type=float, default=900)
+    parser.add_argument("--wait-timeout", type=float, default=7200)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if args.requests < 200 or args.requests < len(args.endpoint):
@@ -163,6 +173,9 @@ def main() -> None:
     client = iris_ctx().client
     if client is None:
         raise RuntimeError("Run the proof inside an Iris CPU job on cw-us-east-08a")
+    for endpoint in args.endpoint:
+        wait_for_endpoint(client, timeout=Duration.from_seconds(args.wait_timeout), endpoint_name=endpoint)
+        print(json.dumps({"registered": endpoint}), flush=True)
     targets = [
         Target(
             endpoint=endpoint,
