@@ -291,10 +291,11 @@ a copy.
   candidate pairs, and the second run removes 98.1% at 0.6. Copies of items whose evals share a real
   question opening (MedConceptsQA, FDA) are found by the earlier keys and missed by the default ones more
   often; see the overlap of the two lists above.
-- **A record with changed versions of an item before its exact copy can be missed.** When the whole
-  question (as stored, with its prompt text) is not in a record, the excerpt is cut at the key's first
-  match; in a LangChain test file that tells a GSM8K story about 20 times, mostly changed, the first match
-  is a changed version and the record is kept. 1 of 942 GSM8K clear copies is missed this way.
+- **Both catalog runs cut excerpts around the question as stored, with its prompt text.** When a record
+  lacks the prompt text, its excerpt is cut at the key's first match; in a LangChain test file that tells a
+  GSM8K story about 20 times, mostly changed, that match is a changed version and the copy is kept (1 of
+  942 GSM8K clear copies). `locate` now stores the question without its eval's shared prompt text, so the
+  excerpt lands on the exact copy (the models score it 0.986); this applies from the next scan.
 - **Candidate load concentrates on shared question stems.** One Nemotron formal-logic shard holds 886,186
   candidate pairs: 260 MMLU formal-logic and MMLU-Pro items keyed on one question stem ("which of the
   following propositions is an immediate (one-step) consequence"), which 48,133 of its records hold.
