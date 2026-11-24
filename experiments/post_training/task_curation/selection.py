@@ -440,7 +440,7 @@ def _grader_kind(task: TaskSpec) -> GraderKind:
 
 def _manifest_records(tasks: tuple[TaskSpec, ...], active: set[str]) -> Iterator[dict[str, Any]]:
     from experiments.post_training.task_curation.datasets.structure_closure import (  # noqa: PLC0415 - curation-only dependency
-        SOURCE_ID,
+        VALIDATION_SOURCE_ID,
     )
 
     catalog_ids = _heldout_catalog_ids()
@@ -453,7 +453,7 @@ def _manifest_records(tasks: tuple[TaskSpec, ...], active: set[str]) -> Iterator
             TaskStrata(
                 family=family,
                 aai_category=AAII_CATEGORIES[family],
-                source=SOURCE_ID if structural else catalog_ids[contract["dataset"]],
+                source=VALIDATION_SOURCE_ID if structural else catalog_ids[contract["dataset"]],
             ),
             state=MembershipState.ACTIVE if task.id in active else MembershipState.CANDIDATE,
         )

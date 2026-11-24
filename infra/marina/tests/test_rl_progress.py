@@ -72,6 +72,13 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             else:
                 missing_issue[field] = None
         assert publish(missing_issue) == changed
+    history = changed | {
+        "format_version": 2,
+        "native_run_id": "native/test/control",
+        "base_preset_revision": "2026.11.01",
+    }
+    assert publish(history) == history
+    assert publish(changed) == changed
     unknown = record | {
         "run_id": "test/unknown",
         "attempt_id": "unknown",
@@ -144,7 +151,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     )
     payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert rows["native-first"] == _projection(changed)
+    assert rows["native-first"] == _projection(history)
     assert rows["native-second"] == _projection(failed)
     assert rows["unknown"] == _projection(legacy | {"issue": None})
     assert len(rows) == 3

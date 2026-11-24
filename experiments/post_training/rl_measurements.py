@@ -298,17 +298,17 @@ def _grader_errors(
 def _session_invariants(
     name: str,
     table: pa.Table,
-    evaluation: presets.Evaluation,
-    preset: presets.Preset,
-    expected: int,
     task_ids: Sequence[str],
+    answers_per_task: int,
+    required_coverage: bool,
 ) -> list[Invariant]:
     rows = table.to_pylist()
     counts = Counter(row["task_id"] for row in rows)
-    holds = len(rows) == expected and set(counts.values()) == {evaluation.answers} and set(counts) == set(task_ids)
+    expected = len(task_ids) * answers_per_task
+    holds = len(rows) == expected and set(counts.values()) == {answers_per_task} and set(counts) == set(task_ids)
     result = [Invariant(name=f"{name}/answers_complete", value=len(rows), limit=expected, comparator="==", holds=holds)]
-    if evaluation == preset.guarded or (preset.checkpoint_every and evaluation.held_out):
-        coverage = len({row["task_id"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
+    if required_coverage:
+        coverage = len({row["task_id"] for row in rows if row["scored"]}) / len(task_ids) if task_ids else 0.0
         result.append(
             Invariant(
                 name=f"{name}/task_coverage",
@@ -352,11 +352,7 @@ def evaluation_status(
         return EvaluationStatus()
     try:
         effective = preset.with_updates(launch.max_steps if launch.max_steps is not None else preset.updates)
-        try:
-            inputs = read_run_inputs(path)
-        except FileNotFoundError:
-            inputs = None
-        data = read_measurements(path, effective, inputs, attempt=attempt)
+        data = read_measurements(path, effective, attempt=attempt)
         return EvaluationStatus(
             evaluations=data.evaluations,
             evaluation_invariants=tuple(
@@ -382,11 +378,9 @@ def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[st
 def read_measurements(
     path: str,
     preset: presets.Preset,
-    inputs: RunInputs | None = None,
     *,
     attempt: AttemptRecord | None = None,
 ) -> RunMeasurements:
-    inputs = inputs or RunInputs(preset_name=preset.name)
     terminal = attempt or read_skyrl_attempt(path)
     if terminal is None:
         raise FileNotFoundError(f"no terminal attempt record at {path}")
@@ -414,9 +408,6 @@ def read_measurements(
         }
     except (KeyError, TypeError, ValueError) as error:
         raise InvalidComparison(f"recorded evaluation identity is malformed: {error}") from error
-    default, selection = recipe.task_selections(
-        preset, recipe.selection_artifact(inputs.tasks) if inputs.tasks else None
-    )
     task_set = preset.held_out_tasks if preset.held_out is not None else None
     scores, initial_scores = [ANSWER_SCHEMA.empty_table()], []
     evaluations = []
@@ -424,9 +415,9 @@ def read_measurements(
     primary_answers = 0
     for index, evaluation in enumerate(preset.evaluations):
         quality = evaluation.held_out and (evaluation == preset.guarded or bool(preset.checkpoint_every))
-        expected = recipe.evaluation_answer_count(
-            evaluation, recipe.evaluation_source(evaluation, selection, default, preset.held_out_tasks)
-        )
+        required_coverage = evaluation == preset.guarded or bool(preset.checkpoint_every and evaluation.held_out)
+        recorded_tasks = recorded_task_sets[evaluation.name].task_ids
+        recorded_answers = identities[evaluation.name][1]["n_samples_per_prompt"]
         all_scores = read_answers(evaluation, path, launch=launch, attempt=terminal)
         if index == 0:
             primary_answers = all_scores.num_rows
@@ -466,9 +457,7 @@ def read_measurements(
                     )
                 )
             invariants.extend(
-                _session_invariants(
-                    session_name, session, evaluation, preset, expected, recorded_task_sets[evaluation.name].task_ids
-                )
+                _session_invariants(session_name, session, recorded_tasks, recorded_answers, required_coverage)
             )
             if quality:
                 invariants.append(

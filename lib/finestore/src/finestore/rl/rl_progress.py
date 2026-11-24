@@ -155,18 +155,19 @@ class RunIndexIdentity(BaseModel):
 
 class AttemptSummary(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
-    format_version: Literal[1] = 1
+    format_version: Literal[1, 2] = 1
     run_id: Identity
+    native_run_id: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     attempt_id: Identity
     label: Identity
     series: str | None = None
     model: Identity | None = None
     preset: Identity | None = None
     preset_revision: Identity | None = None
-    base_preset_revision: Identity | None = None
-    control_preset: Identity | None = None
-    evaluation_data_identity: Identity | None = None
-    evaluation_protocol_identity: Identity | None = None
+    base_preset_revision: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    control_preset: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    evaluation_protocol_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     user: Identity | None = None
     branch: str | None = None
     dirty: bool | None = None

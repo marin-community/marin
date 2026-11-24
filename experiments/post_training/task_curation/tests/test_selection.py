@@ -247,7 +247,11 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
     structural = next(task for task in full if families[task.id] == STRUCTURAL_FAMILY)
     assert structural.context.events[-1] == TextMessage(role="assistant", content='{"a":[1')
     assert structural.grader.mode == "structure_closure"
-    assert panel.identity(structural.id).strata.source == "SnowballV01:structure-closure"
+    assert panel.identity(structural.id).strata.source == "SnowballV01:structure-closure/validation"
+    assert (
+        panel.identity("heldout-calendar-0").strata.source
+        == "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2"
+    )
     summary = json.loads((output / "summary.json").read_text())
     assert summary["source_counts"] == {
         "fixture:first": {

@@ -35,7 +35,9 @@ The app's release migration creates its `rl_runs` table in the application schem
 Each `(run_id, attempt_id)` identifies one updatable JSON record. The index groups native
 attempts of the same model, preset, user and composed comparison configuration. Repeat
 publication refreshes that attempt's record. Null provenance fields, issue, gate, gate result and
-grader report fields preserve their stored values. EvalDash links accumulate by ID. A terminal record takes precedence over a
+grader report fields preserve their stored values. EvalDash links accumulate by ID.
+History publishers write format 2. The API returns format 1 to format-1
+publishers and retains the stored history metadata. A terminal record takes precedence over a
 running update for the same attempt.
 
 Native failures and failed training or evaluation invariants set `status: failed` and name `failed_facts`.
@@ -70,12 +72,16 @@ Check cold-loaded run and attempt hash links, refresh after repeat publication,
 and the detail dialog's scrolling body, close control, Escape,
 and backdrop dismissal. Stop the local stack with Ctrl-C.
 
-The `Marin - Release RL Progress` workflow runs manually from main, with inspection as its default. The `rl-progress` CI job runs the packaged API and `marina journey rl_progress` browser owner.
+The `Marin - Release RL Progress` workflow runs on main pushes that change the
+app. Its manual dispatch defaults to inspection. The `rl-progress` CI job runs
+the packaged API and `marina journey rl_progress` browser owner.
 
-Deploy a Marina runtime containing `finestore.rl.rl_progress` before releasing the app package.
+Deploy the shared runtime with format-2 `AttemptSummary` support before using
+the history publisher. The app package continues to serve format-1 writes
+during the runtime rollout.
 
 For production, follow [Marina's release procedure](../../README.md). Inspect the
-current private revision, then release with its exact `--base-version`. Merging
-source does not publish it. Verify the deployed assets, selected revision and all
+current private revision, then release with its exact `--base-version`. Verify
+the deployed assets, selected revision and all
 stored records after release. Do not change access mode or rewrite historical
 results as part of a frontend update.

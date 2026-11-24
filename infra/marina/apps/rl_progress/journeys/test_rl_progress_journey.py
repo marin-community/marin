@@ -14,7 +14,9 @@ from infra.marina.tests.rl_progress_fixtures import APPLET_ID, grader_report, pr
 def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> None:
     api = f"{journey.origin}/a/{APPLET_ID}/api/runs"
     record = progress_record() | {
+        "format_version": 2,
         "run_id": "journey/run",
+        "native_run_id": "native/journey/run",
         "label": "Learning fixture",
         "model": "snowball",
         "evaldash_run_ids": ["first-evaluation", "second-evaluation"],
@@ -58,10 +60,20 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
         expect(dialog.get_by_role("link", name=f"EvalDash {evaluation_id}")).to_have_attribute(
             "href", f"https://marina.oa.dev/evaldash/runs/{evaluation_id}"
         )
-    filters = urlencode({"rl_run": record["run_id"], "rl_attempt": record["attempt_id"], "view": "runs"})
+    filters = urlencode(
+        [
+            ("rl_run", record["run_id"]),
+            ("rl_attempt", record["attempt_id"]),
+            ("view", "runs"),
+            ("rl_native_run", record["native_run_id"]),
+        ]
+    )
     expect(dialog.get_by_role("link", name="All EvalDash evaluations of this attempt")).to_have_attribute(
         "href", f"https://marina.oa.dev/evaldash/runs?{filters}"
     )
+    native_route = urlencode({"run": record["native_run_id"], "attempt": record["attempt_id"]})
+    journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/#{native_route}", wait_until="domcontentloaded")
+    expect(dialog.get_by_text("Learning fixture", exact=True)).to_be_visible()
     expect(journey.page.get_by_role("cell", name="snowball", exact=True)).to_be_visible()
     for metric, value in (("family/small", "0.2500"), ("aai_category/coding", "0.3750"), ("difficulty/hard", "0.5000")):
         expect(dialog.get_by_text(f"eval_lite_100@25/{metric}/mean: {value}", exact=False)).to_be_visible()
@@ -126,11 +138,12 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
 def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journey: Journey) -> None:
     api = f"{journey.origin}/a/{APPLET_ID}/api/runs"
     overall, family = "eval_lite/family_mean", "eval_lite/family/small/mean"
-    revisions = [f"2026.11.{day}" for day in (1, 2, 3)]
-    commits = [letter * 10 for letter in "abc"]
+    revisions = [f"2026.11.{day}" for day in (1, 2, 3, 4)]
+    commits = [letter * 10 for letter in "abcd"]
 
     def attempt(name, revision, day, raw):
         return progress_record() | {
+            "format_version": 2,
             "run_id": name,
             "attempt_id": name,
             "label": name,
@@ -148,47 +161,71 @@ def test_progress_anchors_experiments_and_keeps_the_global_protocol_point(journe
             ],
         }
 
-    def link(run, base, delta, *, invalid=False):
+    def link(run, base, delta):
         return progress_record()["gate_result"] | {
             "attempt_ids": [run],
             "control_commit": commits[base],
             "control_revision": revisions[base],
-            "verdict": "invalid" if invalid else "pass",
-            "reason": "evaluation protocol differs" if invalid else None,
+            "invariants": [
+                {
+                    "name": "eval_lite/shared_tasks",
+                    "value": 18,
+                    "limit": 18,
+                    "comparator": ">=",
+                    "holds": True,
+                    "replicate": 0,
+                },
+            ],
             "comparisons": [
-                Comparison(metric=metric, role=role, delta=delta, tolerance=0.03, n_run=1, n_control=1).model_dump(
-                    mode="json"
-                )
-                for metric, role in ((overall, "guard"), (family, "slice"))
+                Comparison(metric=metric, role="slice", delta=delta, n_run=1, n_control=1).model_dump(mode="json")
+                for metric in (overall, family)
             ],
         }
 
-    for i, (revision, raw) in enumerate(zip(revisions, (0.6, 0.4, 0.7), strict=True)):
+    for i, (revision, raw) in enumerate(zip(revisions, (0.5, 0.4, 0.7, 0.75), strict=True)):
         name = f"control-{i}"
         record = attempt(name, revision, i + 1, raw) | {
             "artifact_uri": f"s3://example/control/learning-medium-{commits[i]}-r0/{revision}",
-            "evaluation_data_identity": f"panel@{revision}",
+            "evaluation_data_identity": f"panel@{revisions[min(i, 2)]}",
             "evaluation_protocol_identity": "protocol-a" if i < 2 else "protocol-b",
-            "gate_result": link(name, i - 1, 0.1, invalid=i == 2) if i else None,
+            "gate_result": link(name, i - 1, 0.1) if i in (1, 2) else None,
         }
+        response = journey.page.request.post(api, data=record)
+        assert response.ok, response.text()
+
+    retry = attempt("control-0-retry", revisions[0], 1, 0.7) | {
+        "artifact_uri": f"s3://example/control/learning-medium-{commits[0]}-r0-retry1/{revisions[0]}",
+        "evaluation_data_identity": f"panel@{revisions[0]}",
+        "evaluation_protocol_identity": "protocol-a",
+    }
+    feature_control = attempt("feature-control", "dev", 2, 0.95) | {
+        "artifact_uri": "s3://example/control/learning-medium-fffaaaa000-r0/dev",
+        "branch": "feature",
+    }
+    unmatched = attempt("unknown-base", "dev", 6, 0.8) | {"branch": "older-branch"}
+    for record in (retry, feature_control, unmatched):
         response = journey.page.request.post(api, data=record)
         assert response.ok, response.text()
 
     branch = attempt("branch-at-first-preset", "dev", 4, 0.55) | {
         "branch": "experiment",
         "base_preset_revision": revisions[0],
-        "gate_result": link("branch-at-first-preset", 0, -0.05),
+        "gate_result": link("branch-at-first-preset", 1, -0.15),
     }
     response = journey.page.request.post(api, data=branch)
     assert response.ok, response.text()
 
     journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/", wait_until="domcontentloaded")
+    journey.page.get_by_role("combobox", name="Preset", exact=True).select_option(label="snowball · learning-medium")
     chart = journey.page.get_by_role("group", name=overall, exact=True)
     expect(chart.locator("line.history-chain")).to_have_count(1)
     expect(chart.locator("line[aria-label='Evaluation set changed']")).to_have_count(1)
     expect(chart.locator("line[aria-label='Protocol changed']")).to_have_count(1)
     expect(chart.locator("circle.history-global > title").last).to_contain_text("Experiment global 55.0%")
+    expect(chart.locator("circle.history-global > title").first).to_contain_text("Global 60.0%")
     expect(chart.locator("circle.history-global > title").nth(2)).to_contain_text("Global 70.0%")
+    expect(chart.locator("line.history-global > title").first).to_contain_text("50.0%\u201370.0%")
+    expect(chart.get_by_role("link", name="unknown-base · 80.0%")).to_be_visible()
     expect(journey.page.get_by_role("group", name=family, exact=True).locator("line.history-chain")).to_have_count(1)
     chart.get_by_role("link", name="branch-at-first-preset · 25.0%").locator("circle").first.click()
     expect(journey.page.get_by_role("dialog")).to_contain_text(revisions[0])

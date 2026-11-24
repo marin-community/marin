@@ -13,16 +13,20 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import ProgrammingError
 
+_HISTORY_FIELDS = (
+    "native_run_id",
+    "base_preset_revision",
+    "control_preset",
+    "evaluation_data_identity",
+    "evaluation_protocol_identity",
+)
 _RETAINED_FIELDS = (
     "issue",
     "gate",
     "gate_result",
     "model",
     "grader_report",
-    "base_preset_revision",
-    "control_preset",
-    "evaluation_data_identity",
-    "evaluation_protocol_identity",
+    *(field for field in _HISTORY_FIELDS if field in AttemptSummary.model_fields),
 )
 _RETAINED_VALUES = ", ".join(
     f"'{key}', COALESCE(NULLIF(EXCLUDED.record -> '{key}', 'null'::jsonb), rl_runs.record -> '{key}', 'null'::jsonb)"
@@ -37,6 +41,8 @@ _UPSERT = text(
           AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record
         ELSE EXCLUDED.record || jsonb_build_object(
           {_RETAINED_VALUES},
+          'format_version', CASE WHEN '2' IN (EXCLUDED.record ->> 'format_version', rl_runs.record ->> 'format_version')
+            THEN 2 ELSE 1 END,
           'evaldash_run_ids', (
             SELECT jsonb_agg(link ORDER BY first_seen)
             FROM (
@@ -121,9 +127,9 @@ def create_api(services):
                 ).scalar_one()
                 repaired = dict(stored)
                 for field in _RETAINED_FIELDS:
-                    if incoming[field] is None:
+                    if incoming.get(field) is None:
                         try:
-                            json.dumps(repaired[field], allow_nan=False)
+                            json.dumps(repaired.get(field), allow_nan=False)
                         except ValueError:
                             repaired[field] = None
                 try:
@@ -131,7 +137,7 @@ def create_api(services):
                 except ValidationError as error:
                     invalid = {item["loc"][0] for item in error.errors() if item["loc"]}
                     for field in _RETAINED_FIELDS:
-                        if field in invalid and incoming[field] is None:
+                        if field in invalid and incoming.get(field) is None:
                             repaired[field] = None
                     summary = AttemptSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
                 normalized = summary.model_dump(mode="json")
@@ -147,6 +153,10 @@ def create_api(services):
                             "record": summary.model_dump_json(),
                         },
                     )
+                if incoming["format_version"] == 1:
+                    return {key: value for key, value in normalized.items() if key not in _HISTORY_FIELDS} | {
+                        "format_version": 1
+                    }
                 return normalized
         except ProgrammingError as error:
             details = error.orig.args[0]

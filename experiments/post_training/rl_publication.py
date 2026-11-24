@@ -185,19 +185,23 @@ def _read_grader_report(launch: RecordedLaunch, attempt_id: str, evidence: list[
 def _gate_result(report: gate.GateReport | None) -> GateResult | None:
     if report is None:
         return None
+    decisions = report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT)
+    decision_metrics = {row.metric for row in decisions}
+    history_scores = [
+        row
+        for row in report.rows(ComparisonRole.SLICE)
+        if row.metric not in decision_metrics
+        and (
+            row.metric.partition("/")[2] in {"mean", "family_mean"}
+            or ("/family/" in row.metric and row.metric.endswith("/mean"))
+        )
+    ]
     return GateResult(
         verdict=report.verdict,
         effect=report.effect,
         reason=report.reason,
         invariants=list(report.invariants),
-        comparisons=[
-            *report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT),
-            *(
-                row
-                for row in report.rows(ComparisonRole.SLICE)
-                if "/family/" in row.metric and row.metric.endswith("/mean")
-            ),
-        ],
+        comparisons=[*decisions, *history_scores],
         attempt_ids=list(report.run.attempt_ids),
         replicates=report.run.replicates,
         control_commit=report.control.commit,
@@ -267,7 +271,9 @@ def build_record(
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
     evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
     return AttemptSummary(
+        format_version=2,
         run_id=attempt.index_run_id,
+        native_run_id=attempt.run_id,
         attempt_id=attempt_id,
         label=run_label(inputs),
         series=preset.name,
@@ -426,29 +432,34 @@ def _link_issue(receipt: AttemptRecord, issue: int) -> int | None:
     return assigned
 
 
-def _with_evaldash_links(summary: AttemptSummary, native_id: str, service_url: str | None) -> AttemptSummary:
+def _with_evaldash_links(summary: AttemptSummary, service_url: str | None) -> AttemptSummary:
     try:
         from marina import client  # noqa: PLC0415
 
+        run_ids = list(dict.fromkeys((summary.run_id, summary.native_run_id or summary.run_id)))
+        rows = client.marina_request(
+            service_url or client.DEFAULT_MARINA_URL,
+            "GET",
+            "/evaldash/api/runs",
+            params={
+                "rl_run": summary.run_id,
+                "rl_native_run": summary.native_run_id or summary.run_id,
+                "rl_attempt": summary.attempt_id,
+                "limit": 1000,
+            },
+            timeout=4,
+        )
+        if not isinstance(rows, list):
+            raise ValueError("EvalDash did not return a run list")
         links = list(summary.evaldash_run_ids or ())
-        for run_id in dict.fromkeys((summary.run_id, native_id)):
-            rows = client.marina_request(
-                service_url or client.DEFAULT_MARINA_URL,
-                "GET",
-                "/evaldash/api/runs",
-                params={"rl_run": run_id, "rl_attempt": summary.attempt_id, "limit": 1000},
-                timeout=4,
-            )
-            if not isinstance(rows, list):
-                raise ValueError("EvalDash did not return a run list")
-            links.extend(
-                row["run_id"]
-                for row in rows
-                if isinstance(row, dict)
-                and row.get("rl_run_id") == run_id
-                and row.get("rl_attempt_id") == summary.attempt_id
-                and isinstance(row.get("run_id"), str)
-            )
+        links.extend(
+            row["run_id"]
+            for row in rows
+            if isinstance(row, dict)
+            and row.get("rl_run_id") in run_ids
+            and row.get("rl_attempt_id") == summary.attempt_id
+            and isinstance(row.get("run_id"), str)
+        )
         return summary.model_copy(update={"evaldash_run_ids": list(dict.fromkeys(links))}) if links else summary
     except (ImportError, OSError, ValueError, RuntimeError) as error:
         logger.debug("EvalDash lookup unavailable for %s (%s)", summary.attempt_id, type(error).__name__)
@@ -527,8 +538,8 @@ def publish_runs(
                 )
                 if issue is not None:
                     record = record.model_copy(update={"issue": _link_issue(receipt, issue)})
-                if record.status == "succeeded":
-                    record = _with_evaldash_links(record, receipt.run_id, service_url)
+                if receipt.native.result.state.is_terminal:
+                    record = _with_evaldash_links(record, service_url)
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if selected_id == current_id:

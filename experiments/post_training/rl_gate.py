@@ -718,7 +718,7 @@ def _write_gate(
             update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
         )
         runs = [
-            with_requirements(with_objectives(read_measurements(path, preset, inputs), preset), inputs.requirements)
+            with_requirements(with_objectives(read_measurements(path, preset), preset), inputs.requirements)
             for path in run_paths
         ]
         if runs:

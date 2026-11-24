@@ -35,6 +35,7 @@ function controlSets(runs) {
     for (const run of [...set.rows].sort((a, b) => time(b).localeCompare(time(a)))) {
       if (run.status !== 'succeeded' || latestByOutput.has(run.artifact_uri)) continue;
       if (report?.attempt_ids.length && !report.attempt_ids.includes(run.attempt_id)) continue;
+      if (!report && run.branch && run.branch !== 'main') continue;
       latestByOutput.set(run.artifact_uri, run);
     }
     const rows = [...latestByOutput.values()];
@@ -50,9 +51,6 @@ function comparison(report, metric) {
   const row = report.comparisons.find((item) => item.metric === metric);
   if (!row) return null;
   if (Number.isFinite(row.delta)) return { delta: row.delta, tolerance: row.tolerance };
-  if (Number.isFinite(row.run) && Number.isFinite(row.control)) {
-    return { delta: row.run - row.control, tolerance: row.tolerance };
-  }
   return null;
 }
 
@@ -65,15 +63,17 @@ function controlPoints(sets, scores, metric) {
   });
   for (const [index, point] of points.entries()) {
     const previous = points[index - 1];
-    if (!previous) continue;
+    if (!previous) { point.segment = 0; continue; }
     const protocolChanged = (point.protocol && previous.protocol && point.protocol !== previous.protocol)
       || point.report?.reason === 'evaluation protocol differs';
     const dataChanged = point.data && previous.data && point.data !== previous.data;
     point.marker = protocolChanged ? 'Protocol changed' : dataChanged ? 'Evaluation set changed' : null;
-    if (!protocolChanged && point.report?.control_revision === previous.revision
+    const shared = point.report?.invariants.some((fact) => fact.name === `${metric.split('/')[0]}/shared_tasks` && fact.holds);
+    if (shared && !protocolChanged && point.report.control_revision === previous.revision
       && sameCommit(point.report.control_commit, previous.commit)) {
       point.link = comparison(point.report, metric);
     }
+    point.segment = previous.segment + (point.link ? 0 : 1);
   }
   for (let index = points.length - 1; index >= 0; index--) {
     const next = points[index + 1];
@@ -83,18 +83,20 @@ function controlPoints(sets, scores, metric) {
 }
 
 function branchPoints(runs, scores, controls, metric) {
+  const groups = new Set();
   return runs.flatMap((run) => {
     const global = scores.get(run).get(metric)?.value;
     if (!Number.isFinite(global) || controlPath.test(run.artifact_uri ?? '')) return [];
     const report = run.gate_result;
-    const matching = controls.map((control, index) => ({ control, index }))
-      .filter(({ control }) => control.revision === run.base_preset_revision);
-    const base = matching.find(({ control }) => sameCommit(report?.control_commit, control.commit)) ?? matching.at(-1);
-    if (!base && controls.length) return [];
-    const delta = base && report?.control_revision === base.control.revision
-      && sameCommit(report?.control_commit, base.control.commit) ? comparison(report, metric) : null;
-    return [{ run, global, index: base?.index, chained: delta ? base.control.chained + delta.delta : null,
-      tolerance: delta?.tolerance }];
+    const matching = controls.filter((control) => control.revision === run.base_preset_revision);
+    const base = matching.find((control) => sameCommit(report?.control_commit, control.commit)) ?? matching.at(-1);
+    const gateControl = controls.find((control) => report?.control_revision === control.revision
+      && sameCommit(report.control_commit, control.commit));
+    const group = report?.attempt_ids.length > 1 ? JSON.stringify([...report.attempt_ids].sort()) : null;
+    const delta = base && gateControl?.segment === base.segment && !groups.has(group) ? comparison(report, metric) : null;
+    if (delta && group) groups.add(group);
+    return [{ run, global, time: base?.time ?? time(run), chained: delta ? gateControl.chained + delta.delta : null,
+      tolerance: delta?.tolerance, replicateCount: delta && group ? report.attempt_ids.length : 1 }];
   }).sort((a, b) => time(a.run).localeCompare(time(b.run)));
 }
 
@@ -112,8 +114,9 @@ function plot(metric, controls, branches, route) {
       row.chained == null ? null : row.chained - (row.tolerance ?? 0)])].filter(Number.isFinite);
   const low = Math.min(...values), high = Math.max(...values), padding = Math.max(.025, (high - low) * .12);
   const y = (value) => 160 - 130 * (value - low + padding) / (high - low + 2 * padding);
-  const count = controls.length || branches.length;
-  const x = (index) => count === 1 ? 346 : 68 + 555 * index / (count - 1);
+  const times = [...new Set([...controls, ...branches].map((row) => row.time))].sort();
+  const positions = new Map(times.map((value, index) => [value, index]));
+  const x = (at) => times.length === 1 ? 346 : 68 + 555 * positions.get(at) / (times.length - 1);
   const line = (index, a, end, b, className, label) => {
     const node = svg('line', { x1: x(index), y1: y(a), x2: x(end), y2: y(b), class: className });
     if (label) node.append(svg('title', {}, label));
@@ -124,44 +127,45 @@ function plot(metric, controls, branches, route) {
       svg('text', { x: 50, y: y(value) + 3, 'text-anchor': 'end' }, score(value)));
   }
   for (const [index, point] of controls.entries()) {
-    if (index) line(index - 1, controls[index - 1].global, index, point.global, 'history-global');
-    if (point.link) line(index - 1, controls[index - 1].chained, index, point.chained, 'history-chain',
+    const previous = controls[index - 1];
+    if (previous) line(previous.time, previous.global, point.time, point.global, 'history-global');
+    if (point.link) line(previous.time, previous.chained, point.time, point.chained, 'history-chain',
       Number.isFinite(point.link.tolerance) ? `Shared-task tolerance ±${score(point.link.tolerance)}` : null);
     if (point.marker) {
-      const marker = svg('line', { x1: x(index), y1: 20, x2: x(index), y2: 165, class: 'history-marker',
+      const marker = svg('line', { x1: x(point.time), y1: 20, x2: x(point.time), y2: 165, class: 'history-marker',
         'aria-label': point.marker });
       marker.append(svg('title', {}, `${point.marker}${point.data ? ` · ${point.data}` : ''}`));
-      chart.append(marker, svg('text', { x: x(index) - 4, y: 17, 'text-anchor': 'end' }, point.marker));
+      chart.append(marker, svg('text', { x: x(point.time) - 4, y: 17, 'text-anchor': 'end' }, point.marker));
     }
-    line(index, point.min, index, point.max, 'history-global', `Replicate range ${score(point.min)}–${score(point.max)}`);
+    line(point.time, point.min, point.time, point.max, 'history-global', `Replicate range ${score(point.min)}–${score(point.max)}`);
     const markers = [[point.global, 'global']];
     if (point.link || controls[index + 1]?.link) markers.push([point.chained, 'chain']);
     for (const [value, style] of markers) {
-      const dot = svg('circle', { cx: x(index), cy: y(value), r: 3.5, class: `history-${style}` });
+      const dot = svg('circle', { cx: x(point.time), cy: y(value), r: 3.5, class: `history-${style}` });
       dot.append(svg('title', {}, `${point.revision} · ${style === 'chain' ? 'Comparable' : 'Global'} ${score(value)}`));
       chart.append(dot);
     }
     if (index === 0 || index === controls.length - 1 || controls.length <= 5) {
-      chart.append(svg('text', { x: x(index), y: 181, 'text-anchor': 'middle' }, point.revision));
+      chart.append(svg('text', { x: x(point.time), y: 181, 'text-anchor': 'middle' }, point.revision));
     }
   }
   let previousMain;
-  for (const [position, point] of branches.entries()) {
-    const index = point.index ?? position;
+  for (const point of branches) {
     const value = point.chained ?? point.global;
     const onMain = !controls.length && point.run.branch === 'main' && !point.run.dirty;
     if (onMain) {
-      if (previousMain) line(previousMain.index, previousMain.value, index, value, 'history-global');
-      previousMain = { index, value };
+      if (previousMain) line(previousMain.time, previousMain.value, point.time, value, 'history-global');
+      previousMain = { time: point.time, value };
     }
     if (point.chained != null && Number.isFinite(point.tolerance)) {
-      line(index, value - point.tolerance, index, value + point.tolerance, 'history-branch');
+      line(point.time, value - point.tolerance, point.time, value + point.tolerance, 'history-branch');
     }
-    const link = svg('a', { href: route(point.run), 'aria-label': `${point.run.label} · ${score(value)}` });
-    link.append(svg('circle', { cx: x(index), cy: y(value), r: 4.5, class: onMain ? 'history-global' : 'history-branch' }),
+    const detail = point.replicateCount > 1 ? ` · ${point.replicateCount} replicate mean` : '';
+    const link = svg('a', { href: route(point.run), 'aria-label': `${point.run.label} · ${score(value)}${detail}` });
+    link.append(svg('circle', { cx: x(point.time), cy: y(value), r: 4.5, class: onMain ? 'history-global' : 'history-branch' }),
       svg('title', {}, `${point.run.branch ?? point.run.label} · ${score(value)} · ${point.run.base_preset_revision ?? 'Base unavailable'}`));
     if (point.chained != null && point.chained !== point.global) {
-      const dot = svg('circle', { cx: x(index), cy: y(point.global), r: 3, class: 'history-global' });
+      const dot = svg('circle', { cx: x(point.time), cy: y(point.global), r: 3, class: 'history-global' });
       dot.append(svg('title', {}, `Experiment global ${score(point.global)}`));
       link.append(dot);
     }
@@ -177,6 +181,8 @@ export function showProgress(container, runs, reference, route) {
   const metricsToShow = selected.filter((key) => !/^[^/]+\/mean$/.test(key)
     || !selected.includes(key.replace(/\/mean$/, '/family_mean')));
   const controls = controlSets([...runs, ...reference]);
+  const initialOnly = runs.some((run) => run.planned_updates === 0)
+    && runs.every((run) => run.planned_updates == null || run.planned_updates === 0);
   container.replaceChildren();
   for (const metric of metricsToShow.sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b))) {
     const points = controlPoints(controls, scores, metric);
@@ -185,6 +191,7 @@ export function showProgress(container, runs, reference, route) {
     const figure = document.createElement('figure');
     const label = document.createElement('figcaption');
     label.textContent = metric.replaceAll('/', ' · ').replaceAll('_', ' ');
+    if (initialOnly) label.textContent += ' · initializer inference';
     figure.append(label, plot(metric, points, branches, route));
     container.append(figure);
   }

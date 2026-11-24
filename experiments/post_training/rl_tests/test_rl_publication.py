@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 import click
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import AttemptSummary
+from finestore.rl.rl_progress import AttemptSummary, RunIndexIdentity
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -52,6 +52,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import controls as write_controls
+from experiments.post_training.skyrl_test_support import selection_summary
 from infra.marina.tests.rl_progress_fixtures import grader_report
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
@@ -314,13 +315,19 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
 
     report, first_gate = saved_gate()
     interrupted = {"once": True}
+    logical_id = "snowball-learning-medium-tester-1234abcd"
+    native_id = f"tests/publication-0-{preset.revision}"
+    automatic_links = ["linked-export", "native-export"]
 
     def unavailable_readback(origin, method, path, *, json_body=None, **kwargs):
         if method == "GET" and path == "/evaldash/api/runs":
-            run_id = kwargs["params"]["rl_run"]
+            if kwargs["params"]["rl_attempt"] == "native-0":
+                assert kwargs["params"]["rl_run"] == logical_id
+                assert kwargs["params"]["rl_native_run"] == native_id
             return [
-                {"run_id": "linked-export", "rl_run_id": run_id, "rl_attempt_id": "native-0"},
-                {"run_id": "cached-export", "rl_run_id": run_id, "rl_attempt_id": "earlier-attempt"},
+                {"run_id": "linked-export", "rl_run_id": logical_id, "rl_attempt_id": "native-0"},
+                {"run_id": "native-export", "rl_run_id": native_id, "rl_attempt_id": "native-0"},
+                {"run_id": "cached-export", "rl_run_id": logical_id, "rl_attempt_id": "earlier-attempt"},
                 {"run_id": "other-run", "rl_run_id": "unrelated", "rl_attempt_id": "native-0"},
             ]
         response = request(origin, method, path, json_body=json_body)
@@ -335,13 +342,32 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         attempt = read_stored_skyrl_attempts(str(source))[1][attempt_id]
         write_attempt(
             str(source / "exports"),
-            AttemptRecord(run_id=attempt.run_id, attempt_id=attempt_id, issue=73 if index == 0 else None),
+            AttemptRecord(
+                run_id=attempt.run_id,
+                attempt_id=attempt_id,
+                issue=73 if index == 0 else None,
+                index=(
+                    RunIndexIdentity(
+                        run_id=logical_id,
+                        model=table.model,
+                        preset=preset.name,
+                        preset_revision=preset.revision,
+                        user="tester",
+                        branch="fixture",
+                        source_revision="fixture",
+                        dirty=False,
+                        base_preset_revision=preset.revision,
+                    )
+                    if index == 0
+                    else None
+                ),
+            ),
         )
     first = publish(first_gate)
     assert len(first.served_records) == 1 and first.errors == ["Response unavailable after insert"]
     persisted = stored()
     assert set(persisted) == {"native-0", "native-1"} and persisted["native-0"]["issue"] == 73
-    assert persisted["native-0"]["evaldash_run_ids"] == ["linked-export"]
+    assert persisted["native-0"]["evaldash_run_ids"] == automatic_links
     assert persisted["native-1"]["evaldash_run_ids"] is None
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
     relative_key = "eval_lite/aai_category/coding/mean"
@@ -351,15 +377,29 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         receipt["result"]["finished_at"] = (
             datetime.fromisoformat(receipt["result"]["started_at"]) + timedelta(hours=2)
         ).isoformat()
-    monkeypatch.setattr("marina.client.marina_request", request)
+
+    def unavailable_catalog(origin, method, path, **kwargs):
+        if method == "GET" and path == "/evaldash/api/runs":
+            raise RuntimeError("EvalDash unavailable")
+        return request(origin, method, path, **kwargs)
+
+    monkeypatch.setattr("marina.client.marina_request", unavailable_catalog)
     repeated = publish(second_gate)
     assert repeated.unserved_records == [] and repeated.errors == []
     payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert rows["native-0"]["evaldash_run_ids"] == ["linked-export"]
+    assert rows["native-0"]["evaldash_run_ids"] == automatic_links
+    assert "EvalDash catalog lookup was unavailable." in rows["native-0"]["evidence"]
     assert rows["native-0"]["evaluation_data_identity"].endswith("/full_validation.parquet")
-    assert repeated.urls[str(sources[0])].endswith(f"#run=tests%2Fpublication-0-{preset.revision}&attempt=native-0")
+    assert repeated.urls[str(sources[0])].endswith(f"#run={logical_id}&attempt=native-0")
+    newer = replace(preset, held_out_tasks="eval-lite@2026.11.24.99")
+    newer_selection = recipe.selection_artifact(newer.held_out_tasks).path()
+    write_json(Path(newer_selection) / "summary.json", selection_summary(40))
+    saved_attempt = read_stored_skyrl_attempts(str(sources[0]))[1]["native-0"]
+    earlier = publication.build_record(str(sources[0]), newer, table=preset_table(newer), attempt=saved_attempt)
+    assert earlier.status == "succeeded"
+    assert earlier.evaluation_data_identity == rows["native-0"]["evaluation_data_identity"]
 
     def wrong_returned_key(origin, method, path, *, json_body=None, **kwargs):
         response = request(origin, method, path, json_body=json_body)
@@ -379,6 +419,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         "eval_lite/family_mean/gain_per_gpu_hour": "objective",
         "policy/entropy": "guard",
         relative_key: "requirement",
+        "eval_lite/mean": "slice",
         "eval_lite/family/small/mean": "slice",
         "eval_lite/family/large/mean": "slice",
     }
@@ -428,7 +469,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
         assert retained["issue"] == 73 + index
         assert read_stored_skyrl_attempts(str(sources[index]))[1][f"native-{index}"].issue == 73 + index
-        assert retained["evaldash_run_ids"] == (["linked-export", *run_ids] if index == 0 else list(run_ids))
+        assert retained["evaldash_run_ids"] == ([*automatic_links, *run_ids] if index == 0 else list(run_ids))
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (
             rows[f"native-{index}"]["status"],
@@ -457,7 +498,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     grafana = urlparse(rows["native-0"]["grafana_url"])
     assert grafana.path == "/d/marin-rl-runs/rl-post-training"
     query = parse_qs(grafana.query)
-    assert query["var-run"] == [receipt["config"]["run"]["id"]]
+    assert query["var-run"] == [logical_id]
     assert query["var-cluster"] == [receipt["config"]["iris"]["cluster"]]
     assert query["to"] == ["1793997600000"]
     evaluation = {item["metric"]: item for item in rows["native-0"]["evaluations"]}
@@ -490,7 +531,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert fresh.unserved_records == [] and fresh.errors == []
     assert fresh_report.run.attempt_ids == ("native-retry", "native-1")
     historical = stored()["native-0"]
-    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == ["linked-export", *run_ids]
+    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == [*automatic_links, *run_ids]
     with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
         publication.publish_runs([str(sources[0])], preset, table=table, evaldash_run_ids=run_ids)
     with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
@@ -503,7 +544,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert linked.served_records == [(receipt["config"]["run"]["id"], "native-retry")] and not linked.errors
     linked_rows = stored()
     assert linked_rows["native-retry"]["evaldash_run_ids"] == ["eval-for-retry"]
-    assert linked_rows["native-0"]["evaldash_run_ids"] == ["linked-export", *run_ids]
+    assert linked_rows["native-0"]["evaldash_run_ids"] == [*automatic_links, *run_ids]
     saved_evaluations = {}
     for root in sources:
         current_id, _ = read_stored_skyrl_attempts(str(root))
@@ -562,7 +603,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert blocked.unserved_records == [(receipt["config"]["run"]["id"], "native-retry")]
     assert blocked.errors == ["Gate storage unavailable"]
     assert set(blocked.served_records) == {
-        (receipt["config"]["run"]["id"], "native-0"),
+        (logical_id, "native-0"),
         (second_receipt["config"]["run"]["id"], "native-1"),
     }
     failed_row = stored()["native-1"]

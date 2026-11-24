@@ -364,6 +364,7 @@ def record_to_row(record: EvalRunRecord) -> dict:
 
     The single definition of that shape, so the run list is identical whichever store produced it.
     """
+    attempt = _rl_attempt(record)
     return {
         "run_id": record.run_id,
         "group_id": record.group_id,
@@ -386,20 +387,24 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "error": record.error,
         "tasks": [task.name for task in record.evaluation.tasks],
         "jobs": dict(record.jobs),
-        "rl_run_id": record.rl_attempt.run_id if record.rl_attempt else None,
-        "rl_attempt_id": record.rl_attempt.attempt_id if record.rl_attempt else None,
-        "rl_step": record.rl_attempt.step if record.rl_attempt else None,
+        "rl_run_id": attempt.get("run_id"),
+        "rl_attempt_id": attempt.get("attempt_id"),
+        "rl_step": attempt.get("step"),
     }
 
 
-def _matches_rl_attempt(record: EvalRunRecord, run_id: str | None, attempt_id: str | None) -> bool:
-    if run_id is None and attempt_id is None:
+def _rl_attempt(record: EvalRunRecord) -> dict:
+    return record.model_dump(include={"rl_attempt"}).get("rl_attempt") or {}
+
+
+def _matches_rl_attempt(record: EvalRunRecord, run_ids: tuple[str, ...], attempt_id: str | None) -> bool:
+    if not run_ids and attempt_id is None:
         return True
-    ref = record.rl_attempt
+    ref = _rl_attempt(record)
     return (
-        ref is not None
-        and (run_id is None or ref.run_id == run_id)
-        and (attempt_id is None or ref.attempt_id == attempt_id)
+        bool(ref)
+        and (not run_ids or ref.get("run_id") in run_ids)
+        and (attempt_id is None or ref.get("attempt_id") == attempt_id)
     )
 
 
@@ -487,12 +492,12 @@ class RecordStore:
         group: str | None = None,
         version: str | None = None,
         accelerator: str | None = None,
-        rl_run: str | None = None,
+        rl_runs: tuple[str, ...] = (),
         rl_attempt: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
         records, _by_id = self._snapshot()
-        rows = [record_to_row(record) for record in records if _matches_rl_attempt(record, rl_run, rl_attempt)]
+        rows = [record_to_row(record) for record in records if _matches_rl_attempt(record, rl_runs, rl_attempt)]
         rows = [
             row
             for row in rows
@@ -543,7 +548,7 @@ class RecordStore:
         status: str | None = None,
         version: str | None = None,
         accelerator: str | None = None,
-        rl_run: str | None = None,
+        rl_runs: tuple[str, ...] = (),
         rl_attempt: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
@@ -558,7 +563,7 @@ class RecordStore:
         for record in records:
             if (model and record.model.name != model) or (user and record.user != user):
                 continue
-            if not _matches_rl_attempt(record, rl_run, rl_attempt):
+            if not _matches_rl_attempt(record, rl_runs, rl_attempt):
                 continue
             by_group.setdefault(record.group_id, []).append(record)
         groups: list[dict] = []
@@ -1177,7 +1182,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             group=params.get("group") or None,
             version=params.get("version") or None,
             accelerator=params.get("accelerator") or None,
-            rl_run=params.get("rl_run") or None,
+            rl_runs=tuple(filter(None, (params.get("rl_run"), params.get("rl_native_run")))),
             rl_attempt=params.get("rl_attempt") or None,
             limit=_parse_limit(params.get("limit")),
         )
@@ -1340,7 +1345,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             status=params.get("status") or None,
             version=params.get("version") or None,
             accelerator=params.get("accelerator") or None,
-            rl_run=params.get("rl_run") or None,
+            rl_runs=tuple(filter(None, (params.get("rl_run"), params.get("rl_native_run")))),
             rl_attempt=params.get("rl_attempt") or None,
             limit=_parse_limit(params.get("limit")),
         )

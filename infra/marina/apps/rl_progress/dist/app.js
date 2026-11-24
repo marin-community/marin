@@ -11,6 +11,7 @@ function element(tag, text, attrs = {}) {
   return node;
 }
 const series = (run) => run.series ?? run.label;
+const savedPreset = (run) => run.preset ?? run.series;
 const grafanaLink = (run) => run.grafana_url && /^https:\/\/grafana\.oa\.dev\//.test(run.grafana_url) ? element('a', 'Grafana ↗', { href: run.grafana_url, target: '_blank', rel: 'noopener noreferrer' }) : null;
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const percent = (value) => value == null ? 'unavailable' : `${number(value, 2)}%`;
@@ -33,7 +34,9 @@ function visibleRuns(groups) {
 function route(run) { return '#' + new URLSearchParams({ run: run.run_id, attempt: run.attempt_id }); }
 function selectedFromHash() {
   const params = new URLSearchParams(location.hash.slice(1));
-  const attempts = groupedRuns().get(params.get('run')) ?? [];
+  const runId = params.get('run');
+  const attempts = groupedRuns().get(runId) ?? runs.filter((run) => run.native_run_id === runId)
+    .sort((a, b) => attemptTime(b) - attemptTime(a));
   return params.has('attempt') ? attempts.find((run) => run.attempt_id === params.get('attempt')) ?? null : attempts[0] ?? null;
 }
 
@@ -54,6 +57,7 @@ function showDetails(run) {
     links.append(element('a', `EvalDash ${id} ↗`, { href: `https://marina.oa.dev/evaldash/runs/${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener noreferrer' }));
   }
   const evaluations = new URLSearchParams({ rl_run: run.run_id, rl_attempt: run.attempt_id, view: 'runs' });
+  if (run.native_run_id && run.native_run_id !== run.run_id) evaluations.set('rl_native_run', run.native_run_id);
   links.append(element('a', 'All EvalDash evaluations of this attempt', { href: `https://marina.oa.dev/evaldash/runs?${evaluations}` }));
   if (run.has_grader_report) links.append(element('a', 'Grader stats', { href: './graders.html?' + route(run).slice(1) }));
   links.append(element('a', 'Link to this run', { href: route(run) }));
@@ -106,15 +110,15 @@ function render() {
   const matching = model ? runs.filter((run) => run.model === model) : runs;
   const groups = groupedRuns(matching), selected = visibleRuns(groups);
   const preset = $('progress-preset'), previous = preset.value;
-  const choices = new Map(matching.filter((run) => run.model && run.preset && run.evaluations?.length)
-    .map((run) => [JSON.stringify([run.model, run.preset]), `${run.model} · ${run.preset}`]));
+  const choices = new Map(matching.filter((run) => run.model && savedPreset(run) && run.evaluations?.length)
+    .map((run) => [JSON.stringify([run.model, savedPreset(run)]), `${run.model} · ${savedPreset(run)}`]));
   preset.replaceChildren(...[...choices].sort((a, b) => a[1].localeCompare(b[1]))
     .map(([value, label]) => element('option', label, { value })));
   if (choices.has(previous)) preset.value = previous;
   $('progress-panel').hidden = !choices.size;
-  const history = matching.filter((run) => JSON.stringify([run.model, run.preset]) === preset.value);
-  const reference = history.find((run) => run.control_preset && run.control_preset !== run.preset);
-  const controls = reference ? matching.filter((run) => run.model === reference.model && run.preset === reference.control_preset) : [];
+  const history = matching.filter((run) => JSON.stringify([run.model, savedPreset(run)]) === preset.value);
+  const reference = history.find((run) => run.control_preset && run.control_preset !== savedPreset(run));
+  const controls = reference ? matching.filter((run) => run.model === reference.model && savedPreset(run) === reference.control_preset) : [];
   showProgress($('progress-charts'), history, controls, route);
   $('count').textContent = `${selected.length} runs · ${matching.length} recorded attempts`;
   $('attempts').replaceChildren(...[...selected].sort((a, b) => attemptTime(b) - attemptTime(a)).map((run) => {
