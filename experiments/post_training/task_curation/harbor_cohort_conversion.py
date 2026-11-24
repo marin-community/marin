@@ -17,10 +17,14 @@ verifier steps as the sandbox grader the rollout engine executes:
   grader's verifier deadline: the ``tests/`` tree is restored to ``/tests``
   with its original modes, the task's ``[[verifier.collect]]`` blocks run
   next, then Harbor's exact execution command runs with the task's verifier
-  env. Harbor bounds each collect hook at its own 60-second default and only
-  warns when one fails; here a failing or hanging collect is a grading
-  failure at the verifier deadline — the conservative direction for graders
-  that must fail closed.
+  env in the native reward-file mode — the script runs unchanged even when
+  its tests fail, its exact exit code persists to
+  ``/logs/verifier/exit-code.txt`` beside the reward file it wrote, and the
+  reward file arbitrates the score. Harbor bounds each collect hook at its own
+  60-second default and only warns when one fails; here a failing or hanging
+  collect is a grading failure at the verifier deadline — the conservative
+  direction for graders that must fail closed. A harness that crashes before
+  scoring leaves no reward file, and the missing file is a grading failure.
 - ``artifacts`` copy the test stdout and the reward file to the grading
   machine.
 - ``reward`` reads the structured verdict when ``verifier.toml`` is present;
@@ -77,10 +81,12 @@ from taskcompendium.runtime.staging import StagedFile, write_archive
 HARBOR_TEST_SCRIPT = "tests/test.sh"
 HARBOR_VERIFIER_CONFIG = "tests/verifier.toml"
 HARBOR_TEST_STDOUT = "/logs/verifier/test-stdout.txt"
+HARBOR_TEST_EXIT = "/logs/verifier/exit-code.txt"
 HARBOR_VERDICT = "/logs/verifier/verdict.json"
 HARBOR_REWARD_JSON = "/logs/verifier/reward.json"
 HARBOR_REWARD_TEXT = "/logs/verifier/reward.txt"
 COPIED_TEST_STDOUT = "/source-test-output.txt"
+COPIED_TEST_EXIT = "/source-exit-code.txt"
 COPIED_VERDICT = "/source-verdict.json"
 COPIED_REWARD_JSON = "/source-reward.json"
 COPIED_REWARD_TEXT = "/source-reward.txt"
@@ -179,12 +185,16 @@ def _reward_files(has_verifier_config: bool) -> tuple[tuple[VerifierArtifact, ..
     """Copy Harbor's reward artifacts and read them with the same precedence.
 
     The argv guards the artifact's arrival: a grading machine without the
-    copied reward file fails loudly instead of scoring anything.
+    copied reward file fails loudly instead of scoring anything. The test
+    script's own exit code is copied beside the reward for diagnostics, exactly
+    as Harbor records it in the control detail.
     """
+    exit_artifact = (VerifierArtifact(source=HARBOR_TEST_EXIT, target=COPIED_TEST_EXIT, kind=ArtifactKind.FILE),)
     if has_verifier_config:
         artifacts = (
             VerifierArtifact(source=HARBOR_TEST_STDOUT, target=COPIED_TEST_STDOUT, kind=ArtifactKind.FILE),
             VerifierArtifact(source=HARBOR_VERDICT, target=COPIED_VERDICT, kind=ArtifactKind.FILE),
+            *exit_artifact,
         )
         reward = FileReward(files=(RewardFile(path=COPIED_VERDICT, format=RewardFileFormat.VERDICT_JSON),))
         return artifacts, reward, VerifierCommand(argv=("test", "-f", COPIED_VERDICT), cwd="/")
@@ -192,6 +202,7 @@ def _reward_files(has_verifier_config: bool) -> tuple[tuple[VerifierArtifact, ..
         VerifierArtifact(source=HARBOR_TEST_STDOUT, target=COPIED_TEST_STDOUT, kind=ArtifactKind.FILE),
         VerifierArtifact(source=HARBOR_REWARD_JSON, target=COPIED_REWARD_JSON, kind=ArtifactKind.FILE),
         VerifierArtifact(source=HARBOR_REWARD_TEXT, target=COPIED_REWARD_TEXT, kind=ArtifactKind.FILE),
+        *exit_artifact,
     )
     reward = FileReward(
         files=(
@@ -262,8 +273,17 @@ def convert_cohort_task(task: TaskSpec, *, input_task_sha256: str) -> CohortConv
         for block in verifier["collect"]
     )
     workdir = environment["workdir"] or "/"
+    # Native reward-file result mode: the script runs unchanged even when its
+    # tests fail, its exact exit code persists beside the reward file it wrote,
+    # and the reward file arbitrates the score (the recorded Harbor bug control
+    # exits nonzero by design while writing a scored zero).
     execute = VerifierCommand(
-        argv=("bash", "-c", f"(/tests/test.sh) > {HARBOR_TEST_STDOUT} 2>&1"),
+        argv=(
+            "bash",
+            "-c",
+            f"( /tests/test.sh ) > {HARBOR_TEST_STDOUT} 2>&1 || status=$?; "
+            f'printf "%s\\n" "${{status-0}}" > {HARBOR_TEST_EXIT}; exit 0',
+        ),
         cwd=workdir,
         env=verifier_env,
     )

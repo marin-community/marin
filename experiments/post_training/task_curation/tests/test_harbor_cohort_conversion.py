@@ -126,12 +126,21 @@ def test_grader_replays_the_harbor_verifier_steps_in_order():
     extract = next(command for command in steps if "tar -C /tests -xzf" in command.argv[-1])
     assert extract.argv[-1].startswith("set -euo pipefail")
     assert steps[-2].argv == ("bash", "-c", "tar -czf /tmp/keep.tgz /testbed")
-    assert steps[-1].argv == ("bash", "-c", "(/tests/test.sh) > /logs/verifier/test-stdout.txt 2>&1")
+    assert steps[-1].argv == (
+        "bash",
+        "-c",
+        "( /tests/test.sh ) > /logs/verifier/test-stdout.txt 2>&1 || status=$?; "
+        'printf "%s\\n" "${status-0}" > /logs/verifier/exit-code.txt; exit 0',
+    )
     assert steps[-1].env == {"VERIFIER_MODE": "strict"}
     assert all(command.argv[:1] != ("chmod",) for command in steps)
     assert grader.answer_path is None
     assert grader.timeout == 900.0
-    assert [artifact.target for artifact in grader.artifacts] == [COPIED_TEST_STDOUT, COPIED_VERDICT]
+    assert [artifact.target for artifact in grader.artifacts] == [
+        COPIED_TEST_STDOUT,
+        COPIED_VERDICT,
+        "/source-exit-code.txt",
+    ]
     assert grader.reward.files[0].path == COPIED_VERDICT
     assert grader.reward.files[0].format.value == "verdict_json"
     assert grader.environment.docker_image == CONTROL_IMAGE
@@ -149,7 +158,7 @@ def test_verifier_config_absent_falls_back_to_the_reward_files():
     out = _convert(_package(with_verifier_config=False))
     grader = out.task.grader
     targets = [artifact.target for artifact in grader.artifacts]
-    assert targets == [COPIED_TEST_STDOUT, "/source-reward.json", "/source-reward.txt"]
+    assert targets == [COPIED_TEST_STDOUT, "/source-reward.json", "/source-reward.txt", "/source-exit-code.txt"]
     assert [file.format.value for file in grader.reward.files] == ["json", "number"]
     assert grader.argv == ("bash", "-c", "test -f /source-reward.json || test -f /source-reward.txt")
 
