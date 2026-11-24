@@ -11,6 +11,7 @@ use crate::proto::finelog::stats::{
     TableVersionSegments,
 };
 use crate::store::catalog::Catalog;
+use crate::store::column_bounds;
 use crate::store::state_store::object::TABLE_STATE_FORMAT_VERSION;
 use crate::store::table_state::ArtifactReferences;
 use crate::store::types::{basename, segment_relative_key, SegmentLocation};
@@ -81,6 +82,10 @@ pub fn namespace_catalog(
             migration_backfill: object_segments
                 .get(&row.path)
                 .map(|record| record.migration_backfill),
+            column_bounds: object_segments
+                .get(&row.path)
+                .map(|record| column_bounds::to_proto(&record.column_bounds))
+                .unwrap_or_default(),
             ..artifact_fields(
                 object_segments
                     .get(&row.path)

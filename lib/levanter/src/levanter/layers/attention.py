@@ -24,14 +24,7 @@ from levanter.kernels.pallas.splash_attention import (
     splash_attention_block_sizes,
     splash_partition_spec_shard_factor,
 )
-from levanter.inference.utils import is_valid
-
-try:
-    from jax.experimental.pallas.ops.tpu.ragged_paged_attention import (
-        ragged_paged_attention as tpu_ragged_paged_attention,
-    )
-except Exception:  # pragma: no cover - optional dep
-    tpu_ragged_paged_attention = None
+from levanter.kernels.pallas.paged_attention import tpu_paged_attention, tpu_paged_attention_available
 
 import haliax
 import haliax as hax
@@ -1616,17 +1609,7 @@ def ragged_paged_attention(
     supported, otherwise it falls back to :func:`default_ragged_paged_attention`.
     """
 
-    def _tpu_rpa_available() -> bool:
-        if tpu_ragged_paged_attention is None:
-            return False
-        if jax.default_backend() != "tpu":
-            return False
-        kind = str(getattr(jax.devices()[0], "device_kind", "")).lower()
-        if "tpu v2" in kind or "tpu v3" in kind:
-            return False
-        return True
-
-    if _tpu_rpa_available():
+    if tpu_paged_attention_available():
         try:
             out = _do_tpu_ragged_paged_attention(
                 q,
@@ -1668,111 +1651,29 @@ def _do_tpu_ragged_paged_attention(
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
 ) -> NamedArray:
-    if tpu_ragged_paged_attention is None:
-        msg = "TPU ragged paged attention kernel is unavailable."
-        raise RuntimeError(msg)
-    kernel = tpu_ragged_paged_attention
+    q = q.rearrange(("position", "kv_head", "q_heads_per_group", "head_size"))
 
-    # Usual shardmap dance
-    # Ensure last dimension (head_size) is a multiple of 128 for Pallas kernels
-    orig_head_size = q.axis_size("head_size")
-    padded_head_size = ((orig_head_size + 127) // 128) * 128
+    # Use runtime scaling to retain the named adapter's query precision.
+    def local_attention(q_arr, pages, lengths, indices, offsets, count, scale):
+        return tpu_paged_attention(q_arr, pages, lengths, indices, offsets, count, sm_scale=scale, soft_cap=soft_cap)
 
-    if padded_head_size != orig_head_size:
-        pad_amount = padded_head_size - orig_head_size
-        # Pad query on the head_size axis with zeros
-        q_padded = hax.concatenate(
-            "head_size",
-            [q, hax.zeros_like(q["head_size", hax.ds(0, pad_amount)])],
-        )
-        # Pad kv_pages on the head_size axis with zeros to match
-        kv_pages_padded = hax.concatenate(
-            "head_size",
-            [kv_pages, hax.zeros_like(kv_pages["head_size", hax.ds(0, pad_amount)])],
-        )
-    else:
-        q_padded = q
-        kv_pages_padded = kv_pages
-
-    # The TPU kernel expects the second dimension of the query tensor to be the total number of query heads.
-    q_flat = q_padded.flatten_axes(("kv_head", "q_heads_per_group"), "kv_head")
-    if num_seqs.ndim == 0:
-        this_num_seqs = num_seqs.reshape((1,))
-    else:
-        this_num_seqs = num_seqs
-
-    # the INVALIDs make the TPU sad. mask them with 0:
-    this_num_seqs = jnp.where(this_num_seqs < 0, 0, this_num_seqs)
-    page_indices = hax.where(~is_valid(page_indices), 0, page_indices)
-    kv_lens = hax.where(~is_valid(kv_lens), 0, kv_lens)
-
-    sm_scale_array = jnp.asarray(sm_scale, dtype=q_flat.array.dtype)
-    q_scaled = q_flat.array * sm_scale_array
-
-    def _rpa_with_runtime_scale(
-        q_arg: jax.Array,
-        kv_pages_arg: jax.Array,
-        kv_lens_arg: jax.Array,
-        page_indices_arg: jax.Array,
-        cu_q_lens_arg: jax.Array,
-        num_seqs_arg: jax.Array,
-    ) -> jax.Array:
-        return kernel(
-            q_arg,
-            kv_pages_arg,
-            kv_lens_arg,
-            page_indices_arg,
-            cu_q_lens_arg,
-            num_seqs_arg,
-            sm_scale=1.0,
-            soft_cap=soft_cap,
-        )
-
-    o = shard_map(
-        _rpa_with_runtime_scale,
+    output = shard_map(
+        local_attention,
         mesh=hax.partitioning._get_mesh(),
-        in_specs=(
-            haliax.partitioning.pspec_for_axis(q_flat.axes),
-            haliax.partitioning.pspec_for_axis(kv_pages_padded.axes),
-            haliax.partitioning.pspec_for_axis(kv_lens.axes),
-            haliax.partitioning.pspec_for_axis(page_indices.axes),
-            haliax.partitioning.pspec_for_axis(cu_q_lens.axes),
-            PartitionSpec(),  # num_seqs
-        ),
-        out_specs=pspec_for_axis(
-            (
-                "position",
-                "kv_head",
-                "head_size",
-            )
-        ),
+        in_specs=tuple(pspec_for_axis(x.axes) for x in (q, kv_pages, kv_lens, page_indices, cu_q_lens))
+        + (PartitionSpec(), PartitionSpec()),
+        out_specs=pspec_for_axis(q.axes),
         check_rep=False,
     )(
-        q_scaled,
-        kv_pages_padded.array,
+        q.array,
+        kv_pages.array,
         kv_lens.array,
         page_indices.array,
         cu_q_lens.array,
-        this_num_seqs,
+        num_seqs,
+        jnp.asarray(sm_scale, dtype=q.dtype),
     )
-
-    out = hax.named(
-        o,
-        ("position", "kv_head", "head_size"),
-    )
-    out = out.unflatten_axis(
-        "kv_head",
-        (
-            q.resolve_axis("kv_head"),
-            q.resolve_axis("q_heads_per_group"),
-        ),
-    )
-
-    # If we padded head_size for the kernel, slice back to the original size
-    if padded_head_size != orig_head_size:
-        out = out["head_size", hax.ds(0, orig_head_size)]
-
-    return out
+    return hax.named(output, q.axes)
 
 
 def default_ragged_paged_attention(

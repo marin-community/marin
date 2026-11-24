@@ -29,6 +29,21 @@ pub fn unique_dir(tag: &str) -> std::path::PathBuf {
     dir
 }
 
+/// Hold one runtime worker until the returned sender is dropped.
+pub async fn block_worker(
+    runtime: &tokio::runtime::Handle,
+) -> (std::sync::mpsc::Sender<()>, tokio::task::JoinHandle<()>) {
+    let (started, started_rx) = tokio::sync::oneshot::channel();
+    let (release, release_rx) = std::sync::mpsc::channel::<()>();
+    let task = runtime.spawn(async move {
+        started.send(()).unwrap();
+        // Deliberately prevent this worker from polling any other task.
+        let _ = release_rx.recv();
+    });
+    started_rx.await.unwrap();
+    (release, task)
+}
+
 /// One operation of the [`ObjectStore`] contract, as a fault matches it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectOp {

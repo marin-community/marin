@@ -47,7 +47,7 @@ import re
 import tempfile
 from collections import Counter, deque
 from collections.abc import Callable, Container, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import chain, islice
 from typing import Any, NamedTuple
 
@@ -176,6 +176,40 @@ def bloom_paths(bloom_dir: str) -> tuple[str, str]:
         os.path.join(bloom_dir, "_bloom", _BLOOM_FILENAME),
         os.path.join(bloom_dir, "_bloom", _INDEX_FILENAME),
     )
+
+
+@dataclass(frozen=True)
+class RequiredEvalSuite:
+    """A sealed eval manifest whose benchmarks must all enter the Bloom.
+
+    Args:
+        manifest_path: Manifest that lists the suite's benchmark artifacts.
+        names: Exact benchmark names the manifest must contain.
+    """
+
+    manifest_path: str
+    names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BestEffortEvalSuite:
+    """A sealed eval manifest that lists the artifacts that loaded.
+
+    Only the exact artifacts in the manifest enter the Bloom. Artifacts must
+    be below the manifest directory.
+
+    Args:
+        manifest_path: Manifest that lists the suite's artifacts.
+        corpus_version: Version that the manifest must report.
+        required_tasks: Tasks that must have loaded, each with its exact
+            number of leaf tasks. The manifest's ``required_tasks`` must list
+            that many leaf tasks for each one, and every leaf must have
+            records.
+    """
+
+    manifest_path: str
+    corpus_version: str
+    required_tasks: Mapping[str, int] = field(default_factory=dict)
 
 
 class EvalBloom(BaseModel):
@@ -944,12 +978,10 @@ def build_eval_bloom(
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     exclude_eval_dirs: frozenset[str] = frozenset(),
-    required_eval_manifest_path: str | None = None,
+    required_eval_suites: tuple[RequiredEvalSuite, ...] = (),
     required_eval_corpus_version: str | None = None,
-    required_eval_names: tuple[str, ...] = (),
     additional_required_eval_manifests: tuple[RequiredEvalManifest, ...] = (),
-    best_effort_eval_manifest_path: str | None = None,
-    best_effort_eval_corpus_version: str | None = None,
+    best_effort_eval_suite: BestEffortEvalSuite | None = None,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
     zephyr_context: ZephyrContext | None = None,
@@ -980,20 +1012,16 @@ def build_eval_bloom(
         exclude_eval_dirs: Eval task directory names to skip while walking
             ``eval_data_sources`` (see :func:`_discover_eval_files`). Excludes
             those tasks from the bloom without regenerating the eval corpus.
-        required_eval_manifest_path: Optional manifest that must report a
-            complete required eval suite before Bloom creation starts. When
-            set, only the exact artifacts in this manifest enter the Bloom.
-        required_eval_corpus_version: Version that the required manifest must
-            report. Set this with ``required_eval_manifest_path``.
-        required_eval_names: Exact benchmark names that the required manifest
-            must contain.
+        required_eval_suites: Manifests that must each report a complete
+            required eval suite before Bloom creation starts. When set, only
+            the exact artifacts in these manifests (and the best-effort
+            manifest) enter the Bloom.
+        required_eval_corpus_version: Version that every required manifest
+            must report. Set this with ``required_eval_suites``.
         additional_required_eval_manifests: Additional independently versioned
             suites. Every listed family must have nonzero, self-matching records.
-        best_effort_eval_manifest_path: Optional manifest with the exact
-            best-effort artifacts to include. Artifacts must be below the
-            manifest directory.
-        best_effort_eval_corpus_version: Version that the best-effort manifest
-            must report.
+        best_effort_eval_suite: Optional manifest with the exact best-effort
+            artifacts to include, and the tasks in it that must have loaded.
         worker_resources: Resource request for each eval-file shard.
         max_workers: Maximum Zephyr workers for the Bloom build.
         zephyr_context: Optional shared Zephyr worker context.
@@ -1004,17 +1032,21 @@ def build_eval_bloom(
     eval_paths = [eval_data_sources] if isinstance(eval_data_sources, str) else list(eval_data_sources)
     if not eval_paths:
         raise ValueError("eval_data_sources must be non-empty")
-    if (required_eval_manifest_path is None) != (required_eval_corpus_version is None):
-        raise ValueError("required eval manifest path and corpus version must be set together")
-    if required_eval_manifest_path is not None:
+    if bool(required_eval_suites) != (required_eval_corpus_version is not None):
+        raise ValueError("required eval suites and corpus version must be set together")
+    if required_eval_suites:
         assert required_eval_corpus_version is not None
-        eval_paths = _validate_required_eval_manifest(
-            required_eval_manifest_path,
-            required_eval_corpus_version,
-            required_eval_names,
-            text_field=text_field,
-            ngram=ngram,
-        )
+        eval_paths = [
+            path
+            for suite in required_eval_suites
+            for path in _validate_required_eval_manifest(
+                suite.manifest_path,
+                required_eval_corpus_version,
+                suite.names,
+                text_field=text_field,
+                ngram=ngram,
+            )
+        ]
     for manifest in additional_required_eval_manifests:
         eval_paths.extend(
             _validate_required_eval_manifest(
@@ -1026,20 +1058,12 @@ def build_eval_bloom(
                 expected_source_catalog_sha256=manifest.source_catalog_sha256,
             )
         )
-    best_effort_parameters = (
-        best_effort_eval_manifest_path,
-        best_effort_eval_corpus_version,
-    )
-    if any(value is not None for value in best_effort_parameters) and not all(
-        value is not None for value in best_effort_parameters
-    ):
-        raise ValueError("best-effort eval manifest path and corpus version must be set together")
-    if best_effort_eval_manifest_path is not None:
-        assert best_effort_eval_corpus_version is not None
+    if best_effort_eval_suite is not None:
         eval_paths.extend(
             _validate_best_effort_eval_manifest(
-                best_effort_eval_manifest_path,
-                best_effort_eval_corpus_version,
+                best_effort_eval_suite.manifest_path,
+                best_effort_eval_suite.corpus_version,
+                best_effort_eval_suite.required_tasks,
             )
         )
 
@@ -1191,6 +1215,7 @@ def _validate_required_eval_manifest(
 def _validate_best_effort_eval_manifest(
     manifest_path: str,
     expected_corpus_version: str,
+    required_tasks: Mapping[str, int],
 ) -> list[str]:
     """Validate a best-effort manifest and return its exact artifact paths."""
     manifest_storage = StoragePath(manifest_path)
@@ -1219,10 +1244,13 @@ def _validate_best_effort_eval_manifest(
         raise ValueError("best-effort eval manifest included_leaf_tasks must be a list of strings")
     if not isinstance(artifacts, list) or not all(isinstance(entry, Mapping) for entry in artifacts):
         raise ValueError("best-effort eval manifest artifacts must be a list of objects")
+    manifest_required_tasks = manifest.get("required_tasks", {})
+    if not isinstance(manifest_required_tasks, Mapping):
+        raise ValueError("best-effort eval manifest required_tasks must be an object")
 
     manifest_parent = os.path.dirname(manifest_path)
     paths: list[str] = []
-    artifact_tasks: list[str] = []
+    artifact_records: dict[str, int] = {}
     for entry in artifacts:
         task = entry.get("task")
         artifact = entry.get("artifact")
@@ -1241,12 +1269,39 @@ def _validate_best_effort_eval_manifest(
             raise ValueError(
                 f"{task}: best-effort manifest expects {expected_records} records, artifact contains {actual_records}"
             )
-        artifact_tasks.append(task)
+        artifact_records[task] = actual_records
         paths.append(artifact_path)
 
-    if sorted(artifact_tasks) != sorted(included_tasks) or len(artifact_tasks) != len(included_tasks):
+    if sorted(artifact_records) != sorted(included_tasks) or len(artifacts) != len(included_tasks):
         raise ValueError("best-effort eval artifact tasks do not match included_leaf_tasks")
+    failures = required_task_failures(required_tasks, manifest_required_tasks, artifact_records)
+    if failures:
+        raise ValueError(f"best-effort eval manifest has incomplete required tasks: {failures}")
     return paths
+
+
+def required_task_failures(
+    required: Mapping[str, int], task_leaves: Mapping[str, list[str]], records: Mapping[str, int]
+) -> list[str]:
+    """Return one message for each required task that is not complete.
+
+    Args:
+        required: Each required task with its exact number of leaf tasks.
+        task_leaves: Each task that loaded with its leaf tasks.
+        records: Each leaf task that has an artifact with its record count.
+    """
+    failures: list[str] = []
+    for task, expected_leaves in required.items():
+        leaves = task_leaves.get(task)
+        if not leaves:
+            failures.append(f"{task}: did not load")
+            continue
+        if len(leaves) != expected_leaves:
+            failures.append(f"{task}: loaded {len(leaves)} leaf tasks, expected {expected_leaves}")
+        empty = sorted(leaf for leaf in leaves if not records.get(leaf))
+        if empty:
+            failures.append(f"{task}: no records for leaf tasks {empty}")
+    return failures
 
 
 def merge_eval_blooms(
@@ -1341,12 +1396,10 @@ def build_eval_bloom_step(
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     exclude_eval_dirs: frozenset[str] = frozenset(),
-    required_eval_manifest_path: str | None = None,
+    required_eval_suites: tuple[RequiredEvalSuite, ...] = (),
     required_eval_corpus_version: str | None = None,
-    required_eval_names: tuple[str, ...] = (),
     additional_required_eval_manifests: tuple[RequiredEvalManifest, ...] = (),
-    best_effort_eval_manifest_path: str | None = None,
-    best_effort_eval_corpus_version: str | None = None,
+    best_effort_eval_suite: BestEffortEvalSuite | None = None,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
     zephyr_context: ZephyrContext | None = None,
@@ -1368,14 +1421,15 @@ def build_eval_bloom_step(
         exclude_eval_dirs: Eval task directory names to drop from the bloom
             (see :func:`build_eval_bloom`). Folded into ``hash_attrs`` so
             changing the exclusion set rebuilds the bloom at a fresh path.
-        required_eval_manifest_path, required_eval_corpus_version,
-            required_eval_names: Required-suite gate passed to
-            :func:`build_eval_bloom`. The path is an external input. The
-            expected version and names enter the step hash.
+        required_eval_suites, required_eval_corpus_version: Required-suite
+            gate passed to :func:`build_eval_bloom`. Manifest paths are
+            external inputs. The expected version and each suite's names enter
+            the step hash.
         additional_required_eval_manifests: Additional mandatory reference suites.
-        best_effort_eval_manifest_path, best_effort_eval_corpus_version:
-            Optional best-effort suite. Only the exact artifacts below its
-            immutable, versioned manifest directory enter the Bloom.
+        best_effort_eval_suite: Optional best-effort suite. Only the exact
+            artifacts below its immutable, versioned manifest directory enter
+            the Bloom. Its version, required task names and their leaf-task
+            counts enter the step hash.
         worker_resources: Resource request for each eval-file shard.
         max_workers: Maximum Zephyr workers for the Bloom build.
         zephyr_context: Optional shared Zephyr worker context.
@@ -1416,8 +1470,11 @@ def build_eval_bloom_step(
         "eval_data_sources": tuple(sorted(s for s in raw_paths if s not in (d.output_path for d in step_deps))),
         "exclude_eval_dirs": tuple(sorted(exclude_eval_dirs)),
         "required_eval_corpus_version": required_eval_corpus_version,
-        "required_eval_names": tuple(sorted(required_eval_names)),
-        "best_effort_eval_corpus_version": best_effort_eval_corpus_version,
+        "required_eval_suites": tuple(sorted(tuple(sorted(suite.names)) for suite in required_eval_suites)),
+        "best_effort_eval_corpus_version": best_effort_eval_suite.corpus_version if best_effort_eval_suite else None,
+        "best_effort_required_tasks": (
+            tuple(sorted(best_effort_eval_suite.required_tasks.items())) if best_effort_eval_suite else ()
+        ),
     }
 
     if additional_required_eval_manifests:
@@ -1436,12 +1493,10 @@ def build_eval_bloom_step(
             estimated_doc_count=estimated_doc_count,
             false_positive_rate=false_positive_rate,
             exclude_eval_dirs=exclude_eval_dirs,
-            required_eval_manifest_path=required_eval_manifest_path,
+            required_eval_suites=required_eval_suites,
             required_eval_corpus_version=required_eval_corpus_version,
-            required_eval_names=required_eval_names,
             additional_required_eval_manifests=additional_required_eval_manifests,
-            best_effort_eval_manifest_path=best_effort_eval_manifest_path,
-            best_effort_eval_corpus_version=best_effort_eval_corpus_version,
+            best_effort_eval_suite=best_effort_eval_suite,
             worker_resources=worker_resources,
             max_workers=max_workers,
             zephyr_context=zephyr_context,

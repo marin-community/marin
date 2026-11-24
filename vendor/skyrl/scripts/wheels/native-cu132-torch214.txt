@@ -24,7 +24,7 @@ nvidia-cusolver==12.2.0.11
 nvidia-cusparse==12.7.10.12
 nvidia-cusparselt-cu13==0.8.1 ; platform_machine != 'aarch64'
 nvidia-cusparselt-cu13 @ https://github.com/marin-community/MarinSkyRL/releases/download/native-cu132-cusparselt081-armtag-20261004/nvidia_cusparselt_cu13-0.8.1-py3-none-manylinux2014_aarch64.whl#sha256=76c16ba86fc7b15771e0f4df42256a4a29bdd378a186ddfd4744e51fdb384594 ; platform_machine == 'aarch64'
-nvidia-nccl-cu13==2.30.7
+nvidia-nccl-cu13==2.32.6
 nvidia-nvjitlink==13.4.92
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.2.86

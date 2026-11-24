@@ -3,9 +3,10 @@
 
 """Pinned Python benchmarks with private test programs run as Shellbox commands.
 
-The source's 3-second (CruxEval: 10-second) execution alarm starts after Python
-startup and NumPy preload. A forked worker has the source's one-second termination allowance.
-Shellbox bounds startup separately and supplies isolation and resource limits.
+The execution alarm (``EXECUTION_TIMEOUT``) covers the whole test program and starts after
+Python startup and NumPy preload. A forked worker has one more second before it is killed.
+The grader command allows ``STARTUP_ALLOWANCE`` more seconds for startup, and Shellbox
+supplies isolation and resource limits.
 """
 
 import hashlib
@@ -26,14 +27,23 @@ from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import ChatGeneration, EvaluationItem, TextGeneration
 from taskcompendium.grader import GraderPackage
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.importers.evalchemy.assets.code_protocol import function_prompt, mbpp_prompt
+from taskcompendium.importers.evalchemy.assets.code_protocol import EXECUTION_TIMEOUT, function_prompt, mbpp_prompt
 from taskcompendium.importers.fewshot import FEWSHOT_SEED, parquet_documents
-from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, TaskSpec, TextMessage
+from taskcompendium.models import (
+    FileReward,
+    GraderMachine,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    TaskSpec,
+    TextMessage,
+)
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource
 
 ASSETS = Path(__file__).parent / "assets"
+STARTUP_ALLOWANCE = 60
 CODE_ASSETS = (
     inline_resource("prepare.py", (ASSETS / "python_prepare.py").read_bytes()),
     inline_resource("code_protocol.py", (ASSETS / "code_protocol.py").read_bytes()),
@@ -44,7 +54,7 @@ CODE_ASSETS = (
     ),
 )
 CODE_REVISION = (
-    "2-"
+    "3-"
     + canonical_sha256(
         {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -110,17 +120,16 @@ def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> Ta
     environment = required_grader_environment(context)
     environment = environment.model_copy(
         update={
-            "setup_commands": (*environment.setup_commands, "python3 /tests/prepare.py"),
             "environment_variables": {**environment.environment_variables, **THREAD_ENVIRONMENT},
         }
     )
     config = {"suite": suite, "problem": problem, "direction": problem.get("direction", "")}
     package = GraderPackage(
         ScriptGrader(
-            argv=("python3", "/app/program.py"),
+            argv=("sh", "-c", "python3 /tests/prepare.py && exec python3 /app/program.py"),
             cwd="/app",
-            environment=environment,
-            timeout=60,
+            placement=GraderMachine(environment=environment),
+            timeout=STARTUP_ALLOWANCE + EXECUTION_TIMEOUT[suite],
             answer_path="/app/answer.txt",
             reward=FileReward(
                 files=(RewardFile(path="/app/reward.json", format=RewardFileFormat.JSON),), pass_above=0.5

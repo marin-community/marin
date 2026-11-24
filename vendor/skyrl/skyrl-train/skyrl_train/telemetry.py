@@ -10,20 +10,11 @@ from typing import Literal, Protocol
 import ray
 from loguru import logger
 
-from marinskyrl.environment_contract import TRAINING_TYPE_ENV, TrainingType
+from marinskyrl.environment_contract import RUN_MODEL_ENV, TRAINING_TYPE_ENV, TrainingType
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
 
-try:
-    from rigging import telemetry
-    from rigging.telemetry.serialization import EventBody
-except ImportError as error:
-    # An installed rigging without the telemetry submodule raises ImportError, not
-    # ModuleNotFoundError; the name check still keeps a failure inside rigging visible.
-    if error.name != "rigging":
-        raise
-    from skyrl_train import inert_telemetry as telemetry
-    from skyrl_train.inert_telemetry import EventBody
-
+from rigging import telemetry
+from rigging.telemetry.serialization import EventBody
 
 # A process that forwards a foreign system's metrics publishes under that system's name; this one
 # covers everything MarinSkyRL measures about itself.
@@ -162,6 +153,7 @@ class TelemetryConfig:
     execution_uid: str | None = None
     serving_job_id: str | None = None
     training_type: TrainingType | None = None
+    model: str | None = None
 
     @classmethod
     def from_environment(cls) -> "TelemetryConfig":
@@ -174,6 +166,7 @@ class TelemetryConfig:
             run_id=text("SKYRL_RUN_ID"),
             execution_uid=text("SKYRL_EXECUTION_UID") or _iris_execution_uid(),
             serving_job_id=text("SKYRL_SERVING_JOB_ID"),
+            model=text(RUN_MODEL_ENV),
             training_type=TrainingType(value) if (value := text(TRAINING_TYPE_ENV)) else None,
         )
 
@@ -184,7 +177,8 @@ def _iris_execution_uid() -> str | None:
     return None
 
 
-def _iris_resources() -> dict[str, str]:
+def iris_resources() -> dict[str, str]:
+    """Read Iris resource identifiers from the current process environment."""
     task_with_attempt = os.environ.get("IRIS_TASK_ID")
     resources: dict[str, str] = {}
     if task_with_attempt:
@@ -238,13 +232,15 @@ def _ray_resources() -> dict[str, str]:
 
 def _resources(config: TelemetryConfig, role: str) -> dict[str, str]:
     resources = {
-        **_iris_resources(),
+        **iris_resources(),
         **_ray_resources(),
         "host": socket.gethostname(),
         "run_id": config.run_id or "",
         "execution_uid": config.execution_uid or "",
         "role": role,
     }
+    if config.model is not None:
+        resources["model"] = config.model
     if config.serving_job_id:
         resources["serving_job_id"] = config.serving_job_id
     if config.training_type is not None:

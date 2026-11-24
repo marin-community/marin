@@ -1,0 +1,18 @@
+# Qwen3-32B with YaRN factor 4 (131,072 tokens), matching the LongBench v2 leaderboard setup
+# (https://longbench2.github.io/). Transformers v5 reads `rope_parameters`, not `rope_scaling`, and
+# vLLM treats a YaRN model's max_position_embeddings as already scaled, so both are overridden.
+# auto_overrides is off because its context clamp reads the checkpoint's native 40,960-token limit.
+name: qwen3-32b-yarn-128k
+location: Qwen/Qwen3-32B
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 131072
+  hf_overrides: '{"rope_parameters":{"rope_type":"yarn","rope_theta":1000000,"factor":4.0,"original_max_position_embeddings":32768},"max_position_embeddings":131072}'
+  reasoning_parser: qwen3
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-prefix-caching

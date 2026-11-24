@@ -57,8 +57,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arrow::array::{ArrayRef, AsArray, Int64Array, RecordBatch, StringArray};
-use arrow::compute::concat_batches;
+use arrow::array::{Array, ArrayRef, AsArray, Int64Array, RecordBatch, StringArray};
+use arrow::compute::{concat, concat_batches};
 use arrow::datatypes::{Field, Int64Type, Schema as ArrowSchema};
 use connectrpc::client::{CallOptions, ClientConfig, ServiceTransport};
 use connectrpc::compression::{CompressionRegistry, GzipProvider, ZstdProvider};
@@ -617,7 +617,7 @@ where
                 return ForwardTurn::Wait;
             }
         }
-        let Some((ship, seqs)) = batch.rows else {
+        if batch.rows.is_empty() {
             // Every row up to `scanned_through` was filtered out by the scan (rows already
             // carrying a foreign origin cluster). Advance the cursor to `scanned_through`,
             // or the loop rereads them forever. Safe against a concurrent writer:
@@ -634,7 +634,7 @@ where
             } else {
                 ForwardTurn::Wait
             };
-        };
+        }
         // The hub must hold the namespace before it can take rows for it.
         if !self.ensure_registered(name, schema).await {
             tracing::warn!(
@@ -644,9 +644,9 @@ where
             return ForwardTurn::Wait;
         }
 
-        let row_count = ship.num_rows();
+        let row_count: usize = batch.rows.iter().map(|(rows, _)| rows.num_rows()).sum();
         let encoding_started = Instant::now();
-        let chunks = match chunk_by_bytes(&ship, &seqs, FORWARD_BATCH_BYTES) {
+        let chunks = match chunk_batches_by_bytes(batch.rows, FORWARD_BATCH_BYTES) {
             Ok(chunks) => chunks,
             Err(e) => {
                 tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: encoding a batch failed; retrying next tick");
@@ -656,8 +656,6 @@ where
         let encoding_elapsed = encoding_started.elapsed();
         let chunk_count = chunks.len();
         let encoded_bytes: usize = chunks.iter().map(|(ipc, _)| ipc.len()).sum();
-        drop(ship);
-        drop(seqs);
         let concurrency = if name == LOG_NAMESPACE_NAME {
             1
         } else {
@@ -1049,13 +1047,11 @@ where
         fills.complete();
         let scan_elapsed = scan_started.elapsed();
 
-        let encode_started = Instant::now();
-        let rows = self.ship_batch(result)?;
-        let encode_elapsed = encode_started.elapsed();
-        let row_count = rows.as_ref().map_or(0, |(batch, _)| batch.num_rows());
-        let complete_window = rows
-            .as_ref()
-            .is_none_or(|(batch, _)| batch.num_rows() < batch_rows as usize);
+        let prepare_started = Instant::now();
+        let rows = prepare_forward_batches(result, &self.config.cluster)?;
+        let prepare_elapsed = prepare_started.elapsed();
+        let row_count: usize = rows.iter().map(|(batch, _)| batch.num_rows()).sum();
+        let complete_window = row_count < batch_rows as usize;
         let total = read_started.elapsed();
         let log_read = || {
             tracing::info!(
@@ -1070,7 +1066,7 @@ where
                 snapshot_ms = snapshot_elapsed.as_millis() as u64,
                 planning_ms = planning_elapsed.as_millis() as u64,
                 scan_ms = scan_elapsed.as_millis() as u64,
-                encode_ms = encode_elapsed.as_millis() as u64,
+                prepare_ms = prepare_elapsed.as_millis() as u64,
                 total_ms = total.as_millis() as u64,
                 "finelog forwarder: slow read completed"
             );
@@ -1090,7 +1086,7 @@ where
                 snapshot_ms = snapshot_elapsed.as_millis() as u64,
                 planning_ms = planning_elapsed.as_millis() as u64,
                 scan_ms = scan_elapsed.as_millis() as u64,
-                encode_ms = encode_elapsed.as_millis() as u64,
+                prepare_ms = prepare_elapsed.as_millis() as u64,
                 total_ms = total.as_millis() as u64,
                 "finelog forwarder: read completed"
             );
@@ -1101,53 +1097,6 @@ where
             scanned_through,
             complete_window,
         })
-    }
-
-    /// Turn a scan result into a batch ready for [`WriteRows`]: concatenate the collected
-    /// batches, drop the server-assigned `seq` column (the hub assigns its own), and
-    /// stamp the origin column with this store's cluster. `None` when the scan matched no
-    /// rows. Returns the dropped seqs alongside, so the caller can advance its cursor.
-    fn ship_batch(
-        &self,
-        result: QueryResult,
-    ) -> Result<Option<(RecordBatch, Int64Array)>, StatsError> {
-        if result.batches.is_empty() {
-            return Ok(None);
-        }
-        let batch = concat_batches(&result.schema, &result.batches)
-            .map_err(|e| StatsError::Internal(format!("concat batches: {e}")))?;
-        let num_rows = batch.num_rows();
-        if num_rows == 0 {
-            return Ok(None);
-        }
-
-        let seq_idx = result
-            .schema
-            .index_of(IMPLICIT_SEQ_COLUMN)
-            .map_err(|e| StatsError::Internal(format!("scan result has no seq column: {e}")))?;
-        let seqs: Int64Array = batch.column(seq_idx).as_primitive::<Int64Type>().clone();
-
-        let origin: ArrayRef = Arc::new(StringArray::from(vec![
-            self.config.cluster.as_str();
-            num_rows
-        ]));
-        let mut fields: Vec<Field> = Vec::with_capacity(batch.num_columns() - 1);
-        let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns() - 1);
-        for (i, field) in result.schema.fields().iter().enumerate() {
-            if i == seq_idx {
-                continue;
-            }
-            fields.push(field.as_ref().clone());
-            if field.name() == IMPLICIT_CLUSTER_COLUMN {
-                columns.push(Arc::clone(&origin));
-            } else {
-                columns.push(Arc::clone(batch.column(i)));
-            }
-        }
-        let ship_schema = Arc::new(ArrowSchema::new(fields));
-        let ship = RecordBatch::try_new(ship_schema, columns)
-            .map_err(|e| StatsError::Internal(format!("build ship batch: {e}")))?;
-        Ok(Some((ship, seqs)))
     }
 
     /// Create or evolve `name` on the hub when this process has not registered its
@@ -1328,7 +1277,7 @@ async fn wait_or_stop(backoff: Duration, stop: &mut watch::Receiver<bool>) -> bo
 /// stamped with the origin cluster) and the seqs they carry, plus — when the cursor had
 /// fallen below the oldest local row — the seq to resume from instead.
 struct Batch {
-    rows: Option<(RecordBatch, Int64Array)>,
+    rows: Vec<(RecordBatch, Int64Array)>,
     resume_at: Option<i64>,
     /// Highest sequence position included in this physical scan window.
     scanned_through: i64,
@@ -1383,6 +1332,99 @@ fn resume_after_eviction(cursor: i64, min_seq: Option<i64>) -> Option<i64> {
 /// resolves as one table and an embedded quote cannot break out of the identifier.
 fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Stamp each batch's origin and return its source sequences separately.
+fn prepare_forward_batches(
+    result: QueryResult,
+    cluster: &str,
+) -> Result<Vec<(RecordBatch, Int64Array)>, StatsError> {
+    let seq_idx = result
+        .schema
+        .index_of(IMPLICIT_SEQ_COLUMN)
+        .map_err(|e| StatsError::Internal(format!("scan result has no seq column: {e}")))?;
+    let fields: Vec<Field> = result
+        .schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != seq_idx)
+        .map(|(_, field)| field.as_ref().clone())
+        .collect();
+    let schema = Arc::new(ArrowSchema::new(fields));
+    // A complete forwarding read can exceed Utf8's 2 GiB offset limit. Keep
+    // engine batches separate until byte-bounded coalescing.
+    result
+        .batches
+        .into_iter()
+        .filter(|batch| batch.num_rows() > 0)
+        .map(|batch| {
+            let seqs = batch.column(seq_idx).as_primitive::<Int64Type>().clone();
+            let columns = batch
+                .schema()
+                .fields()
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != seq_idx)
+                .map(|(i, field)| {
+                    if field.name() == IMPLICIT_CLUSTER_COLUMN {
+                        Arc::new(StringArray::from(vec![cluster; batch.num_rows()])) as ArrayRef
+                    } else {
+                        Arc::clone(batch.column(i))
+                    }
+                })
+                .collect();
+            let ship = RecordBatch::try_new(Arc::clone(&schema), columns)
+                .map_err(|e| StatsError::Internal(format!("build ship batch: {e}")))?;
+            Ok((ship, seqs))
+        })
+        .collect()
+}
+
+/// Return IPC chunks bounded by `max_bytes`, each with its highest source sequence.
+/// A single oversized row is emitted alone.
+fn chunk_batches_by_bytes(
+    batches: Vec<(RecordBatch, Int64Array)>,
+    max_bytes: usize,
+) -> Result<Vec<(Vec<u8>, i64)>, StatsError> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < batches.len() {
+        let mut end = start + 1;
+        let mut bytes = batches[start].0.get_array_memory_size();
+        while end < batches.len() {
+            let next_bytes = batches[end].0.get_array_memory_size();
+            if bytes.saturating_add(next_bytes) > max_bytes {
+                break;
+            }
+            bytes += next_bytes;
+            end += 1;
+        }
+        if end == start + 1 {
+            chunks.extend(chunk_by_bytes(
+                &batches[start].0,
+                &batches[start].1,
+                max_bytes,
+            )?);
+        } else {
+            let schema = batches[start].0.schema();
+            let ship = concat_batches(&schema, batches[start..end].iter().map(|(batch, _)| batch))
+                .map_err(|e| StatsError::Internal(format!("concat bounded ship batches: {e}")))?;
+            let seqs: Vec<&dyn Array> = batches[start..end]
+                .iter()
+                .map(|(_, seqs)| seqs as &dyn Array)
+                .collect();
+            let seqs = concat(&seqs)
+                .map_err(|e| StatsError::Internal(format!("concat ship sequences: {e}")))?;
+            chunks.extend(chunk_by_bytes(
+                &ship,
+                seqs.as_primitive::<Int64Type>(),
+                max_bytes,
+            )?);
+        }
+        start = end;
+    }
+    Ok(chunks)
 }
 
 /// Encode `ship` into IPC chunks bounded by `max_bytes`, pairing each with the largest

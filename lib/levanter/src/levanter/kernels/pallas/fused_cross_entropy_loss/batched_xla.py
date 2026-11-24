@@ -8,6 +8,7 @@ from typing import NamedTuple, Optional
 
 import jax
 import jax.numpy as jnp
+from haliax import jax_utils
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes, max_weight_tile_bytes_for_device
@@ -45,9 +46,7 @@ def _is_power_of_two(n: int) -> bool:
 
 
 def _device_kind() -> str:
-    if not jax.devices():
-        return ""
-    return jax.devices()[0].device_kind.lower()
+    return jax_utils.device_kind().lower()
 
 
 def _max_h_tiles_for_device(device_kind: str) -> Optional[int]:

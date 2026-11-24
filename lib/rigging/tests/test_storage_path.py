@@ -71,6 +71,19 @@ def test_storage_path_join_rejects_non_relative():
         base / "gs://other/loc"
 
 
+@pytest.mark.parametrize(
+    "path,base,expected",
+    [
+        ("gs://bucket/cache//train", "gs://bucket/cache", True),
+        ("gs://other/cache/train", "gs://bucket/cache", False),
+        ("/tmp/a", "/tmp/a", True),
+        ("/tmp/ab", "/tmp/a", False),
+    ],
+)
+def test_storage_path_is_relative_to_checks_roots_and_segments(path, base, expected):
+    assert StoragePath(path).is_relative_to(StoragePath(base)) is expected
+
+
 def test_storage_path_relative_to_is_structural():
     """Containment compares parsed segments, not string prefixes, so a doubled
     separator on either side cannot fork the answer (marin-community/marin#6838)."""

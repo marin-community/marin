@@ -30,8 +30,11 @@ def _moe_mlp_local(
     num_experts: int,
     implementation: MoeImplementation,
     expert_chunks: int = 1,
+    combine_in_fp32: bool = False,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     if implementation == "sonic_cute":
+        if combine_in_fp32:
+            raise ValueError("combine_in_fp32 is unsupported by sonic_cute")
         if activation_fn is not jax.nn.silu:
             raise ValueError("sonic_cute requires SiLU because its QuACK kernel fuses SwiGLU")
         # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
@@ -76,4 +79,5 @@ def _moe_mlp_local(
         moe_w2,
         activation_fn=activation_fn,
         num_experts=num_experts,
+        combine_in_fp32=combine_in_fp32,
     )

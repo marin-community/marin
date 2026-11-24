@@ -20,6 +20,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
     VerifyitGrader,
+    grader_environment,
     verifyit_spec,
 )
 from taskcompendium.pipeline.controls import answer_reply, reference_reply
@@ -300,7 +301,7 @@ def test_math_uses_verifyit_in_the_sandbox_and_keeps_source_evidence_and_oracle(
         assert problem in prompt
     grader = task.grader
     assert isinstance(grader, VerifyitGrader)
-    assert grader.environment == fixture_context(RECIPES[name]).grader_environment
+    assert grader_environment(grader) == fixture_context(RECIPES[name]).grader_environment
     verifier = verifier_files(task)
     assert verifier["source/verifier.py"] == files["tests/verifier.py"]
     assert verifier["source/test.sh"] == files["tests/test.sh"]

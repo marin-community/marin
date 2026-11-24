@@ -67,12 +67,6 @@ provisioning:
       usernames:
         - cwtoken-uhBSRqWXRtyV7WWciRtYr-loom-token
         - cwtoken-umHabiNiEWJbDFZqyTwbP-ops-loom-token
-    sandbox_runtime:
-      handler: cw-gvisor-cpu
-      node_selector:
-        iris-cw-use02a-scale-group: cpu-genoa
-        node.coreweave.cloud/gvisor: "true"
-        node.coreweave.cloud/container-runtime.cw-gvisor-cpu: "true"
 
 platform:
   label_prefix: cw-use02a
@@ -131,7 +125,12 @@ auth:
 
 kubernetes_provider:
   namespace: iris
-  sandbox_runtime_class: iris-gvisor-cpu
+  # CoreWeave's gvisor RuntimeClass (deprecated by CoreWeave,
+  # https://docs.coreweave.com/products/cks/container-runtimes/reference).
+  # Sandboxes do not start under it on this cluster's nodes, so task-curation runs
+  # pass --image-backend daytona here. https://github.com/marin-community/marin/issues/11343
+  # tracks the replacement runtime.
+  sandbox_runtime_class: gvisor
   node_health:
     storage:
       scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-us-east-02a
@@ -153,7 +152,7 @@ controller:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-genoa
-    hostname: g530e1c
+    hostname: g5bea54
     # Off-cluster reach is the operator-managed, IP-locked federation ingress
     # (docs/coreweave.md, scripts/install_cw_network.py).
 
@@ -174,6 +173,12 @@ defaults:
     # differs per node/region, so an exact-match pin (=enpXsYnpZ) is fragile and was
     # silently unmatched by the current task image's NCCL build, breaking bootstrap.
     NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+    # A privileged task pod also sees the front-end Ethernet NIC's RoCE functions
+    # (mlx5_*, 100G) beside the eight InfiniBand rails (ibp0..ibp7). NCCL merges
+    # them into virtual NICs and routes channels over them; they do not reach the
+    # peer's rails, so transfers fail with IBV_WC_RETRY_EXC_ERR(12). Restrict NCCL
+    # to the rails, as CoreWeave documents.
+    NCCL_IB_HCA: "ibp"
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001

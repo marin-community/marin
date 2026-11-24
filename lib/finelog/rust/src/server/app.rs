@@ -26,18 +26,22 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Request, State};
+use axum::http::{Method, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use connectrpc::{ConnectRpcService, Limits, Router as ConnectRouter};
 
 use crate::proto::finelog::logging::LogServiceExt;
 use crate::proto::finelog::stats::StatsServiceExt;
+use crate::read_executor::ReadExecutor;
 use crate::server::auth::{auth_gate, AuthInterceptor, AuthPolicy};
 use crate::server::forwarding::ForwardingConfig;
 use crate::server::ingest_health::IngestHealth;
 use crate::server::interceptors::{
-    ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
+    read_procedure, ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
     MAX_CONCURRENT_FETCH_LOGS, MAX_CONCURRENT_QUERY,
 };
 use crate::server::{debug, forwarded_prefix, introspection, legacy_path, spa, telemetry};
@@ -48,15 +52,14 @@ use super::log_service::{LogServiceImpl, LogTailCache};
 use super::stats_service::StatsServiceImpl;
 use super::MAX_MESSAGE_BYTES;
 
-/// Server-shell tuning. The interceptor caps + slow threshold are fields so a
-/// cargo/parity test can lower them; production uses [`ServerConfig::default`].
+/// Server HTTP and telemetry tuning; production uses [`ServerConfig::default`].
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// Mount the non-proto `--debug-admin` `/debug/*` routes.
     pub debug_admin: bool,
-    /// Concurrent FetchLogs cap.
+    /// Concurrent FetchLogs working-set cap.
     pub max_concurrent_fetch_logs: usize,
-    /// Concurrent Query cap.
+    /// Concurrent Query working-set cap.
     pub max_concurrent_query: usize,
     /// Concurrent telemetry request cap; excess requests receive HTTP 429.
     pub max_concurrent_telemetry: usize,
@@ -149,7 +152,7 @@ fn build_connect_service(
 
 /// Build the full axum app for `store` with `config`. See the module doc for
 /// the route precedence. Re-exported as `server::build_app_with_config`.
-pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
+pub fn build_app(store: Arc<Store>, config: ServerConfig, reads: Arc<ReadExecutor>) -> Router {
     let tail_cache = Arc::new(LogTailCache::new());
     let connect_service =
         build_connect_service(Arc::clone(&store), &config, Arc::clone(&tail_cache));
@@ -169,6 +172,7 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
         Arc::clone(&health),
         config.forwarding.clone(),
         tail_cache,
+        Arc::clone(&reads),
     )
     .layer(axum::middleware::from_fn_with_state(
         Arc::clone(&config.auth),
@@ -204,6 +208,7 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
     app = spa::spa_routes(app, spa::vue_dist_dir(), connect_service.clone());
 
     app.fallback_service(connect_service)
+        .layer(axum::middleware::from_fn_with_state(reads, dispatch_reads))
         // Transport layer: rewrite legacy /iris.logging.LogService/* onto
         // /finelog.logging.LogService/* before routing.
         .layer(axum::middleware::from_fn(
@@ -216,4 +221,25 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
         .layer(axum::middleware::from_fn(
             forwarded_prefix::strip_forwarded_prefix,
         ))
+}
+
+async fn dispatch_reads(
+    State(reads): State<Arc<ReadExecutor>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if request.method() != Method::POST || read_procedure(request.uri().path()).is_none() {
+        return next.run(request).await;
+    }
+    match reads.run(async move { next.run(request).await }).await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::error!(%error, "read request task failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "read request task failed",
+            )
+                .into_response()
+        }
+    }
 }

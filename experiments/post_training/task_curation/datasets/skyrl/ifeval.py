@@ -1,41 +1,36 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SkyRL instruction-following sources, graded by the vendored SkyRL IFEval scorer.
-
-The scorer rewards the fraction of constraints a reply satisfies. RLVR-IFeval rows already carry
-SkyRL constraint descriptors; Nemotron instruction IDs are mapped to the same descriptors.
-Conversion normalizes them with the scorer's own preparation function, which rejects unknown
-constraints and missing arguments. The sources publish no passing replies, so the controls check
-only that an empty reply scores 0.
-"""
+"""SkyRL instruction-following sources graded with verifyit IFEval checks."""
 
 import json
-import re
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
+from taskcompendium.convert.script_grader import grade_script, script_package
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
+from taskcompendium.models import ConversationInput, TaskResource, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow
-from verifyit.spec import DEFAULT_OUTPUT
+from verifyit.adapters.open_instruct_ifeval import constraints_from_descriptors, normalize_ground_truth
+from verifyit.grade import InvalidTask
+from verifyit.modes.grade_ifeval import resolve_checks
+from verifyit.spec import DEFAULT_OUTPUT, Constraint
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 HERE = Path(__file__).parent
-SCORERS = HERE / "scorers"
-IFEVAL_GRADE = grade_script(HERE / "ifeval_grade.py", *shipped_files(SCORERS, "ifeval_utils.py"))
+IFEVAL_GRADE = grade_script(HERE / "nemotron_if_grade.py")
+NEMOTRON_GRADE = IFEVAL_GRADE
 GRADER_TIMEOUT = 40.0
 
-RUBRIC = """
+RUBRIC_REQUESTS = """
 Identify every public content request and requirement across the complete conversation; do not discard earlier
 requests.
 
@@ -44,83 +39,92 @@ contradictory constraints.
 
 Formal constraint rewards do not establish factual correctness or useful content; judge the underlying request
 separately.
-
-The source scorer rewards the fraction of constraints satisfied; TaskTrove similarly named checks can differ in
-counting and punctuation semantics.
-
+"""
+RUBRIC_DEFECTS = """
 Missing requested documents or inputs are defects.
 """
+RUBRIC = (
+    RUBRIC_REQUESTS
+    + """
+The scorer rewards the fraction of constraints satisfied with verifyit's IFEval checks. Some scores differ from
+the source checker, especially for language, punctuation, and Markdown formatting.
+"""
+    + RUBRIC_DEFECTS
+)
+NEMOTRON_RUBRIC = (
+    RUBRIC_REQUESTS
+    + """
+The scorer rewards the fraction of constraints satisfied, with verifyit's IFEval checks.
+"""
+    + RUBRIC_DEFECTS
+)
 
-# Nemotron instruction ID -> (SkyRL constraint function, {Nemotron argument: SkyRL argument}).
-# keywords:letter_frequency has no entry: Nemotron asks for a relation such as "at least N times",
-# and the scorer's letter check counts exactly N.
-NEMOTRON_CONSTRAINTS: dict[str, tuple[str, dict[str, str]]] = {
-    "keywords:existence": ("verify_keywords", {"keywords": "keyword_list"}),
-    "keywords:frequency": (
-        "verify_keyword_frequency_relation",
-        {"keywords": "keyword_list", "frequency": "N", "relation": "quantifier"},
-    ),
-    "keywords:forbidden_words": ("validate_forbidden_words", {"forbidden_words": "forbidden_words"}),
-    "language:response_language": ("validate_response_language", {"language": "language"}),
-    "length_constraints:number_paragraphs": ("verify_paragraph_count", {"num_paragraphs": "N"}),
-    "length_constraints:number_words": ("validate_word_constraint", {"num_words": "N", "relation": "quantifier"}),
-    "length_constraints:number_sentences": (
-        "verify_sentence_constraint",
-        {"num_sentences": "N", "relation": "quantifier"},
-    ),
-    "length_constraints:nth_paragraph_first_word": (
-        "validate_paragraphs",
-        {"num_paragraphs": "N", "first_word": "first_word", "nth_paragraph": "i"},
-    ),
-    "detectable_content:postscript": ("verify_postscript", {"postscript_marker": "postscript_marker"}),
-    "detectable_content:number_placeholders": ("validate_placeholders", {"num_placeholders": "N"}),
-    "detectable_format:number_bullet_lists": ("verify_bullet_points", {"num_bullets": "N"}),
-    "detectable_format:title": ("validate_title", {}),
-    "detectable_format:constrained_response": ("validate_choice", {"options": "options"}),
-    "detectable_format:number_highlighted_sections": ("validate_highlighted_sections", {"num_highlights": "N"}),
-    "detectable_format:multiple_sections": (
-        "validate_sections",
-        {"num_sections": "N", "section_spliter": "section_splitter"},
-    ),
-    "detectable_format:json_format": ("validate_json_format", {}),
-    "combination:repeat_prompt": ("validate_repeat_prompt", {"original_prompt": "original_prompt"}),
-    "combination:two_responses": ("validate_two_responses", {}),
-    "change_case:capital_word_frequency": (
-        "validate_frequency_capital_words",
-        {"frequency": "N", "relation": "quantifier"},
-    ),
-    "change_case:english_capital": ("validate_uppercase", {}),
-    "change_case:english_lowercase": ("validate_lowercase", {}),
-    "startend:end_checker": ("validate_end", {"end_phrase": "end_phrase"}),
-    "punctuation:no_comma": ("validate_no_commas", {}),
-    "startend:quotation": ("validate_quotation", {}),
+# The IFEval arguments each supported Nemotron instruction needs; a row without one cannot be satisfied.
+# language:response_language has no entry: verifyit's language check is an approximation that one hint word passes.
+NEMOTRON_ARGUMENTS: dict[str, tuple[str, ...]] = {
+    "change_case:capital_word_frequency": ("capital_frequency", "capital_relation"),
+    "change_case:english_capital": (),
+    "change_case:english_lowercase": (),
+    "combination:two_responses": (),
+    "detectable_content:number_placeholders": ("num_placeholders",),
+    "detectable_content:postscript": ("postscript_marker",),
+    "detectable_format:constrained_response": (),
+    "detectable_format:json_format": (),
+    "detectable_format:multiple_sections": ("num_sections", "section_spliter"),
+    "detectable_format:number_bullet_lists": ("num_bullets",),
+    "detectable_format:number_highlighted_sections": ("num_highlights",),
+    "detectable_format:title": (),
+    "keywords:existence": ("keywords",),
+    "keywords:forbidden_words": ("forbidden_words",),
+    "keywords:frequency": ("keyword", "frequency", "relation"),
+    "keywords:letter_frequency": ("letter", "let_frequency", "let_relation"),
+    "length_constraints:nth_paragraph_first_word": ("num_paragraphs", "nth_paragraph", "first_word"),
+    "length_constraints:number_paragraphs": ("num_paragraphs",),
+    "length_constraints:number_sentences": ("num_sentences", "relation"),
+    "length_constraints:number_words": ("num_words", "relation"),
+    "punctuation:no_comma": (),
+    "startend:end_checker": ("end_phrase",),
+    "startend:quotation": (),
 }
+MISSING_ARGUMENT_VALUES = (None, "", [])
+"""An empty keyword list would make the check pass on any reply."""
 
 
-def nemotron_constraint(instruction_id: str, arguments: Mapping[str, Any], prompt: str) -> dict[str, Any]:
-    """The SkyRL constraint descriptor for one Nemotron instruction; ``prompt`` fills repeat-prompt checks."""
+def nemotron_constraint(instruction_id: str, arguments: Mapping[str, Any]) -> Constraint:
+    """The verifyit constraint for one Nemotron instruction, without the arguments the row leaves null."""
     try:
-        function_name, argument_names = NEMOTRON_CONSTRAINTS[instruction_id]
+        required = NEMOTRON_ARGUMENTS[instruction_id]
     except KeyError as error:
         raise ValueError(f"Unsupported Nemotron instruction id: {instruction_id!r}") from error
-    constraint: dict[str, Any] = {"func_name": function_name}
-    for source_name, target_name in argument_names.items():
-        value = prompt if source_name == "original_prompt" else arguments.get(source_name)
-        if instruction_id == "keywords:frequency" and source_name == "keywords" and value is None:
-            # Some rows name one keyword, or only quote it in the instruction's first paragraph.
-            keyword = arguments.get("keyword")
-            value = [keyword] if isinstance(keyword, str) else re.findall(r'"([^"\n]+)"', prompt.split("\n\n", 1)[0])
-        # An empty keyword list makes the check pass on any reply.
-        if value is None or value == []:
-            raise ValueError(f"Nemotron instruction {instruction_id!r} requires {source_name!r}")
-        constraint[target_name] = value
-    return constraint
+    params = {name: value for name, value in arguments.items() if value is not None}
+    missing = [name for name in required if params.get(name) in MISSING_ARGUMENT_VALUES]
+    if missing:
+        raise ValueError(f"Nemotron instruction {instruction_id!r} requires {missing}")
+    return Constraint(instruction_id, params)
 
 
 def _messages(value: Any) -> tuple[TextMessage, ...]:
     messages = tuple(TextMessage.model_validate(message) for message in value)
     ConversationInput(events=messages)
     return messages
+
+
+def scripted_task(
+    row: RawRow,
+    context: ConversionContext,
+    events: Sequence[TextMessage],
+    grade: tuple[TaskResource, ...],
+    constraints: list[Any],
+    evidence: Mapping[str, Any],
+) -> TaskSpec:
+    package = script_package(
+        grade,
+        {"constraints": constraints},
+        environment=required_grader_environment(context),
+        timeout=GRADER_TIMEOUT,
+        answer_path=DEFAULT_OUTPUT,
+    )
+    return conversation_task(row, events=events, package=package, evidence=evidence)
 
 
 def ifeval_task(
@@ -131,36 +135,31 @@ def ifeval_task(
     evidence: Mapping[str, Any],
 ) -> TaskSpec | ImportRejection:
     try:
-        normalized = json.loads(ifeval_utils.normalize_ground_truth(constraints))
-    except (ValueError, TypeError) as error:
+        normalized = json.loads(normalize_ground_truth(constraints))
+        converted = constraints_from_descriptors(normalized)
+    except (InvalidTask, ValueError, TypeError) as error:
         return unsupported("unsupported_ifeval_constraint", str(error))
-    package = script_package(
-        IFEVAL_GRADE,
-        {"constraints": normalized},
-        environment=required_grader_environment(context),
-        timeout=GRADER_TIMEOUT,
-        answer_path=DEFAULT_OUTPUT,
-    )
-    return conversation_task(row, events=events, package=package, evidence=evidence)
+    if any(constraint.name == "language:response_language" for constraint in converted):
+        return unsupported("unsupported_ifeval_constraint", "Response language requires a detector")
+    return scripted_task(row, context, events, IFEVAL_GRADE, [asdict(constraint) for constraint in converted], evidence)
 
 
 def convert_nemotron_if(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     try:
         events = _messages(row.data["input"])
         names, arguments = row.data["args"]["instruction_id_list"], row.data["args"]["instruction_kwargs"]
-        if not names or len(names) != len(arguments):
-            raise ValueError("Instruction identifiers and arguments must be nonempty and aligned")
+        if not names or len(names) != len(arguments) or not all(isinstance(argument, dict) for argument in arguments):
+            raise ValueError("Instruction identifiers and argument objects must be nonempty and aligned")
     except (ValidationError, ValueError, KeyError, TypeError) as error:
         return unsupported("invalid_instruction_contract", str(error))
-    prompt = next(event.content for event in reversed(events) if event.role == "user")
     try:
-        constraints = [
-            nemotron_constraint(name, argument, prompt) for name, argument in zip(names, arguments, strict=True)
-        ]
-    except ValueError as error:
+        constraints = tuple(nemotron_constraint(name, argument) for name, argument in zip(names, arguments, strict=True))
+        resolve_checks(constraints)
+    except (ValueError, InvalidTask) as error:
         return unsupported("unsupported_ifeval_constraint", str(error))
     evidence = {key: value for key, value in row.data.items() if key not in {"input", "args", "path"}}
-    return ifeval_task(row, context, events, constraints, evidence)
+    config = [asdict(constraint) for constraint in constraints]
+    return scripted_task(row, context, events, NEMOTRON_GRADE, config, evidence)
 
 
 def convert_rlvr_ifeval(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -196,9 +195,9 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.JSONL,
                 ),
                 convert=convert_nemotron_if,
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
-                rubric=RUBRIC,
+                rubric=NEMOTRON_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
             ),
@@ -221,7 +220,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.PARQUET,
                 ),
                 convert=convert_rlvr_ifeval,
-                version="1",
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=CONTROLS,

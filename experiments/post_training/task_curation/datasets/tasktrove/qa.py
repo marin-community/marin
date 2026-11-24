@@ -16,7 +16,7 @@ from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.models import GraderMachine, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
@@ -126,7 +126,7 @@ def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
             resource.model_copy(update={"path": "source/" + resource.path})
             for resource in archive_resources(row.data).verifier
         ),
-        environment=required_grader_environment(context),
+        placement=GraderMachine(environment=required_grader_environment(context)),
     )
     prompt = TextMessage(role="user", content=replace_phrases(instruction, OPENQA_DELIVERY))
     task = conversation_task(row, events=(prompt,), package=package)

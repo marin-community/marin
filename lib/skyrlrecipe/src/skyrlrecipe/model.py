@@ -19,6 +19,7 @@ from pydantic import (
     Field,
     PlainSerializer,
     PlainValidator,
+    PositiveInt,
 )
 
 
@@ -93,6 +94,7 @@ def _frozen_map(value: Any) -> FrozenMap:
 
 OpenMap = Annotated[FrozenMap, PlainValidator(_frozen_map), PlainSerializer(thaw)]
 NumberMap = Annotated[Mapping[str, int | float], AfterValidator(FrozenMap), PlainSerializer(thaw)]
+CountMap = Annotated[Mapping[str, PositiveInt], Field(min_length=1), AfterValidator(FrozenMap), PlainSerializer(thaw)]
 
 
 class _Unset(Enum):

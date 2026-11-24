@@ -15,6 +15,8 @@ Marin libraries and Harbor as editable dependencies from this checkout, using
 the paths in `vendor/skyrl/pyproject.toml`. Marin calls SkyRL through the executable.
 See [launching RL experiments](../references/rl-launching.md)
 for the artifact entry point, launch document, and resource configuration.
+For model-owned preset selection, experiment status and saved results, see the
+[RL experiments recipe](../recipes/rl-experiments.md).
 
 The Marin CLI uses SkyRL's `cpu` extra. Set `environment.task_sessions.local: {}`
 to enable the local task backend, which probes Linux bubblewrap before task
@@ -46,8 +48,65 @@ Run the
 [train, resume, and evaluation smoke](#train-resume-and-evaluate-through-marin)
 to check runtime behavior after dependency changes.
 
+When checking an NCCL upgrade, read the loaded library version. Torch's
+`torch.cuda.nccl.version()` returns the version used to build Torch, so it can
+remain older after a dependency override. In the frozen CUDA runtime, run:
+
+```bash
+python - <<'PYTHON'
+import ctypes
+from pathlib import Path
+import torch
+
+paths = {
+    line.split()[-1]
+    for line in Path("/proc/self/maps").read_text().splitlines()
+    if "libnccl.so" in line and line.split()[-1].startswith("/")
+}
+assert len(paths) == 1, paths
+library = ctypes.CDLL(paths.pop())
+version = ctypes.c_int()
+status = library.ncclGetVersion(ctypes.byref(version))
+assert status == 0, status
+print("Loaded NCCL:", version.value, "Torch build NCCL:", torch.cuda.nccl.version())
+PYTHON
+```
+
+NCCL 2.32.6 reports `23206`. Set `NCCL_DEBUG=VERSION` before a collective test
+and capture its stdout and stderr to save the version banner with the numerical
+results.
+
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
+
+## Task errors
+
+[rigging.task_errors](https://github.com/marin-community/marin/blob/main/lib/rigging/src/rigging/task_errors.py)
+owns `ErrorCategory`, `RetrySettings` and names shared by task producers and SDKs.
+Each framework owns its remaining categories: Shellbox owns machine and Daytona
+errors, Harbor owns its native errors, and SkyRL owns its rollout errors.
+SkyRL composes the shared, Shellbox and SkyRL maps, plus Harbor's map when Harbor
+is installed. Composition rejects names assigned by more than one owner.
+
+SkyRL maps categories to training treatment in `skyrl_train.task_error_handling`:
+infrastructure failures are excluded, agent failures receive zero reward, and
+passthrough failures retain available verifier output. Unknown names use the
+configured fallback and emit an error log.
+
+Add a new persisted exception name to its producer's category map. Put a name
+used by several producers in the shared map once. Per-name training overrides
+belong in `ErrorHandlingConfig`.
+
+SkyRL retains passthrough terminal results with usable verifier output. Native
+Harbor may retry when environment teardown is unconfirmed.
+
+## Run records
+
+Native receipts and numeric metrics use the [FineStore run-record contract](https://github.com/marin-community/marin/blob/main/lib/finestore/README.md#package-boundary).
+See [RL launching](../references/rl-launching.md) for checkpoint continuation and retry procedures.
+
+Generate-only launches through Marin allocate the inference engines' nodes and
+reserve no trainer or reference nodes.
 
 ## Grug activation storage
 
@@ -98,6 +157,18 @@ model-only restore can start a fresh optimizer with a different recipe.
 Extracted from [the Mochi experiment](https://github.com/marin-community/marin/pull/11199),
 using [Hero EP at 4af96607](https://github.com/marin-community/marin/tree/4af966070e5d0252e87d404196400c35bd04883b/experiments/grug/moe_hero_ep)
 as the numerical reference.
+
+## Batch assembly
+
+The driver builds batches by default. Recipes that support policy-worker slicing can set
+`trainer.batch_builder=worker`. Keep `driver` for these configurations:
+
+| Worker startup refusal | Configurations |
+| --- | --- |
+| Objectives and credit | Reference objectives, DPO/FTPO, distillation, unsupported estimators, trajectory selection, step-wise training, advantage normalization, loop advantage credit or marker-target penalties |
+| Placement and output | Colocation, MoE ETP (or its TP fallback) greater than one, rows requiring DP padding, dense batch dumps |
+
+Outcome estimators and SFT/uniform support scalar and per-turn token rewards. Unexpected loop, teacher or route metadata reports its group uid. Worker mismatch metrics omit p95/p99/p999, ESS, KL/chi-square and collapse-tail statistics, plus rollout/train probability-difference standard deviation. Two-phase payload sharing precedes rank reads and assembly (`timing/load_worker_batch`). Resume rebuilds per-row summaries with bounded parallel reads for either builder. Checkpoints work in either mode.
 
 ## CI checks
 
@@ -170,7 +241,109 @@ Iris admits the job together; Ray confines each role to its group. Deploy an Iri
 controller with [grouped coscheduling](https://github.com/marin-community/marin/pull/11449)
 before enabling this mode. Explicit groups lose the default preference
 for nearby racks on InfiniBand. Cross-rack transport between trainer and
-inference still needs validation. Omitting the option keeps existing placement.
+inference still needs validation on main. Omitting the option keeps existing placement.
+
+## Mochi inference on GB200
+
+Use a retained BF16 Mochi (535B-A23B) export with
+`grugmoe_artifact_schema_version: 3` in its `config.json`, retained data handles,
+and a recipe that already validates on main with a 64-GPU Megatron trainer
+at TP1/PP16/CP4/EP4. This configuration uses eight
+TP1/PP1/DP16/EP16 inference engines on another 128 GPUs. Required NVLink placement
+packs the trainer into one 16-host domain and four inference engines into each of
+two further domains: 48 four-GPU hosts in total.
+
+Keep the existing context limit, optimizer, n=8, staleness three, trainer batch,
+task setup, evaluation and recovery settings. The base recipe must use local
+vLLM engines, Triton MoE and NCCL expert-block weight sync. Commit the following
+fragment as `mochi-inference.yaml` beside your experiment:
+
+```yaml
+trainer:
+  rollout_buffer:
+    max_in_flight: 128
+generator:
+  num_inference_engines: 8
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 16
+  inference_engine_expert_parallel_size: 16
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASHINFER
+  max_num_seqs: 128
+  max_num_batched_tokens: 2048
+  gpu_memory_utilization: 0.90
+  enable_prefix_caching: false
+  expert_block_sync:
+    verify: true
+    timeout_seconds: 1800
+  engine_init_kwargs:
+    enable_return_routed_experts: true
+    compilation_config:
+      mode: 3
+      cudagraph_mode: PIECEWISE
+      splitting_ops:
+        - vllm::unified_attention_with_output
+        - vllm::unified_kv_cache_update
+        - vllm::grug_moe_short_conv
+      inductor_compile_config:
+        enable_auto_functionalized_v2: false
+        combo_kernels: true
+        benchmark_combo_kernel: true
+```
+
+In your artifact main, apply it to the existing `SkyRLSpec` named `spec` and
+`IrisSkyRLExecution` named `execution` before calling `skyrl_step`. These public
+interfaces are described in [RL launching](../references/rl-launching.md).
+The role plan below reads its inference topology from the same patch that replaces
+the recipe's old declarations. The file stays in the submitted checkout so the
+coordinator reads the same recipe.
+
+```python
+from dataclasses import replace
+from pathlib import Path
+
+import yaml
+from skyrlrecipe import RecipePatch, SkyRLRecipe
+from skyrlrecipe.locality import RoleTopologyMode
+
+recipe = SkyRLRecipe.from_document(yaml.safe_load(spec.config_yaml))
+inference = RecipePatch.from_document(
+    yaml.safe_load(Path(__file__).with_name("mochi-inference.yaml").read_text())
+)
+role_plan = replace(
+    spec.topology.role_plan,
+    num_inference_engines=inference.generator.num_inference_engines,
+    inference_engine_tensor_parallel_size=inference.generator.inference_engine_tensor_parallel_size,
+    inference_engine_pipeline_parallel_size=inference.generator.inference_engine_pipeline_parallel_size,
+    inference_engine_data_parallel_size=inference.generator.inference_engine_data_parallel_size,
+    inference_engine_expert_parallel_size=inference.generator.inference_engine_expert_parallel_size,
+)
+spec = replace(
+    spec,
+    config_yaml=yaml.safe_dump(recipe.merge(inference).to_skyrl(), sort_keys=False),
+    topology=replace(spec.topology, num_nodes=role_plan.num_nodes, role_plan=role_plan),
+)
+execution = replace(execution, role_topology=RoleTopologyMode.NVLINK_DOMAIN)
+```
+
+The 128-group admission limit is separate from the trainer batch. The native
+buffer also bounds untrained groups by `(staleness + 1) * batch_size`: at
+staleness three, a six-group batch admits at most 24 groups. The 128-sequence
+limit applies to each vLLM DP worker, which uses one GPU in this layout. To keep a smoke
+run's admission cap at two groups, use
+`inference = inference.with_settings(("trainer.rollout_buffer.max_in_flight=2",))`
+before updating `spec`. Use a new artifact version for the changed
+inference layout and inspect the rendered launch document before submitting it.
+
+This example was composed for vLLM build `marin-vllm-gpu-20261113-0ac9dcb157ee`.
+CPU validation covers recipe composition,
+native launch loading, training configuration and three-domain placement, with
+and without existing inference topology declarations. It also checks the two-group
+admission override. These checks provide no GPU execution or performance evidence.
+GPU memory fit, updated-weight publication, long-context training and recovery
+need validation on your runtime. [Issue #11430](https://github.com/marin-community/marin/issues/11430)
+tracks serving work.
 
 ## Expert-block weight sync placement
 

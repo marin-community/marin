@@ -15,7 +15,7 @@ from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.harness.core import Harness, HarnessContext
+from rolloutengine.harness.core import OUTPUT_LIMIT_OPTION_KEYS, Harness, HarnessContext, reply_options_match
 from rolloutengine.models import (
     BUDGET_STOP_REASON,
     LENGTH_STOP_REASON,
@@ -132,13 +132,20 @@ class _Conversation:
 
 @dataclass(frozen=True)
 class _CleanupScope:
-    """``HarnessCleanup`` on an exit stack: each close runs within the cleanup deadline, and failures are recorded."""
+    """``HarnessCleanup`` on exit stacks: each close runs within the cleanup deadline, and failures are recorded.
 
-    stack: AsyncExitStack
+    ``stopped`` closes when the harness ends, and ``released`` after grading.
+    """
+
+    stopped: AsyncExitStack
+    released: AsyncExitStack
     cleanup: _Cleanup
 
     def push(self, name: str, close: Callable[[], Coroutine[Any, Any, None]]) -> None:
-        self.stack.push_async_callback(self.cleanup.run, name, close)
+        self.stopped.push_async_callback(self.cleanup.run, name, close)
+
+    def push_after_grading(self, name: str, close: Callable[[], Coroutine[Any, Any, None]]) -> None:
+        self.released.push_async_callback(self.cleanup.run, name, close)
 
 
 @dataclass(frozen=True)
@@ -198,7 +205,8 @@ class _Recorder:
         self.stop_reason = "error"
         self.stopped = False
         self.model_error: Exception | None = None
-        self.no_response_reason: str | None = None
+        self.no_response_reason = "The attempt ended before the first response"
+        self.context_rejected = False
         self.model_call: asyncio.Timeout | None = None
         self.step_observations: tuple[dict[str, Any], ...] = ()
         self.step_data: object = None
@@ -236,7 +244,11 @@ class _Recorder:
         return await self._send(request, conversation.request((), prompt.token_ids))
 
     async def reply(
-        self, observations: tuple[dict[str, Any], ...], *, token_ids: tuple[int, ...] | None = None
+        self,
+        observations: tuple[dict[str, Any], ...],
+        *,
+        token_ids: tuple[int, ...] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> ModelTurn:
         await self._enter()
         conversation = self.conversation
@@ -244,6 +256,8 @@ class _Recorder:
             raise RuntimeError("A harness replies only after a model turn")
         if self.step_observations:
             raise RuntimeError("A turn has recorded final observations, so the harness cannot reply to it")
+        if options is not None and not reply_options_match(conversation.options, options):
+            raise ValueError(f"A reply can change only {', '.join(sorted(OUTPUT_LIMIT_OPTION_KEYS))}")
         if (
             self.stop_reason == LENGTH_STOP_REASON
             or self.budget_reached
@@ -258,7 +272,12 @@ class _Recorder:
             self.model_error = RolloutContractError("Pinned prompt tokens must start with the tokens served so far")
             raise RolloutEnded("The pinned prompt broke the token contract") from self.model_error
         request = _Request(observations, token_ids, None, self._waited())
-        return await self._send(request, conversation.request(observations, token_ids))
+        model_request = conversation.request(observations, token_ids)
+        if options is not None:
+            model_request = replace(model_request, options=options)
+        turn = await self._send(request, model_request)
+        conversation.options = model_request.options
+        return turn
 
     def record(
         self,
@@ -378,6 +397,9 @@ class _Recorder:
                 self.context_recovery == ContextRecovery.AFTER_TURN and self.has_response
             ):
                 self.request = None
+                self.context_rejected = True
+                if not self.has_response:
+                    self.no_response_reason = "The model rejected the first request for its context"
                 self._set_tool_deadline(self.limits.tool_turn_timeout)
                 raise ContextWindowExceeded(str(outcome)) from outcome.error
             outcome = outcome.error
@@ -537,8 +559,9 @@ async def _run_harness(
         recorder.stop_at_turn_deadline()
         return None
     if failure is None or (refused and recorder.stopped):
-        # A limit can stop the attempt before the first turn. Without a limit, the harness returned too early.
-        if not recorder.has_response and not recorder.stopped:
+        # A limit, or a model that rejected a request for its context, can end the attempt before the first turn.
+        # Otherwise the harness returned too early.
+        if not recorder.has_response and not recorder.stopped and not recorder.context_rejected:
             return RolloutOperation.PREPARE, RuntimeError("The harness returned before its first model turn")
         recorder.finish()
         return None
@@ -567,8 +590,8 @@ async def harness_rollout(
     run_id = uuid.uuid4().hex if run_id is None else run_id
     recorder = _Recorder(model, limits, trace, events, context_recovery=harness.context_recovery)
     cleanup = _Cleanup(limits.cleanup_timeout)
-    async with AsyncExitStack() as resources:
-        context = HarnessContext(task, limits, machine, events, _CleanupScope(resources, cleanup), run_id)
+    async with AsyncExitStack() as released, AsyncExitStack() as stopped:
+        context = HarnessContext(task, limits, machine, events, _CleanupScope(stopped, released, cleanup), run_id)
         failure = await _run_harness(harness, context, recorder, attempt_deadline=None)
     rollout = recorder.rollout(run_id, {})
     if cleanup.errors:

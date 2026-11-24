@@ -6,6 +6,7 @@ import os
 
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
+from rigging.task_errors import RetrySettings
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
@@ -17,7 +18,6 @@ from skyrl_train.rollouts.harbor_settings import (
     HARBOR_EXCEPTION,
     EnvironmentConfig,
     EnvironmentType,
-    RetryConfig,
     VerifierConfig,
     concurrent_trials,
 )
@@ -30,7 +30,8 @@ from skyrl_train.trajectory_runners.harbor.identity_aware_reward import (
 from skyrl_train.trajectory_runners.harbor.truncation_penalty import apply_truncation_penalty, detect_turn_truncation
 from skyrl_train.trajectory_runners.types import RESPONSE_SPAN_TAGS_KEY, TrajectoryRequestBatch
 from skyrl_train.metric_names import IDENTITY_AWARE_REWARD_METRIC_PREFIX
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig, ErrorTreatment, classify_exception_type
+from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_exception_type
 from skyrl_train.utils.pbs_shaping import compute_pbs_token_shaping
 from skyrl_train.utils.span_tagger import tag_generated_tokens
 from skyrl_train.utils.reward_shaping import (
@@ -57,7 +58,7 @@ class HarborTaskSettings:
     concurrent_trials: int
     error_handling: ErrorHandlingConfig
     reward_shaping: dict
-    retry: RetryConfig
+    retry: RetrySettings
     attempt_timeout: float | None
 
     @classmethod

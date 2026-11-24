@@ -1,17 +1,18 @@
 """Metric names shared by training and offline analysis."""
 
+from rolloutengine.models import TASK_TIMING_KEYS as TASK_TIMING_KEYS
+
 ROLLOUT_FAILURE_FRACTION_METRIC = "generate/failed_trajectory_fraction"
 ENVIRONMENT_METRIC_PREFIX = "environment/"
+GENERATE_OUTCOME_METRIC_PREFIX = "generate/outcome/"
+EVAL_OUTCOME_METRIC_PREFIX = "eval/all/outcome/"
 IDENTITY_AWARE_REWARD_METRIC_PREFIX = "generate/reward_shaping/identity_aware"
 TASK_ROLLOUT_METRIC_PREFIX = "generate/task_rollout/"
 TIS_ALIGNED_TOKENS_METRIC = "generate/tis/aligned_tokens"
 TIS_METRIC_PREFIX = TIS_ALIGNED_TOKENS_METRIC.removesuffix("aligned_tokens")
 TIS_EXACT_MATCH_FRACTION_METRIC = "generate/tis/exact_match_fraction"
-TIS_LCS_FALLBACK_FRACTION_METRIC = "generate/tis/lcs_fallback_fraction"
 TIS_UNALIGNED_FRACTION_METRIC = "generate/tis/unaligned_fraction"
 TIS_ALIGNMENT_FAIL_COUNT_METRIC = "generate/tis/alignment_fail_count"
-TIS_LCS_FALLBACK_MESSAGES_METRIC = "generate/tis/lcs_fallback_messages"
-TIS_LCS_FALLBACK_ALERT_METRIC = "generate/tis/lcs_fallback_alert"
 TIS_ALIGNMENT_ALERT_METRIC = "generate/tis/alignment_alert"
 TIS_TITO_FULL_ATTEMPTS_METRIC = "generate/tis/tito_full/attempts"
 TIS_TITO_FULL_SUCCESS_FRACTION_METRIC = "generate/tis/tito_full/success_fraction"
@@ -21,3 +22,5 @@ TIS_TITO_FULL_DECLINE_METRIC_PREFIX = "generate/tis/tito_full/decline/"
 CORRECTION_WEIGHT_MEAN_METRIC = "policy/correction/weight_mean"
 CORRECTION_TRUNCATED_FRACTION_METRIC = "policy/correction/truncated_fraction"
 CORRECTION_MASKED_FRACTION_METRIC = "policy/correction/masked_fraction"
+
+PROMPTS_DROPPED_TOO_LONG_METRIC = "generate/prompts_dropped_too_long"

@@ -9,11 +9,12 @@ import pytest
 
 pytest.importorskip("math_verify", reason="math mode needs the `math` extra")
 
+import latex2sympy2_extended
 import math_verify
 import sympy
 from math_verify.errors import TimeoutException
 from verifyit.execution.worker import call_bounded
-from verifyit.grade import InvalidTask, Status, run, write_reward
+from verifyit.grade import GradingInfraError, InvalidTask, Status, run, write_reward
 from verifyit.grade import grade as dispatch
 from verifyit.modes import grade_math
 from verifyit.modes.grade_exact import grade_exact_candidate
@@ -53,6 +54,37 @@ def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text,
     assert grade_math.grade(MathSpec(expected=expected), tmp_path, tmp_path).reward == reward
 
 
+@pytest.mark.parametrize("power", [(19, 9), (17, 6), (5, 4)])
+def test_math_positive_symbols_accept_equivalent_ratio_powers(power):
+    numerator, denominator = power
+    exponent = rf"\frac{{{numerator}}}{{{denominator}}}"
+    reference = rf"\frac{{a_{{1}} \left(\frac{{a_{{3}}}}{{a_{{2}}}}\right)^{{{exponent}}}}}{{a_{{3}}}}"
+    regrouped = rf"\frac{{a_{{1}} a_{{3}}^{{{exponent}}}}}{{a_{{2}}^{{{exponent}}} a_{{3}}}}"
+    spec = MathSpec(expected=reference, positive_symbols=("a_1", "a_2", "a_3"))
+
+    assert grade_math.grade_math_candidate(spec, regrouped).reward == 1.0
+    wrong_exponent = regrouped.replace(exponent, rf"\frac{{{numerator + 1}}}{{{denominator}}}")
+    assert grade_math.grade_math_candidate(spec, wrong_exponent).reward == 0.0
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference), regrouped).reward == 0.0
+
+
+def test_math_positive_symbols_apply_only_to_explicitly_named_symbols():
+    assert grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}"), "x").reward == 0.0
+    assert grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}", positive_symbols=("x",)), "x").reward == 1.0
+    assert (
+        grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}+y", positive_symbols=("y",)), "x+y").reward == 0.0
+    )
+
+
+def test_math_positive_symbols_survive_spec_file_grading(tmp_path):
+    spec = MathSpec(expected=r"\sqrt{x^2}", positive_symbols=("x",))
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    _answer(tmp_path, "x")
+
+    assert run(spec_path, tmp_path).reward == 1.0
+
+
 @pytest.mark.parametrize(
     "expected, math_type, text, reward",
     [
@@ -87,6 +119,36 @@ def test_math_typed_answers_use_their_comparison(tmp_path, expected, math_type, 
     assert grade_math.grade(spec, tmp_path, tmp_path).reward == reward
 
 
+# A HARDMath polynomial_roots answer in the dataset's own form: two \left[…\right] members
+# and no outer brackets (row 122 of the train split, issue #11511).
+HARDMATH_ROOTS_ANSWER = (
+    r"\left[ - \sqrt{\frac{1.00}{\epsilon}}, \  \sqrt{\frac{1.00}{\epsilon}}\right],"
+    r" \left[ \frac{1.00}{\epsilon}, \  -1.00\right]"
+)
+
+
+@pytest.mark.parametrize(
+    "expected, candidate, reward",
+    [
+        # The reply in the dataset's form and the bracketed golden control are the same
+        # two members: the outer brackets are dropped only when they enclose the whole text.
+        (f"[{HARDMATH_ROOTS_ANSWER}]", HARDMATH_ROOTS_ANSWER, 1.0),
+        (f"[{HARDMATH_ROOTS_ANSWER}]", f"[{HARDMATH_ROOTS_ANSWER}]", 1.0),
+        (f"[{HARDMATH_ROOTS_ANSWER}]", HARDMATH_ROOTS_ANSWER.replace("-1.00", "-2.00"), 0.0),
+        # A wrong reply in the dataset's form stays 0.
+        (f"[{HARDMATH_ROOTS_ANSWER}]", HARDMATH_ROOTS_ANSWER.replace("- \\sqrt", "\\sqrt"), 0.0),
+        # A sequence whose members are parenthesized pairs.
+        ("[(1,2),(3,4)]", "(1,2),(3,4)", 1.0),
+        ("[(1,2),(3,4)]", "[(1,2),(3,4)]", 1.0),
+        ("[(1,2),(3,4)]", "(1,2),(3,5)", 0.0),
+        ("[(1,2),(3,4)]", "(1,2),(3,4),(5,6)", 0.0),
+    ],
+)
+def test_list_members_keep_their_own_brackets(expected, candidate, reward):
+    spec = MathSpec(expected=expected, math_type=MathType.LIST)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == reward
+
+
 def test_math_empty_output_scores_zero_with_no_output(tmp_path):
     _answer(tmp_path, "\n  \n")
     result = grade_math.grade(MathSpec(expected="42"), tmp_path, tmp_path)
@@ -103,6 +165,149 @@ def test_math_reward_detail_carries_the_extracted_expression(tmp_path):
 def test_math_unparsable_expected_is_an_invalid_task(tmp_path, expected):
     _answer(tmp_path, "\\boxed{42}")
     assert dispatch(MathSpec(expected=expected), tmp_path, tmp_path).status == Status.INVALID_TASK
+
+
+@pytest.mark.parametrize(
+    "expected, math_type",
+    [
+        (r"67.\overline{3}", MathType.SCALAR),
+        (r"\begin{pmatrix} -1 & 0 \\ 0 & -1 \end{pmatrix}.", MathType.SCALAR),
+        (r"2007 + \frac\pi 2", MathType.SCALAR),
+        (r"\{x \mid 2 < x < 3\}", MathType.SET),
+        (r"32 \text{ white}, 16 \text{ black}", MathType.SCALAR),
+        (r"32 \text{white}, 16 \text{black}", MathType.SCALAR),
+        (r"\mathrm{x}+32 \text{ white}, 16 \text{ black}", MathType.SCALAR),
+        (r"[1, 67.\overline{3}]", MathType.LIST),
+        (r"x = \frac\pi 2 = 2", MathType.EQUATION),
+        (r"1$ + $2", MathType.SCALAR),
+        (r"1$ + ", MathType.SCALAR),
+        (r"[1, x = \frac\pi 2 = 2]", MathType.LIST),
+        (r"[1, 1$ + $2]", MathType.LIST),
+    ],
+)
+def test_math_partial_reference_is_invalid_before_scoring(expected, math_type):
+    with pytest.raises(InvalidTask):
+        grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "32")
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "\\text{No \u2013 the limit need not exist; the matrices can stay bounded\nbut fail to converge.}",
+        r"\text{one two three four five}",
+    ],
+)
+@pytest.mark.parametrize("math_type", [MathType.SCALAR, MathType.LIST])
+def test_math_prose_only_text_reference_or_list_member_is_invalid_before_scoring(prose, math_type):
+    expected = prose if math_type is MathType.SCALAR else f"[1, {prose}]"
+    with pytest.raises(InvalidTask):
+        grade_math.grade_math_candidate(MathSpec(expected=expected, math_type=math_type), "No")
+
+
+def test_math_escaped_dollar_reference_stays_parseable():
+    reference = r"\$32,\!348"
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference), "32,348").reward == 1.0
+
+
+@pytest.mark.parametrize("answer", ["B", "Evelyn", "Friday", "New York City Hall"])
+def test_math_short_text_reference_stays_parseable(answer):
+    assert grade_math.grade_math_candidate(MathSpec(expected=rf"\text{{{answer}}}"), answer).reward == 1.0
+
+
+@pytest.mark.parametrize("math_type", [MathType.SCALAR, MathType.LIST])
+@pytest.mark.parametrize("connector", ["and", "or"])
+def test_math_text_connector_does_not_invalidate_comma_separated_reference(connector, math_type):
+    spec = MathSpec(expected=rf"2, 3, \text{{ {connector} }} 4", math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, "2, 3, 4").reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, math_type",
+    [
+        (r"15\mbox{ cm}^2", "15", MathType.SCALAR),
+        (r"15\mbox{ cm}^{2}", "15", MathType.SCALAR),
+        (r"15\mbox{ cm}^{3}", "15", MathType.SCALAR),
+        (r"15\mbox{ cm}^{3}", r"15\mbox{ cm}^{3}", MathType.SCALAR),
+        (r"15\text{ cm}^3", "15", MathType.SCALAR),
+        (r"15\text{ cm}^{4}", "15", MathType.SCALAR),
+        (r"[1, 15\mbox{ cm}^{2}]", "[1, 15]", MathType.LIST),
+        (r"[1, 15\mbox{ cm}^{3}]", "[1, 15]", MathType.LIST),
+        (r"[1, 15\mbox{ cm}^{3}]", r"[1, 15\mbox{ cm}^{3}]", MathType.LIST),
+        (r"[1, 15\text{ cm}^3]", "[1, 15]", MathType.LIST),
+    ],
+)
+def test_math_terminal_unit_power_stays_parseable(reference, candidate, math_type):
+    spec = MathSpec(expected=reference, math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, math_type",
+    [
+        (r"\mathrm{x}+1", r"\mathrm{x}+1", MathType.SCALAR),
+        (r"2\mathrm{x}+1", r"2\mathrm{x}+1", MathType.SCALAR),
+        (r"\frac{1}{2}\mathrm{x}+1", r"\frac{1}{2}\mathrm{x}+1", MathType.SCALAR),
+        (r"\frac{\mathrm{x}}{2}", r"\frac{\mathrm{x}}{2}", MathType.SCALAR),
+        (r"[1, \frac{\mathrm{x}}{2}]", r"[1, \frac{\mathrm{x}}{2}]", MathType.LIST),
+    ],
+)
+def test_math_upright_symbols_parse_with_following_math(reference, candidate, math_type):
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference, math_type=math_type), candidate).reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, wrong_candidate, math_type",
+    [
+        (r"2\mathrm{xy}+1", r"2\mathrm{xy}+1", "2", MathType.SCALAR),
+        (r"2\text{x}+1", r"2\text{x}+1", "2", MathType.SCALAR),
+        (r"[1, 2\mathrm{xy}+1]", r"[1, 2\mathrm{xy}+1]", "[1, 2]", MathType.LIST),
+        (r"[1, 2\text{x}+1]", r"[1, 2\text{x}+1]", "[1, 2]", MathType.LIST),
+    ],
+)
+def test_math_adjacent_text_symbols_keep_following_math(reference, candidate, wrong_candidate, math_type):
+    spec = MathSpec(expected=reference, math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
+
+
+@pytest.mark.parametrize(
+    "reference, candidate, wrong_candidate, math_type",
+    [
+        (r"1+\mathrm{x}", r"1+\mathrm{x}", "1", MathType.SCALAR),
+        (r"1+\text{x}", r"1+\text{x}", "1", MathType.SCALAR),
+        (r"[2, 1+\mathrm{x}]", r"[2, 1+\mathrm{x}]", "[2, 1]", MathType.LIST),
+    ],
+)
+def test_math_terminal_text_symbols_after_operators_stay_symbolic(reference, candidate, wrong_candidate, math_type):
+    spec = MathSpec(expected=reference, math_type=math_type)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
+
+
+@pytest.mark.parametrize(
+    "reference,candidate",
+    [("18", r"18 \text{ dollars}"), (r"35 \mathrm{~cm}", "35"), (r"\dfrac{1}{2}", r"0.5\text{ m}")],
+)
+def test_math_candidate_units_match_reference_policy(reference, candidate):
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference), candidate).reward == 1.0
+
+
+def test_math_symbolic_reference_preserves_unit_like_candidate_factor():
+    spec = MathSpec(expected="2 s")
+    assert grade_math.grade_math_candidate(spec, "2 s").reward == 1.0
+    assert grade_math.grade_math_candidate(spec, "2").reward == 0.0
+
+
+def test_math_list_uses_each_references_unit_policy_for_candidates():
+    spec = MathSpec(expected=r"[2 s, 5 \text{ m}]", math_type=MathType.LIST)
+    assert grade_math.grade_math_candidate(spec, "[2 s, 5]").reward == 1.0
+    assert grade_math.grade_math_candidate(spec, "[2, 5]").reward == 0.0
+
+
+def test_math_list_candidate_units_ignore_unrelated_reference_normalization():
+    spec = MathSpec(expected=r"[\dfrac{1}{2}, 2 s]", math_type=MathType.LIST)
+    assert grade_math.grade_math_candidate(spec, r"[0.5\text{ m}, 2 s]").reward == 1.0
+    assert grade_math.grade_math_candidate(spec, r"[0.5\text{ m}, 2]").reward == 0.0
 
 
 def test_math_grades_from_a_worker_thread(tmp_path):
@@ -166,10 +371,48 @@ def test_backend_timeout_removes_prior_positive_reward(monkeypatch, tmp_path, op
     monkeypatch.setattr(math_verify, operation, expired)
     result = run(spec_path, tmp_path)
     assert (result.status, result.reward) == (Status.INFRA_ERROR, 0.0)
+    assert result.detail["code"] == grade_math.MATH_VERIFIER_DEADLINE
     write_reward(logs, result)
     assert not (logs / "reward.txt").exists()
     assert not (logs / "reward.json").exists()
     assert json.loads((logs / "verdict.json").read_text())["status"] == Status.INFRA_ERROR
+
+
+def test_math_deadline_verdicts_carry_their_phase(monkeypatch):
+    """Reference-parse deadlines are a task property; candidate-parse and comparison
+    deadlines follow the reply. The verdict tags which step ran out."""
+
+    spec = MathSpec(expected="y=x+1", math_type=MathType.EQUATION)
+    original_reference_parse = latex2sympy2_extended.latex2sympy
+    original_parse = math_verify.parse
+
+    def deadline(*args, **kwargs):
+        raise TimeoutException("backend deadline exhausted")
+
+    monkeypatch.setattr(latex2sympy2_extended, "latex2sympy", deadline)
+    with pytest.raises(GradingInfraError) as reference:
+        grade_math.grade_math_candidate(spec, "y=x+2")
+    assert reference.value.detail["phase"] == grade_math.MATH_DEADLINE_REFERENCE_PARSE
+    monkeypatch.setattr(latex2sympy2_extended, "latex2sympy", original_reference_parse)
+
+    def candidate_deadline(text, **kwargs):
+        if "y=x+2" in text:
+            raise TimeoutException("candidate deadline")
+        return original_parse(text, **kwargs)
+
+    monkeypatch.setattr(math_verify, "parse", candidate_deadline)
+    with pytest.raises(GradingInfraError) as candidate:
+        grade_math.grade_math_candidate(spec, "y=x+2")
+    assert candidate.value.detail["phase"] == grade_math.MATH_DEADLINE_CANDIDATE_PARSE
+
+    monkeypatch.setattr(math_verify, "parse", original_parse)
+    monkeypatch.setattr(math_verify, "verify", deadline)
+    with pytest.raises(GradingInfraError) as comparison:
+        grade_math.grade_math_candidate(spec, "y=x+2")
+    assert comparison.value.detail["phase"] == grade_math.MATH_DEADLINE_COMPARISON
+    assert all(
+        error.value.detail["code"] == grade_math.MATH_VERIFIER_DEADLINE for error in (reference, candidate, comparison)
+    )
 
 
 @pytest.mark.parametrize(

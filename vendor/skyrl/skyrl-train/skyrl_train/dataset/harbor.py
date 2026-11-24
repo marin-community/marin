@@ -9,16 +9,19 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
+from finestore.rl.strata import TaskEvaluationIdentity, read_selection_manifest
 from loguru import logger
 from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from skyrl_gym.rollout_specs import SHELLBOX_HARNESS, rollout_spec
 from shellbox.machine import Backend, NetworkPolicy
-from taskcompendium.models import NoGrader, ScriptGrader, Source, TaskSpec, VerifyitGrader
+from taskcompendium.models import NoGrader, Source, TaskSpec, grader_environment
 
 from marinskyrl.packed_tasks import PackedTaskMaterializer, PackedTaskReference, select_task_references
 from marinskyrl.task_sources import DirectoryDataSource, TaskTroveParquetSource, data_source
-from skyrl_train.dataset.tasks import TASK_ROLLOUT_COLUMN, TaskDataset, cache_tasks
+from skyrl_train.dataset.tasks import (
+    TASK_ROLLOUT_COLUMN, TaskDataset, cache_tasks, task_evaluation_identity, with_evaluation_identities,
+)
 from skyrl_train.dataset.harbor_import import (
     HARBOR_TRIAL_SESSION,
     EnvironmentConfig,
@@ -153,8 +156,7 @@ def lower_harbor_task(directory: Path, task: TaskSpec, *, session: Mapping[str, 
     task_machine = harbor_machine(config.environment, config.agent.user)
     verifier_machine = (
         harbor_machine(config.verifier.environment or config.environment, config.verifier.user)
-        if isinstance(task.grader, ScriptGrader)
-        or (isinstance(task.grader, VerifyitGrader) and task.grader.environment is not None)
+        if grader_environment(task.grader) is not None
         else None
     )
     return rollout_spec(
@@ -170,16 +172,39 @@ def lower_harbor_task(directory: Path, task: TaskSpec, *, session: Mapping[str, 
     )
 
 
+def _parquet_evaluation_identities(
+    data_files: Sequence[str | Mapping[str, Any]],
+) -> dict[str, TaskEvaluationIdentity | None]:
+    identities = {}
+    for source in data_files:
+        if not isinstance(source, str) or not source.endswith(".parquet"):
+            continue
+        selection = read_selection_manifest(str(Path(source).parent))
+        with pq.ParquetFile(source) as parquet:
+            for batch in parquet.iter_batches(columns=[TASK_ROLLOUT_COLUMN], batch_size=MATERIALIZATION_BATCH_SIZE):
+                for raw in batch.column(0).to_pylist():
+                    task = json.loads(raw)["task"]
+                    task_id = task["id"]
+                    identity = task_evaluation_identity(task, selection)
+                    if task_id in identities and identities[task_id] != identity:
+                        raise ValueError(f"task has conflicting selection identities in one input set: {task_id}")
+                    identities[task_id] = identity
+    return identities
+
+
 def materialize_harbor_tasks(
     data_files: Sequence[str | Mapping[str, Any]],
     *,
     cache_dir: Path,
     session: Mapping[str, Any],
     grader_override: NoGrader | None = None,
+    identities: Mapping[str, TaskEvaluationIdentity | None] | None = None,
 ) -> Path:
     """Combine Harbor packages and pre-lowered task Parquet for one worker pool."""
     task_files = [source for source in data_files if isinstance(source, str) and source.endswith(".parquet")]
     sources = TerminalBenchTaskDataset([source for source in data_files if source not in task_files])
+    if identities is None:
+        identities = _parquet_evaluation_identities(task_files)
     if not len(sources) and not task_files:
         raise ValueError("No Harbor tasks matched the configured sources")
 
@@ -197,6 +222,8 @@ def materialize_harbor_tasks(
                         directory = directories[item]
                         data_source = item.stable_uri()
                         uid = item.uid()
+                    if identities.get(uid) is not None:
+                        raise ValueError(f"task has conflicting selection identities in one input set: {uid}")
                     importer = harbor_trial_task if session["task_session"] == HARBOR_TRIAL_SESSION else harbor_task
                     task = importer(
                         directory,
@@ -258,10 +285,20 @@ class HarborTaskDataset(TaskDataset):
         grader_override: NoGrader | None = None,
         num_workers: int = 8,
     ):
+        identities = _parquet_evaluation_identities(data_files)
+
+        def prepare_source(_source, dataset):
+            return with_evaluation_identities(
+                dataset, (identities.get(json.loads(raw)["task"]["id"]) for raw in dataset[TASK_ROLLOUT_COLUMN])
+            )
+
         self.task_path = materialize_harbor_tasks(
-            data_files, cache_dir=cache_dir.expanduser(), session=session, grader_override=grader_override
+            data_files, cache_dir=cache_dir.expanduser(), session=session, grader_override=grader_override,
+            identities=identities,
         )
-        super().__init__([str(self.task_path)], tokenizer, max_prompt_length, num_workers=num_workers)
+        super().__init__(
+            [str(self.task_path)], tokenizer, max_prompt_length, num_workers=num_workers, prepare_source=prepare_source
+        )
 
     def uid(self, index: int) -> str:
-        return TaskRolloutSpec.model_validate_json(self.dataframe[index][TASK_ROLLOUT_COLUMN]).task.id
+        return self.label(index)

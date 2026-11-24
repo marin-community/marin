@@ -621,6 +621,10 @@ pub fn adopt_local_segments(
             max_key_value: meta.max_key_value,
             partition: meta.partition,
             location,
+            column_bounds: object_records
+                .get(&row.path)
+                .map(|record| record.column_bounds.clone())
+                .unwrap_or_default(),
             artifacts: segment_artifacts(objects, object_records.get(&row.path), local_path)?,
         });
     }
@@ -677,6 +681,7 @@ pub fn adopt_local_segments(
             max_key_value: meta.max_key_value,
             partition: meta.partition,
             location: SegmentLocation::Local,
+            column_bounds: Default::default(),
             // A file with no catalog row is not object-backed, so its sidecars
             // come from the local layout.
             artifacts: local_sidecar_artifacts(path),
@@ -1122,6 +1127,105 @@ mod tests {
             partition: None,
             location: SegmentLocation::Local,
         }
+    }
+
+    #[test]
+    fn adopt_keeps_the_column_bounds_of_a_dual_written_object_segment() {
+        // While a table migrates from local L0 to object storage, boot still
+        // adopts from disk, and the objects its flushes dual-write at the target
+        // version are query-visible. Adoption must carry their bounds.
+        use buffa::MessageField;
+        use sha2::{Digest, Sha256};
+
+        use crate::proto::finelog::stats::{ObjectRef, OperatingPolicy, TableSpec};
+        use crate::store::column_bounds::{ColumnBounds, ColumnRange};
+        use crate::store::object_store::{build_remote_object_store, CachedObjectStore};
+        use crate::store::policy::StoragePolicy;
+        use crate::store::schema::schema_to_proto_owned;
+        use crate::store::table_spec::canonical_json_bytes;
+        use crate::store::table_state::SegmentDescriptor;
+
+        let dir = tempdir("column_bounds");
+        let table_dir = dir.join("iris.worker");
+        std::fs::create_dir_all(&table_dir).unwrap();
+        let remote_dir = dir.join("remote");
+        std::fs::create_dir_all(&remote_dir).unwrap();
+        let objects = CachedObjectStore::new(
+            Arc::new(
+                build_remote_object_store(remote_dir.to_str().unwrap())
+                    .unwrap()
+                    .unwrap(),
+            ),
+            dir.clone(),
+            None,
+        )
+        .unwrap();
+        let catalog = Catalog::open(Some(&dir)).unwrap();
+        catalog
+            .register_or_evolve(
+                "iris.worker",
+                worker_store_schema(),
+                StoragePolicy::default(),
+                |existing| Ok(existing.clone()),
+            )
+            .unwrap();
+        let v1 = TableSpec {
+            version: Some(1),
+            logical_schema: MessageField::some(schema_to_proto_owned(&worker_store_schema())),
+            operating_policy: MessageField::some(OperatingPolicy::default()),
+            ..Default::default()
+        };
+        let hash: [u8; 32] = Sha256::digest(canonical_json_bytes(&v1).unwrap()).into();
+        let lifecycle = catalog
+            .register_table_spec("iris.worker", &v1, &hash, true)
+            .unwrap();
+        assert_eq!(
+            (lifecycle.active_version(), lifecycle.desired_version()),
+            (0, 1)
+        );
+
+        let (path, byte_size) =
+            write_segment_to_dir(&table_dir, 1, 1, &worker_batch(1, vec![10, 20, 30])).unwrap();
+        let column_bounds =
+            ColumnBounds::from([("mem_bytes".to_string(), ColumnRange::new(100, 102))]);
+        let segment = SegmentDescriptor {
+            row: SegmentRow {
+                namespace: "iris.worker".to_string(),
+                path: path.to_string_lossy().into_owned(),
+                level: 1,
+                min_seq: 1,
+                max_seq: 3,
+                row_count: 3,
+                byte_size,
+                created_at_ms: 1,
+                min_key_value: None,
+                max_key_value: None,
+                partition: None,
+                location: SegmentLocation::Both,
+            },
+            source: ObjectRef {
+                object_id: Some("_finelog/tables/iris.worker/objects/a.parquet".to_string()),
+                byte_size: Some(byte_size as u64),
+                ..Default::default()
+            },
+            artifacts: Default::default(),
+            column_bounds: column_bounds.clone(),
+        };
+        catalog
+            .commit_object_segments(&[segment], 1, false)
+            .unwrap();
+
+        let adopted = adopt_local_segments(
+            &table_dir,
+            Some("timestamp_ms"),
+            &catalog,
+            "iris.worker",
+            Some(&objects),
+        )
+        .unwrap();
+        assert_eq!(adopted.len(), 1);
+        assert_eq!(adopted[0].column_bounds, column_bounds);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
