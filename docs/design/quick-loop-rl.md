@@ -21,7 +21,7 @@ typed binary protocol for rollout replay and isolated worker commands.
 | 40-H100 learner smoke | Passed on the `2026.11.20.20` replacement. Both updates, exact restore on four fresh learners, all 24 receiver receipts, stamped generation under the trained policies, terminal checkpoint, and independent changed-weight sample passed on the same child. | — |
 | Native Snowball capture and replay | A fresh learner reproduced all 555 sampled raw logprobs on the two-layer, four-TPUv4 fixture. On eight H100s, one pinned 67B diagnostic passed weight swap, a real tool turn, and all 32,768 full-context fused scorer targets. [Passing diagnostic][native-passing-diagnostic-evidence] | Repeat the 67B diagnostic before promoting native serving. Earlier diagnostics crossed the scorer's ratio bounds. |
 | Native online loop based on `main` | On two four-chip TPUv4 hosts, the small BF16 fixture passed two tool episodes and optimizer updates, byte-exact binary replay, fresh learner restore and final generation under policy 2. One serving process handled all three policies. | Qualify the current port with the full 67B inventory workload. |
-| Native inventory backend | Both 40-H100 arms completed two updates and two prompt-identical panels. Native took 35.73 lease seconds per admitted group, compared with 0.331 for vLLM. Policy-2 mean verifier scores were 0.08 and 0.20, respectively. | Keep vLLM serving for the quick loop. Measure native batching and tool-call termination changes in a separate H100 arm. |
+| Bounded 40-H100 backend pilot | Both arms completed two 32-group updates and two prompt-identical panels with a 512-token reply cap. Native took 35.73 lease seconds per admitted group, compared with 0.331 for vLLM. Policy-2 mean verifier scores were 0.08 and 0.20, respectively. | Keep vLLM serving for the quick loop. Measure native batching and tool-call termination on H100. |
 | Typed binary protocol | Native serving and the maintained isolated learner use protobuf headers with detached binary payloads. The maintained learner passed exact recovery on TPUv4 and across four 67B learner hosts on H100. | Evaluate carrying the typed batch envelope across Ray. |
 
 [Quick-loop branch status][learner-status] · [H100 readiness retry coordinator][iris-smoke-readiness] ·
@@ -1829,7 +1829,7 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   [Saved-frame BF16 attention diagnostic][iris-native-attention-profiles] ·
   [Saved-frame FP32 attention diagnostic][iris-native-attention-fp32]
 
-  The held comparison measures end-to-end rollout admission and optimizer
+  The matched 40-H100 pilot measures end-to-end rollout admission and optimizer
   timing with four learner hosts. Step 2 of the third frozen Levanter
   run generated 1,628,026 response tokens for 512 trajectories. At the
   22-token-per-second native rate measured on the full-context group,
