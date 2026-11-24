@@ -840,11 +840,7 @@ async def run_evaluation(
     ``harnesses`` builds agent harnesses, keyed by the kind of ``AgentEpisode.harness``; their task machines use
     ``config.task_machine`` and the factory registered for its backend.
 
-    With ``reuse_from``, a generation attempt takes the latest completed model response that result root
-    stored for the same benchmark, source row and trial when it sends the identical request; any other
-    attempt asks the model. That root must hold a run of the same model identity, and it is not part of
-    this run's identity. The run descriptor lists every such root with its run identity and driver
-    revision, since responses stored under another driver revision are graded by this one.
+    For ``reuse_from``, see "Regrade stored model responses" in ``docs/references/evaluation-tasks.md``.
     """
     if (config.judge is None) != (judge_connection is None):
         raise ValueError("A judge requires both an explicit connection and a recorded judge identity")
