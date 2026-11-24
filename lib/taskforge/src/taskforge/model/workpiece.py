@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from taskcompendium.models import TaskSpec
 
 from taskforge.model.content_hash import digest
@@ -81,3 +81,7 @@ class Workpiece:
 
 
 WORKPIECE = TypeAdapter(Workpiece)
+ENTRY = TypeAdapter(tuple[Workpiece], config=ConfigDict(ser_json_inf_nan="constants"))
+"""A workpiece in a one-tuple as a stage boundary records it, as its own JSON text with nonfinite numbers as constants.
+The event codec sorts mapping keys, and a resumed stage renders task files and prompts from this workpiece, so its key
+order is part of what the stage's later requests hash."""

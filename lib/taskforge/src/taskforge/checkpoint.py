@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal (format 15; its layout is in the README) under one fenced writer.
+"""Publish a workpiece's journal (format 16; its layout is in the README) under one fenced writer.
 
 Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
 advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.
@@ -29,13 +29,13 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from taskforge.effects.issues import CorruptJournal, LogFailure, PublicationFailed, Superseded, UnsupportedFormat
-from taskforge.effects.log import BufferSink, Owners, Record, Sink, Status
+from taskforge.effects.log import BufferSink, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
-from taskforge.stages.classify import commitments
+from taskforge.stages.classify import boundary
 
-JOURNAL_FORMAT = 15
-"""Format 15 checks author judge settings at grade and submit. Replaying a format-14 draft can change the next action."""
-READABLE = frozenset({8, 9, 10, 11, 12, 13, 14, JOURNAL_FORMAT})
+JOURNAL_FORMAT = 16
+"""Format 16 resumes at stage boundaries and runs sandbox operations live; format 15 rebuilt sandboxes by position."""
+READABLE = frozenset({8, 9, 10, 11, 12, 13, 14, 15, JOURNAL_FORMAT})
 """The head formats whose rows this code decodes, for the usage report; a writer claims only ``JOURNAL_FORMAT``."""
 FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "workpiece.json"})
 """Format 1 named events by module path and wrote these objects beside its stream; any one marks its root."""
@@ -240,8 +240,7 @@ class CheckpointSink(Sink):
         events = journal.events() if journal else b""
         try:
             records = self.local.start(events)
-            Owners(records)  # owner references, pairing, outcomes and continuity, before anything is claimed
-            commitments(records)  # each committed trial's receipt, as reconstruction checks it
+            boundary(records)  # each boundary trial's receipt, before anything is claimed
         except LogFailure as error:
             raise CorruptJournal(f"{self.destination}: {error}") from error
         chunks, size = (journal.head.chunks, journal.head.size) if journal else ((), 0)

@@ -57,7 +57,7 @@ from verifyit.spec import NumericSpec
 from taskforge.effects.context import Context
 from taskforge.effects.events import Event, Retrying
 from taskforge.effects.issues import OutputBudgetExhausted, Restart, Transient
-from taskforge.effects.log import EventLog, Opened
+from taskforge.effects.log import EventLog
 from taskforge.harness.protocol import ToolResult as ToolReply
 from taskforge.harness.role import install_env
 from taskforge.harness.tools.grade import GradeTool
@@ -274,7 +274,7 @@ print(int(staged.exists() and staged.read_text() == 'print(12)' and not Path('/w
         requirements(image=None)
     )
     try:
-        async with ctx.scope("author", Opened("author/0", env.fingerprint().digest)):
+        async with ctx.scope("author"):
             install_env(ctx, env)
             ctx.handle(GradeCandidate, partial(grade, notify=ctx.notify), resource)
             await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), task.model_dump_json().encode()))

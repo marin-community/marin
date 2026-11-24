@@ -135,7 +135,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
         writes.append((workdir / "proposal.json", proposal.encode()))
         return tuple(writes)
 
-    # A round has one author visit, which a stage restart reconstructs on its fresh machine. The caller's files are
+    # A round has one author visit, which a stage restart opens again on a fresh machine. The caller's files are
     # prepared inside it and the opening after hydration, so either failing is journalled and its machine closed.
     tools: dict[str, Tool[object]] = {}
     last = workpiece.decisions[-1] if workpiece.decisions else None
@@ -144,7 +144,7 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
         submit = config.author.tools["submit"]
         assert isinstance(submit, SubmitTool)
         tools = {"submit": RevisedSubmitTool(submit, sent)}
-    visit = Visit("author", f"author/{workpiece.round}", machine, workspace, tools, bills=Billing.AUTHOR)
+    visit = Visit("author", machine, workspace, tools, bills=Billing.AUTHOR)
     async with sitting(ctx, config.author, visit, resources) as session:
         if workpiece.session is not None:
             return await session(workpiece.session)

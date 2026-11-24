@@ -1446,8 +1446,8 @@ async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
     assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
     assert payers(root, replayed=False) == PAID  # the cold rerun paid for nothing
     assert charged(await report(str(root))) == CHARGED
-    replayed = payers(root, replayed=True)
-    assert sum(replayed.values()) == 12 and {payer for _, payer in replayed} == {None}
+    replayed = payers(root, replayed=True)  # the rerun resumed at confirmation: its five slots and final review
+    assert sum(replayed.values()) == 6 and {payer for _, payer in replayed} == {None}
 
 
 async def test_a_format_9_root_charges_its_tokens_as_unattributed(tmp_path: Path) -> None:

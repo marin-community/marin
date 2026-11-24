@@ -26,7 +26,7 @@ from taskforge.effects.events import (
     ScopeExited,
     StageCompleted,
 )
-from taskforge.effects.log import Billing, EventLog, Opened, Record, Status
+from taskforge.effects.log import Billing, EventLog, Record, Status
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import Completion, Usage
@@ -73,7 +73,7 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
     result = GradedRollout(Rollout("r", (conversation,), "stop"), GradeResult(Outcome.GRADED, 1.0))
     spec = lower_with_settings(arithmetic_task(), lowering_settings(load_policy(DEFAULTS_DIR)), {})
     sandbox = (Fingerprint(ENVIRONMENT, "definition", ReplayPolicy.REEXECUTE),)
-    opened, attempts, answers = {3: Opened("author/0", "definition")}, {7: 3, 9: 3}, {8: 7, 10: 9}  # sandbox rows
+    answers = {8: 7, 10: 9}  # sandbox outcomes
     billed = {4: Billing.AUTHOR, 12: Billing.ADVERSARY, 14: Billing.SOLVER}
     events: list[tuple[float, Event[object]]] = [
         (-2, ScopeEntered("judge")),  # An interrupted previous process left this scope open.
@@ -105,7 +105,7 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
         decisions = (Abandon(reasons),) if terminal is Terminal.ABANDONED else (Incomplete(reasons),)
         data = events if name == "accepted" else [(0, StageCompleted(Stage.REVIEW, "", "Done", terminal=terminal))]
         records = tuple(
-            Record(i, 1000000 - age + offset, event, opened.get(i), attempts.get(i), answers.get(i), billed.get(i))
+            Record(i, 1000000 - age + offset, event, answers.get(i), billed.get(i))
             for i, (offset, event) in enumerate(data, 1)
         )
         sink = CheckpointSink(str(directory))

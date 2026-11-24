@@ -4,8 +4,8 @@
 and its controls, **validation** runs solver trials, control replays, adversarial review and a
 machine-less **solve-review** of the recorded trials against the lowered task, and a pure **review**
 rule turns that evidence into accept, modify or abandon. Every effect (model call, shell command, file read, grade) is recorded in an event log,
-so a crashed workpiece resumes by replay: model calls come back from the log, commands are
-re-executed on a fresh machine.
+so a crashed workpiece resumes at its last stage boundary: paid results come back from the log by key, and an
+unfinished session starts again on a fresh machine.
 
 This file covers how to run it.
 
@@ -21,7 +21,7 @@ This file covers how to run it.
 | `src/taskforge/llm/` | the model client (the one retry owner), the `Provider` protocol and its GLM default, model profiles, wire helpers |
 | `src/taskforge/policy/` | the policy record: `defaults/policy.json` and `defaults/prompts/<role>/*.md` |
 | `src/taskforge/lowering.py` | `TaskSpec` → `TaskRolloutSpec` for the host; the only place that chooses machines |
-| `src/taskforge/coordinator.py` | author → validate → review, decisions and budgets, bounded stage replay |
+| `src/taskforge/coordinator.py` | author → validate → review, decisions and budgets, stage boundaries, bounded stage restarts |
 | `src/taskforge/driver.py` | CLI: runs a shard of proposals, publishes to S3, resumes |
 | `src/taskforge/wiring.py` | builds resources and config from the policy for a host |
 | `experiments/post_training/capability_driven_envs/` | our launcher: one Iris driver job per bucket range |
@@ -110,7 +110,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 15); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 16); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -137,14 +137,17 @@ format 7 (no confirmation step: its acceptances end at the validation round and 
 resumed format-7 round would buy one its history lacks),
 fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 15` and reports the
-rest. Formats 8 to 14 differ: their rows decode at format 15, so `report` reads them, but the driver refuses
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 16` and reports the
+rest. Formats 8 to 15 differ: their rows decode at format 16, so `report` reads them (their rows' `opened` and
+`attempt` fields are read and discarded), but the driver refuses
 to claim a running or held root of those formats, exiting 4 with its head untouched and naming the writer of its
-format or a fresh output prefix as the way on. Format 15 rejects unsupported judge settings during an author's
+format or a fresh output prefix as the way on; a finished root of those formats is skipped untouched. Format 16
+resumes at stage boundaries and runs sandbox operations live, where format 15 rebuilt each sandbox by replaying its
+recorded operations in order. Format 15 rejects unsupported judge settings during an author's
 `grade` or `submit`. A format-14 author could receive a grade for the same draft and take a different next action.
 Format 14 records a solver generation still running at
 `solver.time_limit` as stopped at the time limit (`time_limit`), which a format-13 reader cannot decode; format 13 recorded it as a generation limit, under another
-solver clock. Format 13 commits reviewed visits (above), which a format-12 root lacks, so its resumed rounds would
+solver clock. Format 13 commits reviewed visits, which a format-12 root lacks, so its resumed rounds would
 decide again on re-observed evidence. Format 12 words two author requests otherwise: a final revision's request ends
 with its ordinal, and a too-easy placement's line no longer calls the round the one hardening attempt, so a resumed
 format-11 author would send requests its recorded calls did not. Formats 8 to 10 embedded a schema reference in their
@@ -162,16 +165,11 @@ without one; it covers two writers that its header cannot tell apart: one whose 
 naming the refused slot result an operator-authorised replacement supersedes); a bare request row in either cannot
 establish an operator's intent. Format 6 refuses both alike, and a reader of the first kind refuses a format-6 root
 the same way instead of misreading its new rows. Before claiming, the reader
-validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
-one envelope field; `billed` only on a plain row holding a resolution that was not replayed; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
-resolution under re-executed sandbox fingerprints or a failure with an errno-name category, and no other
-row carries any of these, so cached results never enter an owner's history; references name an earlier
-open row or unanswered request of the same sandbox definition; and an answered request matches the
-request and outcome its owner already established at that position. A best-effort check for accidental corruption
-also requires each committed trial's receipt to name an earlier physical solver resolution of that trial's slot; a
-deliberately rewritten journal is out of scope, and reading a transcript at its receipt checks the full request again
-(a mismatch there holds the workpiece). A request left unanswered may differ
-from the recording, which is how a held divergence looks.
+validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields, an ordered sequence,
+and `billed` only on a physical cached resolution. A best-effort check for accidental corruption also requires each
+trial receipt in a stage boundary to name an earlier physical solver resolution of that trial's slot; a deliberately
+rewritten journal is out of scope, and reading a transcript at its receipt checks the full request again (a mismatch
+there holds the workpiece).
 A storage hiccup never costs paid model work; only an explicit refusal stops the writer
 (`checkpoint.is_transient_storage_error`). A refusal is an HTTP 4xx other than 408 and 429 (denied
 access, a bad key or signature, a missing bucket) or a local filesystem refusal (permission, a missing
@@ -222,29 +220,36 @@ capped at 300 characters and records no read, the solver batch lets every admitt
 further one, and the workpiece holds for a person (exit 0, as any held workpiece) instead of restarting the
 stage. A refusal of a slot's first read still restarts the stage, as before.
 
-A validation or confirmation visit that a continuing review decided on is committed: that review's `stage.completed`
-row carries the visit's identity (its stage, the workpiece it entered with and the run's compatibility digest) and its
-typed evidence, whose solver trials each name the journal row their result was bought at (`receipt`; none for a slot
-whose output budget ran out twice, the only case with no row; a slot-local refusal keeps its row). A later launch that enters the same visit takes
-that evidence and buys nothing inside it again (as far as the visit reached a published chunk: work bought after
-the last published chunk is bought again after a hard kill, as for any crash below; a cancelled launch publishes its
-rows first): no solver, control, adversary or solve-review call, no stage duration
-sample, observer notification, sandbox reopen or decision-model answer; the pure review rule then decides again.
-The compatibility digest covers the whole policy, the band and budget, the adversary's and solve-review's effective
-sessions (sampling included), the rollout, grading and decision-model replay identities and the machine backends
-lowering may pick; a custom review rule or a role run by any harness but the exact stock loop has no stable identity,
-and such a run reuses no visit (logged once). Reuse identifies a role by its harness type, tool classes, settings and
-resource fingerprints, so a caller who assembles a harness by hand (its argument-repair callback, say) must keep that
-behaviour and the resource replay identity in step. A visit is reused only under the plan that committed it. An edit to the policy, even
-of an operational setting such as the solver heartbeat, is a different plan whose visits run afresh from the first
-one, and returning to an earlier plan returns to that plan's committed visits. A new plan's decisions follow its
-settings, so lowering `budget.max_missing_trials` below a round's missing slots turns that round into a hold.
-The author reads each round's evidence as `.validation/<n>.json` in ordinary JSON with sorted keys and without
+**Stage boundaries.** Each launch resumes from the last `stage.boundary` row in its journal: the workpiece the next
+stage starts from, and the plan it was recorded under. A boundary is recorded when the author submits or stops into a
+continuing decision, and when a review continues (a business `Retry` included); validation and confirmation
+evidence stays provisional until the review after it continues, so a launch cut or held between them runs that stage
+again, its paid solver slots and grades hitting their keys. A review that decides `Incomplete`, or a stage that
+raises a hold, leaves the previous boundary in force: an explicit resume re-enters the stage that produced the
+evidence, never the review that held on it. A boundary carries each trial's `receipt`, the journal row its result
+was bought at (none for a slot whose output budget ran out twice, the only case with no row; a slot-local refusal
+keeps its row). Boundaries ride the ordinary checkpoints, so work bought after the last published chunk is bought
+again after a hard kill, as for any crash below; a cancelled launch publishes its rows first.
+
+A boundary is reused only under the plan that recorded it: a digest of the proposal, the whole policy, the band and
+budget, the author's, adversary's and solve-review's effective sessions (sampling included), tools and model
+identities, the static workspace files, the rollout, grading, decision-model and web replay identities and the
+machine backends lowering may pick. A custom review rule, a workspace renderer, an injected machine factory (any but
+the stock Iris and ShellSim ones), or a role run by any harness but the exact stock loop has no stable identity, and such a run resumes no stage (logged once). A caller who assembles a
+harness by hand (its argument-repair callback, say) must keep that behaviour and the resource replay identity in
+step. A launch whose plan differs from the latest boundary's records a new initial boundary and starts at the author;
+it never searches back for an earlier boundary of its own plan, so switching back to an earlier plan starts that
+plan's author again. Its paid results still hit their own keys, so it buys only what no row holds. An edit to the
+policy, even of an operational setting such as the solver heartbeat, is such a change. A new plan's decisions
+follow its settings, so lowering `budget.max_missing_trials` below a round's missing slots turns that round into a
+hold. The author reads each round's evidence as `.validation/<n>.json` in ordinary JSON with sorted keys and without
 receipts (a nonfinite reward is `null`), so a cold launch hydrates the bytes the first one wrote.
 
-Model calls replay from the event log; shell commands are
-re-executed on fresh machines, so a resumed author session takes minutes before new events appear. A held
-root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone. The author's system prompt embeds the `TaskSpec` and control JSON schemas, generated from the installed
+Model calls replay from the event log by their content; shell commands and file operations run live on a fresh
+machine, so a resumed author session takes minutes before new events appear. A restarted session reopens its
+conversation and runs its tools again: with the tool output its first run saw, each recorded model turn hits the
+cache; the first turn whose input differs (a PID, a changed file, another errno) is bought, and so is every turn after
+it. The author's system prompt embedsThe author's system prompt embeds the `TaskSpec` and control JSON schemas, generated from the installed
 TaskCompendium models at a root's first fresh author session and recorded as a `schema.author_reference` row
 (about 29 KB); every later author session of the root, in this launch or a resumed one, replays that text, so a
 wording-only change in TaskCompendium's schemas does not affect a root that recorded it. `wiring.install` binds
@@ -256,21 +261,12 @@ The `submit` and `grade` tools ask the author to revise a draft that changes eit
 `answers` rubric, or requests an unsupported reasoning effort. The reference also omits VerifyIt's HTTP timeout and
 retry settings. Existing tasks may supply them. Taskforge's provider policy controls the callback transport.
 
-Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and
-its initial sandbox definition; each command or file operation it issues references that row, takes the
-next position in the owner's history, and its outcome references the request. A resumed attempt is
-served the outcome recorded at each position of the longest prefix its owner established, and runs a
-request at a frontier (one whose outcome was never recorded) live once; a request beyond the history
-returns its fresh result. A served command returns its recorded output, so later model calls replay
-even when its text drifts (a PID, a timestamp, the truncation flag); each drift is logged at INFO as a
-`Replay of <kind> diverged` note naming digests only. A handled guest failure (an `OSError` such as a
-missing file, the only failure tools hand to the model) is recorded by errno name and text and served
-again when the guest fails the same way; a transfer archive the backend cannot unpack is a stage
-restart. A recorded outcome that an attempt dispatched but could not verify (the machine failed first)
-is no frontier: the stage restarts within its replay budget and holds after it, never counting the
-attempt as evidence. The workpiece holds as `Unreproducible` when an owner reopens on another sandbox definition, issues
-another request at a recorded position, changes an outcome (success, errno, exit status or read
-bytes), or returns normally before its recorded history ends.
+Each command or file operation is journalled as its request and then its outcome: a resolution under the sandbox's
+fingerprint, or a handled guest failure (an `OSError` such as a missing file, the only failure tools hand to the model)
+recorded by errno name and text; the outcome row's `answers` names its request row. These rows feed the usage report
+and inspection; no launch reads them back. A transfer archive the backend cannot unpack, a lost machine or an unknown
+command outcome restarts the stage on a fresh machine within its restart budget (`STAGE_REPLAY_ATTEMPTS`, three
+attempts), and holds after it.
 SIGTERM (an Iris cancel, a preemption, a lost node's grace period) is a crash. The command line's `driver.main`,
 the process entry point and not an embedding API (it leaves its handler installed), handles it by exiting 143 at
 once: no cancellation, no final snapshot, no flushed output. `one` and `run` called as library functions install
@@ -383,7 +379,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   that ends without a reproduced finding, by an empty report or because its context window or output
   budget ran out first (`exhausted`), counts as evidence of a strong task: the task can still be
   accepted, and its result and the Accept's reasons say it ran out of search budget without a finding,
-  never that it validated the task. Each result carries a `continuation` (the search's sandbox owner,
+  never that it validated the task. Each result carries a `continuation` (the search's name by visit and occurrence,
   why it stopped: `reported`, `budget_exhausted` or `held`, and the digest of its conversation at the
   stop) for a workflow that continues an exhausted search; the default workflow does not.
 - **Solve-review**: once a round's solver trials and controls are clean and its placement is

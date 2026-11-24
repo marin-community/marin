@@ -482,9 +482,9 @@ class SearchEnd(StrEnum):
 class Continuation:
     """Where an adversary session stopped, for a consumer that continues it; the default workflow never does.
 
-    ``owner`` is the sandbox owner whose journal rows rebuild the session's machine; ``conversation`` is the content
-    digest of its conversation at the exit, which replaying that owner's session reproduces (None when the session
-    raised before an exit), and ``turns`` its assistant turns.
+    ``owner`` names the search (validation visit, roster name, occurrence and retry); ``conversation`` is the content
+    digest of its conversation at the exit (None when the session raised before an exit), and ``turns`` its assistant
+    turns. They describe where the search ended; nothing reconstructs that machine or conversation.
     """
 
     owner: str

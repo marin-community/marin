@@ -27,7 +27,7 @@ from verifyit.spec import NumericSpec
 from taskforge.effects.context import Context
 from taskforge.effects.events import Resolved
 from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Transient
-from taskforge.effects.log import BufferSink, EventLog, Opened
+from taskforge.effects.log import BufferSink, EventLog
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import (
     Returned,
@@ -99,7 +99,7 @@ def environment(ctx: Context) -> FakeEnv:
 @asynccontextmanager
 async def opened(ctx: Context, env: Env) -> AsyncIterator[None]:
     """One author attempt on ``env``, the scope its re-executed effects need."""
-    async with ctx.scope("author", Opened("author/0", env.fingerprint().digest)):
+    async with ctx.scope("author"):
         yield
 
 

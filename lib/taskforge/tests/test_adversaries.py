@@ -530,7 +530,6 @@ async def test_searches_without_a_finding_accept_and_say_the_budget_ran_out_with
     exhausted, reported = workpiece.evidence[-1].adversary
     assert (exhausted.status, exhausted.limit) == (AdversaryStatus.EXHAUSTED, SearchLimit.CONTEXT_WINDOW)
     assert reported.status is AdversaryStatus.REPORTED and not reported.findings
-    owners = [r.opened.owner for r in log.records if r.opened is not None]
     (first,) = (request for request in client.requests if BRIEFED["false_accept"] in request.conversation[1].content)
     assert exhausted.continuation == Continuation(
         "validate/0/0/adversary:false_accept/0/0",
@@ -539,9 +538,7 @@ async def test_searches_without_a_finding_accept_and_say_the_budget_ran_out_with
         0,
     )
     assert reported.continuation is not None and reported.continuation.stopped is SearchEnd.REPORTED
-    assert exhausted.continuation is not None and {exhausted.continuation.owner, reported.continuation.owner} <= set(
-        owners
-    )
+    assert reported.continuation.owner == "validate/0/0/adversary:false_reject/0/0"
     decision = workpiece.decisions[-1]
     assert isinstance(decision, Accept)
     notes = [reason for reason in decision.reasons if reason.startswith(("false_accept: ", "false_reject: "))]

@@ -15,11 +15,11 @@ class EffectIssue(Exception):
 
 
 class Transient(EffectIssue):
-    """Retry this effect inside its executor; interrupted startup replays its stage."""
+    """Retry this effect inside its executor; interrupted startup restarts its stage."""
 
 
 class Restart(EffectIssue):
-    """Reconstruct an interrupted stage on a fresh machine, replaying resolved effects.
+    """Run an interrupted stage again on a fresh machine; its cached effects hit by their keys.
 
     Lost containers and failed verifier resets need replacement, never a score.
     """
@@ -35,14 +35,6 @@ class Hold(EffectIssue):
     """Publish held until explicit resume; exhausted resources require human review.
 
     Refusals by the host hold; defects in authored work go back to the author for repair, not an effect retry.
-    """
-
-
-class Unreproducible(Hold):
-    """A fresh machine cannot reproduce an owner's recorded sandbox history.
-
-    Rationale: every later recorded result would describe state that does not exist, so the workpiece holds for a
-    person instead of continuing on it.
     """
 
 

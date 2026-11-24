@@ -27,8 +27,8 @@ def no_files(_workpiece: Workpiece, _policy: Policy) -> tuple[TaskResource, ...]
 class WorkspaceHydration:
     """Files a caller adds to every author workspace, at ``/<path>``; the default adds none.
 
-    ``rendered`` may depend on the workpiece (for example per-proposal reference data) and must be
-    deterministic, because a resumed stage replays the write. Only the author sandbox receives these
+    ``rendered`` may depend on the workpiece (for example per-proposal reference data); it has no
+    identity, so a run that sets it resumes no stage. Only the author sandbox receives these
     files: solvers, adversaries and graders see a file only if the author puts it in the task.
     """
 

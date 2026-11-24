@@ -1,8 +1,9 @@
 # Taskforge
 
 Taskforge is an effect-driven task pipeline. Keep stages and models pure; put I/O,
-clock, id, randomness, and resource mutation behind executors. Replay resolved
-effects, never whole stages.
+clock, id, randomness, and resource mutation behind executors. A launch resumes at
+its last stage boundary; inside a stage, cached effects hit by their keys and
+sandbox effects run live, never replayed.
 
 - Use frozen dataclasses with `slots=True`. Model fields use `Mapping`,
   `Sequence`, `tuple`, or `frozenset`; no mutable collections or module state.

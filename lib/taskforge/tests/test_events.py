@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 import pytest
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.identity import canonical_sha256
 
 from taskforge import wiring
@@ -22,17 +23,20 @@ from taskforge.effects.events import (
     Retrying,
     ScopeEntered,
     ScopeExited,
+    StageBoundary,
     StageCompleted,
     digest,
     event_digest,
 )
-from taskforge.effects.log import Opened, decode
+from taskforge.effects.log import BufferSink, Record, decode
 from taskforge.harness.events import ToolInvoked, ToolReturned
 from taskforge.llm.policy import LLMPolicy
 from taskforge.model.content_hash import json_value
 from taskforge.model.llm import Message, Role
-from taskforge.model.review import ValidationResult
+from taskforge.model.proposal import TaskProposal
+from taskforge.model.review import TrialResult, ValidationResult
 from taskforge.model.stage import Stage
+from taskforge.model.workpiece import ENTRY, Workpiece
 from taskforge.resources.decision_model import DecisionModelRead
 from taskforge.resources.env import ReadFile, RunCommand, WriteFile, WriteFiles
 from taskforge.resources.grading import GradeCandidate
@@ -61,6 +65,7 @@ KINDS: dict[str, type[Event[object]]] = {
     "schema.author_reference": AuthorReference,
     "scope.entered": ScopeEntered,
     "scope.exited": ScopeExited,
+    "stage.boundary": StageBoundary,
     "stage.completed": StageCompleted,
     "tool.invoked": ToolInvoked,
     "tool.returned": ToolReturned,
@@ -107,13 +112,7 @@ def test_recorded_kinds_decoders_and_replay_digests_are_pinned() -> None:
         ReadFile(PurePosixPath("missing")),
         failed,
     ]
-    envelopes = [(record.opened, record.attempt, record.answers) for record in records]
-    assert envelopes == [
-        (Opened("author/0", "image"), None, None),
-        *[(None, None, None)] * 3,
-        (None, 1, None),
-        (None, None, 5),
-    ]
+    assert [record.answers for record in records] == [None] * 5 + [5]  # an older format's open and attempt are dropped
     request = InferenceRequest((Message(Role.USER, "hi"),), (), LLMPolicy())
     assert {
         "stage": event_digest(StageCompleted(Stage.AUTHOR, "config", "submitted", 1)),
@@ -181,3 +180,23 @@ def test_digest_matches_the_taskcompendium_hash_and_also_accepts_nan() -> None:
     with pytest.raises(ValueError):
         canonical_sha256({"value": math.nan})
     assert digest(math.nan) != digest(math.inf)
+
+
+@pytest.mark.parametrize("reward", [math.nan, math.inf, -math.inf])
+async def test_a_boundary_workpiece_round_trips_a_nonfinite_reward_and_its_dict_order(
+    proposal: TaskProposal, reward: float
+) -> None:
+    """Regression: the event codec sorted every dict, so a resumed stage rendered a task's grader parameters in
+    another order and its first model request missed the cache. A nonfinite reward survives as a JSON constant."""
+    trial = TrialResult(0, GradeResult(Outcome.GRADED, reward, diagnostics={"zeta": 1, "alpha": 0.0}), receipt=3)
+    wp = Workpiece("id", proposal, evidence=(ValidationResult("task", (trial,), (), ()),))
+    sink = BufferSink()
+    await sink.write([Record(1, 0.0, StageBoundary("plan", Stage.VALIDATE, ENTRY.dump_json((wp,)).decode()))])
+    (record,) = decode(bytes(sink.data))
+    boundary = record.event
+    assert isinstance(boundary, StageBoundary)
+    grade = boundary.workpiece.evidence[0].solver[0].grade
+    assert grade is not None and grade.reward is not None and math.isnan(reward) == math.isnan(grade.reward)
+    assert math.isnan(reward) or grade.reward == reward
+    assert list(grade.diagnostics.items()) == [("zeta", 1), ("alpha", 0.0)]
+    assert isinstance(grade.diagnostics["alpha"], float)

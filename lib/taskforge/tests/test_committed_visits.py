@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Committed validation visits through ``driver.one``: a cold launch re-enters a visit a continuing review decided on
-with its stored evidence and buys nothing inside it, while the open frontier executes."""
+"""Stage boundaries through ``driver.one``: a cold launch resumes at the last stage a continuing review or the author
+reached and buys nothing a published row holds, while the open frontier executes."""
 
 import asyncio
 import hashlib
@@ -12,10 +12,11 @@ from argparse import Namespace
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, fields, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast, override
 
 import pytest
+import shellsim
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider
 from lib.taskforge.tests.stage_fakes import CandidateEngine, transcript
@@ -42,14 +43,16 @@ from rolloutengine.models import (
     RolloutOperation,
     TaskRolloutSpec,
 )
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import MachineOutputLimitExceeded
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from taskforge import driver
 from taskforge.checkpoint import HEAD
-from taskforge.config import TaskforgeConfig
+from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.effects.context import Context
-from taskforge.effects.events import Resolved, ScopeEntered, StageCompleted
+from taskforge.effects.events import Resolved, ScopeEntered, StageBoundary
 from taskforge.effects.issues import Hold, LogFailure
 from taskforge.effects.log import BufferSink, EventLog, Record
 from taskforge.harness.loop import AgenticHarness
@@ -68,7 +71,7 @@ from taskforge.model.review import (
     Retry,
     TrialOutcome,
 )
-from taskforge.model.stage import Exit
+from taskforge.model.stage import Exit, Stage
 from taskforge.model.workpiece import Conversation, Terminal, Workpiece
 from taskforge.policy import Policy
 from taskforge.report import trial_outcomes
@@ -283,6 +286,11 @@ def republish(root: Path, events: bytes) -> None:
     (root / HEAD).write_text(json.dumps({**head, "chunks": [name], "size": len(events)}))
 
 
+def boundaries(rows: Sequence[Record]) -> list[Stage]:
+    """The stage each recorded boundary starts, in journal order."""
+    return [r.event.following for r in rows if isinstance(r.event, StageBoundary)]
+
+
 def published_events(root: Path) -> bytes:
     head = json.loads((root / HEAD).read_bytes())
     return b"".join((root / "chunks" / name).read_bytes() for name in head["chunks"])
@@ -295,8 +303,8 @@ async def test_three_cold_launches_enter_identical_visits_and_only_the_first_buy
     assert await launches.run(third) == 0
     wp = published_workpiece(launches.root)
     assert wp.terminal is Terminal.ACCEPTED and kinds(wp) == ["accept", "accept"]
-    one, two, three = launches.entries
-    assert len(one) == len(two) == 4 and len(three) == 5 and one == two == three[:4]
+    one, two, three = launches.entries  # the later launches resume at the confirmation, which held
+    assert len(one) == 4 and two == one[3:] == three[:1] and len(three) == 2
     assert sorted(first.solver.runs)[:2] == [(0, 0), (1, 0)]
     assert [slot for slot in (*second.solver.runs, *third.solver.runs) if slot[1] == 0] == []
     assert not finished(first) & set(second.solver.runs)
@@ -308,7 +316,7 @@ async def test_three_cold_launches_enter_identical_visits_and_only_the_first_buy
 
 async def test_a_cold_launch_keeps_the_retry_a_control_outage_bought(launches: Driver) -> None:
     """Round 0's control grade was unavailable, so its review retried. A cold launch whose grader would now answer
-    keeps that Retry: both committed visits return their evidence and only the confirmation frontier executes."""
+    keeps that Retry: it resumes at the confirmation and only the confirmation frontier executes."""
     first = launch(Paid(outage={(2, 2)}), Grader(unavailable=1))
     assert await launches.run(first) == driver.DEFERRED
     held = len(launches.rows())
@@ -321,8 +329,7 @@ async def test_a_cold_launch_keeps_the_retry_a_control_outage_bought(launches: D
     assert (second.grader.calls, second.round_reviews, len(second.reviewer.requests)) == (0, 0, 1)
     new = launches.rows()[held:]
     assert scopes(new, "validate") == 0 and scopes(new, "confirm") == 1  # no duration sample for a committed visit
-    commits = [r.event.committed for r in launches.rows() if isinstance(r.event, StageCompleted) and r.event.committed]
-    assert len({c.visit for c in commits}) == len(commits) == 2  # the two validation visits, each committed once
+    assert boundaries(launches.rows()) == [Stage.AUTHOR, Stage.VALIDATE, Stage.VALIDATE, Stage.CONFIRM]
 
 
 async def test_a_trial_without_a_transcript_stays_absent_beside_a_newer_resolution_of_its_slot(launches: Driver) -> None:
@@ -373,13 +380,14 @@ async def test_only_a_changed_effective_reviewer_sampling_reopens_the_visit(
     assert [slot for slot in second.solver.runs if slot[1] == 0] == []  # the solver slots replay from the cache
 
 
-def committed_trials(lines: Sequence[bytes]) -> list[tuple[int, dict[str, Any], list[dict[str, Any]]]]:
-    """Each committed marker's line index, row and stored solver trials, in journal order."""
+def boundary_entries(lines: Sequence[bytes]) -> list[tuple[int, dict[str, Any], list[Any]]]:
+    """Each boundary with evidence: its line index, row and decoded entry, in journal order."""
     rows = [(n, json.loads(line)) for n, line in enumerate(lines)]
     return [
-        (n, row, row["event"]["payload"]["committed"]["result"]["solver"])
+        (n, row, entry)
         for n, row in rows
-        if row["event"].get("type") == StageCompleted.kind and row["event"]["payload"].get("committed")
+        if row["event"].get("type") == StageBoundary.kind
+        and (entry := json.loads(row["event"]["payload"]["entry"]))[0]["evidence"]
     ]
 
 
@@ -396,14 +404,16 @@ async def refuses_the_damaged_root(launches: Driver, lines: list[bytes], at: int
 
 
 @pytest.mark.parametrize("damage", ["another row", "a sibling slot"])
-async def test_a_malformed_commitment_leaves_the_held_head_byte_identical(launches: Driver, damage: str) -> None:
+async def test_a_malformed_boundary_receipt_leaves_the_held_head_byte_identical(launches: Driver, damage: str) -> None:
     assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
     lines = published_events(launches.root).splitlines(keepends=True)
-    [(at, row, (first, second))] = committed_trials(lines)
+    [(at, row, entry)] = boundary_entries(lines)
+    first, second = entry[0]["evidence"][-1]["solver"]
     if damage == "another row":
         first["receipt"] = 1
     else:  # a same-type resolution of the wrong slot
         first["receipt"], second["receipt"] = second["receipt"], first["receipt"]
+    row["event"]["payload"]["entry"] = json.dumps(entry)
     await refuses_the_damaged_root(launches, lines, at, row)
 
 
@@ -516,8 +526,7 @@ async def test_a_custom_review_rule_reuses_no_visit(launches: Driver) -> None:
     assert await launches.run(launch(Paid(outage={(2, 1)})), configure=custom) == driver.DEFERRED
     held = len(launches.rows())
     assert await launches.run(launch(Paid()), configure=custom) == 0
-    assert scopes(launches.rows()[held:], "validate") == 1
-    assert not [r for r in launches.rows() if isinstance(r.event, StageCompleted) and r.event.committed]
+    assert scopes(launches.rows()[held:], "validate") == scopes(launches.rows()[held:], "author") == 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -636,14 +645,15 @@ def graded(*ungraded: Slot, invalid: Iterable[Slot] = ()) -> Callable[[int, int]
     return grade
 
 
-CUTS = pytest.mark.parametrize(
-    "cut", [None, 0, 1, 2, 3, 4], ids=lambda cut: "two launches" if cut is None else f"killed at stage {cut}"
-)
-"""No launch between, or one killed as it enters a stage: its author, round 0's validation or review, the retry's
-validation, or the retry's review once the retry's slots are bought."""
+def cuts(*stages: int) -> pytest.MarkDecorator:
+    """No launch between, or one killed as it enters a stage after resuming at the retry's validation: that validation,
+    the retry's review once its slots are bought, the confirmation, or the final review once its slots are bought."""
+    return pytest.mark.parametrize(
+        "cut", [None, *stages], ids=lambda cut: "two launches" if cut is None else f"killed at stage {cut}"
+    )
 
 
-@CUTS
+@cuts(0, 1)
 async def test_a_retried_round_keeps_its_consumed_slots_and_its_replacement_fault(
     launches: Driver, cut: int | None
 ) -> None:
@@ -666,11 +676,11 @@ async def test_a_retried_round_keeps_its_consumed_slots_and_its_replacement_faul
     wp = published_workpiece(launches.root)
     assert kinds(wp) == ["retry", "abandon"] and wp.terminal is Terminal.ABANDONED
     assert [t.cause for t in wp.evidence[1].solver] == [None, Cause.INVALID_TASK, None]
-    assert (bought, last.solver.runs) == (([(2, 1)], []) if cut == 4 else ([], [(2, 1)]))
+    assert (bought, last.solver.runs) == (([(2, 1)], []) if cut == 1 else ([], [(2, 1)]))
     assert last.grader.calls == 0
 
 
-@CUTS
+@cuts(0, 1, 2, 3)
 async def test_an_unreviewed_replacement_stays_open_for_every_later_launch(launches: Driver, cut: int | None) -> None:
     """Round 0's slot 1 was ungraded, so its review retried; in the retry slot 1 was ungraded again and slot 2 met a
     decision-model outage, and no review used either. Later launches whose grader answers buy both once and accept,
@@ -688,9 +698,9 @@ async def test_an_unreviewed_replacement_stays_open_for_every_later_launch(launc
     assert await launches.run(last, RETRYING) == 0
     wp = published_workpiece(launches.root)
     assert kinds(wp) == ["retry", "accept", "accept"] and wp.terminal is Terminal.ACCEPTED
-    assert (bought, sorted(last.solver.runs)) == (
-        ([(1, 1), (2, 1)], confirmed(2)) if cut == 4 else ([], [(1, 1), (2, 1), *confirmed(2)])
-    )
+    retry, untouched = [(1, 1), (2, 1)], ([], [(1, 1), (2, 1), *confirmed(2)])
+    expected = {None: untouched, 0: untouched, 1: (retry, confirmed(2)), 2: (retry, confirmed(2))}
+    assert (bought, sorted(last.solver.runs)) == expected.get(cut, ([*retry, *confirmed(2)], []))
     assert [t.cause for t in wp.evidence[0].solver] == [None, Cause.NO_GRADE, None]
 
 
@@ -735,9 +745,10 @@ async def test_a_retry_beside_a_time_limited_trial_records_the_missing_grade_as_
     assert wp.evidence[0].solver[0].outcome is TrialOutcome.TIME_LIMIT
 
 
-async def test_a_changed_time_limit_is_another_plan_and_the_old_limit_returns_to_its_visits(launches: Driver) -> None:
+async def test_a_changed_time_limit_is_another_plan_and_the_old_limit_reuses_its_paid_slots(launches: Driver) -> None:
     """The solver's replay identity carries ``solver.time_limit``: under another limit round 0 is bought again, and
-    back at the first limit it is reused, with only the first plan's open confirmation slots bought."""
+    back at the first limit every launch starts at the author but buys only the first plan's open confirmation
+    slots."""
     plans = [launch(Paid(outage={(3, 1)})), launch(Paid(outage={(3, 1)})), launch(Paid())]
     for plan, limit in zip(plans[:2], (4200.0, 3600.0), strict=True):
         assert await launches.run(plan, {**RETRYING, "solver.time_limit": limit}, wired=True) == driver.DEFERRED
@@ -746,8 +757,7 @@ async def test_a_changed_time_limit_is_another_plan_and_the_old_limit_returns_to
     other, back = plans[1].solver.runs, plans[2].solver.runs
     assert [slot for slot in other if slot[1] == 0] == [(0, 0), (1, 0), (2, 0)]
     assert sorted(back) == sorted(set(confirmed(1)) - finished(plans[0]))
-    commits = [r.event.committed for r in launches.rows() if isinstance(r.event, StageCompleted) and r.event.committed]
-    assert len({c.visit for c in commits}) == len(commits) == 2  # round 0 under each limit, each once
+    assert boundaries(launches.rows()).count(Stage.AUTHOR) == 3  # each plan change resets to the author
 
 
 async def test_explicit_resume_rereads_the_live_grade_and_keeps_the_paid_fault(launches: Driver) -> None:
@@ -776,3 +786,95 @@ async def test_explicit_resume_rereads_the_live_grade_and_keeps_the_paid_fault(l
     assert kinds(wp) == ["retry", "abandon"] and wp.terminal is Terminal.ABANDONED
     assert resumed.solver.runs == [(2, 1)] and resumed.grader.calls == 0
     assert wp.evidence[0].solver[0].cause is Cause.HELD and wp.evidence[1].solver[1].cause is Cause.INVALID_TASK
+
+
+async def test_a_plan_switched_back_after_a_reset_starts_at_the_author_and_buys_only_what_no_row_holds(
+    launches: Driver,
+) -> None:
+    """A holds in its confirmation; B, a policy edit, is killed just after its reset boundary; A's next launch starts at
+    the author because B's reset is the latest boundary, and every paid effect it meets hits its own key."""
+    first = launch(Paid(outage={(2, 1)}))
+    assert await launches.run(first) == driver.DEFERRED
+    with pytest.raises(asyncio.CancelledError):
+        await launches.run(launch(Paid()), {"solver.heartbeat_interval": 7.0}, cut=0)
+    again = launch(Paid())
+    assert await launches.run(again) == 0
+    assert published_workpiece(launches.root).terminal is Terminal.ACCEPTED
+    first_plan, reset, back = [Stage.AUTHOR, Stage.VALIDATE, Stage.CONFIRM], [Stage.AUTHOR], [Stage.AUTHOR]
+    assert boundaries(launches.rows()) == [*first_plan, *reset, *back, Stage.VALIDATE, Stage.CONFIRM]
+    assert launches.entries[2][0] == launches.entries[0][0]  # the author, from the initial workpiece
+    assert sorted(again.solver.runs) == sorted(confirmation(1, finished(first)))
+    assert (again.grader.calls, again.round_reviews) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    "workspace",
+    [
+        WorkspaceHydration((inline_resource("reference.txt", b"V2"),)),
+        WorkspaceHydration((inline_resource("reference.txt", b"V1"),), rendered=lambda _wp, _policy: ()),
+    ],
+    ids=["changed static content", "custom renderer"],
+)
+async def test_a_changed_or_unidentified_workspace_never_resumes_past_the_author(
+    launches: Driver, workspace: WorkspaceHydration
+) -> None:
+    """The author may have built its task from ``/reference.txt``: a launch whose workspace differs, or whose renderer
+    has no identity, starts at the author on a machine holding what this launch hydrates."""
+    v1 = WorkspaceHydration((inline_resource("reference.txt", b"V1"),))
+    assert await launches.run(launch(Paid(outage={(2, 1)})), configure=lambda c: replace(c, workspace=v1)) == (
+        driver.DEFERRED
+    )
+    held = len(launches.rows())
+    second = launch(Paid())
+    assert await launches.run(second, configure=lambda c: replace(c, workspace=workspace)) == 0
+    assert scopes(launches.rows()[held:], "author") == 1
+    author = cast(Envs, second.bundle.envs).created[0]
+    assert author.files[PurePosixPath("/reference.txt")] == resource_bytes(workspace.static[0])
+
+
+class InjectedMachines(ShellSimMachineFactory):
+    """A caller's own machine factory: it may configure machines in ways no plan identity sees."""
+
+
+async def test_an_injected_machine_factory_never_resumes_past_the_author(launches: Driver) -> None:
+    """The same backend name as the stock factory of the held launch, so only the factory's type differs."""
+    first = launch(Paid(outage={(2, 1)}))
+    first.bundle = replace(first.bundle, factories={"shellsim": ShellSimMachineFactory(context=shellsim.Context())})
+    assert await launches.run(first) == driver.DEFERRED
+    held = len(launches.rows())
+    second = launch(Paid())
+    second.bundle = replace(second.bundle, factories={"shellsim": InjectedMachines(context=shellsim.Context())})
+    assert await launches.run(second) == 0
+    new = launches.rows()[held:]
+    assert scopes(new, "author") == 1 and boundaries(new)[0] is Stage.AUTHOR
+
+
+async def test_a_launch_after_the_published_author_boundary_opens_no_author_machine_or_model_call(
+    launches: Driver,
+) -> None:
+    """Killed as validation starts, after the author's boundary; the next launch starts at validation."""
+    with pytest.raises(asyncio.CancelledError):
+        await launches.run(launch(Paid()), cut=1)
+    assert boundaries(launches.rows()) == [Stage.AUTHOR, Stage.VALIDATE]
+    held = len(launches.rows())
+    again = launch(Paid(), inference=FakeInference(()))  # any author turn would raise
+    assert await launches.run(again) == 0
+    assert published_workpiece(launches.root).terminal is Terminal.ACCEPTED
+    assert scopes(launches.rows()[held:], "author") == 0
+    assert cast(FakeInference, again.bundle.inference).requests == []
+    assert cast(Envs, again.bundle.envs).created == []
+
+
+@pytest.mark.parametrize("change", ["author sampling", "proposal bytes"])
+async def test_a_changed_author_session_or_proposal_resumes_at_the_author(
+    launches: Driver, proposal: TaskProposal, change: str
+) -> None:
+    assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
+    held = len(launches.rows())
+    profiles = {"author": replace(GLM_5_3, sampling=LLMPolicy(max_tokens=128))} if change == "author sampling" else {}
+    if change == "proposal bytes":
+        edited = replace(proposal, body=proposal.body + "\nOne more sentence.")
+        Path(launches.args.proposals).write_bytes(TASK_PROPOSAL.dump_json(edited))
+    assert await launches.run(launch(Paid()), profiles=profiles) == 0
+    new = launches.rows()[held:]
+    assert scopes(new, "author") == 1 and boundaries(new)[0] is Stage.AUTHOR

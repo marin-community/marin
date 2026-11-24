@@ -45,7 +45,7 @@ MAX_EMPTY_COMPLETIONS = 3
 
 async def settled(event: InferenceRequest, client: InferenceClient, *, notify: Notify) -> Completion:
     """The harness's inference: a provider's context refusal settles the visit, so it is a recorded result (with the
-    retries before it) that a reconstructed visit replays, never a raise that leaves the request to be asked again."""
+    retries before it) that a restarted visit replays, never a raise that leaves the request to be asked again."""
     try:
         return await complete(event, client, notify=notify)
     except ContextExceeded as error:
