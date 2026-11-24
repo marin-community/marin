@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
+from harbor_config.errors import ERROR_CATEGORIES
 from harbor_config.models.trial.config import TaskConfig
 from shellbox.machine import CommandOutputLost
 
@@ -369,7 +370,7 @@ class Trial(ABC):
             self.result.verifier_result = None
             while isinstance(exc, ExceptionGroup) and len(exc.exceptions) == 1:
                 exc = exc.exceptions[0]
-            if error_category(type(exc).__name__) is not ErrorCategory.INFRASTRUCTURE:
+            if error_category(type(exc).__name__, categories=ERROR_CATEGORIES) is not ErrorCategory.INFRASTRUCTURE:
                 failure = RuntimeServiceError("Required trial service failed")
                 failure.__cause__ = exc
                 exc = failure
@@ -442,7 +443,7 @@ class Trial(ABC):
             self.result.completion = None
             self.result.verifier_result = None
             prior = self.result.exception_info
-            if prior is None or error_category(prior.exception_type) in (
+            if prior is None or error_category(prior.exception_type, categories=ERROR_CATEGORIES) in (
                 ErrorCategory.AGENT,
                 ErrorCategory.PASSTHROUGH,
             ):
