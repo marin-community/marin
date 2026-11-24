@@ -17,11 +17,13 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     EnvironmentRequirements,
     FileReward,
+    GraderMachine,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
     TaskResource,
 )
+from taskcompendium.runtime.grading import JUDGE_SPEC_PATH
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCORERS = Path(__file__).parent / "scorers"
@@ -80,11 +82,15 @@ def source_package(
     judge: JudgeSpec | None = None,
     timeout: float = 60,
 ) -> GraderPackage:
-    """Package the pinned source scorer for a fresh Shellbox verifier machine."""
+    """Package the pinned source scorer for a fresh Shellbox verifier machine.
+
+    With a ``judge``, the scorer's command names the path where the runtime stages its contract.
+    """
+    judge_argv = () if judge is None else ("--judge-spec", JUDGE_SPEC_PATH)
     grader = ScriptGrader(
-        argv=("python3", "-m", "source_grader.main", scorer),
+        argv=("python3", "-m", "source_grader.main", scorer, *judge_argv),
         cwd="/tests",
-        environment=environment,
+        placement=GraderMachine(environment=environment),
         judge=judge,
         empty_output=EmptyOutputPolicy.GRADE,
         answer_path="/app/answer.txt",

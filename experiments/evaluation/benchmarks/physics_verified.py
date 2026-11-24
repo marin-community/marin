@@ -33,7 +33,7 @@ from experiments.post_training.task_curation.pipeline import HfSource
 
 PHYSICS_VERIFIED_REVISION = "724170025e3541c9b877285b2d577a1257796f0b"
 PHYSICS_VERIFIED_POPULATION = 602
-VERSION = "2026.11.23"
+VERSION = "2026.11.20"
 
 
 def benchmarks() -> list[EvaluationBenchmark]:

@@ -17,7 +17,6 @@ import marin.inference.repository_snapshot as repository_snapshot
 import pytest
 import requests
 import shellsim
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.inference import python_tool_routes, shell_workspace, shellsim_runtime
 from marin.inference.chat_template_protocol import ChatTemplateProtocol, ToolCallFormat, protocol_for_chat_template
 from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, build_dashboard_app, serve_app_background
@@ -25,6 +24,7 @@ from marin.inference.python_tool_routes import TOOL_WORKER_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
 from marin.inference.repository_snapshot import RepositorySnapshotTooLarge, clone_repository_snapshot
 from marin.inference.web_search import ParallelWebSearch
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse

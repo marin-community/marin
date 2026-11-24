@@ -11,7 +11,7 @@ renamed ``{candidate}`` and its numeric tolerance is fixed at the harness's 1%.
 from collections.abc import Mapping
 from typing import Any
 
-from verifyit.spec import JudgeSampling, JudgeSpec
+from verifyit.spec import JudgeSpec
 
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
@@ -51,7 +51,6 @@ def physics_verified_judge(row: Mapping[str, Any]) -> JudgeSpec:
         request_timeout=JUDGE_REQUEST_TIMEOUT,
         transport_attempts=3,
         transport_budget=JUDGE_TRANSPORT_BUDGET,
-        sampling=JudgeSampling.PROVIDER_DEFAULT,
         # Use the judge deployment selected by the evaluation launcher.
         model="",
     )

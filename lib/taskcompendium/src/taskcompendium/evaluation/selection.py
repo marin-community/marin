@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 
 from taskcompendium.evaluation.corpus import EvaluationCase, EvaluationCorpus, TaskRow, source_order, text_prompt
 from taskcompendium.evaluation.spec import (
+    AgentEpisode,
     ChatGeneration,
     CohortOrder,
     CohortPolicy,
@@ -144,6 +145,9 @@ def _context_decision(
     if protocol.sampling is None:
         return SelectionDecision(record, case)
     cap = min(max_tokens, protocol.sampling.max_tokens or max_tokens)
+    if isinstance(case.item.operation, AgentEpisode):
+        # The harness renders the prompts, so the episode has no prompt to admit before it starts.
+        return SelectionDecision(record.model_copy(update={"max_tokens": cap}), case)
     case = replace(case, task=prompt_variant(case, context_window, cap, tokenizer))
     if tokenizer is None:
         if protocol.context_policy is not None:

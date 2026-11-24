@@ -40,6 +40,7 @@ def test_proof_grader_scores_final_points_line_out_of_seven(judge_server, connec
     verdict = grade_judge_candidate(spec, "Proof.", connection=connection)
     assert verdict.status is Status.SCORED
     assert verdict.reward == pytest.approx(points / 7)
+    assert "temperature" not in judge_server.requests[-1]
     prompt = judge_server.requests[-1]["messages"][-1]["content"]
     assert "**SPECIFIC GRADING GUIDELINES**\n(Partial)\n 1. Proved $f(\\{0\\})=\\{0\\}$.\n" in prompt
 

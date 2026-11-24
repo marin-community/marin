@@ -4,9 +4,11 @@
 """Run the machine contract on a Daytona sandbox."""
 
 import asyncio
+import errno
 import json
 import logging
 import math
+import os
 import re
 import shlex
 import stat
@@ -14,10 +16,11 @@ import tarfile
 import tempfile
 import uuid
 from asyncio import sleep
-from collections.abc import Awaitable, Callable, Mapping
-from contextlib import AsyncExitStack, suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from http import HTTPStatus
 from pathlib import Path, PurePosixPath
 
 from daytona import (
@@ -26,10 +29,13 @@ from daytona import (
     CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
     DaytonaConflictError,
+    DaytonaConnectionError,
     DaytonaError,
     DaytonaNotFoundError,
     DaytonaRateLimitError,
+    DaytonaTimeoutError,
     ExecuteResponse,
+    SandboxState,
 )
 from rigging.timing import ExponentialBackoff
 
@@ -38,6 +44,7 @@ from shellbox.backends.daytona.snapshot import (
     daytona_image,
     ensure_snapshot,
     snapshot_request_for_spec,
+    validate_source,
 )
 from shellbox.backends.daytona.transient import is_transient_daytona_error, retry_transient
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
@@ -50,6 +57,7 @@ from shellbox.machine import (
     CommandSemantics,
     ExecutionRequirements,
     ExitReason,
+    MachineDiskFull,
     MachineSpec,
     MachineTerminated,
     NetworkPolicy,
@@ -72,6 +80,7 @@ GONE_MARKER = "SHELLBOX_GONE"
 CLAIMED_MARKER = "SHELLBOX_CLAIMED"
 CLIPPED_OUTPUT_SUFFIX = ".limited"
 PROVIDER_DIAGNOSTIC_CHAR_LIMIT = 4096
+DISK_FULL_MESSAGE = os.strerror(errno.ENOSPC)
 # The exit trap records the command's status, so a request that lost its connection can still read it.
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; '
@@ -221,7 +230,7 @@ class DaytonaNetworkPolicy:
         return {"network_block_all": mode == DaytonaNetworkMode.BLOCK_ALL}
 
 
-class DaytonaOutputUnavailable(RuntimeError):
+class DaytonaOutputUnavailable(ConnectionError):
     """A command ran, but its output could not be read back from the sandbox."""
 
 
@@ -241,9 +250,24 @@ class DaytonaMachine:
         self.resources = resources
         self.output_collection_timeout = output_collection_timeout
         self._closed = False
+        # Why the machine closed itself, after which its sandbox is in an unknown state.
+        self._lost: BaseException | None = None
         self._sessions: set[DaytonaProcessSession] = set()
         self._acquisitions: set[asyncio.Task[None]] = set()
         self._closing: asyncio.Task[None] | None = None
+
+    def _require_open(self) -> None:
+        """Raise ``MachineTerminated`` once the machine closed itself after a failure; using it after its owner
+        closed it is a ``RuntimeError``."""
+        if not self._closed:
+            return
+        if self._lost is not None:
+            raise MachineTerminated(f"The Daytona machine was closed after {self._lost!r}") from self._lost
+        raise RuntimeError("Machine is closed")
+
+    async def _close_after(self, failure: BaseException) -> None:
+        self._lost = self._lost or failure
+        await self.close()
 
     async def _control(self, script: str):
         """Run a root command that is safe to run twice, repeating a request that failed in transit."""
@@ -265,8 +289,7 @@ class DaytonaMachine:
 
     async def open_process(self, command: Command) -> DaytonaProcessSession:
         """Attach persistent binary pipes through one provider session and log stream."""
-        if self._closed:
-            raise RuntimeError("Machine is closed")
+        self._require_open()
         if not command.argv or command.stdin or command.timeout is not None:
             raise ValueError("Process sessions require argv and own stdin and their lifetime")
         if command.output_limit_bytes < 0:
@@ -274,7 +297,7 @@ class DaytonaMachine:
 
         async def cleanup_failed() -> None:
             if not self._closed:
-                await self.close()
+                await self._close_after(MachineTerminated("Cannot delete a Daytona process session"))
 
         session = DaytonaProcessSession(
             self.sandbox.process,
@@ -282,6 +305,7 @@ class DaytonaMachine:
             stderr_limit=command.output_limit_bytes,
             release=self._sessions.discard,
             failed_cleanup=cleanup_failed,
+            provider_failures=self._provider_failures,
         )
         self._sessions.add(session)
 
@@ -294,8 +318,7 @@ class DaytonaMachine:
         self._acquisitions.add(acquisition)
         try:
             await asyncio.shield(acquisition)
-            if self._closed:
-                raise RuntimeError("Machine was closed while opening a process session")
+            self._require_open()
             return session
         except BaseException as error:
             try:
@@ -396,32 +419,60 @@ class DaytonaMachine:
 
     async def _close_preserving_failure(self, failure: BaseException) -> None:
         try:
-            await self.close()
+            await self._close_after(failure)
         except Exception as cleanup_error:
             failure.add_note(f"Daytona machine cleanup failed: {cleanup_error!r}")
 
     async def _cleanup_cancelled_command(
-        self, prefix: str, pidfile: str, completed_path: str, started: bool, cancellation: asyncio.CancelledError
+        self,
+        prefix: str,
+        pidfile: str,
+        completed_path: str,
+        launch_requested: bool,
+        cancellation: asyncio.CancelledError,
     ) -> None:
         try:
-            if started:
+            if launch_requested:
                 await finish_owned(own_cleanup(self._stop_command(pidfile, completed_path)))
-                await finish_owned(own_cleanup(self._remove_command_files(prefix)))
-            else:
-                await finish_owned(own_cleanup(self.close()))
+            # Cancellation during staging leaves only private files. Keeping the machine
+            # available lets the verifier grade work from commands that already finished.
+            await finish_owned(own_cleanup(self._remove_command_files(prefix)))
         except BaseException as cleanup_error:
             cancellation.add_note(f"Daytona command cancellation cleanup failed ({type(cleanup_error).__name__})")
             try:
-                await finish_owned(own_cleanup(self.close()))
+                await finish_owned(own_cleanup(self._close_after(cleanup_error)))
             except BaseException as close_error:
                 cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
+
+    @asynccontextmanager
+    async def _provider_failures(self) -> AsyncIterator[None]:
+        """Raise a lost provider connection, or a started sandbox its proxy cannot reach, as ``ConnectionError``,
+        and any failure of a sandbox that is no longer started as ``MachineTerminated``."""
+        try:
+            yield
+        except (DaytonaConnectionError, DaytonaTimeoutError) as error:
+            raise ConnectionError(f"Lost the connection to Daytona sandbox {self.sandbox.id}: {error}") from error
+        except DaytonaError as error:
+            try:
+                await self.sandbox.refresh_data(request_timeout=INTERRUPT_TIMEOUT)
+            except DaytonaNotFoundError:
+                raise MachineTerminated(f"Daytona sandbox {self.sandbox.id} no longer exists: {error}") from error
+            except DaytonaError as probe_error:
+                raise ConnectionError(
+                    f"Cannot check Daytona sandbox {self.sandbox.id} after {error}: {probe_error}"
+                ) from error
+            if self.sandbox.state != SandboxState.STARTED:
+                raise MachineTerminated(f"Daytona sandbox {self.sandbox.id} is {self.sandbox.state}: {error}") from error
+            # The SDK reports a failed file transfer's HTTP response without its status code.
+            if error.status_code is None or error.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+                raise ConnectionError(f"Daytona cannot reach sandbox {self.sandbox.id}: {error}") from error
+            raise
 
     async def open_process_scope(self) -> ProcessScope:
         raise UnsupportedMachineSpec("Daytona does not provide confirmed scoped descendant teardown")
 
     async def run(self, command: Command) -> Result:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
+        self._require_open()
         if not command.argv:
             raise ValueError("Command argv is empty")
         if command.output_limit_bytes < 0:
@@ -430,83 +481,88 @@ class DaytonaMachine:
         stdin_path, stdout_path, stderr_path = (f"{prefix}/{part}" for part in ("in", "out", "err"))
         script_path = f"{prefix}/command.sh"
         pidfile, completed_path, claim_path = f"{prefix}/pid", f"{prefix}/completed", f"{prefix}/claimed"
-        started = False
+        launch_requested = False
         primary_error = None
         exit_code = None
         diagnostic = ""
         environment = {**self.spec.env, **command.env}
         try:
-            async with asyncio.timeout(command.timeout) as deadline:
-                argv = (
-                    "/bin/sh",
-                    "-c",
-                    'PATH=$_SHELLBOX_COMMAND_PATH; unset _SHELLBOX_COMMAND_PATH; export PATH; exec "$@"',
-                    "shellbox-agent",
-                    *command.argv,
-                )
-                argv = await self._user_argv(argv, command.user)
-                argv = (
-                    "/bin/sh",
-                    "-c",
-                    START_COMMAND,
-                    "shellbox-start",
-                    "/bin/sh",
-                    "-c",
-                    RUN_COMMAND,
-                    "shellbox-command",
-                    pidfile,
-                    completed_path,
-                    *argv,
-                )
-                # Only the first request to claim the directory runs the command.
-                script = (
-                    f"mkdir {shlex.quote(claim_path)} 2>/dev/null || {{ echo {CLAIMED_MARKER}; exit 0; }}; "
-                    f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
-                    f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
-                )
-                # The name is random, so `-p` only makes a repeated request succeed.
-                prepared = await self._control(f"umask 077; mkdir -p {shlex.quote(prefix)}")
-                if prepared.exit_code:
-                    raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
-                if command.stdin:
-                    stdin = command.stdin
-                    await retry_transient(lambda: self.sandbox.fs.upload_file_stream(stdin, stdin_path))
-                # Nested shell quoting can exceed execve's single-argument limit
-                # even when every original command argument fits.
-                await retry_transient(lambda: self.sandbox.fs.upload_file_stream(script.encode(), script_path))
-                started = True
-
-                def request():
-                    return self.sandbox.process.exec(
-                        _control_command(shlex.join(("/bin/sh", script_path))),
-                        cwd=command.cwd or self.spec.workdir or None,
-                        env=environment,
-                        timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
+            async with self._provider_failures():
+                async with asyncio.timeout(command.timeout) as deadline:
+                    argv = (
+                        "/bin/sh",
+                        "-c",
+                        'PATH=$_SHELLBOX_COMMAND_PATH; unset _SHELLBOX_COMMAND_PATH; export PATH; exec "$@"',
+                        "shellbox-agent",
+                        *command.argv,
                     )
+                    argv = await self._user_argv(argv, command.user)
+                    argv = (
+                        "/bin/sh",
+                        "-c",
+                        START_COMMAND,
+                        "shellbox-start",
+                        "/bin/sh",
+                        "-c",
+                        RUN_COMMAND,
+                        "shellbox-command",
+                        pidfile,
+                        completed_path,
+                        *argv,
+                    )
+                    # Only the first request to claim the directory runs the command.
+                    script = (
+                        f"mkdir {shlex.quote(claim_path)} 2>/dev/null || {{ echo {CLAIMED_MARKER}; exit 0; }}; "
+                        f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
+                        f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
+                    )
+                    # The name is random, so `-p` only makes a repeated request succeed.
+                    prepared = await self._control(f"umask 077; mkdir -p {shlex.quote(prefix)}")
+                    if prepared.exit_code and DISK_FULL_MESSAGE in prepared.result:
+                        raise MachineDiskFull(f"Daytona sandbox {self.sandbox.id} is full: {prepared.result}")
+                    if prepared.exit_code:
+                        raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
+                    if command.stdin:
+                        stdin = command.stdin
+                        await retry_transient(lambda: self.sandbox.fs.upload_file_stream(stdin, stdin_path))
+                    # Nested shell quoting can exceed execve's single-argument limit
+                    # even when every original command argument fits.
+                    await retry_transient(lambda: self.sandbox.fs.upload_file_stream(script.encode(), script_path))
+                    launch_requested = True
 
-                try:
-                    response = await request()
-                    exit_code, diagnostic = response.exit_code, response.result or ""
-                except DaytonaError as error:
-                    if not is_transient_daytona_error(error):
-                        raise
-                    logger.warning("Reattaching to a Daytona command after %s", type(error).__name__)
-                    exit_code, diagnostic = await self._exit_after_lost_request(request, pidfile, completed_path)
-            async with asyncio.timeout(self.output_collection_timeout):
-                try:
-                    return await self._command_result(exit_code, stdout_path, stderr_path, command.output_limit_bytes)
-                except Exception as error:
-                    error.add_note(
-                        "Daytona exec response: "
-                        + json.dumps(
-                            {
-                                "exit_code": exit_code,
-                                "diagnostic": diagnostic[:PROVIDER_DIAGNOSTIC_CHAR_LIMIT],
-                                "diagnostic_truncated": len(diagnostic) > PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
-                            }
+                    def request():
+                        return self.sandbox.process.exec(
+                            _control_command(shlex.join(("/bin/sh", script_path))),
+                            cwd=command.cwd or self.spec.workdir or None,
+                            env=environment,
+                            timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
                         )
-                    )
-                    raise
+
+                    try:
+                        response = await request()
+                        exit_code, diagnostic = response.exit_code, response.result or ""
+                    except DaytonaError as error:
+                        if not is_transient_daytona_error(error):
+                            raise
+                        logger.warning("Reattaching to a Daytona command after %s", type(error).__name__)
+                        exit_code, diagnostic = await self._exit_after_lost_request(request, pidfile, completed_path)
+                async with asyncio.timeout(self.output_collection_timeout):
+                    try:
+                        return await self._command_result(
+                            exit_code, stdout_path, stderr_path, command.output_limit_bytes
+                        )
+                    except Exception as error:
+                        error.add_note(
+                            "Daytona exec response: "
+                            + json.dumps(
+                                {
+                                    "exit_code": exit_code,
+                                    "diagnostic": diagnostic[:PROVIDER_DIAGNOSTIC_CHAR_LIMIT],
+                                    "diagnostic_truncated": len(diagnostic) > PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
+                                }
+                            )
+                        )
+                        raise
         except TimeoutError as error:
             if exit_code is not None:
                 primary_error = DaytonaOutputUnavailable("Cannot collect Daytona command output")
@@ -514,26 +570,27 @@ class DaytonaMachine:
             if not deadline.expired():
                 primary_error = error
                 raise
-            if not started:
+            if not launch_requested:
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             try:
                 await self._stop_command(pidfile, completed_path)
             except asyncio.CancelledError as cancellation:
                 primary_error = cancellation
-                await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
+                await self._cleanup_cancelled_command(prefix, pidfile, completed_path, launch_requested, cancellation)
                 raise
-            except TimeoutError as error:
-                primary_error = MachineTerminated("Daytona sandbox stopped responding to the command stop request")
-                await self._close_preserving_failure(primary_error)
-                raise primary_error from error
             except Exception as error:
-                primary_error = RuntimeError("Cannot stop the Daytona command process group")
+                # Closing the machine ends it, so the caller sees the machine as terminated.
+                primary_error = MachineTerminated(
+                    "Daytona sandbox stopped responding to the command stop request"
+                    if isinstance(error, TimeoutError)
+                    else "Cannot stop the Daytona command process group"
+                )
                 await self._close_preserving_failure(primary_error)
                 raise primary_error from error
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except asyncio.CancelledError as cancellation:
             primary_error = cancellation
-            await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
+            await self._cleanup_cancelled_command(prefix, pidfile, completed_path, launch_requested, cancellation)
             raise
         except BaseException as error:
             primary_error = error
@@ -547,10 +604,10 @@ class DaytonaMachine:
                     raise
                 except Exception as error:
                     if primary_error is None:
-                        primary_error = (
-                            MachineTerminated("Daytona sandbox stopped responding to command file cleanup")
+                        primary_error = MachineTerminated(
+                            "Daytona sandbox stopped responding to command file cleanup"
                             if isinstance(error, TimeoutError)
-                            else RuntimeError("Cannot remove Daytona command files")
+                            else "Cannot remove Daytona command files"
                         )
                         await self._close_preserving_failure(primary_error)
                         raise primary_error from error
@@ -558,10 +615,10 @@ class DaytonaMachine:
                     await self._close_preserving_failure(primary_error)
 
     async def upload(self, source: Path, target: str) -> None:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
+        self._require_open()
         # Each transfer rewrites its target, so a transfer that lost its connection starts over.
-        await retry_transient(lambda: self._upload(source, target))
+        async with self._provider_failures():
+            await retry_transient(lambda: self._upload(source, target))
 
     async def _upload(self, source: Path, target: str) -> None:
         if source.is_dir():
@@ -593,9 +650,9 @@ class DaytonaMachine:
             raise RuntimeError(f"Failed to upload {source}: {result.result}")
 
     async def download(self, source: str, target: Path) -> None:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
-        await retry_transient(lambda: self._download(source, target))
+        self._require_open()
+        async with self._provider_failures():
+            await retry_transient(lambda: self._download(source, target))
 
     async def _download(self, source: str, target: Path) -> None:
         probe = await self.sandbox.process.exec(_control_command(f"test -d {shlex.quote(source)}"), cwd=CONTROL_CWD)
@@ -687,7 +744,8 @@ class DaytonaMachineFactory:
     def _check_spec(self, spec: MachineSpec) -> DockerfileSource | RegistryImage:
         source: DockerfileSource | RegistryImage
         if isinstance(spec.source, DockerfileSource):
-            source = spec.source
+            # Reject a build context Daytona cannot use when the spec is checked, before any machine starts.
+            source = validate_source(spec.source)
         elif isinstance(spec.source, RegistryImage):
             source = spec.source
         else:
