@@ -392,6 +392,18 @@ path to capture this known failure, preserving the original workload and exit
 deadline. Successful instrumentation alone would not establish a shutdown fix.
 [Full-model deterministic run](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.23.1-coordinator-e253e06c)
 
+Observed run `2026.11.24.1` at `082025c4d8` scheduled the same 40-H100
+allocation and reached Ray startup. The training entry point then stopped in
+configuration validation because `WANDB_API_KEY` was missing. The isolated
+launch wrapper had omitted that credential, which the unchanged `wandb` logger
+requires. No learner update, checkpoint continuation or native shutdown sample
+was recorded. Both jobs failed with zero retries and preemptions, and all five
+GPU pods were verified absent. The next launcher must deliver the existing
+logging key explicitly and check required credentials before compute. The
+one-H100 lifecycle and delivery qualification above remains bound to its own
+source and fixture.
+[Observed full-model startup](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.1-coordinator-227e2e97)
+
 The native server stages and installs weights inside one runtime. The worker
 bridge accepts a version-bound native route payload per trajectory and
 preserves that binding through batching and policy scoring. The distributed

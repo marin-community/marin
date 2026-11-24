@@ -12,6 +12,15 @@ checkpoint metadata was committed. It failed again at the five-second natural
 process-exit check. Fresh-process continuation, updated-weight publication and
 generation, and the matched 25-update comparison remain unverified.
 
+Observed follow-up `2026.11.24.1` at `082025c4d8` reached Ray startup, then
+stopped in training-entrypoint validation because the isolated launch wrapper
+omitted `WANDB_API_KEY`. The recipe still uses the same `wandb` logger. No
+learner update or shutdown sample was recorded; both jobs failed with no
+retries or preemptions, and all five GPU pods were verified absent. Explicit
+delivery of the existing logging key and a prelaunch credential check are
+required before another attempt.
+[Observed full-model startup](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.1-coordinator-227e2e97)
+
 Under `--xla_gpu_deterministic_ops=true`, the eight-H100 tiny MoE run at
 `94f1d6b171` passed all 18 strict warm-process versus fresh-process checks.
 Independent decoding found all 411 checkpoint arrays finite; continued model,
