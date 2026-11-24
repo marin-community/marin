@@ -141,7 +141,7 @@ def _causal_depthwise_conv1d_update(
 class GatedRmsNorm(eqx.Module):
     """RMSNorm(x) * SiLU(gate)"""
 
-    axis: Axis
+    axis: Axis = eqx.field(static=True)
     weight: NamedArray  # [axis]
     eps: float = eqx.field(default=1e-6, static=True)
 
