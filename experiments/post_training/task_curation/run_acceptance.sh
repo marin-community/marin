@@ -40,7 +40,12 @@ print(HfApi().repo_info("$RELEASE_REPO", repo_type="dataset").sha)
 PY
 )
 
-uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python -m \
+# The sandbox graders run on Daytona through the rollout engine's machine
+# machinery, so the environment carries the shellbox Daytona extra and the
+# rollout engine alongside the taskcompendium pipeline extra.
+uv run --frozen --with-editable ./lib/taskcompendium[pipeline] \
+  --with-editable "./lib/shellbox[daytona]" \
+  --with-editable ./lib/rolloutengine python -m \
   experiments.post_training.task_curation.acceptance_controls \
   --source-id "$SOURCE_ID" \
   --release-repo "$RELEASE_REPO" \
