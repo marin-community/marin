@@ -179,29 +179,29 @@ QUIESCE_PROGRAM = (
     "while pid > 1:\n"
     "    mine.add(pid)\n"
     "    try:\n"
-    "        with open(f\"/proc/{pid}/stat\") as stream:\n"
-    "            fields = stream.read().rsplit(\") \", 1)[1].split()\n"
+    '        with open(f"/proc/{pid}/stat") as stream:\n'
+    '            fields = stream.read().rsplit(") ", 1)[1].split()\n'
     "        pid = int(fields[1])\n"
     "    except (OSError, IndexError, ValueError):\n"
     "        break\n"
     "killed = []\n"
-    "for entry in os.scandir(\"/proc\"):\n"
+    'for entry in os.scandir("/proc"):\n'
     "    if not entry.name.isdecimal():\n"
     "        continue\n"
     "    victim = int(entry.name)\n"
     "    if victim in mine or victim == 1:\n"
     "        continue\n"
     "    try:\n"
-    "        with open(f\"/proc/{victim}/stat\") as stream:\n"
-    "            fields = stream.read().rsplit(\") \", 1)[1].split()\n"
+    '        with open(f"/proc/{victim}/stat") as stream:\n'
+    '            fields = stream.read().rsplit(") ", 1)[1].split()\n'
     "        state = fields[0]\n"
     "    except (OSError, IndexError, ValueError):\n"
     "        continue\n"
-    "    if state.startswith(\"Z\"):\n"
+    '    if state.startswith("Z"):\n'
     "        continue\n"
     "    try:\n"
-    "        with open(f\"/proc/{victim}/cmdline\", \"rb\") as stream:\n"
-    "            argv = stream.read().split(b\"\\x00\")\n"
+    '        with open(f"/proc/{victim}/cmdline", "rb") as stream:\n'
+    '            argv = stream.read().split(b"\\x00")\n'
     "    except OSError:\n"
     "        argv = []\n"
     "    if tuple(argv[: len(KEEPER_SLEEP_ARGS)]) == KEEPER_SLEEP_ARGS:\n"
@@ -214,7 +214,7 @@ QUIESCE_PROGRAM = (
     "    except OSError as error:\n"
     "        # A failed kill means the victim may survive: the quiesce cannot be\n"
     "        # guaranteed, so the advisory must fail instead of passing silently.\n"
-    "        print(f\"quiesce kill failed for {victim}: {error}\", file=sys.stderr)\n"
+    '        print(f"quiesce kill failed for {victim}: {error}", file=sys.stderr)\n'
     "        raise\n"
     "print(len(killed))\n"
 )
