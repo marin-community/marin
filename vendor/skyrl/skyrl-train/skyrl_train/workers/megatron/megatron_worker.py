@@ -86,6 +86,12 @@ class _MegatronInitMode(StrEnum):
     CHECKPOINT_EXPORT = "checkpoint-export"
 
 
+# Outcome labels shared by the sizing report, its headroom gate and the receipt consumers.
+SIZING_PASSED = "passed"
+SIZING_OOM = "oom"
+SIZING_INSUFFICIENT_HEADROOM = "insufficient_headroom"
+
+
 class MegatronWorker:
     @property
     def scoring_temperature(self) -> float:
@@ -680,11 +686,11 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             external_before = max(0, total - free_before - torch.cuda.memory_reserved(device))
             torch.cuda.reset_peak_memory_stats(device)
             started = time.monotonic()
-            outcome = "passed"
+            outcome = SIZING_PASSED
             try:
                 run()
             except torch.OutOfMemoryError:
-                outcome = "oom"
+                outcome = SIZING_OOM
                 raise
             finally:
                 free_after, _ = torch.cuda.mem_get_info(device)
@@ -704,13 +710,13 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                     "minimum_headroom_fraction": config.minimum_headroom_fraction,
                     "outcome": outcome,
                 }
-                if outcome == "passed" and headroom < total * config.minimum_headroom_fraction:
-                    report["outcome"] = "insufficient_headroom"
+                if outcome == SIZING_PASSED and headroom < total * config.minimum_headroom_fraction:
+                    report["outcome"] = SIZING_INSUFFICIENT_HEADROOM
                 reports.append(report)
                 record_event("trainer_memory_profile", report, attributes={"rank": str(self._rank)})
                 publish()
                 logger.info("Trainer sizing rank={} {}", self._rank, report)
-            if report["outcome"] != "passed":
+            if report["outcome"] != SIZING_PASSED:
                 raise RuntimeError(f"Trainer sizing failed before rollouts: rank={self._rank} {report}")
             return report
 

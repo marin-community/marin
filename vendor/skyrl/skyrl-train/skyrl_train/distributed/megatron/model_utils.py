@@ -135,7 +135,6 @@ def from_parallel_logits_to_logprobs_packed_sequences(
     vocab_parallel_logits = vocab_parallel_logits.squeeze(0)
     batch_size = cu_seqlens_padded.shape[0] - 1
     cp_size = 1 if cp_group is None else torch.distributed.get_world_size(cp_group)
-    cp_rank = 0 if cp_group is None else torch.distributed.get_rank(cp_group)
 
     rolled_targets = packed_next_token_targets(target, cu_seqlens_padded, cp_group)
     vocab_parallel_logits = vocab_parallel_logits.unsqueeze(0)
