@@ -404,20 +404,33 @@ one-H100 lifecycle and delivery qualification above remains bound to its own
 source and fixture.
 [Observed full-model startup](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.1-coordinator-227e2e97)
 
-Corrected diagnostic `2026.11.24.2`, executing source `40723ba125`, was
-submitted at 04:52 UTC on November 24. At the 05:02 UTC check, the coordinator
-and all five GPU tasks were running with zero failures or preemptions. The
-40-H100 allocation retains 32 learner GPUs and eight for the existing vLLM
-group, BATCH priority, zero automatic retries and two-hour execution caps.
-The launcher now explicitly delivers the existing W&B key; the unchanged
-logger authenticated and began syncing the run. The accepted coordinator and
-GPU source bundles matched all 4,640 frozen source files. Actual pod resources
-and security settings matched the reviewed request, and the staged coordinator
-hash matched its frozen source. The run formed its Ray cluster and began vLLM
-initialization. No new learner update, restore, native shutdown sample or
-updated-policy generation was verified at that check. This remains a diagnostic
-of the full-model shutdown failure. The five-second natural process-exit
-deadline remains unchanged.
+Corrected diagnostic `2026.11.24.2`, executing source `40723ba125`, completed
+one finite update on all four native learner ranks, each using eight GPUs.
+Model and Adam fingerprints changed,
+with schemas and layouts preserved. The 40-H100 run used 32 learner GPUs and
+eight for the existing vLLM group, BATCH priority and zero automatic retries.
+Explicit delivery of the W&B key restored normal logging. The coordinator and
+GPU source bundles matched all 4,640 frozen files. Compared with the original
+`2026.11.23.1` run, all 693 payload leaves matched after applying the 17 reviewed
+changes to attempt paths, diagnostic observation and the execution cap.
+
+The checkpoint writer completed at 05:27 UTC on November 24. The fetched
+321-byte metadata records step 1, policy version 1 and the same Snowball SFT
+initializer. The array payload, reported as 749.66 GiB, was not independently
+decoded. The run then failed
+at the unchanged five-second natural process-exit limit, before restore.
+The reported failure was native rank 2 on physical task 4. The observer watched
+native rank 0 on physical task 3 and hit its own deadline after the native
+shutdown acknowledgment. Its helpers
+were safely retired, but it retained no qualifying C++ stack. The automatic
+attach display's single `ioctl` frame does not identify the failed rank's exit
+cause. The underlying exit cause remains unknown. The coordinator and GPU jobs
+each failed once, with no preemptions; all five GPU pods were verified absent.
+Iris task-output archives were unavailable. Independently fetched per-rank
+state proofs and error tracebacks support these results. The next observer must
+save frames as they are collected and cover every native rank. Restore, update
+two, updated-policy publication and generation, and the matched 25-update
+Megatron-versus-Levanter comparison remain unverified.
 [Corrected observed diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.2-coordinator-8a56842f)
 · [W&B run](https://wandb.ai/marin-community/marin-snowball-curriculum/runs/02o09b9k)
 
