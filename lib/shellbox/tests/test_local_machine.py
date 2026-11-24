@@ -97,11 +97,9 @@ print(started)
 """
 # The shared native root-delivery grading quiesce (taskcompendium's harbor.root_delivery,
 # whose grading collect runs it first, before restoring private verifier material): kill
-# every process outside the exec's own ancestry, sparing only PID 1 and zombies. While the
-# machine's keeper was the guest init's child, this killed the keeper, bwrap exited 137,
-# and every graded attempt died as "Machine is closed". The grader's current revision also
-# spares the sleeper by its exact argv; these copies predate that spare, so they exercise
-# the harsher form, where the init must keep the machine alive by respawning the sleeper.
+# every process outside the exec's own ancestry, sparing PID 1 and zombies. The grader
+# also spares the keeper sleeper by its exact argv; these copies omit that spare, so a
+# machine survives them only because its init respawns the sleeper.
 ROOT_DELIVERY_QUIESCE_PROGRAM = """\
 import os, signal
 
@@ -626,7 +624,12 @@ def test_the_guest_init_reaps_an_orphaned_background_process(factory):
     on_machine(factory, SPEC, scenario)
 
 
-def quiesce_survival_scenario(factory: LocalMachineFactory, quiesce: tuple[str, ...]) -> None:
+@pytest.mark.parametrize(
+    "quiesce",
+    [("python3", "-I", "-c", ROOT_DELIVERY_QUIESCE_PROGRAM), ("bash", "-c", ROOT_DELIVERY_QUIESCE_SCRIPT)],
+    ids=["python", "shell"],
+)
+def test_machine_survives_the_root_delivery_quiesce(factory, quiesce):
     """Kill a stray with the quiesce and require the machine to stay open."""
 
     async def scenario(machine):
@@ -644,15 +647,6 @@ def quiesce_survival_scenario(factory: LocalMachineFactory, quiesce: tuple[str, 
         assert (await machine.run(Command(("printf", "alive")))).stdout == b"alive"
 
     on_machine(factory, SPEC, scenario)
-
-
-@pytest.mark.parametrize(
-    "quiesce",
-    [("python3", "-I", "-c", ROOT_DELIVERY_QUIESCE_PROGRAM), ("bash", "-c", ROOT_DELIVERY_QUIESCE_SCRIPT)],
-    ids=["python", "shell"],
-)
-def test_machine_survives_the_root_delivery_quiesce(factory, quiesce):
-    quiesce_survival_scenario(factory, quiesce)
 
 
 def test_cancelled_creation_reclaims_a_process_before_its_handle_is_returned(factory, tmp_path, monkeypatch):

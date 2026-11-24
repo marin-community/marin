@@ -83,12 +83,10 @@ done
 The init owns the machine's lifecycle and reaps its orphans. Guest processes
 whose parents exit reparent to PID 1, so only the init can collect them, and
 guest code observes a dead daemon through ``kill -0`` and ``/proc`` just as it
-does on the Docker backend's ``--init``. ``wait`` blocks on the sleeper while
-collecting every reparented orphan, and the respawn loop keeps the sleeper's
-``sleep 2147483647`` argv alive: grading quiesces spare the machine's PID 1
-and also spare exactly that argv, and an init that would exit when the sleeper
-dies would close the machine mid-grading the way the pre-``--as-pid-1``
-keeper died.
+does on the Docker backend's ``--init``. The init also keeps the sleeper
+``sleep 2147483647`` running: grading quiesces spare the machine's PID 1 and
+spare exactly that argv, and an init that would exit when the sleeper dies
+would close the machine mid-grading.
 """
 NPROC_HEADROOM = 256
 """Tasks a command may add beyond the host's task count when it starts; RLIMIT_NPROC counts all of a user's tasks."""
