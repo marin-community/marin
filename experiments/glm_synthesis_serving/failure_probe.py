@@ -6,6 +6,7 @@
 Writes the result matrix to in-region S3 (short-job stdout is not reliably retrievable).
 """
 
+import argparse
 import json
 import threading
 
@@ -38,15 +39,19 @@ def _body(seed: int, prompt_tokens: int = 48_000) -> dict:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--endpoint-name", default=None, help="Target endpoint (default: the pool's).")
+    args = parser.parse_args()
+    endpoint = args.endpoint_name or pool.ENDPOINT_NAME
     client = iris_ctx().client
-    resolved = client.resolve_endpoint("/serve/glm-5-3-flash").rstrip("/")
-    jwt = client.mint_endpoint_token("/serve/glm-5-3-flash").token
+    resolved = client.resolve_endpoint(endpoint).rstrip("/")
+    jwt = client.mint_endpoint_token(endpoint).token
     headers = {"Authorization": f"Bearer {jwt}"}
+    proxied_name = endpoint.removeprefix("/serve/")
     urls = {
-        "proxied": "http://iris-controller-svc:10000/proxy/serve.glm-5-3-flash/v1/chat/completions",
+        "proxied": f"http://iris-controller-svc:10000/proxy/{proxied_name}/v1/chat/completions",
         "direct": resolved + "/v1/chat/completions",
-    }
-    results: dict[str, dict] = {}
+    }    results: dict[str, dict] = {}
     for name, url in urls.items():
         outcomes: list[dict] = []
         lock = threading.Lock()
@@ -65,7 +70,7 @@ def main() -> None:
                                 "body": response.read()[:600].decode(errors="replace"),
                             }
             except Exception as error:
-                outcome = {"error": str(error)[:200]}
+                outcome = {"error": f"{type(error).__name__}: {error}"[:240]}
             with lock:
                 outcomes.append({"seed": seed, **outcome})
 
