@@ -19,6 +19,7 @@ from experiments.post_training.task_curation.difficulty.audit import audit_captu
 from experiments.post_training.task_curation.difficulty.catalog import (
     DEFAULT_APPLET,
     available_artifact_uris,
+    exclude_catalog_sources,
     served_catalog,
 )
 from experiments.post_training.task_curation.difficulty.controller import launch_controller, run_controller
@@ -87,6 +88,7 @@ def main() -> None:
             budget.add_argument("--gpu-hour-budget", type=float)
             budget.add_argument("--unlimited-gpu-hours", action="store_true")
             command.add_argument("--serving-pool")
+            command.add_argument("--exclude-source", action="append", default=[], help="Quarantine this source ID")
     args = parser.parse_args()
     configure_coreweave_s3()
     if args.command == "record-source-repairs":
@@ -124,6 +126,7 @@ def main() -> None:
             frozenset(args.provider_available),
             args.gpu_hour_budget,
             args.serving_pool,
+            excluded_sources=frozenset(args.exclude_source),
         )
         return
     if bool(args.queue) != bool(args.queue_sha256):
@@ -133,6 +136,8 @@ def main() -> None:
         if args.queue
         else served_catalog(args.applet_id, ledger=args.ledger)
     )
+    if args.command == "reconcile":
+        catalog = exclude_catalog_sources(catalog, frozenset(args.exclude_source))
     rows = read_rows(args.ledger)
     policy = CoveragePolicy()
     cells = cells_for_catalog(rows, catalog, policy)
@@ -154,6 +159,7 @@ def main() -> None:
             args.gpu_hour_budget,
             args.secrets_env,
             args.serving_pool,
+            excluded_sources=frozenset(args.exclude_source),
         )
         return
     if args.command == "plan":

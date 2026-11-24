@@ -23,7 +23,11 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 
 from experiments.post_training.task_curation.difficulty.capacity import available_provider_solvers
-from experiments.post_training.task_curation.difficulty.catalog import available_artifact_uris, served_catalog
+from experiments.post_training.task_curation.difficulty.catalog import (
+    available_artifact_uris,
+    exclude_catalog_sources,
+    served_catalog,
+)
 from experiments.post_training.task_curation.difficulty.executor import EscalationLog, collect_finished, reconcile_once
 from experiments.post_training.task_curation.difficulty.iris_backend import IrisBackend
 from experiments.post_training.task_curation.difficulty.launch import cpu_job_command
@@ -66,6 +70,8 @@ def run_controller(
     providers: frozenset[Solver],
     budget_gpu_hours: float | None,
     serving_pool: str | None = None,
+    *,
+    excluded_sources: frozenset[str],
 ) -> None:
     context = iris_ctx()
     backend = IrisBackend(context.client, context.job_id, ledger, serving_pool)
@@ -86,9 +92,13 @@ def run_controller(
         if actual_gpus != SOLVER_POOL_GPU_COUNT:
             raise ValueError(f"Solver pools request {actual_gpus} GPUs; expected {SOLVER_POOL_GPU_COUNT}")
     reporting_started = datetime.now(UTC)
+    if excluded_sources:
+        LOGGER.warning("DIFFICULTY_SOURCE_QUARANTINE %s", json.dumps(sorted(excluded_sources)))
     while True:
         try:
-            catalog = served_catalog(applet_id, token_provider=provider, ledger=ledger)
+            catalog = exclude_catalog_sources(
+                served_catalog(applet_id, token_provider=provider, ledger=ledger), excluded_sources
+            )
         except (requests.ConnectionError, requests.Timeout):
             LOGGER.exception("DIFFICULTY_CATALOG_UNAVAILABLE; retrying after %d seconds", CONTROLLER_INTERVAL)
             time.sleep(CONTROLLER_INTERVAL)
@@ -155,6 +165,8 @@ def launch_controller(
     budget_gpu_hours: float | None,
     secrets_env: Path | None = None,
     serving_pool: str | None = None,
+    *,
+    excluded_sources: frozenset[str],
 ) -> None:
     """Submit one CPU parent; its inherited client owns every remediation child."""
     for job in list_iris_jobs():
@@ -201,6 +213,8 @@ def launch_controller(
     )
     if serving_pool is not None:
         command.extend(["--serving-pool", serving_pool])
+    for source in sorted(excluded_sources):
+        command.extend(["--exclude-source", source])
     if once:
         command.append("--once")
     for solver in sorted(providers):

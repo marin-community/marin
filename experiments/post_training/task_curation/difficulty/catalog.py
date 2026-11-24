@@ -19,16 +19,24 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_s
 
 DECLARATION_BATCH_SIZE = 4
 DEFAULT_APPLET = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
+# Current-schema metadata for every retained panel matching the served population.
+# The migration audit beside sources.json verifies unchanged panel/sample/release bindings.
 DEFAULT_QUEUES = (
     (
-        "s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.13.8/samples/sources.json",
-        "9d318f52e75dd0e76acaf450f3b824e236e9666b12458bd8dc517335fbfc5695",
-    ),
-    (
-        "s3://marin-rno2a/marin/rl-data/atlas/difficulty/2026.11.17.5/samples/sources.json",
-        "5b2f937f100b2d73fb2fbc92eb9d14d9e0533dfef46272500a58eb69061e0a01",
+        "s3://marin-us-east-08a/marin/rl-data/atlas/difficulty-engine-pools/20261123-phase2/"
+        "queues/current-schema-20261124/"
+        "fa94574a3e7e50055993631ccd148c46033d0b552c58cb08281f1f89620a5741/sources.json",
+        "fa94574a3e7e50055993631ccd148c46033d0b552c58cb08281f1f89620a5741",
     ),
 )
+
+
+def exclude_catalog_sources(catalog: Sequence[CatalogSource], excluded_sources: frozenset[str]) -> list[CatalogSource]:
+    """Apply explicit source quarantines and reject unknown source IDs."""
+    missing = excluded_sources - {source.source_id for source in catalog}
+    if missing:
+        raise ValueError(f"Excluded sources are absent from the served catalog: {sorted(missing)}")
+    return [source for source in catalog if source.source_id not in excluded_sources]
 
 
 def available_artifact_uris(cells: Sequence[CellState]) -> frozenset[str]:

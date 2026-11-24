@@ -72,13 +72,21 @@ def test_controller_resolves_versioned_credentials_before_external_submission(tm
                     "priority": command[command.index("--priority") + 1],
                     "failure_retries": command[command.index("--max-retries") + 1],
                     "unlimited_gpu_hours": "--unlimited-gpu-hours" in command,
+                    "excluded_source": command[command.index("--exclude-source") + 1],
                 }
             )
         )
 
     monkeypatch.setattr(controller.subprocess, "run", scheduler_submit)
     controller.launch_controller(
-        "ledger", "applet", False, frozenset(), "generation", None if serving_pool else 800, serving_pool=serving_pool
+        "ledger",
+        "applet",
+        False,
+        frozenset(),
+        "generation",
+        None if serving_pool else 800,
+        serving_pool=serving_pool,
+        excluded_sources=frozenset({"held-source"}),
     )
     assert requested == [
         "projects/hai-gcp-models/secrets/DAYTONA_RL_API_KEY/versions/1",
@@ -89,6 +97,7 @@ def test_controller_resolves_versioned_credentials_before_external_submission(tm
     assert submitted["priority"] == ("production" if serving_pool else "interactive")
     assert submitted["failure_retries"] == ("3" if serving_pool else "0")
     assert submitted["unlimited_gpu_hours"] == bool(serving_pool)
+    assert submitted["excluded_source"] == "held-source"
 
 
 @pytest.mark.parametrize("default_parent", [False, True], ids=["controller-launch", "reproduce-default-parent"])
@@ -152,7 +161,9 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
             controller, "load_credentials", lambda profile: SimpleNamespace(edge_refresh_token="fixture")
         )
         monkeypatch.setattr(controller, "subprocess", SimpleNamespace(run=scheduler_submit))
-        controller.launch_controller("ledger", "applet", False, frozenset(), "generation", 800)
+        controller.launch_controller(
+            "ledger", "applet", False, frozenset(), "generation", 800, excluded_sources=frozenset()
+        )
         backend = IrisBackend(client, parent, str(tmp_path / "ledger"))
         action = RebuildEnvironmentArtifact("s3://fixture/artifact", (), ())
         manifest = "s3://fixture/manifest.json"
@@ -183,7 +194,7 @@ def test_controller_recovers_catalog_connection_failure_before_reconciling(tmp_p
         catalog_calls.append(True)
         if len(catalog_calls) == 1:
             raise requests.ConnectionError("[Errno 101] Network is unreachable")
-        return [source]
+        return [source, CatalogSource("held", "revision", (("task", "sha"),), "queue", "digest")]
 
     monkeypatch.setattr(controller, "iris_ctx", lambda: SimpleNamespace(client=None, job_id="fixture"))
     monkeypatch.setattr(controller, "IrisBackend", lambda *args: SimpleNamespace(jobs=lambda: []))
@@ -193,7 +204,7 @@ def test_controller_recovers_catalog_connection_failure_before_reconciling(tmp_p
     monkeypatch.setattr(controller, "available_artifact_uris", lambda cells: frozenset())
     monkeypatch.setattr(controller.time, "sleep", sleeps.append)
     monkeypatch.setattr(controller, "reconcile_once", lambda ledger, sources, *args: reconciled.append(sources) or {})
-    controller.run_controller(str(tmp_path), "fixture", True, frozenset(), 800)
+    controller.run_controller(str(tmp_path), "fixture", True, frozenset(), 800, excluded_sources=frozenset({"held"}))
     assert reconciled == [[source]]
     assert sleeps == [controller.CONTROLLER_INTERVAL]
 
@@ -210,7 +221,9 @@ def test_launcher_loads_provider_credentials_from_explicit_file(tmp_path, monkey
     monkeypatch.setattr(
         controller.subprocess, "run", lambda command, **kwargs: accepted.append((command, kwargs["env"]))
     )
-    controller.launch_controller("ledger", "applet", False, frozenset(), "generation", 800, secret_file)
+    controller.launch_controller(
+        "ledger", "applet", False, frozenset(), "generation", 800, secret_file, excluded_sources=frozenset()
+    )
     ((command, environment),) = accepted
     assert {name: environment[name] for name in names} == {name: f"file-{name}" for name in names}
     assert not any("file-" in argument for argument in command)

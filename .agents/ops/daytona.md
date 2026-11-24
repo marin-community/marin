@@ -4,6 +4,29 @@ Use this runbook when Harbor trials fail during sandbox setup, snapshot quota
 prevents a launch, or completed trials leave provider capacity occupied. Iris
 job operations remain in [Iris OPS](../../lib/iris/OPS.md).
 
+## Difficulty queue schema changes
+
+Difficulty workers validate byte-bound `sources.json` queues against the current
+`DifficultySource` schema before contacting a solver. A validation error such as
+`declaration.name: extra_forbidden` is a queue metadata failure. Keep healthy
+solver pools running while correcting the controller's queue bindings.
+
+Publish a new queue with current served declarations only when each declaration's
+population revision matches its retained panel. Preserve the panel, sample, task
+hashes, release and converter bindings, and record the old and new queue digests.
+Validate every replacement row with `DifficultySource` and read back the published
+bytes before updating `DEFAULT_QUEUES`. Keep the old queues immutable. Queue URI
+and digest are part of the action identity, so the corrected binding permits a
+fresh attempt without deleting previous submissions or writing scored evidence.
+
+Use repeatable `reconcile --exclude-source SOURCE_ID` arguments to quarantine a
+source whose independent repair is pending. The launcher forwards these IDs to
+the remote controller, which excludes them before planning any solver's work and
+rejects unknown IDs. Record the exclusions with the controller handoff; remove
+them on a controller relaunch only after the source's canonical release and new
+panel binding are verified. An entry in `repair-verifications` prioritizes a
+source and does not quarantine it.
+
 ## Credentials and account selection
 
 Agentic RL uses the dedicated `DAYTONA_RL_API_KEY`. A generic Daytona key can
