@@ -18,8 +18,8 @@ import pytest
 
 pytest.importorskip("daytona")
 
+from daytona.v2 import ClientTimeoutError, WaitResult
 from daytona.v2 import ConnectionError as ProviderConnectionError
-from daytona.v2 import WaitResult
 from shellbox.backends.daytona.machine import DaytonaMachine
 from shellbox.backends.daytona.process import decode_frame_data
 from shellbox.http_service import HttpResponse, serve_http
@@ -107,6 +107,8 @@ class ProcessHandle:
         yield SimpleNamespace(type="eof", cursor=str(index))
 
     async def write_stdin(self, data: bytes) -> None:
+        if self.api.input_failure is not None:
+            raise self.api.input_failure
         self.process.child.stdin.write(data)
         await self.process.child.stdin.drain()
 
@@ -132,6 +134,7 @@ class ProcessAPI:
         self.cut_at: int | None = None
         self.warning_at: int | None = None
         self.drop_state = False
+        self.input_failure: Exception | None = None
 
     async def start(self, *, argv, cwd, env, stdin, tag):
         assert stdin == "open"
@@ -176,7 +179,7 @@ def session_machine(tmp_path):
     resources = AsyncExitStack()
     resources.push_async_callback(api.close)
     machine = DaytonaMachine(
-        SimpleNamespace(process=api),
+        SimpleNamespace(id="sbx_fixture", process=api),
         MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path), env={"TAG": "spec"}),
         resources,
     )
@@ -442,6 +445,22 @@ def test_daytona_machine_close_reclaims_active_process_and_releases_reader(sessi
             assert await asyncio.wait_for(reading, 5) == b""
             assert not api.processes
             assert all(child.returncode is not None for child in api.children)
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_daytona_process_reports_a_provider_timeout_on_input_as_a_lost_connection(session_machine):
+    async def scenario():
+        machine, api = session_machine
+        try:
+            session = await machine.open_process(Command((sys.executable, "-c", "import signal; signal.pause()")))
+            api.input_failure = ClientTimeoutError("Failed to send process input", status_code=408)
+            # Callers retry a lost connection; the SDK's own timeout type is not a TimeoutError.
+            with pytest.raises(ConnectionError):
+                await session.write(b"request\n")
+            await session.close()
         finally:
             await machine.close()
 

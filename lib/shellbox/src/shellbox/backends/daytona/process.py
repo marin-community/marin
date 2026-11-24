@@ -7,6 +7,7 @@ import asyncio
 import base64
 import signal
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 
 from daytona import DaytonaConnectionError, DaytonaNotFoundError
 from daytona.v2 import AsyncProcessHandle, AsyncProcessService, WaitResult
@@ -44,7 +45,11 @@ def exit_status(result: WaitResult) -> int:
 
 
 class DaytonaProcessSession(StreamProcessSession):
-    """A provider process whose tag owns every process it starts."""
+    """A provider process whose tag owns every process it starts.
+
+    ``provider_failures`` translates the provider's errors as the machine's commands do, so a lost
+    connection raises ``ConnectionError`` and a stopped sandbox ``MachineTerminated``.
+    """
 
     def __init__(
         self,
@@ -54,8 +59,10 @@ class DaytonaProcessSession(StreamProcessSession):
         stderr_limit: int,
         release: Callable[["DaytonaProcessSession"], None],
         failed_cleanup: Callable[[], Awaitable[None]],
+        provider_failures: Callable[[], AbstractAsyncContextManager[None]],
     ):
         self._process = process
+        self._provider_failures = provider_failures
         self.name = name
         self._release = release
         self._failed_cleanup = failed_cleanup
@@ -74,7 +81,7 @@ class DaytonaProcessSession(StreamProcessSession):
         )
 
     async def start(self, argv: tuple[str, ...], cwd: str | None, environment: dict[str, str]) -> None:
-        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+        async with asyncio.timeout(INTERRUPT_TIMEOUT), self._provider_failures():
             self._handle = await self._process.start(argv=argv, cwd=cwd, env=environment, stdin="open", tag=self.name)
         self._logs = asyncio.create_task(self._follow())
 
@@ -84,27 +91,28 @@ class DaytonaProcessSession(StreamProcessSession):
         resumes = 0
         backoff = retry_backoff()
         try:
-            while True:
-                try:
-                    async for event in self._handle.stream_logs(cursor=cursor, encoding="base64"):
-                        if event.type == "log":
-                            data = decode_frame_data(event.frame.data)
-                            if event.frame.channel == "stdout":
-                                await self._output.append(data)
-                            else:
-                                self.capture_stderr(data)
-                        elif event.type == "warning":
-                            raise RuntimeError(f"Daytona dropped process output: {event.message}")
-                        elif event.type == "state":
-                            self._code = exit_status(event.result)
-                        # Advance only past delivered events, so a resumed stream replays nothing twice.
-                        cursor, resumes = event.cursor, 0
-                    break
-                except DaytonaConnectionError:
-                    resumes += 1
-                    if resumes > STREAM_RESUMES:
-                        raise
-                    await asyncio.sleep(backoff.next_interval())
+            async with self._provider_failures():
+                while True:
+                    try:
+                        async for event in self._handle.stream_logs(cursor=cursor, encoding="base64"):
+                            if event.type == "log":
+                                data = decode_frame_data(event.frame.data)
+                                if event.frame.channel == "stdout":
+                                    await self._output.append(data)
+                                else:
+                                    self.capture_stderr(data)
+                            elif event.type == "warning":
+                                raise RuntimeError(f"Daytona dropped process output: {event.message}")
+                            elif event.type == "state":
+                                self._code = exit_status(event.result)
+                            # Advance only past delivered events, so a resumed stream replays nothing twice.
+                            cursor, resumes = event.cursor, 0
+                        break
+                    except DaytonaConnectionError:
+                        resumes += 1
+                        if resumes > STREAM_RESUMES:
+                            raise
+                        await asyncio.sleep(backoff.next_interval())
             if self._code is None:
                 raise RuntimeError("Daytona process stream ended without an exit status")
         except asyncio.CancelledError:
@@ -123,7 +131,7 @@ class DaytonaProcessSession(StreamProcessSession):
         for offset in range(0, len(data), STDIN_CHUNK_BYTES):
             if self._closing is not None or self._finished.is_set():
                 raise MachineTerminated("Daytona process session is closed")
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with asyncio.timeout(INTERRUPT_TIMEOUT), self._provider_failures():
                 await self._handle.write_stdin(data[offset : offset + STDIN_CHUNK_BYTES])
 
     async def _wait_provider(self) -> int:
