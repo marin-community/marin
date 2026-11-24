@@ -6,7 +6,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import QualifiedSourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration, source_display_name
+from finestore.rl.status_taxonomy import PendingStage
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
@@ -25,8 +26,7 @@ def test_curriculum_release_retains_qualified_pins_and_private_tier():
     converter_revision = "fixture-converter"
     declaration = QualifiedSourceDeclaration(
         id="Marin:curriculum",
-        name="curriculum",
-        display_name="Curriculum",
+        display_name=source_display_name("Marin:curriculum"),
         origin="Marin",
         upstream_dataset="curriculum",
         upstream_name="Curriculum",
@@ -57,6 +57,7 @@ def test_curriculum_release_retains_qualified_pins_and_private_tier():
         is_benchmark=False,
         kind="Dataset",
         status="Pending",
+        stage=PendingStage.MEASUREMENTS_PENDING,
         pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": converter_revision, "files": []},
         daytona_safety="not_applicable",
         daytona_snapshot_count=0,

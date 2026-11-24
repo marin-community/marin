@@ -57,6 +57,7 @@ RELOCATED_SERVER_FILES = (
     "server/audit.py",
     "server/restrictions.py",
     "server/source_counts.py",
+    "server/typed_status.py",
 )
 
 

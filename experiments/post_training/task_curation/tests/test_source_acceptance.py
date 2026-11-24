@@ -7,19 +7,103 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from finestore.rl.curation import OversightEvidence, OversightLevel
+from finestore.rl.curation import DatasetRelease, OversightEvidence, OversightLevel
 from finestore.rl.status_taxonomy import DataRestriction, SourceStatus
+from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation import sources as source_catalog
 from experiments.post_training.task_curation.datasets import native_releases
+from experiments.post_training.task_curation.datasets.litecoder import tasks as litecoder
+from experiments.post_training.task_curation.datasets.mcp_atlas_easy import tasks as mcp_atlas_easy
+from experiments.post_training.task_curation.datasets.mimo import tasks as mimo
+from experiments.post_training.task_curation.datasets.terminal_lego import tasks as terminal_lego
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
+from experiments.post_training.task_curation.retained_release import RetainedCohort
 from experiments.post_training.task_curation.source import (
     RlDataSource,
     SourceInfo,
     SourceOrigin,
+    SourceReference,
     TaskFormat,
 )
 from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format, runnable_sources
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+
+FIXTURE_COHORT_REPO = "open-athena/fixture-tasks"
+FIXTURE_COHORT_REVISION = "a" * 40
+
+
+def _inject_offline_prebuilt_registries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serve consistent fixture qualification documents for the prebuilt catalog reads.
+
+    ``configured_sources`` validates each prebuilt dataset's pinned qualification
+    document against its declared release. Offline unit tests cannot read the
+    private registry archive, so each dataset module's registry read returns a
+    consistent fixture document; the download boundary refuses any network read.
+    """
+    release = DatasetRelease(
+        repo=FIXTURE_COHORT_REPO,
+        revision=FIXTURE_COHORT_REVISION,
+        url=f"https://huggingface.co/datasets/{FIXTURE_COHORT_REPO}/tree/{FIXTURE_COHORT_REVISION}",
+    )
+
+    def fixture_info(prefix: str) -> SourceInfo:
+        return SourceInfo(
+            origin=SourceOrigin.MARIN,
+            upstream_dataset=f"fixture/{prefix}",
+            upstream_name=f"{prefix} fixture",
+            build_path="fixture prebuilt qualification",
+            current_release=release,
+        )
+
+    def admitted_document(prefix: str) -> dict:
+        info = fixture_info(prefix)
+        config = PrebuiltCohort(
+            name="fixture",
+            version="fixture-1",
+            repo=release.repo,
+            revision=release.revision,
+            expected_rows=1,
+            intended_use=IntendedUse.TRAIN,
+        )
+        return {
+            "source_id": info.id,
+            "original_info": info,
+            "config": config,
+            "admission": {"filtration": {"original_count": config.expected_rows}},
+        }
+
+    def eval_document(prefix: str) -> dict:
+        info = fixture_info(prefix)
+        config = PrebuiltCohort(
+            name="fixture",
+            version="fixture-1",
+            repo=release.repo,
+            revision=release.revision,
+            expected_rows=1,
+            intended_use=IntendedUse.EVAL,
+        )
+        return {"source_id": info.id, "info": info, "cohort": config}
+
+    mimo_info = fixture_info("mimo")
+    mimo_cohort = RetainedCohort(
+        name="fixture",
+        version="fixture-1",
+        release=release,
+        original_dataset=SourceReference(release.repo, release.revision, release.url),
+        expected_rows=1,
+        tasks_parquet_sha256="a" * 64,
+        intended_use=IntendedUse.TRAIN,
+        evidence_url=f"{release.url}/evidence",
+    )
+    monkeypatch.setattr(litecoder, "read_registry_json", lambda path: admitted_document("litecoder"))
+    monkeypatch.setattr(terminal_lego, "read_registry_json", lambda path: admitted_document("terminal-lego"))
+    monkeypatch.setattr(mcp_atlas_easy, "read_registry_json", lambda path: eval_document("mcp-atlas-easy"))
+    monkeypatch.setattr(
+        mimo,
+        "read_registry_json",
+        lambda path: {"source_id": mimo_info.id, "info": mimo_info, "cohort": mimo_cohort},
+    )
 
 
 @pytest.mark.parametrize(
@@ -31,6 +115,7 @@ from experiments.post_training.task_curation.tests.numbers_pipeline import numbe
 )
 def test_new_lean_sources_wait_for_measurement_before_entering_the_atlas_catalog(monkeypatch, source_id, dataset):
     monkeypatch.setattr(native_releases, "read_registry_json", lambda path: {"entries": []})
+    _inject_offline_prebuilt_registries(monkeypatch)
     pending = {source.info.id: source for source in source_catalog.PENDING_MEASUREMENT_SOURCES}
     source = pending[source_id]
     assert source.dataset.name == dataset

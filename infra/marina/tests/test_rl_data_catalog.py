@@ -52,6 +52,7 @@ from finestore.rl.curation import (
     SourceOrigin,
     SourceQualityResult,
     register_catalog,
+    source_display_name,
 )
 from finestore.rl.curation import (
     QualifiedSourceDeclaration as SourceDeclaration,
@@ -460,9 +461,9 @@ def test_status_inventory_matches_source_statuses_without_loading_task_evidence(
     fields = (
         "id",
         "display_name",
-        "name",
         "status",
         "stage",
+        "replacement_source_id",
         "exclusion_claims",
         "notes",
         "consumer_findings",
@@ -814,8 +815,7 @@ def publish_sample(
     declaration = SourceDeclaration(
         license_receipt=fixture_license(source_id, FIXTURE_DATASET, FIXTURE_REVISION),
         id=source_id,
-        name="Marin:math",
-        display_name="Math",
+        display_name=source_display_name(source_id),
         origin=origin,
         build_path="test",
         upstream_dataset=source_id.partition(":")[2],
@@ -947,8 +947,7 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
     declarations = [
         SourceDeclaration(
             id=identifier,
-            name=identifier,
-            display_name=identifier.upper(),
+            display_name=source_display_name(identifier),
             origin=SourceOrigin.MARIN,
             build_path="test",
             upstream_dataset=identifier.partition(":")[2],
@@ -1137,7 +1136,12 @@ def test_retired_curriculum_is_rejected_before_idempotency_or_sql(tmp_path, monk
     path = curriculum_release(tmp_path)
     if retired_source == "MarinSkyRL:aime24":
         release = json.loads(path.read_text())
-        release["inventory"][0].update(id=retired_source, origin=SourceOrigin.HUGGINGFACEH4, upstream_dataset="aime24")
+        release["inventory"][0].update(
+            id=retired_source,
+            display_name=source_display_name(retired_source),
+            origin=SourceOrigin.HUGGINGFACEH4,
+            upstream_dataset="aime24",
+        )
         release["sources"][0]["source_id"] = retired_source
         path.write_text(json.dumps(release))
     inputs = [path, tmp_path / "coverage.json", tmp_path / "tasks.parquet", tmp_path / "statistics.parquet"]
@@ -1614,7 +1618,14 @@ def test_atlas_blocks_invalid_admission_census_without_replacing_selected_catalo
         with store.transaction() as transaction:
             transaction.table(INVENTORY).add(changed)
     catalog = CurationCatalog(root)
-    with pytest.raises(ValueError, match=r"Admission census|Actor census input|without runnable graders"):
+    # The stale census is refused at declaration validation: the model binds the
+    # actor census to the declaration's exact inputs, so the versioned snapshot
+    # reader refuses the row before the census binding runs. The missing and
+    # no-grader mutations stay schema-valid and are refused by the binding.
+    with pytest.raises(
+        ValueError,
+        match=r"Admission census|Actor census input|without runnable graders|refusing to guess a conversion",
+    ):
         load_surveyed_catalog(
             catalog,
             catalog_query,
@@ -1798,6 +1809,7 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
                         {
                             **historical,
                             "id": "Marin:historical",
+                            "display_name": source_display_name("Marin:historical"),
                             "consumer_receipt": (
                                 consumer_receipt("Marin:historical", benchmark_train.actor_census_input).model_dump(
                                     mode="json"
@@ -2223,7 +2235,15 @@ def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_d
             for key, value in store.read_view().point(INVENTORY, snapshot_id="frozen", id=current).items()
             if key in SnapshotSource.model_fields
         }
-        record.update(snapshot_id="legacy", id=old, declaration={**record["declaration"], "id": old})
+        record.update(
+            snapshot_id="legacy",
+            id=old,
+            declaration={
+                **record["declaration"],
+                "id": old,
+                "display_name": source_display_name(old),
+            },
+        )
         assessment = {
             key: value
             for key, value in store.read_view().point(ASSESSMENTS, pipeline_key="frozen").items()
@@ -2317,7 +2337,12 @@ def test_historical_curriculum_artifacts_load_without_rewriting_inputs(catalog_d
             row["source_id"] = old
     for row in release["inventory"]:
         if row["id"] == "Marin:a":
-            row.update(id=old, origin=SourceOrigin.HUGGINGFACEH4, upstream_dataset="aime24")
+            row.update(
+                id=old,
+                display_name=source_display_name(old),
+                origin=SourceOrigin.HUGGINGFACEH4,
+                upstream_dataset="aime24",
+            )
     path.write_text(json.dumps(release))
     inputs = [path, tmp_path / "coverage.json", tmp_path / "tasks.parquet", tmp_path / "statistics.parquet"]
     for parquet in inputs[2:]:
@@ -3358,8 +3383,7 @@ def publish_full_bound_source(
     declaration = SourceDeclaration(
         license_receipt=fixture_license(source_id, "fixture", "1"),
         id=source_id,
-        name="fullqc",
-        display_name="Full QC",
+        display_name=source_display_name(source_id),
         origin=SourceOrigin.MARIN,
         build_path="test",
         upstream_dataset="fullqc",
