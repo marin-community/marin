@@ -66,7 +66,7 @@
       "uri": "s3://marin-us-east-08a/marin/rl-data/atlas/preview-release/20261122-r39-admissions-refresh-v1/curriculum-composition/composed/release.json"
     },
     "registry_index": {
-      "sha256": "f9418100d846926b2877a37ea3d8744cf57b1e3bd2b80af01da7cf7d2f7bc400",
+      "sha256": "c2a0a8c4cc60795760f367df8a9c762526a9dd8e9f21521aa6fe350677aa75bf",
       "uri": "experiments/post_training/task_curation/release_stages/plans/registry-index.json"
     },
     "source_counts": {
@@ -416,7 +416,7 @@
   "rebound_tasks": 0,
   "region_prefix": "s3://marin-us-east-02a/marin/rl-data/atlas/",
   "release_id": "m3-dryrun",
-  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v13",
+  "release_root": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261124-m3-dryrun-v14",
   "scan_regions": {
     "us-east-02a": "s3://marin-us-east-02a/marin/rl-data/atlas/"
   },

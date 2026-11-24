@@ -1,5 +1,5 @@
 {
-  "revision": "c2371b32851f70594f213b90317d18359e444a04",
+  "revision": "3778d69f498ce95cf51f82e1ea3362cc2418e6d7",
   "sources": {
     "AI-MO:numina_math": {
       "input_sha256": "56b745a538dad1c11afd3f5f954f73c43605435b08d296a75836ae5b8a0b1849",
@@ -566,6 +566,11 @@
       "sha256": "c5e2cf44efb33996322868c7e48eff8d9f2286cd5160b259aa91f779ab82b37c",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/fweindel-fineenvs/2026.11.17.1/admission-v1/preseal-v1/source-identities.json"
     },
+    "FWeindel:validated-tasks/mimo_v1": {
+      "input_sha256": "661f812c5cb9217e431020dc52ff46f76743d000cd62449e15fc9732de20ac8e",
+      "sha256": "db0fce04857d4dcba1e853205525f64fb265f34565a9828b47552fb579c382cb",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/fweindel-mimo-v1/2026.11.20.1/prepared-image-final-lexical-sample-v1/source-identities.json"
+    },
     "GPQA:gpqa": {
       "input_sha256": "0de296ff92f11daa777ded980d3e2d0443a60ecd2f4841deb57ebc28beff7bf1",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
@@ -590,6 +595,21 @@
       "input_sha256": "9ee04f7bcf8c2ffa383d3d50cc2bcdb4aa56b2a3a409672525f038ebe2cb56ee",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "Lego-X:Terminal-Lego-15k": {
+      "input_sha256": "458c033f46b9e8a29ec7fb7b056c3542fa2544f9a49b7b09beca522abedebca0",
+      "sha256": "22ac606741ea6d47eeaf7b4e471d63279569b869e1a451ded14775e8f730fedc",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/terminal-lego/2026.11.20.1/root-delivery-admission-v1/source-identities.json"
+    },
+    "Lite-Coder:LiteCoder-Terminal-RL-preview": {
+      "input_sha256": "a0f6c95b07d7fc3e2bd369b98d01c479dd0fd1116450efa0245f90f9baae91ec",
+      "sha256": "8b7de74f9aa90966548645c24ae7625454fc396cf154572bac54c8efd4daed66",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/litecoder-terminalworld/2026.11.22.1/file-state-neighbor-survey-v1/source-identities.json"
+    },
+    "Marin:forge-main-20261117": {
+      "input_sha256": "a71c596d2c38649108448526f3b26b33c5c51d0cfdd84ae2041ca4ad8470095b",
+      "sha256": "971f57928d34902da1b2d67692d9365eb5ee8837daae6dada5d2208a154c5f02",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/forge-main/2026.11.21.2/selected-overlap-v1/source-identities-reviewed.json"
     },
     "Marin:thoughtcrime": {
       "input_sha256": "fe2afbbea06098b4746d02ca6c091f1f8d6b3d7145e98a0d9df9dbea51389c56",
@@ -692,9 +712,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": {
-      "input_sha256": "b4e3afb9aed92cabad8ef4787df6905648095522041524e81e2538c0a91cf99e",
-      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+      "input_sha256": "7d615a9043a4e41c82c8825a5e665354022409c0f3f1a6b302b49e265e5cae7d",
+      "sha256": "63113f8d4b381c3869b14c42dac1aa2ca6db8633fd80a3d6d0b2ad6c2edc8ad2",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-fingerprints-v1/identity.json"
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": {
       "input_sha256": "b2673e673bb9d5246e2470107329f56ecddcb70dca65a0180d9082f9d3d376f6",
@@ -807,9 +827,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
-      "input_sha256": "84b010f74fe1ba7371023fc9494d182fa1e2766027d1317f3235070a6672aa82",
-      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+      "input_sha256": "2d045964e7e81b61a1c51b0fc99a4d843fb20150b4f0db9fe5cc9ccbcda893a9",
+      "sha256": "63113f8d4b381c3869b14c42dac1aa2ca6db8633fd80a3d6d0b2ad6c2edc8ad2",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-fingerprints-v1/identity.json"
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
       "input_sha256": "5abcf68dceadfa89e1a30cb69741aa1991a516c2d955674fc9aa08a0a074edd9",
@@ -917,9 +937,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": {
-      "input_sha256": "b61c732af4c8aef174011aa3e941355fc59b6bf03f247a5b2ffb7e1f5795f30a",
-      "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+      "input_sha256": "1e4c63f571868fb3ecf7e55cfd9ced3ef4d0a901a06f227fe2c6dcbe60c529af",
+      "sha256": "63113f8d4b381c3869b14c42dac1aa2ca6db8633fd80a3d6d0b2ad6c2edc8ad2",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-fingerprints-v1/identity.json"
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": {
       "input_sha256": "a9fa8b5418ee4b13564cbd8ae7f070c4ed833dfd82cd06e9eaa4a7cb0d08a7f8",
@@ -1006,6 +1026,11 @@
       "sha256": "2bc6c1596c7edf9c893f53ae8fca7727f3cae4c37a694bc3fd9fba514b04d62a",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2bc6c1596c7edf9c.json"
     },
+    "OpenAthena:pdbthink-coordinate-tasks": {
+      "input_sha256": "cad2fe6ffe198be5e75a9df1c1a4b27b6fe4eed99817d13e800b12c67994aa2e",
+      "sha256": "905b2e9b9db9e04d4e4d05fc1682d6db95089c1390ff8749d17853812af6dd80",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/pdbthink/2026.11.16.1/admission-v1/source-identities.json"
+    },
     "OpenAthena:structure-closure": {
       "input_sha256": "a26b41244fde3c7cab2250b37aec454f146e24b06eec4c709ad499bfd2b30321",
       "sha256": "9b2684a3676be606af7d26d67f36230b44a10a85552652cc00b6cf880286c1de",
@@ -1017,9 +1042,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/preview-release/20261116-r20-v1/overlap/full-index-with-new.json"
     },
     "OpenResearcher:OpenResearcher-Dataset": {
-      "input_sha256": "78677fa0234c01a7d02f5235d7be5782bbae729242e65fc4842753037952f0cc",
-      "sha256": "13623ce8bfba6e6e47bed9aa10fdda929a98e6d2ab06502c4922b76de785f55e",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/central/openresearcher/2026.11.16.1/source-identities.json"
+      "input_sha256": "1866168849a348825d852cfb688b8bf08d1bea00e7423016f36f90730237a042",
+      "sha256": "711a72df966089115364dfc53efb38e093c97fb4ea50116eaba26a3b9af93083",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261121/openresearcher-bootstrap-measurements-v1/identity.json"
     },
     "POLARIS-Project:Polaris-Dataset-53K": {
       "input_sha256": "aafd0101271700d60d83532636b0243cde49b381d848f187fa6f95c56ee73a83",
@@ -1131,6 +1156,11 @@
       "sha256": "82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
+    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@backfilled-20261122": {
+      "input_sha256": "812819e023817492956072dd243a9c5dc5a411b31e0d1488d362a6ae0237f217",
+      "sha256": "f5d8c6194c3a388fbf26660fec107e70090bfc1ffce901ba77bca7ceb8ee9105",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/requirement-backfill/neighbors/backfilled-20261122-r3/source-identities-content-nn-v4.json"
+    },
     "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118": {
       "input_sha256": "28ee06e7054b3afa0f30bd3f5ce85092003303779e045698798a47d6b4cfca91",
       "sha256": "829a468cc7ec90d680a1350713d1328f292360f4ee248b9ec4ea178de92843f2",
@@ -1150,6 +1180,11 @@
       "input_sha256": "427f97ab890a5a7079609661e3cbf8236d2d2168639ecab4af06d43037f0e86e",
       "sha256": "82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
+    },
+    "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2@backfilled-20261122": {
+      "input_sha256": "95fee6cafe3b21885fcc4caa98c89cd01c83de6ce2cefc136dd1cfce41b0dab1",
+      "sha256": "f5d8c6194c3a388fbf26660fec107e70090bfc1ffce901ba77bca7ceb8ee9105",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/requirement-backfill/neighbors/backfilled-20261122-r3/source-identities-content-nn-v4.json"
     },
     "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4": {
       "input_sha256": "11ffd9e75e6853e3754c05cd79ef167f0a94edd5a55b661ee01cca17b6234db6",
@@ -1715,6 +1750,11 @@
       "input_sha256": "62b087df21088dca5d3b38dd49d6e6ec568aa268df6c4cb08771bd2afc7666f6",
       "sha256": "5edd8c04ea3ccd32f3e850a9f1fc70940c8eec9e788d6a62b60a5e722c1be1c0",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/final326-review-v5/source-identities-acknowledged-5edd8c04ea3ccd32.json"
+    },
+    "marin-community:mcp-atlas-easy": {
+      "input_sha256": "ed0e21870e5e6043847f0c78094a70a6b503cdc992e72999c6ca06c1205696e2",
+      "sha256": "b7d0b31e2215b4b505a7be97677f3b022595243c2b785a3d9c4fbd4f3f7fbee9",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/mcp-atlas/2026.11.23.1/easy-eval-neighbor-survey-v1/source-identities.json"
     },
     "pafitis:hardmath": {
       "input_sha256": "08ad137cc47bf88a52a86dad50c7895d9711e76d7787f022ab77753fbb5e96b7",
