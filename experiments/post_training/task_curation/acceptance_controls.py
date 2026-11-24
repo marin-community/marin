@@ -125,6 +125,7 @@ async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
         DaytonaConnection,
     )
     from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
+    from shellbox.machine import Command  # noqa: PLC0415
 
     connection = DaytonaConnection(
         api_key=os.environ["DAYTONA_API_KEY"],
@@ -152,10 +153,25 @@ async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
             grade = await grade_empty_in_sandbox(
                 task, factory, grading_spec, timeout=task.grader.timeout, task_machine=task_machine
             )
-    if grade.status is Outcome.GRADED:
-        return ControlOutcome(task.id, expected, grade.reward, "graded", "")
-    detail = str(grade.error or grade.detail or "")[:300]
-    return ControlOutcome(task.id, expected, grade.reward, grade.status.value, detail)
+            if grade.status is not Outcome.GRADED:
+                # The on-machine post-mortem: the harness's own exit code and
+                # log directory state, for a typed failure report.
+                probe = await task_machine.run(
+                    Command(
+                        (
+                            "bash",
+                            "-c",
+                            "ls -la /logs/verifier 2>&1 | tail -6; "
+                            "echo '--- exit-code:'; cat /logs/verifier/exit-code.txt 2>&1 | tail -1; "
+                            "echo '--- stdout tail:'; tail -3 /logs/verifier/test-stdout.txt 2>&1",
+                        ),
+                        timeout=60.0,
+                    )
+                )
+                postmortem = probe.stdout.decode(errors="replace")[-600:]
+                detail = f"{grade.error or grade.detail or ''} | machine: {postmortem}"
+                return ControlOutcome(task.id, expected, grade.reward, grade.status.value, detail[:300])
+    return ControlOutcome(task.id, expected, grade.reward, "graded", "")
 
 
 def _expected_reward(task_id: str, rewards: dict[str, float]) -> float:
