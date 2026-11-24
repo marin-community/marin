@@ -92,9 +92,10 @@ def projected_token_statistics(
 ) -> torch.Tensor:
     """Return [tokens, 2] logprobs/entropy without a full token-by-vocabulary tensor.
 
-    ``project`` must be token-local and return model-dtype logits. The Megatron adapter supplies
-    its native output layer, including fp32 main-gradient accumulation. Tensor/sequence-parallel
-    projections require a separate adapter; this primitive does not insert collectives.
+    ``project`` must be token-local and return model-dtype logits; with ``fused_weight_gradient``
+    it accumulates weight gradients into fp32 main-grad buffers instead of returning them.
+    Tensor- or sequence-parallel projections require a separate adapter; this primitive does not
+    insert collectives.
     """
     if hidden.ndim != 2 or targets.shape != hidden.shape[:1]:
         raise ValueError("Projection requires [tokens, hidden] states and one target per token")

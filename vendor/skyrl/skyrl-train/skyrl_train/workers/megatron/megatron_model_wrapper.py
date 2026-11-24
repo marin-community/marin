@@ -159,7 +159,7 @@ class MegatronModelWrapper:
         return targets.transpose(0, 1).reshape(-1)
 
     def _output_statistics(self, *, hidden_states, output_layer, output_weight, context, config, scale_logits, **_):
-        """Consume the MCore output hook before full vocabulary logits exist."""
+        """Return per-token log probabilities and entropy in place of full vocabulary logits."""
         sequences, attention_mask, packed_seq_params, temperature = context
         if config.tensor_model_parallel_size != 1 or config.sequence_parallel:
             raise ValueError("Chunked output projection currently requires TP1 without sequence parallelism")
