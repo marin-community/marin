@@ -84,6 +84,11 @@ from experiments.june_tpu_67b_a2b.moe.train import (
 
 logger = logging.getLogger(__name__)
 _LOSS_FINITE_KEY = "train/loss_finite"
+_INPUTS_VALID_KEY = "train/inputs_valid"
+# Checked every step: a step whose update is non-finite still has a finite loss.
+_ALWAYS_FINITE_KEYS = ("train/params_finite", "train/qb_betas_finite")
+# More skipped steps in a row than this means the data, not a damaged buffer, fails the input check.
+_MAX_CONSECUTIVE_SKIPPED_STEPS = 3
 # The hyperparameters (learning rate, ...) of the optimizer state a step returns, which the step-info hook logs.
 _OPTIMIZER_HYPERPARAMS_KEY = "optimizer_hyperparams"
 
@@ -220,10 +225,38 @@ def _optimizer_hyperparams(opt_state: optax.OptState) -> dict[str, jax.Array]:
     return dict(getattr(opt_state, "hyperparams", {}))
 
 
+def _batch_inputs_valid(batch, vocab_size: int) -> jax.Array:
+    """Whether every array of ``batch`` holds values the data loader produces: token ids in ``[0, vocab_size)``, finite
+    loss weights in ``[0, 1]``, and equal query and key segment ids in ``[-1, seq_len)``.
+
+    On MI355X a stray device write occasionally overwrites 16 int32 words of a step's freshly allocated input buffers
+    with float32 bit patterns (about once per 9,000 GPU-steps); the damaged words fall outside these ranges."""
+    tokens = batch.tokens
+    weights = batch.loss_weight
+    valid = jnp.all((tokens >= 0) & (tokens < vocab_size))
+    valid &= jnp.all(jnp.isfinite(weights) & (weights >= 0) & (weights <= 1))
+    mask = batch.attn_mask
+    if isinstance(mask, AttentionMask) and mask.segment_ids is not None:
+        q_seg, kv_seg = mask.segment_ids
+        valid &= jnp.all((q_seg == kv_seg) & (q_seg >= -1) & (q_seg < q_seg.shape[-1]))
+    return valid
+
+
+def _model_mask(mask: AttentionMask | None) -> AttentionMask | None:
+    """``mask`` with its query segment ids used for the keys too. The loader's query and key ids are equal, and the
+    step compares them in ``_batch_inputs_valid``; the model reads one array, so a damaged copy cannot abort the
+    attention kernel's own equality check before the step can be skipped."""
+    if not isinstance(mask, AttentionMask) or mask.segment_ids is None:
+        return mask
+    q_seg, _ = mask.segment_ids
+    return dataclasses.replace(mask, segment_ids=(q_seg, q_seg))
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     *,
+    vocab_size: int,
     z_loss_weight: float,
     ema_beta: float | None,
     microbatches: int,
@@ -259,7 +292,7 @@ def _make_train_step(
             return params.next_token_loss_terms(
                 microbatch.tokens,
                 microbatch.loss_weight,
-                mask=microbatch.attn_mask,
+                mask=_model_mask(microbatch.attn_mask),
                 reduction="sum" if microbatches > 1 else "mean",
                 logsumexp_weight=z_loss,
                 routing=routing,
@@ -284,10 +317,17 @@ def _make_train_step(
                 gather_sources=qb_params if zero1 else None,
             )
         grads = mp.cast_to_param(compute_grads)
+        # Read the inputs after the backward, so the check sees any damage that reached the loss or gradients.
+        grads, checked_batch = jax.lax.optimization_barrier((grads, batch))
+        inputs_valid = _batch_inputs_valid(checked_batch, vocab_size)
         # The loss's finiteness is checked on the host from this flag, fetched with the other metrics.
-        metrics = {"train/loss": loss, _LOSS_FINITE_KEY: jnp.isfinite(loss), **summarized_metrics}
+        metrics = {
+            "train/loss": loss,
+            _LOSS_FINITE_KEY: jnp.isfinite(loss),
+            _INPUTS_VALID_KEY: inputs_valid,
+            **summarized_metrics,
+        }
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        metrics[_OPTIMIZER_HYPERPARAMS_KEY] = _optimizer_hyperparams(opt_state)
         params = optax.apply_updates(qb_params, updates)
         if diagnose_numerics:
             metrics.update(
@@ -295,8 +335,6 @@ def _make_train_step(
                     "train/supervised_tokens": jnp.sum(batch.loss_weight),
                     "train/grads_finite": _tree_all_finite(grads),
                     "train/updates_finite": _tree_all_finite(updates),
-                    "train/params_finite": _tree_all_finite(params),
-                    "train/qb_betas_finite": jnp.all(jnp.isfinite(metrics["qb_beta_per_layer"])),
                 }
             )
 
@@ -333,14 +371,29 @@ def _make_train_step(
                 is_leaf=lambda x: x is None,
             )
             compute_params = eqx.tree_at(lambda t: t.stacked_blocks.stacked, compute_params, stacked)
+        updated = (
+            params,
+            opt_state,
+            ema_params,
+            metrics["qb_beta_per_layer"],
+            resharded_like(compute_params, state.compute_params),
+        )
+        kept = (state.params, state.opt_state, state.ema_params, state.pending_qb_betas, state.compute_params)
+        # A step whose inputs were damaged leaves the state as it was, apart from the step count: its batch is skipped.
+        params, opt_state, ema_params, pending_qb_betas, compute_params = jax.tree.map(
+            lambda new, old: jnp.where(inputs_valid, new, old), updated, kept
+        )
+        metrics[_OPTIMIZER_HYPERPARAMS_KEY] = _optimizer_hyperparams(opt_state)
+        metrics["train/params_finite"] = _tree_all_finite(params)
+        metrics["train/qb_betas_finite"] = jnp.all(jnp.isfinite(pending_qb_betas))
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
-            compute_params=resharded_like(compute_params, state.compute_params),
+            pending_qb_betas=pending_qb_betas,
+            compute_params=compute_params,
         )
         return next_state, metrics, watch_stats
 
@@ -651,18 +704,25 @@ def _check_per_device_parallelism(
             )
 
 
-def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> None:
-    """Raise if a step's loss (with ``diagnose_numerics`` also its gradients, updates, parameters or QB betas) is not
-    finite. ``metrics`` are the step's host metrics (``_fetch_step_metrics``): the flags were computed in the step."""
+def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> bool:
+    """Raise if the state a step returned has non-finite parameters or QB betas, or if a step that applied its update
+    has a non-finite loss (with ``diagnose_numerics`` also non-finite gradients or updates). Return whether the step
+    applied its update: False when its inputs failed ``_batch_inputs_valid`` and it kept the previous state.
+    ``metrics`` are the step's host metrics (``_fetch_step_metrics``): the flags were computed in the step."""
     diagnostics = (
         {key: float(metrics[key]) for key in (*_NUMERIC_DIAGNOSTIC_KEYS, "train/supervised_tokens")}
         if diagnose_numerics
         else {}
     )
+    if not all(bool(metrics[key]) for key in _ALWAYS_FINITE_KEYS):
+        raise FloatingPointError(f"Non-finite Grug state at step {step}: {diagnostics}")
+    if not bool(metrics[_INPUTS_VALID_KEY]):
+        return False
     if not bool(metrics[_LOSS_FINITE_KEY]):
         raise FloatingPointError(f"Non-finite Grug loss at step {step}: {diagnostics}")
     if diagnose_numerics and not all(bool(metrics[key]) for key in _NUMERIC_DIAGNOSTIC_KEYS):
         raise FloatingPointError(f"Non-finite Grug update at step {step}: {diagnostics}")
+    return True
 
 
 def _is_router_metric(key: str) -> bool:
@@ -671,7 +731,14 @@ def _is_router_metric(key: str) -> bool:
 
 def _fetch_step_metrics(metrics: dict, diagnose_numerics: bool) -> dict:
     """The metrics of a step the loop checks and logs, copied to the host in one transfer, which waits for the step."""
-    keys = ["train/loss", _LOSS_FINITE_KEY, _OPTIMIZER_HYPERPARAMS_KEY, "train/cross_entropy_loss"]
+    keys = [
+        "train/loss",
+        _LOSS_FINITE_KEY,
+        _INPUTS_VALID_KEY,
+        *_ALWAYS_FINITE_KEYS,
+        _OPTIMIZER_HYPERPARAMS_KEY,
+        "train/cross_entropy_loss",
+    ]
     if diagnose_numerics:
         keys += [*_NUMERIC_DIAGNOSTIC_KEYS, "train/supervised_tokens"]
     keys += [key for key in metrics if _is_router_metric(key)]
@@ -744,6 +811,7 @@ def _train_loop(
     last_loss = 0.0
     last_duration = 0.0
     last_hook_start: float | None = None
+    consecutive_skipped = 0
 
     def fetch(record: _DispatchedStep) -> dict:
         if record.host_metrics is None:
@@ -753,12 +821,27 @@ def _train_loop(
 
     def finish(record: _DispatchedStep, returned_state: GrugTrainState | None) -> None:
         """Check, hook and log a fetched step; ``returned_state`` is the state it returned, None once donated."""
-        nonlocal last_done, last_loss, last_duration, last_hook_start
+        nonlocal last_done, last_loss, last_duration, last_hook_start, consecutive_skipped
         host = fetch(record)
         assert record.done_time is not None
         duration = record.done_time - max(record.dispatch_time, last_done)
         last_done = record.done_time
-        _check_step_numerics(host, record.step + 1, diagnose_numerics)
+        if _check_step_numerics(host, record.step + 1, diagnose_numerics):
+            consecutive_skipped = 0
+        else:
+            consecutive_skipped += 1
+            logger.warning(
+                "Step %d skipped: its input buffers hold values the data loader cannot produce (loss %s); the state "
+                "is unchanged",
+                record.step,
+                float(host["train/loss"]),
+            )
+            if consecutive_skipped > _MAX_CONSECUTIVE_SKIPPED_STEPS:
+                raise ValueError(
+                    f"{consecutive_skipped} consecutive steps up to {record.step} failed the input check; the data, "
+                    "not a damaged buffer, is out of range"
+                )
+        levanter.tracker.log({"train/skipped_step": float(not host[_INPUTS_VALID_KEY])}, step=record.step)
         hyperparams = host[_OPTIMIZER_HYPERPARAMS_KEY]
         hook_state = (
             returned_state
@@ -845,6 +928,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
+        vocab_size=config.model.vocab_size,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
