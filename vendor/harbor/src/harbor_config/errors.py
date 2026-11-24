@@ -59,6 +59,7 @@ HARBOR_ERROR_CATEGORIES = MappingProxyType(
         CONTEXT_MANAGEMENT_INFRASTRUCTURE_ERROR: ErrorCategory.INFRASTRUCTURE,
         "DownloadVerifierDirError": ErrorCategory.INFRASTRUCTURE,
         "EnrootMemoryLimitExceededError": ErrorCategory.INFRASTRUCTURE,
+        "EnvironmentSetupError": ErrorCategory.INFRASTRUCTURE,
         ENVIRONMENT_STOP_ERROR: ErrorCategory.INFRASTRUCTURE,
         "HealthcheckError": ErrorCategory.INFRASTRUCTURE,
         LLM_REQUEST_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,

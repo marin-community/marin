@@ -12,10 +12,10 @@ from taskforge.policy import Policy, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.stages.author import AUTHOR_REFERENCE, DECISION_MODEL_GRADER, author_reference, system_prompt
 
-# sha256 of the reference d8c26e50ba rendered live from TaskSpec and CONTROL: what recorded author requests embed.
-V1_DIGEST = "a91b393984f9d4d9887ea534a22c35a3252bebd76244b8ad51a1c335eda87a06"
-# The same with a decision model configured, as bded40edcc rendered it live before the kind was pinned.
-DECISION_MODEL_DIGEST = "3c73be30771a048cf3f2f1a559f5c581b9b748f38eea0a6a95cff1d316dc4bf4"
+# sha256 of the v2 reference as generated from TaskSpec and CONTROL: what recorded author requests embed.
+V2_DIGEST = "28bef7104d48e9e3752479bc0c98a9c87dae1af4a1704e0e22994e6d15b29a40"
+# The same with the decision-model grader kind inserted, as a decision-model configuration shows it.
+DECISION_MODEL_DIGEST = "6097046236d23c1e96cc41464ef5093012eb85a7133b924639daf249ca186025"
 WORDING = frozenset({"description", "title"})
 # Keywords whose values are schemas; every other keyword's value is data (default, examples, const, enum, mapping, ...).
 SCHEMA = frozenset({"additionalProperties", "contains", "else", "if", "items", "not", "propertyNames", "then"})
@@ -58,7 +58,7 @@ def installed_shapes(decision_model: bool) -> dict[str, object]:
     return shapes(installed)
 
 
-@pytest.mark.parametrize("decision_model, digest", [(False, V1_DIGEST), (True, DECISION_MODEL_DIGEST)])
+@pytest.mark.parametrize("decision_model, digest", [(False, V2_DIGEST), (True, DECISION_MODEL_DIGEST)])
 def test_author_is_shown_the_pinned_reference_bytes(decision_model: bool, digest: str) -> None:
     reference = author_reference(decision_model)
     assert hashlib.sha256(reference.encode()).hexdigest() == digest

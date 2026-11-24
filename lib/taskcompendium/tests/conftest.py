@@ -50,6 +50,19 @@ class JudgeHandler(BaseHTTPRequestHandler):
         pass
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--shared-source-python",
+        type=Path,
+        help="Interpreter with pytest dependencies for the Linux SHARED guest fixture",
+    )
+    parser.addoption(
+        "--shared-verifyit-source",
+        type=Path,
+        help="Pinned Verifyit src directory for the single-manifest Linux SHARED regression",
+    )
+
+
 @pytest.fixture
 def judge_server():
     server = JudgeServer(("127.0.0.1", 0), JudgeHandler)
