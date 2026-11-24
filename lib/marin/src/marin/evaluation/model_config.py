@@ -237,7 +237,7 @@ class ModelConfig:
 
     @property
     def resolved_revision(self) -> str:
-        """The immutable weights identity a run records."""
+        """The weights identity a run records: the pinned revision, else the producer identity or location."""
         return self.revision or self.identity or self.location
 
     @property

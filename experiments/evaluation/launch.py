@@ -54,7 +54,7 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform, supports_request_seed
-from marin.evaluation.model_config import ApiModelConfig, ModelConfig
+from marin.evaluation.model_config import ApiModelConfig, EvaluatedModel, ModelConfig
 from marin.evaluation.runner import (
     CANDIDATE_API_KEY,
     ApiCandidate,
@@ -413,6 +413,8 @@ class _ResolvedCandidate:
     secret_env: dict[str, SecretSpec]
     egress_allow: tuple[str, ...]
     target_cluster: str | None
+    stated_context_window: int | None
+    """The window an API model states; a served model's window is read from its server."""
 
 
 def _resolve_served_candidate(
@@ -463,6 +465,7 @@ def _resolve_served_candidate(
         secret_env={},
         egress_allow=(),
         target_cluster=accelerator.target_cluster,
+        stated_context_window=None,
     )
 
 
@@ -509,6 +512,7 @@ def _resolve_api_candidate(
         secret_env={CANDIDATE_API_KEY: model.api_key},
         egress_allow=(host,),
         target_cluster=None,
+        stated_context_window=model.context_window,
     )
 
 
@@ -628,6 +632,7 @@ def build_evaluation_batch(
             executor = partial(
                 _execute_curated,
                 resolved.model,
+                resolved.stated_context_window,
                 reference,
                 selection.run.judge_endpoint,
                 tuple(selection.run.task_secrets),
@@ -757,7 +762,8 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
 
 
 def _execute_curated(
-    model: ModelConfig | ApiModelConfig,
+    model: EvaluatedModel,
+    stated_context_window: int | None,
     reference: EvalRef,
     judge_endpoint: str | None,
     task_secrets: tuple[str, ...],
@@ -781,7 +787,7 @@ def _execute_curated(
         judge_endpoint,
         agent=reference.curated.agent,
         task_secrets=task_secrets,
-        stated_context_window=model.context_window if isinstance(model, ApiModelConfig) else None,
+        stated_context_window=stated_context_window,
     )
     executor = source if policy is None else policy_executor(source, reference, policy, judge_accelerator, priority)
     return executor(session, output_dir, env_vars, backend_state=backend_state, judge=judge)

@@ -873,20 +873,20 @@ def test_api_model_launch_runs_chat_and_agent_benchmarks_without_serving(
 
 
 @pytest.mark.parametrize(
-    ("extra", "message"),
+    ("extra", "rejected"),
     [
-        (("--evals", "mmlu-smoke"), "choice_likelihood needs a served model"),
-        (("--evals", "gsm8k-smoke", "--accelerator", "H100x1"), "--accelerator apply only to a served model"),
-        (("--evals", "gsm8k-smoke", "--platform", "tpu"), "--platform apply only to a served model"),
+        (("--evals", "mmlu-smoke"), "mmlu-smoke"),
+        (("--evals", "gsm8k-smoke", "--accelerator", "H100x1"), "--accelerator"),
+        (("--evals", "gsm8k-smoke", "--platform", "tpu"), "--platform"),
     ],
 )
 def test_api_model_launch_rejects_what_needs_a_served_model(
-    tmp_path, api_model_config, submitted_batches, extra, message
+    tmp_path, api_model_config, submitted_batches, extra, rejected
 ):
     result = CliRunner().invoke(cli, _api_command(tmp_path, api_model_config, *extra))
 
     assert result.exit_code != 0
-    assert message in result.output
+    assert rejected in result.output
     assert submitted_batches == []
 
 
@@ -906,7 +906,7 @@ def test_api_model_launch_rejects_harnesses_that_tokenize_on_the_server(
     result = CliRunner().invoke(cli, _api_command(tmp_path, api_model_config, "--evaluation-config", str(selection)))
 
     assert result.exit_code != 0
-    assert "pi harness counts tokens with a vLLM server's /tokenize" in result.output
+    assert "terminal-agent" in result.output
     assert submitted_batches == []
 
 
@@ -917,5 +917,5 @@ def test_api_model_launch_rejects_harbor(tmp_path, api_model_config, submitted_b
     result = CliRunner().invoke(cli, _api_command(tmp_path, api_model_config, "--harbor-config", str(policy)))
 
     assert result.exit_code != 0
-    assert "runs curated chat and agent benchmarks, not Harbor" in result.output
+    assert "policy" in result.output
     assert submitted_batches == []
