@@ -89,7 +89,7 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> I
             valid_tokens and len(tokens) >= cohort["budget"]
         )
         length_stop += int(at_cap)
-        response = row.get("output_response") or ""
+        response = (row.get("input_prompt") or "") + (row.get("output_response") or "")
         open_think += int(at_cap and response.rfind("<|start_think|>") > response.rfind("<|end_think|>"))
     quantiles = np.percentile(lengths, [50, 90, 99]).tolist() if lengths else [None] * 3
     return Incidence(

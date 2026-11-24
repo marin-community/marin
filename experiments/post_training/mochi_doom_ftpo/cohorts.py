@@ -61,6 +61,7 @@ class Candidate:
     domain: str
     prompt_hash: str
     original_validation: bool = False
+    source_priority: int = 0
 
 
 def token_hash(token_ids: list[int]) -> str:
@@ -118,7 +119,7 @@ def freeze(candidates: list[Candidate]) -> tuple[dict[str, list[Candidate]], lis
     for item in candidates:
         groups[item.domain].append(item)
     for values in groups.values():
-        values.sort(key=lambda row: row.prompt_hash)
+        values.sort(key=lambda row: (row.source_priority, row.prompt_hash))
     original_math = [row for row in groups["math"] if row.original_validation]
     if len(original_math) != 512:
         raise ValueError(f"Original math cohort has {len(original_math)} eligible prompts; expected 512")
@@ -213,6 +214,7 @@ def main() -> None:
     parser.add_argument("--output", default=f"{REGIONAL_ROOT}/cohorts/{VERSION}")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     configure_coreweave_s3()
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER, revision=TOKENIZER_REVISION)
     selection_recipe = json.loads(args.recipe.read_text())
@@ -238,7 +240,7 @@ def main() -> None:
     counts = Counter()
     seen = set()
 
-    def add(task: TaskSpec, domain: str, original_validation: bool = False) -> None:
+    def add(task: TaskSpec, domain: str, original_validation: bool = False, source_priority: int = 0) -> None:
         if _grader_kind(task) not in LOCAL_GRADERS:
             counts[f"{domain}/nonprogrammatic"] += 1
             return
@@ -254,7 +256,7 @@ def main() -> None:
             counts[f"{domain}/duplicate"] += 1
             return
         seen.add(digest)
-        candidates.append(Candidate(task, domain, digest, original_validation))
+        candidates.append(Candidate(task, domain, digest, original_validation, source_priority))
         counts[f"{domain}/eligible"] += 1
 
     # Process the original validation first so training duplicates cannot displace it.
@@ -267,7 +269,9 @@ def main() -> None:
             continue
         logger.info("Reading admitted source %s", source["source_id"])
         for task, _ in _admitted_records(SelectionInput(source["source_id"], domain, source["root"])):
-            add(task, domain)
+            priority = int(source["source_id"] == "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3")
+            add(task, domain, source_priority=priority)
+    logger.info("Eligibility before cohort freezing: %s", dict(counts))
     cohorts, training = freeze(candidates)
     provenance = {
         "corpus": args.corpus,

@@ -34,3 +34,11 @@ def test_audit_missing_generation_is_unassessed():
     cohort, _ = cohort_and_row([7] * 8)
     result = audit_cohort(cohort, [])
     assert (result.N, result.unassessed, result.unavailable, result.UB) == (1, 1, 1, 1)
+
+
+@pytest.mark.parametrize("response,expected", [("still reasoning", 1), ("<|end_think|>answer", 0)])
+def test_open_thinking_at_cap_includes_the_rendered_prompt(response, expected):
+    cohort, row = cohort_and_row(list(range(32)))
+    row.update(input_prompt="<|start_think|>", output_response=response, stop_reason="length")
+    result = audit_cohort(cohort, [row])
+    assert (result.length_stop, result.open_think) == (1, expected)

@@ -33,6 +33,7 @@
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": "mcq32k",
     "MarinSkyRL:reasoning_gym": "rgym32k",
     "SnowballV01:structure-closure": "closure",
+    "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar",
     "Task Trove:laion__nemotron-gym-instruction-following-structured-v3": "if32k"
   },
   "validation_per_family": 16,

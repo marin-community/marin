@@ -45,6 +45,14 @@ def test_freeze_excludes_entire_reserve_and_aliases_from_training(tmp_path):
     # Both aliases are beyond the selected range, and must still be removed by identity or prompt.
     rows.append(replace(rows[0], task=task.model_copy(update={"id": "hash-alias"}), original_validation=False))
     rows.append(replace(rows[0], prompt_hash="math-z-alias", original_validation=False))
+    rows = [
+        (
+            replace(row, source_priority=1, prompt_hash="acalendar-" + row.prompt_hash)
+            if row.domain == "calendar" and int(row.task.id.split("-")[-1]) >= 79
+            else row
+        )
+        for row in rows
+    ]
     cohorts, training = freeze(rows)
     held = [row for values in cohorts.values() for row in values]
     assert not {row.prompt_hash for row in held} & {row.prompt_hash for row in training}
@@ -56,6 +64,7 @@ def test_freeze_excludes_entire_reserve_and_aliases_from_training(tmp_path):
     assert len(training) == 32
     assert [row.prompt_hash for row in cohorts["math32k"]] == [row.prompt_hash for row in cohorts["math16k"][:256]]
     assert sum(row.domain == "calendar" for row in cohorts["struct32k"][:128]) == 64
+    assert all(row.source_priority == 0 for row in cohorts["struct32k"][:128])
 
 
 @pytest.mark.parametrize("confirmed,count,decision", [(9, 128, "extend"), (9, 256, "non-target"), (10, 128, "target")])
