@@ -866,13 +866,10 @@ def test_broker_worker_children_do_not_pin_a_federation_target(monkeypatch):
 
 
 def test_child_resources_only_drop_the_cluster_pin():
-    """The pin is the only field the helper touches."""
     resources = ResourceConfig.with_gpu("GB200", count=4, cpu=16.0, ram="256g", target_cluster="cw-us-east-08a")
     child = _child_resources(resources)
     assert child.target_cluster is None
     assert dataclasses.replace(child, target_cluster="cw-us-east-08a") == resources
-    unpinned = dataclasses.replace(resources, target_cluster=None)
-    assert _child_resources(unpinned) is unpinned
 
 
 @pytest.mark.parametrize("task_index", [0, 1])

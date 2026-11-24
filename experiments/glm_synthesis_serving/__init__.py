@@ -3,7 +3,7 @@
 
 """Standing GLM-5.3-Flash data-synthesis serving pool on cw-us-east-08a.
 
-One brokered OpenAI-compatible endpoint served by 32 independent TP4 vLLM engines
-(one GB200x4 tray each, 128 GPUs total) for the tool-conversion repair and later
-synthesis consumers. See pool.py for the single source of serving configuration.
+Independent TP4 vLLM endpoints (one GB200x4 tray each, 128 GPUs total) feed
+tool conversion and synthesis through a validated client-side pool manifest.
+See pool.py for the pinned serving configuration.
 """

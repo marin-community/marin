@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Replay archived conversion requests in-region, recording aggregate facts only."""
+"""Replay real conversion requests in-region; publish only validated pool manifests."""
 
 import argparse
 import asyncio
@@ -11,40 +11,76 @@ import random
 import tarfile
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 
 import httpx
 from iris.client.client import iris_ctx
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
-from experiments.glm_synthesis_serving import pool, warmup_bench
-from experiments.glm_synthesis_serving.launch_pool import wait_for_endpoint
+from experiments.glm_synthesis_serving import pool
 
 SOURCE_ROOT = "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization"
 SOURCE_FLEETS = (("ortet-24-20261112", 24), ("h100-eight-20261105", 8))
 SOURCE_START = 1795463520  # Conversion-active window: 2026-11-23 19:52-22:52 UTC.
 SOURCE_END = SOURCE_START + 10800
 CAPABILITY_HOURS = 168
+ENDPOINT_POLL_SECONDS = 15
 
 
 @dataclass(frozen=True)
 class Target:
     endpoint: str
     base_url: str
-    token: str
+    token: str = field(repr=False)
+    expires_at: int
+
+
+class RequestState(StrEnum):
+    SUCCESS = "success"
+    HTTP_ERROR = "http_error"
+    STREAM_ERROR = "stream_error"
+    INVALID_OUTPUT = "invalid_output"
+    TRANSPORT_ERROR = "transport_error"
+
+
+@dataclass(frozen=True)
+class RequestOutcome:
+    endpoint: str
+    state: RequestState
+    status: int | None = None
+    error: str | None = None
+    finish_reason: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return self.state is RequestState.SUCCESS
+
+
+@dataclass(frozen=True)
+class StageSummary:
+    requests: int
+    passed: int
+    failures: int
+    elapsed: float
+    rows_per_hour: float
+    prompt_tok_per_second_per_gpu: float
+    output_tok_per_second_per_gpu: float
+    per_endpoint: dict[str, int]
 
 
 def archived_requests(count: int) -> list[dict]:
-    """Read distinct request bodies from regional archives without writing trace text."""
+    """Read distinct request bodies without writing trace text."""
     fs, root = filesystem_for(SOURCE_ROOT)
     candidates = []
     for fleet, replicas in SOURCE_FLEETS:
         for replica in range(1, replicas + 1):
             for item in fs.ls(f"{root}/{fleet}/r{replica}/batches", detail=True):
-                if not item["name"].endswith(".tar.gz"):
-                    continue
-                if SOURCE_START <= item["LastModified"].timestamp() <= SOURCE_END:
+                if item["name"].endswith(".tar.gz") and SOURCE_START <= item["LastModified"].timestamp() <= SOURCE_END:
                     candidates.append(item["name"])
     random.Random(1234).shuffle(candidates)
     requests = []
@@ -64,8 +100,8 @@ def archived_requests(count: int) -> list[dict]:
                 body = json.loads(raw)
                 if not body.get("stream") or body.get("response_format", {}).get("type") != "json_schema":
                     raise ValueError("Archived request does not match the conversion contract")
-                if "thinking_token_budget" not in body:
-                    raise ValueError("Archived request lacks the consumer's thinking_token_budget field")
+                if not {"thinking_token_budget", "cache_salt"} <= body.keys():
+                    raise ValueError("Archived request lacks consumer fields")
                 body["model"] = pool.SERVED_MODEL_NAME
                 requests.append(body)
                 seen.add(identity)
@@ -74,18 +110,42 @@ def archived_requests(count: int) -> list[dict]:
     raise RuntimeError(f"Only {len(requests)} distinct conversion requests found; need {count}")
 
 
-async def request_outcome(client: httpx.AsyncClient, target: Target, body: dict) -> dict:
-    """Require HTTP 200, complete SSE, model content, valid JSON, and token usage."""
-    started = time.monotonic()
-    headers = {"Authorization": f"Bearer {target.token}"}
+def ready_targets(endpoints: list[str], wait_timeout: float) -> list[Target]:
+    client = iris_ctx().client
+    if client is None:
+        raise RuntimeError("Run inside an Iris CPU job on cw-us-east-08a")
+    deadline = time.monotonic() + wait_timeout
+    targets = []
+    for endpoint in endpoints:
+        print(json.dumps({"waiting_for": endpoint}), flush=True)
+        while not client.list_endpoint_instances(endpoint):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"{endpoint} did not register")
+            time.sleep(ENDPOINT_POLL_SECONDS)
+        minted = client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(CAPABILITY_HOURS))
+        proxy_name = endpoint.lstrip("/").replace("/", ".")
+        targets.append(
+            Target(
+                endpoint,
+                f"{pool.CONTROLLER_PROXY_ORIGIN}/proxy/{proxy_name}/v1",
+                minted.token,
+                minted.expires_at.epoch_ms,
+            )
+        )
+    return targets
+
+
+async def request_outcome(client: httpx.AsyncClient, target: Target, body: dict) -> RequestOutcome:
+    """Require HTTP 200, complete SSE, valid JSON content, stop, and token usage."""
     content = []
-    usage = None
+    usage = {}
     done = False
     finish_reason = None
+    headers = {"Authorization": f"Bearer {target.token}"}
     try:
         async with client.stream("POST", target.base_url + "/chat/completions", headers=headers, json=body) as response:
             if response.status_code != 200:
-                return {"ok": False, "status": response.status_code, "endpoint": target.endpoint}
+                return RequestOutcome(target.endpoint, RequestState.HTTP_ERROR, response.status_code)
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -95,137 +155,160 @@ async def request_outcome(client: httpx.AsyncClient, target: Target, body: dict)
                     break
                 event = json.loads(data)
                 if "error" in event:
-                    return {"ok": False, "error": "stream_error", "endpoint": target.endpoint}
+                    return RequestOutcome(target.endpoint, RequestState.STREAM_ERROR, 200)
                 for choice in event.get("choices", []):
                     text = choice.get("delta", {}).get("content")
                     if text:
                         content.append(text)
-                    if choice.get("finish_reason"):
-                        finish_reason = choice["finish_reason"]
+                    finish_reason = choice.get("finish_reason") or finish_reason
                 usage = event.get("usage") or usage
-        valid = (
-            done
-            and bool(content)
-            and usage is not None
-            and usage.get("completion_tokens", 0) > 0
-            and finish_reason == "stop"
-        )
+        valid = done and bool(content) and usage.get("completion_tokens", 0) > 0 and finish_reason == "stop"
         if valid:
             json.loads("".join(content))
-        return {
-            "endpoint": target.endpoint,
-            "ok": valid,
-            "status": 200,
-            "done": done,
-            "finish_reason": finish_reason,
-            "prompt_tokens": (usage or {}).get("prompt_tokens", 0),
-            "completion_tokens": (usage or {}).get("completion_tokens", 0),
-            "elapsed": time.monotonic() - started,
-        }
-    except (httpx.HTTPError, ValueError) as error:
-        # Exception text can contain credential-bearing URLs or response content.
-        return {"ok": False, "error": type(error).__name__, "endpoint": target.endpoint}
+        return RequestOutcome(
+            endpoint=target.endpoint,
+            state=RequestState.SUCCESS if valid else RequestState.INVALID_OUTPUT,
+            status=200,
+            finish_reason=finish_reason,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
+    except httpx.HTTPError as error:
+        # Exception text can contain response data or credentials.
+        return RequestOutcome(target.endpoint, RequestState.TRANSPORT_ERROR, error=type(error).__name__)
+    except ValueError as error:
+        return RequestOutcome(target.endpoint, RequestState.INVALID_OUTPUT, error=type(error).__name__)
 
 
-async def prove(targets: list[Target], bodies: list[dict], concurrency: int) -> list[dict]:
+async def check_models(client: httpx.AsyncClient, targets: list[Target]) -> None:
+    for target in targets:
+        response = await client.get(target.base_url + "/models", headers={"Authorization": f"Bearer {target.token}"})
+        if response.status_code != 200:
+            raise RuntimeError(f"{target.endpoint}: /models returned {response.status_code}")
+        if pool.SERVED_MODEL_NAME not in [item["id"] for item in response.json()["data"]]:
+            raise RuntimeError(f"{target.endpoint}: /models lacks {pool.SERVED_MODEL_NAME}")
+
+
+async def prove(targets: list[Target], bodies: list[dict], concurrency: int) -> list[RequestOutcome]:
     semaphore = asyncio.Semaphore(concurrency)
-    completed = 0
-    passed = 0
+    outcomes = []
     limits = httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency)
     async with httpx.AsyncClient(timeout=1800, limits=limits) as client:
-        for target in targets:
-            response = await client.get(target.base_url + "/models", headers={"Authorization": f"Bearer {target.token}"})
-            if response.status_code != 200:
-                raise RuntimeError(f"{target.endpoint}: /models returned {response.status_code}")
-            if pool.SERVED_MODEL_NAME not in [item["id"] for item in response.json()["data"]]:
-                raise RuntimeError(f"{target.endpoint}: /models lacks {pool.SERVED_MODEL_NAME}")
+        await check_models(client, targets)
 
-        async def run(index: int, body: dict) -> dict:
-            nonlocal completed, passed
+        async def run(index: int, body: dict) -> None:
             async with semaphore:
                 outcome = await request_outcome(client, targets[index % len(targets)], body)
-                completed += 1
-                passed += outcome["ok"]
-                if completed % 25 == 0 or completed == len(bodies):
-                    print(json.dumps({"completed": completed, "passed": passed, "total": len(bodies)}), flush=True)
-                return outcome
+                outcomes.append(outcome)
+                if len(outcomes) % 25 == 0:
+                    print(
+                        json.dumps({"completed": len(outcomes), "passed": sum(item.ok for item in outcomes)}), flush=True
+                    )
 
-        return await asyncio.gather(*(run(index, body) for index, body in enumerate(bodies)))
+        await asyncio.gather(*(run(index, body) for index, body in enumerate(bodies)))
+    return outcomes
 
 
-def write_json(url: str, value: object) -> None:
-    fs, path = filesystem_for(url)
-    with fs.open(path, "w") as stream:
-        json.dump(value, stream)
+async def sustained_load(
+    targets: list[Target], bodies: list[dict], concurrency_per_replica: int, duration: float
+) -> list[RequestOutcome]:
+    """Replay real bodies; each round gets a new salt to prevent whole-request cache reuse."""
+    outcomes = []
+    stopped = asyncio.Event()
+    deadline = time.monotonic() + duration
+    request_index = 0
+    concurrency = len(targets) * concurrency_per_replica
+    limits = httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency)
+    async with httpx.AsyncClient(timeout=1800, limits=limits) as client:
+
+        async def worker(target: Target) -> None:
+            nonlocal request_index
+            while time.monotonic() < deadline and not stopped.is_set():
+                index = request_index
+                request_index += 1
+                original = bodies[index % len(bodies)]
+                body = {**original, "cache_salt": f"{original['cache_salt']}-load-{index // len(bodies)}"}
+                outcome = await request_outcome(client, target, body)
+                outcomes.append(outcome)
+                if not outcome.ok:
+                    stopped.set()
+                if len(outcomes) % 100 == 0:
+                    print(json.dumps({"load_completed": len(outcomes)}), flush=True)
+
+        await asyncio.gather(*(worker(target) for target in targets for _ in range(concurrency_per_replica)))
+    return outcomes
+
+
+def stage_summary(outcomes: list[RequestOutcome], elapsed: float, replicas: int) -> StageSummary:
+    passed = [outcome for outcome in outcomes if outcome.ok]
+    gpu_time = elapsed * replicas * pool.GPUS_PER_ENGINE
+    return StageSummary(
+        len(outcomes),
+        len(passed),
+        len(outcomes) - len(passed),
+        elapsed,
+        len(passed) * 3600 / elapsed,
+        sum(outcome.prompt_tokens for outcome in passed) / gpu_time,
+        sum(outcome.completion_tokens for outcome in passed) / gpu_time,
+        dict(Counter(outcome.endpoint for outcome in passed)),
+    )
+
+
+def write_report(path: StoragePath, outcomes: list[RequestOutcome], elapsed: float, replicas: int) -> StageSummary:
+    summary = stage_summary(outcomes, elapsed, replicas)
+    write_text(path, json.dumps({**asdict(summary), "outcomes": [asdict(outcome) for outcome in outcomes]}))
+    print(json.dumps(asdict(summary)), flush=True)
+    return summary
+
+
+def write_text(path: StoragePath, content: str) -> None:
+    """Write through the declared bucket routing, including CoreWeave endpoints."""
+    fs, resolved = filesystem_for(str(path))
+    with fs.open(resolved, "w") as stream:
+        stream.write(content)
+
+
+def publish_manifest(output: StoragePath, targets: list[Target]) -> None:
+    manifest = []
+    for target in targets:
+        credential = output / "credentials" / (target.endpoint.rsplit("/", 1)[-1] + ".jwt")
+        write_text(credential, target.token)
+        manifest.append({"base_url": target.base_url, "api_key_ref": str(credential)})
+    write_text(output / "credential-expiry.json", json.dumps({target.endpoint: target.expires_at for target in targets}))
+    write_text(output / "manifest.json", json.dumps(manifest))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", action="append", required=True)
     parser.add_argument("--requests", type=int, default=200)
-    parser.add_argument("--concurrency", type=int, default=24)
+    parser.add_argument(
+        "--concurrency", type=int, default=24, help="Global proof concurrency; load concurrency per replica."
+    )
     parser.add_argument("--duration", type=float, default=900)
     parser.add_argument("--wait-timeout", type=float, default=7200)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if args.requests < 200 or args.requests < len(args.endpoint):
         raise ValueError("Proof requires at least 200 requests and one per replica")
-    client = iris_ctx().client
-    if client is None:
-        raise RuntimeError("Run the proof inside an Iris CPU job on cw-us-east-08a")
-    for endpoint in args.endpoint:
-        wait_for_endpoint(client, timeout=Duration.from_seconds(args.wait_timeout), endpoint_name=endpoint)
-        print(json.dumps({"registered": endpoint}), flush=True)
-    targets = [
-        Target(
-            endpoint=endpoint,
-            base_url=f"http://iris-controller-svc:10000/proxy/{endpoint.lstrip('/').replace('/', '.')}/v1",
-            token=client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(CAPABILITY_HOURS)).token,
-        )
-        for endpoint in args.endpoint
-    ]
+    if args.concurrency < 1 or args.duration < 0 or args.wait_timeout < 0:
+        raise ValueError("Concurrency must be positive and durations must not be negative")
+    targets = ready_targets(args.endpoint, args.wait_timeout)
     bodies = archived_requests(args.requests)
+    output = StoragePath(args.output.rstrip("/"))
     started = time.monotonic()
     outcomes = asyncio.run(prove(targets, bodies, args.concurrency))
-    elapsed = time.monotonic() - started
-    passed = sum(result["ok"] for result in outcomes)
-    report = {
-        "requests": len(outcomes),
-        "passed": passed,
-        "failures": len(outcomes) - passed,
-        "elapsed": elapsed,
-        "rows_per_hour": passed * 3600 / elapsed,
-        "per_endpoint": dict(Counter(result["endpoint"] for result in outcomes if result["ok"])),
-        "outcomes": outcomes,
-    }
-    write_json(args.output + "/proof.json", report)
-    print(json.dumps({key: value for key, value in report.items() if key != "outcomes"}), flush=True)
-    if passed != len(outcomes):
+    proof = write_report(output / "proof.json", outcomes, time.monotonic() - started, len(targets))
+    if proof.failures:
         raise RuntimeError("Real-request proof failed; consumer manifest was not published")
     if args.duration <= 0:
         return
-
-    async def sustain() -> list[dict]:
-        async def bench(target: Target) -> dict:
-            started = time.monotonic()
-            stats = await warmup_bench.run_load(target.base_url, args.concurrency, args.duration, "high", target.token)
-            return {"endpoint": target.endpoint, **stats.summary(time.monotonic() - started, pool.GPUS_PER_ENGINE)}
-
-        return await asyncio.gather(*(bench(target) for target in targets))
-
-    sustained = asyncio.run(sustain())
-    write_json(args.output + "/sustained.json", sustained)
-    print(json.dumps({"sustained": sustained}), flush=True)
-    if any(result["failures"] for result in sustained):
-        raise RuntimeError("Sustained load failed")
-    manifest = []
-    for target in targets:
-        credential_ref = args.output + "/credentials/" + target.endpoint.rsplit("/", 1)[-1] + ".jwt"
-        fs, path = filesystem_for(credential_ref)
-        with fs.open(path, "w") as stream:
-            stream.write(target.token)
-        manifest.append({"base_url": target.base_url, "api_key_ref": credential_ref})
-    write_json(args.output + "/manifest.json", manifest)
+    started = time.monotonic()
+    outcomes = asyncio.run(sustained_load(targets, bodies, args.concurrency, args.duration))
+    load = write_report(output / "sustained.json", outcomes, time.monotonic() - started, len(targets))
+    if load.failures:
+        raise RuntimeError("Sustained real-request load failed; consumer manifest was not published")
+    publish_manifest(output, targets)
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ def replica_service(endpoint: str) -> IrisServiceConfig:
         engine=pool.engine(),
         iris=replace(pool.iris_config(), max_retries_failure=REPLICA_RETRIES),
         endpoint_name=endpoint,
-        timeout_hours=pool.COORDINATOR_TIMEOUT_HOURS,
+        timeout_hours=pool.SERVICE_TIMEOUT_HOURS,
         controller_proxy_timeout_seconds=pool.REQUEST_TIMEOUT_SECONDS,
     )
 
@@ -48,9 +48,7 @@ def main() -> None:
         (f"{pool.JOB_PREFIX}-{args.tag}-{index:02d}", f"{pool.ENDPOINT_NAME}-{args.tag}-{index:02d}")
         for index in range(args.start_index, args.start_index + args.count)
     ]
-    # This client connects directly to 08a; a cluster constraint would request
-    # federation back to the same controller, which is not a peer of itself.
-    resources = replace(pool.worker_resources(), target_cluster=None)
+    resources = pool.worker_resources()
     if args.dry_run:
         print(json.dumps({"replicas": replicas, "gpus": args.count * pool.GPUS_PER_ENGINE, "resources": str(resources)}))
         return
@@ -68,7 +66,7 @@ def main() -> None:
                     max_retries_failure=REPLICA_RETRIES,
                     max_task_failures=REPLICA_RETRIES,
                     max_retries_preemption=pool.MAX_RETRIES_PREEMPTION,
-                    timeout=Duration.from_hours(pool.COORDINATOR_TIMEOUT_HOURS),
+                    timeout=Duration.from_hours(pool.SERVICE_TIMEOUT_HOURS),
                 )
                 print(json.dumps({"job_id": str(job.job_id), "endpoint": endpoint}), flush=True)
 
