@@ -95,6 +95,83 @@ except RuntimeError:
 release.set()
 print(started)
 """
+KEEPER_SLEEP_ARGS = (b"sleep", b"2147483647")
+"""The machine keeper's payload argv, which the guest init must run (see the quiesce tests)."""
+
+# The root-delivery grading quiesce (taskcompendium.harbor.root_delivery) as the original
+# task revisions run it: kill every process outside the exec's own ancestry, sparing only
+# PID 1 and zombies. While the machine's keeper was the guest init's child, this killed
+# the keeper, bwrap exited 137, and every graded attempt died as "Machine is closed".
+ROOT_DELIVERY_QUIESCE_PROGRAM = """\
+import os, signal
+
+mine = set()
+pid = os.getpid()
+while pid > 1:
+    mine.add(pid)
+    try:
+        with open(f"/proc/{pid}/stat") as stream:
+            fields = stream.read().rsplit(") ", 1)[1].split()
+        pid = int(fields[1])
+    except (OSError, IndexError, ValueError):
+        break
+killed = []
+for entry in os.scandir("/proc"):
+    if not entry.name.isdecimal():
+        continue
+    victim = int(entry.name)
+    if victim in mine or victim == 1:
+        continue
+    try:
+        with open(f"/proc/{victim}/stat") as stream:
+            fields = stream.read().rsplit(") ", 1)[1].split()
+        state = fields[0]
+    except (OSError, IndexError, ValueError):
+        continue
+    if state.startswith("Z"):
+        continue
+    try:
+        os.kill(victim, signal.SIGKILL)
+        killed.append(victim)
+    except ProcessLookupError:
+        continue
+print(len(killed))
+"""
+
+ROOT_DELIVERY_QUIESCE_SCRIPT = """\
+set -eu
+self=$$
+ancestry=" $self "
+pid=$self
+while [ "$pid" -gt 1 ]; do
+  line=$(cat "/proc/$pid/stat" 2>/dev/null) || break
+  rest=${line##*) }
+  state=${rest%% *}
+  ppid=${rest#* }
+  ppid=${ppid%% *}
+  case $ppid in ''|*[!0-9]*) break;; esac
+  ancestry="$ancestry $ppid "
+  pid=$ppid
+done
+killed=0
+for entry in /proc/[0-9]*; do
+  victim=${entry#/proc/}
+  case $ancestry in *" $victim "*) continue;; esac
+  [ "$victim" -gt 1 ] || continue
+  line=$(cat "/proc/$victim/stat" 2>/dev/null) || continue
+  rest=${line##*) }
+  case ${rest%% *} in Z*) continue;; esac
+  if kill -9 "$victim" 2>/dev/null; then
+    killed=$((killed + 1))
+  elif [ ! -d "/proc/$victim" ]; then
+    continue
+  else
+    echo "quiesce kill failed for $victim" >&2
+    exit 1
+  fi
+done
+echo "$killed"
+"""
 SPEC = MachineSpec(HostImage(), workdir="/app")
 PYTHON_VERSION = "3.12.13"
 # A hash lock as ``uv pip compile --generate-hashes`` writes it, for a small pure-Python package.
@@ -481,6 +558,63 @@ def test_losing_the_host_launcher_reclaims_its_still_running_guest(factory):
         assert not machine.root.exists()
 
     on_machine(factory, SPEC, scenario)
+
+
+def test_the_keeper_payload_is_the_guest_init(factory):
+    """The machine's lifecycle sleeper is PID 1 of the guest PID namespace.
+
+    Shared grading quiesces kill every process outside their ancestry except PID 1,
+    so a keeper below PID 1 dies mid-grading and closes the machine with it.
+    """
+
+    async def scenario(machine):
+        async with asyncio.timeout(5):
+            while True:
+                argv = (await machine.run(Command(("cat", "/proc/1/cmdline")))).stdout.split(b"\0")
+                if tuple(argv[: len(KEEPER_SLEEP_ARGS)]) == KEEPER_SLEEP_ARGS:
+                    break
+                await asyncio.sleep(0.05)
+
+    on_machine(factory, SPEC, scenario)
+
+
+def quiesce_survival_scenario(factory: LocalMachineFactory, quiesce: tuple[str, ...]) -> None:
+    """Kill a stray with the quiesce and require the machine to stay open."""
+
+    async def scenario(machine):
+        stray = await machine.run(Command(("/bin/sh", "-c", "sleep 3600 & printf '%s\\n' \"$!\" > /app/stray-pid")))
+        assert stray.exit_code == 0, stray.stderr
+        result = await machine.run(Command(quiesce))
+        assert result.exit_code == 0, (result.stdout, result.stderr)
+        # The quiesce must have killed the stray. Nobody reaps a guest orphan once the
+        # sleeper is the init, so a killed stray may remain visible as a zombie until close.
+        checked = await machine.run(
+            Command(
+                (
+                    "/bin/sh",
+                    "-c",
+                    "pid=$(cat /app/stray-pid)\n"
+                    "if [ -d \"/proc/$pid\" ]; then\n"
+                    "  line=$(cat \"/proc/$pid/stat\")\n"
+                    "  state=${line##*) }\n"
+                    "  case ${state%% *} in Z*) exit 0;; *) exit 7;; esac\n"
+                    "fi",
+                )
+            )
+        )
+        assert checked.exit_code == 0, checked.stderr
+        # Ordinary commands still run: the quiesce did not close the machine.
+        assert (await machine.run(Command(("printf", "alive")))).stdout == b"alive"
+
+    on_machine(factory, SPEC, scenario)
+
+
+def test_machine_survives_the_root_delivery_quiesce(factory):
+    quiesce_survival_scenario(factory, ("python3", "-I", "-c", ROOT_DELIVERY_QUIESCE_PROGRAM))
+
+
+def test_machine_survives_the_root_delivery_shell_quiesce(factory):
+    quiesce_survival_scenario(factory, ("bash", "-c", ROOT_DELIVERY_QUIESCE_SCRIPT))
 
 
 def test_cancelled_creation_reclaims_a_process_before_its_handle_is_returned(factory, tmp_path, monkeypatch):
