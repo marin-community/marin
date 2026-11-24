@@ -1,8 +1,8 @@
 {
   "artifact_version": "2026.11.24",
   "catalog_root": "s3://marin-us-east-02a/marin/rl-data/catalog/production",
-  "catalog_target_load_id": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
-  "curriculum_target_load_id": "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+  "catalog_target_load_id": "54405be9b4db4c2d9828549469abe759",
+  "curriculum_target_load_id": "cbe58f5c9e2142b294986479c6f457c2",
   "embed_cache_root": "s3://marin-us-east-02a/marin/rl-data/atlas/embedding-cache/r40",
   "expected_browse_source_count": 223,
   "expected_contract_count": 4,
