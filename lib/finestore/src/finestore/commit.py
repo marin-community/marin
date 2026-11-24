@@ -95,6 +95,8 @@ class CommitDelta:
     replacements: dict[str, TableReplacement] = field(default_factory=dict)
     metadata_updates: dict[str, str] = field(default_factory=dict)
     reset_tables: frozenset[str] = frozenset()
+    table_creations: dict[str, ManifestTable] = field(default_factory=dict)
+    table_moves: dict[str, str] = field(default_factory=dict)
     expected_tables: dict[str, TableVersion] = field(default_factory=dict)
     expected_contents: dict[str, TableContentVersion] = field(default_factory=dict)
     expected_incarnations: dict[str, int] | None = None
@@ -232,36 +234,51 @@ def _check_preconditions(base: Manifest, delta: CommitDelta) -> None:
             raise CommitConflict(f"table {name!r} changed since the expected snapshot")
 
 
-def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
-    _check_preconditions(base, delta)
-    sequence = base.sequence + 1
-    tables = dict(base.tables)
-    incarnations = dict(base.table_incarnations)
-    for name in delta.reset_tables:
-        tables.pop(name, None)
-        incarnations[name] = sequence
+def _published_shards(shards: tuple[Shard, ...], sequence: int) -> tuple[Shard, ...]:
+    return tuple(
+        shard.model_copy(update={"commit_sequence": sequence, "min_row_commit": sequence, "max_row_commit": sequence})
+        for shard in shards
+    )
 
-    for name, addition in delta.additions.items():
+
+def _append_tables(base: Manifest, additions: dict[str, TableAddition], sequence: int) -> dict[str, ManifestTable]:
+    tables = dict(base.tables)
+    for name, addition in additions.items():
         if base.table_incarnations.get(name, INITIAL_TABLE_INCARNATION) != addition.incarnation:
             raise CommitConflict(f"table {name!r} was dropped or replaced after the writer registered it")
-        if not addition.shards:
-            continue
         current = tables.get(name)
         if current is not None and current.metadata_path != addition.metadata_path:
             raise CommitConflict(f"table {name!r} was registered with different metadata")
         prior = current.shards if current is not None else ()
         paths = {shard.path for shard in prior}
-        added = tuple(
-            shard.model_copy(
-                update={"commit_sequence": sequence, "min_row_commit": sequence, "max_row_commit": sequence}
-            )
-            for shard in addition.shards
-            if shard.path not in paths
-        )
+        added = _published_shards(tuple(shard for shard in addition.shards if shard.path not in paths), sequence)
         if current is None:
             tables[name] = ManifestTable(metadata_path=addition.metadata_path, shards=added)
         else:
             tables[name] = current.model_copy(update={"shards": prior + added})
+    return tables
+
+
+def _apply_table_ddl(
+    tables: dict[str, ManifestTable], base: Manifest, delta: CommitDelta, sequence: int
+) -> dict[str, int]:
+    incarnations = dict(base.table_incarnations)
+    moved_tables = {destination: tables[source] for destination, source in delta.table_moves.items()}
+    for name in delta.reset_tables:
+        tables.pop(name, None)
+        if name in base.tables or name in incarnations:
+            incarnations[name] = sequence
+    tables.update(moved_tables)
+    for name, table in delta.table_creations.items():
+        tables[name] = table.model_copy(update={"shards": _published_shards(table.shards, sequence)})
+    return incarnations
+
+
+def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
+    _check_preconditions(base, delta)
+    sequence = base.sequence + 1
+    tables = _append_tables(base, delta.additions, sequence)
+    incarnations = _apply_table_ddl(tables, base, delta, sequence)
 
     for name, replacement in delta.replacements.items():
         current = tables.get(name)
@@ -281,7 +298,7 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
         tables[name] = current.model_copy(update={"metadata_path": metadata_path})
 
     sealed = base.sealed
-    if isinstance(delta.seal_update, ClearSeal) or delta.reset_tables.intersection(base.tables):
+    if isinstance(delta.seal_update, ClearSeal) or delta.table_creations or delta.reset_tables.intersection(base.tables):
         sealed = None
     elif delta.seal_update is not None:
         sealed = delta.seal_update

@@ -9,6 +9,7 @@ import dataclasses
 import hashlib
 import itertools
 import json
+import uuid
 from collections.abc import Iterable, Iterator
 
 from finestore.eval import (
@@ -27,7 +28,7 @@ from finestore.eval import (
     sample_from_archive_row,
 )
 from finestore.eval_rollouts import participant_type_for_role, rollout_records_from_sample
-from finestore.layout import TableMetadata
+from finestore.layout import TableMetadata, TableNameConflict
 from finestore.reader import ReadView
 from finestore.store import DataStore
 
@@ -107,6 +108,10 @@ def _source_fingerprints(reader: ReadView) -> dict[str, str]:
             "metadata_path": version.metadata_path,
             "row_commit_upper_bound": version.row_commit_upper_bound,
         }
+        if version.incarnation:
+            source["incarnation"] = version.incarnation
+        if version.history_floor:
+            source["history_floor"] = version.history_floor
         fingerprints[table] = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
     return fingerprints
 
@@ -131,13 +136,19 @@ def normalize_rollouts(root: str, *, writer_id: str) -> None:
     )
     with DataStore.open(root, writer_id=writer_id) as store:
         with store.transaction(base=reader) as transaction:
-            transaction.replace_table(
-                ARCHIVE_ROLLOUTS_TABLE,
-                (record.model_dump(mode="json") for record in records),
-                metadata=TableMetadata(primary_key=ROLLOUTS_MERGE_KEY, schema_version=ROLLOUT_SCHEMA_VERSION),
-                schema=rollouts_schema(),
-                depends_on=_SOURCE_TABLES,
-            )
+            transaction.require_unchanged(*_SOURCE_TABLES)
+            first = next(records, None)
+            if first is None:
+                transaction.drop_table(ARCHIVE_ROLLOUTS_TABLE)
+            else:
+                temporary = f"{ARCHIVE_ROLLOUTS_TABLE}_staging_{uuid.uuid4().hex}"
+                table = transaction.create_table(
+                    temporary,
+                    metadata=TableMetadata(primary_key=ROLLOUTS_MERGE_KEY, schema_version=ROLLOUT_SCHEMA_VERSION),
+                    schema=rollouts_schema(),
+                )
+                table.extend(record.model_dump(mode="json") for record in itertools.chain((first,), records))
+                transaction.rename_table(temporary, ARCHIVE_ROLLOUTS_TABLE, on_conflict=TableNameConflict.REPLACE)
             transaction.write_object(
                 _COMPLETE_OBJECT,
                 json.dumps(completion, sort_keys=True).encode(),

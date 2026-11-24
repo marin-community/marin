@@ -28,6 +28,7 @@ from finestore.layout import (
     FORMAT_VERSION,
     INITIAL_TABLE_INCARNATION,
     RESERVED_COLUMNS,
+    TABLE_INCARNATIONS_FEATURE,
     ArchiveMetadata,
     BlobColumns,
     BlobTables,
@@ -37,6 +38,7 @@ from finestore.layout import (
     KeyRange,
     OnConflict,
     TableMetadata,
+    TableNameConflict,
 )
 from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, FilterClause, ReadView, shard_may_contain
@@ -252,6 +254,9 @@ def test_drop_clears_current_seal_and_preserves_pinned_snapshot(archive_root):
     current = ReadView(archive_root)
     assert current.point("items", id=1) is None
     assert not current.is_sealed()
+    assert current.token is not None
+    manifest = json.loads(StoragePath(current.token.manifest_path).read_text())
+    assert TABLE_INCARNATIONS_FEATURE in manifest["required_features"]
     assert pinned.point("items", id=1)["id"] == 1
     assert pinned.is_sealed()
 
@@ -277,7 +282,7 @@ def test_drop_fences_buffered_writes_even_after_same_schema_recreation(archive_r
                 assert ReadView(archive_root).keys("items") == {(3,)}
 
 
-def test_table_replacement_publishes_all_staged_shards_with_transaction_objects(archive_root):
+def test_private_table_rename_publishes_all_staged_shards_with_transaction_objects(archive_root):
     with DataStore.open(archive_root, flush_interval=3600) as store:
         store.table("items", primary_key=("id",)).append({"id": 0})
         store.write_object("completion", b"old")
@@ -285,11 +290,10 @@ def test_table_replacement_publishes_all_staged_shards_with_transaction_objects(
         pinned = store.read_view()
 
         with store.transaction(max_bytes=256) as transaction:
-            transaction.replace_table(
-                "items",
-                ({"id": key, "payload": "p" * 128} for key in range(1, 4)),
-                metadata=TableMetadata(primary_key=("id",)),
-            )
+            staged = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+            staged.extend({"id": key, "payload": "p" * 128} for key in range(1, 4))
+            assert "scratch" not in store.read_view().table_names()
+            transaction.rename_table("scratch", "items", on_conflict=TableNameConflict.REPLACE)
             transaction.write_object("completion", b"new")
             assert store.read_view().token == pinned.token
 
@@ -298,11 +302,12 @@ def test_table_replacement_publishes_all_staged_shards_with_transaction_objects(
         assert len(current.list_shards("items")) > 1
         assert current.keys("items") == {(1,), (2,), (3,)}
         assert current.read_blob("completion") == b"new"
+        assert "scratch" not in current.table_names()
         assert pinned.keys("items") == {(0,)}
         assert pinned.read_blob("completion") == b"old"
 
 
-def test_table_replacement_rebases_over_source_and_target_compaction(archive_root):
+def test_private_table_rename_rebases_over_source_and_target_compaction(archive_root):
     with DataStore.open(archive_root, flush_interval=3600) as store:
         store.table("derived", primary_key=("id",)).append({"id": 0})
         store.table("source", primary_key=("id",)).append({"id": 1})
@@ -310,12 +315,10 @@ def test_table_replacement_rebases_over_source_and_target_compaction(archive_roo
         before = store.read_view()
 
         with store.transaction(base=before) as transaction:
-            transaction.replace_table(
-                "derived",
-                ({"id": row["id"]} for row in before.iter_rows("source")),
-                metadata=TableMetadata(primary_key=("id",)),
-                depends_on=("source",),
-            )
+            transaction.require_unchanged("source")
+            staged = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+            staged.extend({"id": row["id"]} for row in before.iter_rows("source"))
+            transaction.rename_table("scratch", "derived", on_conflict=TableNameConflict.REPLACE)
             compact_table(archive_root, "source")
             compact_table(archive_root, "derived")
             compacted = store.read_view()
@@ -327,7 +330,7 @@ def test_table_replacement_rebases_over_source_and_target_compaction(archive_roo
         assert current.keys("derived") == {(1,)}
 
 
-def test_table_replacement_rejects_a_concurrent_source_append(archive_root):
+def test_private_table_rename_rejects_a_concurrent_source_append(archive_root):
     with DataStore.open(archive_root, flush_interval=3600) as store:
         store.table("derived", primary_key=("id",)).append({"id": 0})
         source = store.table("source", primary_key=("id",))
@@ -336,18 +339,54 @@ def test_table_replacement_rejects_a_concurrent_source_append(archive_root):
 
         with pytest.raises(CommitConflict):
             with store.transaction() as transaction:
-                transaction.replace_table(
-                    "derived",
-                    [{"id": 1}],
-                    metadata=TableMetadata(primary_key=("id",)),
-                    depends_on=("source",),
-                )
+                transaction.require_unchanged("source")
+                staged = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+                staged.add({"id": 1})
+                transaction.rename_table("scratch", "derived", on_conflict=TableNameConflict.REPLACE)
                 with DataStore.open(archive_root) as other:
                     other.table("source", primary_key=("id",)).append({"id": 2})
 
         reader = store.read_view()
         assert reader.keys("source") == {(1,), (2,)}
         assert reader.keys("derived") == {(0,)}
+        assert "scratch" not in reader.table_names()
+
+
+def test_rename_published_table_moves_existing_shards_and_appends(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        store.table("source", primary_key=("id",)).append({"id": 1})
+        store.table("destination", primary_key=("id",)).append({"id": 0})
+        store.flush()
+        pinned = store.read_view()
+
+        with store.transaction() as transaction:
+            transaction.table("source").add({"id": 2})
+            with pytest.raises(ValueError):
+                transaction.rename_table("source", "destination")
+            transaction.rename_table("source", "destination", on_conflict=TableNameConflict.REPLACE)
+            transaction.table("destination").add({"id": 3})
+
+        current = store.read_view()
+        assert current.table_names() == ("destination",)
+        assert current.keys("destination") == {(1,), (2,), (3,)}
+        assert pinned.keys("source") == {(1,)}
+        assert pinned.keys("destination") == {(0,)}
+        assert pinned.list_shards("source")[0] in current.list_shards("destination")
+
+
+def test_transaction_can_publish_empty_tables_and_drop_existing_tables(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        store.table("old", primary_key=("id",)).append({"id": 1})
+        store.flush()
+
+        with store.transaction() as transaction:
+            transaction.create_table("empty", metadata=TableMetadata(primary_key=("id",)))
+            transaction.drop_table("old")
+            assert store.read_view().table_names() == ("old",)
+
+        current = store.read_view()
+        assert current.table_names() == ("empty",)
+        assert current.table_metadata("empty").primary_key == ("id",)
 
 
 def test_multi_writer_compose(archive_root):
@@ -1271,12 +1310,16 @@ def test_transaction_exception_publishes_nothing(archive_root):
         with pytest.raises(RuntimeError, match="abort"):
             with store.transaction() as transaction:
                 transaction.table("purchases").add({"order_id": "o1"})
+                staged = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+                staged.add({"id": 1})
+                transaction.rename_table("scratch", "items")
                 transaction.write_object("receipts/o1", b"paid")
                 raise RuntimeError("abort")
 
         view = ReadView(root)
         assert view.scan("purchases") is None
         assert view.read_blob("receipts/o1") is None
+        assert view.table_names() == ()
 
 
 def test_transaction_limit_uses_arrow_buffer_bytes(archive_root):

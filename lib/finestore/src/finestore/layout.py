@@ -23,6 +23,7 @@ HEAD_FILE = "HEAD"
 MAINTENANCE_LEASE_FILE = "_maintenance"
 FORMAT_VERSION = 2
 DATA_DIR = "data"
+STAGED_TABLE_DIR = "_staged"
 MANIFESTS_DIR = "manifests"
 SCHEMAS_DIR = "schemas"
 
@@ -96,6 +97,13 @@ class OnConflict(StrEnum):
 
     ERROR = "error"
     SUPERSEDE = "supersede"
+
+
+class TableNameConflict(StrEnum):
+    """How a rename handles an occupied destination."""
+
+    ERROR = "error"
+    REPLACE = "replace"
 
 
 class TableMetadata(_FormatModel):
