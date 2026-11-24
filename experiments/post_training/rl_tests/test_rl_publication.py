@@ -317,7 +317,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         )
     monkeypatch.setattr("marina.client.marina_request", request)
     family_metrics = {
-        f"eval_lite/family/{family}/mean{suffix}" for family in ("small", "large") for suffix in ("", "/gain", "/initial")
+        f"eval_lite/family/{family}/mean{suffix}"
+        for family in ("small", "large")
+        for suffix in ("", "/gain", "/initial")
     }
     expected = report.model_dump(mode="json", include={"verdict", "effect", "reason", "invariants"}) | {
         "comparisons": [
