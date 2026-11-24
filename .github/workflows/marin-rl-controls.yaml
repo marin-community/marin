@@ -1,100 +1,62 @@
 name: "Marin - Refresh RL controls"
 
 on:
-  issue_comment:
-    types: [created]
-  pull_request_target:
-    types: [closed]
-    branches: [main]
+  schedule:
+    - cron: '43 4 * * *'
   workflow_dispatch:
     inputs:
-      pull_request:
-        description: "Merged PR number to inspect in a dry run"
+      preset:
+        description: "Gated Snowball preset to inspect"
         required: true
-        type: number
+        type: string
 
 permissions:
   contents: read
-  issues: read
-  pull-requests: read
   id-token: write
 
 concurrency:
-  group: rl-controls-${{ github.event.issue.number || github.event.pull_request.number || inputs.pull_request }}
+  group: marin-rl-controls
   cancel-in-progress: false
 
 jobs:
   refresh:
-    if: >-
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
-       github.event.comment.body == '/rl-controls') ||
-      (github.event_name == 'pull_request_target' && github.event.pull_request.merged) ||
-      github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 30
     env:
-      RL_CONTROLS_ALLOWED_LOGINS: ${{ vars.RL_CONTROLS_ALLOWED_LOGINS }}
+      REQUESTED_PRESET: ${{ inputs.preset }}
+      RL_CONTROLS_CODE_CHANGES: ${{ vars.RL_CONTROLS_CODE_CHANGES }}
+      RL_CONTROLS_PIN_MERGE_POLICY: ${{ vars.RL_CONTROLS_PIN_MERGE_POLICY }}
       RL_CONTROLS_BOT_LOGIN: ${{ vars.RL_CONTROLS_BOT_LOGIN }}
-      RL_CONTROLS_MIN_OVERLAP: ${{ vars.RL_CONTROLS_MIN_OVERLAP }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: main
-          fetch-depth: 0
           persist-credentials: false
 
-      - name: Resolve the requested merge
-        id: request
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 infra/ci/rl_control_request.py
-
-      - name: Check out reviewed source
-        if: steps.request.outputs.commit != ''
-        env:
-          MERGE_SHA: ${{ steps.request.outputs.commit }}
-        run: |
-          set -euo pipefail
-          git merge-base --is-ancestor "$MERGE_SHA" origin/main
-          if ! git cat-file -e "$MERGE_SHA:experiments/post_training/rl_control_refresh.py"; then
-            echo "Control refresh requires a merge that contains the refresh driver." >&2
-            exit 1
-          fi
-          git worktree add --detach "$RUNNER_TEMP/rl-controls" "$MERGE_SHA"
-
       - uses: astral-sh/setup-uv@v7
-        if: steps.request.outputs.commit != ''
         with:
           python-version: "3.12"
 
       - uses: google-github-actions/auth@v3
-        if: steps.request.outputs.commit != ''
         with:
           project_id: hai-gcp-models
           workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
           service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
 
       - uses: google-github-actions/setup-gcloud@v3
-        if: steps.request.outputs.commit != ''
         with:
           project_id: hai-gcp-models
 
-      - name: Check controls or collect the authorized refresh
-        if: steps.request.outputs.commit != ''
-        working-directory: ${{ runner.temp }}/rl-controls
+      - name: Plan refresh from main
         env:
-          REQUEST_PULL: ${{ steps.request.outputs.pull }}
-          DRY_RUN: ${{ steps.request.outputs.dry_run }}
-          GH_TOKEN: ${{ steps.request.outputs.dry_run == 'true' && github.token || secrets.RL_CONTROLS_BOT_TOKEN }}
-          WANDB_API_KEY: ${{ steps.request.outputs.dry_run != 'true' && secrets.RL_CONTROLS_WANDB_API_KEY || '' }}
-          TOGETHER_API_KEY: ${{ steps.request.outputs.dry_run != 'true' && secrets.TOGETHER_API_KEY || '' }}
           CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
           CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          options=(--pull "$REQUEST_PULL")
-          if [[ "$DRY_RUN" == true ]]; then
-            options+=(--dry-run)
+          options=(--dry-run)
+          if [[ -n "$REQUESTED_PRESET" ]]; then
+            options+=(--preset "$REQUESTED_PRESET")
           fi
           uv run --frozen --all-packages --extra cpu --no-default-groups \
             python -m experiments.post_training.rl_control_refresh "${options[@]}"

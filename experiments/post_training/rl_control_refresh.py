@@ -20,7 +20,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.provenance import Provenance
 
 from experiments.post_training import rl, rl_compose, rl_gate, rl_publication
-from experiments.post_training.rl_measurements import RunInputs, read_recorded_launch, read_task_set, recorded_sources
+from experiments.post_training.rl_measurements import RunInputs, read_recorded_launch, read_task_set
 from experiments.post_training.rl_presets import ControlPin, ModelPresets, Preset
 from experiments.post_training.snowball_rl import SNOWBALL
 
@@ -34,11 +34,19 @@ class ControlRefresh:
     current: ControlPin
 
 
-def plan_refresh(table: ModelPresets) -> list[ControlRefresh]:
-    """Select cohorts whose recorded revision or task sets differ from the preset."""
+def plan_refresh(table: ModelPresets, preset_name: str | None = None) -> list[ControlRefresh]:
+    """Plan refreshes by preset revision and the training set of launch-selectable data presets."""
     provenance = Provenance.capture(rl_compose.REPO_ROOT)
     if provenance.dirty or not provenance.base_commit:
         raise ValueError("control refresh needs a clean source commit")
+    presets = table.by_name
+    control_name = None
+    if preset_name is not None:
+        selected = presets.get(preset_name)
+        if selected is None or selected.control_preset not in table.control_pins:
+            raise ValueError(f"choose a gated preset with controls, got {preset_name!r}")
+        control_name = selected.control_preset
+    launch_selected = {preset.control_preset for preset in presets.values() if preset.tasks_input != "forbidden"}
     digests: dict[tuple[tuple[str, str], ...], str] = {}
 
     def digest(sources: Sequence[RecordedSource]) -> str:
@@ -47,29 +55,23 @@ def plan_refresh(table: ModelPresets) -> list[ControlRefresh]:
             digests[paths] = read_task_set(sources).task_set_sha256
         return digests[paths]
 
-    def signature(launch: RecordedLaunch, preset: Preset) -> tuple[str, ...]:
-        return (
-            digest(launch.train_data),
-            *(digest(recorded_sources(launch, evaluation.name)) for evaluation in preset.evaluations),
-        )
-
     planned = []
     for previous in table.control_pins.values():
-        preset = table.by_name[previous.preset]
+        if control_name is not None and previous.preset != control_name:
+            continue
+        preset = presets[previous.preset]
         stale = previous.revision != preset.revision
-        if not stale:
+        if not stale and previous.preset in launch_selected:
             (config,) = rl_gate._compose_plans(preset, (RunInputs(preset_name=preset.name),))
             expected = RecordedLaunch.from_document(config, attempt=config["run"]["attempt_id"])
-            current_tasks = signature(expected, preset)
+            current_tasks = digest(expected.train_data)
             for index in range(previous.replicates):
                 output = rl_gate.control_path(preset, previous, index, table=table)
                 receipt = read_stored_skyrl_attempt(output)
                 if receipt is None or receipt.native.result.state != "succeeded":
                     raise ValueError(f"expected a successful pinned control receipt at {output}")
                 observed = read_recorded_launch(receipt)
-                if observed.evaluation_data.keys() != expected.evaluation_data.keys() or (
-                    signature(observed, preset) != current_tasks
-                ):
+                if digest(observed.train_data) != current_tasks:
                     stale = True
                     break
         if stale:
@@ -168,11 +170,10 @@ def _submit_pin_pr(
     reports: Sequence[tuple[ControlRefresh, str]],
     source: str,
     branch: str,
-    pull: int,
     published: str | None,
 ) -> None:
     title = "Refresh Snowball RL controls"
-    body = [f"Pin the refreshed Snowball control cohorts collected at `{source}` after #{pull}."]
+    body = [f"Pin the Snowball control cohorts collected at main commit `{source}`."]
     for item, report_path in reports:
         report = rl_gate.read_gate_report(report_path)
         if report is None:
@@ -205,9 +206,11 @@ def _submit_pin_pr(
 
 
 def _configured_bot() -> str:
+    code_changes = os.environ.get("RL_CONTROLS_CODE_CHANGES")
+    merge_policy = os.environ.get("RL_CONTROLS_PIN_MERGE_POLICY")
     bot = os.environ.get("RL_CONTROLS_BOT_LOGIN")
-    if not bot or not os.environ.get("RL_CONTROLS_ALLOWED_LOGINS"):
-        raise ValueError("control refresh requires configured bot and requester identities")
+    if not code_changes or not merge_policy or not bot:
+        raise ValueError("live refresh requires the code-change policy, pin merge policy, and bot login")
     login = subprocess.check_output(["gh", "api", "user", "--jq", ".login"], text=True).strip()
     if login != bot:
         raise ValueError("control refresh token does not match the configured bot")
@@ -246,15 +249,9 @@ def _verify_pin_base(source: str) -> None:
         raise ValueError(f"current main changed Snowball control inputs after {source}:\n{changed}")
 
 
-def _refresh_controls(planned: Sequence[ControlRefresh], *, pull: int, bot: str) -> None:
+def _refresh_controls(planned: Sequence[ControlRefresh], *, bot: str) -> None:
     if not planned:
-        subprocess.run(
-            ["gh", "pr", "comment", str(pull), "--body", "🤖 All RL controls match this merge. No refresh is needed."],
-            check=True,
-        )
         return
-    if os.environ.get("RL_CONTROLS_MIN_OVERLAP") != str(rl_gate.MIN_SHARED_TASK_FRACTION):
-        raise ValueError("control collection needs approval of the current gate overlap threshold")
     if not os.environ.get("TOGETHER_API_KEY") or not os.environ.get("WANDB_API_KEY"):
         raise ValueError("control collection requires W&B and Together grader credentials")
     source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
@@ -275,23 +272,21 @@ def _refresh_controls(planned: Sequence[ControlRefresh], *, pull: int, bot: str)
     if errors:
         raise RuntimeError("Control link publication failed:\n" + "\n".join(errors))
     _verify_pin_base(source)
-    _submit_pin_pr(table, reports, source, branch, pull, published)
+    _submit_pin_pr(table, reports, source, branch, published)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pull", required=True, type=int)
+    parser.add_argument("--preset", help="Plan the control cohort for one gated preset")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
-    if args.pull < 1:
-        parser.error("--pull must name a positive PR number")
     bot = None if args.dry_run else _configured_bot()
     configure_coreweave_s3()
-    planned = plan_refresh(SNOWBALL)
+    planned = plan_refresh(SNOWBALL, args.preset)
     if bot is None:
         print(json.dumps({"refresh": [item.preset.name for item in planned]}))
         return
-    _refresh_controls(planned, pull=args.pull, bot=bot)
+    _refresh_controls(planned, bot=bot)
 
 
 if __name__ == "__main__":

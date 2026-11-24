@@ -54,7 +54,6 @@ from experiments.post_training.rl_tests.fixtures import (
     evaluation_task_rows,
     fake_s3,
     fake_s3_checkpoint,
-    replace_evaluations,
     write_metrics,
     write_receipt,
     write_skyrl_run_record,
@@ -842,10 +841,9 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
         ("relabeled-family", (), 0, 20, None),
         ("too-few-common", range(10, 20), 0, 10, "10 of 20 control tasks shared"),
         ("missing-family", (0,), 0, 19, "family/small: 0 of 1 control tasks shared"),
-        ("missing-initial", (), 0, 20, "eval_lite/gain: 0 of 20 control tasks shared"),
     ),
 )
-def test_learning_gate_scores_shared_evaluation(
+def test_control_link_scores_shared_evaluation(
     recorded_runs, preset_table, monkeypatch, case, replaced, extra, shared, reason
 ):
     cache_native_compositions(monkeypatch)
@@ -853,12 +851,9 @@ def test_learning_gate_scores_shared_evaluation(
         snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3), checkpoint_every=3
     )
     table = preset_table(preset)
-    pin = gate.control_pin(preset, table=table)
-    monkeypatch.setattr(
-        snowball_model,
-        "SNOWBALL",
-        replace(table, control_pins={**table.control_pins, preset.name: replace(pin, replicates=2)}),
-    )
+    previous = replace(gate.control_pin(preset, table=table), replicates=2)
+    table = replace(table, control_pins={**table.control_pins, preset.name: previous})
+    monkeypatch.setattr(snowball_model, "SNOWBALL", table)
     baseline_roots = controls(recorded_runs, preset.name)
     if case in ("different-content", "relabeled-family"):
         for control, score in zip(baseline_roots, (0.1, 0.9), strict=True):
@@ -914,39 +909,37 @@ def test_learning_gate_scores_shared_evaluation(
     summary["selection_strata"]["version"] = "2026.11.24.1"
     _json(panel / "summary.json", summary)
 
-    preset = replace(preset, held_out_tasks=new_binding)
-    preset_table(preset)
-    name = f"users/test/shared-eval-{case}"
-    candidate = recorded_runs(preset.name, name)
-    export = str(candidate / "exports")
+    fresh = replace(previous, commit="next-main", revision="2026.11.24.1")
+    preset = replace(preset, revision=fresh.revision, held_out_tasks=new_binding)
+    table = preset_table(preset)
+    table = replace(table, control_pins={**table.control_pins, preset.name: fresh})
+    monkeypatch.setattr(snowball_model, "SNOWBALL", table)
     changed_ids = {f"task-{index}" for index in (*replaced, *range(count, count + extra))}
-    rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/", step=preset.updates)
-    if case == "missing-initial":
-        replace_evaluations(candidate, rows)
-    elif changed_ids and reason is None:
-        write_evaluations(
-            export,
-            [
-                row.model_copy(
-                    update={"answers": [answer.model_copy(update={"verifier_score": 1.0}) for answer in row.answers]}
-                )
-                for row in rows
-                if row.task_id in changed_ids
-            ],
-        )
-    elif case == "relabeled-family":
-        with edit_receipt(candidate) as receipt:
-            receipt["result"].update(started_at="2026-11-06T18:41:00+00:00", finished_at="2026-11-06T19:41:00+00:00")
-    report = compare(preset.name, "--candidate", name)
+    for index in range(fresh.replicates):
+        candidate = recorded_runs(preset.name, gate.control_name(preset.name, fresh.commit, index, table=table))
+        if changed_ids and reason is None:
+            export = str(candidate / "exports")
+            rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/", step=preset.updates)
+            write_evaluations(
+                export,
+                [
+                    row.model_copy(
+                        update={"answers": [answer.model_copy(update={"verifier_score": 1.0}) for answer in row.answers]}
+                    )
+                    for row in rows
+                    if row.task_id in changed_ids
+                ],
+            )
+        elif case == "relabeled-family":
+            with edit_receipt(candidate) as receipt:
+                receipt["result"].update(started_at="2026-11-06T18:41:00+00:00", finished_at="2026-11-06T19:41:00+00:00")
+    [link] = run(gate.control_link_step(preset, fresh, previous, table=table))
+    report = link.model_dump(mode="json")
     facts = {fact["name"]: fact for fact in report["invariants"]}
     assert facts["eval_lite/shared_tasks"]["value"] == shared
     assert facts["eval_lite/shared_task_fraction"]["value"] == shared / count
     if reason is not None:
         assert report["verdict"] == "invalid" and reason in report["reason"], report
-        assert "/rl-controls" in report["reason"]
-        if case == "missing-initial":
-            assert facts["eval_lite/shared_tasks"]["holds"]
-            assert not facts["eval_lite/gain/shared_tasks"]["holds"]
         return
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
     assert report["control"]["held_out_tasks"] == old_binding

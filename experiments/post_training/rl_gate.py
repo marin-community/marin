@@ -53,7 +53,6 @@ from experiments.post_training.rl_measurements import (
     InvalidComparison,
     RunInputs,
     RunMeasurements,
-    held_out_identity,
     read_measurements,
     read_recorded_launch,
     read_run_inputs,
@@ -144,15 +143,13 @@ def validate_candidate(preset: presets.Preset, inputs: RunInputs, *, table: Mode
         return candidate
     defaults, candidate = _compose_plans(preset, (RunInputs(preset_name=preset.name), inputs))
     pin = control_pin(preset, table=table)
-    panel_defaults = {preset.held_out_tasks: defaults}
     for index in range(pin.replicates):
         path = control_path(preset, pin, index, table=table)
         receipt = read_stored_skyrl_attempt(path)
         if receipt is None:
             raise InvalidComparison(f"control receipt is unavailable: {path}")
         launch = read_recorded_launch(receipt)
-        baseline = _panel_defaults(preset, launch, panel_defaults)
-        _check_control_config(receipt.native.config, baseline, launch, preset=preset)
+        _check_control_config(receipt.native.config, defaults, launch, preset=preset)
     return candidate
 
 
@@ -295,7 +292,11 @@ def _task_labels(table: pa.Table) -> dict[str, TaskStrata]:
 
 
 def _check_protocols(runs: Sequence[RunMeasurements], controls: Sequence[RunMeasurements]) -> None:
-    if any(run.evaluation_protocols != controls[0].evaluation_protocols for run in (*runs, *controls)):
+    def protocols(run: RunMeasurements) -> dict[str, dict]:
+        return {name: protocol for name, (_, protocol) in run.evaluation_identity.items()}
+
+    expected = protocols(controls[0])
+    if any(protocols(run) != expected for run in (*runs, *controls)):
         raise InvalidComparison("evaluation protocol differs")
 
 
@@ -324,11 +325,8 @@ def _require_shared_overlap(
             holds=accepted >= required,
         ),
     )
-    refresh = "Request fresh controls with /rl-controls."
     if accepted < required:
-        raise InsufficientOverlap(
-            f"{name}: {accepted} of {total} control tasks shared; minimum {required}. {refresh}", coverage
-        )
+        raise InsufficientOverlap(f"{name}: {accepted} of {total} control tasks shared; minimum {required}", coverage)
     for labels in control_labels:
         families: dict[str, set[str]] = {}
         for digest, strata in labels.items():
@@ -342,7 +340,7 @@ def _require_shared_overlap(
                     name=f"{label}/shared_tasks", value=accepted, limit=required, comparator=">=", holds=False
                 )
                 raise InsufficientOverlap(
-                    f"{label}: {accepted} of {len(members)} control tasks shared; minimum {required}. {refresh}",
+                    f"{label}: {accepted} of {len(members)} control tasks shared; minimum {required}",
                     (*coverage, fact),
                 )
     return coverage
@@ -376,8 +374,7 @@ def _unshared_score(
 @dataclass(frozen=True)
 class SharedEvaluation:
     coverage: tuple[Invariant, ...]
-    final_tasks: int
-    gain_tasks: int
+    tasks: int
     same_task_count: bool
     unshared: Comparison | None
 
@@ -393,34 +390,24 @@ def _align_evaluation(
     sets = [set(tasks) for tasks in labels]
     shared = set.intersection(*sets)
     coverage = _require_shared_overlap(name, shared, labels[n_runs:])
-    gain = shared.copy()
-    if evaluation.at_start:
-        for member in cohort:
-            gain.intersection_update(member.held_out_answers[name].initial["task_digest"].to_pylist())
-        if gain != shared:
-            try:
-                coverage += _require_shared_overlap(name + "/gain", gain, labels[n_runs:])
-            except InsufficientOverlap as error:
-                raise InsufficientOverlap(str(error), coverage + error.coverage) from error
     baseline = set.union(*sets[n_runs:])
     extra = _unshared_score(name, cohort[:n_runs], [tasks - baseline for tasks in sets[:n_runs]])
     strata = labels[newest]
     aligned = [
         (
-            restrict_evaluation(member, name, shared, gain, strata)
+            restrict_evaluation(member, name, shared, strata)
             if evaluation.at_start or tasks != shared or member_labels != strata
             else member
         )
         for member, tasks, member_labels in zip(cohort, sets, labels, strict=True)
     ]
-    return aligned, SharedEvaluation(coverage, len(shared), len(gain), len({len(tasks) for tasks in sets}) == 1, extra)
+    return aligned, SharedEvaluation(coverage, len(shared), len({len(tasks) for tasks in sets}) == 1, extra)
 
 
 def _compare_evaluations(
     preset: presets.Preset,
     runs: Sequence[RunMeasurements],
     controls: Sequence[RunMeasurements],
-    requirements: tuple[str, ...] = (),
 ) -> tuple[list[Invariant], list[Comparison]]:
     cohort = [*runs, *controls]
     newest = max(
@@ -444,22 +431,17 @@ def _compare_evaluations(
             replace(run, values={key: value for key, value in run.values.items() if key not in unavailable})
             for run in cohort
         ]
-    selected_runs = [with_requirements(run, requirements) for run in cohort[: len(runs)]]
+    selected_runs = cohort[: len(runs)]
     selected_controls = cohort[len(runs) :]
     invariants = [fact for alignment in shared.values() for fact in alignment.coverage]
     invariants.extend(
         row.model_copy(update={"replicate": index}) for index, run in enumerate(selected_runs) for row in run.invariants
     )
-    comparisons = _compare(preset, selected_runs, selected_controls, requirements)
+    comparisons = _compare(preset, selected_runs, selected_controls)
     for index, row in enumerate(comparisons):
         alignment = shared.get(row.metric.split("/", 1)[0])
         if alignment is not None and row.tasks is None and (row.run is not None or row.control is not None):
-            tasks = (
-                alignment.gain_tasks
-                if "/gain" in row.metric or row.metric.endswith("/initial")
-                else alignment.final_tasks
-            )
-            comparisons[index] = row.model_copy(update={"tasks": tasks})
+            comparisons[index] = row.model_copy(update={"tasks": alignment.tasks})
     comparisons.extend(alignment.unshared for alignment in shared.values() if alignment.unshared is not None)
     return invariants, comparisons
 
@@ -905,16 +887,6 @@ def _check_control_config(
         raise InvalidComparison(f"control config differs from current preset defaults: {', '.join(sorted(differences))}")
 
 
-def _panel_defaults(preset: presets.Preset, recorded: RecordedLaunch, cache: dict[str | None, dict]) -> dict:
-    identity = held_out_identity(preset, recorded)
-    if identity is None:
-        return cache[preset.held_out_tasks]
-    if identity not in cache:
-        bound = replace(preset, held_out_tasks=identity)
-        (cache[identity],) = _compose_plans(bound, (RunInputs(preset_name=preset.name),))
-    return cache[identity]
-
-
 def _write_gate(
     preset: presets.Preset,
     run_paths: tuple[str, ...],
@@ -935,7 +907,10 @@ def _write_gate(
         metadata = metadata.model_copy(
             update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
         )
-        runs = [read_measurements(path, preset, inputs) for path in run_paths]
+        runs = [
+            with_requirements(with_objectives(read_measurements(path, preset, inputs), preset), inputs.requirements)
+            for path in run_paths
+        ]
         if runs:
             provenance_fields = {"tree": "tree_hash", "base_commit": "base_commit", "dirty": "dirty"}
             metadata = metadata.model_copy(
@@ -951,7 +926,7 @@ def _write_gate(
             for index, candidate in enumerate(runs)
             for row in candidate.invariants
         ]
-        controls = [read_measurements(path, preset) for path in control_paths]
+        controls = [with_objectives(read_measurements(path, preset), preset) for path in control_paths]
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
         control = control.model_copy(
@@ -959,7 +934,8 @@ def _write_gate(
         )
         for candidate in controls:
             _check_control(candidate, control_pin)
-        _check_protocols(runs, controls)
+        if any(candidate.evaluation_identity != controls[0].evaluation_identity for candidate in (*runs, *controls)):
+            raise InvalidComparison("evaluation protocol or held-out TaskSpec content differs")
         model = runs[0].config["inputs"]["model"]
         resolved_model = ResolvedModelLocator(
             **{field.name: model[field.name] for field in fields(ResolvedModelLocator)}
@@ -977,15 +953,10 @@ def _write_gate(
                 raise InvalidComparison(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
                 )
-        panel_defaults = {preset.held_out_tasks: current_config}
         for candidate in controls:
-            baseline = _panel_defaults(preset, candidate.recorded, panel_defaults)
-            _check_control_config(candidate.config, baseline, candidate.recorded, preset=preset)
-        invariants, comparisons = _compare_evaluations(preset, runs, controls, inputs.requirements)
+            _check_control_config(candidate.config, current_config, candidate.recorded, preset=preset)
+        comparisons = _compare(preset, runs, controls, inputs.requirements)
         verdict, effect = _verdict(invariants, comparisons)
-    except InsufficientOverlap as error:
-        invariants.extend(error.coverage)
-        reason = str(error)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
         reason = str(error)
     report = GateReport(

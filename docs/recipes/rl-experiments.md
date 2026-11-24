@@ -284,13 +284,15 @@ replicate count. Data-medium shares learning-medium's pin. Before submission, th
 candidate on CPU and checks every control against current defaults. During comparison, candidate configuration
 must match its recorded inputs. The report states why a comparison is INVALID or an invariant fails.
 
-Held-out comparisons use task digests shared by every candidate and control at the scored step
-and at the initial step when that evaluation measures gain. All recorded evaluation requests
-must match. Each control must share at least 90% of its tasks overall and in each family.
-The report names each side's recorded selection, counts the shared tasks and shows candidate-only
-scores separately. The gate uses the newest run's strata labels for both sides and recalibrates
-the control spread on the shared set. Gain per GPU-hour is unavailable when the evaluation
-task counts differ. A control pin still needs the preset's revision.
+The gate compares candidates and controls with the same preset revision, evaluation request and
+held-out task set. The preset revision includes the evaluation selection.
+
+A link report compares consecutive control cohorts on task digests that every run scored.
+Evaluation requests must match, and the shared set must cover at least 90% of each run's tasks
+overall and in each family. The report names both selections, counts the shared tasks and shows
+scores on tasks unique to the new cohort. It uses the newest run's strata labels and calibrates
+the control spread on the shared set. Gain per GPU-hour is available when evaluation task counts
+match and the shared set includes the initial scores.
 
 Guard tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, where `k` is the number of
 guards and `sd` is the controls' sample standard deviation. A worse change beyond tolerance fails the guard.
@@ -315,18 +317,17 @@ Set `CANDIDATE` to the stored run name or `NAME@VERSION`. Leave-one-out compares
 replicate against the remaining controls with fixed default inputs.
 Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
 
-### Refresh controls from a merged PR
+### Plan the nightly control refresh
 
-When the repository has configured the requester and bot identities, an authorized `/rl-controls`
-comment requests a refresh after the PR merges into main. The workflow checks the merged revision
-and the training and evaluation task digests. It collects only stale cohorts, qualifies every
-replicate, publishes comparisons to the prior cohort on shared tasks, and opens one draft with
-the updated pins after checking that main still has the same control inputs.
+The workflow reads main's head at 04:43 UTC. A manual run accepts one gated preset name. Both
+entry points run on CPU and report which cohorts have a changed revision or, for a preset that
+takes a training set at launch, a changed training-set digest. The workflow serializes runs and
+checks the current head once per run. Each check uses the latest defaults on main when it starts.
 
-Choose a merge that contains the refresh driver. Manual dry runs read stored task sets and
-receipts using the workflow's storage credentials. Live collection also requires the bot token,
-W&B and Together grader credentials, and the approved overlap threshold recorded in
-`RL_CONTROLS_MIN_OVERLAP`.
+The refresh driver can collect changed cohorts, keep every completed replicate, run leave-one-out,
+link each cohort to its previous pin, and propose one draft with the new pins. The workflow runs
+in dry-run mode. Live collection requires a decision on code-only changes, the pin PR merge
+policy and the bot account.
 
 ## Change a preset's default
 
@@ -344,9 +345,8 @@ W&B and Together grader credentials, and the approved overlap threshold recorded
    Inspect the composed settings and add the new revision's hash under that preset in the
    test's `revisions` table.
    The compared-configuration hash includes actual execution memory and priority.
-4. Controls are collected by CI after the default change merges, once per changed default.
-   That CI workflow is planned separately; control collection is not a merge gate.
-   The manual `--control` command remains available for an explicitly authorized calibration.
+4. The nightly workflow identifies changed defaults on main. Use the manual `--control` command
+   for an explicitly authorized calibration.
    Source, revision and replicate count live in `snowball_rl.SNOWBALL.control_pins`.
 5. Validate newly collected control replicates with `snowball_rl compare --leave-out rN` for every replicate.
    Every leave-one-out verdict must PASS.

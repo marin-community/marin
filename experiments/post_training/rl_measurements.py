@@ -99,7 +99,10 @@ def _source_task_specs(sources: Sequence[RecordedSource]) -> list[tuple[str, str
 
 def read_task_set(sources: Sequence[RecordedSource]) -> RecordedTaskSet:
     """Read task IDs and a hash of the sorted raw TaskSpec strings."""
-    pairs = _source_task_specs(sources)
+    return _task_set(_source_task_specs(sources))
+
+
+def _task_set(pairs: Sequence[tuple[str, str]]) -> RecordedTaskSet:
     payload = json.dumps(sorted(pairs), separators=(",", ":"), ensure_ascii=False).encode()
     return RecordedTaskSet(tuple(task_id for task_id, _ in pairs), hashlib.sha256(payload).hexdigest())
 
@@ -358,7 +361,7 @@ class RunMeasurements:
     invariants: tuple[Invariant, ...]
     evaluations: tuple[Comparison, ...]
     slices: dict[str, int]
-    evaluation_protocols: dict[str, dict]
+    evaluation_identity: dict[str, tuple[str | None, dict]]
     held_out_answers: dict[str, HeldOutAnswers]
     started_at: str | None
     gpu_hours: float | None
@@ -366,28 +369,26 @@ class RunMeasurements:
     attempt_id: str
 
 
-def _evaluation_values(
-    final: pa.Table, initial: pa.Table, *, final_for_gain: pa.Table | None = None
-) -> tuple[dict[str, float], dict[str, int]]:
+def _evaluation_values(final: pa.Table, initial: pa.Table) -> tuple[dict[str, float], dict[str, int]]:
     values = score_answers(final)
-    gain_values = score_answers(final_for_gain) if final_for_gain is not None else values
     for key, value in score_answers(initial).items():
         values[key + "/initial"] = value
-        if key in gain_values:
-            values[key + "/gain"] = gain_values[key] - value
+        if key in values:
+            values[key + "/gain"] = values[key] - value
     slices = {key: len({row["task_id"] for row in rows}) for key, rows in score_slices(final).items()}
     return values, slices
 
 
 def restrict_evaluation(
-    run: RunMeasurements, name: str, digests: set[str], gain_digests: set[str], strata: Mapping[str, TaskStrata]
+    run: RunMeasurements, name: str, digests: set[str], strata: Mapping[str, TaskStrata]
 ) -> RunMeasurements:
     """Recompute evaluation metrics on the selected digests with shared strata labels."""
     answers = run.held_out_answers[name]
 
-    def project(table: pa.Table, selected_digests: set[str]) -> pa.Table:
-        values = pa.array(sorted(selected_digests), type=pa.string())
-        selected = table.filter(pc.is_in(table["task_digest"], value_set=values))
+    selected_digests = pa.array(sorted(digests), type=pa.string())
+
+    def project(table: pa.Table) -> pa.Table:
+        selected = table.filter(pc.is_in(table["task_digest"], value_set=selected_digests))
         labels = [strata[digest] for digest in selected["task_digest"].to_pylist()]
         for column in SLICE_COLUMNS:
             position = ANSWER_SCHEMA.get_field_index(column)
@@ -398,10 +399,7 @@ def restrict_evaluation(
             )
         return selected
 
-    final = project(answers.final, digests)
-    initial = project(answers.initial, gain_digests)
-    aligned = project(answers.final, gain_digests) if digests != gain_digests else None
-    values, slices = _evaluation_values(final, initial, final_for_gain=aligned)
+    values, slices = _evaluation_values(project(answers.final), project(answers.initial))
     prefix = name + "/"
     return replace(
         run,
@@ -607,7 +605,13 @@ def read_measurements(
         invariants=tuple(invariants),
         evaluations=tuple(evaluations),
         slices=slices,
-        evaluation_protocols=protocols,
+        evaluation_identity={
+            evaluation.name: (
+                _task_set(recorded_tasks[evaluation.name]).task_set_sha256 if evaluation.held_out else None,
+                protocols[evaluation.name],
+            )
+            for evaluation in preset.evaluations
+        },
         held_out_answers=held_out_answers,
         started_at=result.started_at,
         gpu_hours=gpu_hours,
