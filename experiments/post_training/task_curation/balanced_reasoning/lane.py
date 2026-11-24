@@ -37,6 +37,7 @@ from experiments.post_training.task_curation.balanced_reasoning.difficulty impor
 from experiments.post_training.task_curation.balanced_reasoning.graceful import (
     CONVERGENCE_PROMPT,
     check_graceful_trace,
+    graceful_correction_prompt,
 )
 from experiments.post_training.task_curation.balanced_reasoning.selection import SelectedTask
 from experiments.post_training.task_curation.balanced_reasoning.style import style_report
@@ -47,6 +48,8 @@ RESOLUTION_SOLVED_SHORTEST = "solved_shortest"
 RESOLUTION_UNSOLVED = "unsolved"
 KIND_SOLVE = "solve"
 KIND_GRACEFUL = "graceful"
+GRACEFUL_ROUNDS = 2
+"""The graceful form gets one corrective retry after a rejected first reply."""
 
 START_THINK = "<|start_think|>"
 END_THINK = "<|end_think|>"
@@ -251,9 +254,9 @@ async def run_selected_task(
                 resolution = RESOLUTION_UNSOLVED
                 graceful = await _graceful_pass(ctx, entry.task.task_id, messages, sampling, spec, traces)
                 if graceful is not None:
+                    # The passing trace is already appended by the graceful pass.
                     trace, resolution = graceful
-                    traces.append(trace)
-                    selected_index = len(traces) - 1
+                    selected_index = len(traces) - 1 - [*reversed(traces)].index(trace)
                 else:
                     unsolved_reason = "the generator produced no passing attempt within the band budget"
             else:
@@ -315,7 +318,8 @@ async def _graceful_pass(
     """Continue the best failed attempt under the graceful form contract.
 
     A graceful trace is form-verified, not correctness-verified: its grade is recorded for
-    metadata only and never gates shipping.
+    metadata only and never gates shipping. One corrective retry follows a reply whose form
+    check fails; the store takes the first trace that satisfies the contract.
     """
     failed = tuple(trace for trace in traces if trace.kind == KIND_SOLVE)
     if not failed:
@@ -326,14 +330,23 @@ async def _graceful_pass(
         Message(role=Role.ASSISTANT, content=best.content, reasoning=best.reasoning),
         Message(role=Role.USER, content=CONVERGENCE_PROMPT),
     )
-    completion = await ctx.emit(
-        InferenceRequest(messages=conversation, tools=(), sampling=sampling, sample=len(traces) + 1)
-    )
-    check = check_graceful_trace(completion.reasoning, completion.content, completion.finish_reason.value)
-    grade = await ctx.emit(GradeCandidate(spec, Candidate(reply=completion.content)))
-    trace = _attempt_trace(KIND_GRACEFUL, completion, grade)
-    trace = dataclasses.replace(trace, graceful_resolution=check.resolution, style_reason=check.reason)
-    if check.passed:
-        return trace, check.resolution
-    logger.info("GRACEFUL %s rejected: %s", task_id, check.reason)
+    sample = len(traces) + 1
+    for round_index in range(GRACEFUL_ROUNDS):
+        completion = await ctx.emit(InferenceRequest(messages=conversation, tools=(), sampling=sampling, sample=sample))
+        check = check_graceful_trace(completion.reasoning, completion.content, completion.finish_reason.value)
+        grade = await ctx.emit(GradeCandidate(spec, Candidate(reply=completion.content)))
+        trace = _attempt_trace(KIND_GRACEFUL, completion, grade)
+        trace = dataclasses.replace(
+            trace, graceful_resolution=check.resolution, style_reason=check.reason or check.resolution
+        )
+        traces.append(trace)
+        if check.passed:
+            return trace, check.resolution
+        logger.info("GRACEFUL %s rejected (round %d/%d): %s", task_id, round_index + 1, GRACEFUL_ROUNDS, check.reason)
+        conversation = (
+            *conversation,
+            Message(role=Role.ASSISTANT, content=completion.content, reasoning=completion.reasoning),
+            Message(role=Role.USER, content=graceful_correction_prompt()),
+        )
+        sample += 1
     return None

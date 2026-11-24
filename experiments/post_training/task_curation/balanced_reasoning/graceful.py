@@ -30,19 +30,30 @@ Your previous attempt did not reach a verified answer. Converge now:
 
 1. Spend a short, bounded effort re-deriving only the parts you are least sure of. Do not \
 restart the problem from scratch more than once.
-2. Then close the reply with exactly one final line, either:
+2. The FINAL line of your reply must be exactly one of these two lines, with the prefix \
+copied verbatim:
 
 {best_effort_line}
-or
 {uncertain_line}
 
 The first commits to your single best candidate answer plus one sentence on why you believe \
 it despite not verifying it. The second states that the answer is uncertain, gives your best \
-candidate, and names the concrete blocker. Never leave the reply without this final line.
+candidate, and names the concrete blocker. Never leave the reply without this final line; the \
+line must start with exactly "{best_effort_prefix}" or "{uncertain_prefix}".
 """
 
 BEST_EFFORT_LINE = f"{BEST_EFFORT_MARKER} <answer> -- <one sentence on why this is your best candidate>"
 UNCERTAIN_LINE = f"{UNCERTAIN_MARKER} <answer> -- <the concrete blocker>"
+
+CORRECTION_PROMPT = """\
+Your reply did not end with the required closing line. Reply once more with the same bounded \
+effort, and make the LAST line exactly one of:
+
+{best_effort_line}
+{uncertain_line}
+
+Copy the prefix verbatim; nothing may follow that line.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +72,17 @@ class GracefulCheck:
 
 def graceful_convergence_prompt() -> str:
     """The user turn that converts a failed attempt into a bounded, committed reply."""
-    return CONVERGENCE_PROMPT.format(best_effort_line=BEST_EFFORT_LINE, uncertain_line=UNCERTAIN_LINE)
+    return CONVERGENCE_PROMPT.format(
+        best_effort_line=BEST_EFFORT_LINE,
+        uncertain_line=UNCERTAIN_LINE,
+        best_effort_prefix=BEST_EFFORT_MARKER,
+        uncertain_prefix=UNCERTAIN_MARKER,
+    )
+
+
+def graceful_correction_prompt() -> str:
+    """The user turn that retries a reply missing its contract closing."""
+    return CORRECTION_PROMPT.format(best_effort_line=BEST_EFFORT_LINE, uncertain_line=UNCERTAIN_LINE)
 
 
 def _closing_resolution(content: str) -> tuple[str | None, str | None]:

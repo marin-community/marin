@@ -40,6 +40,8 @@ from experiments.post_training.task_curation.balanced_reasoning.bands import Ban
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import TaskDifficulty
 from experiments.post_training.task_curation.balanced_reasoning.graceful import BEST_EFFORT_MARKER
 from experiments.post_training.task_curation.balanced_reasoning.lane import (
+    GRACEFUL_ROUNDS,
+    KIND_GRACEFUL,
     RESOLUTION_SOLVED_SHORTEST,
     RESOLUTION_UNSOLVED,
     run_selected_task,
@@ -219,6 +221,7 @@ def test_lane_unsolved_when_graceful_contract_fails(tmp_path: Path) -> None:
             (
                 *(provider_completion("thirteen", completion_tokens=40 + index) for index in range(4)),
                 provider_completion("probably 13", completion_tokens=60),  # no contract closing
+                provider_completion("still no closing line here", completion_tokens=61),  # the corrective retry
             )
         )
         return await run_selected_task(
@@ -229,6 +232,8 @@ def test_lane_unsolved_when_graceful_contract_fails(tmp_path: Path) -> None:
     assert outcome.resolution_kind == RESOLUTION_UNSOLVED
     assert outcome.selected_index is None
     assert outcome.unsolved_reason is not None
+    graceful = [attempt for attempt in outcome.attempts if attempt.kind == KIND_GRACEFUL]
+    assert len(graceful) == GRACEFUL_ROUNDS, "the rejected first reply gets one corrective retry"
 
 
 def test_lane_replays_recorded_effects_on_relaunch(tmp_path: Path) -> None:
