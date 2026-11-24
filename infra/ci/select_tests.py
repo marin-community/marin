@@ -133,10 +133,12 @@ UV_EXTRAS: dict[str, list[str]] = {
 }
 
 PYTHON_VERSION = "3.12"
+# `-n auto` counts physical cores, so it starts 2 workers on a 4-vCPU hosted runner.
+# `logical` starts one per vCPU.
 PYTEST_ARGS: tuple[str, ...] = (
     "--durations=5",
     "-n",
-    "auto",
+    "logical",
     "--dist=worksteal",
     "--tb=short",
 )
