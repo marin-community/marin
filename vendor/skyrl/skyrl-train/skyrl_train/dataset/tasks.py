@@ -32,6 +32,7 @@ from taskcompendium.models import (
     TextMessage,
     grader_environment,
     grades_with_judge,
+    task_subset,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
@@ -125,6 +126,8 @@ class TaskDataset(PromptDataset):
                             data_source=extra_info.get("data_source") or extras.get("data_source"),
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
+                            task_id=lowered.task.id,
+                            subset_id=task_subset(lowered.task),
                             evaluation_identity=(
                                 TaskEvaluationIdentity.model_validate_json(extras[TASK_EVALUATION_IDENTITY])
                                 if extras.get(TASK_EVALUATION_IDENTITY) is not None
