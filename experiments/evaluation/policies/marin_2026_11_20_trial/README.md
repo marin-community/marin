@@ -23,6 +23,20 @@ uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-2
 Qwen3.6 is served as October served it: 4×H100 (TP2×DP2), 320 GB host memory, and the `qwen3`
 reasoning and `qwen3_coder` tool parsers.
 
+## Evaluations
+
+Every candidate runs every evaluation. `show` prints each one's context, seed, protocol, trials,
+output cap, judge and metric.
+
+| Kind | Evaluations |
+| --- | --- |
+| Knowledge and reasoning | GPQA Diamond, MMLU-Pro, TriviaQA, TruthfulQA, BoolQ, PIQA, WinoGrande |
+| Math | AIME24, MATH-500, OlympiadBench, GSM8K (0-shot), NUPA |
+| Code | HumanEval+, MBPP+, CruxEval |
+| Long context | MRCR (default, 32k and 65k) |
+| Instruction following and finance | IFBench, FinanceBench |
+| Agentic | Terminal-Bench 2.1, OT-TBLite, SWE-bench Verified (mini-SWE-agent), DS-1000, BFCL (Pi) |
+
 ## Differences from October
 
 Not run:
@@ -42,7 +56,6 @@ Run, with a known difference:
 | OlympiadBench | no output cap | protocol cap 32,768 tokens |
 | Agentic benchmarks | external Harbor fork | curated TaskSpec corpora, with prebuilt and Dockerfile base images pinned by digest, run by Marin's rollout engine ([#11664](https://github.com/marin-community/marin/pull/11664)) |
 | TB2, OT-TBLite, SWE-bench Verified | Daytona snapshots | declarative Daytona image builds, which create no snapshots |
-| SWE-bench Verified, DS-1000 | packages of registry `016dd78` | packages of registry `38742b0` |
 
 The same as October: the 20 single-turn selections (thinking mode, repeats, few-shot count,
 MRCR and MMLU-Pro windows), seed 42 on AIME24 and OlympiadBench, and the Together

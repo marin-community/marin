@@ -6,11 +6,14 @@
 Candidates wrap model catalog entries and evaluations hold benchmark catalog selections.
 """
 
+import re
 from collections import Counter
 from dataclasses import dataclass
 
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import ModelConfig
+
+HF_COMMIT = re.compile(r"[0-9a-f]{40}")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -18,15 +21,17 @@ class PolicyCandidate:
     """A model catalog entry under evaluation.
 
     ``max_context`` is the largest context window the model supports; no evaluation runs it with more.
-    A Hugging Face model must pin a revision so the policy names one checkpoint.
+    A Hugging Face model must pin a commit SHA so the policy names one checkpoint.
     """
 
     model: ModelConfig
     max_context: int
 
     def __post_init__(self) -> None:
-        if "://" not in self.model.location and self.model.revision is None:
-            raise ValueError(f"{self.name}: pin a Hugging Face revision for {self.model.location}")
+        if "://" not in self.model.location and (
+            self.model.revision is None or HF_COMMIT.fullmatch(self.model.revision) is None
+        ):
+            raise ValueError(f"{self.name}: pin {self.model.location} to a Hugging Face commit SHA")
 
     @property
     def name(self) -> str:

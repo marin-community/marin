@@ -67,7 +67,8 @@ def load_evaluations(path: Path) -> tuple[EvaluationSelection, ...]:
     return tuple(EvaluationSelection.model_validate({"label": name, **entry}) for name, entry in entries.items())
 
 
-def resolve_selection(selection: EvaluationSelection, model_format: PromptFormat | None) -> ResolvedEvaluationSelection:
+def selection_dataset(selection: EvaluationSelection, model_format: PromptFormat | None) -> EvaluationCorpusRecipe:
+    """The catalog dataset, with its protocol, that a selection runs as for this model format."""
     catalog = evaluation_benchmarks()
     if selection.benchmark not in catalog:
         raise ValueError(f"Unknown evaluation benchmark: {selection.benchmark}")
@@ -76,6 +77,11 @@ def resolve_selection(selection: EvaluationSelection, model_format: PromptFormat
     )
     dataset = sources[0].config
     assert dataset is not None
+    return dataset
+
+
+def resolve_selection(selection: EvaluationSelection, model_format: PromptFormat | None) -> ResolvedEvaluationSelection:
+    dataset = selection_dataset(selection, model_format)
     form = {"chat_generation": PromptFormat.CHAT, "text_generation": PromptFormat.COMPLETION}.get(
         dataset.protocol.operation
     )

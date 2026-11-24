@@ -16,8 +16,9 @@ from experiments.evaluation.policy.schema import (
     PolicyOverride,
 )
 
-LARGE = PolicyCandidate(model=ModelConfig(name="large", location="org/large", revision="abc"), max_context=200_000)
-SMALL = PolicyCandidate(model=ModelConfig(name="small", location="org/small", revision="abc"), max_context=60_000)
+REVISION = "0" * 40
+LARGE = PolicyCandidate(model=ModelConfig(name="large", location="org/large", revision=REVISION), max_context=200_000)
+SMALL = PolicyCandidate(model=ModelConfig(name="small", location="org/small", revision=REVISION), max_context=60_000)
 
 CONTEXT = 50_000
 PLAIN = PolicyEvaluation(definition=EvaluationSelection(benchmark="plain"), context=CONTEXT, max_output=None, seed=None)

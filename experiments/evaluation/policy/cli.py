@@ -10,14 +10,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import click
-from evalrecords.records import EvaluationSelection, PromptFormat, ResolvedEvaluationSelection
-from marin.evaluation.model_config import ModelConfig
+from evalrecords.records import PromptFormat
 
-from experiments.evaluation.curated import resolve_selection, selected_sources
+from experiments.evaluation.curated import selection_dataset
 from experiments.evaluation.policies import POLICIES
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
-from experiments.evaluation.preparation import EvaluationCorpusRecipe
 
 _COLUMNS = ("evaluation", "context", "output", "seed", "runs as", "think", "trials", "cap", "judge", "metric")
 
@@ -42,21 +40,16 @@ def _thinking(kwargs: Mapping[str, object]) -> str:
     return "on" if kwargs["enable_thinking"] else "off"
 
 
-def resolved_selection(selection: EvaluationSelection, model: ModelConfig) -> ResolvedEvaluationSelection:
-    """The catalog protocol a selection runs as for this model."""
-    return resolve_selection(selection, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION)
-
-
-def selection_dataset(selection: EvaluationSelection, model: ModelConfig) -> EvaluationCorpusRecipe:
-    """The catalog dataset, with its protocol, that a selection runs as for this model."""
-    config = selected_sources(resolved_selection(selection, model))[0].config
-    assert config is not None
-    return config
+def _seed(policy_seed: int | None, protocol_seed: int | None) -> str:
+    """The base seed the run starts from: the policy's, else the protocol's, else none."""
+    seed = policy_seed if policy_seed is not None else protocol_seed
+    return "unseeded" if seed is None else str(seed)
 
 
 def _row(item: ResolvedPolicyEvaluation) -> _Row:
     selection = item.evaluation.definition
-    config = selection_dataset(selection, item.candidate.model)
+    model_format = PromptFormat.CHAT if item.candidate.model.apply_chat_template else PromptFormat.COMPLETION
+    config = selection_dataset(selection, model_format)
     protocol = config.protocol
     sampling = protocol.sampling
     judge = selection.run.judge
@@ -64,7 +57,7 @@ def _row(item: ResolvedPolicyEvaluation) -> _Row:
         evaluation=item.evaluation.name,
         context=str(item.context),
         output=str(item.max_output or "-"),
-        seed=str(item.seed) if item.seed is not None else "protocol",
+        seed=_seed(item.seed, protocol.trials.seed),
         runs_as=f"{selection.benchmark}/{config.protocol_name} {protocol.operation.value}"
         + (f" {config.agent.harness.kind}" if config.agent is not None else ""),
         think=_thinking(sampling.chat_template_kwargs) if sampling is not None else "-",
