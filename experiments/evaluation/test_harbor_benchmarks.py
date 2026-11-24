@@ -147,7 +147,7 @@ def test_science_corpus_uses_the_validated_daytona_solver_resources():
     build = task.environment_requirements.docker_build
     assert build is not None
     dockerfile = base64.b64decode(build.files[0].source.content_base64).decode()
-    assert pi_install(swebench_science.PI) in dockerfile
+    assert "@earendil-works/pi-coding-agent@0.87.0" in dockerfile
     assert isinstance(task.grader, ScriptGrader) and isinstance(task.grader.placement, GraderMachine)
     assert task.grader.placement.environment.docker_build is None
     episode = source.config.item_builder(task).episode

@@ -276,9 +276,7 @@ and metadata are MIT licensed. Individual task materials retain their upstream l
 Both named evaluations use Pi 0.87.0 with explicit `xhigh`, one attempt per
 task, up to 16 concurrent attempts, a 65,536-token context cap and a
 16,384-token reply cap. The served model must support Pi's thinking format.
-Its context and generation settings can lower these limits. The pinned `qwen3.8-27b-pi-xhigh` model preset provides the
-65,536-token window and requests top-level `reasoning_effort=xhigh` alongside
-Pi's chat-template thinking switch.
+Its context and generation settings can lower these limits.
 The 96-task benchmark also exposes the `mini-swe-agent` protocol with its
 8,192-token reply limit. Pi is installed when building the solver image
 from the release digest using the shared Harbor Pi installation recipe.
@@ -304,7 +302,7 @@ Smoke-test the launch plan with:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
-  --model qwen3.8-27b-pi-xhigh --evals swebench-science --limit 1 --dry-run
+  --model qwen3.6-35b-a3b --evals swebench-science --limit 1 --dry-run
 ```
 
 Report the selection, harness, effective token budgets and verifier backend.

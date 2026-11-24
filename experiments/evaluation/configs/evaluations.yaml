@@ -189,7 +189,6 @@ evaluations:
     protocol: pi-xhigh
     run:
       concurrency: 16
-      max_tokens: 16384
       task_machine:
         image_build: declarative
   swebench-science-hosted114:
@@ -197,7 +196,6 @@ evaluations:
     protocol: pi-xhigh
     run:
       concurrency: 16
-      max_tokens: 16384
       task_machine:
         image_build: declarative
   gaia:

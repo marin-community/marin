@@ -1299,12 +1299,9 @@ async def test_task_machines_read_only_host_variables_the_run_supplies(tmp_path,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("agent", "model_body"),
-    [(PiAgent(), {}), (MiniSweAgent(), {}), (PiAgent(thinking="xhigh"), {"reasoning_effort": "xhigh"})],
-)
+@pytest.mark.parametrize("agent", [PiAgent(), MiniSweAgent()], ids=lambda agent: agent.kind)
 async def test_agents_that_send_their_own_request_options_reach_the_model_without_the_protocols(
-    tmp_path, run_config, agent, model_body
+    tmp_path, run_config, agent
 ):
     corpus = publish_episodes(tmp_path, ("episode/solve",), agent)
     requests = []
@@ -1314,12 +1311,7 @@ async def test_agents_that_send_their_own_request_options_reach_the_model_withou
         return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(5, 2))
 
     config = run_config.model_copy(
-        update={
-            "agent_extra_body": model_body,
-            "concurrency": 1,
-            "source_limit": None,
-            "task_machine": machine_runtime(backend="shellsim"),
-        }
+        update={"concurrency": 1, "source_limit": None, "task_machine": machine_runtime(backend="shellsim")}
     )
     await run_evaluation(
         (corpus,),
@@ -1332,10 +1324,7 @@ async def test_agents_that_send_their_own_request_options_reach_the_model_withou
     )
 
     [request] = requests
-    assert "tools" in request.options
-    assert {k: v for k, v in request.options.items() if k != "tools"} == (
-        {"extra_body": model_body} if model_body else {}
-    )
+    assert set(request.options) == {"tools"}
 
 
 @pytest.mark.asyncio

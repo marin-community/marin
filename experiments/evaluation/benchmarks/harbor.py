@@ -43,6 +43,7 @@ from taskcompendium.importers.harbor.config import UnsupportedHarborFeature
 from taskcompendium.importers.harbor.images import resolve_image_digests
 from taskcompendium.importers.harbor.package import (
     GradingRule,
+    HarborTask,
     JobSettings,
     PackageTests,
     image_references,
@@ -50,7 +51,7 @@ from taskcompendium.importers.harbor.package import (
 )
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse, RawRow
+from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, IntendedUse, RawRow
 
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.campaign import CampaignRuntime
@@ -129,24 +130,34 @@ class HarborConversion:
         job: JobSettings = JobSettings(),
         edits: tuple[PackageEdit, ...] = (),
     ) -> TaskSpec | ImportRejection:
-        with TemporaryDirectory(prefix="harbor-package-") as root:
-            directory = Path(root) / row.data["name"]
-            extract_package(row.data["archive"], directory)
-            edit_package(directory, edits)
-            try:
-                lowered = lower_package(
-                    directory,
-                    task_id=row.id,
-                    source=row.source,
-                    rule=self.rule(directory),
-                    image_digests=self.image_digests,
-                    job=job,
-                )
-            except UnsupportedHarborFeature as error:
-                return ImportRejection(kind=ImportFailureKind.UNSUPPORTED, reason="harbor_feature", detail=error.reason)
-        task = lowered.task
-        labels = {**task.labels, EPISODE_LABEL: lowered.episode.model_dump_json()}
-        return task.model_copy(update={"labels": labels, "tags": ("eval",)})
+        return convert_package_row(row, partial(self.lower, row=row, job=job), edits)
+
+    def lower(self, directory: Path, *, row: RawRow, job: JobSettings) -> HarborTask:
+        return lower_package(
+            directory,
+            task_id=row.id,
+            source=row.source,
+            rule=self.rule(directory),
+            image_digests=self.image_digests,
+            job=job,
+        )
+
+
+def convert_package_row(
+    row: RawRow, lower: Callable[[Path], HarborTask], edits: tuple[PackageEdit, ...] = ()
+) -> TaskSpec | ImportRejection:
+    """Convert an archived package and attach its episode inputs to the task."""
+    with TemporaryDirectory(prefix="harbor-package-") as root:
+        directory = Path(root) / row.data["name"]
+        extract_package(row.data["archive"], directory)
+        edit_package(directory, edits)
+        try:
+            lowered = lower(directory)
+        except UnsupportedHarborFeature as error:
+            return ImportRejection(kind=ImportFailureKind.UNSUPPORTED, reason="harbor_feature", detail=error.reason)
+    task = lowered.task
+    labels = {**task.labels, EPISODE_LABEL: lowered.episode.model_dump_json()}
+    return task.model_copy(update={"labels": labels, "tags": ("eval",)})
 
 
 def harbor_item(task: TaskSpec, *, agent: AgentEpisode) -> EvaluationItem:
@@ -261,6 +272,28 @@ def harbor_source(
         **({} if job is None else {"job": job}),
         **({"edits": dataset.edits} if dataset.edits else {}),
     }
+    return harbor_evaluation_source(
+        dataset,
+        agent,
+        partial(convert, **keywords) if keywords else convert,
+        max_input_tokens=max_input_tokens,
+        max_output_tokens=max_output_tokens,
+        trials=trials,
+        protocol=protocol,
+    )
+
+
+def harbor_evaluation_source(
+    dataset: HarborDataset,
+    agent: EpisodeAgent,
+    convert: Converter,
+    *,
+    max_input_tokens: int | None,
+    max_output_tokens: int,
+    trials: int,
+    protocol: str | None,
+) -> RlDataSource[EvaluationCorpusRecipe]:
+    """Assemble a Harbor evaluation using the dataset's package converter."""
     # Harbor's limits: each package sets its agent and verifier timeouts, and Harbor caps no turns or tokens.
     limits = EpisodeLimits(
         max_turns=None,
@@ -285,8 +318,7 @@ def harbor_source(
             CurationRecipe(
                 name=f"harbor-{dataset.recipe}",
                 source=dataset.source,
-                # A recipe without job settings or edits keeps the conversion identity of its published corpora.
-                convert=partial(convert, **keywords) if keywords else convert,
+                convert=convert,
                 version=dataset.version,
                 intended_use=IntendedUse.EVAL,
             ),

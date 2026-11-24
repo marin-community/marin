@@ -87,9 +87,10 @@ ARTIFACTS_DIR = "/logs/artifacts"
 AGENT_LOGS_DIR = "/logs/agent"
 AGENT_CAPABILITIES = ("shell", "filesystem", "process")
 LOG_DIRECTORIES = f"mkdir -p {AGENT_LOGS_DIR} {ARTIFACTS_DIR} && chmod 777 {AGENT_LOGS_DIR} {ARTIFACTS_DIR}"
+REWARD_JSON_PATH = "/logs/verifier/reward.json"
 PACKAGE_REWARD = FileReward(
     files=(
-        RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON_METRICS),
+        RewardFile(path=REWARD_JSON_PATH, format=RewardFileFormat.JSON_METRICS),
         RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),
     )
 )

@@ -12,7 +12,14 @@ from tempfile import TemporaryDirectory
 
 import tomlkit
 
-from taskcompendium.importers.harbor.package import HarborTask, JobSettings, PackageTests, lower_package
+from taskcompendium.importers.harbor.config import TASK_CONFIG
+from taskcompendium.importers.harbor.package import (
+    REWARD_JSON_PATH,
+    HarborTask,
+    JobSettings,
+    PackageTests,
+    lower_package,
+)
 from taskcompendium.models import (
     ArtifactKind,
     FileReward,
@@ -27,14 +34,14 @@ from taskcompendium.models import (
 PATCH = "/logs/artifacts/model.patch"
 
 
-def lower_science_package(
-    directory: Path, *, task_id: str, source: Source, job: JobSettings = JobSettings()
-) -> HarborTask:
-    """Convert a Pier 1.3 science package to a Harbor task with isolated patch grading."""
-    config = tomllib.loads((directory / "task.toml").read_text())
+def _harbor_config(directory: Path) -> dict:
+    """Translate the supported Pier release fields into their Harbor 1.2 equivalents."""
+    config = tomllib.loads((directory / TASK_CONFIG).read_text())
     verifier = config["verifier"]
     if config["schema_version"] != "1.3" or verifier["environment_mode"] != "separate":
         raise ValueError("Expected SWE-bench Science's schema 1.3 separate-verifier release")
+    if config.get("artifacts") != [PATCH]:
+        raise ValueError(f"Expected the sole Science artifact to be {PATCH}")
     for environment in (config["environment"], verifier["environment"]):
         if environment["allow_internet"] or "@sha256:" not in environment["docker_image"]:
             raise ValueError("SWE-bench Science requires offline digest-pinned images")
@@ -44,17 +51,25 @@ def lower_science_package(
         raise ValueError("SWE-bench Science requires the native no-network protocol")
     hook = (directory / "pre_artifacts.sh").read_text()
     command = f"cd {shlex.quote(config['environment']['workdir'])} && sh -c {shlex.quote(hook)}"
+    # This release's 1.3 fields have 1.2 equivalents: offline environment
+    # declarations plus an explicit collection command replace Pier's hook.
+    config["schema_version"] = "1.2"
+    verifier["collect"] = [{"command": command, "timeout_sec": 300.0}]
+    return config
+
+
+def lower_science_package(
+    directory: Path, *, task_id: str, source: Source, job: JobSettings = JobSettings()
+) -> HarborTask:
+    """Convert a Pier 1.3 science package to a Harbor task with isolated patch grading."""
+    config = _harbor_config(directory)
     with TemporaryDirectory(prefix="swe-science-package-") as temporary:
         prepared = Path(temporary) / directory.name
         (prepared / "environment").mkdir(parents=True)
         (prepared / "tests").mkdir()
         shutil.copyfile(directory / "instruction.md", prepared / "instruction.md")
         shutil.copyfile(directory / "tests/grader.py", prepared / "tests/grader.py")
-        # This release's 1.3 fields have 1.2 equivalents: offline environment
-        # declarations plus an explicit collection command replace Pier's hook.
-        config["schema_version"] = "1.2"
-        verifier["collect"] = [{"command": command, "timeout_sec": 300.0}]
-        (prepared / "task.toml").write_text(tomlkit.dumps(config))
+        (prepared / TASK_CONFIG).write_text(tomlkit.dumps(config))
         lowered = lower_package(prepared, task_id=task_id, source=source, rule=PackageTests(), image_digests={}, job=job)
     grader = lowered.task.grader
     assert isinstance(grader, ScriptGrader)
@@ -67,7 +82,7 @@ def lower_science_package(
     grader = grader.model_copy(
         update={
             "placement": placement,
-            "reward": FileReward(files=(RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),)),
+            "reward": FileReward(files=(RewardFile(path=REWARD_JSON_PATH, format=RewardFileFormat.JSON),)),
         }
     )
     return HarborTask(lowered.task.model_copy(update={"grader": grader}), lowered.episode)

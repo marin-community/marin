@@ -52,8 +52,17 @@ def test_native_verifier_entrypoint_and_hidden_tests_remain_image_owned():
     assert (lowered.episode.cpus, lowered.episode.memory_mb, lowered.episode.storage_mb) == (2, 8192, 20480)
 
 
+def test_unexpected_patch_artifact_is_rejected(tmp_path):
+    package = tmp_path / "package"
+    shutil.copytree(FIXTURE, package)
+    config = package / "task.toml"
+    config.write_text(config.read_text().replace("/logs/artifacts/model.patch", "/logs/artifacts/other.patch"))
+    with pytest.raises(ValueError, match="sole Science artifact"):
+        lower_science_package(package, task_id="science-002", source=SOURCE)
+
+
 @pytest.mark.parametrize("reward", [0, 1])
-def test_nested_native_report_scores_without_modifying_diagnostics(reward):
+def test_nested_native_report_returns_only_the_numeric_reward(reward):
     lowered = lower_science_package(FIXTURE, task_id="science-002", source=SOURCE)
     report = json.dumps({"reward": reward, "task_id": "002", "private": {"passed": 3, "collected": 4}}).encode()
     file = lowered.task.grader.reward.files[0]
