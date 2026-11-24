@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import Protocol
@@ -21,6 +21,7 @@ import pyarrow as pa
 from rigging import telemetry
 from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock, lease_refresh
 from rigging.filesystem.s3_errors import is_transient_s3_error
+from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import launch_user
 from rigging.timing import ExponentialBackoff
 
@@ -31,23 +32,28 @@ from finestore.commit import (
     CommitCoordinator,
     CommitDelta,
     TableAddition,
+    check_preconditions,
     initialize_archive,
     write_schema,
 )
 from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, compact_level_zero_tables, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
+    INITIAL_TABLE_INCARNATION,
     RESERVED_COLUMNS,
+    STAGED_TABLE_DIR,
     BlobColumns,
     BlobTables,
     CommitToken,
     FineStoreLayout,
     KeyRange,
+    ManifestTable,
     OnConflict,
     SealMarker,
     Shard,
     SystemColumns,
     TableMetadata,
+    TableNameConflict,
     blob_table_metadata,
     build_uri,
 )
@@ -146,9 +152,17 @@ def _reject_reserved_columns(columns: Iterable[str]) -> None:
         raise ValueError(f"row uses reserved FineStore column: {names}")
 
 
-def _addition_delta(additions: dict[str, TableAddition]) -> CommitDelta:
+def _addition_delta(additions: dict[str, TableAddition], *, delta: CommitDelta | None = None) -> CommitDelta:
+    base = delta or CommitDelta()
     required_features = frozenset({CHUNKED_BLOBS_FEATURE}) if BlobTables.PARTS in additions else frozenset()
-    return CommitDelta(additions=additions, required_features=required_features, seal_update=ClearSeal())
+    return replace(
+        base, additions=additions, required_features=base.required_features | required_features, seal_update=ClearSeal()
+    )
+
+
+def _require_user_table(name: str) -> None:
+    if name in (BlobTables.DESCRIPTORS, BlobTables.PARTS):
+        raise ValueError(f"table {name!r} belongs to the named-object store")
 
 
 @dataclass(frozen=True)
@@ -168,6 +182,12 @@ class PendingRows:
 
     rows: tuple[ArrowRow, ...]
     nbytes: int
+
+
+@dataclass(frozen=True)
+class _TransactionRows:
+    writer: DataTable
+    rows: list[ArrowRow]
 
 
 class FlushScheduler(Protocol):
@@ -250,27 +270,46 @@ class DataStore:
             metadata = TableMetadata(
                 primary_key=tuple(primary_key), schema_version=schema_version, on_conflict=on_conflict
             )
-            _reject_reserved_columns(primary_key)
-            metadata_path = write_schema(self._layout, metadata)
             view = self.read_view()
-            existing_metadata_path = view.table_metadata_path(name)
-            if existing_metadata_path is not None and existing_metadata_path != metadata_path:
-                raise ValueError(f"table {name!r} already exists with different metadata")
-            table = DataTable(
+            version = view.table_version(name)
+            table = self._table_writer(
                 name,
-                writer_id=self.writer_id,
-                layout=self._layout,
-                metadata_path=metadata_path,
-                max_buffer_bytes=self._max_buffer_bytes,
-                scheduler=self,
-                primary_key=metadata.primary_key,
+                metadata=metadata,
                 schema=schema,
-                schema_version=schema_version,
-                on_conflict=on_conflict,
+                incarnation=version.incarnation,
                 start_seq=view.max_seq(name) + 1,
             )
+            if version.metadata_path is not None and version.metadata_path != table.metadata_path:
+                raise ValueError(f"table {name!r} already exists with different metadata")
             self._tables[name] = table
             return table
+
+    def _table_writer(
+        self,
+        name: str,
+        *,
+        metadata: TableMetadata,
+        schema: pa.Schema | None,
+        incarnation: int,
+        start_seq: int,
+        storage_table: str | None = None,
+    ) -> DataTable:
+        _reject_reserved_columns(metadata.primary_key)
+        return DataTable(
+            name,
+            writer_id=self.writer_id,
+            layout=self._layout,
+            metadata_path=write_schema(self._layout, metadata),
+            incarnation=incarnation,
+            max_buffer_bytes=self._max_buffer_bytes,
+            scheduler=self,
+            primary_key=metadata.primary_key,
+            schema=schema,
+            schema_version=metadata.schema_version,
+            on_conflict=metadata.on_conflict,
+            start_seq=start_seq,
+            storage_table=storage_table,
+        )
 
     def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
         """Buffer one named byte object and return its ``finestore://`` URI."""
@@ -329,20 +368,25 @@ class DataStore:
         return ReadView(self.root)
 
     def transaction(
-        self, *, max_bytes: int | None = None, message: str | None = None, author: str | None = None
+        self,
+        *,
+        max_bytes: int | None = None,
+        base: ReadView | None = None,
+        message: str | None = None,
+        author: str | None = None,
     ) -> Transaction:
-        """Create a transaction bounded by actual Arrow buffer bytes.
+        """Create a transaction with an Arrow buffer budget and an optional pinned base.
 
         With a ``message``, the commit this transaction publishes records it as ``commit_info``,
         together with ``author``, the commit's sequence and its publication time. ``author``
-        defaults to the launching user (``rigging.provenance.launch_user``). A transaction without
-        rows on a non-empty archive publishes no commit and records nothing.
+        defaults to the launching user (``rigging.provenance.launch_user``).
+        On a non-empty archive, a transaction with only read guards returns its checked commit.
         """
         self.raise_if_failed()
         transaction_limit = self._max_buffer_bytes if max_bytes is None else max_bytes
         if transaction_limit <= 0:
             raise ValueError("max_bytes must be positive")
-        return Transaction(self, max_bytes=transaction_limit, attribution=_attribution(author, message))
+        return Transaction(self, max_bytes=transaction_limit, base=base, attribution=_attribution(author, message))
 
     def unbounded_transaction(self, *, message: str | None = None, author: str | None = None) -> Transaction:
         """Create a transaction without an Arrow buffer byte limit; ``message`` and ``author`` as for ``transaction``."""
@@ -374,7 +418,7 @@ class DataStore:
                 return None
             try:
                 additions = {
-                    table.name: TableAddition(metadata_path=table.metadata_path, shards=(table._write(pending),))
+                    table.name: TableAddition(table.metadata_path, (table._write(pending),), table.incarnation)
                     for table, pending in claimed.items()
                 }
                 return self._commits.commit(_addition_delta(additions))
@@ -383,22 +427,41 @@ class DataStore:
                     table._restore(pending)
                 raise
 
-    def _commit_transaction(self, rows: dict[str, list[ArrowRow]], *, attribution: Attribution | None) -> CommitToken:
-        with self._commit_lock:
+    def _commit_transaction(
+        self,
+        rows: dict[str, _TransactionRows],
+        delta: CommitDelta,
+    ) -> CommitToken:
+        with self._commit_lock, ExitStack() as retire:
+            retiring = []
+            if delta.reset_tables:
+                retire.enter_context(self._register_lock)
+                for name in delta.reset_tables:
+                    table = self._tables.get(name)
+                    if table is not None:
+                        retire.enter_context(table._retire_on_commit())
+                        retiring.append(table)
+
             additions = {}
-            for name, pending_rows in rows.items():
-                table = self._tables.get(name)
-                if table is None:
-                    raise KeyError(f"table {name!r} must be registered before the transaction")
-                stamped = table._stamp_arrow_rows(pending_rows)
-                pending = PendingRows(tuple(stamped), sum(row.table.nbytes for row in stamped))
-                additions[name] = TableAddition(metadata_path=table.metadata_path, shards=(table._write(pending),))
-            if not additions:
-                snapshot = self._commits.snapshot()
-                if snapshot.token is None:
-                    return self._commits.commit(CommitDelta(attribution=attribution))
-                return snapshot.token
-            return self._commits.commit(replace(_addition_delta(additions), attribution=attribution))
+            for name, buffered in rows.items():
+                table = buffered.writer
+                if self._tables.get(name) is not table:
+                    raise CommitConflict(f"table {name!r} was dropped or replaced after the writer registered it")
+                pending_rows = buffered.rows
+                shard = table._write_rows(pending_rows, nbytes=sum(row.table.nbytes for row in pending_rows))
+                additions[name] = TableAddition(table.metadata_path, (shard,), table.incarnation)
+            if additions:
+                delta = _addition_delta(additions, delta=delta)
+            if additions or delta.reset_tables:
+                token = self._commits.commit(delta)
+                for table in retiring:
+                    del self._tables[table.name]
+                return token
+            snapshot = self._commits.snapshot()
+            if snapshot.token is None:
+                return self._commits.commit(delta)
+            check_preconditions(snapshot.manifest, delta)
+            return snapshot.token
 
     def compact(self, table: str, *, generation: int | None = None) -> CompactionResult:
         """Logically compact one table against the current manifest."""
@@ -496,11 +559,17 @@ class DataStore:
         with self._maintenance() as held:
             if not held:
                 logger.info("FineStore sealing %s while another writer holds the maintenance lease", self.root)
-            for name in self.read_view().table_names():
+            snapshot = self._commits.snapshot()
+            for name in ReadView(self.root, snapshot).table_names():
                 result = self.compact(name)
                 if result.superseded:
                     superseded[name] = result.superseded
-        return self._commits.commit(CommitDelta(seal_update=SealMarker(writer=self.writer_id, superseded=superseded)))
+        return self._commits.commit(
+            CommitDelta(
+                seal_update=SealMarker(writer=self.writer_id, superseded=superseded),
+                expected_incarnations=snapshot.manifest.table_incarnations,
+            )
+        )
 
     def close(self) -> None:
         """Flush pending writes and, as the maintainer, merge bounded groups of level-zero shards.
@@ -514,8 +583,8 @@ class DataStore:
         self._closed = True
         self.request_stop()
         self._thread.join()
-        self.flush()
         try:
+            self.flush()
             if not self._has_level_zero_groups():
                 return
             with self._maintenance() as held:
@@ -539,7 +608,9 @@ class DataStore:
     def _has_level_zero_groups(self) -> bool:
         """Whether some registered table holds at least two level-zero shards, from any writer."""
         view = ReadView(self.root, self._commits.last_snapshot())
-        return any(sum(1 for shard in view.list_shards(name) if shard.generation == 0) >= 2 for name in self._tables)
+        return any(
+            sum(1 for shard in view.list_shards(name) if shard.generation == 0) >= 2 for name in list(self._tables)
+        )
 
     def request_stop(self) -> None:
         """Request maintenance shutdown without waiting or performing storage I/O.
@@ -601,25 +672,69 @@ class DataStore:
 class TransactionTable:
     """One table's rows inside a transaction."""
 
-    def __init__(self, transaction: Transaction, name: str) -> None:
+    def __init__(self, transaction: Transaction, writer: DataTable) -> None:
         self._transaction = transaction
-        self._name = name
+        self._writer = writer
 
     def add(self, row: dict) -> None:
-        self._transaction._add_rows({self._name: [row]})
+        self._transaction._add_rows({self._writer: [row]})
 
     def extend(self, rows: Iterable[dict]) -> None:
         for row in rows:
             self.add(row)
 
 
-class Transaction:
-    """A set of retained Arrow rows and objects published through one commit token."""
+class StagedTable:
+    """A transaction-private table whose Arrow batches are written as they arrive."""
 
-    def __init__(self, store: DataStore, *, max_bytes: int | None, attribution: Attribution | None) -> None:
+    def __init__(self, transaction: Transaction, writer: DataTable, max_bytes: int) -> None:
+        self._transaction = transaction
+        self._writer = writer
+        self._max_bytes = max_bytes
+        self._shards: list[Shard] = []
+
+    def add(self, row: dict) -> None:
+        self.extend((row,))
+
+    def extend(self, rows: Iterable[dict]) -> None:
+        """Write bounded batches. A staging failure aborts the transaction."""
+        self._transaction._require_open()
+        if self not in self._transaction._table_changes.values():
+            raise RuntimeError("staged table is no longer part of the transaction")
+        try:
+            self._shards.extend(self._writer._stage_shards(rows, max_bytes=self._max_bytes))
+        except BaseException:
+            self._transaction._closed = True
+            raise
+
+    def _manifest_table(self) -> ManifestTable:
+        return ManifestTable(metadata_path=self._writer.metadata_path, shards=tuple(self._shards))
+
+
+@dataclass(frozen=True)
+class _PublishedTable:
+    source: str
+
+
+class Transaction:
+    """An isolated set of table changes and writes published through one commit token."""
+
+    def __init__(
+        self,
+        store: DataStore,
+        *,
+        max_bytes: int | None,
+        attribution: Attribution | None,
+        base: ReadView | None = None,
+    ) -> None:
+        if base is not None and base.root != store.root:
+            raise ValueError("transaction base must come from the same archive")
         self._store = store
-        self._base = store.read_view()
-        self._rows: dict[str, list[ArrowRow]] = {}
+        self._base = store.read_view() if base is None else base
+        self._rows: dict[str, _TransactionRows] = {}
+        self._table_changes: dict[str, StagedTable | _PublishedTable | None] = {}
+        self._dependencies: set[str] = set()
+        self._staging_id: str | None = None
         self._objects: dict[str, bytes] = {}
         self._attribution = attribution
         self._max_bytes = max_bytes
@@ -627,37 +742,141 @@ class Transaction:
         self._closed = False
         self.token: CommitToken | None = None
 
-    def table(self, name: str) -> TransactionTable:
-        if name not in self._store._tables:
-            raise KeyError(f"table {name!r} must be registered before the transaction")
-        return TransactionTable(self, name)
-
-    def _add_rows(self, rows: dict[str, list[dict]]) -> None:
+    def _require_open(self) -> None:
         if self._closed:
             raise RuntimeError("transaction is closed")
+
+    def _visible_table(self, name: str) -> StagedTable | _PublishedTable | None:
+        if name in self._table_changes:
+            return self._table_changes[name]
+        if self._base.table_metadata_path(name) is not None or name in self._rows:
+            return _PublishedTable(name)
+        return None
+
+    def _can_append(self, source: str) -> bool:
+        return source not in self._table_changes or _PublishedTable(source) in self._table_changes.values()
+
+    def table(self, name: str) -> TransactionTable | StagedTable:
+        self._require_open()
+        table = self._visible_table(name)
+        if isinstance(table, StagedTable):
+            return table
+        if name in self._table_changes and table is None:
+            raise KeyError(f"table {name!r} is absent from the transaction")
+        source = table.source if isinstance(table, _PublishedTable) else name
+        writer = self._store._tables.get(source)
+        if writer is None:
+            raise KeyError(f"table {name!r} must be registered before the transaction")
+        return TransactionTable(self, writer)
+
+    def _add_rows(self, rows: dict[DataTable, list[dict]]) -> None:
+        self._require_open()
         buffered = {}
-        for name, table_rows in rows.items():
-            table = self._store._tables.get(name)
-            if table is None:
-                raise KeyError(f"table {name!r} must be registered before the transaction")
-            buffered[name] = table._arrow_rows(table_rows)
+        for table, table_rows in rows.items():
+            name = table.name
+            if not self._can_append(name):
+                raise KeyError(f"table {name!r} is absent from the transaction")
+            existing = self._rows.get(name)
+            if existing is not None and existing.writer is not table:
+                raise CommitConflict(f"table {name!r} was dropped or replaced after the writer registered it")
+            buffered[table] = table._arrow_rows(table_rows)
         added_bytes = sum(row.table.nbytes for table_rows in buffered.values() for row in table_rows)
         if self._max_bytes is not None and self._buffer_bytes + added_bytes > self._max_bytes:
             raise TransactionTooLarge(f"transaction payload exceeds {self._max_bytes} bytes; commit a smaller batch")
         self._buffer_bytes += added_bytes
-        for name, table_rows in buffered.items():
-            self._rows.setdefault(name, []).extend(table_rows)
+        for table, table_rows in buffered.items():
+            self._rows.setdefault(table.name, _TransactionRows(table, [])).rows.extend(table_rows)
+
+    def create_table(
+        self,
+        name: str,
+        *,
+        metadata: TableMetadata,
+        schema: pa.Schema | None = None,
+    ) -> StagedTable:
+        """Create a private table that can stream rows before publication."""
+        self._require_open()
+        _require_user_table(name)
+        if self._visible_table(name) is not None:
+            raise ValueError(f"table {name!r} already exists")
+        if self._staging_id is None:
+            self._staging_id = uuid.uuid4().hex
+        storage_table = prefix_join(prefix_join(STAGED_TABLE_DIR, self._staging_id), uuid.uuid4().hex)
+        writer = self._store._table_writer(
+            name,
+            metadata=metadata,
+            schema=schema,
+            incarnation=INITIAL_TABLE_INCARNATION,
+            start_seq=0,
+            storage_table=storage_table,
+        )
+        batch_limit = self._store._max_buffer_bytes if self._max_bytes is None else self._max_bytes
+        table = StagedTable(self, writer, batch_limit)
+        self._table_changes[name] = table
+        return table
+
+    def rename_table(
+        self, source: str, destination: str, *, on_conflict: TableNameConflict = TableNameConflict.ERROR
+    ) -> None:
+        """Move a table in the transaction's namespace."""
+        self._require_open()
+        _require_user_table(source)
+        _require_user_table(destination)
+        table = self._visible_table(source)
+        if table is None:
+            raise KeyError(f"table {source!r} is absent from the transaction")
+        if source == destination:
+            return
+        if self._visible_table(destination) is not None and on_conflict != TableNameConflict.REPLACE:
+            raise ValueError(f"table {destination!r} already exists")
+        self._table_changes[source] = None
+        self._table_changes[destination] = table
+
+    def drop_table(self, name: str) -> None:
+        """Remove a table from the transaction if it is present."""
+        self._require_open()
+        _require_user_table(name)
+        if self._visible_table(name) is not None:
+            self._table_changes[name] = None
+        elif name not in self._table_changes:
+            self._dependencies.add(name)
+
+    def require_unchanged(self, *tables: str) -> None:
+        """Reject publication if any of these tables changed since the base view."""
+        self._require_open()
+        self._dependencies.update(tables)
+
+    def _commit_delta(self, rows: dict[str, _TransactionRows]) -> CommitDelta:
+        resets = set()
+        creations = {}
+        moves = {}
+        for name, table in self._table_changes.items():
+            if table == _PublishedTable(name):
+                continue
+            if table is None and self._base.table_metadata_path(name) is None and name not in rows:
+                continue
+            resets.add(name)
+            if isinstance(table, StagedTable):
+                creations[name] = table._manifest_table()
+            elif isinstance(table, _PublishedTable):
+                moves[name] = table.source
+        return CommitDelta(
+            reset_tables=frozenset(resets),
+            table_creations=creations,
+            table_moves=moves,
+            expected_contents={name: self._base.table_content_version(name) for name in resets | self._dependencies},
+            attribution=self._attribution,
+        )
 
     def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
         """Buffer one named byte object and return its ``finestore://`` URI."""
-        if self._closed:
-            raise RuntimeError("transaction is closed")
+        self._require_open()
         blob_table = self._store._blob_table()
         descriptor, parts = self._store._blob_rows(name, data, metadata)
-        rows = {blob_table.name: [descriptor]}
+        rows = {blob_table: [descriptor]}
         if parts:
             part_table = self._store._blob_part_table()
-            rows[part_table.name] = parts
+            rows[part_table] = parts
         self._add_rows(rows)
         self._objects[name] = data
         return build_uri(BlobTables.DESCRIPTORS, name)
@@ -673,7 +892,8 @@ class Transaction:
             if self.token is None:
                 raise RuntimeError("transaction closed without committing")
             return self.token
-        self.token = self._store._commit_transaction(self._rows, attribution=self._attribution)
+        rows = {name: pending for name, pending in self._rows.items() if self._can_append(name)}
+        self.token = self._store._commit_transaction(rows, self._commit_delta(rows))
         self._closed = True
         return self.token
 
@@ -702,6 +922,7 @@ class DataTable:
         writer_id: str,
         layout: FineStoreLayout,
         metadata_path: str,
+        incarnation: int,
         max_buffer_bytes: int,
         scheduler: FlushScheduler,
         primary_key: tuple[str, ...],
@@ -709,21 +930,25 @@ class DataTable:
         schema_version: int,
         on_conflict: OnConflict = OnConflict.ERROR,
         start_seq: int = 0,
+        storage_table: str | None = None,
     ) -> None:
         self.name = name
         self.primary_key = primary_key
         self.schema_version = schema_version
         self.on_conflict = on_conflict
         self.metadata_path = metadata_path
+        self.incarnation = incarnation
         self._writer_id = writer_id
         self._layout = layout
+        self._storage_table = name if storage_table is None else storage_table
         self._max_buffer_bytes = max_buffer_bytes
         self._scheduler = scheduler
         self._schema = _with_stamp_columns(schema) if schema is not None else None
         self._pending: list[ArrowRow] = []
         self._pending_bytes = 0
         self._next_seq = start_seq
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._retired = False
         self._digests: dict[tuple, bytes] | None = {} if on_conflict is OnConflict.ERROR else None
 
     def append(self, row: dict) -> None:
@@ -763,6 +988,8 @@ class DataTable:
     def _stamp_arrow_rows(self, rows: Iterable[ArrowRow]) -> list[ArrowRow]:
         stamped = []
         with self._lock:
+            if self._retired:
+                raise CommitConflict(f"table {self.name!r} was dropped or replaced after the writer registered it")
             for row in rows:
                 self._check_conflict(row)
                 sequence = self._next_seq
@@ -778,13 +1005,23 @@ class DataTable:
 
     def extend(self, rows: Iterable[dict]) -> None:
         self._scheduler.raise_if_failed()
-        buffered = self._stamp_arrow_rows(self._arrow_rows(rows))
+        arrow_rows = self._arrow_rows(rows)
         with self._lock:
+            buffered = self._stamp_arrow_rows(arrow_rows)
             self._pending.extend(buffered)
             self._pending_bytes += sum(row.table.nbytes for row in buffered)
             over_cap = self._pending_bytes >= self._max_buffer_bytes
         if over_cap:
             self._scheduler.request_flush()
+
+    @contextmanager
+    def _retire_on_commit(self) -> Iterator[None]:
+        # An append either reaches the pending buffer before publication or sees the retired handle.
+        with self._lock:
+            if self._pending:
+                raise CommitConflict(f"flush buffered appends to table {self.name!r} before changing it")
+            yield
+            self._retired = True
 
     def _claim_pending(self) -> PendingRows | None:
         with self._lock:
@@ -800,6 +1037,24 @@ class DataTable:
             self._pending = list(pending.rows) + self._pending
             self._pending_bytes += pending.nbytes
 
+    def _stage_shards(self, rows: Iterable[dict], *, max_bytes: int) -> Iterator[Shard]:
+        batch = []
+        batch_bytes = 0
+        for row in rows:
+            (arrow_row,) = self._arrow_rows((row,))
+            size = arrow_row.table.nbytes
+            if batch and batch_bytes + size > max_bytes:
+                yield self._write_rows(batch, nbytes=batch_bytes)
+                batch = []
+                batch_bytes = 0
+            batch.append(arrow_row)
+            batch_bytes += size
+        if batch:
+            yield self._write_rows(batch, nbytes=batch_bytes)
+
+    def _write_rows(self, rows: Sequence[ArrowRow], *, nbytes: int) -> Shard:
+        return self._write(PendingRows(tuple(self._stamp_arrow_rows(rows)), nbytes))
+
     def _write(self, pending: PendingRows) -> Shard:
         rows = list(pending.rows)
         primary_key_sorted = all(row.sort_key is not None for row in rows)
@@ -808,7 +1063,7 @@ class DataTable:
         assert all(row.sequence is not None for row in rows)
         min_seq = min(row.sequence for row in rows if row.sequence is not None)
         max_seq = max(row.sequence for row in rows if row.sequence is not None)
-        path = self._layout.shard_path(self.name, self._writer_id, 0, min_seq, uuid.uuid4().hex[:8])
+        path = self._layout.shard_path(self._storage_table, self._writer_id, 0, min_seq, uuid.uuid4().hex[:8])
         schema = self._schema or pa.unify_schemas([row.table.schema for row in rows], promote_options="permissive")
         schema = _drop_empty_struct_fields(schema)
         arrow_rows = (_align_arrow_row(row.table, schema) for row in rows)
