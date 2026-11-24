@@ -87,7 +87,9 @@ class ReleaseSource:
     path: str
     tree: str
     inputs: dict[str, str] = field(default_factory=dict)
-    branch: str = DEFAULT_RELEASE_BRANCH
+    branch: str | None = None
+    """The declared release branch a published record was cut from; None on a
+    default main release and on checkout descriptions, which declare no branch."""
 
 
 class ReleaseState(StrEnum):
@@ -106,16 +108,37 @@ class ReleaseStatus:
     checkout: ReleaseSource
 
 
-def release_source(
-    app_dir: Path, source_paths: tuple[str, ...], *, branch: str = DEFAULT_RELEASE_BRANCH
-) -> ReleaseSource:
+def release_source(app_dir: Path, source_paths: tuple[str, ...]) -> ReleaseSource:
     """Read the committed source identity without changing Git refs or the index."""
     root = Path(git_output(["rev-parse", "--show-toplevel"], app_dir))
     path = app_dir.resolve().relative_to(root).as_posix()
     commit = git_output(["rev-parse", "HEAD"], app_dir)
     tree = git_output(["rev-parse", f"{commit}:{path}"], app_dir)
     inputs = {source: git_output(["rev-parse", f"{commit}:{source}"], app_dir) for source in source_paths}
-    return ReleaseSource(commit=commit, path=path, tree=tree, inputs=inputs, branch=branch)
+    return ReleaseSource(commit=commit, path=path, tree=tree, inputs=inputs)
+
+
+def require_forward_move(repo_dir: Path, *, branch: str, live_commit: str) -> None:
+    """Refuse a release that moves backward along its declared branch.
+
+    The landing check accepts any commit the branch contains, so a stale checkout
+    could otherwise republish older source over newer. The live release's commit
+    must be an ancestor of this checkout's; it is reachable after the branch fetch
+    the landing check performs. A different or undeclared lineage skips the check.
+    """
+    git_output(["fetch", "--quiet", "origin", f"refs/heads/{branch}"], repo_dir, timeout=120)
+    forward = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", live_commit, "HEAD"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if forward.returncode != 0:
+        raise RuntimeError(
+            f"The live release's commit {live_commit[:12]} is ahead of this checkout on {branch!r}; "
+            "release from a newer commit instead of republishing older source."
+        )
 
 
 def source_status(

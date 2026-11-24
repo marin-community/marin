@@ -1509,6 +1509,17 @@ def test_release_with_release_branch_records_the_branch_and_refuses_unlanded(
     def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
         nonlocal metadata
         requests.append(method)
+        if method == "GET":
+            if url.endswith("marina-release.json") and metadata is None:
+                not_found = json_response({"detail": "applet file not found"})
+                not_found.status_code = 404
+                return not_found
+            return json_response(
+                {
+                    "current_version": 7,
+                    "authenticated_url": "https://applets.example.test/a/00000000-0000-0000-0000-000000000001",
+                }
+            )
         package = read_applet_package(kwargs["data"])
         metadata = json.loads(package.files["dist/marina-release.json"])
         return json_response({"id": "00000000-0000-0000-0000-000000000001", "version": 8, "path": "/a/id/v/8/"})
@@ -1528,7 +1539,7 @@ def test_release_with_release_branch_records_the_branch_and_refuses_unlanded(
     ]
     result = CliRunner().invoke(cli, args)
     assert result.exit_code == 0, result.output
-    assert len(requests) == 1
+    assert [method for method in requests if method == "POST"] == ["POST"]
     assert metadata is not None and metadata["branch"] == "integration"
 
     # A commit the branch does not contain refuses before any publish.
@@ -1538,7 +1549,7 @@ def test_release_with_release_branch_records_the_branch_and_refuses_unlanded(
     unlanded = CliRunner().invoke(cli, args)
     assert unlanded.exit_code == 1
     assert "not landed on origin/integration" in unlanded.output
-    assert len(requests) == 1
+    assert [method for method in requests if method == "POST"] == ["POST"]
 
 
 @pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
@@ -1580,3 +1591,66 @@ def test_require_release_checkout_prefers_the_branch_over_a_same_named_tag(relea
         require_release_checkout(release_checkout, branch="integration")
     subprocess.run(["git", "checkout", "-q", tip], cwd=release_checkout, check=True, capture_output=True)
     assert require_release_checkout(release_checkout, branch="integration") == tip
+
+
+@pytest.mark.parametrize("release_checkout", ["static"], indirect=True)
+def test_release_refuses_a_checkout_behind_the_live_release(
+    release_checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale checkout on the same branch cannot republish older source as landed."""
+    metadata: dict | None = None
+    requests: list[str] = []
+
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        nonlocal metadata
+        if method == "POST":
+            requests.append(method)
+            package = read_applet_package(kwargs["data"])
+            metadata = json.loads(package.files["dist/marina-release.json"])
+            return json_response({"id": "00000000-0000-0000-0000-000000000001", "version": 8, "path": "/a/id/v/8/"})
+        if url.endswith("marina-release.json"):
+            if metadata is None:
+                not_found = json_response({"detail": "applet file not found"})
+                not_found.status_code = 404
+                return not_found
+            return json_response(metadata)
+        return json_response(
+            {
+                "current_version": 8,
+                "authenticated_url": "https://applets.example.test/a/00000000-0000-0000-0000-000000000001",
+            }
+        )
+
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    (release_checkout / "extra.txt").write_text("released")
+    for arguments in (
+        ["add", "."],
+        ["commit", "-m", "released"],
+        ["checkout", "-q", "-b", "integration"],
+        ["push", "origin", "HEAD:integration"],
+    ):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    args = [
+        "release",
+        str(release_checkout),
+        "--base-version",
+        "8",
+        "--url",
+        "http://localhost:8080",
+        "--release-branch",
+        "integration",
+    ]
+    released = CliRunner().invoke(cli, args)
+    assert released.exit_code == 0, released.output
+    live_commit = metadata["commit"]
+    # Move the branch forward on origin, then check out the released commit: a stale
+    # worktree on the same branch must refuse before publishing.
+    (release_checkout / "extra.txt").write_text("newer")
+    for arguments in (["add", "."], ["commit", "-m", "newer"], ["push", "origin", "HEAD:integration"]):
+        subprocess.run(["git", *arguments], cwd=release_checkout, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "-q", f"{live_commit}^"], cwd=release_checkout, check=True, capture_output=True)
+    stale = CliRunner().invoke(cli, args)
+    assert stale.exit_code == 1
+    assert "ahead of this checkout" in stale.output
+    assert len(requests) == 1
+    assert metadata["branch"] == "integration"
