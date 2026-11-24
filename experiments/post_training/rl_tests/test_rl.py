@@ -1277,7 +1277,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         assert publications[-1].failed_facts == ["coordinator_interrupted"]
     running = [row for row in publications if row.status == "running"]
     assert [row.attempt_id for row in running] == ([] if outcome == "native-failure" else ["native-indexed"])
-    terminal = publications[-1]
+    terminal = next(row for row in publications if row.attempt_id == "native-indexed" and row.status != "running")
     assert terminal.status == ("failed" if early_failure else "succeeded")
     assert terminal.pr_number == pr_number
     assert all(row.run_id == terminal.run_id and row.pr_number == pr_number for row in running)
