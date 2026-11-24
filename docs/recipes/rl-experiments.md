@@ -57,6 +57,7 @@ Both Mochi layouts restrict NCCL to the `ibp` InfiniBand rails. The long presets
 | --- | --- | --- | --- | --- |
 | `train-medium-agentic` | Ten updates with held-out evaluation on one inference engine. | `h100x88`, 11 nodes × 8 H100s | Best eligible policy. | Ran with the v4 task selection, reduced batches and a bounded attempt |
 | `train-long-agentic` | Up to 10,000 updates with held-out evaluation on 22 inference engines. | `h100x256`, 32 nodes × 8 H100s | Best eligible policy. | CPU plan only |
+| `train-medium-tools` | Ten updates on a `--tasks` selection of shell-tool tasks. | `p40`, 5 nodes × 8 H100s | None by default. | Ran three updates on a 164-task forge selection |
 
 When a trained step has the best eligible score, a successful waiting run keeps that native
 checkpoint and returns its HF export. When step zero wins, the result points to the starting HF
@@ -66,6 +67,9 @@ Detached launches use the trainer’s rolling checkpoint window.
 The smaller Snowball layouts pack one trajectory per replica with context parallelism of one and
 no separate packing token budget, and the campaign layout splits a 102,400-token request into
 20,480 packed token positions per context rank, with an update at that length still unmeasured.
+
+`train-medium-tools` runs Linux tasks and image graders on Daytona sandboxes in the RL organization, so set
+`DAYTONA_RL_API_KEY`.
 
 ### Task selection and native resume
 
@@ -390,6 +394,11 @@ Keep the native run ID and attempt ID together. The run identifies the experimen
 identifies one native execution, including a resumed execution. In `resolved-launch.yaml`, these
 are `config.run.id` and `config.run.attempt_id`. Pair them with the output path and source revision
 when recording a result.
+
+For quick-loop training time, use `elapsed_excluding_eval_seconds` from the
+`Training run completed` line in the SkyRL training driver logs. The timer runs from
+tracker setup through shutdown and subtracts all inline evaluation time, including
+step-zero and final evaluations when enabled.
 
 | Sink | Where to find the run |
 |---|---|

@@ -24,7 +24,13 @@ from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
-from experiments.post_training.rl_agentic_recipe import agentic_limits, agentic_preset
+from experiments.post_training.rl_agentic_recipe import (
+    NO_AGENTIC_TASKS,
+    NO_IMAGE_SANDBOX,
+    agentic_limits,
+    agentic_preset,
+    shell_tool_preset,
+)
 from experiments.post_training.rl_compose import BATCH_SETTINGS
 from experiments.post_training.rl_presets import (
     HARBOR_EVALUATION,
@@ -217,7 +223,7 @@ _REPORTING_P40 = replace(
 
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
-_GAPS = ("aaii-coverage", "no-agentic-tasks", "no-image-sandbox")
+_GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
 
 _TASK_SET = EVALUATIONS["eval_lite_100"]
 
@@ -342,7 +348,7 @@ _TRAIN_LONG_AGENTIC = agentic_preset(
         data_settings=frozenset({"shuffle"}),
         evaluations=(replace(_TASK_SET, every=2),),
         checkpoint_every=2,
-        gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != "no-agentic-tasks"), "harbor-on-daytona"),
+        gaps=(*(gap for gap in _TRAIN_LONG.gaps if gap != NO_AGENTIC_TASKS), "harbor-on-daytona"),
     ),
     name="train-long-agentic",
     # The sandbox covers one 90-minute trial; admission covers the trial and one retry.
@@ -364,6 +370,37 @@ _TRAIN_MEDIUM_AGENTIC = replace(
             priority="interactive",
         ),
     ),
+)
+
+_TRAIN_MEDIUM_TOOLS = shell_tool_preset(
+    replace(
+        _TRAIN_LONG.with_updates(10),
+        revision="2026.11.20.1",
+        recipe=replace(
+            _TRAIN_LONG.recipe,
+            config=_TRAIN_LONG.recipe.config.merge(
+                RecipePatch(
+                    trainer=sections.Trainer(
+                        policy=sections.Policy(
+                            # A full-window trajectory needs the GPU memory for the policy update, so the
+                            # optimizer state stays on the CPU.
+                            megatron_config=sections.PolicyMegatronConfig(
+                                optimizer_config_kwargs=sections.OptimizerConfigKwargs(
+                                    optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
+                                )
+                            )
+                        )
+                    )
+                )
+            ),
+        ),
+        data_settings=frozenset({"shuffle"}),
+        checkpoints="none",
+        checkpoint_every=None,
+        export="none",
+        budget="40 H100s plus Daytona sandboxes; wall time and cost are unmeasured",
+    ),
+    name="train-medium-tools",
 )
 
 _PRESETS = (
@@ -446,6 +483,7 @@ _PRESETS = (
     _TRAIN_LONG,
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
+    _TRAIN_MEDIUM_TOOLS,
     replace(
         _TRAIN_LONG,
         name="train-long-harbor",

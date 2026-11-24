@@ -36,8 +36,8 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
 runtime on the host. The Daytona SDK and current Iris dependencies require
 `--prerelease allow`. A checkout can supply Iris as a workspace dependency.
-Iris uses `CONTAINER_PROFILE_SANDBOX`: gVisor, no cluster environment,
-credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
+Iris uses `CONTAINER_PROFILE_SANDBOX`: the cluster's sandbox runtime, no cluster
+environment, credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require

@@ -256,11 +256,9 @@ flowchart TD
 ```
 
 Accelerator-free jobs prefer the physical CPU pool through the `iris-cpu`
-ResourceFlavor and may spill onto accelerator nodes through `cw-tas`. The 02a
-sandbox RuntimeClass adds a `cpu-genoa` selector, so those pods cannot spill
-onto H100 nodes. Iris does not expose a general CPU-only placement constraint
-for other jobs. GPU and RDMA resource requests exclude CPU nodes without an
-additional selector.
+ResourceFlavor and may spill onto accelerator nodes through `cw-tas`. Iris does
+not expose a CPU-only placement constraint. GPU and RDMA resource requests
+exclude CPU nodes without an additional selector.
 
 Kueue requires every topology label key to exist on a Node; an empty value is
 valid in Kueue v0.18.3. CoreWeave supplies physical fabric, superpod, leafgroup
@@ -305,8 +303,8 @@ resource failure and Iris returns the attempt to `PENDING` for fresh admission.
 
 | Resource | Owner |
 | --- | --- |
-| CKS cluster and operator kubeconfig | CoreWeave and the cluster operator |
-| Namespace, RBAC, NodePools, configured sandbox RuntimeClass, Kueue operator, ClusterQueue, ResourceFlavor, ingress, and DNS | `infra/pulumi` |
+| CKS cluster, operator kubeconfig, and sandbox RuntimeClasses | CoreWeave and the cluster operator |
+| Namespace, RBAC, NodePools, Kueue operator, ClusterQueue, ResourceFlavor, ingress, and DNS | `infra/pulumi` |
 | Pod and Workload priority classes, Kueue LocalQueue, controller ConfigMap, Deployment, Service, PDB, state volume, and Secrets | `K8sControllerProvider` |
 | Task Pods and their lifecycle | `K8sTaskProvider` |
 | Node scheduling and provisioning | Kubernetes and CoreWeave |
@@ -354,6 +352,7 @@ their Kubernetes service account inside the cluster.
 | `kubernetes_provider.controller_address` | In-cluster controller address injected into task Pods. |
 | `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
 | `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
+| `kubernetes_provider.sandbox_runtime_class` | RuntimeClass for SANDBOX pods; defaults to `gvisor`. See [Sandbox runtime](#sandbox-runtime). |
 
 An empty `kubernetes_provider.kubeconfig` means in-cluster authentication. That
 is the normal CoreWeave controller configuration.
@@ -614,40 +613,12 @@ reference](federation.md) for cross-cluster job semantics, the [Pulumi
 guide](../../../infra/pulumi/README.md) for infrastructure, and
 [`OPS.md`](../OPS.md) for live diagnosis.
 
-### cw-us-east-02a sandbox runtime
+### Sandbox runtime
 
-The default CoreWeave `gvisor` RuntimeClass selects nodes marked
-`node.coreweave.cloud/gvisor=true`. On cw-us-east-02a it admits H100 nodes where
-the NVIDIA gVisor wrapper fails during sandbox creation. A CPU-pool probe also
-failed through that wrapper, and an independent CPU probe reported the same
-`cannot read client sync file: waiting for sandbox to start: EOF` as the H100
-failure. The wrapper's underlying cause is unknown. The 02a config selects the
-Pulumi-owned `iris-gvisor-cpu` RuntimeClass, which requests the direct
-`cw-gvisor-cpu` handler and restricts placement to `cpu-genoa` nodes marked
-gVisor-capable and labelled for that handler. The direct CPU handler started a
-bounded probe on cw-us-west-04a, but it has not been verified on 02a. See
-[incidents 631](https://marina.oa.dev/echo/wiki/631) and
-[976](https://marina.oa.dev/echo/wiki/976).
-
-```mermaid
-flowchart TD
-    request[CPU SANDBOX request] --> pod[Iris sets runtimeClassName<br/>iris-gvisor-cpu]
-    pod --> selector[RuntimeClass selects cpu-genoa<br/>gVisor and cw-gvisor-cpu nodes]
-    selector --> admission[Kueue prefers iris-cpu<br/>hostname-only flavor]
-    admission --> fit{CPU node fits?}
-    fit -- No --> spill[Check cw-tas spill admission]
-    fit -- Yes --> node[Kubernetes assigns cpu-genoa node]
-    node --> handler[kubelet invokes cw-gvisor-cpu]
-    handler --> runsc{runsc starts sandbox?}
-    runsc -- Yes --> running[Pod reaches Running]
-    runsc -- No --> diagnose[Capture node runtime logs<br/>repair CoreWeave handler]
-```
-
-The RuntimeClass is a placement and handler request. It does not install or
-repair a containerd handler on the node. Follow
-[02a sandbox runtime rollout](../OPS.md#02a-sandbox-runtime-rollout) before
-deploying a controller that selects this class. The 02a RuntimeClass selects
-only CPU nodes; a sandbox task that requests a GPU cannot run there.
+SANDBOX pods use the RuntimeClass named by `kubernetes_provider.sandbox_runtime_class`;
+CoreWeave owns these classes and their handlers. Every CoreWeave cluster uses the
+`gvisor` class, which CoreWeave has deprecated;
+[#11343](https://github.com/marin-community/marin/issues/11343) tracks its replacement.
 
 ## Source map
 
@@ -745,8 +716,8 @@ reprovisioning. Deploy the updated DaemonSet to enable it. This does not remove
 historical logs or impose retention on the NVMe directory.
 
 Task `/tmp`, workdirs, and outputs use private Kubernetes `emptyDir` volumes.
-CoreWeave puts kubelet/containerd storage on NVMe, including for Shellbox's
-gVisor sandbox profile. Shared caches use the configured NVMe `cache_dir`;
+CoreWeave puts kubelet/containerd storage on NVMe, including for SANDBOX
+pods. Shared caches use the configured NVMe `cache_dir`;
 sandbox tasks never receive those shared caches.
 
 For `NodeRuntimeFilesystemAlmostFull` or runtime ENOSPC, check bytes and inodes

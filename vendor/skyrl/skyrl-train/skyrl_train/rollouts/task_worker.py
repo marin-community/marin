@@ -83,7 +83,7 @@ from skyrl_train.rollouts.training_record import (
     reject_malformed_reasoning,
     training_rollout,
 )
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
+from skyrl_train.task_error_handling import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,

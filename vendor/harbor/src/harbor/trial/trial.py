@@ -10,11 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from harbor_config.errors import ErrorCategory, error_category
+from rigging.task_errors import ErrorCategory, error_category
+from harbor_config.errors import ERROR_CATEGORIES
 from harbor_config.models.trial.config import TaskConfig
 from shellbox.machine import CommandOutputLost
 
 from harbor.agents.factory import AgentFactory
+from harbor.environments.setup import run_environment_setup
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
 from harbor.environments.factory import EnvironmentFactory
 from harbor.host_capabilities import HostCapabilities
@@ -369,7 +371,7 @@ class Trial(ABC):
             self.result.verifier_result = None
             while isinstance(exc, ExceptionGroup) and len(exc.exceptions) == 1:
                 exc = exc.exceptions[0]
-            if error_category(type(exc).__name__) is not ErrorCategory.INFRASTRUCTURE:
+            if error_category(type(exc).__name__, categories=ERROR_CATEGORIES) is not ErrorCategory.INFRASTRUCTURE:
                 failure = RuntimeServiceError("Required trial service failed")
                 failure.__cause__ = exc
                 exc = failure
@@ -427,6 +429,12 @@ class Trial(ABC):
         await self.agent_environment.run_healthcheck()
         await self._upload_injected_skills()
         await self._upload_setup_files()
+        if self.task.config.environment.setup is not None:
+            await self._await_phase(
+                run_environment_setup(self.agent_environment, self.task.config.environment.setup),
+                timeout_sec=self.task.config.environment.setup.timeout_sec,
+                timeout_error=EnvironmentStartTimeoutError("Task initialization timed out"),
+            )
         await self._emit(TrialEvent.ENVIRONMENT_READY)
         with self.agent_environment.with_default_user(self.task.config.agent.user):
             await self._setup_agent()
@@ -442,7 +450,7 @@ class Trial(ABC):
             self.result.completion = None
             self.result.verifier_result = None
             prior = self.result.exception_info
-            if prior is None or error_category(prior.exception_type) in (
+            if prior is None or error_category(prior.exception_type, categories=ERROR_CATEGORIES) in (
                 ErrorCategory.AGENT,
                 ErrorCategory.PASSTHROUGH,
             ):

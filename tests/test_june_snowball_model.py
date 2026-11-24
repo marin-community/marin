@@ -341,10 +341,10 @@ def test_june_pipeline_stages_match_model_under_expert_parallelism():
 
     Runs in a fresh interpreter with two forced CPU devices because the XLA device
     count is process-global; the ring MoE backend then executes expert-parallel
-    collectives through shard_map, exercising the path a size-1 expert axis skips.
-    Capacity factor 0.5 clips assignments structurally, so the per-stage drop
-    counters observe real clipped work. Gradients stay pinned so the equality holds
-    at the training boundary, not only in the forward.
+    collectives through shard_map. Three layers retain an uneven stage split
+    and exercise sliding-window and full causal attention.
+    Capacity factor 0.5 forces routing drops. Compare the forward results and
+    each stage's gradients against the full model.
     """
     script = textwrap.dedent(
         """
@@ -368,7 +368,7 @@ def test_june_pipeline_stages_match_model_under_expert_parallelism():
 
         config = JuneSnowballConfig(
             vocab_size=24, hidden_dim=12, intermediate_dim=16, shared_expert_intermediate_dim=12,
-            num_experts=4, num_experts_per_token=2, num_layers=5, num_heads=2, num_kv_heads=1, head_dim=8,
+            num_experts=4, num_experts_per_token=2, num_layers=3, num_heads=2, num_kv_heads=1, head_dim=8,
             max_seq_len=8, sliding_window=4, initializer_std=0.02,
             attention_implementation="reference", moe_implementation="ring", capacity_factor=0.5,
         )

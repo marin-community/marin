@@ -58,6 +58,67 @@ def test_wrong_answer_scores_zero(tests_dir, workspace):
     assert (reward.reward, reward.status) == (0.0, Status.SCORED)
 
 
+@pytest.mark.parametrize(
+    ("dataset", "index", "constant_reply"),
+    [
+        ("coin_flip", 0, "0"),
+        ("complex_arithmetic", 0, "NaN"),
+        ("game_of_life_halting", 0, "definitely wrong"),
+        ("game_of_life_halting", 2, "False"),
+        ("propositional_logic", 1, "P \u2228 Q"),
+        ("puzzle24", 0, "1*2*3*4"),
+    ],
+)
+def test_reasoning_gym_constant_reply_scores_zero_and_reference_scores_one(dataset, index, constant_reply):
+    entry = reasoning_gym.create_dataset(dataset, size=3, seed=42)[index]
+    reference = entry["answer"] or entry["metadata"]["example_answer"]
+    assert grade_reasoning_gym.score_reasoning_gym_answer(dataset, entry, constant_reply) == 0.0
+    assert grade_reasoning_gym.score_reasoning_gym_answer(dataset, entry, reference) == 1.0
+
+
+@pytest.mark.parametrize(
+    ("reply", "reward"),
+    [("1/8192", 1.0), ("0.0001221", 1.0), ("0.00012", 0.0)],
+    ids=["fraction", "four_significant_figures", "two_significant_figures"],
+)
+def test_coin_flip_scores_a_probability_within_a_tenth_of_a_percent(reply, reward):
+    entry = reasoning_gym.create_dataset("coin_flip", size=1, seed=42)[0]
+    assert entry["answer"] == "0.0001220703125"
+    assert grade_reasoning_gym.score_reasoning_gym_answer("coin_flip", entry, reply) == reward
+
+
+@pytest.mark.parametrize(("reply", "reward"), [("0.999", 1.0), ("1.001", 0.0)], ids=["below_one", "above_one"])
+def test_coin_flip_scores_no_probability_above_one(reply, reward):
+    entry = reasoning_gym.create_dataset("coin_flip", size=5, seed=42)[4]
+    assert entry["answer"] == "1"
+    assert grade_reasoning_gym.score_reasoning_gym_answer("coin_flip", entry, reply) == reward
+
+
+def test_coin_flip_malformed_reference_is_an_invalid_task():
+    entry = {**reasoning_gym.create_dataset("coin_flip", size=1, seed=42)[0], "answer": "not a probability"}
+    with pytest.raises(InvalidTask, match="coin_flip reference probability"):
+        grade_reasoning_gym.score_reasoning_gym_answer("coin_flip", entry, "0")
+
+
+def test_complex_arithmetic_rejects_spaced_nan():
+    entry = reasoning_gym.create_dataset("complex_arithmetic", size=1, seed=42)[0]
+    assert grade_reasoning_gym.score_reasoning_gym_answer("complex_arithmetic", entry, "N a N") == 0.0
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    [
+        ("4+3+9+8", 1.0),
+        ("4+3+9+8+0", 0.0),
+        ("4*3+9+8", 0.0),
+        ("4+3+9+8.0", 0.0),
+    ],
+)
+def test_puzzle24_requires_exact_entry_numbers_and_exact_value(candidate, expected):
+    entry = reasoning_gym.create_dataset("puzzle24", size=1, seed=42)[0]
+    assert grade_reasoning_gym.score_reasoning_gym_answer("puzzle24", entry, candidate) == expected
+
+
 def test_prose_around_the_answer_is_not_accepted_by_this_dataset(tests_dir, workspace):
     answer(workspace, "The person who savors playing the accordion is Richard.")
     assert grade(tests_dir, workspace).reward == 0.0
@@ -88,6 +149,23 @@ def test_prime_factorization_bad_reference_is_an_invalid_task(tests_dir, workspa
     answer(workspace, "I need to find the prime factorization of 835.")
     with pytest.raises(InvalidTask):
         grade(tests_dir, workspace, dataset="prime_factorization")
+
+
+@pytest.mark.parametrize(
+    ("dataset", "index", "candidate"),
+    [
+        pytest.param("boxnet", 0, "0", id="boxnet-json-number"),
+        pytest.param("game_of_life", 0, "{}", id="game_of_life-empty-object"),
+        pytest.param("coin_flip", 0, "1e400", id="coin_flip-infinite-float"),
+        pytest.param("propositional_logic", 0, "(" * 5000 + ")" * 5000, id="propositional_logic-deep-nesting"),
+        pytest.param("calendar_arithmetic", 0, "9" * 400, id="calendar_arithmetic-400-digits"),
+        pytest.param("time_intervals", 2, "9" * 400, id="time_intervals-400-digits"),
+    ],
+)
+def test_reply_the_scorer_cannot_parse_scores_zero(dataset, index, candidate):
+    entry = json.loads(json.dumps(reasoning_gym.create_dataset(dataset, size=3, seed=42)[index]))
+    result = grade_reasoning_gym.grade_reasoning_gym_candidate(ReasoningGymSpec(dataset=dataset), entry, candidate)
+    assert (result.reward, result.status) == (0.0, Status.SCORED)
 
 
 def test_partial_credit_from_the_scorer_is_passed_through(tmp_path, workspace):
@@ -282,6 +360,22 @@ def test_broken_external_scorer_cannot_persist_an_invalid_reward(tests_dir, work
     write_reward(logs, verdict)
     assert (verdict.status, verdict.reward) == (Status.INFRA_ERROR, 0.0)
     assert not (logs / "reward.json").exists()
+
+
+@pytest.mark.parametrize("score", [True, float("nan"), float("inf"), -0.1, 1.1])
+def test_invalid_reference_score_keeps_a_parse_failure_an_error(tests_dir, workspace, monkeypatch, score):
+    # The reply raises, so the entry's own answer is scored to tell a broken entry from a malformed reply.
+    def score_answer(response, entry):
+        if response == entry["answer"]:
+            return score
+        raise ValueError("unparseable reply")
+
+    monkeypatch.setattr(grade_reasoning_gym.reasoning_gym, "get_score_answer_fn", lambda name: score_answer)
+    answer(workspace, "not the answer")
+    spec_path = tests_dir / "verifier.toml"
+    spec_path.write_text(render_spec(ReasoningGymSpec(dataset="needle_haystack")))
+    verdict = run(spec_path, workspace)
+    assert (verdict.status, verdict.reward) == (Status.INFRA_ERROR, 0.0)
 
 
 def test_configured_decimal_precision_preserves_source_score(tests_dir, workspace):

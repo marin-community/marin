@@ -13,7 +13,7 @@ import math_verify
 import sympy
 from math_verify.errors import TimeoutException
 from verifyit.execution.worker import call_bounded
-from verifyit.grade import InvalidTask, Status, run, write_reward
+from verifyit.grade import GradingInfraError, InvalidTask, Status, run, write_reward
 from verifyit.grade import grade as dispatch
 from verifyit.modes import grade_math
 from verifyit.modes.grade_exact import grade_exact_candidate
@@ -51,6 +51,37 @@ def _answer(workspace: Path, text: str) -> None:
 def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text, reward):
     _answer(tmp_path, text)
     assert grade_math.grade(MathSpec(expected=expected), tmp_path, tmp_path).reward == reward
+
+
+@pytest.mark.parametrize("power", [(19, 9), (17, 6), (5, 4)])
+def test_math_positive_symbols_accept_equivalent_ratio_powers(power):
+    numerator, denominator = power
+    exponent = rf"\frac{{{numerator}}}{{{denominator}}}"
+    reference = rf"\frac{{a_{{1}} \left(\frac{{a_{{3}}}}{{a_{{2}}}}\right)^{{{exponent}}}}}{{a_{{3}}}}"
+    regrouped = rf"\frac{{a_{{1}} a_{{3}}^{{{exponent}}}}}{{a_{{2}}^{{{exponent}}} a_{{3}}}}"
+    spec = MathSpec(expected=reference, positive_symbols=("a_1", "a_2", "a_3"))
+
+    assert grade_math.grade_math_candidate(spec, regrouped).reward == 1.0
+    wrong_exponent = regrouped.replace(exponent, rf"\frac{{{numerator + 1}}}{{{denominator}}}")
+    assert grade_math.grade_math_candidate(spec, wrong_exponent).reward == 0.0
+    assert grade_math.grade_math_candidate(MathSpec(expected=reference), regrouped).reward == 0.0
+
+
+def test_math_positive_symbols_apply_only_to_explicitly_named_symbols():
+    assert grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}"), "x").reward == 0.0
+    assert grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}", positive_symbols=("x",)), "x").reward == 1.0
+    assert (
+        grade_math.grade_math_candidate(MathSpec(expected=r"\sqrt{x^2}+y", positive_symbols=("y",)), "x+y").reward == 0.0
+    )
+
+
+def test_math_positive_symbols_survive_spec_file_grading(tmp_path):
+    spec = MathSpec(expected=r"\sqrt{x^2}", positive_symbols=("x",))
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    _answer(tmp_path, "x")
+
+    assert run(spec_path, tmp_path).reward == 1.0
 
 
 @pytest.mark.parametrize(
@@ -196,10 +227,46 @@ def test_backend_timeout_removes_prior_positive_reward(monkeypatch, tmp_path, op
     monkeypatch.setattr(math_verify, operation, expired)
     result = run(spec_path, tmp_path)
     assert (result.status, result.reward) == (Status.INFRA_ERROR, 0.0)
+    assert result.detail["code"] == grade_math.MATH_VERIFIER_DEADLINE
     write_reward(logs, result)
     assert not (logs / "reward.txt").exists()
     assert not (logs / "reward.json").exists()
     assert json.loads((logs / "verdict.json").read_text())["status"] == Status.INFRA_ERROR
+
+
+def test_math_deadline_verdicts_carry_their_phase(monkeypatch):
+    """Reference-parse deadlines are a task property; candidate-parse and comparison
+    deadlines follow the reply. The verdict tags which step ran out."""
+
+    spec = MathSpec(expected="y=x+1", math_type=MathType.EQUATION)
+    original_parse = math_verify.parse
+
+    def deadline(*args, **kwargs):
+        raise TimeoutException("backend deadline exhausted")
+
+    monkeypatch.setattr(math_verify, "parse", deadline)
+    with pytest.raises(GradingInfraError) as reference:
+        grade_math.grade_math_candidate(spec, "y=x+2")
+    assert reference.value.detail["phase"] == grade_math.MATH_DEADLINE_REFERENCE_PARSE
+
+    def candidate_deadline(text, **kwargs):
+        if "y=x+2" in text:
+            raise TimeoutException("candidate deadline")
+        return original_parse(text, **kwargs)
+
+    monkeypatch.setattr(math_verify, "parse", candidate_deadline)
+    with pytest.raises(GradingInfraError) as candidate:
+        grade_math.grade_math_candidate(spec, "y=x+2")
+    assert candidate.value.detail["phase"] == grade_math.MATH_DEADLINE_CANDIDATE_PARSE
+
+    monkeypatch.setattr(math_verify, "parse", original_parse)
+    monkeypatch.setattr(math_verify, "verify", deadline)
+    with pytest.raises(GradingInfraError) as comparison:
+        grade_math.grade_math_candidate(spec, "y=x+2")
+    assert comparison.value.detail["phase"] == grade_math.MATH_DEADLINE_COMPARISON
+    assert all(
+        error.value.detail["code"] == grade_math.MATH_VERIFIER_DEADLINE for error in (reference, candidate, comparison)
+    )
 
 
 @pytest.mark.parametrize(

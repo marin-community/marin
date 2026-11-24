@@ -551,72 +551,7 @@ PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris
 
 The deployment preflight reads the RuntimeClass before creating the controller
 Deployment. A 403 on this GET raises a `KubectlError` with the API status and
-reason; only a 404 is reported as a missing class. On 02a, include the
-RuntimeClass target in the same preview and apply as shown below.
-
-### 02a sandbox runtime rollout
-
-The 02a sandbox RuntimeClass requests CoreWeave's `cw-gvisor-cpu` handler and
-selects `cpu-genoa` nodes labelled for gVisor and that handler. It does not
-install the handler. Require CoreWeave to enable it on the 02a CPU nodes.
-First apply [the CPU topology resources](https://github.com/marin-community/marin/pull/11515)
-for 02a so Kueue can admit CPU work through `iris-cpu`. Apply the RuntimeClass
-before deploying an Iris controller that selects it.
-
-Review a targeted Pulumi preview for the RuntimeClass and the controller
-ClusterRole's RuntimeClass `get` permission. Require only those two changes,
-with no NodePool, ClusterQueue, controller, or unrelated resource change. After
-approval for that exact preview, run the same command with `up`:
-
-```bash
-runtime_urn='urn:pulumi:cw-us-east-02a::marin-iac::kubernetes:node.k8s.io/v1:RuntimeClass::sandbox-runtime-class'
-role_urn='urn:pulumi:cw-us-east-02a::marin-iac::marin:coreweave:IrisRbac$kubernetes:rbac.authorization.k8s.io/v1:ClusterRole::cluster-role'
-PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris" \
-  pulumi -C infra/pulumi preview --stack cw-us-east-02a \
-    --target "$runtime_urn" --target "$role_urn"
-```
-
-Check the installed handler and eligible nodes with the configured 02a context:
-
-```bash
-kubectl --kubeconfig "$HOME/.kube/coreweave-iris" --context marin-gpu_US-EAST-02A \
-  get runtimeclass iris-gvisor-cpu \
-  -o jsonpath='{.handler}{"\n"}{.scheduling.nodeSelector}{"\n"}'
-kubectl --kubeconfig "$HOME/.kube/coreweave-iris" --context marin-gpu_US-EAST-02A \
-  get nodes -l 'iris-cw-use02a-scale-group=cpu-genoa,node.coreweave.cloud/gvisor=true,node.coreweave.cloud/container-runtime.cw-gvisor-cpu=true' \
-  -o custom-columns='NODE:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory'
-```
-
-Before changing the Iris controller, start one bounded public-image sandbox Pod
-with `runtimeClassName: iris-gvisor-cpu` and a hostname selector on each eligible
-CPU node. The 02a pool has four `cpu-genoa` nodes; verify all four carry the
-handler label and pass the canary. Require each Pod to reach Running within
-600 seconds. Read Pod events and the kubelet, containerd, `cw-gvisor-cpu`, and
-`runsc` logs on any failed node;
-the `FailedCreatePodSandBox` event alone does not identify the cause. If the
-direct handler fails, repair it with CoreWeave before routing Iris sandbox work.
-
-After every node passes, deploy the Iris controller through its normal rollout
-procedure. Run an Iris CPU `SANDBOX` canary and confirm its Kueue assignment,
-RuntimeClass, selected node, and process exit. Check a 1 GiB sandbox disk limit
-with a 1152 MiB write: require eviction and Iris `RESOURCE_LIMIT_DISK` rather
-than a generic process failure. Record the expected peak Taskforge sandbox
-concurrency and compare its CPU and memory requests with the allocatable capacity
-and existing reservations on these four nodes. Run a bounded batch at that peak
-only if it fits with headroom. Require every admitted Pod to reach Running within
-600 seconds, without `FailedCreatePodSandBox` events. Runtime shim and cgroup
-counts must return to baseline after teardown.
-
-Fill the CPU pool with bounded canaries, then submit one more Iris `SANDBOX` task.
-Require the Workload to remain gated without an H100 assignment. Inspect its
-Kueue flavor and TAS hostname assignment. If `cw-tas`
-admits it to an H100 hostname, the RuntimeClass selector will keep the Pod
-unschedulable while it holds quota. Block normal sandbox traffic until admission
-prevents this spill. Release the filler canaries after the check. Record
-allocatable CPU and memory, Kueue quota, and each result in
-[#10090](https://github.com/marin-community/marin/issues/10090)
-and [#11343](https://github.com/marin-community/marin/issues/11343) before
-resuming normal 02a sandbox traffic.
+reason; only a 404 is reported as a missing class.
 
 ### Public LoadBalancer reachability
 
