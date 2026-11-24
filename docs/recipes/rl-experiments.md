@@ -151,6 +151,9 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-short --ve
 ```
 
 Plans and host-side submissions run the native driver checks on CPU before Iris submission.
+The rollout worker count times its CPUs per worker must fit the driver task's Iris CPU request.
+Static preference training with `trainer.evaluation_runner=training` skips this check because it starts
+no inference rollout pool.
 A plan without `--require` uses the declared control pin. With `--require`, planning also validates the pin
 and checks that control r0 recorded the requested metric. Gated execution and comparison require the pin's revision to match
 the preset; a mismatch returns exit 4 before submission or INVALID during gate execution. Controls are collected
@@ -386,6 +389,11 @@ Keep the native run ID and attempt ID together. The run identifies the experimen
 identifies one native execution, including a resumed execution. In `resolved-launch.yaml`, these
 are `config.run.id` and `config.run.attempt_id`. Pair them with the output path and source revision
 when recording a result.
+
+For quick-loop training time, use `elapsed_excluding_eval_seconds` from the
+`Training run completed` line in the SkyRL training driver logs. The timer runs from
+tracker setup through shutdown and subtracts all inline evaluation time, including
+step-zero and final evaluations when enabled.
 
 | Sink | Where to find the run |
 |---|---|

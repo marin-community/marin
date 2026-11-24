@@ -15,7 +15,7 @@ import pytest
 import shellbox.http_service as http_service
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.gvisor.machine import GvisorMachineFactory
-from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
+from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, HttpServiceEnded, serve_http
 from shellbox.machine import Command, DockerImage, MachineSpec, NetworkPolicy, Result
 from shellbox.process_session import SubprocessSession
 
@@ -163,7 +163,7 @@ def test_http_capability_helper_exit_interrupts_idle_context_and_reaps_process()
         async def handler(request):
             return HttpResponse(200, b"{}")
 
-        with pytest.RaisesGroup(pytest.RaisesExc(RuntimeError, match="process ended")):
+        with pytest.RaisesGroup(pytest.RaisesExc(HttpServiceEnded, match="process ended")):
             async with (
                 asyncio.TaskGroup() as service_tasks,
                 serve_http(machine, handler, task_group=service_tasks, port=available_port()),
@@ -186,7 +186,7 @@ def test_http_capability_late_failure_reaches_group_owner_after_startup_and_spar
             asyncio.TaskGroup() as neighbor_tasks,
             serve_http(neighbor, handler, task_group=neighbor_tasks, port=available_port()) as neighbor_url,
         ):
-            with pytest.RaisesGroup(pytest.RaisesExc(RuntimeError, match="process ended")):
+            with pytest.RaisesGroup(pytest.RaisesExc(HttpServiceEnded, match="process ended")):
                 async with asyncio.TaskGroup() as trial_tasks:
                     async with AsyncExitStack() as resources:
 

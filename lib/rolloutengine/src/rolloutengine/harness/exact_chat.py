@@ -26,7 +26,7 @@ class ExactChatHarness:
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         unsupported = tuple(
-            feature for feature in unsupported_direct_chat_features(task) if feature != "grader.environment"
+            feature for feature in unsupported_direct_chat_features(task) if feature != "grader.placement"
         )
         if unsupported:
             raise ValueError(f"Exact chat cannot satisfy: {', '.join(unsupported)}")

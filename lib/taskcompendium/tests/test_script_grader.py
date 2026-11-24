@@ -43,6 +43,7 @@ from taskcompendium.models import (
     ExitCodeReward,
     FileReward,
     Grader,
+    GraderMachine,
     GradingAttempt,
     JsonAnswer,
     MissingArtifactPolicy,
@@ -324,10 +325,9 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
     grader = ScriptGrader(
         argv=("sh", "-c", "cmp /logs/artifacts/answer /tests/expected"),
         cwd="/workspace",
-        environment=GRADER_ENVIRONMENT,
+        placement=GraderMachine(environment=GRADER_ENVIRONMENT, artifacts=(artifact,)),
         answer_path=None,
         reward=ExitCodeReward(),
-        artifacts=(artifact,),
     )
     task = arithmetic_task(grader).model_copy(
         update={"resources": ResourceGroups(verifier=(inline_resource("expected", b"secret"),))}
@@ -370,7 +370,8 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
 
 
 @pytest.mark.asyncio
-async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading():
+@pytest.mark.parametrize("wrong_path", [False, True])
+async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading(wrong_path):
     agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
     await agent.run(
         Command(
@@ -388,16 +389,26 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
 """
     grader = ScriptGrader(
         argv=("sh", "-c", report),
-        environment=GRADER_ENVIRONMENT,
-        collect=(VerifierCommand(argv=("sh", "-c", "printf collected > /app/collected.txt")),),
-        artifacts=(
-            VerifierArtifact(source="/app/collected.txt", target="/grader/collected.txt", kind=ArtifactKind.FILE),
-            VerifierArtifact(source="/app/out", target="/grader/out", kind=ArtifactKind.DIRECTORY),
-            VerifierArtifact(
-                source="/app/missing",
-                target="/grader/missing",
-                kind=ArtifactKind.AUTO,
-                missing=MissingArtifactPolicy.SKIP,
+        placement=GraderMachine(
+            environment=GRADER_ENVIRONMENT,
+            collect=(
+                VerifierCommand(
+                    argv=(
+                        "sh",
+                        "-c",
+                        "ls /results > /lsroot.txt 2>&1" if wrong_path else "printf collected > /app/collected.txt",
+                    )
+                ),
+            ),
+            artifacts=(
+                VerifierArtifact(source="/app/collected.txt", target="/grader/collected.txt", kind=ArtifactKind.FILE),
+                VerifierArtifact(source="/app/out", target="/grader/out", kind=ArtifactKind.DIRECTORY),
+                VerifierArtifact(
+                    source="/app/missing",
+                    target="/grader/missing",
+                    kind=ArtifactKind.AUTO,
+                    missing=MissingArtifactPolicy.SKIP,
+                ),
             ),
         ),
         reward=FileReward(files=(RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)),
@@ -408,6 +419,12 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
         task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
     )
 
+    if wrong_path:
+        assert result.failure is GradingFailure.GRADER_EXIT and result.diagnostics["exit_code"] == 2
+        assert result.diagnostics["stderr"] == ""
+        assert (await agent.run(Command(("cat", "/app/out/a.txt")))).stdout == b"a"
+        await agent.close()
+        return
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
     assert result.detail == {
         "collected": "collected",
@@ -418,6 +435,55 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
     assert collected.stdout == b"collected"
 
 
+@dataclass
+class SlowHookMachine:
+    """An agent machine on which ``hook`` takes ``duration`` seconds and every other command is instant."""
+
+    hook: tuple[str, ...]
+    duration: float
+
+    async def run(self, command: Command) -> Result:
+        assert command.argv == self.hook
+        if command.timeout is not None and self.duration > command.timeout:
+            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        return Result(0, b"", b"", False, False, ExitReason.EXITED)
+
+    async def upload(self, source: Path, target: str) -> None:
+        raise AssertionError("Collecting inputs uploads nothing")
+
+    async def download(self, source: str, target: Path) -> None:
+        raise AssertionError("The grader declares no artifacts")
+
+    async def close(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hook_duration,expected",
+    [(30, (Outcome.GRADED, None)), (120, (Outcome.INFRA_ERROR, GradingFailure.TIMEOUT))],
+)
+async def test_collect_command_runs_within_its_own_timeout_not_the_grader_limit(hook_duration, expected):
+    hook = ("sh", "-c", "collect-inputs")
+    grader = ScriptGrader(
+        argv=("sh", "-c", "exit 0"),
+        placement=GraderMachine(environment=GRADER_ENVIRONMENT, collect=(VerifierCommand(argv=hook, timeout=60),)),
+        reward=ExitCodeReward(),
+        timeout=600,
+    )
+    task = arithmetic_task(grader)
+
+    result = await grade_in_sandbox(
+        task,
+        answered(task, "12"),
+        FixtureImageFactory(),
+        GRADER_MACHINE,
+        task_machine=SlowHookMachine(hook, hook_duration),
+    )
+
+    assert (result.status, result.failure) == expected, result.error
+
+
 @pytest.mark.asyncio
 async def test_script_grader_reads_extracted_answer_and_conversation_at_declared_paths():
     report = """jq --arg answer "$(cat /submission/final.txt)" \
@@ -426,10 +492,12 @@ async def test_script_grader_reads_extracted_answer_and_conversation_at_declared
 """
     grader = ScriptGrader(
         argv=("sh", "-c", report),
-        environment=GRADER_ENVIRONMENT.model_copy(
-            update={
-                "setup_commands": ('test "$(cat /submission/final.txt)" = 12 && echo setup > /submission/final.txt',)
-            }
+        placement=GraderMachine(
+            environment=GRADER_ENVIRONMENT.model_copy(
+                update={
+                    "setup_commands": ('test "$(cat /submission/final.txt)" = 12 && echo setup > /submission/final.txt',)
+                }
+            )
         ),
         answer_path="/submission/final.txt",
         conversation_path="/tests/transcript.json",
@@ -455,6 +523,7 @@ async def test_script_grader_reads_extracted_answer_and_conversation_at_declared
 
 NUMBER_FILE = (RewardFile(path=REWARD_TXT, format=RewardFileFormat.NUMBER),)
 JSON_FILE = (RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)
+METRICS_FILE = (RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON_METRICS),)
 DETAIL = {"cases": [{"passed": True}]}
 
 
@@ -463,13 +532,21 @@ DETAIL = {"cases": [{"passed": True}]}
     "reward,phase,exit_code,expected",
     [
         (ExitCodeReward(), "candidate", None, (Outcome.GRADED, 0.0, None)),
-        (StdoutReward(), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
-        (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (StdoutReward(), "candidate", 1, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_EXIT)),
+        (StdoutReward(), "candidate", 137, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "candidate", -9, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_TIMEOUT)),
+        (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_TIMEOUT)),
         (ExitCodeReward(), "preparation", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
         (ExitCodeReward(), "preparation", 1, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "collect", 2, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_EXIT)),
+        (StdoutReward(), "collect", 137, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "collect", -9, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "collect", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (StdoutReward(), "collect-unknown", None, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
     ],
 )
-async def test_test_command_timeout_is_candidate_failure_but_preparation_failure_is_infra(
+async def test_command_failure_classification_by_phase(
     monkeypatch,
     reward,
     phase,
@@ -479,11 +556,12 @@ async def test_test_command_timeout_is_candidate_failure_but_preparation_failure
     original_run = VerifyitImageMachine.run
     preparation = ("sh", "-c", "prepare-tests")
     candidate = ("candidate-tests",)
+    collecting = phase.startswith("collect")
 
     async def run(machine, command):
-        if command.argv == (candidate if phase == "candidate" else preparation):
-            reason = ExitReason.TIMED_OUT if exit_code is None else ExitReason.EXITED
-            return Result(exit_code, b"", b"command failure", False, False, reason)
+        if command.argv == (candidate if phase == "candidate" or collecting else preparation):
+            reason = ExitReason.TIMED_OUT if exit_code is None and phase != "collect-unknown" else ExitReason.EXITED
+            return Result(exit_code, b"command output", b"command failure", False, False, reason)
         if command.argv == preparation:
             return Result(0, b"", b"", False, False, ExitReason.EXITED)
         return await original_run(machine, command)
@@ -492,12 +570,25 @@ async def test_test_command_timeout_is_candidate_failure_but_preparation_failure
     grader = ScriptGrader(
         argv=candidate,
         reward=reward,
-        environment=GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("prepare-tests",)}),
+        placement=GraderMachine(
+            environment=GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("prepare-tests",)}),
+            collect=(VerifierCommand(argv=candidate),) if collecting else (),
+        ),
     )
     task = arithmetic_task(grader)
-    result = await grade_in_sandbox(task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE)
+    agent = await FixtureImageFactory().create(GRADER_MACHINE) if collecting else None
+    try:
+        result = await grade_in_sandbox(
+            task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
+        )
+    finally:
+        if agent is not None:
+            await agent.close()
     assert (result.status, result.reward, result.failure) == expected
     assert result.diagnostics["stderr"] == "command failure"
+    assert result.diagnostics["stdout"] == "command output"
+    if collecting:
+        assert result.diagnostics["exit_code"] == exit_code
 
 
 @pytest.mark.asyncio
@@ -515,7 +606,9 @@ async def test_slow_input_staging_preserves_the_candidate_time_limit(monkeypatch
 
     monkeypatch.setattr(VerifyitImageMachine, "run", run)
     task = arithmetic_task(
-        ScriptGrader(argv=candidate, reward=ExitCodeReward(), environment=GRADER_ENVIRONMENT, timeout=3)
+        ScriptGrader(
+            argv=candidate, reward=ExitCodeReward(), placement=GraderMachine(environment=GRADER_ENVIRONMENT), timeout=3
+        )
     )
     result = await grade_in_sandbox(
         task, answered(task, "12"), FixtureImageFactory(), replace(GRADER_MACHINE, startup_timeout=10)
@@ -567,6 +660,18 @@ async def test_slow_input_staging_preserves_the_candidate_time_limit(monkeypatch
             id="json-file-detail",
         ),
         pytest.param(
+            FileReward(files=METRICS_FILE),
+            f"printf '%s' '{json.dumps({'reward': 0.5, 'passed': 3, 'failed': 1})}' > {REWARD_JSON}",
+            (Outcome.GRADED, 0.5, None, {"passed": 3, "failed": 1}, None),
+            id="json-metrics-file",
+        ),
+        pytest.param(
+            FileReward(files=METRICS_FILE),
+            f"""printf '%s' '{{"reward": 1, "note": "ok"}}' > {REWARD_JSON}""",
+            (Outcome.INFRA_ERROR, None, None, None, GradingFailure.INVALID_REWARD),
+            id="json-metrics-non-numeric",
+        ),
+        pytest.param(
             FileReward(files=(*JSON_FILE, *NUMBER_FILE)),
             f"echo 0.5 > {REWARD_TXT}",
             (Outcome.GRADED, 0.5, None, None, None),
@@ -606,7 +711,9 @@ async def test_slow_input_staging_preserves_the_candidate_time_limit(monkeypatch
 )
 @pytest.mark.asyncio
 async def test_script_grader_reward_kinds(reward, script, expected):
-    grader = ScriptGrader(argv=("sh", "-c", script), environment=GRADER_ENVIRONMENT, reward=reward)
+    grader = ScriptGrader(
+        argv=("sh", "-c", script), placement=GraderMachine(environment=GRADER_ENVIRONMENT), reward=reward
+    )
     task = arithmetic_task(grader)
 
     result = await grade_in_sandbox(task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE)
@@ -620,7 +727,9 @@ async def test_verifyit_grader_with_environment_runs_verifyit_cli_in_grading_mac
     environment = GRADER_ENVIRONMENT.model_copy(
         update={"setup_commands": ("test -s /app/answer.txt && echo setup > /app/answer.txt",)}
     )
-    package = verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0), environment=environment)
+    package = verifyit_package(
+        NumericSpec("12", tolerance_abs=0, tolerance_rel=0), placement=GraderMachine(environment=environment)
+    )
     task = arithmetic_task(package.grader)
 
     result = await grade_in_sandbox(task, answered(task, answer), FixtureImageFactory(), GRADER_MACHINE)

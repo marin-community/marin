@@ -6,10 +6,10 @@
 from dataclasses import replace
 from fractions import Fraction
 
+from rigging.task_errors import DEFAULT_RETRY_EXCLUSIONS
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.machine import Backend, CommandSemantics, NetworkPolicy
 from skyrlrecipe import RecipePatch, sections
-from skyrlrecipe.declared import DEFAULT_RETRY_EXCLUSIONS
 
 from experiments.post_training.rl_presets import HARBOR_EVALUATION, BatchMix, Preset, Recipe
 from experiments.post_training.task_curation.task_health import task_health_step

@@ -1,0 +1,591 @@
+[
+  {
+    "id": "in-process",
+    "context": {
+      "events": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": "What is six plus six?"
+        }
+      ]
+    },
+    "environment_requirements": {
+      "capabilities": [],
+      "command_semantics": null,
+      "docker_image": null,
+      "docker_build": null,
+      "working_directory": null,
+      "setup_commands": [],
+      "environment_variables": {},
+      "tool_providers": {},
+      "packages_lock": null,
+      "package_spec": null
+    },
+    "final_tools": [],
+    "interaction_tools": [],
+    "tool_bindings": {},
+    "output_paths": [],
+    "answer_type": "number",
+    "answer_format": {
+      "kind": "plain_text"
+    },
+    "grader": {
+      "kind": "verifyit",
+      "mode": "numeric",
+      "parameters": {
+        "expected": "12",
+        "tolerance_abs": 0,
+        "tolerance_rel": 0,
+        "output": "/app/answer.txt",
+        "empty_output": "zero"
+      },
+      "environment": null
+    },
+    "reasoning_markup": "grade",
+    "source": {
+      "dataset": "fixture",
+      "revision": "1",
+      "row": "in-process",
+      "importer_revision": "1"
+    },
+    "schema_version": "0.30",
+    "resources": {
+      "all": [],
+      "worker": [],
+      "oracle": [],
+      "verifier": []
+    },
+    "tags": [],
+    "labels": {}
+  },
+  {
+    "id": "verifyit-machine",
+    "context": {
+      "events": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": "What is six plus six?"
+        }
+      ]
+    },
+    "environment_requirements": {
+      "capabilities": [],
+      "command_semantics": null,
+      "docker_image": null,
+      "docker_build": null,
+      "working_directory": null,
+      "setup_commands": [],
+      "environment_variables": {},
+      "tool_providers": {},
+      "packages_lock": null,
+      "package_spec": null
+    },
+    "final_tools": [],
+    "interaction_tools": [],
+    "tool_bindings": {},
+    "output_paths": [],
+    "answer_type": "number",
+    "answer_format": {
+      "kind": "plain_text"
+    },
+    "grader": {
+      "kind": "verifyit",
+      "mode": "numeric",
+      "parameters": {
+        "expected": "12",
+        "tolerance_abs": 0,
+        "tolerance_rel": 0,
+        "output": "/app/answer.txt",
+        "empty_output": "zero"
+      },
+      "environment": {
+        "capabilities": [],
+        "command_semantics": "linux_process",
+        "docker_image": "registry.example/grader@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "docker_build": null,
+        "working_directory": "/app",
+        "setup_commands": [
+          "true"
+        ],
+        "environment_variables": {},
+        "tool_providers": {},
+        "packages_lock": null,
+        "package_spec": null
+      }
+    },
+    "reasoning_markup": "grade",
+    "source": {
+      "dataset": "fixture",
+      "revision": "1",
+      "row": "verifyit-machine",
+      "importer_revision": "1"
+    },
+    "schema_version": "0.30",
+    "resources": {
+      "all": [],
+      "worker": [],
+      "oracle": [],
+      "verifier": []
+    },
+    "tags": [],
+    "labels": {}
+  },
+  {
+    "id": "script-collect",
+    "context": {
+      "events": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": "What is six plus six?"
+        }
+      ]
+    },
+    "environment_requirements": {
+      "capabilities": [],
+      "command_semantics": "linux_process",
+      "docker_image": "registry.example/grader@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "docker_build": null,
+      "working_directory": "/app",
+      "setup_commands": [
+        "true"
+      ],
+      "environment_variables": {},
+      "tool_providers": {},
+      "packages_lock": null,
+      "package_spec": null
+    },
+    "final_tools": [],
+    "interaction_tools": [],
+    "tool_bindings": {},
+    "output_paths": [
+      "/app/out"
+    ],
+    "answer_type": "file",
+    "answer_format": {
+      "kind": "plain_text"
+    },
+    "grader": {
+      "kind": "script",
+      "argv": [
+        "sh",
+        "/tests/test.sh"
+      ],
+      "cwd": "/app",
+      "env": {},
+      "environment": {
+        "capabilities": [],
+        "command_semantics": "linux_process",
+        "docker_image": "registry.example/grader@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "docker_build": null,
+        "working_directory": "/app",
+        "setup_commands": [
+          "true"
+        ],
+        "environment_variables": {},
+        "tool_providers": {},
+        "packages_lock": null,
+        "package_spec": null
+      },
+      "collect": [
+        {
+          "argv": [
+            "sh",
+            "-c",
+            "cp /app/out /tmp/out"
+          ],
+          "cwd": "/app",
+          "env": {
+            "A": "1"
+          }
+        }
+      ],
+      "artifacts": [
+        {
+          "source": "/app/out",
+          "target": "/app/out",
+          "kind": "file",
+          "exclude": [],
+          "missing": "error"
+        }
+      ],
+      "answer_path": null,
+      "conversation_path": "/tests/conversation.json",
+      "reward": {
+        "kind": "file",
+        "files": [
+          {
+            "path": "/logs/verifier/reward.txt",
+            "format": "number",
+            "key": "reward"
+          }
+        ],
+        "pass_above": null
+      },
+      "timeout": 600.0,
+      "empty_output": "zero",
+      "judge": null
+    },
+    "reasoning_markup": "grade",
+    "source": {
+      "dataset": "fixture",
+      "revision": "1",
+      "row": "script-collect",
+      "importer_revision": "1"
+    },
+    "schema_version": "0.30",
+    "resources": {
+      "all": [],
+      "worker": [],
+      "oracle": [],
+      "verifier": [
+        {
+          "path": "test.sh",
+          "source": {
+            "kind": "inline_file",
+            "content_base64": "ZWNobyAxID4gL2xvZ3MvdmVyaWZpZXIvcmV3YXJkLnR4dAo="
+          },
+          "mode": null,
+          "mtime_ns": null
+        }
+      ]
+    },
+    "tags": [],
+    "labels": {}
+  },
+  {
+    "id": "script-plain",
+    "context": {
+      "events": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": "What is six plus six?"
+        }
+      ]
+    },
+    "environment_requirements": {
+      "capabilities": [],
+      "command_semantics": null,
+      "docker_image": null,
+      "docker_build": null,
+      "working_directory": null,
+      "setup_commands": [],
+      "environment_variables": {},
+      "tool_providers": {},
+      "packages_lock": null,
+      "package_spec": null
+    },
+    "final_tools": [],
+    "interaction_tools": [],
+    "tool_bindings": {},
+    "output_paths": [],
+    "answer_type": "number",
+    "answer_format": {
+      "kind": "plain_text"
+    },
+    "grader": {
+      "kind": "script",
+      "argv": [
+        "sh",
+        "-c",
+        "echo 1"
+      ],
+      "cwd": "/app",
+      "env": {},
+      "environment": {
+        "capabilities": [],
+        "command_semantics": "linux_process",
+        "docker_image": "registry.example/grader@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "docker_build": null,
+        "working_directory": "/app",
+        "setup_commands": [
+          "true"
+        ],
+        "environment_variables": {},
+        "tool_providers": {},
+        "packages_lock": null,
+        "package_spec": null
+      },
+      "collect": [],
+      "artifacts": [],
+      "answer_path": "/app/answer.txt",
+      "conversation_path": "/tests/conversation.json",
+      "reward": {
+        "kind": "stdout"
+      },
+      "timeout": 600.0,
+      "empty_output": "zero",
+      "judge": null
+    },
+    "reasoning_markup": "grade",
+    "source": {
+      "dataset": "fixture",
+      "revision": "1",
+      "row": "script-plain",
+      "importer_revision": "1"
+    },
+    "schema_version": "0.30",
+    "resources": {
+      "all": [],
+      "worker": [],
+      "oracle": [],
+      "verifier": []
+    },
+    "tags": [],
+    "labels": {}
+  },
+  {
+    "id": "judge-in-process",
+    "context": {
+      "events": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": "Which planet is red?"
+        }
+      ]
+    },
+    "environment_requirements": {
+      "capabilities": [],
+      "command_semantics": null,
+      "docker_image": null,
+      "docker_build": null,
+      "working_directory": null,
+      "setup_commands": [],
+      "environment_variables": {},
+      "tool_providers": {},
+      "packages_lock": null,
+      "package_spec": null
+    },
+    "final_tools": [],
+    "interaction_tools": [],
+    "tool_bindings": {},
+    "output_paths": [],
+    "answer_type": "text",
+    "answer_format": {
+      "kind": "plain_text"
+    },
+    "grader": {
+      "kind": "verifyit",
+      "mode": "judge",
+      "parameters": {
+        "references": [
+          "Mars"
+        ],
+        "criteria": [],
+        "question": "Which planet is red?",
+        "context": "",
+        "constraints": [],
+        "rubric": "reference",
+        "model": "",
+        "exact_gate": true,
+        "request_timeout": 120.0,
+        "transport_attempts": 1,
+        "transport_budget": 180.0,
+        "output": "/app/answer.txt",
+        "empty_output": "zero",
+        "system_prompt": "",
+        "prompt_template": "",
+        "label_scores": {},
+        "label_metrics": {},
+        "completion_policy": "completed_text",
+        "exact_gate_answers": [],
+        "exact_gate_label": "",
+        "strip_reasoning_blocks": false,
+        "strip_candidate_reasoning_blocks": true,
+        "max_completion_tokens": 8192,
+        "incomplete_retry_tokens": 0,
+        "reasoning_effort": "",
+        "label_scan": "literal",
+        "label_case": "sensitive",
+        "api": "chat_completions"
+      },
+      "environment": null
+    },
+    "reasoning_markup": "grade",
+    "source": {
+      "dataset": "fixture",
+      "revision": "1",
+      "row": "judge-in-process",
+      "importer_revision": "1"
+    },
+    "schema_version": "0.30",
+    "resources": {
+      "all": [],
+      "worker": [],
+      "oracle": [],
+      "verifier": []
+    },
+    "tags": [],
+    "labels": {}
+  },
+  {
+    "id": "script-judge",
+    "context": {
+      "events": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": "What is six plus six?"
+        }
+      ]
+    },
+    "environment_requirements": {
+      "capabilities": [],
+      "command_semantics": null,
+      "docker_image": null,
+      "docker_build": null,
+      "working_directory": null,
+      "setup_commands": [],
+      "environment_variables": {},
+      "tool_providers": {},
+      "packages_lock": null,
+      "package_spec": null
+    },
+    "final_tools": [],
+    "interaction_tools": [],
+    "tool_bindings": {},
+    "output_paths": [],
+    "answer_type": "number",
+    "answer_format": {
+      "kind": "plain_text"
+    },
+    "grader": {
+      "kind": "script",
+      "argv": [
+        "sh",
+        "-c",
+        "echo 1"
+      ],
+      "cwd": "/app",
+      "env": {},
+      "environment": {
+        "capabilities": [],
+        "command_semantics": "linux_process",
+        "docker_image": "registry.example/grader@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "docker_build": null,
+        "working_directory": "/app",
+        "setup_commands": [
+          "true"
+        ],
+        "environment_variables": {},
+        "tool_providers": {},
+        "packages_lock": null,
+        "package_spec": null
+      },
+      "collect": [],
+      "artifacts": [],
+      "answer_path": "/app/answer.txt",
+      "conversation_path": "/tests/conversation.json",
+      "reward": {
+        "kind": "stdout"
+      },
+      "timeout": 600.0,
+      "empty_output": "zero",
+      "judge": {
+        "references": [
+          "Mars"
+        ],
+        "criteria": [],
+        "question": "Which planet is red?",
+        "context": "",
+        "constraints": [],
+        "rubric": "reference",
+        "model": "",
+        "exact_gate": true,
+        "request_timeout": 120.0,
+        "transport_attempts": 1,
+        "transport_budget": 180.0,
+        "output": "/app/answer.txt",
+        "empty_output": "zero",
+        "system_prompt": "",
+        "prompt_template": "",
+        "label_scores": {},
+        "label_metrics": {},
+        "completion_policy": "completed_text",
+        "exact_gate_answers": [],
+        "exact_gate_label": "",
+        "strip_reasoning_blocks": false,
+        "strip_candidate_reasoning_blocks": true,
+        "max_completion_tokens": 8192,
+        "incomplete_retry_tokens": 0,
+        "reasoning_effort": "",
+        "label_scan": "literal",
+        "label_case": "sensitive",
+        "api": "chat_completions"
+      }
+    },
+    "reasoning_markup": "grade",
+    "source": {
+      "dataset": "fixture",
+      "revision": "1",
+      "row": "script-judge",
+      "importer_revision": "1"
+    },
+    "schema_version": "0.30",
+    "resources": {
+      "all": [],
+      "worker": [],
+      "oracle": [],
+      "verifier": []
+    },
+    "tags": [],
+    "labels": {}
+  },
+  {
+    "id": "no-grader",
+    "context": {
+      "events": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": "What is six plus six?"
+        }
+      ]
+    },
+    "environment_requirements": {
+      "capabilities": [],
+      "command_semantics": null,
+      "docker_image": null,
+      "docker_build": null,
+      "working_directory": null,
+      "setup_commands": [],
+      "environment_variables": {},
+      "tool_providers": {},
+      "packages_lock": null,
+      "package_spec": null
+    },
+    "final_tools": [],
+    "interaction_tools": [],
+    "tool_bindings": {},
+    "output_paths": [],
+    "answer_type": "number",
+    "answer_format": {
+      "kind": "plain_text"
+    },
+    "grader": {
+      "kind": "none",
+      "reason": "fixture",
+      "contract": {}
+    },
+    "reasoning_markup": "grade",
+    "source": {
+      "dataset": "fixture",
+      "revision": "1",
+      "row": "no-grader",
+      "importer_revision": "1"
+    },
+    "schema_version": "0.30",
+    "resources": {
+      "all": [],
+      "worker": [],
+      "oracle": [],
+      "verifier": []
+    },
+    "tags": [],
+    "labels": {}
+  }
+]

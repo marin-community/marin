@@ -15,7 +15,7 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.rollouts.context import TrainingContext
 from skyrl_train.task_inputs import task_messages
-from taskcompendium.models import ExitCodeReward, ScriptGrader
+from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace, WhitespaceSplit
@@ -135,7 +135,7 @@ def prepared_selection(tmp_path):
     selection = tmp_path / "selection"
     selection.mkdir()
     path = selection / "validation.parquet"
-    grader = ScriptGrader(argv=("true",), environment=NATIVE_ENVIRONMENT, reward=ExitCodeReward())
+    grader = ScriptGrader(argv=("true",), placement=GraderMachine(environment=NATIVE_ENVIRONMENT), reward=ExitCodeReward())
     tasks = [
         text_task(f"fixture:{index}", prompt=prompt).model_copy(update={"grader": grader})
         for index, prompt in ((4, "start!?"), (1, "middle " * 200), (3, "end!?"))

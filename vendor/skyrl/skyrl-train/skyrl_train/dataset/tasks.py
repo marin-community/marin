@@ -27,11 +27,10 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
-    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
-    VerifyitGrader,
+    grader_environment,
     grades_with_judge,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
@@ -253,15 +252,9 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
         else None
     )
     verifier = None
-    grader = task.grader
-    if (
-        isinstance(grader, ScriptGrader | VerifyitGrader)
-        and grader.environment is not None
-        and not grades_with_judge(grader)
-    ):
-        machine = (
-            config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
-        )
+    grader_build = grader_environment(task.grader)
+    if grader_build is not None and not grades_with_judge(task.grader):
+        machine = config["image_verifier"] if grader_build.docker_image is not None else config["package_verifier"]
         verifier = MachineRuntimeSpec.model_validate(machine)
     lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
     return {**_stored_prompt(lowered), FAMILY_COLUMN: row.get(FAMILY_COLUMN)}
