@@ -209,7 +209,14 @@ def tb2_candidate(source_task_id: str, template_row: dict, package_files: dict[s
     verifier += [{"path": "solution/solve.sh", "content": package_files["solution/solve.sh"]}]
     base_image, workdir = _tb2_base_image(source_task_id, package_files)
     verifier.append(
-        {"path": "environment/Dockerfile", "content": _pi_dockerfile_tb2(source_task_id, base_image, workdir).encode()}
+        {
+            "path": "environment/Dockerfile",
+            "content": (
+                _pi_dockerfile_tb2(
+                    source_task_id, base_image, package_files.get("Dockerfile", b"").decode(), workdir
+                ).encode()
+            ),
+        }
     )
     verifier += [{"path": path, "content": payload} for path, payload in pi_manifests.items()]
     toml = package_files["task.toml"].decode()
@@ -269,7 +276,9 @@ def _tb2_base_image(source_task_id: str, package_files: dict[str, bytes]) -> tup
     """
     if _tb2_registry_image_exists(source_task_id):
         return f"alexgshaw/{source_task_id}:{TB2_IMAGE_TAG}", _upstream_workdir(package_files)
-    return _BUILD_FROM_UPSTREAM_MARKER, _upstream_workdir(package_files)
+    # No published image: the candidate's Dockerfile is the task's own one, which the
+    # driver builds, pushes to ghcr and digest-pins before gating.
+    return None, _upstream_workdir(package_files)
 
 
 def _tb2_registry_image_exists(source_task_id: str) -> bool:
@@ -295,12 +304,13 @@ def _upstream_workdir(package_files: dict[str, bytes]) -> str:
     return workdirs[-1] if workdirs else "/app"
 
 
-BUILD_FROM_UPSTREAM_MARKER = "__BUILD_FROM_UPSTREAM__"
-_BUILD_FROM_UPSTREAM_MARKER = BUILD_FROM_UPSTREAM_MARKER
+def _pi_dockerfile_tb2(source_task_id: str, base_image: str | None, upstream_dockerfile: str, workdir: str) -> str:
+    """The tb2 Dockerfile: the Pi stage over the task's base image or its own Dockerfile.
 
-
-def _pi_dockerfile_tb2(source_task_id: str, base_image: str, workdir: str) -> str:
-    """The tb2 Dockerfile: Pi stage on the task's base image (registry or digest-pinned)."""
+    With a published registry image the base is one FROM line. Without one the task's own
+    environment Dockerfile is carried verbatim and the Pi stage and injection tail are
+    appended — no placeholder ever appears in a generated Dockerfile.
+    """
     stage = (
         "FROM node@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS long_loop_pi_runtime\n"
         "WORKDIR /opt/long-loop-pi\n"
@@ -308,7 +318,6 @@ def _pi_dockerfile_tb2(source_task_id: str, base_image: str, workdir: str) -> st
         "RUN npm ci --omit=dev --no-audit --no-fund\n"
     )
     tail = (
-        "\nFROM task_base\n"
         "COPY --from=long_loop_pi_runtime /usr/local/bin/node /opt/long-loop-node/node\n"
         "COPY --from=long_loop_pi_runtime /opt/long-loop-pi /opt/long-loop-pi\n"
         "ENV PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH}\n"
@@ -317,5 +326,6 @@ def _pi_dockerfile_tb2(source_task_id: str, base_image: str, workdir: str) -> st
     )
     if workdir and workdir != "/":
         tail += f"WORKDIR {workdir}\n"
-    upstream = f"FROM {base_image} AS task_base\n" if not base_image.startswith("FROM ") else ""
-    return stage + upstream + tail
+    base = f"FROM {base_image}\n\n" if base_image else ""
+    body = (base + upstream_dockerfile.rstrip("\n") + "\n\n") if base_image is None else base
+    return stage + body + tail

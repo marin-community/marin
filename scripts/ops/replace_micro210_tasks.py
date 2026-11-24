@@ -38,7 +38,6 @@ from huggingface_hub import hf_hub_download, list_repo_files
 
 from experiments.evaluation.micro210_gate import HARBOR_BENCHMARKS
 from experiments.evaluation.micro210_replacements import (
-    _BUILD_FROM_UPSTREAM_MARKER,
     BROKEN_TASKS,
     REPLACEMENT_SEED,
     CandidateRow,
@@ -55,6 +54,11 @@ from scripts.ops.verify_micro210_spec_gate import (
 
 REPLACEMENT_ATTEMPTS_PER_FAMILY = 4
 CANDIDATE_RETRIES = 2
+
+# The marker the generated Dockerfiles used to carry for missing registry images; the
+# builder now inlines the task's own Dockerfile instead. The dry-run hard-fails if any
+# generated Dockerfile contains it again.
+_RETIRED_PLACEHOLDER = "__BUILD_FROM_UPSTREAM__"
 
 
 def table_digest(path: Path) -> str:
@@ -383,7 +387,8 @@ def main() -> None:
         for benchmark, members in in_policy_by_benchmark.items():
             ordered = _deterministic_order(_family_pool(benchmark), members)
             print(f"{benchmark}: pool order head (excl. policy): {ordered[:8]}")
-        # Exercise candidate construction for the head of each family (no builds/gating).
+        # Exercise candidate construction for the head of each family (no builds/gating)
+        # and print the generated Dockerfiles: none may carry the retired placeholder.
         for broken_task_id in BROKEN_TASKS:
             broken_row = next(row for row in rows if row["task_id"] == broken_task_id)
             benchmark = broken_row["benchmark"]
@@ -401,6 +406,15 @@ def main() -> None:
                     print(f"construct {source_task_id} failed: {type(error).__name__}: {error}")
                     continue
                 print(f"{benchmark}: first constructible candidate = {candidate.task_id}")
+                if benchmark == "humanevalplus":
+                    print(f"{benchmark}: no Dockerfile (verifier-side grading only)")
+                    break
+                dockerfile = _row_files(candidate.task_spec)["environment/Dockerfile"].decode()
+                if _RETIRED_PLACEHOLDER in dockerfile:
+                    raise SystemExit(f"{candidate.task_id}: generated Dockerfile carries {_RETIRED_PLACEHOLDER}")
+                print(f"{benchmark}: generated Dockerfile for {candidate.source_task_id}:")
+                for line in dockerfile.splitlines():
+                    print(f"  | {line}")
                 break
         return
 
@@ -413,9 +427,10 @@ def main() -> None:
         )
         chosen = None
         for candidate in candidates:
-            files = _row_files(candidate.task_spec)
-            dockerfile = files.get("environment/Dockerfile", b"").decode()
-            if _BUILD_FROM_UPSTREAM_MARKER in dockerfile:
+            dockerfile = _row_files(candidate.task_spec).get("environment/Dockerfile", b"").decode()
+            # Digest-pin every candidate whose base is the task's own Dockerfile (no
+            # published registry image): build, push to ghcr, rewrite the row.
+            if "alexgshaw/" not in dockerfile:
                 print(f"building ghcr image for {candidate.source_task_id}", flush=True)
                 digest_ref = _push_tb2_image(candidate)
                 candidate = _pin_candidate_image(candidate, digest_ref)
