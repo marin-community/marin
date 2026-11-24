@@ -1,0 +1,43 @@
+# Fresh BankAdam128 reference with sealed V5 and a 20-hour clock.
+schema: 1
+format: mochi_sft
+name: long-loop-mochi-sft-exp3-v5-bankadam-128/sft
+slug: long-loop-mochi-sft-exp3-v5-bankadam-128
+version: "2026.11.24.128"
+cluster: cw-us-east-08a
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/mochi-long-loop
+  temporary_prefix: s3://marin-us-east-08a/tmp
+hero_reference:
+  path: s3://marin-us-east-08a/marin/users/benfeuer/mochi-sft-preparation/bankadam128-20261124/reference-dafc25df.json
+  sha256: dafc25df2728ba470e2d82496c552e701d7d449cb7bdded8b2db3b73dfc6ab9e
+data_release:
+  path: s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/manifest.json
+  sha256: c4c2035e177dff1090b4510f1aa228a676eb753951a10581c7ba4bd853b63b1f
+data_seal:
+  path: s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.15-candidate-v1/release-v5/release-complete-v5.json
+  sha256: 3e2161945e1adc60c9edcdb6b0d7395946966dc4e0d16b88660fbc38989603f5
+initializer:
+  source: s3://marin-us-east-08a/tmp/ttl=30d/mochi-base-step393491/step-393491
+  metadata_sha256: 07df6c2f942b7f4a86b5d6fc42f1f5f0306a2bb3c3838a0b0616c8297d996267
+  step: 393491
+sft:
+  gpu_count: 128
+  batch_size: 32
+  microbatch_size: null
+  schedule:
+    updates: 2100
+    warmup_steps: 5
+    decay_steps: 210
+  stopping:
+    type: mixture_epochs
+    count: 1
+  epoch_capacity:
+    path: s3://marin-us-east-08a/marin/users/benfeuer/mochi-sft-preparation/bankadam128-capacity-20261124b/long-loop/sft-epoch-capacity/2026.11.24.2/capacity.json
+    sha256: e335ed4eefabfcf14043ef47778fe07b9985483ca0facd4f4ab367e6b39d93d8
+  training_budget:
+    finalization_reserve: 40m
+    update_reserve: 10m
+  packing:
+    cap: 262144
+    lookahead: null

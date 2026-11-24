@@ -348,7 +348,7 @@ def test_native_hero_restore_starts_the_new_epoch_and_scales_its_lr_tail(epoch_i
 
 
 def test_fresh_bankadam_round_preserves_batch_mesh_optimizer_and_weights_only_init(epoch_inputs):
-    recipe, _, pin = epoch_inputs
+    recipe = epoch_inputs[0]
     recipe["data"]["tokenizer"] = "gpt2"
     baseline = GrugRunConfig(
         model=GrugModelConfig(vocab_size=64, max_seq_len=16, num_layers=1, num_experts=192),
@@ -383,20 +383,9 @@ def test_fresh_bankadam_round_preserves_batch_mesh_optimizer_and_weights_only_in
         "compute_dtype": {"__dtype__": "bfloat16"},
         "output_dtype": {"__dtype__": "bfloat16"},
     }
-    budget = TrainingBudgetConfig(SFT_TRAINING_DURATION, SFT_FINALIZATION_RESERVE, SFT_UPDATE_RESERVE)
-    spec = MochiSftRound(
-        1,
-        "mochi_sft",
-        "mochi/sft",
-        "2026.11.24.128",
-        "mochi-bankadam",
-        "cw-us-east-08a",
-        StorageConfig("s3://marin-us-east-08a/new", "s3://marin-us-east-08a/tmp"),
-        pin,
-        pin,
-        pin,
-        MochiWeightsInitializer("base", "0" * 64, 393491),
-        MochiSftControls(128, 32, None, MochiSftSchedule(2100, 5, 210), MixtureEpochs(), pin, budget, 72000),
+    spec = replace(
+        load_round(Path(__file__).parents[1] / "rounds/mochi-sft-exp3-v5-bankadam-128.yaml"),
+        initializer=MochiWeightsInitializer("base", "0" * 64, 393491),
     )
     actual = bind_mochi_sft_config(spec, reference, recipe["data"], updates=20000, output="s3://marin-us-east-08a/new")
     assert actual.optimizer == replace(baseline.optimizer, decay=210)
