@@ -1613,15 +1613,25 @@ def _fresh_qc_index_step(
     plan: ReleasePlan, qc_browse: ArtifactStep, declarations: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["fresh_qc_index"]
-    identity = _identity_fields(plan, "release_id", "catalog_target_load_id", "snapshot_id", "source_revision")
+    identity = _identity_fields(
+        plan,
+        "release_id",
+        "prior",
+        "catalog_target_load_id",
+        "snapshot_id",
+        "source_revision",
+    )
 
     def build_inputs(ctx: StepContext) -> dict:
         return {
             "release_id": plan.release_id,
+            "prior_load_id": plan.prior.load_id,
             "target_load_id": plan.catalog_target_load_id,
             "snapshot_id": plan.snapshot_id,
             "source_revision": plan.source_revision,
             "output_root": stage_output_root(plan, "qc-index"),
+            "service_url": plan.service.service_url,
+            "applet_id": plan.service.applet_id,
             "declarations": _resolved_receipt(ctx, declarations),
             "qc_completion": _resolved_receipt(ctx, qc_browse),
         }

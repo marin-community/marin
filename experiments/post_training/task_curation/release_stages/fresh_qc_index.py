@@ -5,11 +5,12 @@
 
 The release's fresh QC index is a graph output bound to the release's target load and
 snapshot (ruling 2026-11-24), not a hand-produced pin. One panel entry per browse-staged
-source: the maintained
-(:mod:`infra.marina.apps.rl_data_catalog.load_reviews`) stager resolves the frozen
-declaration's selected review evidence into the replayable staged document; this stage
-compresses it byte-deterministically under the release prefix, seals the per-panel
-receipt row, and seals the index the catalog load replays.
+source: the panel's replayable staged document is exported from the prior load's review
+tables (the assessments, populations and items rows ride only on staged documents, and
+the raw-review and batch rows are re-staged from them), compressed
+byte-deterministically under the release prefix, and sealed into the index the catalog
+load replays. The exported document carries the browse-copied review receipt verbatim,
+so the load's pointer verification binds the replay to what the browse verified.
 """
 
 import argparse
@@ -23,6 +24,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
+from experiments.post_training.task_curation.release_stages import paced_query
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 
 INDEX_KIND_SUFFIX = "fresh-qc-index"
@@ -34,19 +36,24 @@ class FreshQcIndexInputs:
     """Typed inputs for the release's fresh QC index; every value is a graph output."""
 
     release_id: str
+    prior_load_id: str
     target_load_id: str
     snapshot_id: str
     source_revision: str
     output_root: str
+    service_url: str
+    applet_id: str
     declarations: ArtifactRef
     qc_completion: ArtifactRef
 
     def validate(self) -> None:
         """Refuse malformed inputs before anything runs."""
-        if not self.release_id or not self.target_load_id or not self.snapshot_id:
-            raise ValueError("release_id, target_load_id and snapshot_id are required")
+        if not self.release_id or not self.prior_load_id or not self.target_load_id or not self.snapshot_id:
+            raise ValueError("release_id, load ids and snapshot are required")
         if not self.source_revision or not self.output_root:
             raise ValueError("source_revision and output_root are required")
+        if not self.service_url or not self.applet_id:
+            raise ValueError("the served applet endpoint is required")
 
 
 def _read_declarations(ref: ArtifactRef) -> dict[str, dict]:
@@ -74,24 +81,94 @@ def _completion_rows(ref: ArtifactRef) -> list[dict]:
     return rows
 
 
-def _stage_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str, dict], *, write: bool) -> dict:
-    """Resolve, verify and (in write mode) stage one panel document under the release prefix."""
-    from infra.marina.apps.rl_data_catalog import load_reviews  # noqa: PLC0415 — the maintained stager
-    from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference  # noqa: PLC0415
+def _export_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str, dict], query, *, write: bool) -> dict:
+    """Export one panel's replayable staged document from the prior load's review tables."""
+    from infra.marina.apps.rl_data_catalog.server.evidence_content import (  # noqa: PLC0415 — the maintained codec
+        unpack_content,
+    )
+    from infra.marina.apps.rl_data_catalog.server.restrictions import (  # noqa: PLC0415 — the maintained restriction
+        declaration_restriction,
+    )
 
     source_id = row["source_id"]
     declaration = declarations.get(source_id)
     if declaration is None:
         raise ValueError(f"no frozen declaration for staged panel source: {source_id}")
-    reference = ManifestReference.model_validate(row["original_receipt"]["artifact"])
-    staged = load_reviews.stage_content_reviews(reference, declaration, 8, None)
-    if staged["receipt"]["artifact"] != row["original_receipt"]["artifact"]:
-        raise ValueError(f"the staged review receipt differs from the browse copy: {source_id}")
+    key = row["pipeline_key"]
+    bound = {"load": inputs.prior_load_id, "key": key}
+    assessments = query(
+        "SELECT pipeline_key,source_id,scope,model,rubric,curation,curation_uri,traces"
+        " FROM atlas_assessments WHERE load_id=:load AND pipeline_key=:key",
+        bound,
+    )["rows"]
+    if len(assessments) != 1:
+        raise ValueError(f"{len(assessments)} assessments for the staged panel {source_id}")
+    populations = query(
+        "SELECT pipeline_key,cohort,population,sample_count"
+        " FROM atlas_populations WHERE load_id=:load AND pipeline_key=:key ORDER BY cohort",
+        bound,
+    )["rows"]
+    items = query(
+        "SELECT pipeline_key,task_id,cohort,status,verdict,explanation,evidence_ids,packet_uri,has_task,"
+        "omissions,exclusion_reason,confidence,reference_status,defects,provenance,replaced_task_sha256,"
+        "repair_advisories FROM atlas_items WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
+        bound,
+    )["rows"]
+    raw_rows = query(
+        "SELECT pipeline_key,task_id,record,reviewer"
+        " FROM atlas_raw_reviews WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
+        bound,
+    )["rows"]
+    batch_rows = query(
+        "SELECT pipeline_key,batch_key,record,chunk_count"
+        " FROM atlas_review_batches WHERE load_id=:load AND pipeline_key=:key ORDER BY batch_key",
+        bound,
+    )["rows"]
+    chunk_rows = query(
+        "SELECT batch_key,chunk_index,payload"
+        " FROM atlas_review_batch_chunks WHERE load_id=:load AND pipeline_key=:key ORDER BY batch_key,chunk_index",
+        bound,
+    )["rows"]
+    links = query(
+        "SELECT pipeline_key,task_id,batch_key"
+        " FROM atlas_review_batch_tasks WHERE load_id=:load AND pipeline_key=:key ORDER BY task_id",
+        bound,
+    )["rows"]
+    chunks_by_batch: dict[str, list[str]] = {}
+    for chunk in chunk_rows:
+        chunks_by_batch.setdefault(chunk["batch_key"], []).append(chunk["payload"])
+    batches = []
+    for batch in batch_rows:
+        record = dict(batch["record"])
+        if batch["chunk_count"]:
+            record["payload"] = "".join(chunks_by_batch.get(batch["batch_key"], []))
+            record.pop("payload_chunks", None)
+        batches.append(
+            {
+                "pipeline_key": batch["pipeline_key"],
+                "batch_key": batch["batch_key"],
+                "record": record,
+                "chunk_count": batch["chunk_count"],
+            }
+        )
+    raw = [{**r, "record": unpack_content(r["record"])} for r in raw_rows]
+    if len(raw) != len(items):
+        raise ValueError(f"the staged panel export for {source_id} covers {len(items)} items and {len(raw)} raw rows")
+    staged = {
+        "data_restriction": declaration_restriction(declaration).value,
+        "assessment": assessments[0],
+        "populations": populations,
+        "items": items,
+        "raw": raw,
+        "batches": batches,
+        "batch_links": links,
+        "receipt": row["original_receipt"],
+    }
     payload = gzip.compress(
         json.dumps(staged, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(), mtime=0
     )
-    identity = reference.sha256
-    reference_out = {"uri": row["original_receipt"]["artifact"]["uri"], "sha256": identity}
+    identity = hashlib.sha256(json.dumps(row["original_receipt"], sort_keys=True).encode()).hexdigest()
+    reference = {"uri": row["original_receipt"]["artifact"]["uri"], "sha256": identity}
     if write:
         path = StoragePath(f"{inputs.output_root}/{STAGED_DIR}/{identity}.json.gz")
         if path.exists():
@@ -101,14 +178,14 @@ def _stage_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str, 
             path.write_bytes(payload, auto_mkdir=True)
         if path.read_bytes() != payload:
             raise ValueError(f"staged panel readback mismatch: {identity}")
-        reference_out = {"uri": str(path), "sha256": hashlib.sha256(payload).hexdigest()}
+        reference = {"uri": str(path), "sha256": hashlib.sha256(payload).hexdigest()}
     return {
         "source_id": source_id,
         "identity": identity,
         "status": "complete",
-        "records": len(staged["items"]),
+        "records": len(items),
         "bytes": len(payload),
-        "reference": reference_out,
+        "reference": reference,
     }
 
 
@@ -127,7 +204,8 @@ def run_fresh_qc_index(
         configure_coreweave_s3()
         declarations = _read_declarations(inputs.declarations)
         rows = _completion_rows(inputs.qc_completion)
-        index_rows = [_stage_panel(inputs, row, declarations, write=not dry_run) for row in rows]
+        query = paced_query.open_paced_query(inputs.service_url, inputs.applet_id, paced_query.RetryControl())
+        index_rows = [_export_panel(inputs, row, declarations, query, write=not dry_run) for row in rows]
         if dry_run:
             alerts.stage_finished(
                 inputs.release_id,

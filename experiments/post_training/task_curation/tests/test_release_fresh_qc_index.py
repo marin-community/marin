@@ -15,11 +15,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.task_curation.release_stages import fresh_qc_index as stage
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 
-REVIEW_SHA = "b" * 64
-
-
-def _review_artifact(tmp_path: Path) -> dict:
-    return {"uri": f"file://{tmp_path}/review/.artifact.json", "sha256": REVIEW_SHA}
+KEY = "qc:" + "b" * 64
 
 
 def _declarations(tmp_path: Path) -> ArtifactRef:
@@ -43,7 +39,8 @@ def _completion(tmp_path: Path, *, status: str = "PASS") -> ArtifactRef:
         "results": [
             {
                 "source_id": "Marin:fixture",
-                "original_receipt": {"artifact": _review_artifact(tmp_path), "current_pin": True},
+                "pipeline_key": KEY,
+                "original_receipt": {"artifact": {"uri": "s3://bucket/review", "sha256": "b" * 64}, "current_pin": True},
             }
         ],
     }
@@ -53,13 +50,96 @@ def _completion(tmp_path: Path, *, status: str = "PASS") -> ArtifactRef:
     return ArtifactRef(uri=str(path), sha256=hashlib.sha256(raw).hexdigest())
 
 
+def _packed(content: dict) -> dict:
+    raw = json.dumps(content, sort_keys=True, separators=(",", ":")).encode()
+    return {
+        "encoding": "gzip+base64",
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "bytes": len(raw),
+        "payload": __import__("base64").b64encode(gzip.compress(raw, mtime=0)).decode("ascii"),
+    }
+
+
+class _FakeQuery:
+    """The prior load's review tables for one panel."""
+
+    def __init__(self, tmp_path: Path):
+        self.tmp_path = tmp_path
+        self.tables = {
+            "atlas_assessments": [
+                {
+                    "pipeline_key": KEY,
+                    "source_id": "Marin:fixture",
+                    "scope": "sample",
+                    "model": {"model": "m"},
+                    "rubric": "{}",
+                    "curation": {},
+                    "curation_uri": "s3://bucket/review",
+                    "traces": [],
+                }
+            ],
+            "atlas_populations": [
+                {"pipeline_key": KEY, "cohort": "admitted", "population": 50, "sample_count": 2},
+            ],
+            "atlas_items": [
+                {
+                    "pipeline_key": KEY,
+                    "task_id": f"t{i}",
+                    "cohort": "admitted",
+                    "status": "complete",
+                    "verdict": "good",
+                    "explanation": None,
+                    "evidence_ids": [],
+                    "packet_uri": None,
+                    "has_task": True,
+                    "omissions": None,
+                    "exclusion_reason": None,
+                    "confidence": None,
+                    "reference_status": None,
+                    "defects": None,
+                    "provenance": None,
+                    "replaced_task_sha256": None,
+                    "repair_advisories": None,
+                }
+                for i in range(2)
+            ],
+            "atlas_raw_reviews": [
+                {
+                    "pipeline_key": KEY,
+                    "task_id": f"t{i}",
+                    "record": _packed({"typed_observation": {"task_id": f"t{i}"}}),
+                    "reviewer": {"model": "m"},
+                }
+                for i in range(2)
+            ],
+            "atlas_review_batches": [
+                {"pipeline_key": KEY, "batch_key": "k1", "record": {"attempts": []}, "chunk_count": 0},
+            ],
+            "atlas_review_batch_chunks": [],
+            "atlas_review_batch_tasks": [
+                {"pipeline_key": KEY, "task_id": "t0", "batch_key": "k1"},
+                {"pipeline_key": KEY, "task_id": "t1", "batch_key": "k1"},
+            ],
+        }
+
+    def query(self, sql: str, params: dict) -> dict:
+        for table, rows in self.tables.items():
+            if f"FROM {table}" in sql:
+                filtered = [r for r in rows if r.get("pipeline_key") == params.get("key")]
+                return {"rows": filtered}
+        raise AssertionError(f"unexpected query: {sql[:80]}")
+
+
 def _inputs(tmp_path: Path, **overrides) -> stage.FreshQcIndexInputs:
     inputs = stage.FreshQcIndexInputs(
         release_id="testrelease",
+        prior_load_id="c" * 32,
         target_load_id="a" * 32,
         snapshot_id="assembly-test-v1",
         source_revision="e" * 40,
         output_root=str(tmp_path / "release"),
+        service_url="https://marina.example.test",
+        applet_id="applet",
         declarations=_declarations(tmp_path),
         qc_completion=_completion(tmp_path),
     )
@@ -67,47 +147,39 @@ def _inputs(tmp_path: Path, **overrides) -> stage.FreshQcIndexInputs:
 
 
 @pytest.fixture
-def staged_panel(monkeypatch, tmp_path: Path):
-    """The maintained stager returns a verified staged document without touching storage."""
-    captured = {}
+def fake_query(tmp_path: Path, monkeypatch):
+    query = _FakeQuery(tmp_path)
+    opened = {}
 
-    def fake_stage(reference, source, workers, mapping_reference):
-        captured["reference"] = reference
-        captured["source"] = source
-        return {
-            "data_restriction": "open",
-            "assessment": {"source_id": source["id"]},
-            "populations": [],
-            "items": [{"task_id": f"t{i}"} for i in range(100)],
-            "raw": [],
-            "batches": [],
-            "batch_links": [],
-            "receipt": {
-                "artifact": reference.model_dump(mode="json"),
-                "panel": {},
-                "current_pin": True,
-                "mapping": None,
-            },
-        }
+    def fake_open(url, applet_id, control):
+        opened["url"] = url
+        return query.query
 
-    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load_reviews.stage_content_reviews", fake_stage)
-    return captured
+    monkeypatch.setattr("experiments.post_training.task_curation.release_stages.paced_query.open_paced_query", fake_open)
+    monkeypatch.setattr("experiments.post_training.task_curation.release_stages.paced_query.RetryControl", lambda: None)
+    query.tables["atlas_review_batch_chunks"] = [
+        {"pipeline_key": KEY, "batch_key": "k1", "chunk_index": 0, "payload": "abc"},
+        {"pipeline_key": KEY, "batch_key": "k1", "chunk_index": 1, "payload": "def"},
+    ]
+    return query
 
 
-def test_write_stages_each_panel_and_binds_the_release(tmp_path, staged_panel):
+def test_write_exports_each_panel_from_the_prior_load(tmp_path, fake_query):
     inputs = _inputs(tmp_path)
     proof = stage.run_fresh_qc_index(inputs, dry_run=False)
     assert proof["load_id"] == "a" * 32 and proof["snapshot_id"] == "assembly-test-v1"
     index = json.loads(StoragePath(proof["index"]["uri"]).read_text())
     row = index["receipts"][0]
-    assert row["source_id"] == "Marin:fixture" and row["status"] == "complete" and row["records"] == 100
-    assert row["reference"]["uri"].endswith(f"staged-v1/{REVIEW_SHA}.json.gz")
+    assert row["source_id"] == "Marin:fixture" and row["status"] == "complete" and row["records"] == 2
     document = json.loads(gzip.decompress(StoragePath(row["reference"]["uri"]).read_bytes()))
-    assert document["receipt"]["artifact"]["sha256"] == REVIEW_SHA
+    assert document["receipt"]["artifact"]["sha256"] == "b" * 64
+    assert document["assessment"]["source_id"] == "Marin:fixture"
+    assert document["raw"][0]["record"]["typed_observation"]["task_id"] == "t0"
+    assert document["data_restriction"] == "open"
     assert index["provenance"]["declarations"]["sha256"] == inputs.declarations.sha256
 
 
-def test_dry_run_verifies_without_writing(tmp_path, staged_panel):
+def test_dry_run_verifies_without_writing(tmp_path, fake_query):
     inputs = _inputs(tmp_path)
     proof = stage.run_fresh_qc_index(inputs, dry_run=True)
     assert proof["panels"] == 1
@@ -115,25 +187,22 @@ def test_dry_run_verifies_without_writing(tmp_path, staged_panel):
     assert not StoragePath(f"{inputs.output_root}/fresh-qc-index.json").exists()
 
 
-def test_refuses_a_panel_whose_staged_receipt_differs_from_the_browse_copy(tmp_path, monkeypatch):
-    def fake_stage(reference, source, workers, mapping_reference):
-        return {
-            "data_restriction": "open",
-            "assessment": {"source_id": source["id"]},
-            "populations": [],
-            "items": [],
-            "raw": [],
-            "batches": [],
-            "batch_links": [],
-            "receipt": {"artifact": {"uri": "file://other", "sha256": "f" * 64}, "panel": {}, "current_pin": True},
-        }
-
-    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load_reviews.stage_content_reviews", fake_stage)
-    with pytest.raises(ValueError, match="differs from the browse copy"):
-        stage.run_fresh_qc_index(_inputs(tmp_path), dry_run=True)
+def test_reassembles_a_chunked_batch_record(tmp_path, fake_query):
+    fake_query.tables["atlas_review_batches"][0] = {
+        "pipeline_key": KEY,
+        "batch_key": "k1",
+        "record": {"payload_chunks": 2},
+        "chunk_count": 2,
+    }
+    inputs = _inputs(tmp_path)
+    proof = stage.run_fresh_qc_index(inputs, dry_run=False)
+    index = json.loads(StoragePath(proof["index"]["uri"]).read_text())
+    document = json.loads(gzip.decompress(StoragePath(index["receipts"][0]["reference"]["uri"]).read_bytes()))
+    assert document["batches"][0]["record"]["payload"] == "abcdef"
+    assert "payload_chunks" not in document["batches"][0]["record"]
 
 
-def test_refuses_a_panel_without_a_frozen_declaration(tmp_path, staged_panel):
+def test_refuses_a_panel_without_a_frozen_declaration(tmp_path, fake_query):
     inputs = _inputs(tmp_path)
     declarations = StoragePath(inputs.declarations.uri)
     document = json.loads(declarations.read_text())
@@ -148,7 +217,13 @@ def test_refuses_a_panel_without_a_frozen_declaration(tmp_path, staged_panel):
         stage.run_fresh_qc_index(broken, dry_run=True)
 
 
-def test_refuses_a_failed_browse_completion(tmp_path, staged_panel):
+def test_refuses_items_and_raw_that_disagree(tmp_path, fake_query):
+    fake_query.tables["atlas_items"] = fake_query.tables["atlas_items"][:1]
+    with pytest.raises(ValueError, match="1 items and 2 raw rows"):
+        stage.run_fresh_qc_index(_inputs(tmp_path), dry_run=True)
+
+
+def test_refuses_a_failed_browse_completion(tmp_path, fake_query):
     inputs = _inputs(tmp_path)
     path = StoragePath(inputs.qc_completion.uri)
     document = json.loads(path.read_text())
