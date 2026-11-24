@@ -6,6 +6,7 @@
 import asyncio
 import json
 import math
+from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -108,7 +109,13 @@ def write_observations(
     protocol: EvaluationProtocol | None = None,
     manifest: EvaluationManifest | None = None,
     observations,
+    stop_reasons: Mapping[int, str] | None = None,
+    groups: Mapping[int, Mapping[str, str]] | None = None,
 ):
+    """Save attempts of rows 0 and 1, each attempt with the stop reason and summary groups of its row.
+
+    Without ``stop_reasons``, the attempts table is saved as it was before attempts recorded stop reasons.
+    """
     protocol = protocol or EvaluationProtocol(
         benchmark="colors",
         version="1",
@@ -136,11 +143,14 @@ def write_observations(
         else {"rows": 2, "source_dataset": "colors", "source_revision": "pin"}
     )
     dataset_id = canonical_sha256(snapshot) if manifest is not None else "dataset"
+    attempt_schema = arrow_schema(Attempt)
+    if stop_reasons is None:
+        attempt_schema = attempt_schema.remove(attempt_schema.get_field_index("stop_reason"))
     with DataStore.open(record.results_path) as store:
         EvaluationStore(store)
         store.table(
             ATTEMPTS_TABLE,
-            schema=arrow_schema(Attempt),
+            schema=attempt_schema,
             primary_key=("dataset", "source_row", "trial", "retry", "phase"),
             schema_version=1,
         )
@@ -191,8 +201,11 @@ def write_observations(
                     result_blob="evidence",
                     prompt_tokens=1,
                     completion_tokens=1,
+                    stop_reason=None if stop_reasons is None else stop_reasons[index],
                 )
-                transaction.table(ATTEMPTS_TABLE).add(attempt.model_dump(mode="json"))
+                transaction.table(ATTEMPTS_TABLE).add(
+                    attempt.model_dump(mode="json", exclude={"stop_reason"} if stop_reasons is None else None)
+                )
                 if phase == "finished":
                     sample = EvalSample(
                         task="colors",
@@ -206,7 +219,7 @@ def write_observations(
                             score=values.get(metrics[0]),
                             detail=json.dumps({"detail": {"metric_weights": weights}}),
                         ),
-                        doc=json.dumps({"groups": {"color": "red"}}),
+                        doc=json.dumps({"groups": {"color": "red"} if groups is None else groups[index]}),
                     )
                     transaction.table("samples").add(sample_to_archive_row(sample, trial_id=f"{dataset_id}/0/{retry}"))
 
@@ -418,6 +431,55 @@ def test_raw_import_uses_the_protocol_reduction(raw_run, summary, metric, observ
     result = score_curated_record(raw_run)
     assert result.metrics["colors"][metric] == pytest.approx(expected)
     assert result.metrics["colors"][f"color=red/{metric}"] == pytest.approx(expected)
+
+
+def test_raw_import_counts_length_stops_of_scored_attempts_per_benchmark_and_group(raw_run, tmp_path):
+    write_observations(
+        raw_run,
+        observations=[
+            (0, 0, "finished", "infra_error", {}, {}),
+            (0, 1, "finished", "graded", {"accuracy": 0.0}, {}),
+            (1, 0, "finished", "graded", {"accuracy": 1.0}, {}),
+        ],
+        stop_reasons={0: "length", 1: "stop"},
+        groups={0: {"direction": "input"}, 1: {"direction": "output"}},
+    )
+    write_record(raw_run, str(tmp_path))
+    store = MemoryRecordStore()
+    assert asyncio.run(Ingestor(store, (str(tmp_path),), 1).run_once()) == ()
+    imported = store.get_record("run")
+    assert imported is not None
+    assert {name: value for name, value in imported["metrics"]["colors"].items() if "length_stop" in name} == {
+        "length_stop_count": 1,
+        "length_stop_fraction": 0.5,
+        "direction=input/length_stop_count": 1,
+        "direction=input/length_stop_fraction": 1.0,
+        "direction=output/length_stop_count": 0,
+        "direction=output/length_stop_fraction": 0.0,
+    }
+
+
+def test_length_stops_cover_only_populations_whose_scored_attempts_recorded_stop_reasons(raw_run):
+    groups = {0: {"direction": "input"}, 1: {"direction": "output"}}
+    write_observations(
+        raw_run,
+        observations=[(0, 0, "finished", "graded", {"accuracy": 1.0}, {}), (1, 0, "finished", "infra_error", {}, {})],
+        groups=groups,
+    )
+    assert score_curated_record(raw_run).metrics["colors"] == {"accuracy": 1.0, "direction=input/accuracy": 1.0}
+    # Resuming that root after the change records a stop reason for the retried attempt only.
+    write_observations(
+        raw_run,
+        observations=[(1, 1, "finished", "graded", {"accuracy": 0.0}, {})],
+        stop_reasons={1: "length"},
+        groups=groups,
+    )
+    metrics = score_curated_record(raw_run).metrics["colors"]
+    assert metrics["accuracy"] == 0.5
+    assert {name: value for name, value in metrics.items() if "length_stop" in name} == {
+        "direction=output/length_stop_count": 1,
+        "direction=output/length_stop_fraction": 1.0,
+    }
 
 
 def test_failed_and_unfinished_trials_remain_missing_coverage(raw_run):

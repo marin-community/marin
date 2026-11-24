@@ -345,6 +345,23 @@ weighted mean of `win_rate` over judged games, so 0.5 is parity with the
 baseline: the paper's o3-mini, or o3 for the `-o3` variants. SimpleQA and
 SimpleQAMini use classification summaries.
 
+Generation benchmarks also report `length_stop_count`, the number of scored
+attempts whose rollout stopped with reason `length`, and
+`length_stop_fraction`, that number divided by the scored attempts, for the
+benchmark and for each group label. A population in which a scored attempt has
+no recorded stop reason, as with likelihood scoring or a result root written
+before attempts recorded stop reasons, reports neither.
+
+Stop reason `length` means the model reached a token limit: the request's
+output limit or the context window. The rollout recorder also uses it when a
+prompt leaves no output budget before the first response
+(`GenerationLimitReached`). Such an attempt has no response. When the answer is
+the final message, the attempt gets no grade, so it is an infrastructure
+failure and stays out of both counts; when the answer is a file or machine
+state, it is graded and counts as a length stop. Selection admits only prompts
+that leave an output budget, and the chat and completion transports never raise
+`GenerationLimitReached`.
+
 The shared evaluation CLI and checkpoint menus now select these curated corpora.
 Corpus artifacts are explicit dependencies that finish before inference starts;
 executors receive their resolved roots. Catalog publication remains in the curation
