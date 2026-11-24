@@ -70,7 +70,7 @@ from marin.evaluation.runner import (
     run_evaluation_steps,
 )
 from marin.evaluation.serving_config import resolved_serve_config
-from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, DAYTONA_TARGET, JUDGE_API_KEY
+from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, JUDGE_API_KEY
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.inference.iris import RemoteInferenceSession
@@ -310,9 +310,6 @@ def _resolve_definitions(
                 (urlsplit(definition.run.judge_endpoint).hostname,) if definition.run.judge_endpoint is not None else ()
             )
             if settings.task_machine is not None and settings.task_machine.backend is TaskMachineBackend.DAYTONA:
-                # The worker reads the target from the forwarded launch environment; fail before serving.
-                if not os.environ.get(DAYTONA_TARGET):
-                    raise ValueError(f"{name} runs Daytona task machines, which require {DAYTONA_TARGET}")
                 secret_env[DAYTONA_API_KEY] = DAYTONA_SECRET_ENV[DAYTONA_API_KEY]
                 egress_allow = (*egress_allow, *DAYTONA_EGRESS)
             resolved.append(
