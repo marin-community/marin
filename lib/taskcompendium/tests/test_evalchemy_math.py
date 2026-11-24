@@ -14,6 +14,7 @@ from verifyit.spec import RUBRIC_LABELS, JudgeSpec
 
 from taskcompendium.importers.evalchemy.grader import DEPENDENCIES, scorer_files
 from taskcompendium.importers.evalchemy.scorers import minerva
+from taskcompendium.importers.evalchemy.scorers.amc import grade_amc
 from taskcompendium.importers.evalchemy.scorers.harness_generation import grade_harness_generation_candidate
 from taskcompendium.importers.evalchemy.scorers.main import score
 from taskcompendium.importers.evalchemy.scorers.math import grade_boxed_math
@@ -141,6 +142,32 @@ GRADERS = {
 @pytest.mark.parametrize("grade", GRADERS.values(), ids=GRADERS.keys())
 def test_symbol_free_relation_reference_matches_only_its_own_relations(grade, reference, candidate, correct):
     assert grade(reference, rf"The answer is \boxed{{{candidate}}}.").reward == float(correct)
+
+
+BOXED_GRADERS = {
+    **GRADERS,
+    "amc": grade_amc,
+}
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        # OlympiadBench's prompt ends with this instruction, which models quote while reasoning.
+        "The prompt says: Mark your solution with \\boxed\nAnswer:\nSo the value is 42.\n\\boxed{42}",
+        "I'll put the result in \\boxed{} at the end. 6 * 7 = 42, so \\boxed{42}",
+        "Maybe \\boxed{7}? No: 6 * 7 = 42.</think>The answer is \\boxed{42}.",
+        "Maybe \\boxed{7}? No: 6 * 7 = 42.<|end_think|>The answer is \\boxed{42}.",
+    ],
+)
+@pytest.mark.parametrize("grade", BOXED_GRADERS.values(), ids=BOXED_GRADERS.keys())
+def test_boxed_answer_is_the_final_answers_last_box(grade, response):
+    assert grade("42", response).reward == 1
+
+
+@pytest.mark.parametrize("grade", BOXED_GRADERS.values(), ids=BOXED_GRADERS.keys())
+def test_box_inside_reasoning_is_not_an_answer(grade):
+    assert grade("42", "Maybe \\boxed{42}? No, 6 * 7 is not it.</think>The answer is 7.").reward == 0
 
 
 @pytest.mark.parametrize("scorer", sorted(DEPENDENCIES))

@@ -3,6 +3,8 @@
 
 """FinanceBench evaluation declarations."""
 
+from functools import partial
+
 from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import (
@@ -73,7 +75,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     summary=SummaryKind.MEAN,
                     expected_population=50,
                 ),
-                chat_item,
+                partial(chat_item, response_selection="final_only"),
             ),
             pipeline=prepare_evaluation,
         )

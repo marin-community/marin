@@ -24,7 +24,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from finestore.rl.status_taxonomy import DataRestriction
-from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import (
     AgentEpisode,
     EpisodeAgent,
@@ -153,7 +152,7 @@ class HarborConversion:
 def harbor_item(task: TaskSpec, *, agent: AgentEpisode) -> EvaluationItem:
     """Run ``agent`` with the episode inputs the package declared."""
     episode = EpisodeInputs.model_validate_json(task.labels[EPISODE_LABEL])
-    return chat_item(task).model_copy(update={"operation": agent, "episode": episode})
+    return EvaluationItem(task_id=task.id, source_row=task.source.row, operation=agent, episode=episode)
 
 
 def image_lock(recipe: str) -> dict[str, str]:

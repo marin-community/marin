@@ -77,7 +77,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                     ),
                     protocol=EvaluationProtocol(
                         benchmark=name,
-                        version="2026.11.02",
+                        version="2026.11.24",
                         operation=OperationKind.CHAT_GENERATION,
                         sampling=Sampling(
                             temperature=None,

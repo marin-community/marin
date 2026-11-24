@@ -13,7 +13,6 @@ from fray.local_backend import LocalClient
 from huggingface_hub import HfApi
 from shellbox.machine import NetworkPolicy
 from taskcompendium.convert.answers import answer_task
-from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import (
     AgentEpisode,
     EpisodeInputs,
@@ -88,7 +87,9 @@ def convert_answer(row: RawRow, _context: ConversionContext) -> TaskSpec:
 
 
 def episode_item(task: TaskSpec, *, agent: AgentEpisode = AGENT) -> EvaluationItem:
-    return chat_item(task).model_copy(update={"operation": agent, "episode": EpisodeInputs(network=NetworkPolicy.DENY)})
+    return EvaluationItem(
+        task_id=task.id, source_row=task.source.row, operation=agent, episode=EpisodeInputs(network=NetworkPolicy.DENY)
+    )
 
 
 @pytest.fixture

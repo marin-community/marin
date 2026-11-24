@@ -50,4 +50,6 @@ def convert_mmlu_redux(row: RawRow, context: ConversionContext) -> TaskSpec:
 
 
 def mmlu_redux_item(task: TaskSpec) -> EvaluationItem:
-    return chat_item(task).model_copy(update={"groups": {"subject": source_evidence(task)["config"]}})
+    return chat_item(task, response_selection="final_only").model_copy(
+        update={"groups": {"subject": source_evidence(task)["config"]}}
+    )

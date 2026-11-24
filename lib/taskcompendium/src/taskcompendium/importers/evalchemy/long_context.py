@@ -81,11 +81,11 @@ def convert_mrcr(row: RawRow, context: ConversionContext) -> TaskSpec:
 
 def mrcr_item(task: TaskSpec) -> EvaluationItem:
     row = source_evidence(task)
-    return chat_item(task).model_copy(
-        update={
-            "operation": ChatGeneration(historical_assistant_reasoning="empty"),
-            "groups": {"cell": f"{row['mrcr_bin_upper']}_{row['n_needles']}needle"},
-        }
+    return EvaluationItem(
+        task_id=task.id,
+        source_row=task.source.row,
+        operation=ChatGeneration(response_selection="final_only", historical_assistant_reasoning="empty"),
+        groups={"cell": f"{row['mrcr_bin_upper']}_{row['n_needles']}needle"},
     )
 
 
@@ -105,7 +105,7 @@ def convert_graphwalks(row: RawRow, context: ConversionContext) -> TaskSpec:
 
 def graphwalks_item(task: TaskSpec) -> EvaluationItem:
     row = source_evidence(task)
-    return chat_item(task).model_copy(
+    return chat_item(task, response_selection="final_only").model_copy(
         update={
             "prompt_characters": row["prompt_chars"],
             "reference_text": FINAL_ANSWER_PREFIX + " [" + ", ".join(row["answer_nodes"]) + "]",

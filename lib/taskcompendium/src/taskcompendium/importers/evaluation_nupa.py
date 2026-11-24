@@ -149,7 +149,7 @@ def nupa_item(task: TaskSpec) -> EvaluationItem:
     return EvaluationItem(
         task_id=task.id,
         source_row=task.source.row,
-        operation=ChatGeneration(),
+        operation=ChatGeneration(response_selection="final_only"),
         groups={
             "source_id": source["id"],
             "task": source["task_name"],

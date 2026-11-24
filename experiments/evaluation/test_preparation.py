@@ -59,7 +59,7 @@ def convert_mutating_fixture(row: RawRow, context: ConversionContext):
 
 
 def grouped_item(task):
-    return chat_item(task).model_copy(update={"groups": {"panel": "changed"}})
+    return chat_item(task, response_selection="final_only").model_copy(update={"groups": {"panel": "changed"}})
 
 
 def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
@@ -93,7 +93,7 @@ def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
                 summary=SummaryKind.MEAN,
                 expected_population=1,
             ),
-            chat_item,
+            partial(chat_item, response_selection="final_only"),
         ),
         pipeline=prepare_evaluation,
     )
@@ -140,7 +140,7 @@ def test_python_evaluation_artifact_cache_separates_operation_models_and_options
     content_first = ChatGeneration(response_selection="final_or_complete_reasoning")
     operations = (
         TextGeneration(),
-        ChatGeneration(),
+        ChatGeneration(response_selection="final_only"),
         content_first,
         ChatGeneration.model_validate_json(content_first.model_dump_json()),
     )

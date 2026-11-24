@@ -4,8 +4,7 @@
 """Convert pinned instruction-following rows and preserve their request channels."""
 
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation.corpus import chat_item
-from taskcompendium.evaluation.spec import EvaluationItem, TextGeneration
+from taskcompendium.evaluation.spec import ChatGeneration, EvaluationItem, TextGeneration
 from taskcompendium.importers.evalchemy.grader import source_package
 from taskcompendium.importers.evalchemy.scorers.instruction_spec import InstructionProfile
 from taskcompendium.models import TaskSpec, TextMessage
@@ -34,7 +33,7 @@ def convert_instructions(row: RawRow, context: ConversionContext, *, profile: In
 
 
 def instruction_item(task: TaskSpec, *, profile: InstructionProfile) -> EvaluationItem:
-    item = chat_item(task)
-    if profile is InstructionProfile.HARNESS:
-        return item.model_copy(update={"operation": TextGeneration()})
-    return item
+    operation = (
+        TextGeneration() if profile is InstructionProfile.HARNESS else ChatGeneration(response_selection="final_only")
+    )
+    return EvaluationItem(task_id=task.id, source_row=task.source.row, operation=operation)

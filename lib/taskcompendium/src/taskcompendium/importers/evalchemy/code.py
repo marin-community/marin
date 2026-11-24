@@ -23,7 +23,6 @@ from verifyit.adapters import completion
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.code import THREAD_ENVIRONMENT
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import ChatGeneration, EvaluationItem, TextGeneration
 from taskcompendium.grader import GraderPackage
 from taskcompendium.identity import canonical_sha256
@@ -144,11 +143,10 @@ def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> Ta
 
 
 def python_item(task: TaskSpec, *, generation: ChatGeneration | TextGeneration) -> EvaluationItem:
-    item = chat_item(task)
     row = source_evidence(task)
-    return item.model_copy(
-        update={
-            "operation": generation,
-            "groups": {"direction": row["direction"]} if "direction" in row else {"language": "python"},
-        }
+    return EvaluationItem(
+        task_id=task.id,
+        source_row=task.source.row,
+        operation=generation,
+        groups={"direction": row["direction"]} if "direction" in row else {"language": "python"},
     )
