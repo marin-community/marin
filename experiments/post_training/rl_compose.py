@@ -19,7 +19,6 @@ import yaml
 from finestore.rl.strata import MembershipState, SelectionTaskRow, read_selection_manifest
 from finestore.schema import arrow_schema
 from iris.rpc import job_pb2
-from marin.evaluation.eval_env import DAYTONA_TARGET_ENV
 from marin.execution.artifact import (
     RECORD_FILENAME,
     Artifact,
@@ -638,9 +637,7 @@ def run_step(
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
     if preset.harbor is not None:
-        required_env += (preset.harbor.daytona_api_key_env, DAYTONA_TARGET_ENV)
-    elif get_path(config, "terminal_bench.installed_agent") is not MISSING:
-        required_env += (DAYTONA_TARGET_ENV,)
+        required_env += (preset.harbor.daytona_api_key_env,)
     required_env += tuple(_recipe_env(config))
     return skyrl_step(
         spec,
