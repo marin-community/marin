@@ -10,6 +10,7 @@ import pytest
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.release_stages import __main__ as entry_point
+from experiments.post_training.task_curation.release_stages import graph as release_graph_module
 from experiments.post_training.task_curation.release_stages import preflight as preflight_module
 from experiments.post_training.task_curation.release_stages import preflight_slices
 from experiments.post_training.task_curation.release_stages.graph import write_plan
@@ -99,6 +100,27 @@ def test_preflight_mode_refuses_unknown_nodes(plan_document, capsys):
     exit_code = entry_point.main(_argv(plan_document, "preflight", "--stage", "not_a_node"))
     assert exit_code == 2
     assert "unknown graph nodes" in capsys.readouterr().err
+
+
+def test_run_mode_builds_the_terminal_for_an_unrestricted_run(tmp_path, plan_document, monkeypatch, capsys):
+    """A plain run builds the terminal stage, not just the plan document."""
+    captured = {}
+
+    def fake_run(*handles, **kwargs):
+        captured["handles"] = list(handles)
+        return []
+
+    monkeypatch.setattr(entry_point, "assert_submission_allowed", lambda *a, **k: None)
+    monkeypatch.setattr(entry_point, "run_handles", fake_run)
+    exit_code = entry_point.main(_argv(plan_document, "run"))
+    assert exit_code == 0
+    handles = captured["handles"]
+    assert handles[0].name.endswith("-plan")
+    # The terminal handle is the exposure probe: the graph's last stage. The
+    # entry point constructs its own graph, so compare identity by node key.
+    built = release_graph_module.release_graph(entry_point.load_plan(plan_document))
+    assert handles[-1].name == built.terminal.name
+    assert handles[-1].version == built.terminal.version
 
 
 def test_run_mode_gates_on_the_submission_guard(tmp_path, plan_document, monkeypatch, capsys):

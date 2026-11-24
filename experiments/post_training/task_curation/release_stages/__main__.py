@@ -137,6 +137,10 @@ def mode_run(args, *, force_run_failed: bool) -> int:
     handles: list = [graph.plan_handle]
     if args.stage:
         handles += [graph.stages[node] for node in stages]
+    else:
+        # An unrestricted run builds the terminal stage, which transitively
+        # builds every node; the plan document is its first dependency.
+        handles.append(graph.terminal)
     run_handles(*handles, force_run_failed=force_run_failed, max_concurrent=args.max_concurrent)
     verb = "RESUME" if force_run_failed else "RUN"
     print(f"{verb} {plan.release_id}: {len(handles) - 1} terminal handle(s) built")
@@ -149,12 +153,13 @@ def mode_status(args) -> int:
     plan = _plan_document(args)
     graph = release_graph(plan)
     landed = repo_head(REPO_ROOT)
+    selection = SliceSelection(source=args.source)
     rows = []
     for node in sorted(graph.stages):
         preflight_ref = preflight_module.read_receipt(plan.release_root, node)
         state = "missing"
         if preflight_ref is not None:
-            digests = preflight_module.input_digests(preflight_slices.slice_inputs(node, plan, SliceSelection()))
+            digests = preflight_module.input_digests(preflight_slices.slice_inputs(node, plan, selection))
             state = "fresh" if preflight_module.receipt_is_fresh(preflight_ref, landed, digests) else "stale"
             if not preflight_ref.ok:
                 state = "failed"
