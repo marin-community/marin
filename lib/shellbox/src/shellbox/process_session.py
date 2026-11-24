@@ -98,7 +98,11 @@ class ByteReader(Protocol):
 
 
 class BoundedByteBuffer:
-    """Adapt pushed transport output to a backpressured binary reader."""
+    """Buffer pushed transport output for a binary reader.
+
+    A producer never waits for the reader, so the transport stream keeps flowing;
+    it fails once unread bytes would exceed the capacity.
+    """
 
     def __init__(self, capacity: int):
         if capacity <= 0:
@@ -109,17 +113,14 @@ class BoundedByteBuffer:
         self._finished = False
         self._error: BaseException | None = None
 
-    async def feed(self, data: bytes) -> None:
-        offset = 0
+    async def append(self, data: bytes) -> None:
         async with self._condition:
-            while offset < len(data):
-                await self._condition.wait_for(lambda: len(self._data) < self._capacity or self._finished)
-                if self._finished:
-                    return
-                size = min(len(data) - offset, self._capacity - len(self._data))
-                self._data.extend(data[offset : offset + size])
-                offset += size
-                self._condition.notify_all()
+            if self._finished:
+                return
+            if len(self._data) + len(data) > self._capacity:
+                raise BufferError(f"Unread process output exceeds {self._capacity} bytes")
+            self._data.extend(data)
+            self._condition.notify_all()
 
     async def read(self, max_bytes: int) -> bytes:
         async with self._condition:
@@ -132,7 +133,7 @@ class BoundedByteBuffer:
         return data
 
     async def finish(self, error: BaseException | None = None) -> None:
-        """Release readers and producers, delivering buffered bytes before failure."""
+        """Release readers, delivering buffered bytes before failure."""
         async with self._condition:
             self._finished = True
             if error is not None:

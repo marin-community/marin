@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-from evalrecords.records import CuratedAgentRef, CuratedSettings, RunStatus, TaskImageBuild
+from evalrecords.records import CuratedAgentRef, CuratedSettings, RunStatus
 from iris.client.client import JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
@@ -116,9 +116,6 @@ def runtime_config(
             attempt_timeout=2400,
             verifier_timeout=600,
             cleanup_timeout=RUN_CLEANUP_TIMEOUT,
-        ),
-        image_build=(
-            settings.task_machine.image_build if settings.task_machine is not None else TaskImageBuild.SNAPSHOT
         ),
         task_machine=(
             MachineRuntimeSpec(

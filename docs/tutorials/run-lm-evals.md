@@ -153,18 +153,8 @@ evaluations:
         memory_mb: 8192
 ```
 
-On Daytona, `image_build` selects how each machine gets its image. The default,
-`snapshot`, builds each distinct environment once into a named snapshot that counts
-against the eval account's snapshot quota. `declarative` builds the image for every
-machine and creates no snapshot. Catalog entries for datasets with more distinct
-environments than the quota, such as `tb2`, `swebench` and `aider`, select
-`declarative`:
-
-```yaml
-    run:
-      task_machine:
-        image_build: declarative
-```
+On Daytona, each distinct environment becomes one named image that later machines
+reuse; `shellbox-daytona-images prune` deletes the ones no current spec needs.
 
 Each attempt holds a task machine, and the agent's time budget includes the model's latency,
 which grows with load. `run.concurrency` bounds the attempts that run at once; the model's

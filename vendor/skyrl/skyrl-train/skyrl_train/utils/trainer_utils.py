@@ -36,7 +36,8 @@ EVAL_DIAGNOSTIC_FIELDS = frozenset(
         "machine_operation",
         "provider_status_code",
         "provider_sdk_call",
-        "provider_rate_limits",
+        "provider_retry_after_seconds",
+        "provider_error_code",
     }
 )
 

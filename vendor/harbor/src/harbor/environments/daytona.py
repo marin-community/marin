@@ -8,7 +8,7 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from pathlib import Path
 
-from daytona import AsyncDaytona
+from daytona import AsyncDaytonaV2Client
 
 from harbor.environments.base import (
     BASE_ENVIRONMENT_ARGUMENTS,
@@ -32,18 +32,17 @@ from harbor.environments.model_relay import (
 )
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
+from shellbox.backends.daytona.images import (
+    ImageRequest,
+    image_request_for_spec,
+    validate_source,
+)
 from shellbox.backends.daytona.machine import (
     DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
     DEFAULT_SANDBOX_TTL_MINUTES,
-    DaytonaImageBuild,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkPolicy,
-)
-from shellbox.backends.daytona.snapshot import (
-    SnapshotRequest,
-    snapshot_request_for_spec,
-    validate_source,
 )
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import MachineSpec, NetworkPolicy, UnsupportedMachineSpec
@@ -55,7 +54,7 @@ from shellbox.process_session import (
 )
 
 
-def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> RegistryImage | DockerfileSource:
+def task_image_source(docker_image: str | None, environment_dir: Path) -> RegistryImage | DockerfileSource:
     """Select a Harbor task's image source from its image or environment."""
     if docker_image:
         return RegistryImage(docker_image)
@@ -69,7 +68,7 @@ def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *,
     """The shellbox spec for one task environment.
 
     Pure projection from the task's environment config, so measurement code
-    can derive snapshot identities from the same inputs production uses.
+    can derive image identities from the same inputs production uses.
     Source validation happens once per boundary: environment construction
     rejects unusable definitions, and sandbox creation validates what it
     is about to build.
@@ -97,11 +96,10 @@ class DaytonaEnvironment(BaseEnvironment):
     def __init__(
         self,
         *args,
-        client_factory: Callable[[], AsyncDaytona] | None = None,
+        client_factory: Callable[[], AsyncDaytonaV2Client] | None = None,
         network_policy: dict[str, str] | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
-        image_build: str = DaytonaImageBuild.SNAPSHOT,
         output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
         model_endpoint: str | None = None,
         model_name: str | None = None,
@@ -124,7 +122,7 @@ class DaytonaEnvironment(BaseEnvironment):
             )
             connection = capabilities.daytona
             # An absent connection keeps the environment constructible for
-            # callers that only inspect the task definition, such as snapshot
+            # callers that only inspect the task definition, such as image
             # preflight; the factory then fails when a sandbox is requested.
             client_factory = (
                 connection.client_factory() if connection is not None else None
@@ -135,7 +133,6 @@ class DaytonaEnvironment(BaseEnvironment):
             create_timeout=create_timeout,
             output_collection_timeout=output_collection_timeout,
             network_policy=policy,
-            image_build=DaytonaImageBuild(image_build),
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
         self.judge_access = JudgeAccess(judge_access)
@@ -166,7 +163,7 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 "Shellbox Daytona supports single-container tasks; use local for Compose service groups"
             )
-        task_snapshot_source(self.task_env_config.docker_image, self.environment_dir)
+        task_image_source(self.task_env_config.docker_image, self.environment_dir)
         paths = EnvironmentPaths()
         allowed = {
             str(path)
@@ -190,20 +187,16 @@ class DaytonaEnvironment(BaseEnvironment):
             gpus=self._effective_gpus,
         )
 
-    def snapshot_request(self) -> SnapshotRequest:
-        """Return this task's snapshot request in snapshot build mode."""
-        if self.factory.image_build != DaytonaImageBuild.SNAPSHOT:
-            raise ValueError(
-                f"{self.factory.image_build} image builds start sandboxes without a snapshot"
-            )
-        return snapshot_request_for_spec(self._machine_spec())
+    def image_request(self) -> ImageRequest:
+        """Return the image this task's sandboxes start from."""
+        return image_request_for_spec(self._machine_spec())
 
     async def start(
         self, force_build: bool, *, service_tasks: asyncio.TaskGroup
     ) -> None:
         if force_build:
             raise ValueError(
-                "Shellbox snapshots are immutable; change the prepared image or build inputs"
+                "Shellbox images are immutable; change the prepared image or build inputs"
             )
         spec = self._machine_spec()
         judge, candidate = task_model_relays(

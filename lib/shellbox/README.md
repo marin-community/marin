@@ -22,7 +22,7 @@ The base wheel contains the machine API and guest source. The [vendored Harbor p
 
 `factory.check_environment(requirements, spec)` checks task semantics, capabilities and software support before acquisition. Factories retain the requested `MachineSpec`; prepared images and bundles are backend inputs. The check does not promise available capacity or installed executables.
 
-The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. By default it builds each distinct image once into a reusable account snapshot; `DaytonaImageBuild.DECLARATIVE` builds the image for every sandbox instead and creates no snapshot. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. It registers each distinct image source once as a named project image and starts sandboxes from it. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
 Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. Harbor owns the local, Daytona, QEMU and ShellSim environment adapters. Machines retain their runtime between commands; QEMU and ShellSim also support persistent Bash sessions.
 
@@ -34,8 +34,8 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 | Local | Host programs, Python packages, prepared OCI image or registry reference | allow or deny | Isolated worker with `bwrap` able to create namespaces; OCI images also need `umoci`, registry preparation needs Skopeo |
 
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
-runtime on the host. The Daytona SDK and current Iris dependencies require
-`--prerelease allow`. A checkout can supply Iris as a workspace dependency.
+runtime on the host. The `daytona` extra pins the Daytona 2.x SDK and uses its v2 API.
+Current Iris dependencies require `--prerelease allow`. A checkout can supply Iris as a workspace dependency.
 Iris uses `CONTAINER_PROFILE_SANDBOX`: the cluster's sandbox runtime, no cluster
 environment, credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
@@ -43,7 +43,8 @@ addresses; `DENY` denies external traffic. Neither grants cluster access.
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
 `/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
-for commands and directory transfer; `open_process` also needs Python 3.8 or newer.
+for commands and directory transfer. `open_process` uses the provider's process API
+with open stdin and a base64 log stream, so it needs no guest interpreter.
 Daytona uploads each control wrapper into a private command directory before execution,
 so nested shell quoting does not enlarge the argument sent to its execution API.
 The original argv, stdin, environment and working directory are preserved;
@@ -57,34 +58,37 @@ expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
 
 ```python
+import os
+
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec
 
-machine = await DaytonaMachineFactory().create(MachineSpec(source=RegistryImage("ubuntu:24.04")))
+factory = DaytonaMachineFactory(DaytonaConnection(api_key=os.environ["DAYTONA_EVAL_API_KEY"]).client_factory())
+machine = await factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04")))
 try:
     result = await machine.run(Command(("/bin/sh", "-c", "printf hello")))
 finally:
     await machine.close()
 ```
 
-### Daytona snapshots
+### Daytona images
 
-One snapshot corresponds to one image source and one CPU, memory, disk and GPU
-request. Registry images are identified by reference; Docker build contexts by
-their current contents. Memory and disk round up to whole GiB. The name is
-`shellbox-` plus the first 40 hex characters of
-`sha256(image_source_key(source) + json(resources))`.
+One image corresponds to one image source. Registry images are identified by
+reference; Docker build contexts by their current contents. The name is
+`shellbox-` plus the first 40 hex characters of `sha256(image_source_key(source))`.
+Sandbox CPU, memory and disk are set on each sandbox and do not change the image.
 
-`snapshot_request_for_spec` derives the snapshot identity from a `MachineSpec`,
-and `SnapshotRequest.as_dict`/`from_dict` are the JSON interchange for preflight.
+`image_request_for_spec` derives the image identity from a `MachineSpec`, and
+`ImageRequest.as_dict`/`from_dict` are the JSON interchange for preflight.
 Harbor builds that machine spec from its task configuration and does not select
-sources, round resources or name snapshots itself.
+sources or name images itself.
 
-`shellbox-daytona-snapshots` inventories an account, compares it with a required
-set, creates missing snapshots and reclaims stale ones. See the
-[Daytona operations runbook](../../.agents/ops/daytona.md#snapshot-preflight-and-reclamation)
-for the account-wide one-hour purge policy.
+`shellbox-daytona-images` inventories a project's images, compares them with a
+required set and creates the missing ones. `shellbox-daytona-usage` reports the
+project's limits and live usage. See the
+[Daytona operations runbook](../../.agents/ops/daytona.md#image-preflight).
 
 Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
 Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")`
@@ -183,9 +187,9 @@ Its `ProcessSession` provides incremental binary `read`/`write`, bounded stderr,
 exit status and explicit close. `Machine.run` still executes complete commands.
 Pipe and SDK adapters share `StreamProcessSession` for read/write serialization,
 bounded stderr and owned teardown. The adapter supplies its reader, writer, wait
-and stop operations. Local and Docker use raw binary pipes; Daytona uses the
-shared `process_framing` codec in its host and guest bridge because its SDK
-transports text. HTTP request/response messages sit above this byte-stream API.
+and stop operations. Local and Docker use raw binary pipes; Daytona uses the v2
+process API, whose stdin and base64 log stream carry bytes. HTTP request/response
+messages sit above this byte-stream API.
 QEMU, ShellSim and Iris do not expose process sessions; online relays require a supported
 backend and fail explicitly otherwise.
 
@@ -279,22 +283,23 @@ Daytona records process-group leader PIDs as root in a root-only directory befor
 Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
 Model commands that run as root can stop other root-owned processes.
 
-For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
-Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
-Each machine owns and closes its client. In the default build mode, the factory
-creates sandboxes from shared snapshots. Snapshot names derive from the registry
-reference or build-context contents and the requested resources. Use immutable
-image references. A mutable tag can select a snapshot built from an earlier image.
-Snapshot creation requires available organization quota.
-Machine cleanup deletes the sandbox and retains the snapshot for reuse.
-`DaytonaMachineFactory(auto_stop_interval=30)` sets the idle-stop interval in
-minutes and configures Daytona to delete sandboxes immediately on stop. An open
-machine renews activity at one-third of that interval because a running guest command does not
-reset Daytona's idle timer. Closing the machine stops renewal before deleting
-the sandbox. If the client process exits without cleanup, renewal stops and idle cleanup
-reclaims the sandbox. `auto_stop_interval=0` disables idle stop and renewal.
-`ttl_minutes` remains the hard wall-clock cap, defaulting to 360 minutes,
-including while activity is renewed.
+For Daytona, pass `DaytonaConnection(api_key=...).client_factory()` to
+`DaytonaMachineFactory`; it builds a v2 client for that key and never falls back to
+`DAYTONA_API_KEY`. Sandboxes and images use the project's default region.
+`DAYTONA_V2_API_URL` overrides the API endpoint.
+Each machine owns and closes its client. The factory creates sandboxes from shared
+project images. Image names derive from the registry reference or build-context
+contents. Use immutable image references. A mutable tag can select an image
+imported from an earlier tag target.
+Machine cleanup deletes the sandbox and retains the image for reuse.
+`DaytonaMachineFactory(idle_timeout_minutes=30)` sets the sandbox's idle timeout in
+minutes; Daytona deletes an idle sandbox. An open machine resets the idle timer at
+one-third of that interval because a running guest command does not reset it.
+Closing the machine stops renewal before deleting the sandbox. If the client process
+exits without cleanup, renewal stops and the idle timeout reclaims the sandbox.
+`idle_timeout_minutes=0` disables the idle timeout and renewal.
+`ttl_minutes` is the hard wall-clock cap, defaulting to 360 minutes,
+including while the idle timer is reset; Daytona deletes the sandbox when it expires.
 Pass `labels={"owner": "agent-eval", "lane": "eval", "job": "swe-rebench"}`
 to attach ownership metadata to every sandbox the factory creates. Use a job
 prefix and lane, without personal information or credentials. The default
@@ -308,8 +313,6 @@ Daytona gives stdout and stderr collection a shared 60-second deadline after a
 command exits. `DaytonaMachineFactory(output_collection_timeout=...)` changes
 this deadline without changing the command timeout or cleanup timeouts. Harbor's
 Daytona environment accepts the same `output_collection_timeout` setting.
-The pinned Daytona SDK does not upload local `ADD` inputs. Dockerfiles with `ADD`
-require a prebuilt registry image.
 Other factories do not apply `MachineSpec.startup_timeout`. Callers enforce the
 deadline for the complete create operation.
 
@@ -330,8 +333,9 @@ For Docker, use `DockerMachineFactory()` and `DockerImage("image:tag")` in the s
 `MachineSpec` accepts `cpus`, `memory_mb`, `storage_mb`, and `gpus`. Docker passes
 these settings to its resource flags. Storage limits require a Docker storage
 driver that supports `--storage-opt size`, and GPU allocation requires a GPU
-runtime. Daytona applies CPU, memory, storage, and GPU settings through its SDK.
-It rounds memory and storage up to whole GiB. Iris applies CPU, memory, and storage settings. QEMU applies CPU and
+runtime. Daytona requests `cpus / 2` cores (one core is two vCPUs) and the memory as
+fixed limits, so the guest's `nproc` and memory match the request; storage is a
+request that Daytona raises to its 10 GiB minimum. Daytona rejects GPUs. Iris applies CPU, memory, and storage settings. QEMU applies CPU and
 memory settings. Backends reject resource overrides that they cannot apply.
 
 `Command.user` selects the execution user for one command. Docker accepts a

@@ -66,30 +66,22 @@ evaluations:
   mrcr:
     benchmark: mrcr
   # Agentic evaluations, keyed by the names Evaldash lists the campaign's Harbor runs under. Each
-  # Terminal-Bench, TBLite and SWE-bench package has its own image, and BixBench has one per data
-  # capsule; snapshots of them all would exceed the Daytona account's quota, so their machines build
-  # images declaratively. Each runs as many attempts at once as the campaign's Harbor job did.
+  # runs as many attempts at once as the campaign's Harbor job did.
   tb2-recovery:
     benchmark: terminal-bench-2.1
     protocol: campaign-2026-09-25
     run:
       concurrency: 16
-      task_machine:
-        image_build: declarative
   ot-tblite-recovery:
     benchmark: ot-tblite
     protocol: campaign-2026-09-25
     run:
       concurrency: 16
-      task_machine:
-        image_build: declarative
   swebench-verified:
     benchmark: swebench-verified
     protocol: mini-swe-agent
     run:
       concurrency: 16
-      task_machine:
-        image_build: declarative
   ds-1000-local:
     benchmark: ds-1000
     run:
@@ -104,5 +96,3 @@ evaluations:
     protocol: pi
     run:
       concurrency: 16
-      task_machine:
-        image_build: declarative

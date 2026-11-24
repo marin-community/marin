@@ -380,15 +380,6 @@ for launch in (config, changed):
         assert 2 * attempt_budget + job.retry.min_wait_sec < harbor.timeout
 assert windows[0] != windows[1]
 
-changed_harbor = next(row for row in changed.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
-changed_harbor.cohorts[0].job.environment.kwargs.image_build = "unrecognized-build"
-try:
-    create_callbacks_from_config(changed.skyrl)
-except ValueError as error:
-    assert "unrecognized-build" in str(error), str(error)
-else:
-    raise AssertionError("Harbor accepted an unknown Daytona image build")
-
 selected = []
 for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
     directory = Path(sys.argv[1]).parent / f"coverage-{index}"
@@ -530,8 +521,18 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "train-long": {"2026.11.20.4": "e105d46c"},
             "train-long-3rack": {"2026.11.20.4": "9734d621"},
             "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "1617b1d3"},
-            "train-long-agentic": {"2026.11.20.6": "a3e2befe", "2026.11.20.7": "e1245985"},
-            "train-long-agentic-3rack": {"2026.11.20.6": "b8f3bba7", "2026.11.20.7": "d540f763"},
+            "train-long-agentic": {
+                "2026.11.20.6": "a3e2befe",
+                "2026.11.20.7": "e1245985",
+                "2026.11.23.1": "64b9b3a9",
+                "2026.11.24.1": "8e8ab430",
+            },
+            "train-long-agentic-3rack": {
+                "2026.11.20.6": "b8f3bba7",
+                "2026.11.20.7": "d540f763",
+                "2026.11.23.1": "c6c69bae",
+                "2026.11.24.1": "909a6b8b",
+            },
         }
         with monkeypatch.context() as local:
             local.delenv("MARIN_PREFIX", raising=False)
@@ -617,14 +618,23 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.5": "e1f1635a",
             "2026.11.20.6": "76baa3fb",
             "2026.11.20.7": "9ceb90cb",
+            "2026.11.23.1": "f542cdc3",
+            "2026.11.24.1": "2365e124",
         },
         "train-medium-agentic": {
             "2026.11.19.1": "756f58ef",
             "2026.11.20.1": "b557a4f0",
             "2026.11.20.4": "f76d6b51",
             "2026.11.20.5": "aa36f9de",
+            "2026.11.23.1": "9466c845",
+            "2026.11.24.1": "00c41559",
         },
-        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f"},
+        "train-long-agentic": {
+            "2026.11.20.4": "7123c960",
+            "2026.11.20.5": "0043357f",
+            "2026.11.23.1": "e14d7fef",
+            "2026.11.24.1": "6217b53f",
+        },
         "train-medium-tools": {"2026.11.20.1": "45b0a101"},
         "eval-short": {
             "2026.11.19.1": "8144570a",

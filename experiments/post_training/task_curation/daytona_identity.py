@@ -1,16 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Count the distinct Daytona snapshots a task cohort provisions.
+"""Count the distinct Daytona images a task cohort provisions.
 
 Measurement runs the production naming path. Native cohort tars are
 materialized to a build context and mapped through Harbor's task-config
 mapping; lowered TaskCompendium specs build the shellbox ``MachineSpec``
-directly from their declared requirements. Either way the snapshot name comes
-from ``shellbox.backends.daytona.snapshot.snapshot_request_for_spec`` — the
-same derivation the Daytona factory uses to name and create snapshots. A task
-the production validation rejects is counted as a failure and reported; it is
-not Daytona-safe. No Daytona API calls are made.
+directly from their declared requirements. Either way the image name comes
+from ``shellbox.backends.daytona.images.image_request_for_spec`` — the same
+derivation the Daytona factory uses to name and create images. Daytona v2
+images do not depend on machine resources, so these counts are not comparable
+with counts recorded for v0 snapshots, which did. A task the production
+validation rejects is counted as a failure and reported; it is not
+Daytona-safe. No Daytona API calls are made.
 """
 
 import base64
@@ -23,8 +25,8 @@ from pathlib import Path
 
 from harbor.environments.daytona import machine_spec
 from harbor_config.models.task.config import EnvironmentConfig
+from shellbox.backends.daytona.images import image_request_for_spec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
-from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import HostImage, MachineSpec, NetworkPolicy, UnsupportedMachineSpec
 from taskcompendium.models import EnvironmentRequirements, grader_environment
@@ -45,14 +47,14 @@ def _task_environment_config(task_toml: bytes | None) -> EnvironmentConfig:
 
 
 @dataclass
-class SnapshotIdentityCount:
-    """Distinct production snapshot names with per-name cohort sizes."""
+class ImageIdentityCount:
+    """Distinct production image names with per-name cohort sizes."""
 
     distinct: int
     sizes: dict[str, int] = field(default_factory=dict)
     failures: list[tuple[str, str]] = field(default_factory=list)
     # Tasks whose declared execution requirements the Daytona backend refuses, so a
-    # snapshot count alone must not call them safe.
+    # image count alone must not call them safe.
     execution_failures: list[tuple[str, str]] = field(default_factory=list)
 
 
@@ -94,12 +96,12 @@ def _unpack_environment(payload: bytes) -> tuple[list[EnvironmentEntry], bytes |
 
 
 def _registry_identity(reference: str) -> str:
-    """Production snapshot name for a registry reference with default resources."""
-    return snapshot_request_for_spec(MachineSpec(source=RegistryImage(reference))).name
+    """Production image name for a registry reference."""
+    return image_request_for_spec(MachineSpec(source=RegistryImage(reference))).name
 
 
-def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentityCount:
-    """Count snapshot identities for native cohort tars, one per task."""
+def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> ImageIdentityCount:
+    """Count image identities for native cohort tars, one per task."""
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
     for task_id, payload in tasks:
@@ -119,25 +121,26 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
                     memory_mb=config.memory_mb,
                     storage_mb=config.storage_mb,
                 )
-                name = snapshot_request_for_spec(spec).name
+                name = image_request_for_spec(spec).name
             except UnsupportedMachineSpec as error:
                 failures.append((task_id, str(error)))
                 continue
             sizes[name] += 1
-    return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes), failures=failures)
+    return ImageIdentityCount(distinct=len(sizes), sizes=dict(sizes), failures=failures)
 
 
-def count_lowered_spec_identities(tasks: Iterable[tuple[str, LoweredSpec]]) -> SnapshotIdentityCount:
+def count_lowered_spec_identities(tasks: Iterable[tuple[str, LoweredSpec]]) -> ImageIdentityCount:
     """Measure each declared agent and grader machine through production identities.
 
     Package-lock graders require a local host and are recorded as execution
     failures for Daytona. They never borrow the agent's image or contribute a
-    fabricated snapshot. Docker build contexts are identified by their contents.
+    fabricated image. Docker build contexts are identified by their contents.
     """
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
     execution_failures: list[tuple[str, str]] = []
-    factory = DaytonaMachineFactory()
+    # Measurement checks support only; it never creates a sandbox, so it needs no client.
+    factory = DaytonaMachineFactory(None)
     for task_id, spec in tasks:
         grader = spec.task.grader
         # Only a grader that runs in a fresh machine declares one; the other kinds borrow none.
@@ -159,14 +162,14 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, LoweredSpec]]) -> S
             failures.append((task_id, "; ".join(mapping_errors)))
         if execution_errors:
             execution_failures.append((task_id, "; ".join(execution_errors)))
-    return SnapshotIdentityCount(
+    return ImageIdentityCount(
         distinct=len(sizes), sizes=dict(sizes), failures=failures, execution_failures=execution_failures
     )
 
 
 @dataclass(frozen=True)
 class _DeclaredIdentity:
-    """One declared machine's snapshot name, mapping refusal and execution refusal."""
+    """One declared machine's image name, mapping refusal and execution refusal."""
 
     name: str | None = None
     mapping_error: str | None = None
@@ -243,7 +246,7 @@ def _declared_identity(
         try:
             factory.check_environment(declared, machine)
         except UnsupportedMachineSpec as error:
-            # An execution refusal still reports the identity: snapshot counts measure
+            # An execution refusal still reports the identity: image counts measure
             # what the cohort would provision, whether or not Daytona would run it.
             execution_error = f"{role}: {error}"
         else:
@@ -251,14 +254,14 @@ def _declared_identity(
         if not isinstance(machine.source, RegistryImage | DockerfileSource):
             return _DeclaredIdentity(execution_error=execution_error)
         try:
-            return _DeclaredIdentity(snapshot_request_for_spec(machine).name, execution_error=execution_error)
+            return _DeclaredIdentity(image_request_for_spec(machine).name, execution_error=execution_error)
         except UnsupportedMachineSpec as error:
             return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=execution_error)
 
 
-def count_registry_identities(references: Iterable[str]) -> SnapshotIdentityCount:
-    """Count snapshot identities for registry references, resources defaulted."""
+def count_registry_identities(references: Iterable[str]) -> ImageIdentityCount:
+    """Count image identities for registry references."""
     sizes: Counter[str] = Counter()
     for reference in set(references):
         sizes[_registry_identity(reference)] += 1
-    return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes))
+    return ImageIdentityCount(distinct=len(sizes), sizes=dict(sizes))

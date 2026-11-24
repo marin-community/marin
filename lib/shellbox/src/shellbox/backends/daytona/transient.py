@@ -7,7 +7,8 @@ import logging
 from asyncio import sleep
 from collections.abc import Awaitable, Callable
 
-from daytona import DaytonaConnectionError, DaytonaError
+from daytona import DaytonaConnectionError, DaytonaError, DaytonaRateLimitError, DaytonaTimeoutError
+from daytona.v2 import LimitExceededError
 from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -25,16 +26,33 @@ def is_transient_daytona_error(error: DaytonaError) -> bool:
     return isinstance(error, DaytonaConnectionError) or error.status_code in TRANSIENT_DAYTONA_STATUS
 
 
+def is_ambiguous_daytona_error(error: DaytonaError) -> bool:
+    """Whether the provider may have run a request whose answer never arrived: a transit failure or a timeout.
+
+    Repeat such a request only when it is idempotent, or read its effect back first.
+    """
+    return is_transient_daytona_error(error) or isinstance(error, DaytonaTimeoutError)
+
+
+def retry_backoff() -> ExponentialBackoff:
+    """The wait between repeats of a Daytona request: 0.5 s, doubling to 4 s, with jitter."""
+    return ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
+
+
 async def retry_transient[T](request: Callable[[], Awaitable[T]]) -> T:
-    """Repeat a provider request that failed in transit. The request must be safe to run twice."""
-    backoff = ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
+    """Repeat a provider request that failed in transit or was throttled. The request must be safe to run twice.
+
+    A throttled request waits for the provider's retry hint; a full limit is not a throttle and raises at once.
+    """
+    backoff = retry_backoff()
     for _ in range(TRANSIENT_RETRIES):
         try:
             return await request()
         except DaytonaError as error:
-            if not is_transient_daytona_error(error):
+            throttled = isinstance(error, DaytonaRateLimitError) and not isinstance(error, LimitExceededError)
+            if not throttled and not is_transient_daytona_error(error):
                 raise
-            delay = backoff.next_interval()
+            delay = max(backoff.next_interval(), (error.retry_after_seconds or 0) if throttled else 0)
             logger.warning("Retrying a Daytona request after %s: delay=%.3f", type(error).__name__, delay)
             await sleep(delay)
     return await request()

@@ -229,7 +229,7 @@ _TRAIN_MEDIUM = replace(
     evaluations=(),
 )
 _TRAIN_LONG_AGENTIC = replace(
-    agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.20.7"
+    agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.24.1"
 )
 
 MOCHI = ModelPresets(

@@ -147,43 +147,32 @@ evaluations:
     benchmark: longbench-v2
     protocol: thinking
   # Agentic benchmarks lowered from Harbor task packages; see experiments/evaluation/benchmarks/agentic.py.
-  # Datasets with more distinct environments than the Daytona eval account's snapshot quota build
-  # each machine's image declaratively. Each runs as many attempts at once as its Harbor job did.
+  # Each runs as many attempts at once as its Harbor job did.
   tb2:
     benchmark: terminal-bench-2.0
     protocol: terminus-2
     run:
       concurrency: 32
-      task_machine:
-        image_build: declarative
   tb2-lite:
     benchmark: terminal-bench-2.0
     protocol: terminus-2
     run:
       limit: 2
-      task_machine:
-        image_build: declarative
   swebench:
     benchmark: swebench-verified-100
     protocol: terminus-2
     run:
       concurrency: 32
-      task_machine:
-        image_build: declarative
   swebench-lite:
     benchmark: swebench-verified-100
     protocol: terminus-2
     run:
       limit: 2
-      task_machine:
-        image_build: declarative
   swebench-full:
     benchmark: swebench-verified
     protocol: terminus-2
     run:
       concurrency: 32
-      task_machine:
-        image_build: declarative
   gaia:
     benchmark: gaia
     protocol: terminus-2
@@ -199,8 +188,6 @@ evaluations:
     protocol: terminus-2
     run:
       concurrency: 32
-      task_machine:
-        image_build: declarative
   medagentbench:
     benchmark: medagentbench
     protocol: terminus-2

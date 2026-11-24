@@ -20,14 +20,15 @@ Run it with the RL Daytona credential installed::
         --output /path/to/liveness.jsonl \
         --sample-per-base 20
 
-Snapshot names are written beside each result for cleanup; this repository has
-no code path that deletes Daytona snapshots (see ``.agents/ops/daytona.md``).
+The Daytona image name is written beside each result; this repository has no
+code path that deletes Daytona images (see ``.agents/ops/daytona.md``).
 """
 
 import argparse
 import asyncio
 import json
 import logging
+import os
 import random
 import tempfile
 from collections import defaultdict
@@ -37,6 +38,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from rolloutengine.models import MachineRuntimeSpec
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import HostImage, MachineFactory, MachineSpec, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -51,6 +53,9 @@ VERIFIER_TIMEOUT = 900.0
 
 UNKNOWN_BASE = "<unknown>"
 """The base bucket for tasks whose rebuild manifest names no base."""
+
+DAYTONA_API_KEY_ENV = "DAYTONA_API_KEY"
+"""The variable holding the key of the Daytona account that grades sandboxed tasks."""
 
 
 class LivenessOutcome(StrEnum):
@@ -76,7 +81,7 @@ class LivenessResult:
     outcome: LivenessOutcome
     exit_code: int | None
     reward: float | None
-    snapshot: str
+    image: str
     detail: str = ""
     tests_executed: int = 0
 
@@ -112,7 +117,9 @@ def sample_by_base(specs: dict[str, LoweredSpec], bases: dict[str, str], per_bas
     return chosen
 
 
-async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = None) -> LivenessResult:
+async def run_one(
+    spec: LoweredSpec, base: str, daytona: DaytonaConnection, cgroup_parent: Path | None = None
+) -> LivenessResult:
     """Grade an empty submission in the declared grader environment."""
     with tempfile.TemporaryDirectory(prefix="liveness-build-") as context:
         task = spec.task
@@ -127,12 +134,12 @@ async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = Non
             return LivenessResult(
                 task.id, base, LivenessOutcome.INFRA_ERROR, None, None, "", "CPU qualification cannot provision GPUs"
             )
-        placement = _grader_placement(requirements, runtime, Path(context), cgroup_parent)
+        placement = _grader_placement(requirements, runtime, Path(context), cgroup_parent, daytona)
         spec_machine = replace(placement.machine, startup_timeout=runtime.startup_timeout)
         try:
             result = await grade_empty_in_sandbox(task, placement.factory, spec_machine, timeout=VERIFIER_TIMEOUT)
         except TimeoutError as error:
-            return LivenessResult(task.id, base, LivenessOutcome.TIMEOUT, None, None, placement.snapshot, str(error))
+            return LivenessResult(task.id, base, LivenessOutcome.TIMEOUT, None, None, placement.image, str(error))
         except Exception as error:
             # One task's failure must not end the cohort run; the traceback separates
             # programming errors from sandbox failures in the run log.
@@ -143,10 +150,10 @@ async def run_one(spec: LoweredSpec, base: str, cgroup_parent: Path | None = Non
                 LivenessOutcome.INFRA_ERROR,
                 None,
                 None,
-                placement.snapshot,
+                placement.image,
                 f"{type(error).__name__}: {error}"[:DETAIL_LIMIT],
             )
-        return classify_result(task.id, base, placement.snapshot, result)
+        return classify_result(task.id, base, placement.image, result)
 
 
 def _verifier_runtime(spec: LoweredSpec) -> MachineRuntimeSpec:
@@ -165,17 +172,21 @@ def _verifier_runtime(spec: LoweredSpec) -> MachineRuntimeSpec:
 
 @dataclass(frozen=True)
 class _GraderPlacement:
-    """Where and how the grader runs: its machine factory, machine spec and snapshot."""
+    """Where and how the grader runs: its machine factory, machine spec and Daytona image name."""
 
     factory: MachineFactory
     machine: MachineSpec
-    snapshot: str
+    image: str
 
 
 def _grader_placement(
-    requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec, context: Path, cgroup_parent: Path | None
+    requirements: EnvironmentRequirements,
+    runtime: MachineRuntimeSpec,
+    context: Path,
+    cgroup_parent: Path | None,
+    daytona: DaytonaConnection,
 ) -> _GraderPlacement:
-    """Resolve the machine factory, machine spec, and snapshot name for the grader."""
+    """Resolve the machine factory, machine spec, and Daytona image name for the grader."""
     if requirements.packages_lock is not None:
         # A packaged grader runs in the local bubblewrap runtime. This branch builds its
         # MachineSpec directly instead of through daytona_identity.declared_machine
@@ -194,11 +205,8 @@ def _grader_placement(
         # (cgroup.procs is unwritable there), so an explicit parent overrides discovery.
         factory = LocalMachineFactory(cgroup_parent=cgroup_parent) if cgroup_parent else LocalMachineFactory()
         return _GraderPlacement(factory, machine, "")
-    from shellbox.backends.daytona.machine import (  # noqa: PLC0415
-        DaytonaMachineFactory,
-        snapshot_identity,
-        snapshot_resources,
-    )
+    from shellbox.backends.daytona.images import image_request_for_spec  # noqa: PLC0415
+    from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
 
     from experiments.post_training.task_curation.daytona_identity import declared_machine  # noqa: PLC0415
 
@@ -211,11 +219,11 @@ def _grader_placement(
         storage_mb=runtime.storage_mb,
     )
     return _GraderPlacement(
-        DaytonaMachineFactory(), machine, snapshot_identity(machine.source, snapshot_resources(machine))
+        DaytonaMachineFactory(daytona.client_factory()), machine, image_request_for_spec(machine).name
     )
 
 
-def classify_result(task_id: str, base: str, snapshot: str, result: GradeResult) -> LivenessResult:
+def classify_result(task_id: str, base: str, image: str, result: GradeResult) -> LivenessResult:
     """Require a completed verifier and a structured executed-test count before qualification."""
     exit_code = result.diagnostics.get("exit_code")
     detail = (result.error or json.dumps(result.diagnostics, default=str))[-1500:]
@@ -230,7 +238,7 @@ def classify_result(task_id: str, base: str, snapshot: str, result: GradeResult)
         outcome = LivenessOutcome.UNVERIFIED_EXECUTION
     else:
         outcome = LivenessOutcome.NEGATIVE_VERDICT if result.reward < 1.0 else LivenessOutcome.POSITIVE_REWARD
-    return LivenessResult(task_id, base, outcome, exit_code, result.reward, snapshot, detail, tests_executed)
+    return LivenessResult(task_id, base, outcome, exit_code, result.reward, image, detail, tests_executed)
 
 
 async def run(
@@ -238,11 +246,14 @@ async def run(
     bases: dict[str, str],
     task_ids: list[str],
     output: Path,
+    daytona: DaytonaConnection,
     cgroup_parent: Path | None = None,
 ) -> None:
     with output.open("a") as handle:
         for index, task_id in enumerate(task_ids, start=1):
-            result = await run_one(specs[task_id], bases.get(task_id, UNKNOWN_BASE), cgroup_parent=cgroup_parent)
+            result = await run_one(
+                specs[task_id], bases.get(task_id, UNKNOWN_BASE), daytona, cgroup_parent=cgroup_parent
+            )
             handle.write(json.dumps(asdict(result)) + "\n")
             handle.flush()
             print(f"[{index}/{len(task_ids)}] {task_id}: {result.outcome}", flush=True)
@@ -272,7 +283,8 @@ def main() -> None:
     if args.limit:
         task_ids = task_ids[: args.limit]
     print(f"sampled {len(task_ids)} of {len(specs)} tasks", flush=True)
-    asyncio.run(run(specs, bases, task_ids, args.output, args.cgroup_parent))
+    daytona = DaytonaConnection(api_key=os.environ.get(DAYTONA_API_KEY_ENV))
+    asyncio.run(run(specs, bases, task_ids, args.output, daytona, args.cgroup_parent))
 
 
 if __name__ == "__main__":

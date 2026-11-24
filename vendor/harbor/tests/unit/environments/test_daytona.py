@@ -11,7 +11,6 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from daytona._utils.env import DaytonaEnvReader
 from openai import (
     AsyncOpenAI,
     AuthenticationError,
@@ -20,21 +19,16 @@ from openai import (
 )
 
 from harbor.host_capabilities import HostCapabilities
-from daytona import (
-    CreateSandboxFromImageParams,
-    CreateSnapshotParams,
-    DaytonaNotFoundError,
-    Resources,
-)
-from daytona_api_client_async import SnapshotState
-from shellbox.backends.daytona.connection import DaytonaConnection, DEFAULT_DAYTONA_API_URL
+from daytona import DaytonaNotFoundError
+from daytona.v2 import NotFoundError, Resources
+from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.agents.terminus_2.tmux_session import (
     TmuxCommandError,
     TmuxKeystrokeBatch,
     TmuxSession,
 )
 from harbor.environments import model_relay
-from harbor.environments.daytona import DaytonaEnvironment, task_snapshot_source
+from harbor.environments.daytona import DaytonaEnvironment, task_image_source
 from harbor.environments.local import LocalEnvironment
 from harbor.environments.model_relay import ModelRelay
 from harbor.environments.qemu import QemuEnvironment
@@ -244,11 +238,7 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
         async with asyncio.TaskGroup() as service_tasks:
             adapter = DaytonaEnvironment(
                 host_capabilities=HostCapabilities(
-                    daytona=DaytonaConnection(
-                        api_key="host-daytona-private",
-                        api_url=DEFAULT_DAYTONA_API_URL,
-                        target="test-target",
-                    ),
+                    daytona=DaytonaConnection(api_key="host-daytona-private"),
                     model_authentication={
                         "https://api.together.xyz/v1": "host-provider-private"
                     },
@@ -650,37 +640,36 @@ async def test_model_relay_preserves_sdk_error_classification_without_upstream_d
     assert "host-private" not in str(failure.value)
 
 
-def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
+def test_host_connection_authenticates_with_its_key_not_ambient_credentials(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("DAYTONA_API_KEY", "ambient-key-must-not-be-used")
     monkeypatch.setenv("DAYTONA_JWT_TOKEN", "ambient-jwt-must-not-be-used")
-    monkeypatch.setenv("DAYTONA_API_URL", "https://ambient.invalid/api")
-    protected = {
-        "DAYTONA_API_KEY",
-        "DAYTONA_JWT_TOKEN",
-        "DAYTONA_ORGANIZATION_ID",
-        "DAYTONA_API_URL",
-        "DAYTONA_SERVER_URL",
-        "DAYTONA_TARGET",
-    }
+    authorizations = []
 
-    def environment_value(reader, name):
-        assert (
-            name not in protected
-        ), "Daytona SDK attempted ambient connection resolution"
-        return None
-
-    monkeypatch.setattr(DaytonaEnvReader, "get", environment_value)
+    async def respond(reader, writer):
+        head = (await reader.readuntil(b"\r\n\r\n")).decode()
+        headers = dict(
+            line.lower().split(": ", 1) for line in head.split("\r\n")[1:] if ": " in line
+        )
+        authorizations.append(headers.get("authorization"))
+        body = b'{"message": "absent"}'
+        writer.write(
+            b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n"
+            + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+            + body
+        )
+        await writer.drain()
+        writer.close()
 
     async def run():
-        async with asyncio.TaskGroup() as service_tasks:
+        server = await asyncio.start_server(respond, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        monkeypatch.setenv("DAYTONA_V2_API_URL", f"http://127.0.0.1:{port}")
+        async with server:
             adapter = DaytonaEnvironment(
                 host_capabilities=HostCapabilities(
-                    daytona=DaytonaConnection(
-                        api_key="explicit-key",
-                        api_url=DEFAULT_DAYTONA_API_URL,
-                        target="test-target",
-                    ),
+                    daytona=DaytonaConnection(api_key="explicit-key"),
                     model_authentication={},
                 ),
                 guest_environment={},
@@ -690,38 +679,54 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
                 trial_paths=TrialPaths(tmp_path / "trial"),
                 task_env_config=EnvironmentConfig(docker_image="test/image"),
             )
-            client = adapter.factory.client_factory()
-            await client.close()
+            async with adapter.factory.client_factory() as client:
+                with pytest.raises(DaytonaNotFoundError):
+                    await client.current_api_key()
 
     asyncio.run(run())
+    assert authorizations == ["bearer explicit-key"]
 
 
-async def _provider_exec(command, **kwargs):
+async def _provider_run(*, argv, cwd=None, env=None, execution_timeout=None):
     """Stand in for the guest's command probes with an image workdir of `/`."""
-    if kwargs.get("cwd") is None:
-        return SimpleNamespace(exit_code=0, result="/\n")
-    return SimpleNamespace(exit_code=0, result="")
+    return SimpleNamespace(
+        exit_code=0, output="/\n" if cwd is None else "", reason="exited", signal=None
+    )
 
 
-class RecordingSnapshotClient:
-    """Fake provider that records the snapshot and sandbox requests it receives."""
+class RecordingImageClient:
+    """Fake v2 provider that records the image and sandbox requests it receives."""
 
     def __init__(self):
-        self.snapshot_params = None
-        self.sandbox_params = None
-        self.sandbox = SimpleNamespace(process=SimpleNamespace(exec=_provider_exec))
+        self.builds = []
+        self.ready = {}
+        self.sandbox_request = None
+        self.sandbox = SimpleNamespace(
+            id="sandbox",
+            state="started",
+            error=None,
+            process=SimpleNamespace(run=_provider_run),
+        )
+        self.images = self
+        self.deleted = False
         self.closed = False
-        self.snapshot = self
 
-    async def get(self, name):
-        raise DaytonaNotFoundError("Snapshot does not exist", status_code=404)
+    async def get(self, name_or_id, wait=None):
+        if name_or_id not in self.ready:
+            raise NotFoundError("Image does not exist", status_code=404)
+        return self.ready[name_or_id]
 
-    async def create(self, params, timeout=None):
-        if isinstance(params, CreateSnapshotParams):
-            self.snapshot_params = params
-            return SimpleNamespace(name=params.name, state=SnapshotState.ACTIVE, error_reason=None)
-        self.sandbox_params = params
+    async def build_from_context(self, context, *, dockerfile, name):
+        self.builds.append((context, dockerfile, name))
+        self.ready[name] = SimpleNamespace(id=name, name=name, status="ready", error=None)
+
+    async def create(self, image, **request):
+        self.sandbox_request = {"image": image, **request}
         return self.sandbox
+
+    async def delete(self, sandbox, *, timeout):
+        assert sandbox is self.sandbox
+        self.deleted = True
 
     async def __aenter__(self):
         return self
@@ -730,11 +735,11 @@ class RecordingSnapshotClient:
         self.closed = True
 
 
-def test_daytona_adapter_launches_from_the_override_snapshot_request(tmp_path):
+def test_daytona_adapter_launches_from_the_task_image_with_override_resources(tmp_path):
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir()
     (environment_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
-    client = RecordingSnapshotClient()
+    client = RecordingImageClient()
 
     adapter = DaytonaEnvironment(
         environment_dir=environment_dir,
@@ -760,60 +765,25 @@ def test_daytona_adapter_launches_from_the_override_snapshot_request(tmp_path):
 
     asyncio.run(run())
 
-    # The provider received the job's effective resources, rounded the way the
-    # snapshot identity requires, and the sandbox started from that snapshot.
-    assert client.snapshot_params is not None
-    assert client.snapshot_params.resources == Resources(cpu=2, memory=3, disk=2, gpu=None)
-    assert client.snapshot_params.name.startswith("shellbox-")
-    assert client.sandbox_params is not None
-    assert client.sandbox_params.snapshot == client.snapshot_params.name
-    assert client.sandbox_params.network_block_all is True
-    assert client.closed
-
-
-def test_declarative_adapter_builds_the_sandbox_image_without_a_snapshot(tmp_path):
-    environment_dir = tmp_path / "environment"
-    environment_dir.mkdir()
-    (environment_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
-    client = RecordingSnapshotClient()
-
-    adapter = DaytonaEnvironment(
-        environment_dir=environment_dir,
-        environment_name="task",
-        session_id="trial",
-        trial_paths=TrialPaths(tmp_path / "trial"),
-        task_env_config=EnvironmentConfig(cpus=1, memory_mb=1024, storage_mb=1024),
-        override_cpus=2,
-        override_memory_mb=2049,
-        override_storage_mb=1025,
-        image_build="declarative",
-        client_factory=lambda: client,
+    # The sandbox starts from the task's image and receives the job's effective
+    # resources as a fixed CPU and memory shape; 2 vCPUs are one v2 core.
+    name = adapter.image_request().name
+    assert client.builds == [(environment_dir.resolve(), "Dockerfile", name)]
+    assert client.sandbox_request["image"] == name
+    memory = 2049 / 1024
+    assert client.sandbox_request["resources"] == Resources(
+        cpu=1, cpu_max=1, memory=memory, memory_max=memory, disk=1025 / 1024
     )
-
-    async def run():
-        async with asyncio.TaskGroup() as service_tasks:
-            await adapter.start(False, service_tasks=service_tasks)
-            await adapter.stop(True)
-
-    asyncio.run(run())
-
-    assert client.snapshot_params is None
-    assert isinstance(client.sandbox_params, CreateSandboxFromImageParams)
-    assert client.sandbox_params.resources == Resources(cpu=2, memory=3, disk=2, gpu=None)
-    with pytest.raises(ValueError):
-        adapter.snapshot_request()
+    assert client.sandbox_request["network_policy"] == {"block_all": True}
+    assert client.deleted and client.closed
 
 
-def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_path) -> None:
-    assert task_snapshot_source("fixture:tag", tmp_path) == RegistryImage("fixture:tag")
+def test_task_image_source_selects_and_validates_the_task_environment(tmp_path) -> None:
+    assert task_image_source("fixture:tag", tmp_path) == RegistryImage("fixture:tag")
 
     dockerfile = tmp_path / "Dockerfile"
-    dockerfile.write_text("FROM ubuntu:24.04\n")
-    assert task_snapshot_source(None, tmp_path) == DockerfileSource(tmp_path.resolve(), dockerfile.resolve())
-
     dockerfile.write_text("FROM ubuntu:24.04\nADD payload /opt\n")
-    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
-        task_snapshot_source(None, tmp_path)
+    assert task_image_source(None, tmp_path) == DockerfileSource(tmp_path.resolve(), dockerfile.resolve())
 
     with pytest.raises(UnsupportedMachineSpec, match="registry image or Dockerfile"):
-        task_snapshot_source(None, tmp_path / "absent")
+        task_image_source(None, tmp_path / "absent")

@@ -7,36 +7,43 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-DEFAULT_DAYTONA_API_URL = "https://app.daytona.io/api"
-
 
 @dataclass(frozen=True)
 class DaytonaConnection:
     """Resolve one explicitly selected Daytona account.
 
-    The SDK otherwise reads ambient environment variables, which can silently
-    authenticate against the wrong account. Fields may stay unset on hosts
-    that do not use Daytona; creating a client requires every value, so an
+    The SDK otherwise reads ``DAYTONA_API_KEY`` from the environment, which can
+    silently authenticate against the wrong account. The key may stay unset on
+    hosts that do not use Daytona; creating a client requires it, so an
     incomplete connection fails where the account is used instead of falling
-    back to ambient credentials. Neither the connection nor its client
-    factory exposes the API key through ``repr``, and this module imports
-    without the optional Daytona SDK, which is only loaded when a client is
-    created.
+    back to ambient credentials. Neither the connection nor its client factory
+    exposes the API key through ``repr``, and this module imports without the
+    optional Daytona SDK, which is only loaded when a client is created.
+
+    The v2 API has no client-side region or endpoint setting: sandboxes and
+    images use the project's default region, and only ``DAYTONA_V2_API_URL``
+    overrides the endpoint.
     """
 
     api_key: str | None = field(default=None, repr=False)
-    api_url: str | None = None
-    target: str | None = None
 
     def client_factory(self) -> Callable[[], Any]:
-        """Validate the connection and return a callable that builds SDK clients."""
-        if not (self.api_key and self.api_url and self.target):
-            raise ValueError("Daytona requires an explicit api_key, api_url and target")
-        api_key, api_url, target = self.api_key, self.api_url, self.target
+        """Validate the connection and return a callable that builds v2 SDK clients."""
+        if not self.api_key:
+            raise ValueError("Daytona requires an explicit api_key")
+        api_key = self.api_key
 
         def client() -> Any:
             from daytona import AsyncDaytona, DaytonaConfig  # noqa: PLC0415  # optional SDK, loaded at client creation
+            from daytona.v2 import _transport  # noqa: PLC0415  # optional SDK, loaded at client creation
 
-            return AsyncDaytona(DaytonaConfig(api_key=api_key, api_url=api_url, target=target))
+            # Over HTTP/2 the sandbox proxy stalls stdin writes to a process whose log the
+            # client follows on the same connection, which hangs the HTTP relay. The SDK
+            # enables HTTP/2 whenever h2 is importable and offers no setting, so this turns
+            # it off for every Daytona client in the process. Assigning a name the SDK no
+            # longer reads would silently re-enable HTTP/2, so a renamed switch fails here.
+            assert hasattr(_transport, "_HTTP2_AVAILABLE"), "The Daytona SDK no longer has its HTTP/2 switch"
+            _transport._HTTP2_AVAILABLE = False
+            return AsyncDaytona(DaytonaConfig(api_key=api_key)).v2
 
         return client

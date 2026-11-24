@@ -18,7 +18,6 @@ from evalrecords.records import (
     PromptFormat,
     ResolvedEvaluationSelection,
     TaskEvidence,
-    TaskImageBuild,
     TaskMachineBackend,
     TaskMachineSettings,
     scoring_settings,
@@ -208,11 +207,7 @@ def settings_for(
     if task_machine is None and runs_agent(protocol):
         task_machine = TaskMachineSettings()
     if task_machine is not None and task_machine_backend is not None:
-        update: dict[str, object] = {"backend": task_machine_backend}
-        # How images are built is a Daytona setting; another backend builds each image its own way.
-        if task_machine_backend is not TaskMachineBackend.DAYTONA:
-            update["image_build"] = TaskImageBuild.SNAPSHOT
-        task_machine = TaskMachineSettings.model_validate({**task_machine.model_dump(), **update})
+        task_machine = TaskMachineSettings.model_validate({**task_machine.model_dump(), "backend": task_machine_backend})
     concurrency_bounds = [bound for bound in (model.evaluation_num_concurrent, run.concurrency) if bound is not None]
     return CuratedSettings(
         concurrency=min(concurrency_bounds, default=DEFAULT_EVALUATION_CONCURRENCY),

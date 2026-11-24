@@ -11,10 +11,11 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from jinja2 import TemplateError
-from daytona import DaytonaError
+from daytona.v2 import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
@@ -94,25 +95,26 @@ from skyrl_train.trajectory_runners.types import (
 
 DAYTONA_DIAGNOSTIC_CALLS = frozenset(
     {
-        ("daytona._async.daytona", "create"),
-        ("daytona._async.daytona", "_create"),
-        ("daytona._async.daytona", "delete"),
-        ("daytona._async.snapshot", "get"),
-        ("daytona._async.snapshot", "create"),
-        ("daytona._async.sandbox", "wait_for_sandbox_start"),
-        ("daytona._async.process", "exec"),
-        ("daytona._async.filesystem", "upload_file_stream"),
-        ("daytona._async.filesystem", "download_file"),
-        ("daytona_api_client_async.api.sandbox_api", "create_sandbox"),
-        ("daytona_api_client_async.api.sandbox_api", "get_toolbox_proxy_url"),
-        ("daytona_api_client_async.api.sandbox_api", "get_sandbox"),
+        ("daytona.v2.daytona", "create"),
+        ("daytona.v2.daytona", "delete"),
+        ("daytona.v2.daytona", "find_by_name"),
+        ("daytona.v2.services", "get"),
+        ("daytona.v2.services", "pull"),
+        ("daytona.v2.services", "build_from_context"),
+        ("daytona.v2.process", "run"),
+        ("daytona.v2.process", "start"),
+        ("daytona.v2.process", "stream_logs"),
+        ("daytona.v2.process", "write_stdin"),
+        ("daytona.v2.process", "kill_all"),
+        ("daytona.v2.filesystem", "write_bytes"),
+        ("daytona.v2.filesystem", "read_bytes"),
+        ("daytona.v2.filesystem", "upload_file"),
+        ("daytona.v2.filesystem", "download_file"),
+        ("daytona.v2.sandbox", "reset_idle_timer"),
     }
 )
-DAYTONA_RATE_LIMIT_HEADERS = frozenset(
-    f"{prefix}-{throttler}"
-    for prefix in ("x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after")
-    for throttler in ("anonymous", "authenticated", "sandbox-create", "sandbox-lifecycle")
-) | {"retry-after"}
+# Daytona v2 error codes are short upper-case identifiers such as LIMIT_EXCEEDED.
+DAYTONA_ERROR_CODE_LIMIT = 64
 
 
 class InstalledAgentWorker(Protocol):
@@ -222,6 +224,18 @@ async def _model_turn(
     )
 
 
+def _provider_error(error: BaseException) -> DaytonaError | None:
+    """The first Daytona SDK error in ``error``'s chain of causes."""
+    current: BaseException | None = error
+    seen = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, DaytonaError):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
+    return None
+
+
 def _failed_rollout(
     interruption: GradedRolloutInterrupted,
     lowered: TaskRolloutSpec,
@@ -241,21 +255,17 @@ def _failed_rollout(
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
         diagnostics["cause_error_type"] = type(error.__cause__).__name__
         diagnostics["machine_operation"] = error.operation.value
-        provider_error = error.__cause__
-        if isinstance(provider_error, DaytonaError):
+        # Shellbox raises a provider failure under its own type with the SDK error as its cause.
+        provider_error = _provider_error(error.__cause__)
+        if provider_error is not None:
             if type(provider_error.status_code) is int and 100 <= provider_error.status_code <= 599:
                 diagnostics["provider_status_code"] = provider_error.status_code
-            rate_limits = {
-                name.lower(): int(value)
-                for name, value in (provider_error.headers or {}).items()
-                if name.lower() in DAYTONA_RATE_LIMIT_HEADERS
-                and isinstance(value, str)
-                and value.isascii()
-                and value.isdecimal()
-                and len(value) <= 12
-            }
-            if rate_limits:
-                diagnostics["provider_rate_limits"] = rate_limits
+            retry_after = provider_error.retry_after_seconds
+            if type(retry_after) is int and retry_after >= 0:
+                diagnostics["provider_retry_after_seconds"] = retry_after
+            code = provider_error.code
+            if isinstance(code, str) and code.isascii() and code.isidentifier() and len(code) <= DAYTONA_ERROR_CODE_LIMIT:
+                diagnostics["provider_error_code"] = code
             # This identifies an SDK call, not the HTTP phase of a compound operation.
             diagnostics["provider_sdk_call"] = "unknown"
             nested_error: BaseException | None = provider_error
@@ -683,7 +693,6 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
-            from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 
@@ -694,8 +703,6 @@ class TaskRolloutWorkerSpec:
             daytona_options = harbor.environment.kwargs
             daytona_connection = DaytonaConnection(
                 api_key=os.environ.get(daytona_options.get("api_key_env") or "DAYTONA_API_KEY"),
-                api_url=os.environ.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
-                target=os.environ.get("DAYTONA_TARGET"),
             )
             installed_agents = InstalledAgentRuntime(
                 settings,
