@@ -58,8 +58,9 @@ _INSTANCES_RUNTIME_ARG = "instances"
 def _override_fingerprint(overrides: EvaluationOverrides) -> dict[str, object]:
     # Earlier evaluation artifacts used the fingerprint encoder's type-and-fields representation.
     fields = vars(overrides).copy()
-    if overrides.max_attempts_per_trial is None:
-        del fields["max_attempts_per_trial"]
+    for field in ("max_attempts_per_trial", "metered_judge_concurrency"):
+        if fields[field] is None:
+            del fields[field]
     return {"__repr__": "evalrecords.records.EvaluationOverrides", "vars": fields}
 
 
