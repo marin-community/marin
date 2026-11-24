@@ -13,6 +13,7 @@ import click
 from marin.external_dependencies import VLLM_FORK_REQUIREMENT
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
     LevanterEngineConfig,
     ServedModelConfig,
     VllmEngineConfig,
@@ -42,6 +43,7 @@ _LOCAL_LEVANTER_OPTIONS = {
     "max_seqs": "--max-seqs",
     "page_size": "--page-size",
     "hbm_utilization": "--hbm-utilization",
+    "levanter_expert_parallel_size": "--levanter-expert-parallel-size",
 }
 
 
@@ -87,6 +89,12 @@ def main() -> None:
 @click.option("--max-seqs", type=int, default=16)
 @click.option("--page-size", type=int, default=128)
 @click.option("--hbm-utilization", type=float, default=0.8)
+@click.option(
+    "--levanter-expert-parallel-size",
+    type=click.IntRange(min=1),
+    default=DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
+    help="Number of expert shards for the Levanter backend.",
+)
 def local(
     model: str,
     backend: str,
@@ -110,6 +118,7 @@ def local(
     max_seqs: int,
     page_size: int,
     hbm_utilization: float,
+    levanter_expert_parallel_size: int,
 ) -> None:
     """Start one inference server on the current host."""
 
@@ -159,6 +168,7 @@ def local(
             max_seqs=max_seqs,
             page_size=page_size,
             hbm_utilization=hbm_utilization,
+            expert_parallel_size=levanter_expert_parallel_size,
         )
     if backend == "vllm" and launcher_type is VllmLauncherType.TPU:
         click.echo(f"Using pinned TPU vLLM {VLLM_FORK_REQUIREMENT}")

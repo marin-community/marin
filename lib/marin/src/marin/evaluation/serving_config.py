@@ -23,6 +23,7 @@ from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
+    DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
     BrokerConfig,
     InferenceProxyConfig,
     InferenceWorkerConfig,
@@ -329,7 +330,9 @@ def inference_config_for_model(
                 env_vars={**worker_env, **vllm_environment_variables},
             )
         else:
-            engine = LevanterEngineConfig()
+            engine = LevanterEngineConfig(
+                expert_parallel_size=serve.levanter_expert_parallel_size or DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
+            )
             environment = create_environment(extras=["gpu"], env_vars=worker_env)
     else:
         if accelerator.tpu_type is None:
@@ -345,7 +348,9 @@ def inference_config_for_model(
             engine = _vllm_engine_config(serve, accelerator.platform, extra_args)
             environment = create_environment(extras=["tpu"], env_vars=worker_env)
         else:
-            engine = LevanterEngineConfig()
+            engine = LevanterEngineConfig(
+                expert_parallel_size=serve.levanter_expert_parallel_size or DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
+            )
             environment = create_environment(extras=["tpu"], env_vars=worker_env)
 
     return RemoteInferenceConfig(

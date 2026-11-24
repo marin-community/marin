@@ -64,6 +64,7 @@ from rigging.timing import Duration
 
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
@@ -112,6 +113,7 @@ _LEVANTER_ONLY_OPTIONS = {
     "max_seqs": "--max-seqs",
     "page_size": "--page-size",
     "hbm_utilization": "--hbm-utilization",
+    "levanter_expert_parallel_size": "--levanter-expert-parallel-size",
 }
 
 
@@ -410,6 +412,12 @@ def _wait_and_report_endpoint(
 @click.option("--max-seqs", type=int, default=16, help="Levanter backend: concurrent sequence slots.")
 @click.option("--page-size", type=int, default=128, help="Levanter backend: tokens per KV-cache page.")
 @click.option(
+    "--levanter-expert-parallel-size",
+    type=click.IntRange(min=1),
+    default=DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE,
+    help="Number of expert shards for the Levanter backend.",
+)
+@click.option(
     "--hbm-utilization",
     type=float,
     default=0.8,
@@ -526,6 +534,7 @@ def main(
     max_seqs: int,
     page_size: int,
     hbm_utilization: float,
+    levanter_expert_parallel_size: int,
     tensor_parallel_size: int | None,
     data_parallel_size: int | None,
     session_router: bool,
@@ -604,7 +613,12 @@ def main(
                 else None
             ),
         ),
-        levanter=LevanterEngineConfig(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
+        levanter=LevanterEngineConfig(
+            max_seqs=max_seqs,
+            page_size=page_size,
+            hbm_utilization=hbm_utilization,
+            expert_parallel_size=levanter_expert_parallel_size,
+        ),
         extras=extras,
     )
     if vllm_release is not None:
