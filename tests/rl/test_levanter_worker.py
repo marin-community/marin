@@ -494,6 +494,45 @@ print(json.dumps({'status': status, 'owned_buffer_released': buffer() is None, '
     }
 
 
+def test_native_shutdown_releases_named_jit_mesh_and_backend_before_returning():
+    # Haliax's compilation cache holds output shardings independently of JAX's
+    # caches. Exercise that real ownership path, with no external device owners.
+    script = """
+import json
+import weakref
+import haliax as hax
+import jax
+import numpy as np
+from jax.extend import backend
+from jax.sharding import Mesh
+from marin.rl.levanter_worker_runtime import NativePolicyRuntime
+
+def computation(value):
+    return value + 1
+
+def initialized_runtime():
+    runtime = NativePolicyRuntime()
+    mesh = Mesh(np.array(jax.devices()[:1]), ('data',))
+    with jax.set_mesh(mesh):
+        runtime.state = hax.named_jit(computation, axis_resources={'batch': 'data'})(
+            hax.named(jax.device_put(np.ones(2)), ('batch',)))
+    return runtime, weakref.ref(mesh), weakref.ref(backend.get_backend('cpu'))
+
+runtime, mesh, client = initialized_runtime()
+runtime.dispatch('shutdown', {})
+print(json.dumps({'mesh_released': mesh() is None, 'backend_released': client() is None}))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "JAX_PLATFORMS": "cpu"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"mesh_released": True, "backend_released": True}
+
+
 @pytest.mark.parametrize("require_accelerator", [True, False])
 @pytest.mark.parametrize("allocator,preallocate,numpy_policy", [("bfc", True, None), ("vmm", False, False)])
 def test_native_child_backend_intent_overrides_inherited_coordinator_platform(

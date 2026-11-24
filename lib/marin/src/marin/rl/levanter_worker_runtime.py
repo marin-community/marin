@@ -34,6 +34,7 @@ import jaxlib
 import jmp
 import numpy as np
 import optax
+from haliax._src.compile_utils import clear_caches as clear_haliax_caches
 from jax.experimental import multihost_utils
 from jax.extend.backend import clear_backends
 from jax.sharding import NamedSharding, PartitionSpec
@@ -1105,10 +1106,13 @@ class NativePolicyRuntime:
         self._closed = True
         had_device_state = self.state is not None or self.trainer is not None
         problems = []
+        # Haliax's named_jit caches own shardings and meshes independently of
+        # JAX's caches; release them before destroying the backend client.
         for phase, operation in (
             ("synchronize", self._synchronize),
             ("trainer_exit", self._finish_trainer),
             ("release_owned_resources", self._release_owned_resources),
+            ("clear_haliax_caches", clear_haliax_caches if had_device_state else lambda: None),
             ("clear_jax_caches", jax.clear_caches if had_device_state else lambda: None),
             ("collect_python_resources", gc.collect),
             ("release_backend_clients", self._release_backend_clients if had_device_state else lambda: None),
