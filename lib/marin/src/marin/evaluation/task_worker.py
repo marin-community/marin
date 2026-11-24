@@ -156,7 +156,6 @@ def worker_egress(config: EvaluationRunConfig) -> tuple[str, ...]:
 
 
 def daytona_connection(api_key: str) -> DaytonaConnection:
-    """The Daytona account for ``api_key``."""
     return DaytonaConnection(api_key=api_key)
 
 
