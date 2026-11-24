@@ -1,0 +1,31 @@
+{
+  "name": "marina-knotmeter",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build && esbuild ingest/reduce-series.ts --bundle --platform=node --format=esm --outfile=.build/reduce-series.mjs && cp LICENSE.inferencex dist/inferencex-license.txt && cp THIRD_PARTY.md dist/attribution.txt",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "d3": "7.9.0",
+    "@radix-ui/react-dialog": "1.1.23",
+    "@radix-ui/react-select": "2.3.7",
+    "lucide-react": "1.37.0",
+    "clsx": "2.1.1",
+    "tailwind-merge": "3.6.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "vite": "^7.3.7",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@types/d3": "^7.4.3",
+    "@tailwindcss/vite": "4.3.3",
+    "tailwindcss": "4.3.3",
+    "vitest": "4.1.11",
+    "esbuild": "0.28.2"
+  },
+  "license": "GPL-3.0-only"
+}
