@@ -45,7 +45,7 @@ class PolicyEvaluation:
     The policy owns ``max_output`` and ``seed``, so a selection may not set them in its run overrides.
     """
 
-    definition: EvaluationSelection
+    selection: EvaluationSelection
     context: int
     max_output: int | None
     """None leaves output limited only by the context and the benchmark protocol."""
@@ -53,12 +53,12 @@ class PolicyEvaluation:
     """A base seed for every trial; None leaves sampling seeds to the benchmark protocol."""
 
     def __post_init__(self) -> None:
-        if self.definition.run.max_tokens is not None or self.definition.run.seed is not None:
+        if self.selection.run.max_tokens is not None or self.selection.run.seed is not None:
             raise ValueError(f"{self.name}: set max_output and seed on the policy evaluation, not the selection")
 
     @property
     def name(self) -> str:
-        return self.definition.name
+        return self.selection.name
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -101,7 +101,7 @@ class EvalPolicy:
         _require_unique("candidate", [candidate.name for candidate in self.candidates])
         _require_unique("evaluation", [evaluation.name for evaluation in self.in_distribution])
         _require_unique("exception for", [f"{item.candidate.name} on {item.evaluation.name}" for item in exceptions])
-        # Full-value comparison rejects exceptions built from stale definitions.
+        # Full-value comparison rejects exceptions built from stale evaluations.
         for item in exceptions:
             if item.candidate not in self.candidates or item.evaluation not in self.in_distribution:
                 raise ValueError(f"exception for {item.candidate.name} on {item.evaluation.name} is not in this policy")

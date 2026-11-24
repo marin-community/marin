@@ -56,12 +56,12 @@ def _taskspec(
     selection = EvaluationSelection(
         benchmark=benchmark, label=label, protocol=protocol, num_fewshot=num_fewshot, prompt_format=prompt_format
     )
-    return PolicyEvaluation(definition=selection, context=context, max_output=None, seed=seed)
+    return PolicyEvaluation(selection=selection, context=context, max_output=None, seed=seed)
 
 
 def _judged(name: str, *, seed: int | None = None) -> PolicyEvaluation:
     """A benchmark graded by the shared Together ``openai/gpt-oss-120b`` judge selection, as in October."""
-    return PolicyEvaluation(definition=EVALS[name], context=SERVED_CONTEXT, max_output=None, seed=seed)
+    return PolicyEvaluation(selection=EVALS[name], context=SERVED_CONTEXT, max_output=None, seed=seed)
 
 
 def _agent(
@@ -83,7 +83,7 @@ def _agent(
         protocol=protocol,
         run=EvaluationOverrides(concurrency=concurrency, task_machine=task_machine),
     )
-    return PolicyEvaluation(definition=selection, context=context, max_output=None, seed=None)
+    return PolicyEvaluation(selection=selection, context=context, max_output=None, seed=None)
 
 
 EVALUATIONS: tuple[PolicyEvaluation, ...] = (

@@ -21,10 +21,10 @@ LARGE = PolicyCandidate(model=ModelConfig(name="large", location="org/large", re
 SMALL = PolicyCandidate(model=ModelConfig(name="small", location="org/small", revision=REVISION), max_context=60_000)
 
 CONTEXT = 50_000
-PLAIN = PolicyEvaluation(definition=EvaluationSelection(benchmark="plain"), context=CONTEXT, max_output=None, seed=None)
-SEEDED = PolicyEvaluation(definition=EvaluationSelection(benchmark="seeded"), context=CONTEXT, max_output=None, seed=7)
+PLAIN = PolicyEvaluation(selection=EvaluationSelection(benchmark="plain"), context=CONTEXT, max_output=None, seed=None)
+SEEDED = PolicyEvaluation(selection=EvaluationSelection(benchmark="seeded"), context=CONTEXT, max_output=None, seed=7)
 LONG = PolicyEvaluation(
-    definition=EvaluationSelection(benchmark="long"),
+    selection=EvaluationSelection(benchmark="long"),
     context=100_000,
     max_output=30_000,
     seed=None,

@@ -172,6 +172,8 @@ class LaunchSpec:
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
+    default_seed: int | None = DEFAULT_RUN_SEED
+    """The seed of curated runs that set none where the server accepts seeds; None leaves it to each protocol."""
     task_evidence: TaskEvidence = TaskEvidence.EMBEDDED
     retry_unscored_harbor_trials: bool = False
     version: str | None = None
@@ -438,7 +440,7 @@ def build_evaluation_batch(
         model,
         spec.limit,
         spec.seed,
-        DEFAULT_RUN_SEED if seeded else None,
+        spec.default_seed if seeded else None,
         spec.task_evidence,
         spec.retry_unscored_harbor_trials,
         judge.model if judge is not None else None,
