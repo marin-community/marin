@@ -15,7 +15,9 @@ import dataclasses
 import json
 import logging
 from dataclasses import dataclass, replace
-from pathlib import Path
+
+import fsspec
+from rigging.filesystem.factory import open_url
 
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskSpec, TextMessage
@@ -33,6 +35,7 @@ from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.inference import InferenceRequest
 from taskforge.wiring import install
 
+from experiments.post_training.task_curation.balanced_reasoning.difficulty import url_protocol
 from experiments.post_training.task_curation.balanced_reasoning.graceful import (
     CONVERGENCE_PROMPT,
     check_graceful_trace,
@@ -198,9 +201,15 @@ def _best_failed_attempt(attempts: tuple[AttemptTrace, ...]) -> AttemptTrace:
     return max(attempts, key=lambda attempt: ((attempt.reward or 0.0), -attempt.completion_tokens))
 
 
-def _write_status(workdir: Path, resolution: str) -> None:
+def _write_status(workdir: str, resolution: str) -> None:
     status = {"resolution": resolution}
-    (workdir / "status.json").write_text(json.dumps(status, sort_keys=True))
+    write_workdir_text(workdir, "status.json", json.dumps(status, sort_keys=True))
+
+
+def write_workdir_text(workdir: str, name: str, text: str) -> None:
+    """Write one text file into the task's workdir (a local path or an object-store URL)."""
+    with fsspec.open(f"{workdir.rstrip('/')}/{name}", "wt") as sink:
+        sink.write(text)
 
 
 async def run_selected_task(
@@ -208,7 +217,7 @@ async def run_selected_task(
     task: TaskSpec,
     policy: Policy,
     resources: Resources,
-    workdir: Path,
+    workdir: str,
 ) -> TaskOutcome:
     """Generate, verify and select traces for one selected task.
 
@@ -216,12 +225,14 @@ async def run_selected_task(
     model calls and grades instead of regenerating them. Raises on infrastructure failure;
     unsolved tasks return a normal ``TaskOutcome`` with the reason recorded.
     """
+    workdir = str(workdir)
     budget = entry.budget
     sampling = replace(policy_sampling(policy), max_tokens=budget.cap_tokens)
     messages = task_messages(task)
     task_turns = tuple({"role": message.role.value, "content": message.content} for message in messages)
-    sink = JsonlSink(str(workdir / "events.jsonl"))
-    previous = await sink.read() if Path(sink.path).exists() else ()
+    sink = JsonlSink(f"{workdir.rstrip('/')}/events.jsonl")
+    events_path = sink.path
+    previous = await sink.read() if fsspec.filesystem(url_protocol(events_path)).exists(events_path) else ()
     log = EventLog(sink=sink, replay_from=previous)
     ctx = Context(log=log)
     outcome: TaskOutcome
@@ -272,8 +283,8 @@ async def run_selected_task(
     finally:
         await ctx.drain()
         await resources.close_round()
-    workdir.mkdir(parents=True, exist_ok=True)
-    (workdir / "attempt.json").write_text(json.dumps(outcome.to_document(), indent=2, sort_keys=True))
+    fsspec.filesystem(url_protocol(workdir)).makedirs(workdir, exist_ok=True)
+    write_workdir_text(workdir, "attempt.json", json.dumps(outcome.to_document(), indent=2, sort_keys=True))
     _write_status(workdir, outcome.resolution_kind)
     logger.info(
         "TASK %s band=%s resolution=%s attempts=%d selected=%s",

@@ -40,6 +40,7 @@ from experiments.post_training.task_curation.balanced_reasoning.lane import (
     KIND_GRACEFUL,
     RESOLUTION_UNSOLVED,
     run_selected_task,
+    write_workdir_text,
 )
 from experiments.post_training.task_curation.balanced_reasoning.runtime import (
     lane_policy,
@@ -160,15 +161,14 @@ def command_run(args: argparse.Namespace) -> int:
         async def one(entry) -> None:
             async with semaphore:
                 task = read_task_spec(entry.task.task_path)
-                workdir = Path(args.run_root) / "tasks" / entry.task.task_id
+                workdir = f"{args.run_root.rstrip('/')}/tasks/{entry.task.task_id}"
                 try:
                     async with lane_runtime(policy, source) as (resources, _factories):
                         outcome = await run_selected_task(entry, task, policy, resources, workdir)
                         results.append(outcome)
                 except Exception as error:  # one task's failure must not stop the round
                     logger.exception("TASK %s failed", entry.task.task_id)
-                    workdir.mkdir(parents=True, exist_ok=True)
-                    (workdir / "status.json").write_text(json.dumps({"failed": str(error)}))
+                    write_workdir_text(workdir, "status.json", json.dumps({"failed": str(error)}))
                     results.append(None)
 
         await asyncio.gather(*(one(entry) for entry in selected))

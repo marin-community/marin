@@ -17,8 +17,8 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from hashlib import sha256
-from pathlib import Path
 
+import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.datakit.chat_normalize import CHAT_SCHEMA
@@ -27,6 +27,7 @@ from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT, publish_once
+from experiments.post_training.task_curation.balanced_reasoning.difficulty import url_protocol
 from experiments.post_training.task_curation.balanced_reasoning.lane import (
     AttemptTrace,
     TaskOutcome,
@@ -233,18 +234,21 @@ def build_store(
     """
     digest_value, selected, census = read_selection(selection_path)
     receipt_root = prefix_join(run_root, "tasks")
-    store_dir = Path(run_root) / "store"
-    store_dir.mkdir(parents=True, exist_ok=True)
+    store_dir = f"{run_root.rstrip('/')}/store"
+    fsspec.filesystem(url_protocol(run_root)).makedirs(store_dir, exist_ok=True)
     rows: list[dict] = []
     dropped = 0
     drop_reasons: dict[str, int] = {}
     resolutions: dict[str, int] = {}
     for entry in selected:
-        attempt_path = store_dir.parent / "tasks" / entry.task.task_id / "attempt.json"
-        if not attempt_path.exists():
+        attempt_path = f"{run_root.rstrip('/')}/tasks/{entry.task.task_id}/attempt.json"
+        try:
+            with open_url(attempt_path, "rt") as source:
+                document = source.read()
+        except FileNotFoundError:
             logger.warning("SKIP %s: no attempt record at %s", entry.task.task_id, attempt_path)
             continue
-        outcome = outcome_from_document(json.loads(attempt_path.read_text()))
+        outcome = outcome_from_document(json.loads(document))
         contributed, drop_reason = outcome_rows(outcome, receipt_root=receipt_root, blend=blend)
         rows.extend(contributed)
         if drop_reason is not None:
@@ -252,16 +256,17 @@ def build_store(
             drop_reasons[drop_reason] = drop_reasons.get(drop_reason, 0) + 1
         resolutions[outcome.resolution_kind] = resolutions.get(outcome.resolution_kind, 0) + 1
     table = pa.Table.from_pylist(rows, schema=BALANCED_CHAT_SCHEMA)
-    rows_path = store_dir / "rows.parquet"
-    pq.write_table(table, rows_path)
-    receipts_path = store_dir / "receipts.jsonl"
-    with receipts_path.open("wt") as sink:
+    rows_path = f"{store_dir}/rows.parquet"
+    with fsspec.open(rows_path, "wb") as sink:
+        pq.write_table(table, sink)
+    receipts_path = f"{store_dir}/receipts.jsonl"
+    with open_url(receipts_path, "wt") as sink:
         for row in rows:
             sink.write(
                 json.dumps({"id": row["id"], "verification_receipt": row["verification_receipt"]}, sort_keys=True) + "\n"
             )
-    rows_bytes = rows_path.read_bytes()
-    receipts_bytes = receipts_path.read_bytes()
+    rows_bytes = read_bytes(rows_path)
+    receipts_bytes = read_bytes(receipts_path)
     manifest = {
         "version": STORE_VERSION,
         "source": BALANCED_SOURCE,
@@ -293,15 +298,22 @@ def build_store(
             }
         ),
     }
-    manifest_path = store_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    manifest_path = f"{store_dir}/manifest.json"
+    with open_url(manifest_path, "wt") as sink:
+        sink.write(json.dumps(manifest, indent=2, sort_keys=True))
     logger.info("STORE %s rows=%d dropped=%d resolutions=%s", rows_path, len(rows), dropped, sorted(resolutions.items()))
     return manifest
+
+
+def read_bytes(path: str) -> bytes:
+    """Read a small object whole (store bundles only; never a population dump)."""
+    with fsspec.open(path, "rb") as source:
+        return source.read()
 
 
 def publish_store(store_dir: str, destination: str) -> list[str]:
     """Upload the built store files to the versioned artifact prefix; returns the URIs."""
     prefix = prefix_join(CANONICAL_ARTIFACT_ROOT, destination.strip("/"))
-    files = {name: (Path(store_dir) / name).read_bytes() for name in ("rows.parquet", "receipts.jsonl", "manifest.json")}
+    files = {name: read_bytes(f"{store_dir.rstrip('/')}/{name}") for name in ("rows.parquet", "receipts.jsonl", "manifest.json")}
     publish_once(prefix, files)
     return [prefix_join(prefix, name) for name in files]

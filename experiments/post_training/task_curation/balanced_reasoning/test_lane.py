@@ -236,7 +236,7 @@ def test_lane_replays_recorded_effects_on_relaunch(tmp_path: Path) -> None:
         policy = lane_policy_defaults()
         script = tuple(provider_completion(EXPECTED, completion_tokens=30 + index) for index in range(4))
         first_backend = FakeBackend(script)
-        workdir = tmp_path / "t1"
+        workdir = str(tmp_path / "t1")
         await run_selected_task(selected_task(), example_task(), policy, lane_resources(policy, first_backend), workdir)
         second_backend = FakeBackend(())  # any call would exhaust the script and fail the test
         outcome = await run_selected_task(

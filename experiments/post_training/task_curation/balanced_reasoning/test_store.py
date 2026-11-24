@@ -46,7 +46,7 @@ def _run_task(run_root: Path, entry, completions) -> None:
             task,
             policy,
             lane_resources(policy, FakeBackend(completions), expected=ANSWER),
-            run_root / "tasks" / entry.task.task_id,
+            str(run_root / "tasks" / entry.task.task_id),
         )
 
     asyncio.run(drive())
