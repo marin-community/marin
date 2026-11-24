@@ -5,6 +5,22 @@ November 24, 2026 (UTC).
 For the implementation inventory and remaining transfer, protocol, router-replay
 and zero-KL work, see [inference integration status](../../../INFERENCE_HANDOFF.md).
 
+Full diagnostic `2026.11.24.4` was submitted at 18:24:11 UTC with frozen
+runtime source `b2aa2d9ab8`. It tests 64-frame main-thread capture during the
+unchanged checkpoint-roundtrip shutdown validation. At 18:26:48 UTC, all five
+GPU tasks were running on 40 H100s: 32 learner GPUs and eight existing vLLM GPUs.
+The workload retains BATCH priority and zero automatic retries. Both accepted source bundles match
+all 4,640 frozen files; the child adds only the generated coordinator and its
+byte-identical timestamped alias. The coordinator and all five GPU Pod profiles
+verify the requested resources, private PID namespace, privileged profile,
+`SYS_PTRACE` capability and 10,000 ms runtime termination-grace setting. The
+accepted jobs retain the two-hour execution cap and ten-second termination
+grace. These checks establish startup, source identity and allocation. Learner
+initialization, updates, checkpoint restore,
+updated-policy publication and generation, and natural task exit remain
+unverified for R4. The matched 25-update comparison remains open.
+[Full diagnostic R4](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.4-coordinator-b9bab541)
+
 Full diagnostic `2026.11.24.3` at `8f520676ef` failed during checkpoint
 roundtrip validation. The native learner acknowledged shutdown, then exceeded
 the unchanged five-second natural process-exit limit before restore. All four
@@ -44,8 +60,17 @@ eight frames per supplementary thread. It records the main stack's end or
 truncation explicitly and rejects incomplete capture. All original deadlines,
 the one-MiB output limit, process identity and cleanup checks remain in force.
 Local guardian and artifact-handoff tests passed 65 cases, with three Linux-only
-skips. A new real C fixture places the destructor caller above frame eight;
-Linux execution of that control is still required before GPU reuse.
+skips. The Linux CPU control at `b2aa2d9ab8` passed with a 236,638-byte real
+frame-only trace: 3,102 frames across all 386 observed threads. The complete
+23-frame main stack retained the C destructor caller at frame 15, beyond the
+old eight-frame limit. Stop/backtrace/detach took 0.343 seconds. All nine phase
+checks passed, the deliberately delayed destructor produced the expected
+five-second protocol timeout and native exit -9, and the outer control and
+original suite exited zero. Every tracked owned process exited; all four Pod
+containers terminated zero with no restarts. The Succeeded Pod was retained.
+The canonical archive and independent terminal audit qualify CPU capture
+instrumentation; full-model native exit remains unproven.
+[Deep main-stack CPU control](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-deep-main-20261124-1)
 
 
 Earlier diagnostic `2026.11.24.2` at source `40723ba125` completed
@@ -492,18 +517,18 @@ identify the cause of the measured gradient differences. Exact restoration and
 subsequent compute repeatability remain separate questions; the existing strict
 continuation failure has not been reclassified as a pass.
 
-The next full-model diagnostic will require durable,
-coordinated child-process finiteness proofs for initial, saved, restored and
+Before the subsequent full-model diagnostics, acceptance was strengthened to
+require durable, coordinated child-process finiteness proofs for initial, saved, restored and
 continued states. Each learner scans its model, Adam, RNG, step and optional
 averaging arrays, records component element/nonfinite counts, and participates
 in an all-process verdict. Every learner must persist its candidate and passing
 verdict under the task's `native-finite` output directory at each phase. Parent
 copies are supplemental. Extra host-transfer cost remains
-unmeasured on the full model.
+unmeasured on the full model at that point.
 
 Full-model sequence/window geometry and cross-host behavior remain separate
-gates. The new 40-H100 operational diagnostic failed after its first finite
-update; neither matched 25-update comparison has been launched.
+gates. The 40-H100 operational diagnostic described in this section failed
+after its first finite update; neither matched 25-update comparison has been launched.
 
 Recovery BATCH smoke `2026.11.21.12` ran from
 `a5534aa7aa72be3b1512bc3ad8283a3e8ee1d82b`. Its 43 required runtime files
@@ -972,7 +997,7 @@ absent, and the CPU coordinator pod remains terminal `Failed`. Task archives
 are empty or unreported; original exceptions and bounded full native stderr
 were fetched separately.
 
-A dynamic VMM allocator candidate is under review at the same 0.90 budget
+A dynamic VMM allocator candidate was under review at the same 0.90 budget
 for physical allocations, with preallocation disabled. Pinned XLA source enforces
 that budget on padded physical allocations and maps P2P-capable peers.
 Managed collective colors share the budget; external NCCL, Torch, and context
@@ -981,7 +1006,8 @@ adds about 1.61 GiB for this recorded train program; the driver's actual
 granularity has not been measured. Fit remains uncertain. Standard
 JAX allocator counters do not support this pinned VMM path; the candidate
 adds explicitly labeled parent Torch and global driver-memory receipts.
-VMM hardware acceptance is pending in the fresh attempt below.
+VMM hardware acceptance was pending in the fresh attempt below. Current
+full-model results and remaining gates are recorded at the top of this page.
 
 The VMM candidate passes three schema checks and a 22-case native CPU run.
 After isolating observer errors, three normal host continuations and the real

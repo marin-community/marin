@@ -4,10 +4,13 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
-The full-model run at `8f520676ef` completed one finite update on all four
-native learner ranks, then failed the unchanged five-second process-exit check
-before checkpoint restore. Updated-policy publication, generation from
-that policy, and the matched 25-update comparison remain open. The integrated
+Full-model diagnostic `2026.11.24.4` was submitted at 18:24 UTC on November 24
+with frozen runtime source `b2aa2d9ab8`. At 18:26:48 UTC, all five GPU tasks
+were running on 40 H100s, with 32 learner GPUs and eight vLLM GPUs. Accepted
+source bytes and startup Pod profiles passed verification. These observations
+establish startup, source identity and allocation only. Full-model checkpoint
+restore, update two, updated-policy publication and generation, and the matched
+25-update comparison remain unverified. The integrated
 inference endpoints and benchmarks below have their own source and workload
 boundaries. The experimental shutdown observer is disabled by default.
 
@@ -510,19 +513,42 @@ eight frames per supplementary thread. It records the main stack's end or
 truncation explicitly and rejects incomplete capture. All original deadlines,
 the one-MiB output limit, process identity and cleanup checks remain in force.
 Local guardian and artifact-handoff tests passed 65 cases, with three Linux-only
-skips. A new real C fixture places the destructor caller above frame eight;
-Linux execution of that control is still required before GPU reuse.
+skips. The Linux CPU control at `b2aa2d9ab8` passed with a 236,638-byte real
+frame-only trace: 3,102 frames across all 386 observed threads. The complete
+23-frame main stack retained the C destructor caller at frame 15, beyond the
+old eight-frame limit. Stop/backtrace/detach took 0.343 seconds. All nine phase
+checks passed, the deliberately delayed destructor produced the expected
+five-second protocol timeout and native exit -9, and the outer control and
+original suite exited zero. Every tracked owned process exited; all four Pod
+containers terminated zero with no restarts. The Succeeded Pod was retained.
+The canonical archive and independent terminal audit qualify CPU capture
+instrumentation; full-model native exit remains unproven.
+[Deep main-stack CPU control](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-deep-main-20261124-1)
+
+Full-model diagnostic `2026.11.24.4` uses that frozen `b2aa2d9ab8` runtime,
+including the deeper main-stack observer. It was submitted at 18:24:11 UTC;
+the 18:26:48 UTC snapshot showed all five GPU tasks running at BATCH priority
+with zero automatic retries. Both accepted source bundles match all 4,640
+frozen files. The child bundle adds only the generated coordinator and its
+byte-identical timestamped alias. The coordinator and all five GPU Pod profiles
+verify the requested resources, private PID namespace, privileged profile,
+`SYS_PTRACE` capability and 10,000 ms runtime termination-grace setting. The
+accepted jobs retain the two-hour execution cap and ten-second termination
+grace. This verifies startup, source and allocation; learner initialization,
+updates, restore, updated-policy publication
+and generation, and natural task exit remain unverified for R4.
+[Full diagnostic R4](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.4-coordinator-b9bab541)
 
 
-The native server stages and installs weights inside one runtime. The worker
-bridge accepts a version-bound native route payload per trajectory and
+The native server stages and installs weights inside one runtime. The Levanter
+learner bridge accepts a version-bound native route payload per trajectory and
 preserves that binding through batching and policy scoring. The distributed
 driver still needs to launch native serving replicas and attach their payloads
 during trajectory assembly. Updated-policy publication, full-model restart,
 and a matched 25-update run on the maintained branch remain open. The
 quick-loop design records the separate protobuf worker-pipe proofs and the
-planned H100 comparisons. Those worker responses carry the same replay payload
-used by the native HTTP endpoints.
+planned H100 comparisons. The protobuf worker-pipe proof responses carry the
+same replay payload used by the native HTTP endpoints.
 [Quick-loop migration design](https://github.com/marin-community/marin/pull/11934)
 · [Quick-loop run status](experiments/post_training/inventory/levanter-quick-loop-status.md)
 
