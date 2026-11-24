@@ -12,6 +12,10 @@ import threading
 
 import httpx
 from iris.client.client import iris_ctx
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+
+from experiments.glm_synthesis_serving import pool
 
 _RESULT_PATH = "s3://marin-us-east-08a/marin/users/benfeuer/glm-synthesis-serving/failure-probe.json"
 _UNIT = "tool trace line with json payloads and shell commands "
@@ -47,20 +51,21 @@ def main() -> None:
     resolved = client.resolve_endpoint(endpoint).rstrip("/")
     jwt = client.mint_endpoint_token(endpoint).token
     headers = {"Authorization": f"Bearer {jwt}"}
-    proxied_name = endpoint.removeprefix("/serve/")
+    proxied_name = endpoint.lstrip("/").replace("/", ".")
     urls = {
         "proxied": f"http://iris-controller-svc:10000/proxy/{proxied_name}/v1/chat/completions",
         "direct": resolved + "/v1/chat/completions",
-    }    results: dict[str, dict] = {}
+    }
+    results: dict[str, dict] = {}
     for name, url in urls.items():
         outcomes: list[dict] = []
         lock = threading.Lock()
 
-        def worker(seed: int) -> None:
+        def worker(seed: int, target: str, output: list[dict], output_lock: threading.Lock) -> None:
             outcome: dict = {}
             try:
                 with httpx.Client(timeout=600.0) as http:
-                    with http.stream("POST", url, json=_body(seed), headers=headers) as response:
+                    with http.stream("POST", target, json=_body(seed), headers=headers) as response:
                         if response.status_code == 200:
                             chunks = sum(1 for line in response.iter_lines() if line.startswith("data:"))
                             outcome = {"status": 200, "chunks": chunks}
@@ -71,10 +76,10 @@ def main() -> None:
                             }
             except Exception as error:
                 outcome = {"error": f"{type(error).__name__}: {error}"[:240]}
-            with lock:
-                outcomes.append({"seed": seed, **outcome})
+            with output_lock:
+                output.append({"seed": seed, **outcome})
 
-        threads = [threading.Thread(target=worker, args=(seed,)) for seed in range(12)]
+        threads = [threading.Thread(target=worker, args=(seed, url, outcomes, lock)) for seed in range(12)]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -82,10 +87,7 @@ def main() -> None:
         ok = sum(1 for o in outcomes if o.get("status") == 200)
         results[name] = {"ok": ok, "of": len(outcomes), "failures": [o for o in outcomes if o.get("status") != 200][:6]}
     payload = {"resolved": resolved, **results}
-    from rigging.filesystem.s3_compat import configure_coreweave_s3
-
     configure_coreweave_s3()
-    from rigging.filesystem.buckets import filesystem_for
 
     fs, _ = filesystem_for(_RESULT_PATH)
     with fs.open(_RESULT_PATH, "w") as stream:

@@ -106,6 +106,7 @@ def _request_body(rng: random.Random, cache_salt: str, reasoning_effort: str, re
         ],
         "temperature": 1.0,
         "top_p": 0.95,
+        "thinking_token_budget": 8192,
         "max_tokens": _BENCH_MAX_TOKENS,
         "stream": True,
         "tool_choice": "none",
@@ -127,6 +128,8 @@ class RequestStats:
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.failures = 0
+        self.requests = 0
+        self.successes = 0
 
     def summary(self, elapsed_seconds: float, gpus_per_engine: int) -> dict:
         def pct(values: list[float], quantile: float) -> float | None:
@@ -136,8 +139,11 @@ class RequestStats:
             return ordered[min(len(ordered) - 1, int(quantile * len(ordered)))]
 
         return {
-            "requests": len(self.ttft) + self.failures,
+            "requests": self.requests,
+            "successes": self.successes,
             "failures": self.failures,
+            "elapsed": elapsed_seconds,
+            "responses_per_hour": self.successes * 3600 / elapsed_seconds,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "output_tok_per_s_per_gpu": (self.completion_tokens / elapsed_seconds) / gpus_per_engine,
@@ -155,6 +161,8 @@ async def _one_request(
     first_token_at = None
     last_token_at = None
     usage = None
+    done = False
+    stats.requests += 1
     try:
         async with client.stream(
             "POST", base_url.rstrip("/") + "/chat/completions", json=body, timeout=_REQUEST_TIMEOUT_SECONDS
@@ -165,6 +173,7 @@ async def _one_request(
                     continue
                 data = line.removeprefix("data:").strip()
                 if data == "[DONE]":
+                    done = True
                     break
                 event = json.loads(data)
                 for choice in event.get("choices", []):
@@ -174,20 +183,21 @@ async def _one_request(
                     now = time.monotonic()
                     if first_token_at is None:
                         first_token_at = now
-                        stats.ttft.append(now - started)
                     else:
                         stats.itl.append(now - last_token_at)
                     last_token_at = now
                 if event.get("usage"):
                     usage = event["usage"]
-        if usage:
+        if usage and done and first_token_at is not None:
+            stats.successes += 1
+            stats.ttft.append(first_token_at - started)
             stats.prompt_tokens += usage.get("prompt_tokens") or 0
             stats.completion_tokens += usage.get("completion_tokens") or 0
         else:
             stats.failures += 1
     except Exception as error:
         stats.failures += 1
-        logger.warning("request failed: %s", str(error)[:200])
+        logger.warning("request failed: %s", type(error).__name__)
 
 
 async def run_load(
@@ -254,7 +264,7 @@ def resolve_api_key(arg: str | None, base_url: str) -> str | None:
         raise SystemExit("--api-key mint requires an Iris job")
     if "/proxy/" in base_url:
         after = base_url.split("/proxy/", 1)[1].split("/")[0]
-        endpoint = f"/{after}"
+        endpoint = "/" + after.replace(".", "/")
     else:
         endpoint = pool.ENDPOINT_NAME
     return client.mint_endpoint_token(endpoint).token

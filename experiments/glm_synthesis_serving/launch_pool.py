@@ -91,9 +91,7 @@ def submit_coordinator_job(
     return client.submit(
         entrypoint=Entrypoint.from_callable(serve_pool.serve, *entrypoint_args),
         name=f"{pool.JOB_PREFIX}-{suffix}",
-        resources=convert_resources(
-            _pool_cpu_resources(cpu=_COORDINATOR_CPU, ram=_COORDINATOR_RAM, disk=_COORDINATOR_DISK)
-        ),
+        resources=convert_resources(pool.coordinator_resources()),
         environment=EnvironmentSpec(),
         priority_band=pool.PRIORITY,
         ports=["http"],
@@ -200,9 +198,7 @@ def main() -> None:
         extra_args = (*extra_args, *args.engine_arg)
     worker_env_vars: tuple[tuple[str, str], ...] = ()
     if args.worker_env:
-        worker_env_vars = tuple(
-            (pair.partition("=")[0], pair.partition("=")[2]) for pair in args.worker_env
-        )
+        worker_env_vars = tuple((pair.partition("=")[0], pair.partition("=")[2]) for pair in args.worker_env)
         if any(not key for key, _ in worker_env_vars):
             raise SystemExit("--worker-env entries must be KEY=VALUE")
     suffix = args.tag or uuid.uuid4().hex[:6]

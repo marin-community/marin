@@ -13,6 +13,8 @@ import urllib.error
 import urllib.request
 
 from iris.client.client import iris_ctx
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 _RESULT_PATH = "s3://marin-us-east-08a/marin/users/benfeuer/glm-synthesis-serving/auth-probe.json"
 
@@ -42,10 +44,7 @@ def main() -> None:
         "direct_arbitrary_bearer": _status(f"{resolved}/v1/models", {"Authorization": "Bearer not-a-real-token"}),
         "direct_no_auth": _status(f"{resolved}/v1/models"),
     }
-    from rigging.filesystem.s3_compat import configure_coreweave_s3
-
     configure_coreweave_s3()
-    from rigging.filesystem.buckets import filesystem_for
 
     fs, _ = filesystem_for(_RESULT_PATH)
     with fs.open(_RESULT_PATH, "w") as stream:

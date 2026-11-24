@@ -15,8 +15,12 @@ import subprocess
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
-    print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv"], capture_output=True,
-                         text=True).stdout, flush=True)
+    print(
+        subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv"], capture_output=True, text=True
+        ).stdout,
+        flush=True,
+    )
     print("probe-ok", flush=True)
 
 

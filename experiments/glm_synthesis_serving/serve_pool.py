@@ -14,7 +14,7 @@ from dataclasses import replace
 
 from marin.inference.iris import run_iris_service
 
-from experiments.glm_synthesis_serving.pool import POOL_INSTANCES, WARM_RUN_INSTANCES, service
+from experiments.glm_synthesis_serving.pool import POOL_INSTANCES, service
 
 
 def serve(
