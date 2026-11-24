@@ -20,7 +20,6 @@ from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from marin.datakit.decon import (
     FEATURE_FILTER_VERSION,
-    AllSourceDropSets,
     NGramConfig,
     build_all_source_drop_sets,
     decon_to_parquet,
@@ -281,15 +280,8 @@ def scan_steps(
     version: str,
     max_workers: int,
     runtime: CampaignRuntime,
-    frozen_drop_sets: str | None = None,
 ) -> ArtifactStep:
-    """Bind all DF inputs before any mark and one complete attribution after every mark.
-
-    ``frozen_drop_sets`` adopts an existing :class:`LexicalDropSets` artifact instead of
-    rebuilding source-local and global DF masks, the documented reuse path for re-measuring
-    registered populations at the retained corpus's frozen DF state (task-curation guide,
-    "Lexical decontamination before publication"). Every population key must be covered.
-    """
+    """Bind all DF inputs before any mark and one complete attribution after every mark."""
     inputs = [
         ArtifactStep.adopt(
             f"rl-data/atlas/lexical/input/{population_key(p.source_id)}", version, p.path, kind=SourceTextPopulation
@@ -304,23 +296,20 @@ def scan_steps(
         )
     )[:20]
     root = f"rl-data/atlas/lexical/scan/{cohort}"
-    if frozen_drop_sets is None:
-        drops = ArtifactStep(
-            name=f"{root}/df",
-            version=version,
-            artifact_type=LexicalDropSets,
-            deps=[*inputs, bloom],
-            runtime_args={"max_workers": max_workers},
-            run=partial(build_drop_sets, campaign=runtime),
-            build_config=lambda ctx: DropConfig(
-                [ctx.artifact_path(p) for p in inputs],
-                ctx.artifact_path(bloom),
-                ctx.output_path,
-                ctx.runtime_arg("max_workers"),
-            ),
-        )
-    else:
-        drops = ArtifactStep.adopt(f"{root}/df-frozen", version, frozen_drop_sets, kind=LexicalDropSets)
+    drops = ArtifactStep(
+        name=f"{root}/df",
+        version=version,
+        artifact_type=LexicalDropSets,
+        deps=[*inputs, bloom],
+        runtime_args={"max_workers": max_workers},
+        run=partial(build_drop_sets, campaign=runtime),
+        build_config=lambda ctx: DropConfig(
+            [ctx.artifact_path(p) for p in inputs],
+            ctx.artifact_path(bloom),
+            ctx.output_path,
+            ctx.runtime_arg("max_workers"),
+        ),
+    )
     marks = []
     for population, handle in zip(populations, inputs, strict=True):
 
@@ -361,28 +350,6 @@ def scan_steps(
     )
 
 
-def require_frozen_drop_sets_coverage(path: str, populations: list[SourceTextPopulation]) -> AllSourceDropSets:
-    """Load an adopted drop-sets artifact and refuse uncovered populations before any mark runs."""
-    frozen = read_artifact(path, LexicalDropSets).attributes
-    missing = [
-        key
-        for key in (population_key(p.source_id) for p in populations)
-        if not StoragePath(prefix_join(prefix_join(frozen.output_dir, key), "drop.parquet")).isfile()
-    ]
-    if missing or not StoragePath(prefix_join(str(frozen.global_output_dir), "drop.parquet")).isfile():
-        raise ValueError(
-            f"Frozen drop sets at {path} do not cover the requested populations: "
-            f"missing={sorted(missing)} global={frozen.global_output_dir}"
-        )
-    logger.info(
-        "Adopting frozen drop sets at %s: sources=%d global_dropped=%d",
-        path,
-        frozen.num_sources,
-        frozen.n_global_dropped,
-    )
-    return frozen
-
-
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -395,11 +362,6 @@ def main() -> None:
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--max-workers", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument(
-        "--frozen-drop-sets",
-        help="Adopt an existing LexicalDropSets artifact at this path instead of rebuilding DF masks; "
-        "every population key and the global mask must exist under its recorded output_dir",
-    )
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
@@ -409,10 +371,6 @@ def main() -> None:
         raise ValueError("Normalized populations must cover every requested source exactly once")
     runtime = CampaignRuntime()
     with artifact_prefix(args.artifact_root):
-        if args.frozen_drop_sets is not None:
-            # Inside the artifact prefix: the frozen artifact records DF paths relative to
-            # MARIN_PREFIX, which only resolves under the selected root.
-            require_frozen_drop_sets_coverage(args.frozen_drop_sets, populations)
         report = scan_steps(
             populations,
             args.bloom_path,
@@ -421,7 +379,6 @@ def main() -> None:
             args.artifact_version,
             args.max_workers,
             runtime,
-            frozen_drop_sets=args.frozen_drop_sets,
         )
         if not args.run:
             args.output.write_text(
