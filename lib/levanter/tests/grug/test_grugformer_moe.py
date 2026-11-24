@@ -2610,24 +2610,30 @@ def test_combine_in_fp32_matches_an_fp32_combine_reference_on_eight_devices():
 def test_small_ep_decode_matches_ring_with_a_padded_token():
     with use_test_devices(2) as devices, jax.set_mesh(Mesh(devices, ("expert",), axis_types=(AxisType.Explicit,))):
         mesh = jax.sharding.get_abstract_mesh()
-        mlp = MoEExpertMlp.init(
-            num_experts=4,
-            hidden_dim=8,
-            intermediate_dim=16,
-            initializer_std=0.1,
-            key=jax.random.key(23),
+        expert_spec = P("expert", None, None)
+        identity = jnp.eye(8, 16, dtype=jnp.bfloat16)
+        bank = jnp.broadcast_to(identity, (4, 8, 16))
+        scales = jnp.arange(1, 5, dtype=jnp.bfloat16)
+        mlp = MoEExpertMlp(
+            w_gate=jax.sharding.reshard(scales[:, None, None] * bank, expert_spec),
+            w_up=jax.sharding.reshard(bank, expert_spec),
+            w_down=jax.sharding.reshard(bank.swapaxes(1, 2), expert_spec),
             implementation="ring",
+            activation=ActivationFunctionEnum.relu,
             capacity_factor=2.0,
         )
         token_spec = P("expert", None)
-        tokens = jax.sharding.reshard(jax.random.normal(jax.random.key(17), (2, 8)), token_spec)
+        rows = jnp.array([[1, -1, 2, 0, 0, 0, 0, 0], [1] * 8], dtype=jnp.bfloat16)
+        tokens = jax.sharding.reshard(rows, token_spec)
         indices = jax.sharding.reshard(jnp.array([[0, 3], [2, 1]], dtype=jnp.int32), token_spec)
-        combine = jax.sharding.reshard(jnp.array([[0.25, 0.75], [0.4, 0.6]], dtype=jnp.float32), token_spec)
+        combine = jax.sharding.reshard(jnp.array([[0.25, 0.75], [0.5, 0.5]], dtype=jnp.bfloat16), token_spec)
         valid = jax.sharding.reshard(jnp.array([True, False]), P("expert"))
         args = (tokens, indices, combine)
         reference = mlp(*args, token_valid=valid, mesh=mesh)
         decoded = mlp.decode_small_ep(*args, token_valid=valid, mesh=mesh)
 
-    np.testing.assert_allclose(decoded, reference, atol=1e-6, rtol=1e-5)
-    assert np.any(np.asarray(decoded)[0] != 0)
-    np.testing.assert_array_equal(np.asarray(decoded)[1], 0)
+    # Both dots and the weighted accumulation are exact in BF16 for these inputs.
+    # The valid row combines expert scales 1 and 4 into 3.25 * relu(x) * x.
+    expected = np.array([[3.25, 0, 13, 0, 0, 0, 0, 0], [0] * 8], dtype=np.float32)
+    np.testing.assert_array_equal(reference, expected)
+    np.testing.assert_array_equal(decoded, expected)
