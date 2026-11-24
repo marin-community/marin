@@ -167,6 +167,13 @@ class OptimizerConfigKwargs(Section):
     store_param_remainders: bool = unset_field()
 
 
+class TrainerMemoryProfile(Section):
+    enabled: bool = field(False)
+    max_sequence_length: PositiveInt | None = field(None)
+    valid_token_counts: tuple[PositiveInt, ...] = field(())
+    minimum_headroom_fraction: float = field(0.1)
+
+
 class PolicyMegatronConfig(Section):
     tensor_model_parallel_size: int = field(1)
     pipeline_model_parallel_size: int = field(1)
@@ -183,6 +190,9 @@ class PolicyMegatronConfig(Section):
     transformer_config_kwargs: OpenMap = unset_field()
     empty_cuda_cache: bool = field(True)
     logprob_chunk_size: int = field(1024)
+    output_projection_chunk_size: PositiveInt | None = field(None)
+    """Token chunk bound for PPO's output projection and recomputed backward (TP1)."""
+    memory_profile: TrainerMemoryProfile = Field(default_factory=TrainerMemoryProfile)
     optimizer_checkpoint_sharding_type: Literal["fully_reshardable", "dp_reshardable"] = field("fully_reshardable")
     """dp_reshardable avoids a CPU optimizer gather when the checkpoint keeps the same tensor/pipeline/context/expert
     geometry. Loading reads the format from the checkpoint."""

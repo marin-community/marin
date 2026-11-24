@@ -1219,6 +1219,14 @@ class RayPPOTrainer:
         )
 
     async def _train_loop(self):
+        profile = self.cfg.trainer.policy.megatron_config.get("memory_profile", {})
+        if self.cfg.trainer.strategy == "megatron" and profile.get("enabled", False):
+            with Timer("trainer_memory_profile", self.all_startup_timings):
+                reports = await asyncio.to_thread(
+                    ray.get,
+                    self.policy_model.async_run_ray_method("pass_through", "profile_train_memory"),
+                )
+                logger.info("Trainer warm-state sizing passed on {} ranks", len(reports))
         await self._init_weight_sync()
 
         # Colocated training loads the policy model onto the GPU before its checkpoint.
