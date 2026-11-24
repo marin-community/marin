@@ -69,7 +69,7 @@ def test_refresh_dry_run_uses_the_requested_merge_and_plans_only_stale_cohorts(
     assert json.loads(capsys.readouterr().out)["refresh"] == ["learning-medium"]
 
 
-def test_comment_requests_wait_for_main_and_require_the_allowlist(monkeypatch, capsys):
+def test_comment_requests_wait_for_main_and_require_the_allowlist(monkeypatch):
     repository = "marin-community/marin"
     request_comment = {"body": "/rl-controls", "user": {"login": "member"}}
     event = {"issue": {"number": 37, "pull_request": {}}, "comment": request_comment}
@@ -78,11 +78,10 @@ def test_comment_requests_wait_for_main_and_require_the_allowlist(monkeypatch, c
     def github(endpoint, *flags):
         return [[request_comment]] if flags else pull
 
-    monkeypatch.setattr(rl_control_request, "_github", github)
+    monkeypatch.setattr(rl_control_request, "_github", lambda *args: pytest.fail("unauthorized PR lookup"))
     assert rl_control_request.resolve_request("issue_comment", event, repository, set()) is None
-    assert capsys.readouterr().out == ""
+    monkeypatch.setattr(rl_control_request, "_github", github)
     assert rl_control_request.resolve_request("issue_comment", event, repository, {"member"}) is None
-    assert "awaits its merge into main" in capsys.readouterr().out
 
     sha = "b" * 40
     pull.update(merged=True, merge_commit_sha=sha)

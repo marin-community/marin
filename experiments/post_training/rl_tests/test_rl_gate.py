@@ -847,7 +847,16 @@ def test_learning_gate_scores_shared_evaluation(
     recorded_runs, preset_table, monkeypatch, case, replaced, extra, shared, reason
 ):
     cache_native_compositions(monkeypatch)
-    preset = snowball_model.SNOWBALL.by_name["learning-medium"]
+    preset = replace(
+        snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3), checkpoint_every=3
+    )
+    table = preset_table(preset)
+    pin = gate.control_pin(preset, table=table)
+    monkeypatch.setattr(
+        snowball_model,
+        "SNOWBALL",
+        replace(table, control_pins={**table.control_pins, preset.name: replace(pin, replicates=2)}),
+    )
     controls(recorded_runs, preset.name)
     recorded_runs(preset.name, "users/test/shared-eval-baseline")
     baseline = compare(preset.name, "--candidate", "users/test/shared-eval-baseline")

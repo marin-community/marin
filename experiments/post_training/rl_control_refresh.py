@@ -34,7 +34,7 @@ class ControlRefresh:
 
 
 def plan_refresh(table: ModelPresets) -> list[ControlRefresh]:
-    """Select control cohorts with stale revisions or recorded task sets."""
+    """Select incomplete cohorts and cohorts whose revision or task sets have changed."""
     provenance = Provenance.capture(rl_compose.REPO_ROOT)
     if provenance.dirty or not provenance.base_commit:
         raise ValueError("control refresh needs a clean source commit")
