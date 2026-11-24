@@ -5,21 +5,41 @@ November 24, 2026 (UTC).
 For the implementation inventory and remaining transfer, protocol, router-replay
 and zero-KL work, see [inference integration status](../../../INFERENCE_HANDOFF.md).
 
-Full diagnostic `2026.11.24.4` was submitted at 18:24:11 UTC with frozen
-runtime source `b2aa2d9ab8`. It tests 64-frame main-thread capture during the
-unchanged checkpoint-roundtrip shutdown validation. At 18:26:48 UTC, all five
-GPU tasks were running on 40 H100s: 32 learner GPUs and eight existing vLLM GPUs.
-The workload retains BATCH priority and zero automatic retries. Both accepted source bundles match
-all 4,640 frozen files; the child adds only the generated coordinator and its
-byte-identical timestamped alias. The coordinator and all five GPU Pod profiles
-verify the requested resources, private PID namespace, privileged profile,
-`SYS_PTRACE` capability and 10,000 ms runtime termination-grace setting. The
-accepted jobs retain the two-hour execution cap and ten-second termination
-grace. These checks establish startup, source identity and allocation. Learner
-initialization, updates, checkpoint restore,
-updated-policy publication and generation, and natural task exit remain
-unverified for R4. The matched 25-update comparison remains open.
+Full diagnostic `2026.11.24.4` at frozen runtime source `b2aa2d9ab8` failed
+before checkpoint restore. All four native learner ranks completed a finite,
+changed first update, with preserved schemas and layouts. The independently
+fetched 321-byte checkpoint metadata records step 1, policy version 1 and the
+original SFT initializer; array payloads were not decoded. The trainer traceback
+identifies native rank 1 acknowledging shutdown, then exceeding the unchanged
+five-second natural process-exit limit. Both Iris jobs failed once, with no
+retries or preemptions. All five GPU Pods were verified absent. The retained
+coordinator Pod is terminal Failed: its task exited 1 and its three helper
+containers exited zero. The later `842978442a` report commit changed
+documentation only.
+
+All four main stacks are complete: 13, 44, 10 and 41 frames for ranks 0–3.
+Rank 1 was sampled in `cuMemUnmap`, and rank 3 in `cuMemRelease`, through XLA
+VMM allocator and PJRT client destruction under `Py_FinalizeEx`. Ranks 0 and 2
+were sampled in Python finalization. Background captures remain incomplete
+and unqualified; debugger detach and helper cleanup passed. The independent
+audit verified 76 indexed files totaling 664,671 bytes, both accepted source
+bundles and all 286 numeric configuration values against the frozen recipe.
+These samples identify teardown paths, without proving a driver defect.
 [Full diagnostic R4](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.4-coordinator-b9bab541)
+
+The cleanup candidate at [72cfb8e4de](https://github.com/marin-community/marin/commit/72cfb8e4decc4e5c096cf175637f27bc2d5ffeb7)
+clears Haliax's compilation caches through its existing
+API before JAX's caches and backend teardown. Fresh-process CPU reproductions
+using `hax.named_jit` and tiny Snowball initialization showed that the previous
+cleanup retained the mesh and Python JAX client; Haliax cache clearing released
+both. The affected worker suite passed 61 cases, with three skipped and two
+deselected; the ownership regression also passed with four CPU devices. The
+candidate has not run on a GPU.
+A one-H100 run with the observer enabled must pass exact checkpoint restore,
+strict score continuation and a second finite update. Both native processes
+must exit naturally within the existing five-second post-ACK limit before
+another full Snowball attempt. Full-model restore, update two, updated-policy
+publication and generation, and the matched 25-update comparison remain open.
 
 Full diagnostic `2026.11.24.3` at `8f520676ef` failed during checkpoint
 roundtrip validation. The native learner acknowledged shutdown, then exceeded
@@ -43,8 +63,8 @@ unknown. Captures completed 47–67 thread stacks out of 430–448 observed
 threads before the detach reserve; every capture remains incomplete and
 unqualified. Complete CPU capture did not establish GPU coverage; the reason
 for the coverage difference has not been isolated. Debuggers detached and
-guardian helper cleanup passed. Deeper
-main-thread frames are needed before choosing a lifecycle repair.
+guardian helper cleanup passed. This result motivated deeper main-thread
+capture before choosing a lifecycle repair.
 
 The terminal failure was first observed at 09:43 UTC after a missed heartbeat;
 durable debug objects were written around 08:42–08:43 UTC. Continuous monitoring

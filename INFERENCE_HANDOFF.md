@@ -4,13 +4,15 @@ The inference stack on `codex/dlwh-levanter-rl` uses Snowball's paged prefill
 and cached decode through a shared runtime. The Marin backend owns checkpoint
 and mesh setup. The OpenAI and tensor APIs share request admission, stopping,
 sampling, and policy installation. See [native inference](lib/levanter/docs/design/inference.md).
-Full-model diagnostic `2026.11.24.4` was submitted at 18:24 UTC on November 24
-with frozen runtime source `b2aa2d9ab8`. At 18:26:48 UTC, all five GPU tasks
-were running on 40 H100s, with 32 learner GPUs and eight vLLM GPUs. Accepted
-source bytes and startup Pod profiles passed verification. These observations
-establish startup, source identity and allocation only. Full-model checkpoint
+Full-model diagnostic `2026.11.24.4` at frozen runtime source `b2aa2d9ab8`
+completed one finite, changed update on all four native learner ranks, then
+failed the unchanged five-second process-exit check before checkpoint restore.
+Complete main-thread stacks identified XLA VMM allocator and PJRT client
+destruction during Python finalization on two ranks. A cleanup candidate now
+clears Haliax's compilation caches before JAX's caches and backend teardown;
+it has CPU regression evidence and remains unqualified on GPUs. Full-model
 restore, update two, updated-policy publication and generation, and the matched
-25-update comparison remain unverified. The integrated
+25-update comparison remain open. The integrated
 inference endpoints and benchmarks below have their own source and workload
 boundaries. The experimental shutdown observer is disabled by default.
 
@@ -256,7 +258,7 @@ using the unchanged learner protocol and five-second post-ACK exit limit.
 One-H100 controls then executed a tiny CUDA kernel before shutdown and captured
 C-destructor, CUDA-driver and XLA CUDA-plugin frames. Healthy shutdown and
 hung-debugger cleanup controls passed. These are isolated process fixtures;
-capturing the real GPU learner's native shutdown stack remains open.
+at that point, no actual GPU learner shutdown stack had been captured.
 [CPU shutdown observer](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-controls-20261123-2)
 · [GPU-loaded observer controls](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-stack-protocol-gpu-controls-20261123-1)
 
@@ -274,7 +276,7 @@ CPU-only follow-up hit the guardian deadline before shutdown acknowledgment
 and retained no stack, so actual retention beyond the old limit remains
 unqualified. The original five-second exit check also failed. Outputs were
 backed up before cancellation, and the pod was removed. Neither deadline was
-relaxed. No actual GPU learner shutdown stack has been captured.
+relaxed. That run retained no actual GPU learner shutdown stack.
 [Trace-cap diagnostic](https://iris.oa.dev/#/job/%2Fdlwh%2Fproduction-shutdown-cap-python35-239f1d-20261123-1)
 
 The guardian now waits separately for debugger readiness and shutdown
@@ -496,8 +498,8 @@ unknown. Captures completed 47–67 thread stacks out of 430–448 observed
 threads before the detach reserve; every capture remains incomplete and
 unqualified. Complete CPU capture did not establish GPU coverage; the reason
 for the coverage difference has not been isolated. Debuggers detached and
-guardian helper cleanup passed. Deeper
-main-thread frames are needed before choosing a lifecycle repair.
+guardian helper cleanup passed. This result motivated deeper main-thread
+capture before choosing a lifecycle repair.
 
 The terminal failure was first observed at 09:43 UTC after a missed heartbeat;
 durable debug objects were written around 08:42–08:43 UTC. Continuous monitoring
@@ -525,20 +527,38 @@ The canonical archive and independent terminal audit qualify CPU capture
 instrumentation; full-model native exit remains unproven.
 [Deep main-stack CPU control](https://iris.oa.dev/#/job/%2Fdlwh%2Fpolicy-native-deep-main-20261124-1)
 
-Full-model diagnostic `2026.11.24.4` uses that frozen `b2aa2d9ab8` runtime,
-including the deeper main-stack observer. It was submitted at 18:24:11 UTC;
-the 18:26:48 UTC snapshot showed all five GPU tasks running at BATCH priority
-with zero automatic retries. Both accepted source bundles match all 4,640
-frozen files. The child bundle adds only the generated coordinator and its
-byte-identical timestamped alias. The coordinator and all five GPU Pod profiles
-verify the requested resources, private PID namespace, privileged profile,
-`SYS_PTRACE` capability and 10,000 ms runtime termination-grace setting. The
-accepted jobs retain the two-hour execution cap and ten-second termination
-grace. This verifies startup, source and allocation; learner initialization,
-updates, restore, updated-policy publication
-and generation, and natural task exit remain unverified for R4.
+Full-model diagnostic `2026.11.24.4` executed the frozen `b2aa2d9ab8` runtime;
+the later `842978442a` report commit changed documentation only. All four
+initial and step-one state proofs are finite, with changed model and Adam
+hashes and preserved schemas and layouts. The fetched 321-byte checkpoint
+metadata records step 1, policy version 1 and the original SFT initializer;
+array payloads were not decoded. The trainer traceback identifies native rank 1
+acknowledging shutdown, then exceeding the unchanged five-second natural-exit
+limit before restore. Both Iris jobs failed once with no retries or preemptions.
+All five GPU Pods were verified absent. The retained coordinator Pod is terminal
+Failed: its task exited 1 and its three helper containers exited zero.
+
+The four main stacks are complete, with 13, 44, 10 and 41 frames for ranks
+0–3. Rank 1 was sampled in `cuMemUnmap`, and rank 3 in `cuMemRelease`, through
+XLA VMM allocator and PJRT client destruction under `Py_FinalizeEx`. Ranks 0
+and 2 were sampled in Python finalization. Background captures remain incomplete
+and unqualified; debugger detach and helper cleanup passed. These samples
+identify teardown paths, without proving a driver defect or a repair.
 [Full diagnostic R4](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.24.4-coordinator-b9bab541)
 
+The cleanup candidate at [72cfb8e4de](https://github.com/marin-community/marin/commit/72cfb8e4decc4e5c096cf175637f27bc2d5ffeb7)
+calls Haliax's existing cache-clear API before clearing
+JAX caches and releasing backend clients. Fresh-process CPU reproductions using
+`hax.named_jit` and tiny Snowball initialization showed that the previous
+cleanup retained the mesh and Python JAX client; clearing Haliax's caches
+released both. The affected worker suite passed 61 cases, with three skipped
+and two deselected; the ownership regression also passed with four CPU devices.
+The candidate has not run on a GPU. A one-H100 run with the observer enabled
+must pass exact checkpoint restore, strict score continuation and a second
+finite update. Both native processes
+must exit naturally within the existing five-second post-ACK limit before
+another full Snowball attempt; full-model restore, update two, updated-policy
+publication and generation, and the matched 25-update comparison remain open.
 
 The native server stages and installs weights inside one runtime. The Levanter
 learner bridge accepts a version-bound native route payload per trajectory and
