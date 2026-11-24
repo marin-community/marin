@@ -4,11 +4,15 @@
 """Run Taskforge proposals: ``run`` a shard, each proposal in its own ``one`` process; ``report`` an output root.
 
 ``one`` exits 0 once it publishes a head or skips the proposal; 3 when another writer owns the root; 4 when the root
-has another journal format (migrate it, or rebuild at a fresh output prefix); 5 when the root's journal is corrupt; 75
+has another journal format (rerun at a fresh output prefix; no migration ships); 5 when the root's journal is corrupt; 75
 when the workpiece is held until the decision model answers again; with ``--probe``, 10 when its own decision-model
 reader's last outcome was a valid answer; and 1 on any other failure. ``run`` consumes a probe's 10 silently,
 releasing what it parked; it prints an OUTCOME line for every other nonzero child (a 10 from any child but the probe
-is a failure) and fails when any child exited other than 0, 3 or 75.
+is a failure) and fails when any child exited other than 0, 3 or 75. SIGTERM is a crash: the process exits 143 at
+once from the moment ``main`` has installed its handler (one SIGTERM while the interpreter still imports is lost when
+the driver is PID 1), and each ``run`` child, which reads end of file from its parent's pipe, follows; a relaunch
+reopens each root's last committed head. ``main`` is the process entry point, not an embedding API: it leaves its
+SIGTERM handler installed. ``one`` and ``run`` install nothing.
 """
 
 import argparse
@@ -17,8 +21,11 @@ import hashlib
 import json
 import logging
 import os
+import select
+import signal
 import subprocess
 import sys
+import threading
 import traceback
 from collections import Counter
 from dataclasses import dataclass
@@ -34,7 +41,7 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from rigging.secrets import get_secret, list_secret_names, require_secret
 
-from taskforge.checkpoint import JOURNAL_FORMAT, CheckpointSink, read_journal
+from taskforge.checkpoint import CheckpointSink, read_journal
 from taskforge.coordinator import reasons, run_workpiece
 from taskforge.effects.events import StageCompleted
 from taskforge.effects.issues import (
@@ -63,7 +70,7 @@ from taskforge.wiring import clef, endpoint_source, install, runtime
 SUPERSEDED, NEEDS_MIGRATION, CORRUPT = 3, 4, 5
 OUTCOMES = {
     SUPERSEDED: ("superseded", "another writer owns this root now; nothing to do"),
-    NEEDS_MIGRATION: ("needs_migration", f"migrate to journal format {JOURNAL_FORMAT}, then rerun the proposal"),
+    NEEDS_MIGRATION: ("needs_migration", "rerun at a fresh output prefix (no migration ships in this repository)"),
     CORRUPT: ("corrupt", "move this root aside, then rerun the proposal; relaunching the shard fails it again"),
 }
 """Exit codes by which a ``one`` child says why it published nothing, with what an operator does about it."""
@@ -237,6 +244,8 @@ async def run(args: argparse.Namespace) -> None:
     waiting: asyncio.Task[DecisionModelHealth] | None = None
     probe: str | None = None
     skipped = completed = submitted = 0
+    # Every child reads end of file from ``lifeline`` once this process is gone, however it died; only it holds ``kept``.
+    lifeline, kept = os.pipe()
     try:
         exhausted = False
         while active or not exhausted or parked or ready:
@@ -256,6 +265,7 @@ async def run(args: argparse.Namespace) -> None:
                         parked.append(path)
                         continue
                 command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--proposals", path]
+                command += ["--die-with-parent", str(lifeline)]
                 command += [
                     item
                     for name in ("output", "policy", "work_dir")
@@ -264,7 +274,7 @@ async def run(args: argparse.Namespace) -> None:
                 if args.resume_held:  # the operator's flag alone: a child enters an outage-only hold by itself
                     command.append("--resume-held")
                 command += ["--probe"] * (path == probe)
-                process = subprocess.Popen(command)
+                process = subprocess.Popen(command, pass_fds=(lifeline,))
                 submitted += 1
                 active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
             if not active and waiting is None:
@@ -296,6 +306,8 @@ async def run(args: argparse.Namespace) -> None:
             if parked and waiting is None and probe is None:
                 waiting = asyncio.create_task(recovery(policy))
     finally:
+        os.close(lifeline)  # first, so that neither end outlives this call and each child reads end of file
+        os.close(kept)
         if waiting is not None:
             waiting.cancel()
         for _, process in active.values():
@@ -344,12 +356,43 @@ def cli() -> argparse.ArgumentParser:
             command.add_argument("--ranks", type=lambda value: tuple(map(int, value.split(","))), default=())
         else:
             command.add_argument("--probe", action="store_true", help="Exit 10 after a fresh decision-model answer")
+            command.add_argument("--die-with-parent", type=int, metavar="FD", help="Exit 143 at end of file on FD")
     return parser
 
 
+def die_with_parent(lifeline: int) -> None:
+    """Exit 143 once ``lifeline``, a pipe the parent holds open and never writes, reads end of file: at once when the
+    parent is already gone, else from a watching thread."""
+    (readable := select.poll()).register(lifeline, select.POLLIN)  # poll, unlike select, takes any descriptor
+    if readable.poll(0):
+        os._exit(143)
+    threading.Thread(target=lambda: os.read(lifeline, 1) or os._exit(143), daemon=True).start()
+
+
+def exit_on_sigterm() -> None:
+    """Exit 143 at SIGTERM: a crash, so the journal's last committed head survives. A Python handler runs only once the
+    main thread returns to the interpreter, which a write to a full pipe nobody reads never does when the signal landed
+    just before it; the C handler also writes the signal's number to the wakeup pipe, and a watching thread exits."""
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(143))
+    wakeup, woken = os.pipe()
+    os.set_blocking(woken, False)
+    signal.set_wakeup_fd(woken)
+
+    def watch() -> None:
+        while number := os.read(wakeup, 1):
+            if number[0] == signal.SIGTERM:
+                os._exit(143)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def main() -> None:
-    configure_logging()
     args = cli().parse_args()
+    if threading.current_thread() is threading.main_thread():  # an in-process test child runs on another thread
+        exit_on_sigterm()
+        if getattr(args, "die_with_parent", None) is not None:
+            die_with_parent(args.die_with_parent)
+    configure_logging()
     if args.command == "report":
         configure_coreweave_s3()
         print("\n".join(asyncio.run(report(args.output_root, args.since_hours))))

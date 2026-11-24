@@ -45,9 +45,12 @@ prints the same list.
 | 5 | the root's journal is corrupt | move the root aside, then rerun |
 | 75 | held until the decision model answers again | nothing: every later launch enters it, and the driver parks it until the model's health route reports healthy |
 | 10 | a `--probe` child's own decision-model reader read a valid answer (gateways without the health route); no OUTCOME line | nothing: the driver releases the parked proposals |
+| 143 | SIGTERM ended the driver, or the child's driver died (a crash) | relaunch the same manifest, partition and output root: it reopens each root's last committed head (paid work since then may be bought again; one relaunch need not finish) |
 
 The driver job fails when any child exits with a code other than 0, 3 or 75, apart from the probe's 10; a 10 from
-any other child is a failure.
+any other child is a failure. SIGTERM makes a started driver exit 143 at once (as PID 1 it loses one delivered during its startup imports), and its
+children follow it however it died;
+exit 143 alone promises neither an Iris retry nor a particular budget, and sandbox pods are deleted asynchronously.
 
 Output roots follow the format fence and the rollout rule in the
 [Taskforge README's Outputs section](../../../lib/taskforge/README.md#outputs): a root in another journal format

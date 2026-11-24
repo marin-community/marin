@@ -550,7 +550,7 @@ async def test_bucket_split_preserves_manifest_order_and_ownership(
     driver_args.proposals = str(manifest)
     launched: list[str] = []
 
-    def launch(command: list[str]) -> SimpleNamespace:
+    def launch(command: list[str], **_: object) -> SimpleNamespace:
         launched.append(command[command.index("--proposals") + 1])
         return SimpleNamespace(wait=lambda: 0)
 
@@ -1639,7 +1639,7 @@ async def test_a_cleanup_error_after_a_takeover_stays_a_failure_and_appends_noth
     assert published(destination).head.writer == inference.successor.writer
 
 
-def in_process(monkeypatch: pytest.MonkeyPatch, command: list[str]) -> SimpleNamespace:
+def in_process(monkeypatch: pytest.MonkeyPatch, command: list[str], **_: object) -> SimpleNamespace:
     """Run a child's real entry point in this process, exiting as the interpreter would."""
 
     def wait() -> int:
@@ -1690,7 +1690,9 @@ async def test_a_failing_dispatch_terminates_and_joins_every_held_child(
 ) -> None:
     paths = held_children(driver_args, tmp_path, ("first", "second", "bad"))
     children: list[HeldChild] = []
-    monkeypatch.setattr(driver.subprocess, "Popen", lambda command: children.append(HeldChild(command)) or children[-1])
+    monkeypatch.setattr(
+        driver.subprocess, "Popen", lambda command, **_: children.append(HeldChild(command)) or children[-1]
+    )
     with pytest.raises(ValidationError):
         await driver.run(driver_args)
     assert [child.proposal for child in children] == [str(path) for path in paths[:2]]
@@ -1704,7 +1706,9 @@ async def test_a_malformed_first_input_starts_no_child(
     """Dispatch reads each input before it starts that input's child, so a malformed first one starts none."""
     held_children(driver_args, tmp_path, ("bad", "first", "second"))
     children: list[HeldChild] = []
-    monkeypatch.setattr(driver.subprocess, "Popen", lambda command: children.append(HeldChild(command)) or children[-1])
+    monkeypatch.setattr(
+        driver.subprocess, "Popen", lambda command, **_: children.append(HeldChild(command)) or children[-1]
+    )
     with pytest.raises(ValidationError):
         await driver.run(driver_args)
     assert children == []
@@ -1717,7 +1721,7 @@ async def test_a_cancelled_run_terminates_and_joins_every_held_child(
     children: list[HeldChild] = []
     launched = asyncio.Event()
 
-    def launch(command: list[str]) -> HeldChild:
+    def launch(command: list[str], **_: object) -> HeldChild:
         children.append(HeldChild(command))
         if len(children) == len(paths):
             launched.set()
@@ -2180,7 +2184,7 @@ async def test_a_format_2_root_needs_migration_before_claim_and_stays_untouched(
     with pytest.raises(LogFailure, match=f"has journal format 2, not {checkpoint.JOURNAL_FORMAT}") as raised:
         await driver.one(driver_args)
     assert driver.exit_code(raised.value) == driver.NEEDS_MIGRATION
-    assert f"journal format {checkpoint.JOURNAL_FORMAT}" in driver.OUTCOMES[driver.NEEDS_MIGRATION][1]
+    assert "fresh output prefix" in driver.OUTCOMES[driver.NEEDS_MIGRATION][1]  # no migration ships
     assert tree(destination) == before
 
 
@@ -3541,7 +3545,7 @@ async def test_a_fresh_outage_parks_released_work_that_has_not_started(
     codes = {"a": [driver.DEFERRED, driver.DEFERRED], "b": [], "c": [], "d": []}
     launches, started, seen = batch(driver_args, tmp_path, monkeypatch, proposal, codes), list[str](), list[int]()
     popen = driver.subprocess.Popen
-    monkeypatch.setattr(driver.subprocess, "Popen", lambda command: started.append(command[-1]) or popen(command))
+    monkeypatch.setattr(driver.subprocess, "Popen", lambda command, **_: started.append(command[-1]) or popen(command))
 
     async def health(_policy: Policy) -> DecisionModelHealth:
         seen.append(len(started))  # admission is synchronous: a launch beside this read happened before it

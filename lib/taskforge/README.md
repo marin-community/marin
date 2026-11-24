@@ -219,8 +219,34 @@ is no frontier: the stage restarts within its replay budget and holds after it, 
 attempt as evidence. The workpiece holds as `Unreproducible` when an owner reopens on another sandbox definition, issues
 another request at a recorded position, changes an outcome (success, errno, exit status or read
 bytes), or returns normally before its recorded history ends.
-Cancelling a driver sends SIGTERM to each workpiece process, which exits without a final snapshot:
-its head keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
+SIGTERM (an Iris cancel, a preemption, a lost node's grace period) is a crash. The command line's `driver.main`,
+the process entry point and not an embedding API (it leaves its handler installed), handles it by exiting 143 at
+once: no cancellation, no final snapshot, no flushed output. `one` and `run` called as library functions install
+nothing. Where the driver is its container's PID 1 the handler is what lets it exit at all, since the kernel drops a
+signal PID 1 has no handler for; so the immediate exit holds only from the moment `main` installs the handler, and a
+single SIGTERM delivered while the interpreter is still importing is lost (a later one exits). `run` starts each `one` child with `--die-with-parent FD`, the
+read end of one pipe that the parent alone holds open and never writes (the write end is not inheritable and the
+driver never forks without exec while holding it). The child checks the pipe for end of file before it reads or
+claims anything, then watches it from a thread, and exits 143 when it reads end of file, however its parent died,
+SIGKILL and OOM included. This holds under normal interpreter progress only: the watcher must take the GIL, so a
+stopped child or a native call holding the GIL can outlive its parent, and a parent death after the first check is
+asynchronous, so the child may still start effects. A worker's own local subprocesses and remote sandboxes receive
+no end of file. A strict subtree deadline belongs to the runtime: on Iris, the container's PID namespace and the
+pod's grace period. SIGINT keeps its asyncio behaviour (the run is cancelled and stops its children). An unsignalled
+parent still counts a child that exits 143 or dies by a signal as failed.
+
+What a crash promises is that a relaunch with the same manifest, partition and output root can reopen each root's
+last committed valid head, not that one relaunch completes it. An old claim still in flight can win against the first
+replacement, and a hold resumed with `--resume-held` whose refusal's invalidation had not committed may need the flag
+again. A head whose conditional write committed before the driver heard back is the head the relaunch reads: a
+terminal or held workpiece is skipped and an outage-only hold is entered. Paid external work that finished or was
+running when the process died may have no journal row and can be bought again; the checkpoint triggers (25 events,
+60 seconds) bound neither. Pending output is not delivered. Sandbox jobs are cancelled by the controller
+asynchronously, so a driver's exit does not certify their deletion. Exit 143 alone promises neither an Iris retry nor
+a particular budget: Iris charges a pod failure with an authoritative disruption condition to the preemption budget,
+an ordinary failure to `--max-retries`, and ends an explicitly cancelled job. Object-store heads are conditional
+PUTs, so a crash leaves the previous head or the new one; on a local root a kill can land inside the head's in-place
+rewrite and leave it unreadable (`CorruptJournal`).
 A workpiece process cancelled in-process publishes a terminal head only with the workpiece that
 reached it; one cancelled after its terminal event was written but before that workpiece came back
 publishes `terminal: null` over the full history, and the next launch replays it to the terminal
