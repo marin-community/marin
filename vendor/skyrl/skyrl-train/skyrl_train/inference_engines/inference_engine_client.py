@@ -836,7 +836,7 @@ class InferenceEngineClient(InferenceEngineInterface):
             self._dec_inflight(engine_idx)
 
     async def tokenize(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Delegate prompt tokenization to a live vLLM serving actor."""
+        """Return the served model's prompt token IDs or a vLLM error response."""
         if self.backend != "vllm":
             return ErrorResponse(
                 error=ErrorInfo(

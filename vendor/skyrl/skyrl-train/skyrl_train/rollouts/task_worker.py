@@ -565,7 +565,7 @@ class TaskRolloutWorker:
                 else [task.id for task in tasks],
                 self.group_graders,
                 phase,
-                [self.error_handling] * len(tasks),
+                self.error_handling,
                 logprobs_required=require_logprobs,
             )
         return rollouts

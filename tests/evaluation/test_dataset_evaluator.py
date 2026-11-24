@@ -112,7 +112,7 @@ def test_agent_worker_runs_planned_task_machines_with_daytona_credentials_only_f
     evaluator = DatasetEvaluator(("s3://corpora/agent",), model, settings, agent=AGENT)
     daytona = backend is TaskMachineBackend.DAYTONA
     # The launcher grants the eval-org key only to Daytona evaluations.
-    env_vars = {"SETTING": "configured", **({DAYTONA_API_KEY: "eval-org-key"} if daytona else {})}
+    env_vars = {DAYTONA_API_KEY: "eval-org-key"} if daytona else {}
 
     evaluator(SESSION, "s3://results/agent", env_vars, backend_state=lambda: InferenceBackendState.READY)
 
@@ -121,7 +121,6 @@ def test_agent_worker_runs_planned_task_machines_with_daytona_credentials_only_f
     assert (task_machine.backend, task_machine.cpus, task_machine.memory_mb) == (backend, 2, 4096)
     environment = submitted["environment"]
     assert (environment.secrets.get(DAYTONA_API_KEY) == "eval-org-key") is daytona
-    assert environment.env_vars == {"SETTING": "configured"}
     assert (tuple(submitted["egress_allow"]) == DAYTONA_EGRESS) is daytona
     assert ("daytona" in environment.setup_scripts[0]) is daytona
 
@@ -148,7 +147,7 @@ def test_agent_worker_receives_task_secrets_as_secrets_its_run_may_resolve(creat
     evaluator(
         SESSION,
         "s3://results/agent",
-        {"SEC_EDGAR_API_KEY": "edgar-key", "SETTING": "configured"},
+        {"SEC_EDGAR_API_KEY": "edgar-key"},
         backend_state=lambda: InferenceBackendState.READY,
     )
 
@@ -156,7 +155,6 @@ def test_agent_worker_receives_task_secrets_as_secrets_its_run_may_resolve(creat
     assert args[2].task_secrets == ("SEC_EDGAR_API_KEY",)
     environment = submitted["environment"]
     assert environment.secrets["SEC_EDGAR_API_KEY"] == "edgar-key"
-    assert environment.env_vars == {"SETTING": "configured"}
 
 
 def test_agent_worker_rejects_a_server_window_other_than_the_planned_one(created, submitted):

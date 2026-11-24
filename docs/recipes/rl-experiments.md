@@ -409,7 +409,7 @@ The dashboards are available through the [RL Grafana dashboard](https://grafana.
 ## Agentic checkpoint evaluation
 
 `train-long-checkpoint-eval` evaluates 30 pinned tasks each from BFCL, SWE-bench Verified
-and OpenThoughts-TBLite. Set `DAYTONA_EVAL_API_KEY` and `DAYTONA_TARGET` before submitting.
+and OpenThoughts-TBLite. Set `DAYTONA_EVAL_API_KEY` before submitting.
 The cohorts share SkyRL's evaluation pool with EvalLite. Up to 90 agent episodes can run
 concurrently across the three cohorts. Daytona builds the pinned task environments in
 declarative mode, and Terminus-2 evaluates the same frozen policy as EvalLite.

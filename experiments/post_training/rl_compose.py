@@ -470,6 +470,20 @@ def _refuse_judged(summary: dict, filename: str) -> None:
         raise click.BadParameter("task selections must contain no AI-judge-graded tasks")
 
 
+def _training_selection(selection: ArtifactStep, summary: dict, authored: dict) -> ArtifactStep:
+    legacy = set(summary.get("harness_graded_datasets", ()))
+    if not legacy:
+        return selection
+    if unsupported := legacy - {SWESMITH_DATASET}:
+        raise click.BadParameter(f"Unsupported training datasets with harness graders: {', '.join(sorted(unsupported))}")
+    spec_path = "environment.task_sessions.task_spec"
+    harness = get_path(authored, f"{spec_path}.harness_by_dataset.{SWESMITH_DATASET}")
+    machine = get_path(authored, f"{spec_path}.task_machine_by_dataset.{SWESMITH_DATASET}")
+    if harness != "pi" or machine is MISSING:
+        raise click.BadParameter("SWESmith training requires the Pi harness and a task machine")
+    return native_swesmith_selection(selection)
+
+
 def _checkpoint_session_patch(config: RecipePatch) -> RecipePatch:
     budget = config.context_budget
     assert budget is not None
@@ -533,18 +547,7 @@ def run_spec(
     default, selection = task_selections(preset, tasks)
     summary = selection_summary(selection)
     _refuse_judged(summary, "train")
-    training_selection = selection
-    if legacy_datasets := set(summary.get("harness_graded_datasets", ())):
-        if unsupported := legacy_datasets - {SWESMITH_DATASET}:
-            raise click.BadParameter(
-                f"Unsupported training datasets with harness graders: {', '.join(sorted(unsupported))}"
-            )
-        settings_path = "environment.task_sessions.task_spec"
-        harness = get_path(authored, f"{settings_path}.harness_by_dataset.{SWESMITH_DATASET}")
-        machine = get_path(authored, f"{settings_path}.task_machine_by_dataset.{SWESMITH_DATASET}")
-        if harness != "pi" or machine is MISSING:
-            raise click.BadParameter("SWESmith training requires the Pi harness and a task machine")
-        training_selection = native_swesmith_selection(selection)
+    training_selection = _training_selection(selection, summary, authored)
     chosen = preset.evaluations
     if preset.batch_mix is not None:
         assert isinstance(workload, presets.Training)

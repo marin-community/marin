@@ -19,11 +19,12 @@ import re
 import tomllib
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.run_records import LaunchState
-from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, Phase
+from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, AttemptReceipt, Phase
 from marin.execution.artifact import validate_path_segment
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.skyrl import read_skyrl_attempt
@@ -72,15 +73,15 @@ NATIVE_VERIFIER_TASK_FAILURES = frozenset(
         GradingFailure.GRADER_EXIT,
     }
 )
-SETUP_COMMAND_FAILURE = re.compile(r"^(?:Declared task setup command \d+|Task setup command) exited -?[1-9]\d*\b")
+HARBOR_SETUP_COMMAND_FAILURE = re.compile(r"^Declared task setup command \d+ exited -?[1-9]\d*\b")
 # Only ungraded attempts carry the output tails and the attempt's address.
 ATTEMPT_COLUMNS = (
     "run selection attempt_id task_id task_digest outcome grading_failure exception_type error phase "
-    "docker_image setup_sha256 setup_completed setup_stdout setup_stderr verifier_stdout verifier_stderr address"
+    "docker_image setup_sha256 setup_completed setup_exit_code setup_stdout setup_stderr "
+    "verifier_stdout verifier_stderr address"
 ).split()
-ATTEMPT_SCHEMA = pa.schema(
-    [(name, pa.bool_() if name == "setup_completed" else pa.string()) for name in ATTEMPT_COLUMNS]
-)
+ATTEMPT_COLUMN_TYPES = {"setup_completed": pa.bool_(), "setup_exit_code": pa.int64()}
+ATTEMPT_SCHEMA = pa.schema([(name, ATTEMPT_COLUMN_TYPES.get(name, pa.string())) for name in ATTEMPT_COLUMNS])
 SKIP_COLUMNS = (TASK_SPEC_COLUMN, "task_id", "unit", "attempts", "failed_attempts", "error", "example")
 SKIP_SCHEMA = pa.schema([(name, pa.int64() if name.endswith("attempts") else pa.string()) for name in SKIP_COLUMNS])
 
@@ -212,22 +213,20 @@ def _native_attempt_rows(export_path: str) -> list[dict]:
     root = StoragePath(export_path) / ATTEMPT_RECEIPTS_DIRECTORY
     if not root.exists():
         return []
-    rows = {}
+    rows: dict[str, tuple[AttemptReceipt, str | None]] = {}
 
-    def read_batch(path: StoragePath) -> list[dict]:
-        return [
-            {**row, "address": str(path) if row["outcome"] != Outcome.GRADED else None}
-            for row in map(json.loads, path.read_text().splitlines())
-        ]
+    def read_batch(path: StoragePath) -> list[AttemptReceipt]:
+        return [AttemptReceipt(**json.loads(line)) for line in path.read_text().splitlines()]
 
     paths = sorted((path for path in root.ls() if path.name.endswith(".jsonl")), key=str)
     with ThreadPoolExecutor(READ_THREADS) as pool:
-        for batch in pool.map(read_batch, paths):
-            for row in batch:
-                prior = rows.setdefault(row["attempt_id"], row)
-                if {**row, "address": None} != {**prior, "address": None}:
-                    raise ValueError(f"Conflicting records for attempt {row['attempt_id']}")
-    return list(rows.values())
+        for path, batch in zip(paths, pool.map(read_batch, paths), strict=True):
+            for receipt in batch:
+                address = str(path) if receipt.outcome != Outcome.GRADED else None
+                prior, _ = rows.setdefault(receipt.attempt_id, (receipt, address))
+                if prior != receipt:
+                    raise ValueError(f"Conflicting records for attempt {receipt.attempt_id}")
+    return [{**asdict(receipt), "address": address} for receipt, address in rows.values()]
 
 
 def _historical_attempt_rows(agent: dict, source: dict) -> list[dict]:
@@ -277,6 +276,7 @@ def publish_skip_list(
             if row["task_digest"] is None:
                 continue
             key = (row["run"], row["attempt_id"])
+            row.setdefault("setup_exit_code", None)
             if unique.setdefault(key, row) != row:
                 raise ValueError(f"Conflicting records for attempt {key}")
     rows = unique.values()
@@ -286,10 +286,15 @@ def publish_skip_list(
     for row in rows:
         if row["outcome"] != Outcome.INFRA_ERROR or row["task_digest"] in graded:
             continue
+        setup_exit_code = row["setup_exit_code"]
         failed_setup = (
             row["phase"] == Phase.TASK_SETUP
             and row["setup_completed"] is False
-            and SETUP_COMMAND_FAILURE.match(row["error"] or "") is not None
+            and (
+                0 < setup_exit_code < 128
+                if setup_exit_code is not None
+                else HARBOR_SETUP_COMMAND_FAILURE.match(row["error"] or "") is not None
+            )
         )
         failed_verifier = (
             row["phase"] == Phase.VERIFIER

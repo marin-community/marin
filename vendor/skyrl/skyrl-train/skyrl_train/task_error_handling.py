@@ -28,7 +28,7 @@ class ErrorHandlingConfig:
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "ErrorHandlingConfig":
-        """Apply supplied training policy fields over the default policy."""
+        """Read the training error policy and fill omitted fields with defaults."""
         defaults = DEFAULT_ERROR_HANDLING_CONFIG
         return cls(
             enable_error_classification=bool(

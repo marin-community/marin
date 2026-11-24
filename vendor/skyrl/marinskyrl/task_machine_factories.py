@@ -13,9 +13,10 @@ from shellbox.machine import Backend, MachineFactory
 from skyrlrecipe.declared import DAYTONA_EVAL_BACKEND
 
 
-def _daytona_factory(api_key: str, ttl: int, image_build: DaytonaImageBuild) -> DaytonaMachineFactory:
+def _daytona_factory(api_key: str, ttl_minutes: int, image_build: DaytonaImageBuild) -> DaytonaMachineFactory:
+    connection = DaytonaConnection(api_key=api_key)
     return DaytonaMachineFactory(
-        client_factory=DaytonaConnection(api_key=api_key).client_factory(), ttl_minutes=ttl, image_build=image_build
+        client_factory=connection.client_factory(), ttl_minutes=ttl_minutes, image_build=image_build
     )
 
 
