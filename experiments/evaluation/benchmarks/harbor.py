@@ -43,7 +43,6 @@ from taskcompendium.importers.harbor.config import UnsupportedHarborFeature
 from taskcompendium.importers.harbor.images import resolve_image_digests
 from taskcompendium.importers.harbor.package import (
     GradingRule,
-    HarborTask,
     JobSettings,
     PackageTests,
     image_references,
@@ -85,7 +84,6 @@ NODE_ARCHIVE_SHA256 = "c54118104acc524633b5abe106bbf44a53126ec8b4e5fa105cb92b5d7
 """The digest of the release's ``linux-x64`` archive, from its ``SHASUMS256.txt``."""
 PI_PREFIX = "/opt/pi"
 
-type PackageLowerer = Callable[[Path, RawRow, JobSettings], HarborTask]
 type RuleFor = Callable[[Path], GradingRule]
 type PackageSource = HarborRepoSource | HarborArchiveSource | HarborHubSource
 
@@ -130,24 +128,20 @@ class HarborConversion:
         _context: ConversionContext,
         job: JobSettings = JobSettings(),
         edits: tuple[PackageEdit, ...] = (),
-        lower: PackageLowerer | None = None,
     ) -> TaskSpec | ImportRejection:
         with TemporaryDirectory(prefix="harbor-package-") as root:
             directory = Path(root) / row.data["name"]
             extract_package(row.data["archive"], directory)
             edit_package(directory, edits)
             try:
-                if lower is None:
-                    lowered = lower_package(
-                        directory,
-                        task_id=row.id,
-                        source=row.source,
-                        rule=self.rule(directory),
-                        image_digests=self.image_digests,
-                        job=job,
-                    )
-                else:
-                    lowered = lower(directory, row, job)
+                lowered = lower_package(
+                    directory,
+                    task_id=row.id,
+                    source=row.source,
+                    rule=self.rule(directory),
+                    image_digests=self.image_digests,
+                    job=job,
+                )
             except UnsupportedHarborFeature as error:
                 return ImportRejection(kind=ImportFailureKind.UNSUPPORTED, reason="harbor_feature", detail=error.reason)
         task = lowered.task
@@ -255,7 +249,6 @@ def harbor_source(
     trials: int = 1,
     job: JobSettings | None = None,
     protocol: str | None = None,
-    lower: PackageLowerer | None = None,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     """An evaluation source that runs ``agent`` ``trials`` times on every package of ``dataset``.
 
@@ -263,10 +256,8 @@ def harbor_source(
     caps each reply. ``job`` holds the Harbor job settings that replace or extend each package's own.
     ``protocol`` names the protocol when the agent's kind does not tell it apart from the benchmark's others.
     """
-    # Native lowerers resolve images from their own pinned package declarations.
-    convert = HarborConversion(dataset.rule, image_lock(dataset.image_lock_name) if lower is None else {})
+    convert = HarborConversion(dataset.rule, image_lock(dataset.image_lock_name))
     keywords = {
-        **({"lower": lower} if lower is not None else {}),
         **({} if job is None else {"job": job}),
         **({"edits": dataset.edits} if dataset.edits else {}),
     }

@@ -7,51 +7,65 @@ Release tooling and metadata are MIT licensed. Task sources retain their upstrea
 the default selection follows the release's unrestricted manifest.
 """
 
+import base64
 import re
 import shlex
-import shutil
 import tomllib
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import tomlkit
-from taskcompendium.evaluation.spec import MiniSweAgent, PiAgent
-from taskcompendium.importers.harbor.config import TASK_CONFIG
+from shellbox.machine import NetworkPolicy
+from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, EpisodeLimits, MiniSweAgent, PiAgent
 from taskcompendium.importers.harbor.package import (
+    AGENT_CAPABILITIES,
     INSTRUCTION,
-    REWARD_JSON_PATH,
-    HarborTask,
-    JobSettings,
-    PackageTests,
-    lower_package,
+    LOG_DIRECTORIES,
+    TEST_SCRIPT,
+    harbor_shell,
 )
+from taskcompendium.importers.harbor.sources import LoweredSource, extend_source
 from taskcompendium.models import (
+    AnswerType,
     ArtifactKind,
+    CommandSemantics,
+    ConversationInput,
+    EnvironmentRequirements,
     FileReward,
     GraderMachine,
+    InlineFile,
+    PlainText,
+    ResourceGroups,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
+    TaskResource,
+    TaskSpec,
+    TextMessage,
     VerifierArtifact,
+    VerifierCommand,
 )
-from taskcompendium.pipeline.models import RawRow
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import IntendedUse, RawRow
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.benchmarks.harbor import (
+    EPISODE_LABEL,
     MAX_OUTPUT_TOKENS,
+    MODEL_TURN_TIMEOUT,
     PI_MAX_OUTPUT_TOKENS,
-    HarborDataset,
-    harbor_source,
+    harbor_item,
+    harbor_protocol,
     pi_install,
 )
-from experiments.evaluation.preparation import EvaluationCorpusRecipe
-from experiments.post_training.task_curation.harbor_packages import package_rows
-from experiments.post_training.task_curation.pipeline import HarborRepoSource
-from experiments.post_training.task_curation.source import RlDataSource
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
+from experiments.post_training.task_curation.harbor_packages import extract_package, package_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HarborRepoSource
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 DATASET = "OpenMOSS-Team/SWE-bench-Science"
 REVISION = "997408298e8e4d09978b1120b95c4540d1a71bcb"
-VERSION = "2026.11.24.3"
+VERSION = "2026.11.24.4"
 BENCHMARK = "swebench-science"
 # Exact selections/default-96.json in the pinned release.
 TASK_IDS = tuple(
@@ -67,63 +81,98 @@ TASK_IDS = tuple(
 # The hosted selection adds these reviewed packages to the upstream default.
 HOSTED_TASK_IDS = (*TASK_IDS, *"003 020 021 023 032 057 066 074 075 082 083 084 085 096 097 098 100 118".split())
 PI = PiAgent(version="0.87.0", thinking="xhigh", setup_timeout=360)
-
-
 PATCH = "/logs/artifacts/model.patch"
 
 
-def _harbor_config(directory: Path) -> dict:
-    """Translate the supported Pier release fields into their Harbor 1.2 equivalents."""
-    config = tomllib.loads((directory / TASK_CONFIG).read_text())
-    verifier = config["verifier"]
+def _offline_image(env: dict) -> str:
+    if (
+        env["allow_internet"]
+        or env["os"] != "linux"
+        or not re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", env["docker_image"])
+    ):
+        raise ValueError("SWE-bench Science requires offline digest-pinned Linux images")
+    # Skopeo accepts repository@digest, including registries with ports.
+    return re.sub(r":[^/:@]+(?=@)", "", env["docker_image"])
+
+
+def lower_science_package(directory: Path, row: RawRow, *, agent_install: str | None = None) -> TaskSpec:
+    """Build a TaskSpec directly from a pinned SWE-bench Science release package."""
+    config = tomllib.loads((directory / "task.toml").read_text())
+    agent, verifier = config["agent"], config["verifier"]
+    solver_env, verifier_env = config["environment"], verifier["environment"]
     if config["schema_version"] != "1.3" or verifier["environment_mode"] != "separate":
         raise ValueError("Expected SWE-bench Science's schema 1.3 separate-verifier release")
     if config.get("artifacts") != [PATCH]:
         raise ValueError(f"Expected the sole Science artifact to be {PATCH}")
-    for environment in (config["environment"], verifier["environment"]):
-        if environment["allow_internet"] or "@sha256:" not in environment["docker_image"]:
-            raise ValueError("SWE-bench Science requires offline digest-pinned images")
-        # Skopeo's docker transport accepts repository@digest, including registries with ports.
-        environment["docker_image"] = re.sub(r":[^/:@]+(?=@)", "", environment["docker_image"])
-    if any(role["network_mode"] != "no-network" for role in (config["agent"], verifier)):
+    if any(role["network_mode"] != "no-network" for role in (agent, verifier)):
         raise ValueError("SWE-bench Science requires the native no-network protocol")
+
+    solver = LoweredSource(_offline_image(solver_env), None, solver_env["workdir"])
+    if agent_install is not None:
+        solver = extend_source(solver, agent_install)
     hook = (directory / "pre_artifacts.sh").read_text()
-    command = f"cd {shlex.quote(config['environment']['workdir'])} && sh -c {shlex.quote(hook)}"
-    # This release's 1.3 fields have 1.2 equivalents: offline environment
-    # declarations plus an explicit collection command replace Pier's hook.
-    config["schema_version"] = "1.2"
-    verifier["collect"] = [{"command": command, "timeout_sec": 300.0}]
-    return config
+    command = f"cd {shlex.quote(solver_env['workdir'])} && sh -c {shlex.quote(hook)}"
+    episode = EpisodeInputs(
+        agent_timeout=agent["timeout_sec"],
+        verifier_timeout=verifier["timeout_sec"],
+        cpus=solver_env["cpus"],
+        memory_mb=solver_env["memory_mb"],
+        storage_mb=10240,
+        network=NetworkPolicy.DENY,
+    )
+    return TaskSpec(
+        id=row.id,
+        source=row.source,
+        context=ConversationInput(events=(TextMessage(role="user", content=(directory / INSTRUCTION).read_text()),)),
+        environment_requirements=EnvironmentRequirements(
+            capabilities=AGENT_CAPABILITIES,
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image=solver.docker_image,
+            docker_build=solver.docker_build,
+            working_directory=solver.workdir,
+            setup_commands=(LOG_DIRECTORIES,),
+            environment_variables={**solver_env.get("env", {}), **agent.get("env", {})},
+        ),
+        answer_type=AnswerType.WORKSPACE_STATE,
+        answer_format=PlainText(),
+        grader=ScriptGrader(
+            argv=("bash", TEST_SCRIPT),
+            cwd=verifier_env["workdir"],
+            answer_path=None,
+            timeout=verifier["timeout_sec"],
+            reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),)),
+            placement=GraderMachine(
+                environment=EnvironmentRequirements(
+                    command_semantics=CommandSemantics.LINUX_PROCESS,
+                    docker_image=_offline_image(verifier_env),
+                    working_directory=verifier_env["workdir"],
+                    environment_variables={**verifier_env.get("env", {}), **verifier.get("env", {})},
+                ),
+                collect=(VerifierCommand(argv=harbor_shell(command), timeout=300),),
+                artifacts=(VerifierArtifact(source=PATCH, target=PATCH, kind=ArtifactKind.FILE),),
+            ),
+        ),
+        resources=ResourceGroups(
+            verifier=(
+                TaskResource(
+                    path="grader.py",
+                    source=InlineFile(
+                        content_base64=base64.b64encode((directory / "tests/grader.py").read_bytes()).decode("ascii")
+                    ),
+                    mode="0644",
+                ),
+            )
+        ),
+        tags=("eval",),
+        labels={"harbor_path": directory.name, EPISODE_LABEL: episode.model_dump_json()},
+    )
 
 
-def lower_science_package(directory: Path, row: RawRow, job: JobSettings) -> HarborTask:
-    """Convert a Pier 1.3 science package to a Harbor task with isolated patch grading."""
-    config = _harbor_config(directory)
-    with TemporaryDirectory(prefix="swe-science-package-") as temporary:
-        prepared = Path(temporary) / directory.name
-        (prepared / "environment").mkdir(parents=True)
-        (prepared / "tests").mkdir()
-        for path in (INSTRUCTION, "tests/grader.py"):
-            shutil.copyfile(directory / path, prepared / path)
-        (prepared / TASK_CONFIG).write_text(tomlkit.dumps(config))
-        lowered = lower_package(
-            prepared, task_id=row.id, source=row.source, rule=PackageTests(), image_digests={}, job=job
-        )
-    grader = lowered.task.grader
-    assert isinstance(grader, ScriptGrader)
-    assert isinstance(grader.placement, GraderMachine)
-    placement = grader.placement.model_copy(
-        update={"artifacts": (VerifierArtifact(source=PATCH, target=PATCH, kind=ArtifactKind.FILE),)}
-    )
-    # JSON mode reads the native reward field without treating nested diagnostic
-    # reports as numeric metrics. The original report is not rewritten.
-    grader = grader.model_copy(
-        update={
-            "placement": placement,
-            "reward": FileReward(files=(RewardFile(path=REWARD_JSON_PATH, format=RewardFileFormat.JSON),)),
-        }
-    )
-    return HarborTask(lowered.task.model_copy(update={"grader": grader}), lowered.episode)
+def convert(row: RawRow, _context: ConversionContext, *, agent_install: str | None) -> TaskSpec:
+    with TemporaryDirectory(prefix="swe-science-") as root:
+        package = Path(root) / row.data["name"]
+        extract_package(row.data["archive"], package)
+        return lower_science_package(package, row, agent_install=agent_install)
 
 
 def science_source(
@@ -131,26 +180,53 @@ def science_source(
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     pi = isinstance(harness, PiAgent)
     protocol_name = "pi-xhigh" if pi else "mini-swe-agent"
-    job = JobSettings(storage_mb=10240, agent_install=pi_install(harness) if isinstance(harness, PiAgent) else None)
-    dataset = HarborDataset(
-        recipe=f"{benchmark}-{protocol_name}",
-        benchmark=benchmark,
-        title=f"SWE-bench Science ({len(task_ids)} tasks)",
+    name = f"{benchmark}-{protocol_name}"
+    episode = AgentEpisode(
+        harness=harness,
+        max_input_tokens=65536 if pi else None,
+        limits=EpisodeLimits(
+            max_turns=None,
+            max_total_tokens=None,
+            model_turn_timeout=MODEL_TURN_TIMEOUT,
+            total_turn_timeout=None,
+            verifier_timeout=None,
+            attempt_timeout=10800,
+        ),
+    )
+    recipe = CurationRecipe(
+        name=f"harbor-{name}",
+        version=VERSION,
+        intended_use=IntendedUse.EVAL,
         source=HarborRepoSource(
             DATASET, REVISION, read=package_rows, root="tasks", packages=frozenset(f"task_{key}" for key in task_ids)
         ),
-        version=VERSION,
-        count=len(task_ids),
-        attempt_timeout=10800,
+        convert=partial(convert, agent_install=pi_install(harness) if isinstance(harness, PiAgent) else None),
     )
-    return harbor_source(
-        dataset,
-        harness,
-        lower=lower_science_package,
-        job=job,
-        max_input_tokens=65536 if pi else None,
-        max_output_tokens=PI_MAX_OUTPUT_TOKENS if pi else MAX_OUTPUT_TOKENS,
-        protocol=protocol_name,
+    return RlDataSource(
+        info=SourceInfo(
+            id=f"Harbor:{name}",
+            title=f"SWE-bench Science ({len(task_ids)} tasks)",
+            origin="Harbor",
+            family="agentic",
+            tags=("eval", "source:harbor", "agentic", "multi-turn", "benchmark"),
+            count=len(task_ids),
+            task_format=TaskFormat.HARBOR,
+        ),
+        config=EvaluationCorpusRecipe(
+            recipe,
+            harbor_protocol(
+                benchmark,
+                VERSION,
+                len(task_ids),
+                max_output_tokens=PI_MAX_OUTPUT_TOKENS if pi else MAX_OUTPUT_TOKENS,
+                requires_judge=False,
+                trials=1,
+            ),
+            partial(harbor_item, agent=episode),
+            protocol_name=protocol_name,
+            agent=episode,
+        ),
+        pipeline=prepare_evaluation,
     )
 
 

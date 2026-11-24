@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.importers.harbor.package import JobSettings
 from taskcompendium.models import GraderMachine, MissingArtifactPolicy, ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
@@ -62,8 +61,7 @@ def test_science_corpus_sets_solver_resources_and_keeps_the_verifier_image(scien
 
 
 def test_native_verifier_entrypoint_and_hidden_tests_remain_image_owned(science_package):
-    lowered = lower_science_package(science_package, ROW, JobSettings())
-    task = lowered.task
+    task = lower_science_package(science_package, ROW)
     config = tomllib.loads((science_package / "task.toml").read_text())
     assert task.context.events[0].content == (science_package / "instruction.md").read_text()
     assert task.environment_requirements.docker_image == config["environment"]["docker_image"].replace(":v0.1.0@", "@")
@@ -92,14 +90,14 @@ def test_unexpected_patch_artifact_is_rejected(science_package):
     config = package / "task.toml"
     config.write_text(config.read_text().replace("/logs/artifacts/model.patch", "/logs/artifacts/other.patch"))
     with pytest.raises(ValueError):
-        lower_science_package(package, ROW, JobSettings())
+        lower_science_package(package, ROW)
 
 
 @pytest.mark.parametrize("reward", [0, 1])
 def test_nested_native_report_returns_only_the_numeric_reward(reward, science_package):
-    lowered = lower_science_package(science_package, ROW, JobSettings())
+    task = lower_science_package(science_package, ROW)
     report = json.dumps({"reward": reward, "task_id": "002", "private": {"passed": 3, "collected": 4}}).encode()
-    file = lowered.task.grader.reward.files[0]
+    file = task.grader.reward.files[0]
     assert _reward_value(report, file.format, file.key) == (float(reward), None)
 
 
@@ -121,8 +119,8 @@ def test_native_collect_includes_committed_and_untracked_candidate_changes(tmp_p
     baseline = git("rev-parse", "HEAD").stdout.decode().strip()
     config = package / "task.toml"
     config.write_text(config.read_text().replace("/app/task_002", str(repo)))
-    lowered = lower_science_package(package, ROW, JobSettings())
-    hook = lowered.task.grader.placement.collect[0]
+    task = lower_science_package(package, ROW)
+    hook = task.grader.placement.collect[0]
     subprocess.run(hook.argv, env=env, check=True, capture_output=True)
     assert (artifacts / "model.patch").read_bytes() == b""
     (repo / "source.py").write_text("candidate\n")
