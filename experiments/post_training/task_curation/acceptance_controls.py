@@ -197,7 +197,7 @@ async def _grade_empty(task: TaskSpec, expected: float) -> ControlOutcome:
                     f"{grade.error or grade.detail or ''} | machine: {postmortem} | "
                     f"download_ok={download_ok} content={content!r}"
                 )
-                return ControlOutcome(task.id, expected, grade.reward, grade.status.value, detail[:300])
+                return ControlOutcome(task.id, expected, grade.reward, grade.status.value, detail[:900])
     return ControlOutcome(task.id, expected, grade.reward, "graded", "")
 
 
