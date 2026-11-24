@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import re
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
