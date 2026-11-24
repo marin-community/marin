@@ -293,8 +293,27 @@ After observer retirement, the worker now attempts a bounded upload of its
 selected diagnostic files before propagating a shutdown failure. The route
 uses the physical task and attempt identity; a commit receipt records uploaded
 file hashes separately from observation success. Upload errors preserve the
-original learner exception. Actual Linux process supervision and successful
-object-store delivery with this integration remain unqualified.
+original learner exception. A one-H100 run at `f846f6eae4` now qualifies this
+integration on the genuine Ray `HostWorker` path. Its actual Linux controls
+verified process-group cleanup for hung and exited uploader leaders with forked
+descendants. The learner completed two finite updates with changed model and
+Adam state. An independent audit decoded all 137 step-one checkpoint arrays
+and verified exact restoration; all four restored FP32 scores matched with zero
+absolute error and zero ULP difference. Both native processes exited naturally,
+and final public close took 2.369 s under the unchanged post-ACK exit limit.
+
+The complete archive, all 4,642 source entries and 13 delivered assets, task and
+uploader exit zero, and Iris `SUCCEEDED` state were verified. A separate fresh
+object-store read matched the commit and all eight selected diagnostic files
+against the archive by bytes and hashes; object revisions stayed stable during
+the read. The original
+learner exited before sampling, so its empty stack is **not** a native C++ stack
+capture. This pass qualifies healthy single-host lifecycle and diagnostic
+delivery; full-model shutdown, multihost continuation, updated publication and
+generation, and the 25-update comparison remain open. Step-two full state and
+raw final scores were not serialized; its finite/change checks use producer
+fingerprints and native child receipts. Model averaging was absent.
+[Observer and durable delivery](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-observer-handoff-20261124-1)
 
 A one-H100 smoke at source `f5e53f48b8` exercised the genuine Ray
 `HostWorker` and public checkpoint roundtrip with the observer disabled. Its
@@ -368,7 +387,9 @@ output archives were unavailable: root and inference-head attempts advertised
 `EMPTY`, and the four coscheduling-failed native hosts advertised no archive.
 The evidence above comes from bounded, revision-checked durable debug objects
 and the original exceptions. No real learner C++ shutdown stack was captured.
-A further full-model run needs that diagnostic evidence before another attempt.
+The next full-model diagnostic should enable the qualified observer and delivery
+path to capture this known failure, preserving the original workload and exit
+deadline. Successful instrumentation alone would not establish a shutdown fix.
 [Full-model deterministic run](https://iris.oa.dev/#/job/%2Fdlwh%2Fusers-dlwh-checkpoints-snowball-inventory-2026.11.23.1-coordinator-e253e06c)
 
 The native server stages and installs weights inside one runtime. The worker
