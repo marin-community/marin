@@ -203,7 +203,12 @@ HOME_RESTORE_CHUNK_BYTES = 48 * 1024
 """Raw bytes per chunk; base64 renders ~64 KiB, well inside the argv cap."""
 
 
-def _archive_chunk_commands(archive: bytes, restore_root: str, chunk_bytes: int) -> tuple[VerifierCommand, ...]:
+def archive_chunk_commands(archive: bytes, restore_root: str, chunk_bytes: int) -> tuple[VerifierCommand, ...]:
+    """Chunk a gzip archive onto the machine as base64 argv pieces under ``restore_root``.
+
+    Renamed public for the cohort conversion's tests-tree restore; the encoding
+    is unchanged.
+    """
     if not archive:
         raise ValueError("The home delivery archive is empty")
     encoded = base64.b64encode(archive)
@@ -242,7 +247,7 @@ def home_restore_commands(
     (encoded chunks are multiples of four so ``base64 -d`` decodes them
     standalone); the staging file is removed after the restore.
     """
-    commands = _archive_chunk_commands(archive, restore_root, chunk_bytes)
+    commands = archive_chunk_commands(archive, restore_root, chunk_bytes)
     staging = PurePosixPath(restore_root) / ".capture.tar.gz"
     # Reproduce the source's RESTORE_GRADING_ARTIFACTS exactly (taskset.py at
     # pinned b41d875): each archive member must be a plain relative filename and
@@ -411,7 +416,7 @@ def native_file_reward_grader(
             )
         )
         restore = (
-            *_archive_chunk_commands(compressed.getvalue(), "/tests", HOME_RESTORE_CHUNK_BYTES),
+            *archive_chunk_commands(compressed.getvalue(), "/tests", HOME_RESTORE_CHUNK_BYTES),
             VerifierCommand(argv=("bash", "-c", script), cwd="/"),
         )
     transport = environment.model_copy(
