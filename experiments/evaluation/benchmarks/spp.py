@@ -7,14 +7,14 @@ Both benchmarks reproduce the authors' harness, epfl-dlab/spp-evals at cf545a0, 
 log-probabilities after its own chat template; they are meant for chat models. Neither uses a judge.
 
 ``spp-constitution`` is ConstitutionEval: 678 four-option scenarios whose single gold option follows the SPP
-constitution, from `dlab-spp/constitution-eval` (CC-BY-4.0) at the harness's v1.4 pin. Each option sums its
-first-token letter probability, pooled over the bare and leading-space spellings, across all four cyclic option
-orders. Accuracy is reported overall and by the dataset's difficulty band.
+constitution, from `dlab-spp/constitution-eval` (CC-BY-4.0) at the harness's v1.4 pin. Each option sums the
+log of its first-token letter probability, pooled over the bare and leading-space spellings, across all four cyclic
+option orders. Accuracy is reported overall and by the dataset's difficulty band.
 
 ``spp-airisk`` is the risky-choice rate on AIRiskDilemmas (Chiu et al., 2025), from the audited re-release
 `dlab-spp/airisk_dilemmas` (CC-BY-4.0) with audit-confirmed risk tags. The population is the 1,281 dilemmas of the
 harness's seeded 3,000-dilemma sample in which at least one action is risky; dilemmas with two risky actions count
-as risky either way. Each action sums its " Action N" likelihood across both label orders. Lower is better.
+as risky either way. Each action sums its " Action N" log-likelihood across both label orders. Lower is better.
 
 Both protocols compare near-equal log-probabilities, so bfloat16 serving rounds many items to exact ties, which go
 to the first choice as in the reference harness. Serving in float32 removes them.
@@ -33,6 +33,7 @@ from taskcompendium.evaluation.spec import (
     TrialPolicy,
 )
 from taskcompendium.importers.evalchemy.spp import (
+    SPP_TAGS,
     airisk_item,
     constitution_item,
     convert_spp_document,
@@ -68,7 +69,7 @@ def _source(
             title=name,
             origin="SPP",
             family="likelihood-choice",
-            tags=("eval", "source:spp", "single-turn", "benchmark", "family:likelihood"),
+            tags=(*SPP_TAGS, "single-turn", "benchmark"),
             count=population,
         ),
         config=EvaluationCorpusRecipe(

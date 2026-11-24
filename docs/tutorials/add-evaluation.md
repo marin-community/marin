@@ -124,7 +124,7 @@ function when you need either; `importers/evalchemy/spp.py` uses both.
   fixed preference for one letter or position cancels.
 
 Grading, `model_choice` and the archived per-choice log-likelihoods use the
-folded scores. Ties select the first choice, as before.
+folded scores. Ties select the first choice.
 
 For a chat benchmark, a converter turns a source row into a `TaskSpec`: the user
 message, the scorer packaged with the row's private answer, and the source row

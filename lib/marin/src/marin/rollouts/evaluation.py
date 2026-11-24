@@ -75,6 +75,7 @@ from taskcompendium.evaluation.spec import (
     ContinuationLikelihood,
     EvaluationProtocol,
     LikelihoodContext,
+    LikelihoodRequest,
     MetricKind,
     TextGeneration,
 )
@@ -324,12 +325,8 @@ async def _score_likelihood(
     operation = case.item.operation
     assert isinstance(operation, ChoiceLikelihood | ContinuationLikelihood)
     requests = operation.requests if isinstance(operation, ChoiceLikelihood) else (operation.request,)
-    contexts = tuple(request.context for request in requests)
     user_turn = isinstance(operation, ChoiceLikelihood) and operation.context_format is LikelihoodContext.USER_TURN
-    if user_turn:
-        if tokenizer is None:
-            raise ValueError("User-turn likelihood contexts require the run's pinned tokenizer")
-        contexts = tuple(user_turn_context(tokenizer, context, chat_template_kwargs) for context in contexts)
+    contexts = _likelihood_contexts(requests, user_turn, tokenizer, chat_template_kwargs)
     results = []
     failure_evidence = None
     permanent_error = None
@@ -426,6 +423,20 @@ async def _score_likelihood(
     if permanent_error is not None:
         raise permanent_error
     return outcome
+
+
+def _likelihood_contexts(
+    requests: tuple[LikelihoodRequest, ...],
+    user_turn: bool,
+    tokenizer: EvaluationTokenizer | None,
+    chat_template_kwargs: Mapping[str, bool | str],
+) -> tuple[str, ...]:
+    """The contexts sent to the scorer: verbatim, or each rendered as a user turn with the served chat template."""
+    if not user_turn:
+        return tuple(request.context for request in requests)
+    if tokenizer is None:
+        raise ValueError("User-turn likelihood contexts require the run's pinned tokenizer")
+    return tuple(user_turn_context(tokenizer, request.context, chat_template_kwargs) for request in requests)
 
 
 def _choice_loglikelihood(
