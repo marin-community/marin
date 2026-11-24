@@ -3,6 +3,7 @@
 
 """remote_inference mirrors uncached Hugging Face weights on CPU before reserving accelerators."""
 
+import io
 import os
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -390,19 +391,18 @@ def test_cli_private_model_uses_explicit_secret_through_preparation(monkeypatch,
         events.append("list")
         return [huggingface_hub.RepoFile(path="config.json", size=2, oid="0" * 40)]
 
-    def download(repo, filename, *, revision, local_dir):
-        assert huggingface_hub.get_token() == token
-        assert repo == "org/private" and revision == REVISION
-        events.append("download")
-        if failure == "download":
-            raise OSError("private download access denied")
-        path = Path(local_dir) / filename
-        path.write_text("{}")
-        return str(path)
+    class Hub:
+        def open(self, path, mode="rb", *, revision, block_size):
+            assert huggingface_hub.get_token() == token
+            assert path == "org/private/config.json" and revision == REVISION
+            events.append("download")
+            if failure == "download":
+                raise OSError("private download access denied")
+            return io.BytesIO(b"{}")
 
     monkeypatch.setattr("levanter.model_cache.model_info", model_info)
     monkeypatch.setattr("levanter.model_cache.list_repo_tree", list_repo_tree)
-    monkeypatch.setattr("levanter.model_cache.hf_hub_download", download)
+    monkeypatch.setattr("levanter.model_cache.HfFileSystem", Hub)
 
     class Job:
         job_id = "/test/private-prepare"

@@ -13,8 +13,8 @@ read the snapshot from the nearby cache.
 
 The populate step streams **directly into the cache filesystem** — there is no
 full local copy of the snapshot. :func:`cache_hf_model` is the easy path for the
-common case (mirror an HF repo by id), downloading and uploading one file at a
-time so a multi-hundred-GB repo never has to fit on local disk. If a worker stops
+common case (mirror an HF repo by id), streaming each file from the Hub straight
+into the cache so no file, however large, has to fit on local disk. If a worker stops
 before the completion marker is written, the next worker compares existing file
 sizes with the requested Hugging Face tree and downloads missing or partial files.
 :func:`cache_to_prefix` takes an arbitrary populate callback for callers that need
@@ -26,16 +26,16 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
-import tempfile
+import shutil
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 
 import fsspec
-from huggingface_hub import RepoFile, hf_hub_download, list_repo_tree, model_info
+from huggingface_hub import HfFileSystem, RepoFile, list_repo_tree, model_info
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
@@ -44,6 +44,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_COMPLETE_MARKER = ".cache_metadata.json"
 """Metadata written last after a full upload; its presence is the cache-hit signal."""
+
+_COPY_BUFFER_BYTES = 64 * 1024 * 1024
+"""Read size for each Hub-to-cache copy step."""
+
+_CONCURRENT_FILE_COPIES = 8
+"""Files streamed at once; one Hub connection runs at roughly 50 MB/s."""
 
 
 @dataclass(frozen=True)
@@ -253,9 +259,8 @@ def _stream_hf_snapshot(
 ) -> None:
     """Copy HF repo *model_id* into *dest*, excluding the completion marker.
 
-    Each file is downloaded to a scratch dir, uploaded to ``dest``, then deleted
-    before the next download, so peak local disk is one file rather than the full
-    repo.
+    Files stream from the Hub into ``dest`` through bounded buffers, several at a time, so
+    local disk and memory stay constant regardless of file size.
     """
     # A repository may contain this filename; only cache_to_prefix may write it.
     files = [
@@ -264,23 +269,29 @@ def _stream_hf_snapshot(
         if isinstance(entry, RepoFile) and entry.path != complete_marker
     ]
     logger.info("streaming %d files from HF repo %s into %s", len(files), model_id, dest)
-    with tempfile.TemporaryDirectory(prefix="hf_stream_") as scratch:
-        for file in files:
-            remote_path = f"{dest}/{file.path}"
-            if _has_expected_size(fs, remote_path, file.size):
-                logger.info("model cache file hit: %s", remote_path)
-                continue
+    hub = HfFileSystem()
 
-            local_path = hf_hub_download(model_id, file.path, revision=revision, local_dir=scratch)
-            if os.path.getsize(local_path) != file.size:
-                raise ValueError(f"Hugging Face download has the wrong size: {file.path}")
-            # Local/posix-backed fsspec filesystems don't auto-create parents; object
-            # stores treat this as a no-op since they have no real directories.
-            fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
-            fs.put_file(local_path, remote_path)
-            if not _has_expected_size(fs, remote_path, file.size):
-                raise OSError(f"Uploaded model cache file has the wrong size: {remote_path}")
-            os.remove(local_path)
+    def copy(file: RepoFile) -> None:
+        remote_path = f"{dest}/{file.path}"
+        if _has_expected_size(fs, remote_path, file.size):
+            logger.info("model cache file hit: %s", remote_path)
+            return
+        # Local/posix-backed fsspec filesystems don't auto-create parents; object
+        # stores treat this as a no-op since they have no real directories.
+        fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
+        with (
+            hub.open(f"{model_id}/{file.path}", "rb", revision=revision, block_size=0) as source,
+            fs.open(remote_path, "wb") as target,
+        ):
+            shutil.copyfileobj(source, target, _COPY_BUFFER_BYTES)
+        if not _has_expected_size(fs, remote_path, file.size):
+            raise OSError(f"Uploaded model cache file has the wrong size: {remote_path}")
+
+    # Largest first, so the longest copies start early.
+    ordered = sorted(files, key=lambda file: file.size, reverse=True)
+    with ThreadPoolExecutor(max_workers=_CONCURRENT_FILE_COPIES) as pool:
+        for future in [pool.submit(copy, file) for file in ordered]:
+            future.result()
 
 
 def _has_expected_size(fs: fsspec.AbstractFileSystem, path: str, expected_size: int) -> bool:

@@ -3,6 +3,7 @@
 
 """Tests for the distributed-locked model snapshot cache."""
 
+import io
 import json
 import os
 import threading
@@ -27,6 +28,37 @@ from levanter.model_cache import (
 
 def _repo_file(path: str, contents: bytes) -> RepoFile:
     return RepoFile(path=path, size=len(contents), oid="0" * 40)
+
+
+class _FakeHub:
+    """In-memory stand-in for ``HfFileSystem`` that records which repo files were opened."""
+
+    def __init__(self, contents: dict[str, bytes], *, revision: str | None = None):
+        self.contents = contents
+        self.revision = revision
+        self.opened: list[str] = []
+        self.fail_on: set[str] = set()
+
+    def open(self, path, mode="rb", revision=None, block_size=None):
+        assert mode == "rb"
+        assert revision == self.revision
+        repo, _, filename = path.partition("org/model/")
+        assert repo == ""
+        self.opened.append(filename)
+        if filename in self.fail_on:
+            raise OSError(f"interrupted download of {filename}")
+        return io.BytesIO(self.contents[filename])
+
+
+def _serve_repo(monkeypatch, hub: _FakeHub, sizes: dict[str, bytes] | None = None) -> None:
+    """List *sizes* (default: the hub's contents) as the repo tree and serve files from *hub*."""
+    listed = hub.contents if sizes is None else sizes
+    monkeypatch.setattr(
+        model_cache,
+        "list_repo_tree",
+        lambda *_args, **_kwargs: [_repo_file(path, data) for path, data in listed.items()],
+    )
+    monkeypatch.setattr(model_cache, "HfFileSystem", lambda: hub)
 
 
 def _make_populate(call_count: list[int], lock: threading.Lock, *, delay: float = 0.0):
@@ -95,37 +127,19 @@ def test_custom_complete_marker(tmp_path):
     assert len(calls) == 1
 
 
-def test_cache_hf_model_streams_one_file_at_a_time(tmp_path, monkeypatch):
-    """cache_hf_model mirrors every repo file and keeps only one on local disk at a time."""
-    repo_files = ["config.json", "model.safetensors", "tokenizer.json"]
-    max_local_files = 0
-
-    def fake_list_repo_tree(model_id, revision=None, recursive=False):
-        assert model_id == "org/model"
-        assert recursive
-        return [_repo_file(filename, f"contents of {filename}".encode()) for filename in repo_files]
-
-    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
-        nonlocal max_local_files
-        local_path = Path(local_dir, filename)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        local_path.write_text(f"contents of {filename}")
-        # The streamer must delete each file before fetching the next: peak local
-        # footprint is one file, not the whole repo.
-        present = [p for p in Path(local_dir).rglob("*") if p.is_file()]
-        max_local_files = max(max_local_files, len(present))
-        return str(local_path)
-
-    monkeypatch.setattr(model_cache, "list_repo_tree", fake_list_repo_tree)
-    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
+def test_cache_hf_model_mirrors_every_repo_file(tmp_path, monkeypatch):
+    contents = {
+        name: f"contents of {name}".encode() for name in ("config.json", "model.safetensors", "sub/tokenizer.json")
+    }
+    hub = _FakeHub(contents)
+    _serve_repo(monkeypatch, hub)
 
     cache_path = str(tmp_path / "cache" / "model")
     result = cache_hf_model(cache_path, "org/model")
 
     assert result == cache_path
-    assert max_local_files == 1, f"expected at most one staged file, saw {max_local_files}"
-    for filename in repo_files:
-        assert Path(cache_path, filename).read_text() == f"contents of {filename}"
+    for filename, expected in contents.items():
+        assert Path(cache_path, filename).read_bytes() == expected
     assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": None}
 
 
@@ -133,34 +147,22 @@ def test_cache_hf_model_does_not_copy_repository_completion_marker(tmp_path, mon
     """An interrupted mirror must not look complete because the repo contains Marin's marker."""
     revision = "a" * 40
     cache_path = str(tmp_path / "cache" / "model")
-    fail_weight_download = True
-
-    monkeypatch.setattr(
-        model_cache,
-        "list_repo_tree",
-        lambda model_id, revision=None, recursive=False: [
-            _repo_file(DEFAULT_COMPLETE_MARKER, b'{"source_revision": "parent"}'),
-            _repo_file("model.safetensors", b"weights"),
-        ],
+    hub = _FakeHub(
+        {DEFAULT_COMPLETE_MARKER: b'{"source_revision": "parent"}', "model.safetensors": b"weights"},
+        revision=revision,
     )
+    hub.fail_on.add("model.safetensors")
+    _serve_repo(monkeypatch, hub)
 
-    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
-        if filename == "model.safetensors" and fail_weight_download:
-            raise OSError("interrupted weight download")
-        local_path = Path(local_dir, filename)
-        local_path.write_text('{"source_revision": "parent"}' if filename == DEFAULT_COMPLETE_MARKER else "weights")
-        return str(local_path)
-
-    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
-
-    with pytest.raises(OSError, match="interrupted weight download"):
+    with pytest.raises(OSError, match="interrupted download"):
         cache_hf_model(cache_path, "org/model", revision=revision)
 
     assert not Path(cache_path, DEFAULT_COMPLETE_MARKER).exists()
 
-    fail_weight_download = False
+    hub.fail_on.clear()
     cache_hf_model(cache_path, "org/model", revision=revision)
 
+    assert DEFAULT_COMPLETE_MARKER not in hub.opened
     assert Path(cache_path, "model.safetensors").read_text() == "weights"
     assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": revision}
 
@@ -174,27 +176,10 @@ def test_cache_hf_model_resumes_complete_files_and_replaces_partial_files(tmp_pa
     }
     cache_path = str(tmp_path / "cache" / "model")
     fs = fsspec.filesystem("file")
-    downloaded: list[str] = []
-    interrupt = True
-
+    hub = _FakeHub(contents, revision=revision)
+    hub.fail_on.add("tokenizer.json")
     monkeypatch.setattr(model_cache, "url_to_fs", lambda path: (fs, path))
-    monkeypatch.setattr(
-        model_cache,
-        "list_repo_tree",
-        lambda *_args, **_kwargs: [_repo_file(path, data) for path, data in contents.items()],
-    )
-
-    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
-        assert revision == "a" * 40
-        downloaded.append(filename)
-        if filename == "tokenizer.json" and interrupt:
-            raise OSError("interrupted download")
-        local_path = Path(local_dir, filename)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        local_path.write_bytes(contents[filename])
-        return str(local_path)
-
-    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
+    _serve_repo(monkeypatch, hub)
 
     with pytest.raises(OSError, match="interrupted download"):
         cache_hf_model(cache_path, "org/model", revision=revision)
@@ -215,42 +200,24 @@ def test_cache_hf_model_resumes_complete_files_and_replaces_partial_files(tmp_pa
         return real_open(path, mode, *args, **kwargs)
 
     monkeypatch.setattr(fs, "open", reject_cached_reads)
-    downloaded.clear()
-    interrupt = False
+    hub.opened.clear()
+    hub.fail_on.clear()
 
     cache_hf_model(cache_path, "org/model", revision=revision)
 
-    assert downloaded == ["config.json", "tokenizer.json"]
+    assert sorted(hub.opened) == ["config.json", "tokenizer.json"]
     assert shard.stat().st_mtime_ns == 1_000_000_000
     for filename, expected in contents.items():
         assert Path(cache_path, filename).read_bytes() == expected
     assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": revision}
 
 
-def test_cache_hf_model_rejects_partial_upload_before_completion(tmp_path, monkeypatch):
+def test_cache_hf_model_rejects_truncated_stream_before_completion(tmp_path, monkeypatch):
+    """A Hub stream that ends early leaves a short file, which must fail the mirror."""
     contents = b"valid weights"
     cache_path = str(tmp_path / "cache" / "model")
-    fs = fsspec.filesystem("file")
-    real_put_file = fs.put_file
-
-    monkeypatch.setattr(model_cache, "url_to_fs", lambda path: (fs, path))
-    monkeypatch.setattr(
-        model_cache,
-        "list_repo_tree",
-        lambda *_args, **_kwargs: [_repo_file("model.safetensors", contents)],
-    )
-
-    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
-        local_path = Path(local_dir, filename)
-        local_path.write_bytes(contents)
-        return str(local_path)
-
-    def partial_put_file(local_path, remote_path):
-        real_put_file(local_path, remote_path)
-        Path(remote_path).write_bytes(contents[:-1])
-
-    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
-    monkeypatch.setattr(fs, "put_file", partial_put_file)
+    hub = _FakeHub({"model.safetensors": contents[:-1]}, revision="a" * 40)
+    _serve_repo(monkeypatch, hub, sizes={"model.safetensors": contents})
 
     with pytest.raises(OSError, match="wrong size"):
         cache_hf_model(cache_path, "org/model", revision="a" * 40)
@@ -286,26 +253,13 @@ def test_resolve_pinned_commit_skips_hf_lookup(tmp_path, monkeypatch):
     """An immutable ref can use an existing cache while Hugging Face is unavailable."""
     commit = "a" * 40
 
-    def fake_list_repo_tree(model_id, revision=None, recursive=False):
-        assert model_id == "org/model"
-        assert revision == commit
-        assert recursive
-        return [_repo_file("config.json", commit.encode())]
-
-    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
-        assert model_id == "org/model"
-        local_path = Path(local_dir, filename)
-        local_path.write_text(revision or "unpinned")
-        return str(local_path)
-
     monkeypatch.setattr(model_cache, "model_info", lambda *args, **kwargs: pytest.fail("must not query HF"))
-    monkeypatch.setattr(model_cache, "list_repo_tree", fake_list_repo_tree)
-    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
+    _serve_repo(monkeypatch, _FakeHub({"config.json": commit.encode()}, revision=commit))
     monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda _ttl_days, prefix: str(tmp_path / prefix))
 
     first = resolve_cached_model_path(f"org/model@{commit}", cache_ttl_days=7, cache_prefix="models")
     monkeypatch.setattr(model_cache, "list_repo_tree", lambda *_args, **_kwargs: pytest.fail("cache miss"))
-    monkeypatch.setattr(model_cache, "hf_hub_download", lambda *_args, **_kwargs: pytest.fail("cache miss"))
+    monkeypatch.setattr(model_cache, "HfFileSystem", lambda: pytest.fail("cache miss"))
     second = resolve_cached_model_path(f"org/model@{commit}", cache_ttl_days=7, cache_prefix="models")
 
     assert first == second
@@ -361,15 +315,14 @@ def test_resolve_tracks_mutable_hf_revision(tmp_path, monkeypatch):
         assert recursive
         return [_repo_file(filename, current_commit.encode()) for filename in repo_files]
 
-    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
-        assert model_id == "org/model"
-        local_path = Path(local_dir, filename)
-        local_path.write_text(revision or "unpinned")
-        return str(local_path)
+    class RevisionHub:
+        def open(self, path, mode="rb", revision=None, block_size=None):
+            assert path.startswith("org/model/")
+            return io.BytesIO(revision.encode())
 
     monkeypatch.setattr(model_cache, "model_info", fake_model_info)
     monkeypatch.setattr(model_cache, "list_repo_tree", fake_list_repo_tree)
-    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
+    monkeypatch.setattr(model_cache, "HfFileSystem", RevisionHub)
     monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda _ttl_days, prefix: str(tmp_path / prefix))
 
     first_path = resolve_cached_model_path("org/model", cache_ttl_days=7, cache_prefix="models")
