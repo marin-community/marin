@@ -359,6 +359,22 @@ The `belay` watch runs the `belay` profile every 10 minutes
 runbook session that drains the queue only when events wait. Turning dispatch off in the
 Belay app's admin page pauses it without a Loom deploy.
 
+The [PR review reminder watch](watches/pr-review-reminders.md) runs at 10:00
+Pacific each weekday. Loom posts a digest to `#marin-eng`. Each entry links the PR, gives its title,
+and shows how long since its last update and how long each reviewer has been
+waiting. Ages show elapsed calendar time. A request is due
+when it predates the same time on the previous weekday and the reviewer has
+had no activity since then. A new request, discussion or inline comment,
+review, or commit by that reviewer restarts the clock. Weekends are excluded
+and holidays count as weekdays. Drafts, PRs last updated over seven days ago,
+and PRs by bots or people without repository write access are skipped.
+
+Preview the messages locally with an authenticated `gh` CLI:
+
+```sh
+uv run --no-project python scripts/ops/pr_review_reminders.py --as-of "$(date -u +%FT%TZ)"
+```
+
 The `old-iris-jobs` watch runs the `ops-report` profile
 ([instructions](profiles/ops-report/AGENTS.md)) at 09:00 Pacific on weekdays
 ([prompt](watches/old-iris-jobs.md)). The profile runs Claude: the sandbox of a Codex

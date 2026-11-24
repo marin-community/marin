@@ -204,7 +204,7 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
                     &runtime.catalog,
                     &runtime.segments,
                     &runtime.query_visibility,
-                    &runtime.storage_policy.lock().unwrap().clone(),
+                    &runtime.storage_policy(),
                     &runtime.compaction_config,
                 )
             })
