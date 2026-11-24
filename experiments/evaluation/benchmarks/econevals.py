@@ -103,7 +103,6 @@ def econevals_source(
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="EconEvals:" + run.run + suffix,
             upstream_dataset=run.run + suffix,
             upstream_name=benchmark,
             subset=None,

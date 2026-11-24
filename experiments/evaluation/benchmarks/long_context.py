@@ -94,7 +94,6 @@ def mrcr_source(*, name: str, max_context: int) -> RlDataSource[EvaluationCorpus
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Evalchemy:" + name.lower(),
             upstream_dataset=name.lower(),
             upstream_name=name.lower(),
             subset=None,
@@ -151,7 +150,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="Evalchemy:graphwalks",
                 upstream_dataset="graphwalks",
                 upstream_name="graphwalks",
                 subset=None,

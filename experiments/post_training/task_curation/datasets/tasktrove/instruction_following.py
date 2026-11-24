@@ -227,7 +227,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id=f"TaskTrove:{IFEVAL_CONFIG}",
                 upstream_dataset=IFEVAL_CONFIG,
                 upstream_name=IFEVAL_CONFIG,
                 subset=None,
@@ -255,7 +254,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id=f"TaskTrove:{STRUCTURED_CONFIG}",
                 upstream_dataset=STRUCTURED_CONFIG,
                 upstream_name=STRUCTURED_CONFIG,
                 subset=None,

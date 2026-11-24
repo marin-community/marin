@@ -106,7 +106,6 @@ def number_source(path: Path, name: str = "numbers") -> RlDataSource[NumbersConf
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id=f"Marin:{name}",
             upstream_dataset=name,
             upstream_name=name,
             build_path="test",

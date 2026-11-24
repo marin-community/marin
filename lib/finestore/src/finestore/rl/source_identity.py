@@ -1,7 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Permanent aliases for published source identities and their immutable artifacts."""
+"""Permanent aliases for published source identities.
+
+Stored records written under historical IDs resolve to their generated catalog
+identity where they are read: recipes, corpora and published catalog rows keep
+their original keys, and the read boundary joins them onto the renamed
+declaration.
+"""
 
 SOURCE_ID_ALIASES: dict[str, str] = {
     "MarinSkyRL:aime24": "HuggingFaceH4:aime24",

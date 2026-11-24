@@ -223,7 +223,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             grader=None,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:DCAgent__code-contests-noblock",
                 upstream_dataset="DCAgent__code-contests-noblock",
                 upstream_name="DCAgent/code-contests-noblock",
                 subset=None,
@@ -243,7 +242,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             CODEFORCES_RUBRIC,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__codeforces-v3",
                 upstream_dataset="laion__codeforces-v3",
                 upstream_name="laion/codeforces-v3",
                 subset=None,
@@ -267,7 +265,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             version="2",
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-competitive-coding-v2",
                 upstream_dataset="laion__nemotron-gym-competitive-coding-v2",
                 upstream_name="laion/nemotron-gym-competitive-coding-v2",
                 subset=None,
@@ -289,7 +286,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             grader=None,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_taco-v2",
                 upstream_dataset="laion__exp_rpt_taco-v2",
                 upstream_name="laion/exp_rpt_taco-v2",
                 subset=None,

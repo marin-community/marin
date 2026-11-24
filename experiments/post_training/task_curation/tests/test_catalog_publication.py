@@ -213,10 +213,8 @@ def test_publication_round_trips_daytona_safety_to_the_inventory(tmp_path):
     agent = RlDataSource(
         info=replace(
             runnable.info,
-            id="Marin:agent",
             upstream_dataset="agent",
             upstream_name="agent",
-            title=None,
             tags=("agentic",),
             daytona_snapshot_count=25,
             daytona_count_basis="shellbox-identity over pinned payloads",
@@ -237,10 +235,8 @@ def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_p
     agent = RlDataSource(
         info=replace(
             first.info,
-            id="Marin:agent",
             upstream_dataset="agent",
             upstream_name="agent",
-            title=None,
             tags=("agentic",),
             dataset=pinned,
         )

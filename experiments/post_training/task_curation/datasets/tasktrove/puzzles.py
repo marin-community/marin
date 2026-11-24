@@ -81,7 +81,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id=f"TaskTrove:{PUZZLES_CONFIG}",
                 upstream_dataset=PUZZLES_CONFIG,
                 upstream_name=PUZZLES_CONFIG,
                 subset=None,

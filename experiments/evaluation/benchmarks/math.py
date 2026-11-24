@@ -105,7 +105,6 @@ def math_dataset(
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Evalchemy:" + name,
             upstream_dataset=name,
             upstream_name=name,
             subset=None,
@@ -147,7 +146,6 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Evalchemy:" + benchmark.lower(),
             upstream_dataset=benchmark.lower(),
             upstream_name=benchmark.lower(),
             subset=None,

@@ -101,7 +101,6 @@ def source_step(recipe: CurationRecipe, options: PipelineOptions):
     source = RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id=f"Marin:{recipe.name}",
             upstream_dataset=recipe.name,
             upstream_name=recipe.name,
             build_path="test",

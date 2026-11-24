@@ -316,7 +316,6 @@ SOURCES = (
         controls=None,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="HuggingFaceH4:aime24",
             upstream_dataset="aime24",
             upstream_name="HuggingFaceH4/aime_2024",
             subset=None,
@@ -339,7 +338,6 @@ SOURCES = (
         AIME_1983_2024_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="di-zhang-fdu:aime_1983_2024",
             upstream_dataset="aime_1983_2024",
             upstream_name="di-zhang-fdu/AIME_1983_2024",
             subset=None,
@@ -363,7 +361,6 @@ SOURCES = (
         ASDIV_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="ASDiv:asdiv",
             upstream_dataset="asdiv",
             upstream_name="chaochun/nlu-asdiv-dataset",
             subset=None,
@@ -386,7 +383,6 @@ SOURCES = (
         DAPO_MATH_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="BytedTsinghua-SIA:dapo_math",
             upstream_dataset="dapo_math",
             upstream_name="BytedTsinghua-SIA/DAPO-Math-17k",
             subset=None,
@@ -409,7 +405,6 @@ SOURCES = (
         DEEPSCALER_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="agentica-org:deepscaler",
             upstream_dataset="deepscaler",
             upstream_name="agentica-org/DeepScaleR-Preview-Dataset",
             subset=None,
@@ -432,7 +427,6 @@ SOURCES = (
         GSM8K_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="OpenAI:gsm8k",
             upstream_dataset="gsm8k",
             upstream_name="openai/gsm8k",
             subset=None,
@@ -455,7 +449,6 @@ SOURCES = (
         HARDMATH_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="pafitis:hardmath",
             upstream_dataset="hardmath",
             upstream_name="pafitis/HARDMath_processed_training",
             subset=None,
@@ -478,7 +471,6 @@ SOURCES = (
         HENDRYCKS_MATH_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="EleutherAI:hendrycks_math",
             upstream_dataset="hendrycks_math",
             upstream_name="EleutherAI/hendrycks_math",
             subset=None,
@@ -498,7 +490,6 @@ SOURCES = (
         MATH500_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="HuggingFaceH4:math500",
             upstream_dataset="math500",
             upstream_name="HuggingFaceH4/MATH-500",
             subset=None,
@@ -521,7 +512,6 @@ SOURCES = (
         NUMINA_MATH_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="AI-MO:numina_math",
             upstream_dataset="numina_math",
             upstream_name="AI-MO/NuminaMath-CoT",
             subset=None,
@@ -544,7 +534,6 @@ SOURCES = (
         RLVR_MATH_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="AllenAI:rlvr_math",
             upstream_dataset="rlvr_math",
             upstream_name="allenai/RLVR-MATH",
             subset=None,
@@ -565,7 +554,6 @@ SOURCES = (
         controls=None,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="ChilleD:svamp",
             upstream_dataset="svamp",
             upstream_name="ChilleD/SVAMP",
             subset=None,

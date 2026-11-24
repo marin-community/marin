@@ -237,7 +237,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-knowledge-openqa-v4",
             SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-knowledge-openqa-v4",
                 upstream_dataset="laion__nemotron-gym-knowledge-openqa-v4",
                 upstream_name="laion/nemotron-gym-knowledge-openqa-v4",
                 subset=None,
@@ -257,7 +256,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-science-so-openq-v3",
             SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-science-so-openq-v3",
                 upstream_dataset="laion__nemotron-gym-science-so-openq-v3",
                 upstream_name="laion/nemotron-gym-science-so-openq-v3",
                 subset=None,
@@ -294,7 +292,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id=f"TaskTrove:{MCQA_CONFIG}",
                 upstream_dataset=MCQA_CONFIG,
                 upstream_name=MCQA_CONFIG,
                 subset=None,

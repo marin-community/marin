@@ -50,7 +50,6 @@ def python_source(
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Evalchemy:" + suite,
             upstream_dataset=suite,
             upstream_name=suite,
             subset=None,
@@ -156,7 +155,7 @@ def fewshot_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         replace(
             human,
-            info=replace(human.info, id="", title=None, variant="10shot", build_path="Checkpoint"),
+            info=replace(human.info, variant="10shot", build_path="Checkpoint"),
             config=replace(
                 dataset,
                 recipe=replace(

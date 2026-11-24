@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.source_identity import canonical_source_id
 from finestore.rl.strata import DifficultyBands, MembershipState, SelectionParent, TaskStrata, read_selection_manifest
 from fray.local_backend import LocalClient
 from marin.execution.lazy import ArtifactStep, run
@@ -81,7 +82,6 @@ from experiments.post_training.task_curation.selection import (
 )
 from experiments.post_training.task_curation.swe_verified_release import convert_release
 from experiments.post_training.task_curation.tests.conversion import converted_task
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 FAMILIES = (*HELDOUT_FAMILIES.values(), STRUCTURAL_FAMILY)
 

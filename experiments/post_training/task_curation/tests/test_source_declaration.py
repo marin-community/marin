@@ -24,7 +24,6 @@ def test_non_agentic_sources_are_daytona_safe_without_an_authored_value():
     source = RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Marin:math",
             upstream_dataset="math",
             upstream_name="math",
             build_path="test",
@@ -39,7 +38,6 @@ def test_an_agentic_verdict_comes_from_the_measured_count():
     """The verdict is derived from the count, so no field on the source can set it."""
     agent = SourceInfo(
         data_restriction=DataRestriction.OPEN,
-        id="Marin:agent",
         upstream_dataset="agent",
         upstream_name="agent",
         build_path="test",
@@ -61,7 +59,6 @@ def test_an_agentic_verdict_comes_from_the_measured_count():
 def test_an_unmeasured_agentic_source_is_unassessed_whatever_it_declares():
     agent = SourceInfo(
         data_restriction=DataRestriction.OPEN,
-        id="Marin:agent",
         upstream_dataset="agent",
         upstream_name="agent",
         build_path="test",
@@ -78,7 +75,6 @@ def test_status_prefers_deprecated_then_excluded_then_inventory():
     deprecated = RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Marin:old",
             upstream_dataset="old",
             upstream_name="old",
             build_path="test",
@@ -89,7 +85,6 @@ def test_status_prefers_deprecated_then_excluded_then_inventory():
     excluded = RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Marin:gone",
             upstream_dataset="gone",
             upstream_name="gone",
             build_path="test",
@@ -100,7 +95,6 @@ def test_status_prefers_deprecated_then_excluded_then_inventory():
     pointer = RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Marin:new",
             upstream_dataset="new",
             upstream_name="new",
             build_path="test",
@@ -114,7 +108,6 @@ def test_status_prefers_deprecated_then_excluded_then_inventory():
     runnable = RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Marin:run",
             upstream_dataset="run",
             upstream_name="run",
             build_path="test",

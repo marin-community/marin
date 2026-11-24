@@ -66,7 +66,6 @@ def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Marin:eval-identity",
             upstream_dataset="eval-identity",
             upstream_name="eval-identity",
             build_path="test",

@@ -131,7 +131,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             version="3",
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2",
                 upstream_dataset="DCAgent__swe_rebench_v2_patched_oracle-v2",
                 upstream_name="DCAgent/swe_rebench_v2_patched_oracle-v2",
                 subset=None,
@@ -179,7 +178,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             version="4",
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__swesmith-oracle-filtered-v2",
                 upstream_dataset="laion__swesmith-oracle-filtered-v2",
                 upstream_name="laion/swesmith-oracle-filtered-v2",
                 subset=None,

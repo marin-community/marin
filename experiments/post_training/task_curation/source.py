@@ -29,7 +29,6 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
 class PinnedReference(Protocol):
@@ -133,9 +132,9 @@ class SourceInfo:
 
     ``id`` and ``title`` are generated from the upstream identity keys:
     ``<origin>:<upstream_dataset>[/<subset>][@<variant>]`` and
-    ``<upstream_name> · <subset> · <variant>``. A declared historical ID
-    resolves through the permanent alias table and must match its generated
-    identity. ``count`` is the number of selected input rows at the dataset
+    ``<upstream_name> · <subset> · <variant>``. Stored records written under
+    historical IDs resolve through the alias table where they are read, never
+    at authoring. ``count`` is the number of selected input rows at the dataset
     revision, before conversion or curation. Leave it unknown unless the
     pinned payload or a complete manifest establishes it. A sample size is not
     a source count.
@@ -152,16 +151,12 @@ class SourceInfo:
     """Internal campaign or pipeline, independently of the upstream origin."""
     subset: str | None = None
     variant: str | None = None
-    id: str = ""
-    title: str | None = None
-    data_restriction: DataRestriction = DataRestriction.OPEN
-    """The source's typed restriction tier, set explicitly on every configured source.
+    data_restriction: DataRestriction
+    """The source's typed restriction tier, set explicitly on every source.
 
     ``PRIVATE_ALWAYS`` keeps the source's content in its private store no matter
     what else changes; the declaration and every derived artifact inherit it and
-    a downgrade is refused. Every source definition passes the tier explicitly;
-    the ``Open`` default exists only so archived receipts and other historical
-    records that embed a ``SourceInfo`` copy from before the tier still validate.
+    a downgrade is refused.
     """
     current_release: DatasetRelease | None = None
     """The exact release consumed for training, separately from upstream provenance."""
@@ -216,14 +211,14 @@ class SourceInfo:
     def __post_init__(self) -> None:
         if not isinstance(self.origin, SourceOrigin):
             raise ValueError("origin must be an upstream SourceOrigin")
-        expected_id = source_identifier(self.origin, self.upstream_dataset, self.subset, self.variant)
-        if self.id and canonical_source_id(self.id) != expected_id:
-            raise ValueError("Source ID differs from generated identity")
-        object.__setattr__(self, "id", expected_id)
-        title = source_title(self.upstream_name, self.subset, self.variant)
-        if self.title is not None and self.title != title:
-            raise ValueError("Source title differs from generated title")
-        object.__setattr__(self, "title", title)
+
+    @property
+    def id(self) -> str:
+        return source_identifier(self.origin, self.upstream_dataset, self.subset, self.variant)
+
+    @property
+    def title(self) -> str:
+        return source_title(self.upstream_name, self.subset, self.variant)
 
 
 @dataclass(frozen=True)

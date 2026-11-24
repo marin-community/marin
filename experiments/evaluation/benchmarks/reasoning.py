@@ -149,8 +149,6 @@ def choice_dataset(
             upstream_dataset=name,
             upstream_name=benchmark,
             build_path="Evalchemy",
-            id="",
-            title=None,
             origin=SourceOrigin.EVALCHEMY,
             family="generated-choice",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "reasoning", "benchmark:" + benchmark),

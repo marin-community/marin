@@ -30,7 +30,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="Nemotron:predicted-action",
                 upstream_dataset="predicted-action",
                 upstream_name="NeMo conversational tool-use next actions",
                 subset=None,

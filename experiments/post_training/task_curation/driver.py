@@ -13,6 +13,7 @@ from typing import cast
 
 import click
 from finestore.rl.curation import SourceDeclaration
+from finestore.rl.source_identity import canonical_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -75,7 +76,6 @@ from experiments.post_training.task_curation.selection import (
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOCAL_MAX_WORKERS = 4
 LOCAL_MEMORY = "4g"

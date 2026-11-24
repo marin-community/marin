@@ -38,7 +38,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="ScaleAI:multichallenge",
                 upstream_dataset="multichallenge",
                 upstream_name="MultiChallenge",
                 subset=None,

@@ -117,7 +117,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-structured-outputs-v4",
                 upstream_dataset="laion__nemotron-gym-structured-outputs-v4",
                 upstream_name="laion/nemotron-gym-structured-outputs-v4",
                 subset=None,

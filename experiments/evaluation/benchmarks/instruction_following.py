@@ -63,7 +63,6 @@ def instruction_following_evaluation(
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Evalchemy:" + name,
             upstream_dataset=name,
             upstream_name=name,
             subset=None,

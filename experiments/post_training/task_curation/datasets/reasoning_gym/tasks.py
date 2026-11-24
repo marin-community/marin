@@ -360,7 +360,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="Reasoning Gym:reasoning_gym",
                 upstream_dataset="reasoning_gym",
                 upstream_name="open-thought/reasoning-gym",
                 subset=None,
@@ -390,7 +389,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-reasoning-gym-v2",
                 upstream_dataset="laion__nemotron-gym-reasoning-gym-v2",
                 upstream_name="laion/nemotron-gym-reasoning-gym-v2",
                 subset=None,

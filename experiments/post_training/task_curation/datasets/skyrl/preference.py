@@ -47,7 +47,6 @@ KTO_COMPONENTS = {
         "argilla/distilabel-capybara-dpo-7k-binarized",
         SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
             upstream_dataset="kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
             upstream_name="argilla/distilabel-capybara-dpo-7k-binarized · KTO",
             subset=None,
@@ -65,7 +64,6 @@ KTO_COMPONENTS = {
         "argilla/distilabel-intel-orca-dpo-pairs",
         SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
             upstream_dataset="kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
             upstream_name="argilla/distilabel-intel-orca-dpo-pairs · KTO",
             subset=None,
@@ -83,7 +81,6 @@ KTO_COMPONENTS = {
         "argilla/ultrafeedback-binarized-preferences-cleaned",
         SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
             upstream_dataset="kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
             upstream_name="argilla/ultrafeedback-binarized-preferences-cleaned · KTO",
             subset=None,
@@ -163,7 +160,6 @@ HH_SUBSETS = (
         HH_HARMLESS_BASE_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Anthropic:hh_rlhf/harmless-base",
             upstream_dataset="hh_rlhf/harmless-base",
             upstream_name="Anthropic/hh-rlhf · harmless-base",
             subset=None,
@@ -183,7 +179,6 @@ HH_SUBSETS = (
         HH_HELPFUL_BASE_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Anthropic:hh_rlhf/helpful-base",
             upstream_dataset="hh_rlhf/helpful-base",
             upstream_name="Anthropic/hh-rlhf · helpful-base",
             subset=None,
@@ -203,7 +198,6 @@ HH_SUBSETS = (
         HH_HELPFUL_ONLINE_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Anthropic:hh_rlhf/helpful-online",
             upstream_dataset="hh_rlhf/helpful-online",
             upstream_name="Anthropic/hh-rlhf · helpful-online",
             subset=None,
@@ -223,7 +217,6 @@ HH_SUBSETS = (
         HH_HELPFUL_REJECTION_SAMPLED_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Anthropic:hh_rlhf/helpful-rejection-sampled",
             upstream_dataset="hh_rlhf/helpful-rejection-sampled",
             upstream_name="Anthropic/hh-rlhf · helpful-rejection-sampled",
             subset=None,

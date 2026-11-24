@@ -232,7 +232,6 @@ SOURCES = (
         GYM_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__nemotron-gym-math-v5",
             upstream_dataset="laion__nemotron-gym-math-v5",
             upstream_name="laion/nemotron-gym-math-v5",
             subset=None,
@@ -254,7 +253,6 @@ SOURCES = (
         OPENREASONING_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2",
             upstream_dataset="laion__nemotron-gym-math-openmathreasoning-v2",
             upstream_name="laion/nemotron-gym-math-openmathreasoning-v2",
             subset=None,
@@ -274,7 +272,6 @@ SOURCES = (
         ORACLE_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:SankalpKJ__nemotron-math-oracle-filtered-v2",
             upstream_dataset="SankalpKJ__nemotron-math-oracle-filtered-v2",
             upstream_name="SankalpKJ/nemotron-math-oracle-filtered-v2",
             subset=None,
@@ -294,7 +291,6 @@ SOURCES = (
         PRISM_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__nemo-prism-math-v3",
             upstream_dataset="laion__nemo-prism-math-v3",
             upstream_name="laion/nemo-prism-math-v3",
             subset=None,
@@ -314,7 +310,6 @@ SOURCES = (
         STACK_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__nemotron-gym-math-stack-overflow-v3",
             upstream_dataset="laion__nemotron-gym-math-stack-overflow-v3",
             upstream_name="laion/nemotron-gym-math-stack-overflow-v3",
             subset=None,

@@ -45,7 +45,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id=SOURCE_ID,
                 upstream_dataset="thoughtcrime",
                 upstream_name="thoughtcrime",
                 subset=None,

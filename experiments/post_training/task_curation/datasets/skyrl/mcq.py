@@ -87,7 +87,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="GPQA:gpqa",
                 upstream_dataset="gpqa",
                 upstream_name="Idavidrein/gpqa · gpqa_diamond",
                 subset=None,
@@ -114,7 +113,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="Nemotron:openscience",
                 upstream_dataset="openscience",
                 upstream_name="nvidia/OpenScience",
                 subset=None,

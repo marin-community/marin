@@ -113,7 +113,6 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
         pipeline=prebuilt.import_prebuilt,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Marin:static",
             upstream_dataset="static",
             upstream_name="static",
             build_path="test",

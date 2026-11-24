@@ -33,7 +33,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="Harbor Hub:skill2env/skill2env",
                 upstream_dataset="skill2env/skill2env",
                 upstream_name="skill2env/skill2env",
                 subset=None,
@@ -61,7 +60,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:AweAI-Team__CalibForge",
                 upstream_dataset="AweAI-Team__CalibForge",
                 upstream_name="AweAI-Team/CalibForge",
                 subset=None,
@@ -79,7 +77,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:DCAgent__exp_rle_adversarial-v6",
                 upstream_dataset="DCAgent__exp_rle_adversarial-v6",
                 upstream_name="DCAgent/exp_rle_adversarial-v6",
                 subset=None,
@@ -103,7 +100,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:DCAgent__exp_rpt_nemotron-cpp",
                 upstream_dataset="DCAgent__exp_rpt_nemotron-cpp",
                 upstream_name="DCAgent/exp_rpt_nemotron-cpp",
                 subset=None,
@@ -127,7 +123,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:DCAgent__inferredbugs-sandboxes-verifier",
                 upstream_dataset="DCAgent__inferredbugs-sandboxes-verifier",
                 upstream_name="DCAgent/inferredbugs-sandboxes-verifier",
                 subset=None,
@@ -150,7 +145,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:DCAgent__mix_h4_binary_easy",
                 upstream_dataset="DCAgent__mix_h4_binary_easy",
                 upstream_name="DCAgent/mix_h4_binary_easy",
                 subset=None,
@@ -173,7 +167,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3",
                 upstream_dataset="DCAgent__selfinstruct-naive-sandboxes-2-verified-v3",
                 upstream_name="DCAgent/selfinstruct-naive-sandboxes-2-verified-v3",
                 subset=None,
@@ -196,7 +189,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:GAIR__OpenSWE__openswe_oss",
                 upstream_dataset="GAIR__OpenSWE__openswe_oss",
                 upstream_name="GAIR/OpenSWE__openswe_oss",
                 subset=None,
@@ -225,7 +217,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:GAIR__OpenSWE__openswe_other",
                 upstream_dataset="GAIR__OpenSWE__openswe_other",
                 upstream_name="GAIR/OpenSWE__openswe_other",
                 subset=None,
@@ -254,7 +245,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__codeelo-v2",
                 upstream_dataset="laion__codeelo-v2",
                 upstream_name="laion/codeelo-v2",
                 subset=None,
@@ -274,7 +264,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_bugsinpy-v4",
                 upstream_dataset="laion__exp_rpt_bugsinpy-v4",
                 upstream_name="laion/exp_rpt_bugsinpy-v4",
                 subset=None,
@@ -297,7 +286,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_codenet-python-v4",
                 upstream_dataset="laion__exp_rpt_codenet-python-v4",
                 upstream_name="laion/exp_rpt_codenet-python-v4",
                 subset=None,
@@ -320,7 +308,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4",
                 upstream_dataset="laion__exp_rpt_crosscodeeval-csharp-v4",
                 upstream_name="laion/exp_rpt_crosscodeeval-csharp-v4",
                 subset=None,
@@ -340,7 +327,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_crosscodeeval-java-v3",
                 upstream_dataset="laion__exp_rpt_crosscodeeval-java-v3",
                 upstream_name="laion/exp_rpt_crosscodeeval-java-v3",
                 subset=None,
@@ -360,7 +346,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2",
                 upstream_dataset="laion__exp_rpt_crosscodeeval-typescript-v2",
                 upstream_name="laion/exp_rpt_crosscodeeval-typescript-v2",
                 subset=None,
@@ -380,7 +365,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_ghactions-v3",
                 upstream_dataset="laion__exp_rpt_ghactions-v3",
                 upstream_name="laion/exp_rpt_ghactions-v3",
                 subset=None,
@@ -400,7 +384,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_methods2test-large-v4",
                 upstream_dataset="laion__exp_rpt_methods2test-large-v4",
                 upstream_name="laion/exp_rpt_methods2test-large-v4",
                 subset=None,
@@ -424,7 +407,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_nemotron-junit-v6",
                 upstream_dataset="laion__exp_rpt_nemotron-junit-v6",
                 upstream_name="laion/exp_rpt_nemotron-junit-v6",
                 subset=None,
@@ -444,7 +426,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_scaffold-v3",
                 upstream_dataset="laion__exp_rpt_scaffold-v3",
                 upstream_name="laion/exp_rpt_scaffold-v3",
                 subset=None,
@@ -466,7 +447,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_stack-cpp-v4",
                 upstream_dataset="laion__exp_rpt_stack-cpp-v4",
                 upstream_name="laion/exp_rpt_stack-cpp-v4",
                 subset=None,
@@ -490,7 +470,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
                 upstream_dataset="laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
                 upstream_name="laion/exp_rpt_stack-dockerfile-gpt5mini-v7",
                 subset=None,
@@ -513,7 +492,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_stack-go-v5",
                 upstream_dataset="laion__exp_rpt_stack-go-v5",
                 upstream_name="laion/exp_rpt_stack-go-v5",
                 subset=None,
@@ -536,7 +514,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_stack-jest-v5",
                 upstream_dataset="laion__exp_rpt_stack-jest-v5",
                 upstream_name="laion/exp_rpt_stack-jest-v5",
                 subset=None,
@@ -556,7 +533,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_stack-junit-v6",
                 upstream_dataset="laion__exp_rpt_stack-junit-v6",
                 upstream_name="laion/exp_rpt_stack-junit-v6",
                 subset=None,
@@ -579,7 +555,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_stack-php-large-v9",
                 upstream_dataset="laion__exp_rpt_stack-php-large-v9",
                 upstream_name="laion/exp_rpt_stack-php-large-v9",
                 subset=None,
@@ -599,7 +574,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_stack-pytest-large-v3",
                 upstream_dataset="laion__exp_rpt_stack-pytest-large-v3",
                 upstream_name="laion/exp_rpt_stack-pytest-large-v3",
                 subset=None,
@@ -623,7 +597,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_stack-rspec-v4",
                 upstream_dataset="laion__exp_rpt_stack-rspec-v4",
                 upstream_name="laion/exp_rpt_stack-rspec-v4",
                 subset=None,
@@ -646,7 +619,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__magicoder-v4",
                 upstream_dataset="laion__magicoder-v4",
                 upstream_name="laion/magicoder-v4",
                 subset=None,
@@ -670,7 +642,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__mix_h10_reward_proportional-v2",
                 upstream_dataset="laion__mix_h10_reward_proportional-v2",
                 upstream_name="laion/mix_h10_reward_proportional-v2",
                 subset=None,
@@ -693,7 +664,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__mix_h11_single_skill_only-v2",
                 upstream_dataset="laion__mix_h11_single_skill_only-v2",
                 upstream_name="laion/mix_h11_single_skill_only-v2",
                 subset=None,
@@ -717,7 +687,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__mix_h8_original_tests-v2",
                 upstream_dataset="laion__mix_h8_original_tests-v2",
                 upstream_name="laion/mix_h8_original_tests-v2",
                 subset=None,
@@ -740,7 +709,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3",
                 upstream_dataset="laion__nemotron-gym-agentic-function-calling-pivot-v3",
                 upstream_name="laion/nemotron-gym-agentic-function-calling-pivot-v3",
                 subset=None,
@@ -764,7 +732,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
                 upstream_dataset="laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
                 upstream_name="laion/nemotron-gym-agentic-indirect-prompt-injection-v3",
                 subset=None,
@@ -787,7 +754,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-agentic-swe-pivot-v4",
                 upstream_dataset="laion__nemotron-gym-agentic-swe-pivot-v4",
                 upstream_name="laion/nemotron-gym-agentic-swe-pivot-v4",
                 subset=None,
@@ -807,7 +773,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-cfbench-v4",
                 upstream_dataset="laion__nemotron-gym-cfbench-v4",
                 upstream_name="laion/nemotron-gym-cfbench-v4",
                 subset=None,
@@ -831,7 +796,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-identity-following-v4",
                 upstream_dataset="laion__nemotron-gym-identity-following-v4",
                 upstream_name="laion/nemotron-gym-identity-following-v4",
                 subset=None,
@@ -854,7 +818,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5",
                 upstream_dataset="laion__nemotron-gym-instruction-following-adversarial-v5",
                 upstream_name="laion/nemotron-gym-instruction-following-adversarial-v5",
                 subset=None,
@@ -874,7 +837,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-instruction-following-citation-v2",
                 upstream_dataset="laion__nemotron-gym-instruction-following-citation-v2",
                 upstream_name="laion/nemotron-gym-instruction-following-citation-v2",
                 subset=None,
@@ -894,7 +856,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2",
                 upstream_dataset="laion__nemotron-gym-instruction-following-freeform-v2",
                 upstream_name="laion/nemotron-gym-instruction-following-freeform-v2",
                 subset=None,
@@ -914,7 +875,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4",
                 upstream_dataset="laion__nemotron-gym-instruction-following-multiturnchat-v4",
                 upstream_name="laion/nemotron-gym-instruction-following-multiturnchat-v4",
                 subset=None,
@@ -934,7 +894,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-inverse-ifeval-v4",
                 upstream_dataset="laion__nemotron-gym-inverse-ifeval-v4",
                 upstream_name="laion/nemotron-gym-inverse-ifeval-v4",
                 subset=None,
@@ -954,7 +913,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-knowledge-web-search-mcqa-v2",
                 upstream_dataset="laion__nemotron-gym-knowledge-web-search-mcqa-v2",
                 upstream_name="laion/nemotron-gym-knowledge-web-search-mcqa-v2",
                 subset=None,
@@ -977,7 +935,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-litmus-bench-v2",
                 upstream_dataset="laion__nemotron-gym-litmus-bench-v2",
                 upstream_name="laion/nemotron-gym-litmus-bench-v2",
                 subset=None,
@@ -1000,7 +957,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4",
                 upstream_dataset="laion__nemotron-gym-math-advanced-calculations-v4",
                 upstream_name="laion/nemotron-gym-math-advanced-calculations-v4",
                 subset=None,
@@ -1024,7 +980,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3",
                 upstream_dataset="laion__nemotron-gym-multichallenge-vanilla-v3",
                 upstream_name="laion/nemotron-gym-multichallenge-vanilla-v3",
                 subset=None,
@@ -1044,7 +999,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-qa-abstention-v4",
                 upstream_dataset="laion__nemotron-gym-qa-abstention-v4",
                 upstream_name="laion/nemotron-gym-qa-abstention-v4",
                 subset=None,
@@ -1067,7 +1021,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__nemotron-gym-sysbench-v4",
                 upstream_dataset="laion__nemotron-gym-sysbench-v4",
                 upstream_name="laion/nemotron-gym-sysbench-v4",
                 subset=None,
@@ -1091,7 +1044,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__openswe-tasks-patched-v7-oracle-success",
                 upstream_dataset="laion__openswe-tasks-patched-v7-oracle-success",
                 upstream_name="laion/openswe-tasks-patched-v7-oracle-success",
                 subset=None,
@@ -1115,7 +1067,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__r2egym-patched-full-oracle-v3",
                 upstream_dataset="laion__r2egym-patched-full-oracle-v3",
                 upstream_name="laion/r2egym-patched-full-oracle-v3",
                 subset=None,
@@ -1138,7 +1089,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__swegym-tasks-patched-validated-v5",
                 upstream_dataset="laion__swegym-tasks-patched-validated-v5",
                 upstream_name="laion/swegym-tasks-patched-validated-v5",
                 subset=None,
@@ -1162,7 +1112,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__toolscale-v4",
                 upstream_dataset="laion__toolscale-v4",
                 upstream_name="laion/toolscale-v4",
                 subset=None,
@@ -1186,7 +1135,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__tulu3-sft-personas-math-sandboxes-verified-v3",
                 upstream_dataset="laion__tulu3-sft-personas-math-sandboxes-verified-v3",
                 upstream_name="laion/tulu3-sft-personas-math-sandboxes-verified-v3",
                 subset=None,
@@ -1206,7 +1154,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:R2E-Gym__R2E-Gym-V1",
                 upstream_dataset="R2E-Gym__R2E-Gym-V1",
                 upstream_name="R2E-Gym/R2E-Gym-V1",
                 subset=None,
@@ -1228,7 +1175,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:SankalpKJ__nemotron-code-oracle-filtered",
                 upstream_dataset="SankalpKJ__nemotron-code-oracle-filtered",
                 upstream_name="SankalpKJ/nemotron-code-oracle-filtered",
                 subset=None,
@@ -1251,7 +1197,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:SWE-Gym__SWE-Gym",
                 upstream_dataset="SWE-Gym__SWE-Gym",
                 upstream_name="SWE-Gym/SWE-Gym",
                 subset=None,
@@ -1273,7 +1218,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__code",
                 upstream_dataset="XiaomiMiMo__MiMo-V2.6-RL-oss__code",
                 upstream_name="XiaomiMiMo/MiMo-V2.6-RL-oss__code",
                 subset=None,
@@ -1299,7 +1243,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__cyber",
                 upstream_dataset="XiaomiMiMo__MiMo-V2.6-RL-oss__cyber",
                 upstream_name="XiaomiMiMo/MiMo-V2.6-RL-oss__cyber",
                 subset=None,
@@ -1328,7 +1271,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
                 upstream_dataset="XiaomiMiMo__MiMo-V2.6-RL-oss__general",
                 upstream_name="XiaomiMiMo/MiMo-V2.6-RL-oss__general",
                 subset=None,
@@ -1357,7 +1299,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
                 upstream_dataset="XiaomiMiMo__MiMo-V2.6-RL-oss__music",
                 upstream_name="XiaomiMiMo/MiMo-V2.6-RL-oss__music",
                 subset=None,
@@ -1378,7 +1319,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__webdev",
                 upstream_dataset="XiaomiMiMo__MiMo-V2.6-RL-oss__webdev",
                 upstream_name="XiaomiMiMo/MiMo-V2.6-RL-oss__webdev",
                 subset=None,

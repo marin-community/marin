@@ -65,7 +65,6 @@ def catalog(monkeypatch, tmp_path):
                     pipeline=process_rows,
                     info=SourceInfo(
                         data_restriction=DataRestriction.OPEN,
-                        id=f"Marin:{name}",
                         upstream_dataset=name,
                         upstream_name=name,
                         build_path="test",

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generated source identity: aliases resolve, mismatches fail validation."""
+"""Generated source identity: ids and titles derive from the upstream keys."""
 
 import pytest
 from finestore.rl.curation import SourceOrigin, source_identifier, source_title
@@ -27,22 +27,12 @@ def test_id_and_title_are_generated_from_the_upstream_identity():
     assert info.title == source_title("math", "validation", None)
 
 
-def test_a_declared_historical_id_resolves_through_the_alias_table():
-    info = source(
-        id="Task Trove:laion__codeforces-v3",
-        upstream_dataset="laion__codeforces-v3",
-        upstream_name="laion__codeforces-v3",
-        build_path="Task Trove",
-        origin=SourceOrigin.TASKTROVE,
-    )
-    assert info.id == "TaskTrove:laion__codeforces-v3"
+def test_a_variant_changes_the_generated_identity():
+    info = source(upstream_dataset="hardmath", upstream_name="hardmath", variant="rhs")
+    assert info.id == "Marin:hardmath@rhs"
+    assert info.title == "hardmath · rhs"
 
 
-def test_a_declared_id_outside_the_generated_identity_is_rejected():
-    with pytest.raises(ValueError, match="generated identity"):
-        source(id="Marin:other")
-
-
-def test_a_declared_title_outside_the_generated_title_is_rejected():
-    with pytest.raises(ValueError, match="generated title"):
-        source(title="Other")
+def test_the_origin_must_be_a_source_origin():
+    with pytest.raises(ValueError, match="upstream SourceOrigin"):
+        source(origin="Marin")

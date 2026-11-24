@@ -205,7 +205,6 @@ SOURCES = (
         CODEREVIEW_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2",
             upstream_dataset="laion__stackexchange-codereview-sandboxes-verified-v2",
             upstream_name="laion/stackexchange-codereview-sandboxes-verified-v2",
             subset=None,
@@ -228,7 +227,6 @@ SOURCES = (
         GLAIVE_CODE_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2",
             upstream_dataset="laion__glaive-code-assistant-sandboxes-verified-v2",
             upstream_name="laion/glaive-code-assistant-sandboxes-verified-v2",
             subset=None,
@@ -250,7 +248,6 @@ SOURCES = (
         SAFETY_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__nemotron-gym-safety-v3",
             upstream_dataset="laion__nemotron-gym-safety-v3",
             upstream_name="laion/nemotron-gym-safety-v3",
             subset=None,
@@ -273,7 +270,6 @@ SOURCES = (
         STACK_OVERFLOW_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
             upstream_dataset="laion__stackexchange-overflow-sandboxes-verified-v2",
             upstream_name="laion/stackexchange-overflow-sandboxes-verified-v2",
             subset=None,
@@ -295,7 +291,6 @@ SOURCES = (
         SUPERUSER_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2",
             upstream_dataset="laion__stackexchange-superuser-sandboxes-verified-v2",
             upstream_name="laion/stackexchange-superuser-sandboxes-verified-v2",
             subset=None,
@@ -317,7 +312,6 @@ SOURCES = (
         TEZOS_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2",
             upstream_dataset="laion__stackexchange-tezos-sandboxes-verified-v2",
             upstream_name="laion/stackexchange-tezos-sandboxes-verified-v2",
             subset=None,
@@ -339,7 +333,6 @@ SOURCES = (
         UNIX_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2",
             upstream_dataset="laion__stackexchange-unix-sandboxes-verified-v2",
             upstream_name="laion/stackexchange-unix-sandboxes-verified-v2",
             subset=None,
@@ -361,7 +354,6 @@ SOURCES = (
         WIZARD_ORCA_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:laion__wizardlm-orca-v4",
             upstream_dataset="laion__wizardlm-orca-v4",
             upstream_name="laion/wizardlm-orca-v4",
             subset=None,

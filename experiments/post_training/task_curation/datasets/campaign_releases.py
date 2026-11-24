@@ -145,7 +145,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:smartie-calibforge-admitted",
                 upstream_dataset="smartie-calibforge-admitted",
                 upstream_name="Snowball Smartie CalibForge admitted cohort",
                 subset=None,
@@ -190,7 +189,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:smartie-calibforge-rebuilt-v1",
                 upstream_dataset="smartie-calibforge-rebuilt-v1",
                 upstream_name="Snowball Smartie CalibForge V1 rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -242,7 +240,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-nl2bash-rebuilt-v1",
                 upstream_dataset="tasktrove-nl2bash-rebuilt-v1",
                 upstream_name="TaskTrove nl2bash rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -284,7 +281,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-codeforces-rebuilt-v1",
                 upstream_dataset="tasktrove-codeforces-rebuilt-v1",
                 upstream_name="TaskTrove codeforces rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -327,7 +323,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
                 upstream_dataset="tasktrove-competitive-coding-rebuilt-v1",
                 upstream_name="TaskTrove competitive-coding rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -371,7 +366,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-curriculum-easy-rebuilt-v1",
                 upstream_dataset="tasktrove-curriculum-easy-rebuilt-v1",
                 upstream_name="TaskTrove curriculum-easy rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -411,7 +405,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-curriculum-medium-rebuilt-v1",
                 upstream_dataset="tasktrove-curriculum-medium-rebuilt-v1",
                 upstream_name="TaskTrove curriculum-medium rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -451,7 +444,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-e2egit-v2-rebuilt",
                 upstream_dataset="tasktrove-e2egit-v2-rebuilt",
                 upstream_name="TaskTrove e2egit-v2 rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -497,7 +489,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-e2egit-large-rebuilt-v1",
                 upstream_dataset="tasktrove-e2egit-large-rebuilt-v1",
                 upstream_name="TaskTrove e2egit-large rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -536,7 +527,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-multifile-rebuilt-v1",
                 upstream_dataset="tasktrove-multifile-rebuilt-v1",
                 upstream_name="TaskTrove multifile rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -575,7 +565,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
                 upstream_dataset="tasktrove-pymethods2test-rebuilt-v1",
                 upstream_name="TaskTrove pymethods2test rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -615,7 +604,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
                 upstream_dataset="tasktrove-pymethods2test-large-rebuilt-v1",
                 upstream_name="TaskTrove pymethods2test-large rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -655,7 +643,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-stack-pytest-rebuilt-v1",
                 upstream_dataset="tasktrove-stack-pytest-rebuilt-v1",
                 upstream_name="TaskTrove stack-pytest rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -695,7 +682,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
                 upstream_dataset="tasktrove-unitsyn-python-rebuilt-v1",
                 upstream_name="TaskTrove unitsyn-python rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -735,7 +721,6 @@ def sources() -> list[RlDataSource]:
             ),
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
                 upstream_dataset="tasktrove-unitsyn-python-large-rebuilt-v1",
                 upstream_name="TaskTrove unitsyn-python-large rebuilt cohort (TaskCompendium)",
                 subset=None,
@@ -768,7 +753,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:smartie-calibforge-shared-v2",
                 upstream_dataset="smartie-calibforge-shared-v2",
                 upstream_name="Snowball Smartie repaired CalibForge shared environment v2",
                 subset=None,
@@ -806,7 +790,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:smartie-swesmith-admitted",
                 upstream_dataset="smartie-swesmith-admitted",
                 upstream_name="Snowball Smartie SWE-Smith admitted cohort",
                 subset=None,
@@ -838,7 +821,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:smartie-swesmith-staged-v1",
                 upstream_dataset="smartie-swesmith-staged-v1",
                 upstream_name="Snowball Smartie staged SWE-Smith Stage 1 cohort",
                 subset=None,
@@ -869,7 +851,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:smartie-swesmith-staged-v2",
                 upstream_dataset="smartie-swesmith-staged-v2",
                 upstream_name="Snowball Smartie staged SWE-Smith Stage 3 handoffs",
                 subset=None,

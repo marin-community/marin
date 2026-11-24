@@ -18,6 +18,7 @@ from typing import Any, Literal
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import CurationMode
+from finestore.rl.source_identity import canonical_source_id
 from finestore.rl.strata import (
     DifficultyBands,
     MembershipState,
@@ -64,7 +65,6 @@ from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 SELECTION_PREFIX = "rl-data/task-selection"
 SELECTION_INPUT_PREFIX = "rl-data/selection-inputs"

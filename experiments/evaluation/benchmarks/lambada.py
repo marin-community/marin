@@ -32,7 +32,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
     source = RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Evalchemy:lambada_openai",
             upstream_dataset="lambada_openai",
             upstream_name="lambada_openai",
             subset=None,

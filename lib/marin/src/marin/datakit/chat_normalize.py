@@ -269,7 +269,7 @@ def validate_tool_definitions(tools: list[dict], messages: list[Message]) -> Non
                 raise ValueError(f"Tool call {name!r} has no explicit definition")
 
 
-def normalize_chat_record(record: dict[str, Any], messages_field: str, id_field: str) -> dict[str, Any]:
+def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field: str) -> dict[str, Any]:
     messages_value = record[messages_field]
     if not isinstance(messages_value, list):
         raise ValueError(f"{messages_field!r} must be a list")
@@ -338,7 +338,7 @@ def _build_chat_pipeline(
 ) -> Dataset:
     def normalize_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         try:
-            normalized = normalize_chat_record(record, messages_field, id_field)
+            normalized = _normalize_chat_record(record, messages_field, id_field)
         except RepeatedToolCallError:
             counters.pipeline.update_counter("normalize_chat/repeated_tool_calls_filtered", 1)
             return []

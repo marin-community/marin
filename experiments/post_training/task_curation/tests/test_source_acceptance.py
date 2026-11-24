@@ -23,7 +23,6 @@ def _agentic(task_format: TaskFormat | None, source_id: str = "Nemotron:agentic"
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id=source_id,
             upstream_dataset=source_id.partition(":")[2],
             upstream_name=source_id.partition(":")[2],
             build_path="MarinSkyRL",

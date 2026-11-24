@@ -42,7 +42,6 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvaluationCor
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Evalchemy:" + name,
             upstream_dataset=name,
             upstream_name=name,
             subset=None,
@@ -102,7 +101,6 @@ def simpleqa_verified_source(*, thinking: bool) -> RlDataSource[EvaluationCorpus
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="Evalchemy:" + name,
             upstream_dataset=name,
             upstream_name=name,
             subset=None,

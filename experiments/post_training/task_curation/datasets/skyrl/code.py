@@ -299,7 +299,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="CodeParrot:apps",
                 upstream_dataset="apps",
                 upstream_name="codeparrot/apps",
                 subset=None,
@@ -325,7 +324,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="PRIME-RL:eurus2_code",
                 upstream_dataset="eurus2_code",
                 upstream_name="PRIME-RL/Eurus-2-RL-Data · code",
                 subset=None,
@@ -355,7 +353,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="Open-R1:verifiable_code",
                 upstream_dataset="verifiable_code",
                 upstream_name="open-r1/verifiable-coding-problems-python",
                 subset=None,
@@ -384,7 +381,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="Gretel:gretel_text_to_sql",
                 upstream_dataset="gretel_text_to_sql",
                 upstream_name="gretelai/synthetic_text_to_sql",
                 subset=None,

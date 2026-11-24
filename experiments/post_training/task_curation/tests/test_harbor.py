@@ -16,6 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.source_identity import canonical_source_id
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
@@ -51,7 +52,6 @@ from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tasktrove.export import main
 from experiments.post_training.task_curation.tasktrove.harbor_export import UnsupportedHarborTask, harbor_record
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 GRADER_IMAGE = "example.test/grader@sha256:" + "a" * 64
 

@@ -31,7 +31,6 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="Evalchemy:financebench",
                 upstream_dataset="financebench",
                 upstream_name="FinanceBench",
                 subset=None,

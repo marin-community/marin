@@ -275,7 +275,6 @@ def harbor_source(
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id=f"Harbor:{dataset.recipe}",
             upstream_dataset=dataset.recipe,
             upstream_name=dataset.title,
             subset=None,

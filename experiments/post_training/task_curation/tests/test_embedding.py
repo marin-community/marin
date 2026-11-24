@@ -363,7 +363,6 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
                 RlDataSource(
                     info=SourceInfo(
                         data_restriction=DataRestriction.OPEN,
-                        id="Marin:release",
                         upstream_dataset="release",
                         upstream_name="Pointer",
                         build_path="test",
@@ -374,7 +373,6 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
                 RlDataSource(
                     info=SourceInfo(
                         data_restriction=DataRestriction.OPEN,
-                        id="Marin:no-count",
                         upstream_dataset="no-count",
                         upstream_name="NoCount",
                         build_path="test",

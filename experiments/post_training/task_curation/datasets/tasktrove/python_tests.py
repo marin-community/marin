@@ -203,7 +203,6 @@ SOURCES = {
         CURRICULUM_EASY_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:DCAgent__exp_rpt_curriculum-easy",
             upstream_dataset="DCAgent__exp_rpt_curriculum-easy",
             upstream_name="DCAgent/exp_rpt_curriculum-easy",
             subset=None,
@@ -226,7 +225,6 @@ SOURCES = {
         version="6",
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:DCAgent__exp_rpt_curriculum-medium-v2",
             upstream_dataset="DCAgent__exp_rpt_curriculum-medium-v2",
             upstream_name="DCAgent/exp_rpt_curriculum-medium-v2",
             subset=None,
@@ -249,7 +247,6 @@ SOURCES = {
         version="8",
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:DCAgent__exp_rpt_e2egit-v2",
             upstream_dataset="DCAgent__exp_rpt_e2egit-v2",
             upstream_name="DCAgent/exp_rpt_e2egit-v2",
             subset=None,
@@ -271,7 +268,6 @@ SOURCES = {
         E2EGIT_LARGE_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:DCAgent__exp_rpt_e2egit-large",
             upstream_dataset="DCAgent__exp_rpt_e2egit-large",
             upstream_name="DCAgent/exp_rpt_e2egit-large",
             subset=None,
@@ -293,7 +289,6 @@ SOURCES = {
         MULTIFILE_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:DCAgent__exp_rpt_multifile-v3",
             upstream_dataset="DCAgent__exp_rpt_multifile-v3",
             upstream_name="DCAgent/exp_rpt_multifile-v3",
             subset=None,
@@ -315,7 +310,6 @@ SOURCES = {
         PYMETHODS_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
             upstream_dataset="DCAgent__exp_rpt_pymethods2test-v3",
             upstream_name="DCAgent/exp_rpt_pymethods2test-v3",
             subset=None,
@@ -337,7 +331,6 @@ SOURCES = {
         PYMETHODS_LARGE_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
             upstream_dataset="DCAgent__exp_rpt_pymethods2test-large-v2",
             upstream_name="DCAgent/exp_rpt_pymethods2test-large-v2",
             subset=None,
@@ -359,7 +352,6 @@ SOURCES = {
         UNITSYN_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
             upstream_dataset="DCAgent__exp_rpt_unitsyn-python-v4",
             upstream_name="DCAgent/exp_rpt_unitsyn-python-v4",
             subset=None,
@@ -381,7 +373,6 @@ SOURCES = {
         UNITSYN_LARGE_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2",
             upstream_dataset="DCAgent__exp_rpt_unitsyn-python-large-v2",
             upstream_name="DCAgent/exp_rpt_unitsyn-python-large-v2",
             subset=None,
@@ -403,7 +394,6 @@ SOURCES = {
         STACK_PYTEST_RUBRIC,
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="TaskTrove:DCAgent__exp_rpt_stack-pytest-v2",
             upstream_dataset="DCAgent__exp_rpt_stack-pytest-v2",
             upstream_name="DCAgent/exp_rpt_stack-pytest-v2",
             subset=None,

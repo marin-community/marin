@@ -173,7 +173,6 @@ def source() -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
-            id="LiveCodeBench:release_v6",
             upstream_dataset="release_v6",
             upstream_name="LiveCodeBench",
             subset=None,

@@ -182,7 +182,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="Nemotron:nemotron_if",
                 upstream_dataset="nemotron_if",
                 upstream_name="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
                 subset=None,
@@ -211,7 +210,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="AllenAI:rlvr_ifeval",
                 upstream_dataset="rlvr_ifeval",
                 upstream_name="allenai/RLVR-IFeval",
                 subset=None,
