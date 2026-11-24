@@ -31,6 +31,7 @@ from experiments.post_training.rl_measurements import (
     read_run_inputs,
     training_invariants,
 )
+from experiments.post_training.rl_scoring import FAMILY_SLICE
 
 APPLET_ID = tomllib.loads(
     (Path(__file__).resolve().parents[2] / "infra/marina/apps/rl_progress/applet.toml").read_text()
@@ -163,7 +164,7 @@ def build_record(
                 reason=report.reason,
                 invariants=list(report.invariants),
                 comparisons=list(report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT))
-                + [row for row in report.rows(ComparisonRole.SLICE) if "/family/" in row.metric],
+                + [row for row in report.rows(ComparisonRole.SLICE) if f"/{FAMILY_SLICE}/" in row.metric],
                 attempt_ids=list(report.run.attempt_ids),
                 replicates=report.run.replicates,
             )

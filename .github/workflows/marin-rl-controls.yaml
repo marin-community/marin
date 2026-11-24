@@ -91,5 +91,5 @@ jobs:
           if [[ "$DRY_RUN" == true ]]; then
             options+=(--dry-run)
           fi
-          uv run --frozen --package marin-core --extra cpu --no-default-groups \
+          uv run --frozen --all-packages --extra cpu --no-default-groups \
             python -m experiments.post_training.rl_control_refresh "${options[@]}"

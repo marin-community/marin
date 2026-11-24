@@ -60,7 +60,7 @@ from experiments.post_training.rl_measurements import (
     restrict_evaluation,
 )
 from experiments.post_training.rl_presets import ControlPin, ModelPresets
-from experiments.post_training.rl_scoring import AAII_WEIGHTS, SLICE_COLUMNS, score_answers
+from experiments.post_training.rl_scoring import AAII_WEIGHTS, FAMILY_SLICE, SLICE_COLUMNS, score_answers
 
 GATE_REVISION = "2026.11.24"
 GATE_REPORT_FILENAME = "gate_report.json"
@@ -307,7 +307,10 @@ def _require_shared_overlap(
         families: dict[str, set[str]] = {}
         for digest, strata in labels.items():
             families.setdefault(strata.family, set()).add(digest)
-        for label, total in [(name, set(labels)), *((f"{name}/family/{key}", ids) for key, ids in families.items())]:
+        for label, total in [
+            (name, set(labels)),
+            *((f"{name}/{FAMILY_SLICE}/{key}", ids) for key, ids in families.items()),
+        ]:
             accepted = len(shared & total)
             required = max(1, math.ceil(MIN_SHARED_TASK_FRACTION * len(total)))
             if accepted < required:
