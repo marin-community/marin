@@ -89,7 +89,7 @@ class ServeConfig:
     backend: ServeBackend = ServeBackend.VLLM
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
-    levanter_expert_parallel_size: int | None = field(default=None, metadata={"fingerprint_omit_default": True})
+    levanter_expert_parallel_size: int | None = field(default=None, metadata={"fingerprint_omit_value": None})
     pipeline_parallel_size: int = 1
     instances: int = 1
     gpu_memory_utilization: float | None = None
