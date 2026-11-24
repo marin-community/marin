@@ -32,8 +32,7 @@ def copy_table(reader: ReadView, table: str, destination: str) -> int:
     the destination is left alone: the earliest snapshot is the pristine one, and a resumed
     migration must not write over it.
     """
-    shards = reader.list_shards(table)
-    if not shards:
+    if reader.table_metadata_path(table) is None:
         return 0
     destination_path = StoragePath(destination)
     destination_path.mkdirs()
@@ -46,7 +45,7 @@ def copy_table(reader: ReadView, table: str, destination: str) -> int:
     else:
         metadata_target.write_bytes(metadata_bytes)
         copied += 1
-    for shard in shards:
+    for shard in reader.list_shards(table):
         source = StoragePath(shard.path)
         target = destination_path / source.name
         if target.exists():
@@ -68,12 +67,12 @@ def copy_table(reader: ReadView, table: str, destination: str) -> int:
 
 def drop_table(reader: ReadView, table: str) -> int:
     """Remove a table from the next manifest and return its active shard count."""
-    shards = reader.list_shards(table)
-    if not shards:
+    if reader.table_metadata_path(table) is None:
         return 0
+    count = len(reader.list_shards(table))
     drop_manifest_table(reader.root, table, expected=reader.table_version(table))
-    logger.info("removed %d shard(s) of table %s from the active manifest under %s", len(shards), table, reader.root)
-    return len(shards)
+    logger.info("dropped table %s with %d active shard(s) under %s", table, count, reader.root)
+    return count
 
 
 def backup_and_drop_table(reader: ReadView, table: str, destination: str) -> None:

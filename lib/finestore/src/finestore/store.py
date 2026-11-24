@@ -21,6 +21,7 @@ import pyarrow as pa
 from rigging import telemetry
 from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock, lease_refresh
 from rigging.filesystem.s3_errors import is_transient_s3_error
+from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import ExponentialBackoff
 
 from finestore.commit import (
@@ -404,9 +405,8 @@ class DataStore:
                 table = self._tables.get(name)
                 if table is None:
                     raise KeyError(f"table {name!r} must be registered before the transaction")
-                stamped = table._stamp_arrow_rows(pending_rows)
-                pending = PendingRows(tuple(stamped), sum(row.table.nbytes for row in stamped))
-                additions[name] = TableAddition(table.metadata_path, (table._write(pending),), table.incarnation)
+                shard = table._write_rows(pending_rows, nbytes=sum(row.table.nbytes for row in pending_rows))
+                additions[name] = TableAddition(table.metadata_path, (shard,), table.incarnation)
             if additions:
                 return self._commits.commit(_addition_delta(additions, delta=delta))
             if delta.reset_tables or delta.expected_contents:
@@ -742,13 +742,14 @@ class Transaction:
             raise ValueError(f"table {name!r} already exists")
         if self._staging_id is None:
             self._staging_id = uuid.uuid4().hex
+        storage_table = prefix_join(prefix_join(STAGED_TABLE_DIR, self._staging_id), uuid.uuid4().hex)
         writer = self._store._table_writer(
             name,
             metadata=metadata,
             schema=schema,
             incarnation=INITIAL_TABLE_INCARNATION,
             start_seq=0,
-            storage_table=f"{STAGED_TABLE_DIR}/{self._staging_id}/{uuid.uuid4().hex}",
+            storage_table=storage_table,
         )
         batch_limit = self._store._max_buffer_bytes if self._max_bytes is None else self._max_bytes
         table = StagedTable(self, writer, batch_limit)
@@ -970,13 +971,16 @@ class DataTable:
             (arrow_row,) = self._arrow_rows((row,))
             size = arrow_row.table.nbytes
             if batch and batch_bytes + size > max_bytes:
-                yield self._write(PendingRows(tuple(self._stamp_arrow_rows(batch)), batch_bytes))
+                yield self._write_rows(batch, nbytes=batch_bytes)
                 batch = []
                 batch_bytes = 0
             batch.append(arrow_row)
             batch_bytes += size
         if batch:
-            yield self._write(PendingRows(tuple(self._stamp_arrow_rows(batch)), batch_bytes))
+            yield self._write_rows(batch, nbytes=batch_bytes)
+
+    def _write_rows(self, rows: Sequence[ArrowRow], *, nbytes: int) -> Shard:
+        return self._write(PendingRows(tuple(self._stamp_arrow_rows(rows)), nbytes))
 
     def _write(self, pending: PendingRows) -> Shard:
         rows = list(pending.rows)

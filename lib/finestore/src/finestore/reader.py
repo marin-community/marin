@@ -950,9 +950,8 @@ class ReadView(_ReadOperations):
         return self._snapshot.manifest.table_content_version(table)
 
     def schema_version(self, table: str) -> int | None:
-        """Return the table schema version, or ``None`` when it has no active shards."""
-        state = self._snapshot.manifest.tables.get(table)
-        if state is None or not state.shards:
+        """Return the published table schema version, or ``None`` when the table is absent."""
+        if table not in self._snapshot.manifest.tables:
             return None
         return self._meta(table).schema_version
 

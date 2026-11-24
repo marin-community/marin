@@ -387,6 +387,7 @@ def test_transaction_can_publish_empty_tables_and_drop_existing_tables(archive_r
         current = store.read_view()
         assert current.table_names() == ("empty",)
         assert current.table_metadata("empty").primary_key == ("id",)
+        assert current.schema_version("empty") == 1
 
 
 def test_multi_writer_compose(archive_root):

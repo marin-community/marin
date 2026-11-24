@@ -12,7 +12,9 @@ import pytest
 from finestore.admin import set_table_metadata
 from finestore.commit import CommitConflict
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, EvalSample, EvaluationStore, Grading, SampleKind
+from finestore.layout import TableMetadata
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.samples_v4 import (
@@ -104,6 +106,21 @@ def test_dropping_a_table_only_changes_logical_visibility(tmp_path):
     assert drop_table(ReadView(str(results)), ARCHIVE_SAMPLES_TABLE) == 1
     assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE) is None
     assert StoragePath(shard_path).exists()
+
+
+def test_backup_and_drop_preserves_the_schema_of_an_empty_table(tmp_path):
+    root = str(tmp_path / "results")
+    metadata = TableMetadata(primary_key=("doc_id",), schema_version=3)
+    with DataStore.open(root) as store:
+        with store.transaction() as transaction:
+            transaction.create_table(ARCHIVE_SAMPLES_TABLE, metadata=metadata)
+    pinned = ReadView(root)
+    destination = tmp_path / "backup"
+
+    backup_and_drop_table(pinned, ARCHIVE_SAMPLES_TABLE, str(destination))
+
+    assert TableMetadata.model_validate_json((destination / "_schema.json").read_bytes()) == metadata
+    assert ARCHIVE_SAMPLES_TABLE not in ReadView(root).table_names()
 
 
 def test_copying_a_table_that_was_never_written_is_not_an_error(tmp_path):
