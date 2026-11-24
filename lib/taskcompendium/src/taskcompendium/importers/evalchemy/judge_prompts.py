@@ -438,6 +438,7 @@ def facts_parametric_spec(question: str, answer: str) -> JudgeSpec:
             for label, verdict in verdicts.items()
         },
         label_case="upper",
+        label_scan="pattern",
         verdict_patterns=(FACTS_PARAMETRIC_OUTPUT_LINE,),
         request_timeout=300,
         transport_attempts=3,

@@ -197,6 +197,8 @@ The rubric decides how the prepared answer is scored:
 - `whole`: the whole reply is the label.
 - `json`: the reply is a JSON object, optionally in a Markdown code fence, and its `label_field`
   member is the label. A boolean member is read as the label `true` or `false`.
+- `pattern`: the last match of the first `verdict_patterns` entry that matches is the label, so the
+  judge may name other labels while explaining its verdict.
 
 `label_case = "upper"` matches labels and pairwise verdicts case-insensitively.
 `strip_reasoning_blocks` removes reasoning blocks from the judge's reply before the label or verdict

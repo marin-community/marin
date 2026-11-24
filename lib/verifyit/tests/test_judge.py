@@ -1419,9 +1419,16 @@ def test_pairwise_rejects_invalid_contracts_before_calling_the_judge(unconfigure
 
 
 @pytest.mark.parametrize(
-    "change", [{"label_weights": {"PASS": 3.0}}, {"verdict_patterns": (r"\[\[A=B\]\]",)}, {"verdict_patterns": ("(",)}]
+    "change",
+    [
+        {"label_weights": {"PASS": 3.0}},
+        {"verdict_patterns": (r"VERDICT: (PASS)",)},
+        {"label_scan": "pattern"},
+        {"label_scan": "pattern", "verdict_patterns": (r"\[\[A=B\]\]",)},
+        {"label_scan": "pattern", "verdict_patterns": ("(",)},
+    ],
 )
-def test_label_judges_reject_weights_and_malformed_verdict_patterns(unconfigured_judge, change):
+def test_label_judges_reject_weights_and_mismatched_verdict_patterns(unconfigured_judge, change):
     with pytest.raises(InvalidTask):
         grade_judge.grade_judge_candidate(_label_spec(**change), "candidate")
 
@@ -1437,7 +1444,7 @@ def test_label_judges_reject_weights_and_malformed_verdict_patterns(unconfigured
 )
 def test_label_verdict_patterns_read_the_last_match(fake_judge, reply, reward, status):
     fake_judge.replies = [reply]
-    spec = _label_spec(verdict_patterns=(r"VERDICT: (\[\[[^\]]*\]\])",))
+    spec = _label_spec(label_scan="pattern", verdict_patterns=(r"VERDICT: (\[\[[^\]]*\]\])",))
     if status is Status.INFRA_ERROR:
         with pytest.raises(GradingInfraError):
             grade_judge.grade_judge_candidate(spec, "candidate")
