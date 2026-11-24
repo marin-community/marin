@@ -37,6 +37,13 @@ def test_chunked_sizing_accepts_ppo_and_rejects_incompatible_execution():
         }
     assert validate_cfg(config) is None
 
+    with open_dict(config.trainer.algorithm):
+        config.trainer.algorithm.max_seq_len = 2048
+    with pytest.raises(ValueError, match="below the trained sequence bound"):
+        validate_cfg(config)
+    config.trainer.algorithm.max_seq_len = 1024
+    assert validate_cfg(config) is None
+
     megatron.tensor_model_parallel_size = 2
     with pytest.raises(ValueError, match="requires TP1"):
         validate_cfg(config)

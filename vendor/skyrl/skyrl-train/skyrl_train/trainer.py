@@ -1220,7 +1220,11 @@ class RayPPOTrainer:
 
     async def _train_loop(self):
         profile = self.cfg.trainer.policy.megatron_config.get("memory_profile", {})
-        if self.cfg.trainer.strategy == "megatron" and profile.get("enabled", False):
+        profiling = self.cfg.trainer.strategy == "megatron" and profile.get("enabled", False)
+        if profiling and self.colocate_all:
+            # Sizing snapshots and steps the resident policy, so backload the colocated offload first.
+            self.policy_model.backload_to_gpu()
+        if profiling:
             with Timer("trainer_memory_profile", self.all_startup_timings):
                 reports = await asyncio.to_thread(
                     ray.get,
