@@ -6,6 +6,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -111,6 +112,14 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
     configs = dict(zip(launch_paths, composed, strict=True))
     for name in ("speed-short", "data-short", "eval-short"):
         assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
+
+    # Published train-long controls still contain defaults removed by the TaskSpec migration.
+    planned = configs["train-long"]
+    recorded = deepcopy(planned)
+    recorded["skyrl"]["data"].update(task_cache_dir="~/.cache/marinskyrl/tasks", terminal_bench_data=[])
+    del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
+    del recorded["skyrl"]["trajectory_runner"]["max_concurrent_training_machine_tasks"]
+    assert gate.comparison_config(recorded) == gate.comparison_config(planned)
 
 
 def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):

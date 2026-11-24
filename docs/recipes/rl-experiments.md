@@ -333,7 +333,6 @@ Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
    ```bash
    uv run pytest -q -n 0 experiments/post_training/rl_tests/test_rl.py::test_snowball_presets_plan_native_launches
    ```
-
 4. Controls are collected by CI after the default change merges, once per changed default.
    That CI workflow is planned separately; control collection is not a merge gate.
    The manual `--control` command remains available for an explicitly authorized calibration.
