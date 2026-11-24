@@ -240,14 +240,24 @@ def resolve_base_url(arg: str | None) -> str:
     return normalize_base_url(client.resolve_endpoint(pool.ENDPOINT_NAME))
 
 
-def resolve_api_key(arg: str | None) -> str | None:
-    """The --api-key value, or a freshly minted endpoint capability JWT for 'mint'."""
+def resolve_api_key(arg: str | None, base_url: str) -> str | None:
+    """The --api-key value, or a freshly minted endpoint capability JWT for 'mint'.
+
+    'mint' binds the token to the endpoint the base URL targets, parsed from the
+    controller proxy path (the proxy enforces token↔endpoint binding, so a token
+    for a different endpoint is 403).
+    """
     if arg != "mint":
         return arg
     client = iris_ctx().client
     if client is None:
         raise SystemExit("--api-key mint requires an Iris job")
-    return client.mint_endpoint_token(pool.ENDPOINT_NAME).token
+    if "/proxy/" in base_url:
+        after = base_url.split("/proxy/", 1)[1].split("/")[0]
+        endpoint = f"/{after}"
+    else:
+        endpoint = pool.ENDPOINT_NAME
+    return client.mint_endpoint_token(endpoint).token
 
 
 def main() -> None:
@@ -268,7 +278,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="[warmup-bench] %(message)s")
     base_url = resolve_base_url(args.base_url)
-    api_key = resolve_api_key(args.api_key)
+    api_key = resolve_api_key(args.api_key, base_url)
     logger.info(
         "bench %s concurrency=%d duration=%.0fs effort=%s auth=%s",
         base_url,
