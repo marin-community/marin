@@ -173,11 +173,14 @@ def read_stored_skyrl_attempts(run_output: str) -> tuple[str | None, dict[str, A
     current = read_stored_skyrl_attempt(run_output)
     config = read_skyrl_attempt_config(run_output, current)
     if config is None:
+        # Indexed attempts are prepared before the native coordinator writes its resolved launch.
         attempts = read_attempts(prefix_join(run_output, EXPORTS_SUBDIRECTORY))
         return None, {
             key: record
             for key, record in attempts.items()
-            if record.config is not None and record.config["run"]["mode"] != "checkpoint_export"
+            if record.index is not None
+            and record.config is not None
+            and record.config["run"]["mode"] != "checkpoint_export"
         }
     attempts = {
         attempt_id: record
