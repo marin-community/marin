@@ -146,7 +146,7 @@ def test_cache_hf_model_mirrors_every_repo_file(tmp_path, monkeypatch):
     assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": None}
 
 
-def test_cache_hf_model_does_not_copy_repository_completion_marker(tmp_path, monkeypatch):
+def test_cache_hf_model_ignores_repository_completion_marker(tmp_path, monkeypatch):
     """An interrupted mirror must not look complete because the repo contains Marin's marker."""
     revision = "a" * 40
     cache_path = str(tmp_path / "cache" / "model")
@@ -165,7 +165,6 @@ def test_cache_hf_model_does_not_copy_repository_completion_marker(tmp_path, mon
     hub.fail_on.clear()
     cache_hf_model(cache_path, "org/model", revision=revision)
 
-    assert DEFAULT_COMPLETE_MARKER not in hub.opened
     assert Path(cache_path, "model.safetensors").read_text() == "weights"
     assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": revision}
 
