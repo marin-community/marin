@@ -9,8 +9,9 @@ from lib.taskforge.tests.resources.inference_fakes import Backend, provider_comp
 
 from taskforge.effects.events import Event, Retrying
 from taskforge.effects.issues import ContextExceeded, Restart
+from taskforge.harness.loop import settled
 from taskforge.llm.client import Attempt, AttemptOutcome, ContextExhausted, ModelRequestRejected, ModelUnavailable
-from taskforge.model.llm import ToolCall
+from taskforge.model.llm import Completion, FinishReason, ToolCall
 from taskforge.resources.inference import (
     GlmInference,
     complete,
@@ -102,3 +103,20 @@ async def test_provider_failures_preserve_classification_and_retry_bound(
         assert caught.value is error
     if isinstance(error, ContextExhausted):
         assert str(caught.value) == error.body and caught.value.__cause__ is error
+
+
+# Review 2026-11-21: a 503 before a context refusal made two physical requests, and the recorded stop
+# carried no retry notice. The transport's attempts ride on the refusal into the harness's recorded stop.
+async def test_a_context_refusal_after_a_503_keeps_its_retry_in_the_recorded_stop() -> None:
+    attempts = (
+        Attempt(0, AttemptOutcome.RETRYABLE_STATUS, 10, 0, 1, 503, "private", ()),
+        Attempt(1, AttemptOutcome.CONTEXT_OVERFLOW, 10, 0, 1, 400, "private", ()),
+    )
+    retries = Retries()
+    stop = await settled(
+        request(), GlmInference(Backend((ContextExhausted("context full", attempts),)), "p"), notify=retries
+    )
+    assert stop == Completion(
+        "context full", finish_reason=FinishReason.CONTEXT_EXCEEDED, retries=("retryable_status:503",)
+    )
+    assert [event.cause for event in retries.events] == ["retryable_status:503"]

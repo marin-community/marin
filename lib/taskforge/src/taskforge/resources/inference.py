@@ -117,7 +117,7 @@ class GlmInference(InferenceClient):
                 "GLM transport exhausted its retry or hold budget", retries=_retries(error.attempts)
             ) from error
         except ContextExhausted as error:
-            raise ContextExceeded(error.body) from error
+            raise ContextExceeded(error.body, retries=_retries(error.attempts)) from error
         except ModelRequestRejected as error:
             if error.status not in RETRYABLE_STATUSES:
                 raise
@@ -135,30 +135,6 @@ class GlmInference(InferenceClient):
         )
 
 
-class FakeInference(InferenceClient):
-    def __init__(
-        self, completions: Sequence[Completion | Transient | Restart | Hold | ContextExceeded], *, identity: str = "fake"
-    ) -> None:
-        self.script = tuple(completions)
-        self.requests: list[InferenceRequest] = []
-        self.identity = identity
-
-    @override
-    def fingerprint(self) -> Fingerprint:
-        return Fingerprint("inference", self.identity, ReplayPolicy.CACHE)
-
-    @override
-    async def complete(self, request: InferenceRequest) -> Completion:
-        index = len(self.requests)
-        self.requests.append(request)
-        if index >= len(self.script):
-            raise RuntimeError("Fake inference script exhausted")
-        result = self.script[index]
-        if isinstance(result, Transient | Restart | Hold | ContextExceeded):
-            raise result
-        return result
-
-
 def _retries(attempts: Sequence[Attempt]) -> tuple[str, ...]:
     return tuple(
         f"{attempt.outcome}:{attempt.http_status}"
@@ -171,7 +147,7 @@ async def complete(event: InferenceRequest, client: InferenceClient, *, notify: 
     async def attempt() -> Completion:
         try:
             result = await client.complete(event)
-        except (Transient, Restart, Hold) as error:
+        except (Transient, Restart, Hold, ContextExceeded) as error:
             for index, cause in enumerate(error.retries, 1):
                 notify(Retrying(event, index, str(cause)))
             raise

@@ -186,7 +186,7 @@ async def test_conversation_logs_each_turn_once_and_replays_chained_requests(tmp
     assert content.count("follow-up") == 1
     resumed = EventLog(replay_from=await JsonlSink(sink.path).read())
     assert resumed.lookup(second, ()) == Completion("reply")
-    assert resumed.resolved()[-1].request == second
+    assert [r.event for r in resumed.records if isinstance(r.event, Resolved)][-1].request == second
 
 
 @pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])

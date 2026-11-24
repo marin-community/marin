@@ -27,7 +27,6 @@ def fast_provider() -> LLMProviderConfig:
         backoff_factor=1.0,
         stall_timeout=600.0,
         max_connections=8,
-        structured_repairs=1,
     )
 
 

@@ -7,6 +7,7 @@ import pytest
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 
+from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Message, Role, ToolCall, ToolSchema
 from taskforge.model.proposal import TaskProposal
@@ -92,7 +93,7 @@ def test_policy_overlay_changes_digest_and_preserves_original() -> None:
     policy = Policy({"author.system": Prompt("Hello {name}"), "author.turns": 2, "author.tags": ("a",)})
     updated = policy.overlaid({"author.system": "Welcome {name}", "author.tags": ["b"]})
     assert updated.prompt("author.system").render(name="Ada") == "Welcome Ada"
-    assert updated.stage_digest("author") != policy.stage_digest("author")
+    assert digest(updated) != digest(policy)
     assert policy.prompt("author.system").render(name="Ada") == "Hello Ada"
     assert updated.setting("author.tags", tuple) == ("b",)
 

@@ -32,15 +32,25 @@ from taskforge.harness.protocol import (
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.wire import replay_arguments
 from taskforge.model.content_hash import digest
-from taskforge.model.llm import FinishReason, Message, Role
+from taskforge.model.llm import Completion, FinishReason, Message, Role
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation
 from taskforge.resources.env import WriteFile
+from taskforge.resources.execution import Notify
 from taskforge.resources.inference import InferenceClient, InferenceRequest, complete
 
 # A session ends only through an exit tool, so an empty completion gets a nudge. This many empty
 # completions in a row mean the provider is failing.
 MAX_EMPTY_COMPLETIONS = 3
+
+
+async def settled(event: InferenceRequest, client: InferenceClient, *, notify: Notify) -> Completion:
+    """The harness's inference: a provider's context refusal settles the visit, so it is a recorded result (with the
+    retries before it) that a reconstructed visit replays, never a raise that leaves the request to be asked again."""
+    try:
+        return await complete(event, client, notify=notify)
+    except ContextExceeded as error:
+        return Completion(str(error), finish_reason=FinishReason.CONTEXT_EXCEEDED, retries=error.retries)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +76,7 @@ class AgenticHarness(Harness):
         session = Conversation(session.messages, schemas)
         async with ctx.scope("harness"):
             ctx.resource(client, client.fingerprint)
-            ctx.handle(InferenceRequest, partial(complete, notify=ctx.emit), uses=(client,))
+            ctx.handle(InferenceRequest, partial(settled, notify=ctx.emit), uses=(client,))
             while True:
                 await ctx.check(Hold)
                 if prompt_tokens >= self.max_prompt_tokens:
@@ -77,14 +87,13 @@ class AgenticHarness(Harness):
                         turns,
                     )
                 turns += 1
-                try:
-                    request = InferenceRequest(
-                        session.messages[consumed:], schemas, self.sampling, previous, sample=degenerate_completions
-                    )
-                    result = await ctx.emit(request)
-                    previous, consumed = request, len(session.messages)
-                except ContextExceeded as error:
-                    return Stopped(StopReason.CONTEXT_LIMIT, session, str(error), turns)
+                request = InferenceRequest(
+                    session.messages[consumed:], schemas, self.sampling, previous, sample=degenerate_completions
+                )
+                result = await ctx.emit(request)
+                if result.finish_reason is FinishReason.CONTEXT_EXCEEDED:
+                    return Stopped(StopReason.CONTEXT_LIMIT, session, result.content, turns)
+                previous, consumed = request, len(session.messages)
                 if result.finish_reason == FinishReason.LENGTH and not result.content and not result.tool_calls:
                     degenerate_completions += 1
                     if degenerate_completions == 2:

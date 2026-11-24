@@ -1,25 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Records of model calls, the ``ModelClient`` protocol, and the errors its implementations raise.
+"""Records of model calls and the errors a model client raises.
 
 A logical call returns a ``Completion``, which joins the call's continuation segments and holds an
 ``Attempt`` for every HTTP request the call made. The error from a failed call carries the attempts
-made up to that point.
+made up to that point. A client raises:
 
-Callers go through ``ModelClient`` for free-text replies (``complete``) and for replies validated
-against a pydantic output type (``complete_structured``, which also returns every completion the call took).
-``taskforge.llm.glm_client.GlmClient`` implements it.
+* ``ModelUnavailable`` once the retries or the infrastructure hold run out.
+* ``ContextExhausted`` for a prompt too long for the model's context window.
+* ``ModelRequestRejected`` for any other rejection a retry cannot fix.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
-
-from pydantic import BaseModel
-
-from taskforge.llm.policy import LLMPolicy, Message
 
 RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 """HTTP statuses a retry can cure: a timeout, rate limiting or a server-side failure."""
@@ -129,38 +124,3 @@ class ModelUnavailable(Exception):
     def __init__(self, message: str, attempts: Sequence[Attempt]) -> None:
         super().__init__(message)
         self.attempts = tuple(attempts)
-
-
-@dataclass(frozen=True)
-class StructuredResult[T]:
-    """The validated value of a structured call, with its completions in order; each repair adds a completion."""
-
-    value: T
-    completions: tuple[Completion, ...]
-
-
-class ModelClient(Protocol):
-    """Protocol for calling a model.
-
-    ``model`` is the model id. ``complete`` samples a free-text reply, with ``request_fields`` such as
-    ``tools`` added to the request body. ``complete_structured`` returns a reply validated as
-    ``output_type``. Implementations raise this module's errors:
-
-    * ``ModelUnavailable`` once the retries or the infrastructure hold run out.
-    * ``ContextExhausted`` for a prompt too long for the model's context window.
-    * ``ModelRequestRejected`` for any other rejection a retry cannot fix.
-    """
-
-    @property
-    def model(self) -> str: ...
-
-    async def complete(
-        self,
-        messages: Sequence[Message],
-        policy: LLMPolicy,
-        request_fields: Mapping[str, object] | None = None,
-    ) -> Completion: ...
-
-    async def complete_structured[T: BaseModel](
-        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
-    ) -> StructuredResult[T]: ...

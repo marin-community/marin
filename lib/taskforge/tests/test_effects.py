@@ -159,7 +159,7 @@ async def test_replay_uses_event_and_emit_time_fingerprints_in_any_order(policy:
         assert await ctx.emit(Number(1)) == (10 if policy == ReplayPolicy.CACHE else 100)
     await ctx.drain()
     assert executed == ([1] if policy == ReplayPolicy.CACHE else [2, 1, 1])
-    assert log.resolved()[-1].replayed == (policy == ReplayPolicy.CACHE)
+    assert [r.event for r in log.records if isinstance(r.event, Resolved)][-1].replayed == (policy == ReplayPolicy.CACHE)
     assert isinstance(log.lookup(Number(9), (fingerprint,)), Missing)
 
 

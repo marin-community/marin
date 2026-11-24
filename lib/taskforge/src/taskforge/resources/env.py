@@ -7,7 +7,7 @@ import errno
 import os
 import shlex
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -92,20 +92,22 @@ def _stable(result: CommandResult) -> tuple[str, ...]:
     return str(result.exit_code), result.stdout, result.stderr
 
 
-class _RecordedEnv(Env):
-    def __init__(self, image: str, notify: Notify) -> None:
+class RecordedEnv(Env):
+    """An environment whose fingerprint chains every command and write; subclasses call ``record_command`` and
+    ``record_write`` after each effect succeeds."""
+
+    def __init__(self, image: str) -> None:
         self.digest = digest((image,))
-        self.notify = notify
         self.closed = False
 
     @override
     def fingerprint(self) -> Fingerprint:
         return Fingerprint("env", self.digest, ReplayPolicy.REEXECUTE)
 
-    def _record_command(self, cmd: str, timeout: float, result: CommandResult) -> None:
+    def record_command(self, cmd: str, timeout: float, result: CommandResult) -> None:
         self.digest = digest((self.digest, "command", cmd, float(timeout), *_stable(result)))
 
-    def _record_write(self, path: PurePosixPath, data: bytes) -> None:
+    def record_write(self, path: PurePosixPath, data: bytes) -> None:
         self.digest = digest((self.digest, "write", str(path), digest(data)))
 
     @override
@@ -113,7 +115,7 @@ class _RecordedEnv(Env):
         for path, data in files:
             await self.write(path, data)
 
-    def _check_open(self) -> None:
+    def check_open(self) -> None:
         if self.closed:
             raise Restart("Environment is closed")
 
@@ -145,19 +147,17 @@ def _machine_issue(error: RuntimeError) -> Hold | Restart | Transient:
     return Transient(str(error))
 
 
-class ShellboxEnv(_RecordedEnv):
+class ShellboxEnv(RecordedEnv):
     """An owned Shellbox machine; nonzero command exits remain ordinary results."""
 
-    def __init__(
-        self, machine: Machine, image: str, notify: Notify, owned: AsyncExitStack, workdir: str = DEFAULT_WORKDIR
-    ) -> None:
+    def __init__(self, machine: Machine, image: str, owned: AsyncExitStack, workdir: str = DEFAULT_WORKDIR) -> None:
         self.machine, self.owned = machine, owned
         self.workdir = PurePosixPath(workdir)
-        super().__init__(image, notify)
+        super().__init__(image)
 
     @asynccontextmanager
     async def _operation(self, path: PurePosixPath | None = None) -> AsyncIterator[None]:
-        self._check_open()
+        self.check_open()
         try:
             yield
         except (MachineTerminated, ExecSetupFailed, MachineCancelled) as error:
@@ -204,7 +204,7 @@ class ShellboxEnv(_RecordedEnv):
             elapsed,
             result.stdout_truncated or result.stderr_truncated,
         )
-        self._record_command(cmd, timeout, value)
+        self.record_command(cmd, timeout, value)
         return value
 
     @override
@@ -237,7 +237,7 @@ class ShellboxEnv(_RecordedEnv):
             if never_connected(issue):
                 raise
             raise Restart(f"write outcome unknown: {issue}") from issue
-        self._record_write(path, data)
+        self.record_write(path, data)
 
     @override
     async def write_many(self, files: Sequence[tuple[PurePosixPath, bytes]]) -> None:
@@ -268,7 +268,7 @@ class ShellboxEnv(_RecordedEnv):
                 if result.exit_code != 0:
                     raise RuntimeError(f"Could not hydrate files: {result.stderr.decode(errors='replace')}")
         for path, data in files:
-            self._record_write(path, data)
+            self.record_write(path, data)
 
     @override
     async def close(self) -> None:
@@ -283,7 +283,6 @@ class ShellboxEnvFactory(EnvFactory):
     factory: MachineFactory
     runtime: MachineRuntimeSpec
     cleanup_timeout: float
-    notify: Notify
 
     @override
     async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
@@ -297,50 +296,7 @@ class ShellboxEnvFactory(EnvFactory):
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
         image = digest((requirements, self.runtime))
-        return ShellboxEnv(machine, image, self.notify, owned, requirements.working_directory or DEFAULT_WORKDIR)
-
-
-@dataclass(frozen=True, slots=True)
-class FakeCommand:
-    result: CommandResult
-    writes: Mapping[PurePosixPath, bytes]
-
-
-class FakeEnv(_RecordedEnv):
-    """An in-memory filesystem and explicitly scripted shell effects, without a shell parser."""
-
-    def __init__(self, image: str, commands: Mapping[str, FakeCommand | Transient | Restart], notify: Notify) -> None:
-        super().__init__(image, notify)
-        self.commands = commands
-        self.files: dict[PurePosixPath, bytes] = {}
-
-    @override
-    async def run(self, cmd: str, *, timeout: float) -> CommandResult:
-        self._check_open()
-        scripted = self.commands.get(cmd)
-        if scripted is None:
-            raise ValueError(f"Unscripted fake command: {cmd}")
-        if isinstance(scripted, Transient | Restart):
-            raise scripted
-        self.files.update(scripted.writes)
-        self._record_command(cmd, timeout, scripted.result)
-        return scripted.result
-
-    @override
-    async def read(self, path: PurePosixPath, *, offset: int = 0, limit: int | None = None) -> bytes:
-        self._check_open()
-        if offset < 0 or (limit is not None and limit < 0):
-            raise ValueError("offset and limit must be nonnegative")
-        try:
-            return self.files[path][offset : None if limit is None else offset + limit]
-        except KeyError as error:
-            raise FileNotFoundError(errno.ENOENT, "No such file", str(path)) from error
-
-    @override
-    async def write(self, path: PurePosixPath, data: bytes) -> None:
-        self._check_open()
-        self.files[path] = data
-        self._record_write(path, data)
+        return ShellboxEnv(machine, image, owned, requirements.working_directory or DEFAULT_WORKDIR)
 
 
 async def run_command(event: RunCommand, env: Env, *, notify: Notify) -> CommandResult:

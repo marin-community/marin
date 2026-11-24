@@ -5,6 +5,7 @@ from pathlib import PurePosixPath
 from typing import override
 
 import pytest
+from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv
 from lib.taskforge.tests.resources.rollout_fakes import twelve
 from rolloutengine.models import GradedRollout, Model, Rollout, RolloutInterrupted, RolloutOperation, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
@@ -12,7 +13,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.effects.events import Event, Retrying
 from taskforge.effects.issues import Restart, Transient
-from taskforge.resources.env import CommandResult, FakeCommand, FakeEnv, RunCommand, run_command
+from taskforge.resources.env import CommandResult, RunCommand, run_command
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout, run_rollout
 
 
@@ -25,11 +26,10 @@ class Notifications:
 
 
 class BusyEnv(FakeEnv):
-    def __init__(self, notes: Notifications) -> None:
+    def __init__(self) -> None:
         super().__init__(
             "image",
             {"build": FakeCommand(CommandResult(0, "done", "", 0, False), {PurePosixPath("/output"): b"done"})},
-            notes,
         )
         self.busy = True
 
@@ -43,7 +43,7 @@ class BusyEnv(FakeEnv):
 
 async def test_command_executor_retries_busy_machine_and_preserves_mutation() -> None:
     notes = Notifications()
-    env = BusyEnv(notes)
+    env = BusyEnv()
     event = RunCommand("build", 5)
     assert (await run_command(event, env, notify=notes)).stdout == "done"
     assert await env.read(PurePosixPath("/output")) == b"done"
@@ -52,7 +52,7 @@ async def test_command_executor_retries_busy_machine_and_preserves_mutation() ->
 
 async def test_command_executor_stops_unresolved_machine_at_retry_bound() -> None:
     notes = Notifications()
-    env = FakeEnv("image", {"build": Transient("busy")}, notes)
+    env = FakeEnv("image", {"build": Transient("busy")})
     initial = env.fingerprint()
     event = RunCommand("build", 5)
     with pytest.raises(Restart):

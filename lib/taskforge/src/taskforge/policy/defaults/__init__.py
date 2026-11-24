@@ -3,13 +3,8 @@
 
 # Source: Taskforge integration 9807c5cfb3, defaults/__init__.py.
 
-"""The package's default ``Policy``: ``policy.json`` and the prompt files under ``prompts/``."""
+"""The default policy directory, for ``taskforge.policy.load_policy``: ``policy.json`` and ``prompts/``."""
 
 from pathlib import Path
 
-from taskforge.policy import Policy, load_policy
-
 DEFAULTS_DIR = Path(__file__).parent
-DEFAULT_POLICY: Policy = load_policy(DEFAULTS_DIR)
-
-# Experiments enable adversaries explicitly; an empty roster explicitly disables adversarial validation.

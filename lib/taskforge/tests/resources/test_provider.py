@@ -99,7 +99,7 @@ async def test_endpoint_request_body_has_no_client_output_allowance(monkeypatch:
             super().__init__(transport=httpx.MockTransport(respond), **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(glm_client.httpx, "AsyncClient", MockClient)
-    provider = LLMProviderConfig("test", 1, 3600, 1, 60, 2, 600, 10, 1)
+    provider = LLMProviderConfig("test", 1, 3600, 1, 60, 2, 600, 10)
     source = FixedEndpoint(GlmEndpoint("http://fake/v1", "fake", Pool.BULK))
     async with GlmClient(source, provider, limit_output=False) as client:
         result = await client.complete(({"role": "user", "content": "hello"},), LLMPolicy(max_tokens=1))

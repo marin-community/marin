@@ -3,10 +3,13 @@
 
 import asyncio
 import json
+import shutil
+import subprocess
+import sys
 from argparse import Namespace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import override
@@ -14,6 +17,7 @@ from typing import override
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.iris_fakes import SITES, Fault, Injection, LocalController, local_iris_machine
 from lib.taskforge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
 from rolloutengine.engine import RolloutEngine
@@ -28,7 +32,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import STAGE_REPLAY_ATTEMPTS, run_workpiece
 from taskforge.effects.events import Note, StageCompleted
 from taskforge.effects.issues import Restart, Transient
-from taskforge.effects.log import EventLog, JsonlSink, fold
+from taskforge.effects.log import EventLog, JsonlSink, Status, fold
 from taskforge.harness.protocol import Stopped, StopReason
 from taskforge.llm.glm_client import EndpointSource
 from taskforge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
@@ -39,14 +43,12 @@ from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy
 from taskforge.resources.bundle import Resources
-from taskforge.resources.clock import Clock
-from taskforge.resources.env import CommandResult, EnvFactory, FakeCommand, FakeEnv, ShellboxEnv
+from taskforge.resources.env import CommandResult, EnvFactory, ShellboxEnv
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.ids import Ids
-from taskforge.resources.inference import FakeInference, InferenceRequest
+from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import Engine, RolloutResource
 from taskforge.resources.verifier import RoundVerifier
-from taskforge.resources.web import FakeWeb
 from taskforge.stages.classify import replayable_grade
 from taskforge.stages.rules import default_review
 from taskforge.wiring import build_config, install
@@ -54,7 +56,7 @@ from taskforge.wiring import build_config, install
 
 class RecordingEnv(FakeEnv):
     def __init__(self, commands: Mapping[str, FakeCommand], fail: bool) -> None:
-        super().__init__("workspace", commands, lambda _: None)
+        super().__init__("workspace", commands)
         self.executed: list[str] = []
         self.fail = fail
 
@@ -115,7 +117,6 @@ def resources(envs: EnvFactory, responses: Sequence[Completion]) -> Resources:
         FakeInference(responses),
         RolloutResource(SolverEngine(2), solver_model, "solver"),
         GradingResource(CandidateEngine(), "grader"),
-        Clock(lambda: 1),
         Ids(lambda: "workpiece"),
         {},
         FakeWeb({}, {}),
@@ -585,7 +586,7 @@ class HelperlessMachine(Machine):
 class HelperlessEnvs(EnvFactory):
     @override
     async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
-        return ShellboxEnv(HelperlessMachine(), "image", lambda _: None, AsyncExitStack())
+        return ShellboxEnv(HelperlessMachine(), "image", AsyncExitStack())
 
 
 # Review 2026-11-20 (follow-up 1): a missing guest `wc` was stored as a bug hold and failed the child process.
@@ -638,7 +639,7 @@ class LocalIrisEnvs(EnvFactory):
         workdir.mkdir(parents=True)
         self.created.append(workdir)
         machine = local_iris_machine(workdir, SandboxController(workdir, self.faults, self.prelude), self.cancel)
-        return ShellboxEnv(machine, "image", lambda _: None, AsyncExitStack())
+        return ShellboxEnv(machine, "image", AsyncExitStack())
 
 
 # Review 2026-11-20 (follow-up 3): a lost WebSocket upgrade reply reran the command in the same sandbox, and a
@@ -748,3 +749,65 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
     assert result.terminal is Terminal.ACCEPTED and result.session is not None
     assert [message.content for message in result.session.messages if message.tool_call_id == "read-proof"] == ["proof"]
     assert len(envs.created) == 2 and (envs.created[1] / "proof.txt").read_bytes() == b"proof"
+
+
+def test_a_second_process_replays_a_provider_context_refusal_without_asking_again(tmp_path: Path) -> None:
+    """A fresh process replays the recorded refusal without calling the recovered provider.
+
+    Both replay modes construct the same log in this revision.
+    """
+    probe, root = [sys.executable, "-m", "lib.taskforge.tests.context_replay_probe"], Path(__file__).parents[3]
+    stop = "('author stopped: context_limit after 1 turns: maximum context length exceeded',)"
+    for mode, calls in (("record", 1), ("launch", 0), ("resume", 0)):
+        done = subprocess.run([*probe, mode, str(tmp_path)], cwd=root, capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stderr[-3000:]
+        assert done.stdout.strip() == f"{mode}: abandoned, {stop}, {calls} provider call(s)"
+
+
+# Review 2026-11-21: a driver from before this revision cannot decode a context-refusal row; resumed
+# on such a held root it publishes a held workpiece describing its decode error over workpiece.json and status.json
+# and leaves events.jsonl as it was. This revision recovers from the untouched stream only under --resume-held.
+async def test_an_older_drivers_decode_error_snapshot_is_rebuilt_from_the_stream_only_on_resume_held(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposal: TaskProposal
+) -> None:
+    class Unavailable(SolverEngine):
+        @override
+        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+            return GradedRollout(Rollout(run_id or "trial", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
+
+    held = resources(Envs(), script("S"))
+    launches = iter(
+        (replace(held, rollouts=replace(held.rollouts, engine=Unavailable(2))), *(resources(Envs(), ()),) * 3)
+    )
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
+        yield config(arm), next(launches)
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    key, output = driver.proposal_key(driver_args.proposals), driver_args.output
+    control = tmp_path / "control" / key  # the same root, never touched by an older driver
+    shutil.copytree(destination, control)
+    stream = (destination / "events.jsonl").read_bytes()
+    # What the older driver publishes: its read of the stream failed before a log existed.
+    decode_error = Workpiece(
+        proposal.header.id, proposal, terminal=Terminal.HELD, decisions=(Incomplete(("bug: CorruptJournal ...",)),)
+    )
+    (destination / "workpiece.json").write_bytes(WORKPIECE.dump_json(decode_error))
+    (destination / "status.json").write_text(json.dumps(asdict(Status(terminal=Terminal.HELD))))
+    driver_args.work_dir += "-launch"
+    await driver.one(driver_args)  # an ordinary launch skips a published hold and repairs nothing
+    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()) == decode_error
+    driver_args.resume_held = True
+    for name, prefix in (("control", str(tmp_path / "control")), ("rebuilt", output)):
+        driver_args.output, driver_args.work_dir = prefix, str(tmp_path / f"work-{name}")
+        await driver.one(driver_args)
+    rebuilt, reference = (
+        WORKPIECE.validate_json((root / "workpiece.json").read_bytes()) for root in (destination, control)
+    )
+    assert rebuilt == reference and rebuilt.terminal is Terminal.ACCEPTED
+    assert (destination / "events.jsonl").read_bytes().startswith(stream)

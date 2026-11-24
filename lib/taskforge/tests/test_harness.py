@@ -12,6 +12,7 @@ from typing import override
 
 import httpx
 import pytest
+from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv, FakeInference, FakeWeb
 from lib.taskforge.tests.resources.iris_fakes import LocalController, local_iris_machine
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
@@ -51,8 +52,6 @@ from taskforge.model.workpiece import Conversation, Submission
 from taskforge.policy import GRADER_BASE_IMAGE
 from taskforge.resources.env import (
     CommandResult,
-    FakeCommand,
-    FakeEnv,
     ReadFile,
     RunCommand,
     ShellboxEnv,
@@ -63,10 +62,9 @@ from taskforge.resources.env import (
     write_file,
 )
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
-from taskforge.resources.inference import FakeInference
 from taskforge.resources.rollouts import Engine
 from taskforge.resources.sandbox.factories import shellsim_factory
-from taskforge.resources.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch, search
+from taskforge.resources.web import ParallelWeb, WebFetch, WebSearch, fetch, search
 from taskforge.stages.author import install_env
 
 pytestmark = pytest.mark.asyncio
@@ -86,7 +84,7 @@ def environment(ctx: Context) -> FakeEnv:
             CommandResult(0, "controls ready", "", 0.1, False), {PurePosixPath("/workspace/controls.json"): b"[]"}
         ),
     }
-    env = FakeEnv("image", scripts, ctx.emit)
+    env = FakeEnv("image", scripts)
     ctx.resource(env, env.fingerprint)
     ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
     ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
@@ -498,7 +496,7 @@ async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_
 
 
 def iris_env(ctx: Context, workdir: Path, controller: LocalController) -> ShellboxEnv:
-    env = ShellboxEnv(local_iris_machine(workdir, controller), "image", ctx.emit, AsyncExitStack(), str(workdir))
+    env = ShellboxEnv(local_iris_machine(workdir, controller), "image", AsyncExitStack(), str(workdir))
     install_env(ctx, env)
     return env
 
@@ -559,9 +557,7 @@ async def test_file_tool_infrastructure_failures_are_not_author_feedback(
 async def test_reading_a_shellsim_symlink_loop_is_tool_feedback() -> None:
     ctx = Context(log=EventLog())
     requirements = EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR)
-    env = await ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5, ctx.emit).create(
-        requirements
-    )
+    env = await ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5).create(requirements)
     install_env(ctx, env)
     try:
         await ctx.emit(RunCommand("ln -s /workspace/loop /workspace/loop", 5))

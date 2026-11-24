@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import override
 
 import pytest
+from lib.taskforge.tests.resource_doubles import FakeCommand, FakeEnv
 from lib.taskforge.tests.resources.iris_fakes import (
     RPC_SITES,
     Fault,
@@ -46,8 +47,6 @@ from taskforge.resources import env as env_module
 from taskforge.resources.env import (
     CommandResult,
     Env,
-    FakeCommand,
-    FakeEnv,
     ReadFile,
     RunCommand,
     ShellboxEnv,
@@ -125,12 +124,12 @@ async def create_env(request: pytest.FixtureRequest) -> AsyncIterator[Callable[[
     async def create() -> Env:
         match request.param:
             case "fake":
-                env = FakeEnv("test-image", {COMMAND: FakeCommand(VALUE, {OUTPUT: b"changed"})}, Notes())
+                env = FakeEnv("test-image", {COMMAND: FakeCommand(VALUE, {OUTPUT: b"changed"})})
             case "shellbox-memory":
                 machine = MemoryMachine()
                 owned = AsyncExitStack()
                 owned.push_async_callback(machine.close)
-                env = ShellboxEnv(machine, "test-image", Notes(), owned)
+                env = ShellboxEnv(machine, "test-image", owned)
             case _:
                 try:
                     factory = shellsim_factory()
@@ -138,9 +137,7 @@ async def create_env(request: pytest.FixtureRequest) -> AsyncIterator[Callable[[
                     pytest.skip("Optional sandbox dependency is not installed")
                 semantics = CommandSemantics.SHELL_SIMULATOR
                 requirements = EnvironmentRequirements(command_semantics=semantics, package_spec=PackageSpec())
-                env = await ShellboxEnvFactory(factory, machine_runtime(backend=request.param), 5, Notes()).create(
-                    requirements
-                )
+                env = await ShellboxEnvFactory(factory, machine_runtime(backend=request.param), 5).create(requirements)
         envs.append(env)
         return env
 
@@ -191,7 +188,7 @@ async def test_shellbox_failure_preserves_unresolved_history(
 ) -> None:
     machine = MemoryMachine()
     machine.failure = failure
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     before = env.fingerprint()
     with pytest.raises(decision):
         await env.run(COMMAND, timeout=5)
@@ -202,7 +199,7 @@ async def test_shellbox_unexpected_runtime_error_propagates_without_reclassifica
     machine = MemoryMachine()
     bug = RuntimeError("unexpected adapter bug")
     machine.failure = bug
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     with pytest.raises(RuntimeError) as caught:
         await env.run(COMMAND, timeout=5)
     assert caught.value is bug
@@ -219,7 +216,7 @@ async def test_shellbox_unexpected_runtime_error_propagates_without_reclassifica
 async def test_missing_file_is_tool_feedback_without_retry(operation: str, failure: Exception) -> None:
     machine = MemoryMachine()
     machine.failure = failure
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     before = env.fingerprint()
     with pytest.raises(FileNotFoundError) as caught:
         if operation == "read":
@@ -238,7 +235,7 @@ async def test_missing_file_is_tool_feedback_without_retry(operation: str, failu
 async def test_cpu_exhaustion_holds_with_reason_without_retry() -> None:
     machine = MemoryMachine()
     machine.failure = MachineResourceExhausted("ShellSim terminated: cpu_exhausted")
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     with pytest.raises(Hold, match="cpu_exhausted"):
         await run_command(RunCommand(COMMAND, 5), env, notify=Notes())
     assert machine.calls == 1
@@ -247,7 +244,7 @@ async def test_cpu_exhaustion_holds_with_reason_without_retry() -> None:
 @pytest.mark.parametrize("workdir", ["/workspace", "/custom/work"])
 async def test_relative_paths_use_environment_workdir(workdir: str) -> None:
     machine = MemoryMachine()
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack(), workdir)
+    env = ShellboxEnv(machine, "image", AsyncExitStack(), workdir)
     await env.write(PurePosixPath("release_notes.py"), b"notes")
     assert machine.files == {f"{workdir}/release_notes.py": b"notes"}
     assert await env.read(PurePosixPath("release_notes.py")) == b"notes"
@@ -258,7 +255,7 @@ async def test_relative_paths_use_environment_workdir(workdir: str) -> None:
 async def test_websocket_setup_failure_retries_only_three_times() -> None:
     machine = MemoryMachine()
     machine.failure = ExecSetupFailed("handshake refused")
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     events: list[Event[None]] = []
     with pytest.raises(Restart, match="exhausted its retry budget"):
         await run_command(RunCommand(COMMAND, 5), env, notify=events.append)
@@ -277,7 +274,7 @@ async def test_machine_startup_expected_failure_is_transient(
         yield MemoryMachine()
 
     monkeypatch.setattr(env_module, "prepare_machine", failed_start)
-    factory = ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5, Notes())
+    factory = ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5)
     with pytest.raises(Transient) as caught:
         await factory.create(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR))
     assert caught.value.__cause__ is failure
@@ -294,7 +291,7 @@ async def test_machine_startup_expected_failure_is_transient(
 async def test_directory_read_names_requested_path_without_retry(failure: Exception) -> None:
     machine = MemoryMachine()
     machine.failure = failure
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     with pytest.raises(IsADirectoryError) as caught:
         await read_file(ReadFile(PurePosixPath("/app")), env, notify=Notes())
     assert caught.value.filename == "/app"
@@ -305,7 +302,7 @@ async def test_noninteger_exec_status_requires_new_machine_without_retry() -> No
     detail = "container no longer accepts exec"
     machine = MemoryMachine()
     machine.failure = MachineTerminated(detail)
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     events: list[Event[None]] = []
     with pytest.raises(Restart) as caught:
         await write_file(WriteFile(OUTPUT, b"data"), env, notify=events.append)
@@ -347,14 +344,14 @@ async def test_write_backend_path_failures_are_normalized(code: int, simulated: 
         if simulated
         else GuestPathError(code, os.strerror(code), remote)
     )
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     with pytest.raises(expected) as caught:
         await env.write(OUTPUT, b"data")
     assert caught.value.filename == str(OUTPUT)
 
 
 def _iris_env(tmp_path: Path, controller: LocalController) -> ShellboxEnv:
-    return ShellboxEnv(local_iris_machine(tmp_path, controller), "image", Notes(), AsyncExitStack())
+    return ShellboxEnv(local_iris_machine(tmp_path, controller), "image", AsyncExitStack())
 
 
 def _counted(tmp_path: Path) -> RunCommand:
@@ -493,7 +490,7 @@ FILES = tuple((PurePosixPath(f"dir/f{index}.txt"), f"payload {index}\n".encode()
 def _sandbox(root: Path, faults: Sequence[Injection] = ()) -> tuple[ShellboxEnv, LocalController]:
     root.mkdir()
     controller = LocalController(faults)
-    return ShellboxEnv(local_iris_machine(root, controller), "image", Notes(), AsyncExitStack(), str(root)), controller
+    return ShellboxEnv(local_iris_machine(root, controller), "image", AsyncExitStack(), str(root)), controller
 
 
 async def _write(env: Env, count: int, notify: Callable[[Event[None]], object]) -> None:
@@ -577,7 +574,7 @@ async def test_host_staging_failure_holds_with_its_cause(monkeypatch: pytest.Mon
         raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), str(self))
 
     machine = MemoryMachine()
-    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(machine, "image", AsyncExitStack())
     monkeypatch.setattr(Path, "write_bytes", full_disk)
     with pytest.raises(Hold, match="No space left on device") as caught:
         await write_file(WriteFile(OUTPUT, b"data"), env, notify=Notes())
@@ -592,7 +589,7 @@ async def test_ordinary_iris_path_mistakes_are_tool_feedback_before_any_transfer
     (tmp_path / "dangling").symlink_to(tmp_path / "absent" / "file")
     (tmp_path / "parent-link").symlink_to(tmp_path / "absent")
     controller = LocalController()
-    env = ShellboxEnv(local_iris_machine(tmp_path, controller), "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(local_iris_machine(tmp_path, controller), "image", AsyncExitStack())
     cases = [
         (env.read(PurePosixPath(tmp_path / "directory")), errno.EISDIR, "directory"),
         (env.write(PurePosixPath(tmp_path / "loop"), b"x"), errno.ENOENT, "loop"),
@@ -624,7 +621,7 @@ async def test_broken_guest_helpers_hold_with_their_cause_in_one_bounded_probe(
 ) -> None:
     (tmp_path / "present.txt").write_text("present")
     controller = LocalController(prelude=f"{helper}() {{ echo '{helper}: not found' >&2; return 127; }}; ")
-    env = ShellboxEnv(local_iris_machine(tmp_path, controller), "image", Notes(), AsyncExitStack())
+    env = ShellboxEnv(local_iris_machine(tmp_path, controller), "image", AsyncExitStack())
     if operation == "read":
         path = tmp_path / ("present.txt" if helper == "wc" else "absent/deeper/file.txt")
         action = read_file(ReadFile(PurePosixPath(path)), env, notify=Notes())

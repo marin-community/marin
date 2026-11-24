@@ -244,7 +244,7 @@ print(int(staged.exists() and staged.read_text() == 'print(12)' and not Path('/w
     )
     resource = GradingResource(rollout_engine({"shellsim": shellsim_factory()}, command_timeout=None), "test")
     ctx = Context(log=EventLog())
-    env = await ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5, ctx.emit).create(
+    env = await ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5).create(
         requirements(image=None)
     )
     try:

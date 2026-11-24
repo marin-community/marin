@@ -18,7 +18,7 @@ This file covers how to run it.
 | `src/taskforge/harness/` | the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `validate`, `report`, `finish`, web) |
 | `src/taskforge/stages/` | `author`, `validate`, `review`; the review rules; prompt summaries |
 | `src/taskforge/model/` | frozen data: proposal, workpiece, task spec, verdicts, decisions |
-| `src/taskforge/llm/` | the GLM transport kept from the previous Taskforge: client, policy, structured output, wire helpers |
+| `src/taskforge/llm/` | the GLM transport kept from the previous Taskforge: client, policy, wire helpers |
 | `src/taskforge/policy/` | the policy record: `defaults/policy.json` and `defaults/prompts/<role>/*.md` |
 | `src/taskforge/lowering.py` | `TaskSpec` → `TaskRolloutSpec` for the host; the only place that chooses machines |
 | `src/taskforge/arms.py` | the S and T transition tables |
@@ -144,6 +144,17 @@ Replay reuses recorded model results only while the re-executed commands return 
 was recorded; after the first difference, the remaining model calls run again.
 Cancelling a driver sends SIGTERM to each workpiece process, which exits without a final snapshot:
 its `status.json` keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
+
+**Rollout rule: never resume a root with an earlier driver.** A context-window refusal of an agent's request
+(author, adversary or reviewer) is recorded in `events.jsonl` as a `context_exceeded` completion, so a resumed
+visit replays the stop. This revision and later ones read every row earlier drivers wrote; drivers before it
+cannot decode that row. Such a driver, resumed with `--resume-held` on a held root containing it, publishes a held
+workpiece describing its decode error over `workpiece.json` and `status.json`, and leaves `events.jsonl` untouched.
+No format number fences it: the older drivers predate every one, and so roots written by this revision or later must
+never be resumed by an earlier driver, and a rollback of the binary uses a fresh output prefix. If it happens anyway,
+an ordinary launch of this driver skips the root (it reads as published `held`) and leaves the decode error in place;
+a launch with `--resume-held` rebuilds the snapshot from the unchanged stream, equal to resuming the root had the
+older driver never touched it.
 
 While a driver is working on a workpiece, its `status.json` reads `terminal: null` with
 `upload_started_at`; the hub's `job describe` for a finished federated driver can keep saying
