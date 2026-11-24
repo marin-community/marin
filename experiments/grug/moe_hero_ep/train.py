@@ -174,6 +174,13 @@ class TrainingDataMode(StrEnum):
     SYNTHETIC = "synthetic"
 
 
+class GradientAccumulatorMemory(StrEnum):
+    """Placement of the gradient sum between microbatches."""
+
+    DEVICE = "device"
+    PINNED_HOST = "pinned_host"
+
+
 class RouterBiasMode(StrEnum):
     """How the router bias moves during training.
 
@@ -367,6 +374,7 @@ class GrugTrainerConfig:
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
     max_grad_norm: float | None = None
     microbatch_size: int | None = None
+    gradient_accumulator_memory: GradientAccumulatorMemory = GradientAccumulatorMemory.DEVICE
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
@@ -412,6 +420,8 @@ class GrugTrainerConfig:
                 raise ValueError("Microbatch accumulation requires a positive size and constant logical batch")
             if self.router_bias_mode != RouterBiasMode.FROZEN:
                 raise ValueError("Hero microbatch accumulation requires frozen router bias")
+        elif self.gradient_accumulator_memory != GradientAccumulatorMemory.DEVICE:
+            raise ValueError("Host gradient accumulation requires microbatch_size")
         if self.trainer.training_budget is not None and (
             not self.save_checkpoints or self.trainer.native_telemetry_root is None
         ):
@@ -1058,7 +1068,7 @@ class _AccumulatedGradients(NamedTuple):
     valid_tokens: jax.Array
 
 
-def _accumulated_loss_and_grads(params, batch, mp, z_loss, microbatch_size, logical_batch_size):
+def _accumulated_loss_and_grads(params, batch, mp, z_loss, microbatch_size, logical_batch_size, accumulator_memory):
     """Accumulate one logical update, excluding loader padding before a single clip/optimizer update."""
     physical_size = batch.tokens.shape[0]
     if physical_size % microbatch_size:
@@ -1083,21 +1093,32 @@ def _accumulated_loss_and_grads(params, batch, mp, z_loss, microbatch_size, logi
         return _AccumulatedGradients(loss, metrics, grads, count)
 
     initial = evaluate(jax.tree.map(lambda x: x[0], batched))
+    if accumulator_memory == GradientAccumulatorMemory.PINNED_HOST:
+        initial = initial._replace(gradients=_tree_to_memory_kind(initial.gradients, "pinned_host"))
 
     def accumulate(carry, piece):
         current = evaluate(piece)
+        previous_grads = carry.gradients
+        if accumulator_memory == GradientAccumulatorMemory.PINNED_HOST:
+            previous_grads = _tree_to_memory_kind(previous_grads, "device")
+        gradients = jax.tree.map(jnp.add, previous_grads, current.gradients)
+        if accumulator_memory == GradientAccumulatorMemory.PINNED_HOST:
+            gradients = _tree_to_memory_kind(gradients, "pinned_host")
         return (
             _AccumulatedGradients(
                 carry.loss + current.loss,
                 _merge_microbatch_metrics(carry.metrics, current.metrics, carry.valid_tokens, current.valid_tokens),
-                jax.tree.map(jnp.add, carry.gradients, current.gradients),
+                gradients,
                 carry.valid_tokens + current.valid_tokens,
             ),
             None,
         )
 
     accumulated, _ = jax.lax.scan(accumulate, initial, jax.tree.map(lambda x: x[1:], batched))
-    return (accumulated.loss, accumulated.metrics), accumulated.gradients
+    gradients = accumulated.gradients
+    if accumulator_memory == GradientAccumulatorMemory.PINNED_HOST:
+        gradients = _tree_to_memory_kind(gradients, "device")
+    return (accumulated.loss, accumulated.metrics), gradients
 
 
 def _compute_diagnostic_watch_stats(params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig):
@@ -1170,6 +1191,7 @@ def _make_train_step(
     special_tokens: SpecialTokenInit | None = None,
     microbatch_size: int | None = None,
     logical_batch_size: int | None = None,
+    gradient_accumulator_memory: GradientAccumulatorMemory = GradientAccumulatorMemory.DEVICE,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -1214,7 +1236,7 @@ def _make_train_step(
         else:
             assert logical_batch_size is not None
             (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-                qb_params, batch, mp, z_loss, microbatch_size, logical_batch_size
+                qb_params, batch, mp, z_loss, microbatch_size, logical_batch_size, gradient_accumulator_memory
             )
         metrics = {"train/loss": loss, **summarized_metrics}
         # The watch below reads the unclipped gradients, so grad/norm/* keep their pre-clip meaning.
@@ -1528,6 +1550,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         router_bias_mode=config.trainer.router_bias_mode,
         special_tokens=config.trainer.special_tokens,
         microbatch_size=config.trainer.microbatch_size,
+        gradient_accumulator_memory=config.trainer.gradient_accumulator_memory,
         logical_batch_size=trainer.train_batch_size if isinstance(trainer.train_batch_size, int) else None,
     )
 

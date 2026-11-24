@@ -49,6 +49,7 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
+    GradientAccumulatorMemory,
     GrugRunConfig,
     GrugTrainerConfig,
     RouterBiasMode,
@@ -465,6 +466,43 @@ def test_recomputing_moe_output_preserves_accumulated_updates(precision):
             states = [_trained_state(config, optimizer, mesh) for config in configs]
             for _ in range(4):
                 results = [step(state, batch) for state in states]
+                states = [result[0] for result in results]
+                for left, right in zip(jax.tree.leaves(states[0]), jax.tree.leaves(states[1]), strict=True):
+                    np.testing.assert_array_equal(np.asarray(left), np.asarray(right))
+                np.testing.assert_array_equal(
+                    np.asarray(results[0][1]["train/loss"]), np.asarray(results[1][1]["train/loss"])
+                )
+
+
+@pytest.mark.multidevice
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("precision", [_FP32, jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")])
+def test_host_gradient_accumulator_preserves_padded_updates(precision):
+    with use_test_devices(4) as devices:
+        mesh = _expert_sharded_mesh(devices)
+        with jax.set_mesh(mesh):
+            optimizer = _optimizer()
+            config = dataclasses.replace(_tiny_config(), remat_mode=model.OFFLOAD_CARRY_RECOMPUTE_MOE_REMAT_MODE)
+            tokens = jnp.asarray(np.random.default_rng(3).integers(0, 64, size=(12, 8), dtype=np.int32))
+            batch = GrugLmExample(tokens=tokens, loss_weight=jnp.ones((12, 8), jnp.float32).at[:, -1].set(0.0))
+            steps = [
+                _make_train_step(
+                    optimizer,
+                    precision,
+                    z_loss_weight=1e-4,
+                    ema_beta=None,
+                    max_grad_norm=1.0,
+                    offload_opt_state=True,
+                    router_bias_mode=RouterBiasMode.FROZEN,
+                    microbatch_size=4,
+                    logical_batch_size=10,
+                    gradient_accumulator_memory=memory,
+                )
+                for memory in GradientAccumulatorMemory
+            ]
+            states = [_trained_state(config, optimizer, mesh) for _ in steps]
+            for _ in range(4):
+                results = [step(state, batch) for step, state in zip(steps, states, strict=True)]
                 states = [result[0] for result in results]
                 for left, right in zip(jax.tree.leaves(states[0]), jax.tree.leaves(states[1]), strict=True):
                     np.testing.assert_array_equal(np.asarray(left), np.asarray(right))

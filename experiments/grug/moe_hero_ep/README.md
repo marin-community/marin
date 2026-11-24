@@ -51,7 +51,7 @@ For a native SFT memory gate, run `uv run python -m
 experiments.grug.moe_hero_ep.launch_diagnostics --native-config <resolved.json>
 --native-config-sha256 <sha256> --run-id <fresh-name> --num-steps <absolute-stop-step>
 --version <version> --run`. Set the absolute stop step to the initializer's step plus two.
-uses the pinned model, data cursor, optimizer schedule, batch accumulation and fleet unchanged.
+The diagnostic uses the pinned model, data cursor, optimizer schedule, batch accumulation and fleet unchanged.
 Only the fresh tracker identity, one-to-three-update stop, disabled eval/checkpoint writes and
 memory instrumentation differ. The diagnostic restores only the recorded initializer, writes
 to its own artifact output and prints compiled memory analysis before executing the first step.
@@ -63,6 +63,12 @@ recomputes the routed MoE output during backward instead of saving it on device.
 262K/CP4 hero shape the saved output spans 18 GiB per GPU across 48 layers; the compiled
 peak reduction can differ because other buffers can overlap it. The default remains
 `offload_carry`. Both modes require the same forced collective-overlap limit of one.
+
+`trainer.gradient_accumulator_memory: pinned_host` stores the running gradient sum on
+host between microbatches. Each addition and the optimizer update still execute on GPU
+in the same order and dtype. The default `device` placement is unchanged. At the hero
+shape this carry is about 35.09 GiB per rank; host transfers and compiler scheduling
+determine the actual device-memory saving and step cost. Qualify both before adoption.
 
 ## Inference export
 
