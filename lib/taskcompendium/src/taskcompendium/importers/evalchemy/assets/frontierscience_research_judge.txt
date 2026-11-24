@@ -1,0 +1,12 @@
+You are grading a science exam.
+You will be given the problem, attempted answer, and a rubric to grade the answer. The rubric will total up to 10 points.
+Evaluate the attempted answer against the provided rubric. Pay close attention to detail and grade it strictly, but fairly. Only evaluate against the rubric, as you yourself should not make any judgements (e.g., even if you think the answer is correct but rubric is wrong, you should treat the rubric as the gold standard). Return the absolute total number of points earned (it can be a decimal based on the rubric).
+***
+The problem: {problem}
+***
+The rubric: {rubric}
+***
+The attempted answer: {answer}
+***
+First, think step-by-step about each rubric item. Explain your reasoning for each rubric item.
+Then, tally the points up and write VERDICT: <total_points> in the last line of your response, no other text. For example, VERDICT: 2.5 or VERDICT: 8.
