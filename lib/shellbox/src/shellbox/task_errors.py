@@ -13,15 +13,12 @@ DAYTONA_DOCKER_SETUP_ERROR = "DaytonaDockerSetupError"
 DAYTONA_OUTPUT_UNAVAILABLE = "DaytonaOutputUnavailable"
 DAYTONA_PROCESS_ERROR = "DaytonaProcessError"
 MACHINE_TERMINATED = "MachineTerminated"
+# Shellbox raises its Daytona v2 failures under these names, never the SDK's generic class names
+# (ConnectionError, RateLimitError), which other libraries share. The Daytona-prefixed names above
+# remain for trial results persisted by the v0 SDK.
+DAYTONA_CAPACITY_EXHAUSTED = "DaytonaCapacityExhausted"
 DAYTONA_COMMAND_STOPPED = "DaytonaCommandStopped"
-# Daytona v2 SDK errors have generic class names; the Daytona-prefixed names
-# above remain for trial results persisted by the v0 SDK.
-CONFLICT_ERROR = "ConflictError"
-CONNECTION_ERROR = "ConnectionError"
-SANDBOX_CREATE_CONNECTION_ERROR = "SandboxCreateConnectionError"
-SANDBOX_CREATE_REQUEST_TIMEOUT_ERROR = "SandboxCreateRequestTimeoutError"
-CLIENT_TIMEOUT_ERROR = "ClientTimeoutError"
-SERVICE_UNAVAILABLE_ERROR = "ServiceUnavailableError"
+DAYTONA_PROVISIONING_ERROR = "DaytonaProvisioningError"
 
 
 SHELLBOX_ERROR_CATEGORIES = MappingProxyType(
@@ -35,21 +32,9 @@ SHELLBOX_ERROR_CATEGORIES = MappingProxyType(
         "DaytonaSandboxStopError": ErrorCategory.INFRASTRUCTURE,
         MACHINE_TERMINATED: ErrorCategory.INFRASTRUCTURE,
         "SnapshotQuotaExceeded": ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_CAPACITY_EXHAUSTED: ErrorCategory.INFRASTRUCTURE,
         DAYTONA_COMMAND_STOPPED: ErrorCategory.INFRASTRUCTURE,
-        CONFLICT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        CONNECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
-        SANDBOX_CREATE_CONNECTION_ERROR: ErrorCategory.INFRASTRUCTURE,
-        SANDBOX_CREATE_REQUEST_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        "SandboxTerminalStateError": ErrorCategory.INFRASTRUCTURE,
-        "LimitExceededError": ErrorCategory.INFRASTRUCTURE,
-        # Also the name of the OpenAI SDK's 429 error; both are provider throttling.
-        "RateLimitError": ErrorCategory.INFRASTRUCTURE,
-        "OverloadedError": ErrorCategory.INFRASTRUCTURE,
-        CLIENT_TIMEOUT_ERROR: ErrorCategory.INFRASTRUCTURE,
-        "RequestTimeoutError": ErrorCategory.INFRASTRUCTURE,
-        SERVICE_UNAVAILABLE_ERROR: ErrorCategory.INFRASTRUCTURE,
-        "CursorExpiredError": ErrorCategory.INFRASTRUCTURE,
-        "ProcessKillIncompleteError": ErrorCategory.INFRASTRUCTURE,
+        DAYTONA_PROVISIONING_ERROR: ErrorCategory.INFRASTRUCTURE,
     }
 )
 

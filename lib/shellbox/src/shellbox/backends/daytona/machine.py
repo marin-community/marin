@@ -307,6 +307,38 @@ class DaytonaOutputUnavailable(ConnectionError):
     """A command ran, but its output could not be read back from the sandbox."""
 
 
+class DaytonaCapacityExhausted(RuntimeError):
+    """Daytona refused a sandbox or image for the account's capacity or request rate."""
+
+
+class DaytonaProvisioningError(RuntimeError):
+    """Daytona could not prepare, create or delete a sandbox, or a created sandbox did not start."""
+
+
+@asynccontextmanager
+async def _provisioning_failures(action: str) -> AsyncIterator[None]:
+    """Raise a provider error from preparing, creating or deleting a sandbox under a Shellbox type.
+
+    Callers classify failures by exception name, and the SDK's names (``ConnectionError``,
+    ``RateLimitError``, ``ConflictError``) also name other libraries' errors. A lost or timed-out
+    request raises ``ConnectionError``, as the machine's commands do; a capacity or rate refusal
+    raises ``DaytonaCapacityExhausted``; any other failure raises ``DaytonaProvisioningError``.
+    """
+    try:
+        yield
+    except DaytonaRateLimitError as error:
+        raise DaytonaCapacityExhausted(f"Daytona cannot {action}: {error}") from error
+    except DaytonaError as error:
+        if is_ambiguous_daytona_error(error):
+            raise ConnectionError(f"Lost the connection to Daytona while trying to {action}: {error}") from error
+        raise DaytonaProvisioningError(f"Daytona could not {action}: {error}") from error
+
+
+async def _release_sandbox(client: AsyncDaytonaV2Client, claim: _SandboxClaim) -> None:
+    async with _provisioning_failures("delete the sandbox"):
+        await _delete_sandbox(client, claim)
+
+
 class DaytonaMachine:
     """One Daytona sandbox. Each command gets a fresh process and shared files."""
 
@@ -856,7 +888,7 @@ class DaytonaMachineFactory:
         timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
         self._check_spec(spec)
         request = image_request_for_spec(spec)
-        async with client_factory() as client, asyncio.timeout(timeout):
+        async with _provisioning_failures("prepare the image"), client_factory() as client, asyncio.timeout(timeout):
             return await ensure_image(client, request)
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
@@ -865,7 +897,7 @@ class DaytonaMachineFactory:
             if self.network_policy is None
             else self.network_policy.parameters()
         )
-        async with AsyncExitStack() as lifetime:
+        async with _provisioning_failures("create a sandbox"), AsyncExitStack() as lifetime:
             client = await lifetime.enter_async_context(self._clients()())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
@@ -873,7 +905,7 @@ class DaytonaMachineFactory:
                 image = await ensure_image(client, image_request_for_spec(spec))
                 name = f"shellbox-{uuid.uuid4().hex}"
                 claim = _SandboxClaim(name)
-                lifetime.push_async_callback(_delete_sandbox, client, claim)
+                lifetime.push_async_callback(_release_sandbox, client, claim)
                 try:
                     sandbox = await _create_sandbox(
                         client,
@@ -893,7 +925,7 @@ class DaytonaMachineFactory:
                 claim.sandboxes.append(sandbox)
                 claim.unanswered = False
                 if sandbox.state != STARTED_STATE:
-                    raise RuntimeError(f"Daytona sandbox {sandbox.id} is {sandbox.state}: {sandbox.error}")
+                    raise DaytonaProvisioningError(f"Daytona sandbox {sandbox.id} is {sandbox.state}: {sandbox.error}")
             if self.idle_timeout_minutes:
                 keepalive = asyncio.create_task(_keep_active(sandbox, self.idle_timeout_minutes * 60 / 3))
                 lifetime.push_async_callback(_stop_keepalive, keepalive)

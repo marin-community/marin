@@ -13,8 +13,8 @@ retry:
     - LLMRequestTimeoutError
     - SandboxBuildFailedError
     - TrialTimeoutError
-    - ConflictError
     - ConnectionError
+    - DaytonaCapacityExhausted
     - TmuxBatchProtocolError
     - TmuxSessionEndedError
     - TmuxExecTimeoutError

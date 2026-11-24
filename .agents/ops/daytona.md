@@ -138,9 +138,20 @@ uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-images \
    because concurrent identical builds can report a transient failure; a second
    failure raises with the provider's error.
 
-Shellbox has no automatic image purge: an unreferenced image can be one prepared
-for trials that have not started. Delete images only on an explicit operator
-request.
+Shellbox never deletes images on its own: an unreferenced image can be one
+prepared for trials that have not started. Delete images only on an explicit
+operator request, with `prune`. It selects Shellbox-named images that no spec in
+`--keep-specs` names, optionally only those older than `--older-than-days`, and
+lists them; `--delete` deletes them and keeps any image a sandbox still uses:
+
+```bash
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-images \
+  --api-key-env DAYTONA_RL_API_KEY prune --keep-specs /tmp/required-images.json \
+  --older-than-days 14
+```
+
+Pass the specs of every campaign that still runs in the account, then rerun with
+`--delete` after reviewing the list.
 
 `shellbox-daytona-usage` reads the project's limits and live use: the
 organization's concurrent-sandbox, image, volume and snapshot limits, the
@@ -163,9 +174,11 @@ machine-readable report. The reading moves as lanes start and stop, so re-read
 before large submissions.
 
 Limit exhaustion can fail every trial before scoring. A full concurrent-sandbox
-limit raises `LimitExceededError`; Shellbox retries throttled creation until the
-create deadline. Inspect an actual trial exception and preserve it separately
-from model errors. After any backend or image change, run the campaign's
+or image limit raises `DaytonaCapacityExhausted`; Shellbox retries throttled
+creation until the create deadline. A lost or timed-out provider request raises
+`ConnectionError`, and any other provisioning failure `DaytonaProvisioningError`;
+each keeps the SDK error as its cause. Inspect an actual trial exception and
+preserve it separately from model errors. After any backend or image change, run the campaign's
 end-to-end smoke before scaling collection.
 
 ## Sandbox lifecycle and idle cleanup
@@ -265,8 +278,8 @@ re-measurement; none changes a task's own instruction, files or grader.
 2. **Normalize the machine shape.** Daytona v2 image identity excludes machine
    resources, so differing shapes no longer multiply identities. Counts recorded
    for v0 snapshots included resources and are not comparable with v2 image
-   counts. The ten-environment threshold came from the v0 snapshot quota; v2
-   projects hold up to 1,000 images.
+   counts. The ten-environment threshold came from the v0 snapshot quota; read the
+   account's current image limit with `shellbox-daytona-usage`.
 3. **Keep the archive's environment in the converted task.** A converted task
    runs in the environment its archive specifies:
    `environment_fidelity.environment_unused` rejects a spec that replaces the

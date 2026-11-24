@@ -22,9 +22,8 @@ job:
     include_exceptions:
     - PhaseCancellationError
     - TimeoutError
-    - ConflictError
     - ConnectionError
-    - ClientTimeoutError
+    - DaytonaCapacityExhausted
     - TmuxExecTimeoutError
     - DaytonaOutputUnavailable
     - MachineTerminated

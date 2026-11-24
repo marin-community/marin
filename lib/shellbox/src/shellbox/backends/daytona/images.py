@@ -14,6 +14,8 @@ import hashlib
 from asyncio import sleep
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
 from functools import partial
 from pathlib import Path
 
@@ -149,3 +151,57 @@ async def ensure_image(client: AsyncDaytonaV2Client, request: ImageRequest) -> s
 async def list_images(client: AsyncDaytonaV2Client) -> list[Image]:
     """Read every named image in the authenticated project."""
     return [image async for image in client.images.iter()]
+
+
+class PruneAction(StrEnum):
+    WOULD_DELETE = "would delete"
+    DELETED = "deleted"
+    IN_USE = "in use"
+    GONE = "gone"
+
+
+@dataclass(frozen=True)
+class PrunedImage:
+    name: str
+    created_at: datetime
+    action: PruneAction
+
+
+def prune_candidates(images: list[Image], *, keep: frozenset[str], created_before: datetime | None) -> list[Image]:
+    """The Shellbox images that no kept spec names, and that predate ``created_before`` when it is set."""
+    return [
+        image
+        for image in images
+        if image.name is not None
+        and image.name.startswith(IMAGE_PREFIX)
+        and image.name not in keep
+        and (created_before is None or image.created_at < created_before)
+    ]
+
+
+async def prune_images(
+    client: AsyncDaytonaV2Client,
+    *,
+    keep: frozenset[str],
+    created_before: datetime | None,
+    delete: bool,
+) -> list[PrunedImage]:
+    """Delete, or only list, the Shellbox images that ``prune_candidates`` selects.
+
+    Images that Shellbox did not name are never selected. An image that a sandbox
+    still uses is kept and reported as in use.
+    """
+    pruned = []
+    for image in prune_candidates(await list_images(client), keep=keep, created_before=created_before):
+        assert image.name is not None
+        action = PruneAction.WOULD_DELETE
+        if delete:
+            try:
+                await retry_transient(partial(client.images.delete, image.id))
+                action = PruneAction.DELETED
+            except DaytonaConflictError:
+                action = PruneAction.IN_USE
+            except DaytonaNotFoundError:
+                action = PruneAction.GONE
+        pruned.append(PrunedImage(image.name, image.created_at, action))
+    return pruned

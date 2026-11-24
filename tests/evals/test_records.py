@@ -17,6 +17,8 @@ import pytest
 from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
+    CuratedRef,
+    CuratedSettings,
     EvalchemyRef,
     EvalRef,
     EvalRunRecord,
@@ -34,6 +36,7 @@ from evalrecords.records import (
     RunStatus,
     RunTiming,
     ServingParams,
+    TaskMachineSettings,
     read_record,
     read_records,
     scan_records,
@@ -110,6 +113,24 @@ def test_write_read_record_round_trip(tmp_path):
     reread = read_record(path)
 
     assert reread == _RECORD
+
+
+def test_a_record_from_a_daytona_v0_run_reads_without_its_image_build_setting(tmp_path):
+    settings = CuratedSettings(task_machine=TaskMachineSettings(cpus=2))
+    record = _RECORD.model_copy(
+        update={
+            "evaluation": EvalRef(
+                name="tb2", mechanism="curated", curated=CuratedRef(datasets=("s3://corpora/tb2",), settings=settings)
+            )
+        }
+    )
+    path = write_record(record, str(tmp_path))
+    # A v0 run stored how its Daytona images were built next to the machine resources.
+    stored = json.loads(Path(path).read_text())
+    stored["eval"]["curated"]["settings"]["task_machine"]["image_build"] = "declarative"
+    Path(path).write_text(json.dumps(stored))
+
+    assert read_record(path).evaluation.curated.settings == settings
 
 
 def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):

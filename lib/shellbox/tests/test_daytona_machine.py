@@ -17,6 +17,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,15 +37,17 @@ from daytona.v2 import (
 )
 from daytona.v2 import ConnectionError as ProviderConnectionError
 from shellbox.backends.daytona.connection import DaytonaConnection
-from shellbox.backends.daytona.images import ImageRequest, ensure_image, image_name
+from shellbox.backends.daytona.images import ImageRequest, PruneAction, ensure_image, image_name, prune_images
 from shellbox.backends.daytona.machine import (
     PROVIDER_DIAGNOSTIC_CHAR_LIMIT,
+    DaytonaCapacityExhausted,
     DaytonaCommandStopped,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
     DaytonaOutputUnavailable,
+    DaytonaProvisioningError,
     _create_sandbox,
     _delete_sandbox,
     _SandboxClaim,
@@ -138,13 +141,26 @@ class LocalImages:
     def __init__(self):
         self.images = {}
         self.submitted = []
+        self.in_use: set[str] = set()
 
-    def add(self, name, source, *, status="ready", error=None, pending_polls=0):
+    def add(self, name, source, *, status="ready", error=None, pending_polls=0, created_at=None):
         image = SimpleNamespace(
-            id=f"img_{len(self.images)}", name=name, status=status, error=error, source=source, polls=pending_polls
+            id=f"img_{len(self.images)}",
+            name=name,
+            status=status,
+            error=error,
+            source=source,
+            polls=pending_polls,
+            created_at=created_at or datetime(2026, 11, 1, tzinfo=UTC),
         )
         self.images[name] = image
         return image
+
+    async def delete(self, image_id):
+        if image_id in self.in_use:
+            raise ConflictError("Image is used by a sandbox", status_code=409)
+        image = self._find(image_id)
+        del self.images[image.name]
 
     def _find(self, name_or_id):
         for image in self.images.values():
@@ -436,7 +452,7 @@ def test_daytona_failed_setup_cancels_activity_renewal(lifecycle_client, monkeyp
 
         lifecycle_client.sandbox.process.run = failed_setup
         monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
-        with pytest.raises(DaytonaError):
+        with pytest.raises(DaytonaProvisioningError):
             await DaytonaMachineFactory(lambda: lifecycle_client).create(
                 MachineSpec(source=RegistryImage("fixture:latest"))
             )
@@ -478,6 +494,49 @@ def test_daytona_failed_creation_deletes_an_accepted_sandbox(no_retry_wait, fail
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("provider_error", "expected"),
+    [
+        (LimitExceededError("image limit reached", status_code=429), DaytonaCapacityExhausted),
+        (RateLimitError("too many requests", status_code=429), DaytonaCapacityExhausted),
+        (ProviderConnectionError("Connection reset by peer"), ConnectionError),
+        (ClientTimeoutError("Request timed out", status_code=408), ConnectionError),
+        (DaytonaError("invalid image reference", status_code=400), DaytonaProvisioningError),
+    ],
+    ids=["limit", "throttled", "lost-connection", "timed-out", "refused"],
+)
+def test_daytona_factory_raises_provider_failures_under_shellbox_types(no_retry_wait, provider_error, expected):
+    # Callers classify failures by name, and the SDK's names (ConnectionError, RateLimitError) are shared.
+    class FailingImages(LocalImages):
+        async def get(self, name_or_id, *, wait=None):
+            raise provider_error
+
+    client = LocalDaytona()
+    client.images = FailingImages()
+    factory = DaytonaMachineFactory(lambda: client)
+    spec = MachineSpec(source=RegistryImage("fixture:tag"))
+    for operation in (factory.prepare, factory.create):
+        with pytest.raises(expected) as caught:
+            asyncio.run(operation(spec))
+        assert type(caught.value) is expected and caught.value.__cause__ is provider_error
+
+
+@pytest.mark.requires_host_setsid
+def test_daytona_machine_close_raises_a_refused_deletion_under_a_shellbox_type(tmp_path):
+    refusal = DaytonaError("Sandbox cannot be deleted", status_code=400)
+
+    async def scenario():
+        client = FailedDeletion(refusal)
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        with pytest.raises(DaytonaProvisioningError) as caught:
+            await machine.close()
+        assert caught.value.__cause__ is refusal
+
+    asyncio.run(scenario())
+
+
 def test_daytona_refused_creation_skips_the_name_search():
     class RefusedCreate(LocalDaytona):
         searches = 0
@@ -490,8 +549,9 @@ def test_daytona_refused_creation_skips_the_name_search():
             return ()
 
     client = RefusedCreate()
-    with pytest.raises(LimitExceededError):
+    with pytest.raises(DaytonaCapacityExhausted) as caught:
         asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(source=RegistryImage("fixture:tag"))))
+    assert isinstance(caught.value.__cause__, LimitExceededError)
     # A refused create made no sandbox, so cleanup does not wait out eventually consistent search.
     assert client.searches == 0
     assert client.closed
@@ -1688,6 +1748,39 @@ def test_daytona_reuses_an_image_until_its_build_inputs_change(tmp_path: Path, m
     assert images.submitted == [names[0], names[3]]
     assert images.images[names[0]].source == (context.resolve(), "Dockerfile")
     assert all(client.deleted and client.closed for client in clients)
+
+
+def test_image_prune_lists_then_deletes_only_unneeded_shellbox_images():
+    images = LocalImages()
+    old, recent = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 11, 1, tzinfo=UTC)
+    kept = images.add(image_name(RegistryImage("kept:tag")), "kept:tag", created_at=old)
+    stale = images.add(image_name(RegistryImage("stale:tag")), "stale:tag", created_at=old)
+    images.add(image_name(RegistryImage("recent:tag")), "recent:tag", created_at=recent)
+    busy = images.add(image_name(RegistryImage("busy:tag")), "busy:tag", created_at=old)
+    # An image Shellbox did not name is never selected, whatever its age.
+    images.add("team-image", "team:tag", created_at=old)
+    images.in_use.add(busy.id)
+    client = SimpleNamespace(images=images)
+
+    def prune(delete):
+        return asyncio.run(
+            prune_images(
+                client, keep=frozenset({kept.name}), created_before=datetime(2026, 6, 1, tzinfo=UTC), delete=delete
+            )
+        )
+
+    listed = prune(delete=False)
+    assert {(image.name, image.action) for image in listed} == {
+        (stale.name, PruneAction.WOULD_DELETE),
+        (busy.name, PruneAction.WOULD_DELETE),
+    }
+    assert len(images.images) == 5
+    pruned = prune(delete=True)
+    assert {(image.name, image.action) for image in pruned} == {
+        (stale.name, PruneAction.DELETED),
+        (busy.name, PruneAction.IN_USE),
+    }
+    assert stale.name not in images.images and {kept.name, busy.name, "team-image"} <= images.images.keys()
 
 
 @dataclass(frozen=True)

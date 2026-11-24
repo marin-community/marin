@@ -4,7 +4,8 @@
 """Operate Daytona images without ad-hoc scripts.
 
 ``shellbox-daytona-images`` compares a project's image inventory with
-supplied image specs and creates the missing images before a campaign.
+supplied image specs, creates the missing images before a campaign and
+prunes the Shellbox images that no current spec needs.
 """
 
 import argparse
@@ -12,12 +13,13 @@ import asyncio
 import json
 import os
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from daytona import AsyncDaytonaV2Client
 
 from shellbox.backends.daytona.connection import DaytonaConnection
-from shellbox.backends.daytona.images import IMAGE_PREFIX, ImageRequest, ensure_image, list_images
+from shellbox.backends.daytona.images import IMAGE_PREFIX, ImageRequest, ensure_image, list_images, prune_images
 
 
 def _load_specs(source: str) -> list[ImageRequest]:
@@ -85,6 +87,21 @@ async def _ensure(client: AsyncDaytonaV2Client, requests: list[ImageRequest]) ->
     _print_rows(("NAME", "STATUS"), rows)
 
 
+async def _prune(client: AsyncDaytonaV2Client, arguments: argparse.Namespace) -> None:
+    if arguments.keep_specs is None and arguments.older_than_days is None:
+        raise SystemExit("prune needs --keep-specs, --older-than-days or both")
+    keep = (
+        frozenset(request.name for request in _load_specs(arguments.keep_specs)) if arguments.keep_specs else frozenset()
+    )
+    created_before = (
+        datetime.now(UTC) - timedelta(days=arguments.older_than_days) if arguments.older_than_days is not None else None
+    )
+    pruned = await prune_images(client, keep=keep, created_before=created_before, delete=arguments.delete)
+    _print_rows(
+        ("NAME", "CREATED", "ACTION"), [(image.name, image.created_at.isoformat(), image.action) for image in pruned]
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="shellbox-daytona-images",
@@ -104,6 +121,10 @@ def _parser() -> argparse.ArgumentParser:
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--specs", required=True, help="Image-spec JSON file; use - to read stdin.")
+    prune = commands.add_parser("prune", help="List, or with --delete delete, Shellbox images that no kept spec names.")
+    prune.add_argument("--keep-specs", help="Image-spec JSON whose images are kept; use - to read stdin.")
+    prune.add_argument("--older-than-days", type=float, help="Select only images created more than this long ago.")
+    prune.add_argument("--delete", action="store_true", help="Delete the selected images; without it, only list them.")
     return parser
 
 
@@ -113,8 +134,10 @@ async def _run(arguments: argparse.Namespace) -> None:
             await _inventory(client, as_json=arguments.json)
         elif arguments.command == "plan":
             await _plan(client, _load_specs(arguments.specs))
-        else:
+        elif arguments.command == "ensure":
             await _ensure(client, _load_specs(arguments.specs))
+        else:
+            await _prune(client, arguments)
 
 
 def main() -> None:

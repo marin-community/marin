@@ -154,7 +154,7 @@ evaluations:
 ```
 
 On Daytona, each distinct environment becomes one named image that later machines
-reuse; nothing deletes these images, and the project allows 1,000 of them.
+reuse; `shellbox-daytona-images prune` deletes the ones no current spec needs.
 
 Each attempt holds a task machine, and the agent's time budget includes the model's latency,
 which grows with load. `run.concurrency` bounds the attempts that run at once; the model's

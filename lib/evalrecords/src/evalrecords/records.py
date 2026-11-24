@@ -382,6 +382,14 @@ class TaskMachineSettings(BaseModel):
     storage_mb: int | None = Field(default=None, gt=0)
     startup_timeout: float = Field(default=600, gt=0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def read_daytona_v0_records(cls, value: Any) -> Any:
+        # Records of Daytona v0 runs chose how images were built; v2 has one image path.
+        if isinstance(value, dict) and "image_build" in value:
+            value = {key: item for key, item in value.items() if key != "image_build"}
+        return value
+
 
 class EvaluationOverrides(BaseModel):
     """Run policy supplied by a suite or campaign."""

@@ -224,6 +224,18 @@ async def _model_turn(
     )
 
 
+def _provider_error(error: BaseException) -> DaytonaError | None:
+    """The first Daytona SDK error in ``error``'s chain of causes."""
+    current: BaseException | None = error
+    seen = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, DaytonaError):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
+    return None
+
+
 def _failed_rollout(
     interruption: GradedRolloutInterrupted,
     lowered: TaskRolloutSpec,
@@ -243,8 +255,9 @@ def _failed_rollout(
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
         diagnostics["cause_error_type"] = type(error.__cause__).__name__
         diagnostics["machine_operation"] = error.operation.value
-        provider_error = error.__cause__
-        if isinstance(provider_error, DaytonaError):
+        # Shellbox raises a provider failure under its own type with the SDK error as its cause.
+        provider_error = _provider_error(error.__cause__)
+        if provider_error is not None:
             if type(provider_error.status_code) is int and 100 <= provider_error.status_code <= 599:
                 diagnostics["provider_status_code"] = provider_error.status_code
             retry_after = provider_error.retry_after_seconds

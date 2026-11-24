@@ -146,7 +146,7 @@ class DaytonaProcessSession(StreamProcessSession):
         self._release(self)
         await self._output.finish()
         try:
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with asyncio.timeout(INTERRUPT_TIMEOUT), self._provider_failures():
                 # The tag also reaches a process whose start request never answered, and every
                 # descendant it started, including detached ones.
                 await self._process.kill_all(tag=self.name, timeout=INTERRUPT_TIMEOUT / 2)

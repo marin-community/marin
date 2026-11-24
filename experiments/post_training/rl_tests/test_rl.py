@@ -521,11 +521,17 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "train-long": {"2026.11.20.4": "e105d46c"},
             "train-long-3rack": {"2026.11.20.4": "9734d621"},
             "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "1617b1d3"},
-            "train-long-agentic": {"2026.11.20.6": "a3e2befe", "2026.11.20.7": "e1245985", "2026.11.23.1": "64b9b3a9"},
+            "train-long-agentic": {
+                "2026.11.20.6": "a3e2befe",
+                "2026.11.20.7": "e1245985",
+                "2026.11.23.1": "64b9b3a9",
+                "2026.11.24.1": "b32f8f58",
+            },
             "train-long-agentic-3rack": {
                 "2026.11.20.6": "b8f3bba7",
                 "2026.11.20.7": "d540f763",
                 "2026.11.23.1": "c6c69bae",
+                "2026.11.24.1": "49f082ca",
             },
         }
         with monkeypatch.context() as local:
@@ -613,6 +619,7 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.6": "76baa3fb",
             "2026.11.20.7": "9ceb90cb",
             "2026.11.23.1": "f542cdc3",
+            "2026.11.24.1": "c80a5f61",
         },
         "train-medium-agentic": {
             "2026.11.19.1": "756f58ef",
@@ -620,8 +627,14 @@ def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, r
             "2026.11.20.4": "f76d6b51",
             "2026.11.20.5": "aa36f9de",
             "2026.11.23.1": "9466c845",
+            "2026.11.24.1": "bc411491",
         },
-        "train-long-agentic": {"2026.11.20.4": "7123c960", "2026.11.20.5": "0043357f", "2026.11.23.1": "e14d7fef"},
+        "train-long-agentic": {
+            "2026.11.20.4": "7123c960",
+            "2026.11.20.5": "0043357f",
+            "2026.11.23.1": "e14d7fef",
+            "2026.11.24.1": "c037565b",
+        },
         "train-medium-tools": {"2026.11.20.1": "45b0a101"},
         "eval-short": {
             "2026.11.19.1": "8144570a",
