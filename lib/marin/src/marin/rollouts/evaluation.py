@@ -520,21 +520,19 @@ class _EvaluationWriter:
             await asyncio.shield(pending)
             raise
 
-    async def commit(self, write: Callable[[Transaction], object]) -> None:
+    async def _commit(self, open_transaction: Callable[[], Transaction], write: Callable[[Transaction], object]) -> None:
         def commit_transaction() -> None:
-            with self.store.transaction() as transaction:
+            with open_transaction() as transaction:
                 write(transaction)
 
         await self._run(commit_transaction)
+
+    async def commit(self, write: Callable[[Transaction], object]) -> None:
+        await self._commit(self.store.transaction, write)
 
     async def commit_attempt(self, write: Callable[[Transaction], object]) -> None:
         """Commit one attempt's evidence, which long agent episodes can make larger than a batch's byte limit."""
-
-        def commit_transaction() -> None:
-            with self.store.unbounded_transaction() as transaction:
-                write(transaction)
-
-        await self._run(commit_transaction)
+        await self._commit(self.store.unbounded_transaction, write)
 
     async def append_rows(self, table: str, rows: list[dict]) -> None:
         await self.commit(lambda transaction: transaction.table(table).extend(rows))
