@@ -987,7 +987,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             "3TB",
             "tests/python-tokenizer",
         )
-        assert read_attempt(inspection["export"], inspection["attempt"]) is None
+        prepared = read_attempt(inspection["export"], inspection["attempt"])
+        assert prepared is not None and prepared.index is not None
+        assert prepared.index.model == table.model and prepared.index.preset == preset.name
         native_calls.append(command)
         shutil.copytree(staged, source, dirs_exist_ok=True)
         stored = json.loads((source / "terminal.json").read_text())
