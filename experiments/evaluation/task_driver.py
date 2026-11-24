@@ -52,16 +52,40 @@ def submit_evaluation(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     responses_from: str | None = None,
 ) -> Job:
-    """Submit a disposable privileged CPU worker; Shellbox contains every grader command."""
-    roots = (*datasets, output, *((responses_from,) if responses_from else ()))
-    if any(not StoragePath(root).is_remote for root in roots):
-        raise ValueError(
-            "Iris evaluation requires shared object-storage corpus, output and --responses-from roots; "
-            "use --local for local files"
-        )
+    """Submit ``run_worker``, which reads the model and judge connections from ``secrets``."""
     config = execution_config(config)
+    return submit_worker(
+        client,
+        Entrypoint.from_callable(run_worker, datasets, output, config, max_attempts, responses_from),
+        (*datasets, output, *((responses_from,) if responses_from else ())),
+        config,
+        name=name,
+        resources=resources,
+        timeout=timeout,
+        secrets=secrets,
+    )
+
+
+def submit_worker(
+    client: IrisClient,
+    entrypoint: Entrypoint,
+    roots: tuple[str, ...],
+    config: EvaluationRunConfig,
+    *,
+    name: str,
+    resources: ResourceSpec,
+    timeout: int,
+    secrets: dict[str, str],
+) -> Job:
+    """Submit a disposable privileged CPU worker; Shellbox contains every grader command.
+
+    ``roots`` are the storage roots that ``entrypoint`` reads and writes. The machines of ``config``, an
+    ``execution_config``, select the worker's packages and egress.
+    """
+    if local := [root for root in roots if not StoragePath(root).is_remote]:
+        raise ValueError(f"Iris evaluation requires shared object-storage roots; use --local for local files: {local}")
     return client.submit(
-        entrypoint=Entrypoint.from_callable(run_worker, datasets, output, config, max_attempts, responses_from),
+        entrypoint=entrypoint,
         name=name,
         resources=resources,
         environment=EnvironmentSpec(setup_scripts=(worker_setup_script(config),), secrets=secrets),
@@ -70,6 +94,21 @@ def submit_evaluation(
         timeout=Duration.from_seconds(timeout),
         max_retries_failure=0,
     )
+
+
+def add_worker_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add ``--cluster`` or ``--local``, and the Iris worker's name, resources, lifetime and wait flags."""
+    execution = parser.add_mutually_exclusive_group()
+    execution.add_argument("--cluster", default=DEFAULT_CLUSTER, help="Iris cluster for the CPU evaluation worker.")
+    execution.add_argument(
+        "--local", action="store_true", help="Run on this host, which must support Shellbox bubblewrap."
+    )
+    parser.add_argument("--job-name", default=None, help="Iris job name; generated when omitted.")
+    parser.add_argument("--cpu", type=float, default=4)
+    parser.add_argument("--memory", default="32g")
+    parser.add_argument("--disk", default="64g")
+    parser.add_argument("--timeout", type=int, default=WORKER_TIMEOUT, help="Iris worker lifetime in seconds.")
+    parser.add_argument("--no-wait", action="store_true", help="Return after Iris submission.")
 
 
 def main() -> None:
@@ -98,17 +137,7 @@ def main() -> None:
         default="DAYTONA_EVAL_API_KEY",
         help="Daytona eval-org key, read when the run config selects Daytona machines.",
     )
-    execution = parser.add_mutually_exclusive_group()
-    execution.add_argument("--cluster", default=DEFAULT_CLUSTER, help="Iris cluster for the CPU evaluation worker.")
-    execution.add_argument(
-        "--local", action="store_true", help="Run on this host, which must support Shellbox bubblewrap."
-    )
-    parser.add_argument("--job-name", default=None, help="Iris job name; generated when omitted.")
-    parser.add_argument("--cpu", type=float, default=4)
-    parser.add_argument("--memory", default="32g")
-    parser.add_argument("--disk", default="64g")
-    parser.add_argument("--timeout", type=int, default=WORKER_TIMEOUT, help="Iris worker lifetime in seconds.")
-    parser.add_argument("--no-wait", action="store_true", help="Return after Iris submission.")
+    add_worker_arguments(parser)
     parser.add_argument(
         "--max-attempts",
         type=int,

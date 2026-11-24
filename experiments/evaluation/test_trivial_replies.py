@@ -4,12 +4,19 @@
 """Replies that ignore the task are scored through the evaluation driver and reduced per benchmark."""
 
 import json
+from contextlib import nullcontext
+from inspect import signature
+from types import SimpleNamespace
 
 import pytest
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE
 from evalrecords.rollout_results import logical_samples
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
+from iris.client.client import IrisClient
+from iris.cluster.client import remote_client
+from iris.cluster.types import Entrypoint
+from iris.rpc import controller_pb2, job_pb2
 from marin.rollouts.evaluation import EvaluationRunConfig, ModelIdentity
 from rolloutengine.models import RolloutLimits
 from taskcompendium.convert.answers import answer_task, exact_answer_task, ifeval_task, numeric_answer_task
@@ -23,6 +30,7 @@ from verifyit.spec import Constraint, ExactSpec
 from zephyr.context import ZephyrContext
 
 from experiments.evaluation import trivial_replies
+from experiments.evaluation.task_driver import JUDGE_API_KEY, JUDGE_ENDPOINT, SOLVER_API_KEY, SOLVER_ENDPOINT
 
 LOWERCASE = {"kind": "lowercase", "prompt": "Write a poem in all lowercase letters."}
 ZERO = {"kind": "zero", "prompt": "What is 5 minus 5?"}
@@ -94,35 +102,40 @@ def publish_corpus(tmp_path, rows: list[dict]) -> str:
     return str(corpus)
 
 
+def run_config(*, source_limit: int | None = None, task_secrets: tuple[str, ...] = ()) -> EvaluationRunConfig:
+    return EvaluationRunConfig(
+        model=ModelIdentity(
+            name="solver",
+            revision="model-pin",
+            tokenizer="solver",
+            tokenizer_revision="tokenizer-pin",
+            context_window=1024,
+            serving={"backend": "fixture"},
+        ),
+        max_tokens=16,
+        concurrency=2,
+        source_limit=source_limit,
+        task_secrets=task_secrets,
+        limits=RolloutLimits(
+            max_turns=1,
+            max_total_tokens=None,
+            model_turn_timeout=10,
+            tool_turn_timeout=10,
+            total_turn_timeout=20,
+            attempt_timeout=30,
+            verifier_timeout=10,
+            cleanup_timeout=10,
+        ),
+    )
+
+
 @pytest.fixture
 def run_floor(tmp_path, monkeypatch, capsys):
     """Run the launcher's CLI on a corpus of ``rows``; return its result root and the table it prints."""
     monkeypatch.setattr(trivial_replies, "load_tokenizer", lambda *_args, **_kwargs: WordTokenizer())
 
     def run(rows: list[dict], *arguments: str, source_limit: int | None = None) -> tuple[str, list[str]]:
-        config = EvaluationRunConfig(
-            model=ModelIdentity(
-                name="solver",
-                revision="model-pin",
-                tokenizer="solver",
-                tokenizer_revision="tokenizer-pin",
-                context_window=1024,
-                serving={"backend": "fixture"},
-            ),
-            max_tokens=16,
-            concurrency=2,
-            source_limit=source_limit,
-            limits=RolloutLimits(
-                max_turns=1,
-                max_total_tokens=None,
-                model_turn_timeout=10,
-                tool_turn_timeout=10,
-                total_turn_timeout=20,
-                attempt_timeout=30,
-                verifier_timeout=10,
-                cleanup_timeout=10,
-            ),
-        )
+        config = run_config(source_limit=source_limit)
         config_path = tmp_path / "run.json"
         config_path.write_text(config.model_dump_json())
         output = str(tmp_path / "results")
@@ -130,6 +143,7 @@ def run_floor(tmp_path, monkeypatch, capsys):
             "sys.argv",
             [
                 "trivial_replies",
+                "--local",
                 "--dataset",
                 publish_corpus(tmp_path, rows),
                 "--output",
@@ -185,3 +199,60 @@ def test_json_replies_answer_json_value_tasks_that_reject_the_plain_replies(run_
     }
     assert outcomes == {"word": ["submission_failure"], "json_word": ["graded"]}
     assert table[-1] == "| floor | accuracy | 0.000 (0/1) | 1.000 (1/1) |"
+
+
+@pytest.fixture
+def iris_submission(tmp_path, monkeypatch):
+    """Run the launcher's CLI against a recording Iris controller; return the CLI runner and the launch requests."""
+    requests = []
+
+    def launch(request, **_kwargs):
+        requests.append(request)
+        return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
+
+    monkeypatch.setattr(
+        remote_client,
+        "ControllerServiceClientSync",
+        lambda **_kwargs: SimpleNamespace(launch_job=launch, close=lambda: None),
+    )
+    config_path = tmp_path / "run.json"
+
+    def submit(config: EvaluationRunConfig, *arguments: str) -> None:
+        config_path.write_text(config.model_dump_json())
+        monkeypatch.setattr("sys.argv", ["trivial_replies", "--config", str(config_path), "--no-wait", *arguments])
+        with IrisClient.remote("http://controller.invalid") as client:
+            monkeypatch.setattr(trivial_replies, "open_iris_client", lambda **_kwargs: nullcontext(client))
+            trivial_replies.main()
+
+    return submit, requests
+
+
+def test_cli_submits_every_reply_to_one_iris_worker_without_model_connections(iris_submission, monkeypatch, capsys):
+    submit, requests = iris_submission
+    monkeypatch.setenv("FIXTURE_TASK_TOKEN", "secret-task-token")
+    config = run_config(task_secrets=("FIXTURE_TASK_TOKEN",))
+    roots = ("--dataset", "s3://fixture/corpus", "--output", "s3://fixture/floor")
+    submit(config, *roots, "--reply", "word", "--reply", "echo")
+
+    (request,) = requests
+    assert capsys.readouterr().out.split() == [request.name]
+    assert request.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED
+    worker, arguments, options = Entrypoint.from_proto(request.entrypoint).resolve()
+    assert worker is trivial_replies.evaluate_replies
+    assert signature(worker).bind(*arguments, **options).arguments == {
+        "datasets": ("s3://fixture/corpus",),
+        "output": "s3://fixture/floor",
+        "config": config,
+        "replies": (trivial_replies.TrivialReply.WORD, trivial_replies.TrivialReply.ECHO),
+        "max_attempts": trivial_replies.DEFAULT_MAX_ATTEMPTS,
+    }
+    assert request.environment.secrets["FIXTURE_TASK_TOKEN"] == "secret-task-token"
+    assert b"secret-task-token" not in request.entrypoint.SerializeToString()
+    assert {SOLVER_ENDPOINT, SOLVER_API_KEY, JUDGE_ENDPOINT, JUDGE_API_KEY}.isdisjoint(request.environment.secrets)
+
+
+def test_cli_refuses_to_submit_local_roots_to_iris(tmp_path, iris_submission):
+    submit, requests = iris_submission
+    with pytest.raises(ValueError, match="shared object-storage roots"):
+        submit(run_config(), "--dataset", "s3://fixture/corpus", "--output", str(tmp_path / "floor"))
+    assert requests == []
