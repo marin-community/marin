@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import timedelta
 import json
+import pickle
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +18,7 @@ from torch.distributed.checkpoint.metadata import MetadataIndex
 from torch.distributed._shard.sharded_tensor import Shard, init_from_local_shards
 import torch.multiprocessing as mp
 
+from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
 from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
 from skyrl_train.distributed.megatron.checkpoint_writer import MasterWeightsWriter
 from skyrl_train.io.torch_distributed_checkpoint import StreamingFsspecWriter
@@ -372,3 +374,27 @@ def test_cached_checkpoint_change_on_one_rank_invalidates_all_ranks(tmp_path, ca
         events = json.loads((tmp_path / "distributed" / f"rank-{rank}-events.json").read_text())
         assert [event["cache_reused"] for event in events] == [False, False, True, True] * 2
         assert [event["cache_invalidated"] for event in events] == [True, False, False, False] * 2
+
+
+@pytest.mark.parametrize("optimizer_class", [torch.optim.AdamW, torch.optim.SGD])
+def test_checkpoint_metadata_restricts_optimizer_classes_to_the_restore_scope(tmp_path, optimizer_class):
+    checkpoint_path = tmp_path / "checkpoint"
+    checkpoint_path.mkdir()
+    common_file = checkpoint_path / "common.pt"
+    torch.save({"optimizer": {"defaults": {"cpu_optimizer_cls": optimizer_class}}, "step": 22}, common_file)
+    source_bytes = common_file.read_bytes()
+    with pytest.raises(pickle.UnpicklingError):
+        torch.load(common_file, weights_only=True)
+
+    with remote_checkpoint_metadata(str(checkpoint_path), optimizer_classes=(torch.optim.AdamW,)) as read_dir:
+        if optimizer_class is torch.optim.AdamW:
+            restored = torch.load(Path(read_dir) / "common.pt", weights_only=True)
+            assert restored["optimizer"]["defaults"]["cpu_optimizer_cls"] is torch.optim.AdamW
+            assert restored["step"] == 22
+        else:
+            with pytest.raises(pickle.UnpicklingError):
+                torch.load(Path(read_dir) / "common.pt", weights_only=True)
+
+    assert common_file.read_bytes() == source_bytes
+    with pytest.raises(pickle.UnpicklingError):
+        torch.load(common_file, weights_only=True)
