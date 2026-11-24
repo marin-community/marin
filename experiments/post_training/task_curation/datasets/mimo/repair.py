@@ -29,10 +29,12 @@ Faithfulness notes
 """
 
 import argparse
+import datetime
 import hashlib
 import json
 import re
 import shutil
+import subprocess
 import tomllib
 from collections import Counter
 from dataclasses import dataclass
@@ -44,6 +46,7 @@ import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.harbor.root_delivery import TEST_EXIT, TEST_OUTPUT, native_file_reward_grader
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
 from taskcompendium.models import TaskSpec, VerifierCommand, require_resolved_environment
 from taskcompendium.runtime.resources import resource_bytes
@@ -216,6 +219,25 @@ class TaskExclusion:
     evidence: str
 
 
+CONVERSION_RECEIPT_PROTOCOL = "mimo-taskspec-conversion-v1"
+CONVERTER_NAME = "experiments.post_training.task_curation.datasets.mimo.repair"
+
+
+def converter_revision() -> str:
+    """The landing revision the converter runs from, read from its own checkout."""
+    root = Path(__file__).resolve().parents[4]
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RepairRejected("the converter cannot read its own checkout revision")
+    return result.stdout.strip()
+
+
 def exclusions_from_document(document: dict) -> dict[str, TaskExclusion]:
     """Validate the repair lane's typed per-task exclusion document."""
     exclusions = {}
@@ -378,13 +400,17 @@ def repair_population(
     bindings: dict[str, ImageBinding],
     output_dir: Path,
     exclusions: dict[str, TaskExclusion] | None = None,
+    revision: str | None = None,
 ) -> dict:
     """Rewrite the whole retained population and write the repaired release artifacts."""
     schema = pq.ParquetFile(input_parquet).schema_arrow
+    revision = revision or converter_revision()
     exclusions = exclusions or {}
     ledger = []
+    conversions = []
     excluded = []
     seen = set()
+    input_hashes = {}
     rows = []
     for batch in pq.ParquetFile(input_parquet).iter_batches(batch_size=16):
         for row in batch.to_pylist():
@@ -394,6 +420,7 @@ def repair_population(
             seen.add(task_id)
             if task_id in exclusions:
                 excluded.append({"task_id": task_id, **exclusions[task_id].__dict__})
+                input_hashes[task_id] = row["task_sha256"]
                 continue
             binding = bindings.get(task_id)
             if binding is None:
@@ -401,12 +428,25 @@ def repair_population(
             repaired, entry = repair_task(row, binding)
             ledger.append(entry)
             serialized = repaired.model_dump_json()
+            output_sha = hashlib.sha256(serialized.encode()).hexdigest()
+            input_hashes[task_id] = row["task_sha256"]
+            conversions.append(
+                {
+                    "task_id": task_id,
+                    "input_task_sha256": row["task_sha256"],
+                    "output_task_sha256": output_sha,
+                    "base_digest": binding.base_digest,
+                    "pinned_image": binding.image,
+                    "pinned_digest": binding.digest,
+                    "changed_fields": entry["changed_fields"],
+                }
+            )
             rows.append(
                 {
                     "id": row["id"],
                     "path": row["path"],
                     "task_spec": serialized,
-                    "task_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
+                    "task_sha256": output_sha,
                     "runtime": row["runtime"],
                 }
             )
@@ -427,6 +467,31 @@ def repair_population(
         with pq.ParquetWriter(stream, schema) as writer:
             for start in range(0, len(rows), 64):
                 writer.write_batch(pa.RecordBatch.from_pylist(rows[start : start + 64], schema=schema))
+    receipt = {
+        "protocol": CONVERSION_RECEIPT_PROTOCOL,
+        "converter": {
+            "name": CONVERTER_NAME,
+            "version": REPAIR_VERSION,
+            "revision": revision,
+        },
+        "input": {
+            "tasks_parquet_sha256": hashlib.file_digest(input_parquet.open("rb"), "sha256").hexdigest(),
+            "task_specs_sha256": canonical_sha256([input_hashes[task_id] for task_id in sorted(input_hashes)]),
+            "rows": len(input_hashes),
+        },
+        "output": {
+            "tasks_parquet_sha256": hashlib.file_digest(output.open("rb"), "sha256").hexdigest(),
+            "rows": len(rows),
+        },
+        "image_bindings": {
+            "tasks": len(bindings),
+        },
+        "excluded_tasks": excluded,
+        "conversions": conversions,
+        "completed_at": datetime.datetime.now(datetime.UTC).isoformat(),
+    }
+    receipt_path = output_dir / "conversion-receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=1) + "\n")
     summary = {
         "version": REPAIR_VERSION,
         "input_parquet_sha256": hashlib.file_digest(input_parquet.open("rb"), "sha256").hexdigest(),
@@ -434,6 +499,7 @@ def repair_population(
         "excluded_tasks": len(excluded),
         "exclusion_reasons": dict(Counter(entry["reason"] for entry in excluded)),
         "ledger_sha256": hashlib.sha256(ledger_path.read_bytes()).hexdigest(),
+        "conversion_receipt_sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
         "output_sha256": hashlib.file_digest(output.open("rb"), "sha256").hexdigest(),
     }
     (output_dir / "repair-summary.json").write_text(json.dumps(summary, indent=1) + "\n")
@@ -468,7 +534,7 @@ def main() -> None:
     with TemporaryDirectory(prefix="mimo-repair-") as temporary:
         staging = Path(temporary)
         summary = repair_population(input_parquet, bindings, staging, exclusions)
-        for name in ("tasks.parquet", "repair-ledger.json", "repair-summary.json"):
+        for name in ("tasks.parquet", "repair-ledger.json", "repair-summary.json", "conversion-receipt.json"):
             destination = output / name
             if destination.exists():
                 raise FileExistsError(str(destination))
