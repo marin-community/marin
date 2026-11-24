@@ -1528,6 +1528,7 @@ def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trus
         tokenizer_class = (
             TokenizersBackend
             if tokenizer_config.get("tokenizer_class") == _TRANSFORMERS_V5_FAST_TOKENIZER_CLASS
+            and "auto_map" not in tokenizer_config
             else AutoTokenizer
         )
         return cast(

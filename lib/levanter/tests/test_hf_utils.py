@@ -55,6 +55,31 @@ def test_load_tokenizer_with_unrecognized_beam_config(tmp_path, trust_remote_cod
     assert tokenizer.decode(token_ids) == "hello"
 
 
+def test_load_tokenizer_honors_auto_map_with_generic_class(tmp_path):
+    shutil.copyfile(Path(__file__).with_name("gpt2_tokenizer.json"), tmp_path / "tokenizer.json")
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "beam"}))
+    (tmp_path / "tokenizer_config.json").write_text(
+        json.dumps(
+            {
+                "tokenizer_class": "TokenizersBackend",
+                "auto_map": {"AutoTokenizer": [None, "custom_tokenizer.CustomTokenizer"]},
+            }
+        )
+    )
+    (tmp_path / "custom_tokenizer.py").write_text(
+        "from transformers import PreTrainedTokenizerFast\n"
+        "\n"
+        "class CustomTokenizer(PreTrainedTokenizerFast):\n"
+        "    def encode(self, text, *args, **kwargs):\n"
+        "        if text == 'hello':\n"
+        "            return [0]\n"
+        "        return super().encode(text, *args, **kwargs)\n"
+    )
+
+    tokenizer = load_tokenizer(str(tmp_path), trust_remote_code=True)
+    assert tokenizer.encode("hello", add_special_tokens=False) == [0]
+
+
 def test_model_info_patch_for_fsspec_urls():
     """transformers calls model_info() in _patch_mistral_regex to check if a model is a base Mistral model."""
 
