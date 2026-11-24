@@ -61,11 +61,33 @@ def embed_shard(
     batch_size: int,
     max_tokens: int,
 ) -> dict:
-    """Stream one corpus shard, writing raw fp16 vectors and the ordered docids."""
-    if vectors_path.exists() or docids_path.exists():
-        raise ValueError(f"Embedding outputs already exist for {shard.name}")
+    """Stream one corpus shard, writing raw fp16 vectors and the ordered docids.
+
+    Completed parts are resumed after preemption: an existing pair whose sizes
+    and row counts agree is adopted instead of recomputed, and the manifest
+    digests are recomputed from the bytes on disk.
+    """
     vectors_path.parent.mkdir(parents=True, exist_ok=True)
     docids_path.parent.mkdir(parents=True, exist_ok=True)
+    if vectors_path.exists() and docids_path.exists():
+        with pq.ParquetFile(docids_path) as existing:
+            docid_rows = existing.metadata.num_rows
+        expected_bytes = docid_rows * EMBEDDING_DIM * 2
+        if docid_rows > 0 and vectors_path.stat().st_size == expected_bytes:
+            logger.info("Resuming %s: adopting %d embedded documents", shard.name, docid_rows)
+            return {
+                "shard": shard.name,
+                "vectors": vectors_path.name,
+                "docids": docids_path.name,
+                "documents": docid_rows,
+                "vectors_sha256": sha256_file(vectors_path),
+                "vectors_bytes": vectors_path.stat().st_size,
+                "docids_sha256": sha256_file(docids_path),
+            }
+        if vectors_path.exists():
+            vectors_path.unlink()
+        if docids_path.exists():
+            docids_path.unlink()
     docids: list[str] = []
     texts: list[str] = []
     with pq.ParquetFile(shard) as parquet:

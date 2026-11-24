@@ -98,8 +98,20 @@ def corpus_shards(staged: RegionalInputs) -> list[tuple[str, str, int]]:
 
 
 def stage_corpus(staged_shards: list[tuple[str, str, int]], work: Path) -> list[Path]:
-    """Copy the digest-pinned corpus shards into the job's local work directory."""
+    """Copy the digest-pinned corpus shards into the job's local work directory.
+
+    An existing staged set with matching sizes (verified once at write time)
+    is adopted so preempted attempts resume instead of recopying.
+    """
     corpus = work / "corpus"
+    if corpus.is_dir():
+        existing = {path.name: path.stat().st_size for path in corpus.iterdir() if path.is_file()}
+        if {
+            Path(source).name: expected_bytes for source, _, expected_bytes in staged_shards
+        }.items() <= existing.items():
+            logger.info("Adopting %d previously staged corpus shards", len(existing))
+            return [corpus / Path(source).name for source, _, _ in staged_shards]
+        shutil.rmtree(corpus)
     corpus.mkdir(parents=True, exist_ok=False)
     local = []
     for source, expected_sha, expected_bytes in staged_shards:
