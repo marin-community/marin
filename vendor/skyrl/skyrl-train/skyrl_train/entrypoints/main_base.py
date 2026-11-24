@@ -43,6 +43,7 @@ from marinskyrl.runtime_options import (
     static_preference_pairs_requested,
 )
 from marinskyrl.resource_locator import RolloutModelLoading
+from marinskyrl.task_sources import PreparedTaskCacheSource
 
 if TYPE_CHECKING:
     from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -394,6 +395,8 @@ class BasePPOExp:
     def task_dataset(self, data_files):
         from skyrl_train.dataset.tasks import SourceTaskDataset  # noqa: PLC0415
 
+        cache_config = self.cfg.get("runtime", {}).get("prepared_task_cache")
+        prepared_cache = None if cache_config is None else PreparedTaskCacheSource(**cache_config)
         return SourceTaskDataset(
             datasets=data_files,
             environment_configs=OmegaConf.to_container(self.cfg.environment.task_sessions, resolve=True),
@@ -401,6 +404,7 @@ class BasePPOExp:
             max_prompt_length=self.cfg.trainer.max_prompt_length,
             num_workers=8,
             chat_template_kwargs=dict(self.cfg.generator.chat_template_kwargs),
+            prepared_cache=prepared_cache,
         )
 
     def get_eval_dataset(self, data_files: list[str] | None = None):
