@@ -4,11 +4,11 @@
 """The 2026-11-20 trial policy resolves to the catalog selections and windows each candidate runs with."""
 
 import pytest
-from evalrecords.records import PromptFormat, TaskEvidence
+from evalrecords.records import TaskEvidence
 
-from experiments.evaluation.curated import agent_ref_for, resolve_selection, settings_for
+from experiments.evaluation.curated import agent_ref_for, settings_for
 from experiments.evaluation.policies.marin_2026_11_20_trial.policy import POLICY
-from experiments.evaluation.policy.cli import selection_dataset
+from experiments.evaluation.policy.cli import resolved_selection, selection_dataset
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 
 CANDIDATES = pytest.mark.parametrize("candidate", POLICY.candidates, ids=lambda candidate: candidate.name)
@@ -18,8 +18,7 @@ def _enforced_context(item: ResolvedPolicyEvaluation) -> int:
     """The window the worker enforces: an agent's input limit, else the protocol's window, else the server's."""
     model = item.candidate.model
     selection = item.evaluation.definition
-    model_format = PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
-    resolved = resolve_selection(selection, model_format)
+    resolved = resolved_selection(selection, model)
     settings = settings_for(
         selection,
         resolved,

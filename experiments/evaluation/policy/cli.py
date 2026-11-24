@@ -10,10 +10,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import click
-from evalrecords.records import EvaluationSelection, PromptFormat
+from evalrecords.records import EvaluationSelection, PromptFormat, ResolvedEvaluationSelection
 from marin.evaluation.model_config import ModelConfig
 
-from experiments.evaluation.catalog import evaluation_benchmarks
+from experiments.evaluation.curated import resolve_selection, selected_sources
 from experiments.evaluation.policies import POLICIES
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
@@ -42,13 +42,14 @@ def _thinking(kwargs: Mapping[str, object]) -> str:
     return "on" if kwargs["enable_thinking"] else "off"
 
 
+def resolved_selection(selection: EvaluationSelection, model: ModelConfig) -> ResolvedEvaluationSelection:
+    """The catalog protocol a selection runs as for this model."""
+    return resolve_selection(selection, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION)
+
+
 def selection_dataset(selection: EvaluationSelection, model: ModelConfig) -> EvaluationCorpusRecipe:
     """The catalog dataset, with its protocol, that a selection runs as for this model."""
-    model_format = PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
-    sources = evaluation_benchmarks()[selection.benchmark].resolve(
-        selection.protocol, selection.num_fewshot, selection.prompt_format, model_format=model_format
-    )
-    config = sources[0].config
+    config = selected_sources(resolved_selection(selection, model))[0].config
     assert config is not None
     return config
 

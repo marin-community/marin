@@ -17,7 +17,11 @@ from evalrecords.records import (
     TaskMachineSettings,
 )
 
-from experiments.evaluation.benchmarks.agentic import CAMPAIGN_MAX_INPUT_TOKENS, LONG_MAX_INPUT_TOKENS
+from experiments.evaluation.benchmarks.agentic import (
+    CAMPAIGN_MAX_INPUT_TOKENS,
+    CAMPAIGN_PROTOCOL,
+    LONG_MAX_INPUT_TOKENS,
+)
 from experiments.evaluation.evals import EVALS
 from experiments.evaluation.models import models
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
@@ -109,7 +113,7 @@ EVALUATIONS: tuple[PolicyEvaluation, ...] = (
     _agent(
         "terminal-bench-2.1",
         label="tb2-recovery",
-        protocol="campaign-2026-09-25",
+        protocol=CAMPAIGN_PROTOCOL,
         context=LONG_MAX_INPUT_TOKENS,
         concurrency=16,
         task_machine=DECLARATIVE_BUILDS,
@@ -117,7 +121,7 @@ EVALUATIONS: tuple[PolicyEvaluation, ...] = (
     _agent(
         "ot-tblite",
         label="ot-tblite-recovery",
-        protocol="campaign-2026-09-25",
+        protocol=CAMPAIGN_PROTOCOL,
         context=CAMPAIGN_MAX_INPUT_TOKENS,
         concurrency=16,
         task_machine=DECLARATIVE_BUILDS,
