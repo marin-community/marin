@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, source_identifier
+from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, source_display_name, source_identifier
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import Backend, NetworkPolicy, UnsupportedMachineSpec
@@ -53,9 +53,8 @@ BACKEND_VALUES = frozenset(backend.value for backend in Backend) | {"iris"}
 
 def _declaration(identifier: str) -> QualifiedSourceDeclaration:
     return QualifiedSourceDeclaration(
-        id=source_identifier(SourceOrigin.MARIN, identifier, None, None),
-        name=identifier,
-        display_name=identifier,
+        id=(source_id := source_identifier(SourceOrigin.MARIN, identifier, None, None)),
+        display_name=source_display_name(source_id),
         origin="Marin",
         build_path="fixture",
         upstream_dataset=identifier,
@@ -473,7 +472,7 @@ def test_package_preview_refusals(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="dirty"):
         package_preview.run_package_preview(inputs, dry_run=True, repo_root=repo, feeds=_feeds(tmp_path))
 
-    with pytest.raises(ValueError, match="expected release revision"):
+    with pytest.raises(ValueError, match="does not contain the plan's pinned revision"):
         package_preview.run_package_preview(
             dataclasses.replace(inputs, source_revision="d" * 40), dry_run=True, repo_root=repo2, feeds=_feeds(tmp_path)
         )

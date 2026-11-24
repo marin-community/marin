@@ -15,7 +15,7 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, source_identifier
+from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, source_display_name, source_identifier
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import Backend, NetworkPolicy, UnsupportedMachineSpec
@@ -52,9 +52,8 @@ BACKEND_VALUES = frozenset(backend.value for backend in Backend) | {"iris"}
 
 def _declaration(dataset: str = "open-athena/fixture", revision: str = "b" * 40, identifier: str = "fixture") -> dict:
     base = QualifiedSourceDeclaration(
-        id=source_identifier(SourceOrigin.MARIN, identifier, None, None),
-        name=identifier,
-        display_name=identifier,
+        id=(source_id := source_identifier(SourceOrigin.MARIN, identifier, None, None)),
+        display_name=source_display_name(source_id),
         origin="Marin",
         build_path="fixture",
         upstream_dataset=identifier,

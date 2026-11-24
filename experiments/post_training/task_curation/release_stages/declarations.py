@@ -75,7 +75,14 @@ def current_declarations(sources_fn=all_sources) -> dict[str, dict]:
 
 
 def verify_repo_state(repo_root: Path, inputs: DeclarationInputs) -> str:
-    """The extracting checkout must be clean at the expected landed revision."""
+    """The extracting checkout must be clean and contain the plan's pinned revision.
+
+    ``source_revision`` pins the landed registry state the plan was assembled from;
+    the checkout may sit at that commit or any descendant (pipeline fixes land after
+    the plan), because the checkout's HEAD sha cannot appear inside its own plan
+    document. Source drift between the pin and the checkout is what the declaration
+    fingerprint checks refuse, not this shape check.
+    """
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -84,8 +91,18 @@ def verify_repo_state(repo_root: Path, inputs: DeclarationInputs) -> str:
     revision = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()
-    if revision != inputs.source_revision:
-        raise ValueError(f"checkout HEAD {revision} is not the expected release revision {inputs.source_revision}")
+    pinned = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", inputs.source_revision, revision],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pinned.returncode != 0:
+        raise ValueError(
+            f"checkout HEAD {revision} does not contain the plan's pinned revision {inputs.source_revision}; "
+            "cut from a checkout that contains it"
+        )
     return revision
 
 

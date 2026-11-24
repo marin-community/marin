@@ -69,7 +69,7 @@ def seal(path: str, value: dict) -> ArtifactRef:
 
 
 def verify_repo_state(repo_root: Path, revision: str) -> str:
-    """The packaging checkout must be clean at the expected landed revision."""
+    """The packaging checkout must be clean and contain the plan's pinned revision."""
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -78,8 +78,18 @@ def verify_repo_state(repo_root: Path, revision: str) -> str:
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()
-    if head != revision:
-        raise ValueError(f"checkout HEAD {head} is not the expected release revision {revision}")
+    pinned = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", revision, head],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pinned.returncode != 0:
+        raise ValueError(
+            f"checkout HEAD {head} does not contain the plan's pinned revision {revision}; "
+            "cut from a checkout that contains it"
+        )
     return head
 
 

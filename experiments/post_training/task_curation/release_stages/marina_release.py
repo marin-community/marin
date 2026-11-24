@@ -79,7 +79,7 @@ class MarinaReleaseInputs:
 
 
 def verify_checkout(repo_root: Path, source_revision: str) -> str:
-    """The releasing checkout must be clean at the expected landed revision."""
+    """The releasing checkout must be clean and contain the plan's pinned revision."""
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -88,8 +88,18 @@ def verify_checkout(repo_root: Path, source_revision: str) -> str:
     revision = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()
-    if revision != source_revision:
-        raise ValueError(f"checkout HEAD {revision} is not the expected release revision {source_revision}")
+    pinned = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", source_revision, revision],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pinned.returncode != 0:
+        raise ValueError(
+            f"checkout HEAD {revision} does not contain the plan's pinned revision {source_revision}; "
+            "cut from a checkout that contains it"
+        )
     return revision
 
 

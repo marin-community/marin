@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, source_identifier
+from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, source_display_name, source_identifier
 
 from experiments.post_training.task_curation.release_stages import catalog_stage
 from experiments.post_training.task_curation.release_stages import declarations as declarations_stage
@@ -24,9 +24,8 @@ SOURCE_B = "Marin:fixture-b"
 
 def _declaration(identifier: str) -> QualifiedSourceDeclaration:
     return QualifiedSourceDeclaration(
-        id=source_identifier(SourceOrigin.MARIN, identifier, None, None),
-        name=identifier,
-        display_name=identifier,
+        id=(source_id := source_identifier(SourceOrigin.MARIN, identifier, None, None)),
+        display_name=source_display_name(source_id),
         origin="Marin",
         build_path="fixture",
         upstream_dataset=identifier,
@@ -159,7 +158,7 @@ def test_declarations_refusals(tmp_path, monkeypatch):
     head2 = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=tmp_path / "repo2", capture_output=True, text=True, check=True
     ).stdout.strip()
-    with pytest.raises(ValueError, match="expected release revision"):
+    with pytest.raises(ValueError, match="does not contain the plan's pinned revision"):
         declarations_stage.run_declarations(
             _declaration_inputs(tmp_path, prior, "b" * 40),
             dry_run=True,

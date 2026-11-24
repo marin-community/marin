@@ -67,7 +67,7 @@ def test_verify_repo_state_refuses_dirty_checkout_and_wrong_revision(tmp_path):
     repo.mkdir()
     head = _init_repo(repo)
     inputs = _inputs(tmp_path, source_revision="a" * 40)
-    with pytest.raises(ValueError, match="expected release revision"):
+    with pytest.raises(ValueError, match="does not contain the plan's pinned revision"):
         sp.verify_repo_state(repo, inputs)
     inputs = _inputs(tmp_path, source_revision=head)
     (repo / "file.txt").write_text("dirty\n")
