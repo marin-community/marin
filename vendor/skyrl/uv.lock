@@ -3149,6 +3149,7 @@ requires-dist = [
     { name = "marin-verifyit", extras = ["judge", "math", "reasoning-gym", "schema"], editable = "../../lib/verifyit" },
     { name = "marin-zephyr", marker = "extra == 'pipeline'", editable = "../../lib/zephyr" },
     { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
+    { name = "pdbthink", marker = "extra == 'pdbthink'", url = "https://github.com/Open-Athena/pdbthink/archive/1bf06a464b2eab2f1e16c4dd16714314f225e196.tar.gz" },
     { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -3156,11 +3157,12 @@ requires-dist = [
     { name = "tomli", specifier = ">=2.0.1" },
     { name = "tomlkit", specifier = ">=0.13" },
 ]
-provides-extras = ["pipeline"]
+provides-extras = ["pdbthink", "pipeline"]
 
 [package.metadata.requires-dev]
 test = [
     { name = "marin-shellbox", extras = ["shellsim"], editable = "../../lib/shellbox" },
+    { name = "pdbthink", url = "https://github.com/Open-Athena/pdbthink/archive/1bf06a464b2eab2f1e16c4dd16714314f225e196.tar.gz" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },

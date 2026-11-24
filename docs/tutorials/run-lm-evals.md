@@ -59,6 +59,12 @@ eligible rows fails rather than producing an empty score. GraphWalks requires a
 reference-dependent output allowance of at least 8,192 tokens, so a blanket
 512-token smoke budget cannot exercise it.
 
+[PDBThink](../explanations/pdbthink.md) uses the published 88-question coordinate
+panel with three completions per question. `--evals pdbthink` preserves each
+prompt and fails before inference if any selected question exceeds the context.
+Use the model's full context and output allowance; headline accuracy gives each
+question family equal weight. It needs no LLM judge.
+
 [LongBench v2](https://huggingface.co/datasets/zai-org/LongBench-v2) asks 503
 multiple-choice questions over contexts of 8,000 to 2 million words, with the
 upstream [THUDM/LongBench](https://github.com/THUDM/LongBench/tree/2e00731f8d0bff23dc4325161044d0ed8af94c1e)
