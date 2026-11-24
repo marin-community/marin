@@ -49,7 +49,7 @@ def main() -> None:
         try:
             reward = score_reasoning_gym_answer(dataset, entry, answer)
         except Exception as error:
-            # An unfamiliar parser failure is a bad candidate only if the reference still scores.
+            # Check the reference when available; some datasets have no reference answer.
             reference = entry["answer"]
             if reference is not None and not score_reasoning_gym_answer(dataset, entry, reference) > 0:
                 raise ValueError("Reasoning Gym reference answer does not score") from error

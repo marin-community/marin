@@ -29,6 +29,7 @@ from pathlib import Path
 
 script_path, config_path, answer_path = map(Path, sys.argv[1:4])
 bad_reference = sys.argv[4] == "bad_reference"
+bad_reply = sys.argv[5]
 sys.path.insert(0, str(script_path.parent))
 sys.path.insert(0, str(script_path.parent / "scorers"))
 spec = importlib.util.spec_from_file_location("shipped_reasoning_gym_grade", script_path)
@@ -40,7 +41,7 @@ grader.ANSWER = answer_path
 real_score = grader.score_reasoning_gym_answer
 
 def score(dataset, entry, candidate):
-    if candidate == "I need to find the prime factorization of 835.":
+    if candidate == bad_reply:
         raise RuntimeError("scorer could not parse candidate")
     if bad_reference and candidate == entry["answer"]:
         return 0.0
@@ -75,10 +76,12 @@ def contract_for(script: Path) -> dict:
 @pytest.mark.parametrize("script", SCRIPT_PATHS, ids=("generated", "nemotron_ultra"))
 @pytest.mark.parametrize(
     ("candidate", "bad_reference", "expected"),
-    [(PROSE, False, "0.0"), ("reference", False, "1.0"), (PROSE, True, None)],
+    [(PROSE, False, 0.0), ("reference", False, 1.0), (PROSE, True, None)],
     ids=("unparseable_candidate", "valid_answer", "broken_reference"),
 )
-def test_reasoning_gym_grade_script_scores_or_reports_broken_reference(script, candidate, bad_reference, expected, tmp_path):
+def test_reasoning_gym_grade_script_scores_or_reports_broken_reference(
+    script, candidate, bad_reference, expected, tmp_path
+):
     contract = contract_for(script)
     entry = contract.get("entry", contract)
     answer = entry["answer"] if candidate == "reference" else candidate
@@ -95,6 +98,7 @@ def test_reasoning_gym_grade_script_scores_or_reports_broken_reference(script, c
             str(config_path),
             str(answer_path),
             "bad_reference" if bad_reference else "valid_reference",
+            PROSE,
         ],
         capture_output=True,
         text=True,
@@ -104,4 +108,6 @@ def test_reasoning_gym_grade_script_scores_or_reports_broken_reference(script, c
     if expected is None:
         assert result.returncode != 0 and not result.stdout.strip(), result.stderr
     else:
-        assert (result.returncode, result.stdout.strip()) == (0, expected), result.stderr
+        output = result.stdout.strip().splitlines()
+        assert result.returncode == 0 and len(output) == 1, result.stderr
+        assert float(output[0]) == expected
