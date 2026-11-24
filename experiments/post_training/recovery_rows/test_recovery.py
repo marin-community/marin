@@ -5,6 +5,7 @@ import json
 import random
 
 import pytest
+from rolloutengine.agents.terminus.terminus_json_plain_parser import TerminusJSONPlainParser
 
 from experiments.post_training.recovery_rows import recovery
 from experiments.post_training.recovery_rows.recovery import INJECTED_KEY, Failure, Harness, Injection
@@ -40,11 +41,12 @@ def failures(*styles: str) -> tuple[Failure, ...]:
 
 @pytest.mark.parametrize("style", sorted(recovery.TERMINUS_VARIANTS))
 def test_every_terminus_variant_gets_its_styles_parser_error(style):
+    parser = TerminusJSONPlainParser()
     for variant in recovery.TERMINUS_VARIANTS[style]:
         texts = set()
         for seed in range(30):
             text = recovery.terminus_variant(TURN, style, variant, random.Random(seed))
-            assert recovery.PARSER.parse_response(text).error.startswith(recovery.TERMINUS_ERRORS[style])
+            assert parser.parse_response(text).error.startswith(recovery.TERMINUS_ERRORS[style])
             texts.add(text)
         assert len(texts) > 1, f"{style}/{variant} renders one fixed text"
 
@@ -109,10 +111,11 @@ def test_a_turn_whose_analysis_quotes_a_valid_response_still_gets_a_rejected_fai
     quoted = json.dumps({"analysis": "a", "plan": "b", "commands": [{"keystrokes": "ls\n", "duration": 0.1}]})
     data = TURN | {"analysis": f"Previous response: {quoted}", "plan": "Run ls."}
     assert recovery.terminus_fields(json.dumps(data)) is not None
+    parser = TerminusJSONPlainParser()
     for style in sorted(recovery.TERMINUS_STYLES):
         for seed in range(30):
             text, _ = recovery.render_terminus_failure(data, style, random.Random(seed), None)
-            assert recovery.PARSER.parse_response(text).error, (style, seed, text)
+            assert parser.parse_response(text).error, (style, seed, text)
 
     messages = terminus_trajectory()
     messages[3] = {"role": "assistant", "content": json.dumps(data, indent=2)}

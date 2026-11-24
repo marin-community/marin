@@ -67,7 +67,6 @@ MINI_SWE_NO_TOOL_CALL = (
 )
 MINI_SWE_STYLE = "no_tool_call"
 ELIDED = "@@elided@@"
-PARSER = TerminusJSONPlainParser()
 
 
 class Harness(StrEnum):
@@ -111,9 +110,13 @@ def terminus_feedback(result: ParseResult) -> str:
     )
 
 
+def _parse_terminus_response(content: str) -> ParseResult:
+    return TerminusJSONPlainParser().parse_response(content)
+
+
 def terminus_fields(content: str) -> dict | None:
     """The turn's JSON object when it is a clean Terminus-2 response with at least one command."""
-    result = PARSER.parse_response(content)
+    result = _parse_terminus_response(content)
     if result.error or result.warning:
         return None
     data = json.loads(content)
@@ -224,15 +227,15 @@ def render_terminus_failure(data: dict, style: str, rng: random.Random, previous
             text = terminus_variant(data, style, variant, rng)
             if text is None:
                 break
-            if PARSER.parse_response(text).error.startswith(TERMINUS_ERRORS[style]) and text != previous:
+            if _parse_terminus_response(text).error.startswith(TERMINUS_ERRORS[style]) and text != previous:
                 return text, variant
     text = terminus_base_failure(data, style)
-    if PARSER.parse_response(text).error and text != previous:
+    if _parse_terminus_response(text).error and text != previous:
         return text, "base"
     # No prose here: the parser takes the first balanced object, so an analysis that quotes a valid response makes
     # every rendering with prose parse clean.
     text = terminus_unquoted_plan(data)
-    assert PARSER.parse_response(text).error, text
+    assert _parse_terminus_response(text).error, text
     return text, "fallback_invalid_json"
 
 
@@ -311,7 +314,7 @@ def inject(
                     terminus_fields(message["content"]), failure.style, random.Random(failure.seed), previous
                 )
                 previous = failed
-                result = PARSER.parse_response(failed)
+                result = _parse_terminus_response(failed)
                 out.append({"role": "assistant", "content": failed, INJECTED_KEY: True})
                 out.append({"role": "user", "content": terminus_feedback(result), INJECTED_KEY: True})
                 error = result.error.split(":", 1)[0]
