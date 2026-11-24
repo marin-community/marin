@@ -395,8 +395,8 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
         _TRAIN_LONG.with_updates(10),
         revision="2026.11.20.1",
         recipe=replace(
-            _TRAIN_LONG.recipe,
-            config=_TRAIN_LONG.recipe.config.merge(
+            _ASYNC_P40,
+            config=_ASYNC_P40.config.merge(
                 RecipePatch(
                     trainer=sections.Trainer(
                         policy=sections.Policy(
