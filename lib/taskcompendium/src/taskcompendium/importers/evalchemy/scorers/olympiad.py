@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""OlympiadBench answer preparation, adopted from Marin Evalchemy (MIT).
+"""OlympiadBench grading: the final answer's last box, as for AIME, against any flattened reference.
 
-The candidate is the final answer's last box, as for AIME, and may match any flattened reference.
+Reference flattening and equivalence are adopted from Marin Evalchemy (MIT), which extracted the first box instead.
 """
 
 import re
