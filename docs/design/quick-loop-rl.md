@@ -2780,10 +2780,10 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   greedy outputs and teacher-forced raw scores on the same policy-0
   weights, then vary sampling, tool stopping, and the reply cap separately.
 
-  Start with one eight-H100 serving host and the fixed RL prompts. Measure
-  the optimized engine first with replay disabled, then with exact-token
-  continuation, policy stamps, and the score and route payloads required
-  by the learner. The AgentX singleton path requires replay to be disabled.
+  Start with one eight-H100 serving host and the fixed RL prompts. Hold
+  exact-token continuation, policy stamps, score mode, sampling, and stop
+  rules fixed while toggling route replay. The AgentX singleton path
+  requires replay to be disabled.
   Start from the route-capable AgentX branch, which already includes the
   CUDA paged-attention path and binary endpoint. Bring over the verified
   checkpoint-install helper and require both serving replicas to acknowledge
