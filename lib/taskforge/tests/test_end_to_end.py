@@ -1245,7 +1245,11 @@ def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources, workspace: Work
         policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
     ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
         config = build_config(policy, {})
-        yield (config if workspace is None else replace(config, workspace=workspace)), next(remaining)
+        bundle = next(remaining)
+        if workspace is None:
+            yield wiring.CampaignWiring(config, bundle)  # counted stand-ins for a fixed campaign
+        else:
+            yield replace(config, workspace=workspace), bundle
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
 
@@ -2819,10 +2823,12 @@ class ExhaustedRole(Envs):
         return env
 
 
-# Regression: a resumed adversary whose recorded command exhausted the output budget consumed its position
-# unverified, so the search counted as EXHAUSTED evidence and the workpiece was accepted with no new model call.
-async def test_a_resumed_command_that_exhausts_its_budget_once_reruns_the_search_on_a_fresh_machine(
-    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("exhaustions", "status", "reports"),
+    [(1, AdversaryStatus.REPORTED, 1), (2, AdversaryStatus.EXHAUSTED, 0)],
+)
+async def test_a_resumed_adversary_records_what_its_two_fresh_machines_observed(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, exhaustions: int, status: AdversaryStatus, reports: int
 ) -> None:
     overlay = json.loads(Path(driver_args.policy).read_text())
     Path(driver_args.policy).write_text(json.dumps({**overlay, "adversary.roster": ["false_accept"]}))
@@ -2837,7 +2843,7 @@ async def test_a_resumed_command_that_exhausts_its_budget_once_reruns_the_search
     destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
     assert published_workpiece(destination).terminal is Terminal.HELD and len(held.requests) == 2
     adversary = Adversaries(hold=False, served=held.requests[:1])
-    envs = ExhaustedRole(1)
+    envs = ExhaustedRole(exhaustions)
     resumed = replace(
         resources(envs, ()),
         inference=ServedOnce((), ()),
@@ -2848,9 +2854,17 @@ async def test_a_resumed_command_that_exhausts_its_budget_once_reruns_the_search
     await driver.one(driver_args)
     workpiece = published_workpiece(destination)
     assert executions(resumed) == (0, 0) and envs.exhausted == 0
-    statuses = [result.status for evidence in workpiece.evidence for result in evidence.adversary]
-    assert workpiece.terminal is Terminal.ACCEPTED and statuses[-1] is AdversaryStatus.REPORTED
-    assert len(adversary.requests) == 1  # only the report turn is new: the restored task renders the same opening
+    assert [env.executed for env in envs.created] == [[ROLE], [ROLE]]
+    [search] = workpiece.evidence[-1].adversary
+    assert workpiece.terminal is Terminal.ACCEPTED and search.status is status
+    assert len(adversary.requests) == reports
+    if status is AdversaryStatus.EXHAUSTED:
+        decision = workpiece.decisions[-1]
+        assert isinstance(decision, Accept)
+        assert any(
+            "its output budget ran out before it reported" in reason and "this is not a validation of the task" in reason
+            for reason in decision.reasons
+        )
 
 
 class CorruptArchiveOnce(DriftingEnvs):

@@ -140,7 +140,9 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
     monkeypatch.setattr(httpx.AsyncClient, "send", unexpected)
     policy = load_policy(Path(__file__).parents[1] / "src/taskforge/policy/defaults")
     source = wiring.endpoint_source("http://fake/v1", None, "fake", "glm-5.3", policy.setting("provider.pool", str))
-    async with wiring.runtime(policy, source, "fake") as (_, resources):
+    async with wiring.runtime(policy, source, "fake") as bindings:
+        assert isinstance(bindings, wiring.CampaignWiring)
+        _, resources = bindings
         assert set(resources.factories) == {"gvisor", "shellsim"}
         factory = resources.factories["gvisor"]
         assert isinstance(factory, IrisMachineFactory)

@@ -195,7 +195,7 @@ class StageCompleted(Event[None]):
 
 @dataclass(frozen=True, slots=True)
 class StageBoundary(Event[None]):
-    """The workpiece stage ``following`` starts from under ``plan`` (``coordinator.plan``), as ``ENTRY`` encodes it; a
+    """The workpiece stage ``following`` starts from under ``plan``, as ``ENTRY`` encodes it; a
     later launch of the same plan resumes there."""
 
     kind = "stage.boundary"

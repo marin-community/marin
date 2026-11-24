@@ -13,15 +13,11 @@ import logging
 from collections.abc import Callable
 from dataclasses import replace
 
-from shellbox.backends.iris.machine import IrisMachineFactory
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-
-from taskforge.config import TaskforgeConfig, no_files
+from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, StageBoundary, StageCompleted
 from taskforge.effects.issues import DecisionModelUnavailable, Hold, Restart, Transient, describe_exception
 from taskforge.effects.log import EventLog
-from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Stopped, Submitted
 from taskforge.model.content_hash import digest
 from taskforge.model.llm import Message, Role
@@ -47,7 +43,7 @@ from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
 from taskforge.stages.classify import boundary
 from taskforge.stages.exits import Decided, Validated
-from taskforge.stages.rules import author_stopped, default_review
+from taskforge.stages.rules import author_stopped
 from taskforge.stages.solve_review import finding_lines
 
 
@@ -195,26 +191,6 @@ def advance(wp: Workpiece, stage: Stage, result: Exit, config: TaskforgeConfig) 
     raise ValueError(f"{stage} returned {type(result).__name__}, which has no transition")
 
 
-def plan(proposal: TaskProposal, config: TaskforgeConfig, resources: Resources) -> str | None:
-    """Everything besides the workpiece that the stages' work depends on, or None (resume no stage) when a review rule,
-    workspace renderer, machine factory or role has no stable identity; the stock stages are versioned by the journal
-    format, and a stock factory's settings by the policy and the rollout identity."""
-    stock = all(type(f) in (IrisMachineFactory, ShellSimMachineFactory) for f in resources.factories.values())
-    if config.review is not default_review or config.workspace.rendered is not no_files or not stock:
-        return None
-    roles = []
-    for role in (config.author, config.adversary, config.solve_review):
-        if type(harness := role.harness) is not AgenticHarness:  # a subclass may run otherwise
-            return None
-        session = (harness.max_prompt_tokens, harness.sampling, harness.nudge, harness.output_chars)
-        tools = tuple((tool.schema, type(tool).__module__, type(tool).__qualname__) for tool in role.tools.values())
-        roles.append((role.name, session, tools, resources.inference_for(role.name).fingerprint()))
-    used = (resources.rollouts, resources.grading, resources.decision_model, resources.web)
-    fingerprints = tuple(resource.fingerprint() for resource in used if resource is not None)
-    settings = (config.workspace.static, config.policy, config.band, config.budget, tuple(roles))
-    return digest((proposal, settings, fingerprints, sorted(resources.factories)))
-
-
 async def run_workpiece(
     proposal: TaskProposal,
     config: TaskforgeConfig,
@@ -222,6 +198,7 @@ async def run_workpiece(
     log: EventLog,
     *,
     install: Callable[[Context, Resources], None],
+    stage_plan: str | None = None,
     reached: Callable[[Workpiece], None] = lambda _: None,
 ) -> Workpiece:
     """Resume from the log's last stage boundary when it was recorded under this plan, else start at the author.
@@ -236,20 +213,15 @@ async def run_workpiece(
     config_digest = digest(config.policy)
     interrupted = False
     attempt = 1  # of the executing stage visit; a failed attempt runs the same stage and round again
-    if (identity := plan(proposal, config, resources)) is None:
-        logging.warning(
-            "Workpiece %s resumes no stage: its review rule, workspace, a machine or a role has no identity",
-            wp.id,
-        )
     saved = boundary(log.records)
     try:
         async with ctx.scope("workpiece"):
             install(ctx, resources)
             wp = replace(wp, id=await ctx.emit(NewId("workpiece")))
-            if saved is not None and identity is not None and saved.plan == identity:
+            if saved is not None and stage_plan is not None and saved.plan == stage_plan:
                 wp, stage = saved.workpiece, saved.following
             else:  # a new plan supersedes any earlier boundary before its first stage
-                await ctx.emit(StageBoundary(identity, stage, ENTRY.dump_json((wp,)).decode()))
+                await ctx.emit(StageBoundary(stage_plan, stage, ENTRY.dump_json((wp,)).decode()))
             while True:
                 reached(wp)
                 try:
@@ -276,7 +248,7 @@ async def run_workpiece(
                         break  # keep the terminal stage, which a hold raised while the scope exits records
                     if following is not Stage.REVIEW:
                         await ctx.check()  # the marker's observers, before the boundary moves past them
-                        await ctx.emit(StageBoundary(identity, following, ENTRY.dump_json((wp,)).decode()))
+                        await ctx.emit(StageBoundary(stage_plan, following, ENTRY.dump_json((wp,)).decode()))
                     stage = following
     except* (Hold, Restart, Transient) as error:
         interrupted = True

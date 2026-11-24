@@ -1219,8 +1219,9 @@ async def test_a_cold_resume_replays_the_authors_context_refusal(proposal: TaskP
 # Regression: one note in two versions, a quote trial 4 keeps and one only trial 6's first
 # confirmation attempt holds. Merged into one citation set, the note was dropped after a revision that kept trial 4.
 UNITS = "the prompt does not say which units"
-STABLE, SPECIFIC = found(4, FindingKind.AMBIGUOUS_PROMPT, UNITS), found(
-    6, FindingKind.AMBIGUOUS_PROMPT, UNITS, "attempt 1"
+STABLE, SPECIFIC = (
+    found(4, FindingKind.AMBIGUOUS_PROMPT, UNITS),
+    found(6, FindingKind.AMBIGUOUS_PROMPT, UNITS, "attempt 1"),
 )
 
 
@@ -1372,7 +1373,10 @@ async def billed_root(
     sink = CheckpointSink(str(root))
     log = EventLog(sink=sink, replay_from=sink.claim(read_journal(str(root))))
     async with sink.running():
-        wp = await run_workpiece(proposal, setup(**BILLED), live or billed_bundle(), log, install=install)
+        config = setup(**BILLED)
+        wp = await run_workpiece(
+            proposal, config, live or billed_bundle(), log, install=install, stage_plan=digest((proposal, config.policy))
+        )
     await sink.finish(fold(tuple(record.event for record in log.records)), wp)
     return root
 

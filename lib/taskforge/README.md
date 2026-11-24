@@ -228,16 +228,13 @@ again, its paid solver slots and grades hitting their keys. A review that decide
 raises a hold, leaves the previous boundary in force: an explicit resume re-enters the stage that produced the
 evidence, never the review that held on it. A boundary carries each trial's `receipt`, the journal row its result
 was bought at (none for a slot whose output budget ran out twice, the only case with no row; a slot-local refusal
-keeps its row). Boundaries ride the ordinary checkpoints, so work bought after the last published chunk is bought
-again after a hard kill, as for any crash below; a cancelled launch publishes its rows first.
+keeps its row). Boundaries ride the ordinary checkpoints. A hard kill can lose an author submission and paid
+effects after the last published chunk. A graceful cancellation attempts to publish its buffered rows.
 
-A boundary is reused only under the plan that recorded it: a digest of the proposal, the whole policy, the band and
-budget, the author's, adversary's and solve-review's effective sessions (sampling included), tools and model
-identities, the static workspace files, the rollout, grading, decision-model and web replay identities and the
-machine backends lowering may pick. A custom review rule, a workspace renderer, an injected machine factory (any but
-the stock Iris and ShellSim ones), or a role run by any harness but the exact stock loop has no stable identity, and such a run resumes no stage (logged once). A caller who assembles a
-harness by hand (its argument-repair callback, say) must keep that behaviour and the resource replay identity in
-step. A launch whose plan differs from the latest boundary's records a new initial boundary and starts at the author;
+The stock driver can reuse a boundary when its proposal and policy match the published plan. The journal
+format versions the wiring that builds its roles, workspaces and machines from that policy. Custom wiring
+starts at the author on every launch and still reuses eligible paid requests.
+A launch whose plan differs from the latest boundary's records a new initial boundary and starts at the author;
 it never searches back for an earlier boundary of its own plan, so switching back to an earlier plan starts that
 plan's author again. Its paid results still hit their own keys, so it buys only what no row holds. An edit to the
 policy, even of an operational setting such as the solver heartbeat, is such a change. A new plan's decisions
@@ -248,8 +245,8 @@ receipts (a nonfinite reward is `null`), so a cold launch hydrates the bytes the
 Model calls replay from the event log by their content; shell commands and file operations run live on a fresh
 machine, so a resumed author session takes minutes before new events appear. A restarted session reopens its
 conversation and runs its tools again: with the tool output its first run saw, each recorded model turn hits the
-cache; the first turn whose input differs (a PID, a changed file, another errno) is bought, and so is every turn after
-it. The author's system prompt embedsThe author's system prompt embeds the `TaskSpec` and control JSON schemas, generated from the installed
+cache. A changed PID, file or errno can produce a new request and another purchase. Each turn checks its full key.
+The author's system prompt embeds the `TaskSpec` and control JSON schemas, generated from the installed
 TaskCompendium models at a root's first fresh author session and recorded as a `schema.author_reference` row
 (about 29 KB); every later author session of the root, in this launch or a resumed one, replays that text, so a
 wording-only change in TaskCompendium's schemas does not affect a root that recorded it. `wiring.install` binds
@@ -264,7 +261,9 @@ retry settings. Existing tasks may supply them. Taskforge's provider policy cont
 Each command or file operation is journalled as its request and then its outcome: a resolution under the sandbox's
 fingerprint, or a handled guest failure (an `OSError` such as a missing file, the only failure tools hand to the model)
 recorded by errno name and text; the outcome row's `answers` names its request row. These rows feed the usage report
-and inspection; no launch reads them back. A transfer archive the backend cannot unpack, a lost machine or an unknown
+and inspection. With concurrent sandboxes, the link identifies the command that produced an outcome, but
+does not identify which sandbox issued that command. Recovery reads these rows as part of the journal and
+dispatches sandbox operations live. A transfer archive the backend cannot unpack, a lost machine or an unknown
 command outcome restarts the stage on a fresh machine within its restart budget (`STAGE_REPLAY_ATTEMPTS`, three
 attempts), and holds after it.
 SIGTERM (an Iris cancel, a preemption, a lost node's grace period) is a crash. The command line's `driver.main`,

@@ -46,6 +46,7 @@ from rolloutengine.models import (
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import MachineOutputLimitExceeded
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from taskforge import driver
@@ -57,6 +58,7 @@ from taskforge.effects.issues import Hold, LogFailure
 from taskforge.effects.log import BufferSink, EventLog, Record
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Tool
+from taskforge.harness.tools.submit import SubmitTool
 from taskforge.llm.glm_provider import EndpointSource
 from taskforge.llm.policy import GLM_5_3, LLMPolicy, ModelProfile
 from taskforge.model.content_hash import digest
@@ -72,15 +74,16 @@ from taskforge.model.review import (
     TrialOutcome,
 )
 from taskforge.model.stage import Exit, Stage
-from taskforge.model.workpiece import Conversation, Terminal, Workpiece
+from taskforge.model.workpiece import Conversation, Submission, Terminal, Workpiece
 from taskforge.policy import Policy
 from taskforge.report import trial_outcomes
 from taskforge.resources.bundle import Resources
+from taskforge.resources.env import Env
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.inference import InferenceClient
 from taskforge.resources.rollouts import Engine, SolverRollout
 from taskforge.stages.rules import default_review
-from taskforge.wiring import build_config, build_resources
+from taskforge.wiring import CampaignWiring, build_config, build_resources
 
 RUN_WORKPIECE = driver.run_workpiece
 
@@ -200,7 +203,7 @@ class Driver:
         attempt: Launch,
         settings: Mapping[str, object] = {},
         profiles: Mapping[str, ModelProfile] = {},
-        configure: Callable[[TaskforgeConfig], TaskforgeConfig] = lambda config: config,
+        configure: Callable[[TaskforgeConfig], TaskforgeConfig] | None = None,
         cut: int | None = None,
         wired: bool = False,
     ) -> int:
@@ -218,7 +221,11 @@ class Driver:
                 providers = {role: ScriptedProvider((), policy.setting(f"{role}.model", str)) for role in ROLES}
                 key = build_resources(policy, providers, {}, FakeWeb({}, {})).rollouts.config_digest
                 bundle = replace(bundle, rollouts=replace(bundle.rollouts, config_digest=key))
-            yield configure(build_config(policy, {}, profiles)), bundle
+            config = build_config(policy, {}, profiles)
+            if configure is None and not profiles and not bundle.factories and type(bundle.envs) is Envs:
+                yield CampaignWiring(config, bundle)  # exercise the stock path with counted stand-ins
+            else:
+                yield configure(config) if configure else config, bundle
 
         seen: list[str] = []
         self.entries.append(seen)
@@ -376,7 +383,7 @@ async def test_only_a_changed_effective_reviewer_sampling_reopens_the_visit(
     second = launch(Paid())
     assert await launches.run(second, profiles=changed) == 0
     assert published_workpiece(launches.root).terminal is Terminal.ACCEPTED
-    assert (second.round_reviews, scopes(launches.rows()[held:], "validate")) == (reviews, reviews)
+    assert (second.round_reviews, scopes(launches.rows()[held:], "validate")) == (reviews, 1)
     assert [slot for slot in second.solver.runs if slot[1] == 0] == []  # the solver slots replay from the cache
 
 
@@ -391,13 +398,15 @@ def boundary_entries(lines: Sequence[bytes]) -> list[tuple[int, dict[str, Any], 
     ]
 
 
-async def refuses_the_damaged_root(launches: Driver, lines: list[bytes], at: int, row: dict[str, Any]) -> None:
+async def refuses_the_damaged_root(
+    launches: Driver, lines: list[bytes], at: int, row: dict[str, Any], match: str
+) -> None:
     """Republish ``row`` at line ``at``; the next launch must refuse before claim and leave the tree as it was."""
     lines[at] = json.dumps(row, sort_keys=True).encode() + b"\n"
     republish(launches.root, b"".join(lines))
     before = tree(launches.root)
     launches.monkeypatch.setattr(driver, "runtime", unexpected_runtime)
-    with pytest.raises(LogFailure, match=r"trial \d+'s receipt names no resolution of its slot") as e:
+    with pytest.raises(LogFailure, match=match) as e:
         await driver.one(launches.args)
     assert driver.exit_code(e.value) == driver.CORRUPT
     assert tree(launches.root) == before
@@ -414,7 +423,7 @@ async def test_a_malformed_boundary_receipt_leaves_the_held_head_byte_identical(
     else:  # a same-type resolution of the wrong slot
         first["receipt"], second["receipt"] = second["receipt"], first["receipt"]
     row["event"]["payload"]["entry"] = json.dumps(entry)
-    await refuses_the_damaged_root(launches, lines, at, row)
+    await refuses_the_damaged_root(launches, lines, at, row, r"trial \d+'s receipt names no resolution of its slot")
 
 
 def diagnosed(trial: int, attempt: int) -> GradeResult:
@@ -878,3 +887,52 @@ async def test_a_changed_author_session_or_proposal_resumes_at_the_author(
     assert await launches.run(launch(Paid()), profiles=profiles) == 0
     new = launches.rows()[held:]
     assert scopes(new, "author") == 1 and boundaries(new)[0] is Stage.AUTHOR
+
+
+@pytest.mark.parametrize("change", ["environment", "submit gate", "installer"])
+async def test_new_author_bindings_do_not_ship_the_previous_binding_s_submission(
+    launches: Driver, change: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(asyncio.CancelledError):
+        await launches.run(launch(Paid()), cut=1)
+
+    def gate(_submission: Submission) -> tuple[str, ...]:
+        raise Hold("changed submission gate")
+
+    class ChangedEnvironments:
+        async def create(self, requirements: EnvironmentRequirements) -> Env:
+            raise Hold("changed environment")
+
+    def configure(config: TaskforgeConfig) -> TaskforgeConfig:
+        if change != "submit gate":
+            return config
+        tools = dict(config.author.tools)
+        tools["submit"] = replace(cast(SubmitTool, tools["submit"]), gate=gate)
+        return replace(config, author=replace(config.author, tools=tools))
+
+    if change == "installer":
+        original_install = driver.install
+
+        async def observe(entry: ScopeEntered) -> None:
+            if entry.name == "author":
+                raise Hold("changed installer")
+
+        def installed(ctx: Context, resources: Resources) -> None:
+            original_install(ctx, resources)
+            ctx.observe(ScopeEntered, observe)
+
+        monkeypatch.setattr(driver, "install", installed)
+
+    def resources_for_run() -> Launch:
+        trial = launch(Paid())
+        if change == "environment":
+            trial.bundle = replace(trial.bundle, envs=ChangedEnvironments())
+        return trial
+
+    assert await launches.run(resources_for_run(), configure=configure if change == "submit gate" else None) == 0
+    recovered = published_workpiece(launches.root)
+    launches.args.output += "-fresh"
+    assert await launches.run(resources_for_run(), configure=configure if change == "submit gate" else None) == 0
+    fresh = published_workpiece(launches.root)
+    assert fresh.terminal is Terminal.HELD
+    assert recovered.terminal == fresh.terminal
