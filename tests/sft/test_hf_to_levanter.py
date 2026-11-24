@@ -12,6 +12,7 @@ draccus round-trip that carries the ``LmConfig`` from construction to the worker
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -167,9 +168,9 @@ def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
     assert decoded == arch
 
 
-def test_conversion_omits_only_default_fingerprint_fields_in_nested_config(monkeypatch):
+def test_conversion_transports_nested_values_omitted_from_fingerprint(monkeypatch):
     factor = next(field for field in dataclasses.fields(DefaultRotaryEmbeddingsConfig) if field.name == "factor")
-    monkeypatch.setattr(factor, "metadata", {"fingerprint_omit_default": True})
+    monkeypatch.setattr(factor, "metadata", {"fingerprint_omit_value": 1.0})
     default = LlamaConfig()
     modified = dataclasses.replace(default, rope=DefaultRotaryEmbeddingsConfig(factor=2.0))
     for architecture in (default, modified):
@@ -178,12 +179,13 @@ def test_conversion_omits_only_default_fingerprint_fields_in_nested_config(monke
         )
         handle = hf_to_levanter("fixture/llama", model_type="llama", hf_revision="fixture", version="test-dev")
         encoded = materialized_config(handle.step, _PREFIX).model_config_json
-        rope = encoded["rope"]
-        if architecture is default:
-            assert "factor" not in rope
-        else:
-            assert rope["factor"] == 2.0
+        assert encoded["rope"]["factor"] == architecture.rope.factor
         assert draccus.decode(LlamaConfig, encoded) == architecture
+        fingerprint_rope = json.loads(handle.step.fingerprint_payload())["model_config_json"]["rope"]
+        if architecture is default:
+            assert "factor" not in fingerprint_rope
+        else:
+            assert fingerprint_rope["factor"] == 2.0
 
 
 class _ExportTrainer:
