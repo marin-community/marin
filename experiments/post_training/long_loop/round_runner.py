@@ -48,7 +48,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from skyrlrecipe import RecipePatch
-from skyrlrecipe.documents import merge_mappings
+from skyrlrecipe.documents import merge_mappings, set_path
 
 from experiments.evaluation.micro210 import Micro210ServingProfile, micro210_artifact_step
 from experiments.evaluation.micro210_policy import Micro210Model, micro210_evaluation
@@ -933,6 +933,8 @@ def round_plan(
     if round_spec.rl_layout is not None:
         layout = round_spec.rl_layout
         resolved["rl"]["role_plan"] = dataclasses.asdict(layout.role_plan)
+        for path, value in layout.role_plan.config_values().items():
+            set_path(recipe, path, value)
         geometry = dataclasses.asdict(layout.megatron)
         for role in ("policy", "ref"):
             recipe["trainer"][role]["megatron_config"].update(geometry)
@@ -1001,7 +1003,7 @@ def round_plan(
 
 
 def round_pools(binding: PoolBinding) -> RoundPools:
-    """The regional Exp4 pools bound for a round: the adopted artifact, its fixed curriculum, and its dataset record.
+    """Bind the published pools artifact, curriculum and dataset record for a round.
 
     The pool step drew the curriculum's holdout and recorded the split and the
     fixed curriculum's identity in its manifest; the curriculum reconstructed
@@ -1010,7 +1012,7 @@ def round_pools(binding: PoolBinding) -> RoundPools:
     path = producer.path(binding.prefix)
     record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
     if json.loads(record_bytes)["fingerprint"] != producer.fingerprint():
-        raise ValueError("Regional Exp4 pool producer differs")
+        raise ValueError("Regional pool producer differs")
     manifest_bytes = (StoragePath(path) / "manifest.json").read_bytes()
     manifest = json.loads(manifest_bytes)
     curriculum = curriculum_from_manifest(manifest)
