@@ -243,6 +243,7 @@ def test_machine_failure_policy(operation: RolloutOperation, failure: RuntimeErr
         if isinstance(failure, MachineOutputLimitExceeded)
         else Transient
     )
+    expected = Restart if operation is RolloutOperation.ATTEMPT else expected  # the watchdog: the stage restarts
     decision = interruption(error)
     assert type(decision) is expected and str(failure) in str(decision)
 

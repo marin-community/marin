@@ -36,6 +36,7 @@ from taskforge.effects.issues import Restart
 from taskforge.llm import glm_provider
 from taskforge.llm.client import (
     CONFIRMATION_INTERVAL,
+    AttemptFailed,
     AttemptOutcome,
     ContextExhausted,
     ModelClient,
@@ -46,15 +47,16 @@ from taskforge.llm.client import (
 )
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
 from taskforge.llm.policy import GLM_5_3, LLMPolicy, ReasoningEffort, RetryPolicy
-from taskforge.lowering import requirements
+from taskforge.lowering import lowering_settings, requirements
 from taskforge.model.content_hash import json_value
 from taskforge.model.llm import FinishReason, ToolCall
-from taskforge.model.review import Cause
+from taskforge.model.review import Cause, TrialOutcome, TrialResult
 from taskforge.policy import load_policy
 from taskforge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from taskforge.resources.sandbox.factories import shellsim_factory
 from taskforge.stages.classify import replayable_grade, trial_cause
-from taskforge.wiring import provider_policy, solver_turn
+from taskforge.stages.rules import solved
+from taskforge.wiring import provider_policy, retry_policy, solver_turn
 
 DEFAULTS = Path(__file__).parents[2] / "src/taskforge/policy/defaults"
 TOOL_STALL = Fails(AttemptOutcome.STALLED, (chunk(role="assistant"), chunk(tool_calls=[{"index": 0, "id": "c"}])))
@@ -245,11 +247,13 @@ def bounded(provider: ScriptedProvider, time: LoopTime, wait: float = 3600) -> M
 
 # Regression: after any earlier fault the bound was off, so a long healthy generation ate stage retries.
 @pytest.mark.parametrize("before", [(), (unavailable(AttemptOutcome.RETRYABLE_STATUS),)], ids=["first", "after-a-fault"])
-async def test_a_generation_sustained_past_its_bound_is_an_unsolved_trial(before: tuple[Fails, ...]) -> None:
+async def test_a_generation_sustained_past_its_bound_is_a_time_limited_trial(before: tuple[Fails, ...]) -> None:
+    """Recorded as reaching the solver time limit, not the generation limit, and counted unsolved."""
     time = LoopTime()
     provider = ScriptedProvider((*before, generates(time, 10 * GENERATION_BOUND)))
     result = await rollout(bounded(provider, time), TURN)
-    assert trial_cause(result, SPEC.task) is Cause.GENERATION_LIMIT
+    trial = TrialResult(0, result.grade, trial_cause(result, SPEC.task))
+    assert trial.outcome is TrialOutcome.TIME_LIMIT and not solved(trial)
     assert len(provider.bodies) == len(before) + 1
     # The first token is at second 1; the first token past the bound is confirmed one interval later.
     assert time.offset == len(before) + 1 + GENERATION_BOUND + CONFIRMATION_INTERVAL
@@ -407,27 +411,160 @@ async def test_endpoint_request_body_has_no_client_output_allowance(monkeypatch:
     assert all("max_tokens" not in body and "max_completion_tokens" not in body for body in bodies)
 
 
-def test_trial_timeouts_outlast_declared_provider_window() -> None:
-    resolved = provider_policy(load_policy(DEFAULTS))
-    assert resolved.setting("solver.turn_timeout", float) == 4200
-    assert resolved.setting("solver.attempt_timeout", float) == 8400
+def stock(time_limit: float, **settings: float) -> tuple[RetryPolicy, TaskRolloutSpec]:
+    """The solver client's retry policy and the engine's limits when only ``solver.time_limit`` and ``settings``
+    change."""
+    policy = provider_policy(load_policy(DEFAULTS).overlaid({"solver.time_limit": time_limit, **settings}))
+    return retry_policy(policy, "solver"), SPEC.model_copy(update={"limits": lowering_settings(policy).limits})
 
 
+# Regression: the derived 12,681 s model-turn wall cut healthy requests the client still allowed.
+@pytest.mark.parametrize("time_limit", [1800.0, 4199.0, 4200.0, 4201.0, 7200.0])
+def test_the_time_limit_bounds_generation_under_the_stock_attempt_cap_and_no_model_turn_wall(time_limit: float) -> None:
+    retry, spec = stock(time_limit)
+    assert retry.generation_timeout == time_limit
+    assert (spec.limits.model_turn_timeout, spec.limits.attempt_timeout) == (None, 8400.0)
+
+
+# Regression: at an equal cap and time limit the attempt cap fired first, so a time-limited trial was recorded as an
+# unscored cap and the task held instead of counting the trial unsolved.
 @pytest.mark.parametrize(
-    ("overlay", "message"),
+    ("time_limit", "message"),
     [
-        ({"solver.turn_timeout": 1800.0}, "must cover"),
-        ({"solver.attempt_timeout": 3600.0}, "must cover"),
-        (
-            {"provider.unavailable_wait": 10.0, "solver.turn_timeout": 650.0, "solver.attempt_timeout": 1300.0},
-            "less its margin",
-        ),
+        (8400.0, r"solver\.attempt_timeout must be finite and greater than solver\.time_limit"),
+        (0.0, r"solver\.time_limit must be positive"),
     ],
-    ids=["turn-under-window", "attempt-under-two-turns", "generation-bound-under-a-stall"],
 )
-def test_inconsistent_provider_deadlines_are_rejected(overlay: dict[str, float], message: str) -> None:
+def test_a_time_limit_equal_to_the_attempt_cap_is_rejected(time_limit: float, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        provider_policy(load_policy(DEFAULTS).overlaid(overlay))
+        stock(time_limit)
+
+
+def test_the_renamed_time_limit_key_names_what_it_became() -> None:
+    with pytest.raises(ValueError, match=r"solver\.turn_timeout: renamed solver\.time_limit, which bounds"):
+        load_policy(DEFAULTS).overlaid({"solver.turn_timeout": 4200.0})
+
+
+def walled(provider: ScriptedProvider, time: LoopTime, retry: RetryPolicy) -> ModelClient:
+    return ModelClient(provider, GLM_5_3, retry, role="solver", clock=time.clock, sleep=time.sleep)
+
+
+def silent(time: LoopTime, seconds: float, then: Act | None = None) -> Act:
+    """An attempt that generates nothing for ``seconds``, then runs ``then`` or reports a stall."""
+
+    async def act(progress: Progress) -> Segment:
+        await time.sleep(seconds)
+        if then is None:
+            raise AttemptFailed(AttemptOutcome.STALLED, f"no progress for {seconds}s")
+        return await then(progress)
+
+    return act
+
+
+def busy_for(seconds: float) -> Act:
+    """A 503 whose Retry-After asks for ``seconds``."""
+
+    async def act(_: Progress) -> Segment:
+        raise AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, "busy", 503, retry_after=seconds)
+
+    return act
+
+
+def cut_after(time: LoopTime, seconds: float) -> Act:
+    """A stream that generates a token every second for ``seconds``, then is cut by the transport."""
+
+    async def act(progress: Progress) -> Segment:
+        await generates(time, seconds - 1)(progress)
+        await time.sleep(1)
+        raise AttemptFailed(AttemptOutcome.INCOMPLETE_STREAM, "connection reset")
+
+    return act
+
+
+# Regression: two availability windows around a cut stream, then a long last stream. The stock watchdog stops the
+# attempt before any limit is proven, which restarts the stage; an explicit larger cap lets the client decide.
+@pytest.mark.parametrize(
+    ("last", "cap", "cause", "outcome"),
+    [
+        (3000, 8400.0, None, None),
+        (5000, 8400.0, None, None),
+        (3000, 20000.0, None, TrialOutcome.GRADED),
+        (5000, 20000.0, Cause.TIME_LIMIT, TrialOutcome.TIME_LIMIT),
+    ],
+    ids=["answers-capped", "past-limit-capped", "answers-larger-cap", "past-limit-larger-cap"],
+)
+async def test_a_slot_past_its_attempt_cap_restarts_and_inside_it_the_client_decides(
+    last: float, cap: float, cause: Cause | None, outcome: TrialOutcome | None
+) -> None:
+    time = LoopTime()
+    retry, spec = stock(4200.0, **{"solver.attempt_timeout": cap})
+    provider = ScriptedProvider((busy_for(3400), cut_after(time, 4100), busy_for(3400), generates(time, last)))
+    if outcome is None:  # the second wait was still running at 8,400 s
+        with pytest.raises(Restart, match="attempt"):
+            await rollout(walled(provider, time, retry), spec)
+        return
+    result = await rollout(walled(provider, time, retry), spec)
+    trial = TrialResult(0, result.grade, trial_cause(result, spec.task))
+    assert (trial.cause, trial.outcome) == (cause, outcome)
+    assert len(provider.bodies) == 4 and result.rollout.failure is None and (cause or result.grade.reward == 1)
+
+
+# Regression: at a 12,000 s time limit a cut stream and an answer took two full generations.
+async def test_a_long_time_limit_with_a_larger_explicit_cap_keeps_a_recovery_that_generates_twice() -> None:
+    time = LoopTime()
+    retry, spec = stock(12000.0, **{"solver.attempt_timeout": 30000.0})
+    provider = ScriptedProvider((cut_after(time, 11980), generates(time, 11980)))
+    result = await rollout(walled(provider, time, retry), spec)
+    assert trial_cause(result, spec.task) is None and result.grade.reward == 1 and len(provider.bodies) == 2
+
+
+@pytest.mark.parametrize("time_limit", [1800.0, 7200.0])
+async def test_generation_sustained_past_the_time_limit_is_a_time_limited_trial_under_the_stock_cap(
+    time_limit: float,
+) -> None:
+    time = LoopTime()
+    retry, spec = stock(time_limit)
+    provider = ScriptedProvider((generates(time, 2 * time_limit),))
+    result = await rollout(walled(provider, time, retry), spec)
+    assert trial_cause(result, spec.task) is Cause.TIME_LIMIT and len(provider.bodies) == 1
+    assert time.offset == 1 + time_limit + CONFIRMATION_INTERVAL
+
+
+# Regression: the engine's wall started before admission and the first token, so a delayed first token let it cut
+# a healthy stream that the client would have finished inside its generation bound.
+@pytest.mark.parametrize("time_limit", [1800.0, 7200.0])
+async def test_a_delayed_first_token_with_continuing_progress_finishes_inside_the_time_limit(time_limit: float) -> None:
+    time = LoopTime()
+    retry, spec = stock(time_limit)
+    provider = ScriptedProvider((silent(time, 599, generates(time, time_limit - 2)),))
+    result = await rollout(walled(provider, time, retry), spec)
+    assert trial_cause(result, spec.task) is None and result.grade.reward == 1
+    assert time.offset == 599 + time_limit - 2 > time_limit
+
+
+async def test_a_provider_that_stops_making_progress_restarts_as_unavailable_before_the_cap() -> None:
+    time = LoopTime()
+    retry, spec = stock(1800.0)
+
+    async def stops(progress: Progress) -> Segment:
+        for _ in range(10):
+            await time.sleep(1)
+            report(progress, chunk(content="x"))
+        return await silent(time, 600)(progress)  # then no progress for a whole stall timeout
+
+    provider = ScriptedProvider((stops, *[silent(time, 600)] * 20))
+    with pytest.raises(Restart, match="ModelUnavailable") as raised:
+        await rollout(walled(provider, time, retry), spec)
+    assert "deadline expired" not in str(raised.value) and time.offset < (spec.limits.attempt_timeout or 0)
+
+
+async def test_a_pool_without_workers_restarts_as_unavailable_before_the_cap() -> None:
+    time = LoopTime()
+    retry, spec = stock(1800.0)
+    provider = ScriptedProvider([unavailable(AttemptOutcome.RETRYABLE_STATUS)] * 200, empty_pool=[True] * 200)
+    with pytest.raises(Restart, match="ModelUnavailable") as raised:
+        await rollout(walled(provider, time, retry), spec)
+    assert "deadline expired" not in str(raised.value) and 3599 < time.offset < (spec.limits.attempt_timeout or 0)
 
 
 # Regression: a 200 stream whose finish reason was the harness's internal `context_exceeded`

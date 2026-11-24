@@ -8,41 +8,28 @@ import math
 from collections.abc import Callable, Sequence
 from types import MappingProxyType
 
-from rolloutengine.models import (
-    LENGTH_STOP_REASON,
-    MAX_TURNS_STOP_REASON,
-    TOTAL_TURN_TIMEOUT_STOP_REASON,
-    GradedRollout,
-)
+from rolloutengine.models import MAX_TURNS_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON, GradedRollout
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import NoGrader, TaskSpec
 
 from taskforge.effects.events import Committed, Resolved, StageCompleted
 from taskforge.effects.issues import Hold, LogFailure
 from taskforge.effects.log import Record, physical
-from taskforge.model.review import Cause, Incomplete, Modify, Reject, Retry
+from taskforge.model.review import FAULTS, Cause, Incomplete, Modify, Reject, Retry
 from taskforge.model.verdict import grader_checks
-from taskforge.resources.rollouts import SolverRollout, refused
+from taskforge.resources.rollouts import LIMIT_STOP_REASONS, TIME_LIMIT_STOP_REASON, SolverRollout, refused
 
-# One review disposition per cause; solver generation limits are handled as failed trials. GRADER_INFRA
-# has none: the grader_infra_unavailable observer holds validation before review sees such a grade.
+# One review disposition per cause. GENERATION_LIMIT and TIME_LIMIT have none: such a trial is unsolved
+# (``TrialResult.outcome``). GRADER_INFRA has none: the grader_infra_unavailable observer holds validation before
+# review sees such a grade.
 CAUSE_DECISIONS = MappingProxyType(
     {
         None: None,
         Cause.AGENT_TIMEOUT: Retry,
         Cause.NO_GRADE: Retry,
         Cause.BUDGET_EXHAUSTED: Reject,
-        Cause.GENERATION_LIMIT: Incomplete,
         Cause.HELD: Incomplete,
-        Cause.GRADER_MISSING_REWARD: Modify,
-        Cause.GRADER_EMPTY_REWARD: Modify,
-        Cause.GRADER_INVALID_REWARD: Modify,
-        Cause.GRADER_INVALID_CHECKS: Modify,
-        Cause.GRADER_TIMEOUT: Modify,
-        Cause.GRADER_EXECUTION: Modify,
-        Cause.GRADER_REWARD_RANGE: Modify,
-        Cause.INVALID_TASK: Modify,
-        Cause.VERIFIER_SKIPPED: Modify,
+        **dict.fromkeys(FAULTS, Modify),  # the stock policy returns every fault to the author
     }
 )
 
@@ -84,33 +71,28 @@ def trial_cause(result: GradedRollout, task: TaskSpec) -> Cause | None:
         return Cause.AGENT_TIMEOUT
     if stop == MAX_TURNS_STOP_REASON:
         return Cause.BUDGET_EXHAUSTED
-    if generation_limited(result):
-        return Cause.GENERATION_LIMIT
-    return grade_cause(result.grade, task)
+    if stop == TIME_LIMIT_STOP_REASON:
+        return Cause.TIME_LIMIT
+    return Cause.GENERATION_LIMIT if stop in LIMIT_STOP_REASONS else grade_cause(result.grade, task)
 
 
-def generation_limited(result: GradedRollout) -> bool:
-    """The solver's generation reached its limit: a definitive failed trial whatever the grade says."""
-    return result.rollout.stop_reason in (LENGTH_STOP_REASON, "context")
+def unsettled_grade(value: object) -> GradeResult | None:
+    """A grade that can still hold validation or reopen its slot. A generation limit settles a loss on its own."""
+    if isinstance(value, GradedRollout):
+        value = None if value.rollout.stop_reason in LIMIT_STOP_REASONS else value.grade
+    return value if isinstance(value, GradeResult) else None
 
 
 async def grader_infra_unavailable(event: Resolved[object]) -> None:
-    value = event.value
-    grade = value.grade if isinstance(value, GradedRollout) else value
-    if isinstance(grade, GradeResult) and grade_cause(grade) is Cause.GRADER_INFRA:
+    grade = unsettled_grade(event.value)
+    if grade is not None and grade_cause(grade) is Cause.GRADER_INFRA:
         raise Hold(grade.error or "Grader infrastructure unavailable")
 
 
 def replayable_grade(event: Resolved[object]) -> bool:
-    """Resume successful evidence, generation cutoffs and slot holds, but reevaluate unavailable grading. A cutoff is
-    exempt only without a grade (no answer reached the grader); a graded answer cut at its limit whose grader failed
-    is retried like any grader infrastructure failure."""
-    value = event.value
-    if isinstance(value, GradedRollout) and generation_limited(value) and grade_cause(value.grade) is Cause.NO_GRADE:
-        return True
-    grade = value.grade if isinstance(value, GradedRollout) else value
-    unavailable = isinstance(grade, GradeResult) and grade_cause(grade) in (Cause.GRADER_INFRA, Cause.NO_GRADE)
-    return refused(event.value) or not unavailable
+    """Resume successful evidence, settled losses and slot holds, but reevaluate unavailable grading."""
+    grade = unsettled_grade(event.value)
+    return refused(event.value) or grade is None or grade_cause(grade) not in (Cause.GRADER_INFRA, Cause.NO_GRADE)
 
 
 def replaced_refusals(previous: Sequence[Record], resume: bool) -> Callable[[Resolved[object]], bool]:

@@ -30,7 +30,9 @@ This file covers how to run it.
 
 author → submit → validate → review → confirm → review. On *modify*, a new author conversation starts,
 seeded with the findings and the previous submission's files; on *retry*, the same submission is validated
-again. On *accept*, the confirmation step runs before the acceptance is final (see **Confirmation** below).
+again with a fresh cohort of solver trials under the new round's attempt; the retried round's trials stay in its
+own record. A limited slot is never bought again when the same visit or cohort is replayed, but a retry's
+fresh cohort buys every slot of the new round, that one's included. A limit never causes a retry. On *accept*, the confirmation step runs before the acceptance is final (see **Confirmation** below).
 
 On every author entry, including revision rounds, the workspace holds the proposal, the previous
 submission's `task.json`, `controls.json` and resources, and any validation results. A caller can add
@@ -108,7 +110,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 13); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 14); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -135,15 +137,17 @@ format 7 (no confirmation step: its acceptances end at the validation round and 
 resumed format-7 round would buy one its history lacks),
 fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 13` and reports the
-rest. Formats 8 to 12 differ: their rows decode at format 13, so `report` reads them, but the driver refuses
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 14` and reports the
+rest. Formats 8 to 13 differ: their rows decode at format 14, so `report` reads them, but the driver refuses
 to claim a running or held root of those formats, exiting 4 with its head untouched and naming the writer of its
-format or a fresh output prefix as the way on. Format 12 words two author requests otherwise: a final revision's
-request ends with its ordinal, and a too-easy placement's line no longer calls the round the one hardening attempt,
-so a resumed format-11 author would send requests its recorded calls did not. Format 13 commits reviewed visits
-(above), which a format-12 root lacks, so its resumed rounds would decide again on re-observed evidence. Formats 8 to 10 embedded a schema
-reference in their author calls that this writer does not reproduce, so a resumed author would buy different
-answers that the recorded sandbox history then refuses. Format 11
+format or a fresh output prefix as the way on. Format 14 records a solver generation still running at
+`solver.time_limit` as stopped at the time limit (`time_limit`), which a format-13 reader cannot decode; format 13 recorded it as a generation limit, under another
+solver clock. Format 13 commits reviewed visits (above), which a format-12 root lacks, so its resumed rounds would
+decide again on re-observed evidence. Format 12 words two author requests otherwise: a final revision's request ends
+with its ordinal, and a too-easy placement's line no longer calls the round the one hardening attempt, so a resumed
+format-11 author would send requests its recorded calls did not. Formats 8 to 10 embedded a schema reference in their
+author calls that this writer does not reproduce, so a resumed author would buy different answers that the recorded
+sandbox history then refuses. Format 11
 adds the `schema.author_reference` row (below), which a format-10 reader cannot decode; at 11 that reader refuses the
 root as another format. Format 10 adds a row's `billed` field, outside the event, naming the role that
 paid for a physical cached resolution; a format-9 reader refuses a format-10 root as another format. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its
@@ -218,7 +222,9 @@ A validation or confirmation visit that a continuing review decided on is commit
 row carries the visit's identity (its stage, the workpiece it entered with and the run's compatibility digest) and its
 typed evidence, whose solver trials each name the journal row their result was bought at (`receipt`; none for a slot
 whose output budget ran out twice, the only case with no row; a slot-local refusal keeps its row). A later launch that enters the same visit takes
-that evidence and buys nothing inside it again: no solver, control, adversary or solve-review call, no stage duration
+that evidence and buys nothing inside it again (as far as the visit reached a published chunk: work bought after
+the last published chunk is bought again after a hard kill, as for any crash below; a cancelled launch publishes its
+rows first): no solver, control, adversary or solve-review call, no stage duration
 sample, observer notification, sandbox reopen or decision-model answer; the pure review rule then decides again.
 The compatibility digest covers the whole policy, the band and budget, the adversary's and solve-review's effective
 sessions (sampling included), the rollout, grading and decision-model replay identities and the machine backends
@@ -302,7 +308,10 @@ While a driver is working on a workpiece, its head reads `terminal: null` with
 
 Run `uv run --frozen python -m taskforge.driver report <output-root> [--since-hours N]`
 with the storage credentials above. It reads each journal head and its chunks concurrently,
-then prints terminal/reason counts, accepted/hour over 1/6/24 hours, tokens by role,
+then prints terminal/reason counts, the outcomes of the solver trials in the completed validation and confirmation
+records of terminal workpieces (`solver_trial_outcomes scope=terminal_records outcome=<o> count=<n>`, one line per
+outcome; each bought slot once, though a confirmation record repeats the trials it keeps; a
+running root and a stage that did not finish add nothing), accepted/hour over 1/6/24 hours, tokens by role,
 stage durations, and consecutive-event latency proxies. Replayed results do not add token
 spend or latency samples. Solver usage comes from recorded rollout steps. Each physical model call and solver slot
 is charged to the role its row names as payer (`billed`), set by the visit, judge callback or stage scope that made
@@ -411,9 +420,16 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   decision-model outage parks for automatic relaunch. Controls and adversaries do not run again. The
   confirmation record is assessed as a validation round first, before the final reviewer is asked: an invalid
   task or a grader fault in the new trials is the author's to repair and an exhausted trial budget rejects, never a
-  denominator entry, and a record that rejects or is incomplete is decided without the final review. Only
-  valid scores and generation limits are placed: a generation limit is an unsolved trial, and any other
-  slot without a score is named (`confirmation_trials`) and excluded. The final review
+  denominator entry, and a record that rejects or is incomplete is decided without the final review. Every
+  trial's outcome (`TrialResult.outcome`, read from its recorded cause and grade) is one of `graded` (a reward,
+  a submission failure scoring zero), `generation_limit` (it ran out of context or output), `time_limit` (still
+  generating at `solver.time_limit`), `budget_exhausted` (a configured turn budget spent: `max_turns`),
+  `faulted` (a grader or task fault, a finding) or `unscored` (held, ungraded,
+  grader infrastructure; its cause says which). Graded
+  trials and limits, and only they, are placed: a limit is an unsolved trial whatever its grade says (a grader failure
+  on its partial output, returned or raised at the verifier's deadline, is kept in its grade, never holds validation
+  and replays on resume; a decision-model outage still checkpoints the generation for regrading), which the acceptance
+  names (`Counted unsolved without a gradable answer: ...`), and an unscored trial is named (`confirmation_trials`) and excluded. The final review
   (`solve_review.final.*` prompts, with its own nudge) uses the same reviewer, evidence index, citation
   checks and replay identity (the confirmation builds one index for its final review and its shipped-note check; its
   sources are a read-only mapping and its version is computed once, so a `solve_review(report=...)` factory that
@@ -429,7 +445,7 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   several): shipped notes, an earlier finding an account blames and the earlier-claim recheck keep a finding
   while any one group's citations all still occur, so a revision that changes one cited trial never takes down
   the version citing another.
-  The placement over every scored trial re-tags the acceptance in any band the policy accepts (a refused band:
+  The placement over every placed trial re-tags the acceptance in any band the policy accepts (a refused band:
   above); `note` findings are the acceptance's notes. A new `revise`
   finding (or one an earlier review gave whose latest response on the shipped round's history is a revision:
   a restore discards the revisions after the round it restores, and a later decline overrides) or a fault buys
@@ -447,11 +463,24 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   `accepted_with` is published only on a final acceptance. Missing confirmation evidence
   (`confirmation_trials`, `transcripts`, `solve_review`) is named once, never a hold.
 - **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
-  `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
+  `solver.*` timeouts. `solver.time_limit` (4200 s, 70 minutes; it replaces `solver.turn_timeout`, which measured
+  the engine's model-turn wall from before admission) bounds one solver generation, from its first generated token:
+  a generation still running past it is cut, and the trial is recorded at the time limit (`time_limit`): unsolved,
+  never retried. The engine has no model-turn wall: the model client owns a turn, its time limit, stalls and
+  availability window. `solver.attempt_timeout` (8400 s; the run refuses one that is not greater than `solver.time_limit`) is a watchdog on
+  one physical attempt, machine preparation and grading included. Once the time limit is proven, an attempt it stops
+  is still the settled unsolved trial. An attempt it stops before that restarts the stage within the existing restart
+  bound (`STAGE_REPLAY_ATTEMPTS`, three attempts in all), after which the slot is held: at the default cap that can
+  spend about seven hours of solver time on one slot. Two availability waits around a long cut stream can reach it,
+  and an operator who wants such recoveries sets a larger cap. A judge grade's deadline is its normal minimum or `provider.unavailable_wait` plus
+  `provider.stall_timeout`, whichever is larger; a decision-model grade's is its normal minimum plus
+  `decision_model.unavailable_wait`, so its typed outage comes first. Neither depends on the solver settings.
 - **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
   `provider.backoff_*`), `provider.stall_timeout`, `provider.max_connections`. The run refuses a
-  `solver.turn_timeout` shorter than the window plus a stall, or too short for a first attempt to reach its
-  first token inside the solver's generation bound (the turn less 60 s).
+  `solver.time_limit` that is not positive and finite, and a `solver.attempt_timeout` that is not finite and
+  greater than it. That is a configuration check, not a promise about which clock wins: the cap should leave room
+  above the time limit for machine preparation, tool turns and grading, and a cap close to the limit can interrupt
+  a trial the limit would have failed, which then restarts as above.
 - **Tools**: `tools.output_chars` (at least 240); longer output is saved to `.tool-output/<digest>.txt` in
   the workspace and the model gets the head plus the path, or, for a session without a machine, is clipped.
 
@@ -469,7 +498,7 @@ relay, the transport or local admission may have caused is an outage, and no fai
 | Failure | Evidence checked | What happens |
 |---|---|---|
 | 400 context overflow (recognised wording or `context_length_exceeded`) | the rejection itself | `ContextExhausted`: a solver trial ends at the generation limit (counted, never solved); the author and adversary get `ContextExceeded` |
-| solver generation past `solver.turn_timeout` less 60 s | the same stream still generating: a second generated payload at least `CONFIRMATION_INTERVAL` (1 s) after its first one past the bound, with no finish, abort, cut or stall in between; counted from each attempt's first token; no pool state is consulted | the trial ends at the generation limit |
+| solver generation past `solver.time_limit` | the same stream still generating: a second generated payload at least `CONFIRMATION_INTERVAL` (1 s) after its first one past the bound, with no finish, abort, cut or stall in between; counted from each attempt's first token; no pool state is consulted | the trial ends at the time limit (`time_limit`; counted, never solved) |
 | other rejection (401, unknown 400 wording, ...) | the status | `ModelRequestRejected`, never retried; a solver rollout holds at once with the status and reason |
 | 408, 429, any 5xx, 404 `no route`, no endpoint, registry lookup failure, refused connection, full local pool, an error body not whole within `provider.stall_timeout` of its headers, stall (also inside a tool call), cut or aborted stream (also past the bound) | `/health` while waiting | waited out with backoff, polling `/health` while the pool reports no workers, for `provider.unavailable_wait`; then `ModelUnavailable`, which restarts the stage (a solver rollout is interrupted, never a failed trial) |
 

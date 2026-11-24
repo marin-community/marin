@@ -36,7 +36,6 @@ from taskforge.harness.tools import adversary_tools, standard_tools
 from taskforge.harness.tools.evidence import MIN_OUTPUT_CHARS
 from taskforge.llm.client import ContextExhausted, GenerationTimedOut, ModelClient, Provider
 from taskforge.llm.glm_provider import (
-    CONNECT_TIMEOUT,
     EndpointSource,
     EndpointUnavailable,
     FixedEndpoint,
@@ -88,9 +87,6 @@ from taskforge.resources.web import ParallelWeb, WebClient, WebFetch, WebSearch,
 from taskforge.stages.author import AuthorReference, author_reference
 from taskforge.stages.rules import default_review
 
-SOLVER_TURN_MARGIN = 60.0
-"""Seconds by which a solver generation ends before ``solver.turn_timeout``, so that the engine records it as a stop at
-the generation limit rather than interrupting the rollout at its model-turn deadline (cancelling a stream takes time)."""
 DEFAULT_PROFILES: Mapping[str, ModelProfile] = MappingProxyType({})
 NO_PROVIDERS: Mapping[str, Provider] = MappingProxyType({})
 
@@ -200,9 +196,10 @@ class Environments(EnvFactory):
 
 
 async def solver_turn(client: CompletionBackend, sampling: LLMPolicy, request: ModelRequest) -> ModelTurn:
-    """One solver turn. Only positive evidence that the model ran out ends the rollout at the generation limit, a
-    failed trial that is graded and counted: a recognised context overflow, or generation sustained past the turn
-    deadline less its margin (``taskforge.llm.client``). Every outage propagates, so no trial is recorded."""
+    """One solver turn. Only positive evidence that the model ran out ends the rollout, a failed trial that is graded
+    and counted: a recognised context overflow at the generation limit, or generation sustained past
+    ``solver.time_limit`` (``taskforge.llm.client``) at the time limit. Every outage propagates, so no trial is
+    recorded."""
     if request.continuation is not None or request.prompt_token_ids is not None:
         raise ValueError("GLM solver requires messages trace")
     try:
@@ -213,14 +210,14 @@ async def solver_turn(client: CompletionBackend, sampling: LLMPolicy, request: M
 
 
 def retry_policy(policy: Policy, role: str) -> RetryPolicy:
-    """The provider settings of ``policy``; only a solver generation is bounded, by its turn deadline."""
-    turn = policy.setting("solver.turn_timeout", float)
+    """The provider settings of ``policy``; only a solver generation is bounded, by ``solver.time_limit``."""
+    turn = policy.setting("solver.time_limit", float)
     return RetryPolicy(
         policy.setting("provider.unavailable_wait", float),
         policy.setting("provider.backoff_initial", float),
         policy.setting("provider.backoff_maximum", float),
         policy.setting("provider.backoff_factor", float),
-        generation_timeout=turn - SOLVER_TURN_MARGIN if role == "solver" else None,
+        generation_timeout=turn if role == "solver" else None,
     )
 
 
@@ -234,11 +231,7 @@ def decision_model_policy(policy: Policy) -> DecisionModelPolicy | None:
     named = zip(("concurrency", *names), (concurrency, *timings), strict=True)
     if bad := [f"decision_model.{name}" for name, value in named if not 0 < value < math.inf]:
         raise ValueError(f"{', '.join(bad)} must be positive and finite")
-    settings = DecisionModelPolicy(model, concurrency, *timings)
-    if settings.unavailable_wait >= policy.setting("solver.turn_timeout", float):
-        # A decision-model grade has the solver turn as its verifier deadline: the typed outage must come first.
-        raise ValueError("decision_model.unavailable_wait must end before solver.turn_timeout")
-    return settings
+    return DecisionModelPolicy(model, concurrency, *timings)
 
 
 def clef(policy: Policy, source: EndpointSource, http: httpx.AsyncClient) -> ClefReader:
@@ -285,6 +278,9 @@ def build_resources(
     # non-default profiles of roles whose inference a replayed outer result skips.
     inference = {role: GlmInference(client, role) for role, client in clients.items()}
     profile = solver.profile.replay_identity()
+    # The spec no longer carries the generation bound (the client owns it), so the solver's key does: a changed limit
+    # buys its trials and generations again, and no other role's identity moves.
+    limit = ("solver.time_limit", solver.retry.generation_timeout)
     judge = clients["judge"].profile.replay_identity() if "judge" in clients else None
     graders = () if judge is None else (("judge", judge),)
     graders += () if decided is None else (("decision_model", decided.model),)
@@ -294,7 +290,7 @@ def build_resources(
         RolloutResource(
             verifiers.rollouts,
             partial(solver_turn, solver, sampling),
-            digest((solver.model, sampling, execution) + (() if profile is None else (profile,)) + graders),
+            digest((solver.model, sampling, execution, limit) + (() if profile is None else (profile,)) + graders),
         ),
         GradingResource(verifiers.grades, digest((execution, *graders)) if graders else execution, base_engine),
         Ids(),
@@ -402,17 +398,13 @@ def build_config(
 
 
 def provider_policy(policy: Policy) -> Policy:
-    """Reject deadlines that expire before the declared provider availability window."""
-    window = policy.setting("provider.unavailable_wait", float)
-    turn = policy.setting("solver.turn_timeout", float)
-    stall = policy.setting("provider.stall_timeout", float)
-    if turn < window + stall:
-        raise ValueError("solver.turn_timeout must cover provider.unavailable_wait plus provider.stall_timeout")
-    if turn - SOLVER_TURN_MARGIN <= stall + CONNECT_TIMEOUT:
-        # Otherwise a first attempt still waiting for its first token could be taken for a long generation.
-        raise ValueError("solver.turn_timeout less its margin must exceed provider.stall_timeout plus connecting")
-    if policy.setting("solver.attempt_timeout", float) < 2 * turn:
-        raise ValueError("solver.attempt_timeout must cover two solver.turn_timeout windows")
+    """Reject a solver time limit that bounds no generation, and an attempt cap that ends no later than one could."""
+    limit = policy.setting("solver.time_limit", float)
+    if not 0 < limit < math.inf:
+        raise ValueError("solver.time_limit must be positive and finite")
+    if not limit < policy.setting("solver.attempt_timeout", float) < math.inf:
+        # At equal values the attempt cap fires first, so a time-limited trial would be recorded as an unscored cap.
+        raise ValueError("solver.attempt_timeout must be finite and greater than solver.time_limit")
     return policy
 
 

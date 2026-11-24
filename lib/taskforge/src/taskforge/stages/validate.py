@@ -55,6 +55,7 @@ from taskforge.model.review import (
     SearchEnd,
     SearchLimit,
     SolveReview,
+    TrialOutcome,
     TrialResult,
     ValidationResult,
 )
@@ -71,7 +72,7 @@ from taskforge.stages.classify import (
     trial_cause,
 )
 from taskforge.stages.exits import Validated
-from taskforge.stages.rules import actionable, assess, earlier_findings, missing, shipped
+from taskforge.stages.rules import actionable, assess, earlier_findings, shipped
 from taskforge.stages.solve_review import earlier_reports, evidence, shipped_notes, solve_review
 from taskforge.stages.summary import task_manifest
 
@@ -554,7 +555,7 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
     index = shipped(accepted, workpiece)
     round_, policy, max_missing = workpiece.evidence[index], config.policy, config.budget.max_missing_trials
     spec = solver_spec(submission, config, resources)
-    base = tuple(trial for trial in round_.solver if not missing(trial))
+    base = tuple(trial for trial in round_.solver if trial.outcome is not TrialOutcome.UNSCORED)
     async with ctx.scope("confirm", bills=Billing.CONFIRMATION):
         ctx.observe(Resolved, grader_infra_unavailable)
         # Each base trial's own transcript, at its receipt; a trial without one stays without.

@@ -28,6 +28,12 @@ PROMPT_SUFFIX = ".md"
 type Setting = bool | int | float | str | tuple[str, ...]
 
 
+RETIRED = MappingProxyType(
+    {"solver.turn_timeout": "renamed solver.time_limit, which bounds one solver generation from its first token"}
+)
+"""Keys an earlier policy had, with what became of each, for the error an overlay naming one gets."""
+
+
 @dataclass(frozen=True, slots=True)
 class Prompt:
     """A template loaded from a prompt file: ``template`` is the file's text without its final newline."""
@@ -75,7 +81,7 @@ class Policy:
         for overlay in overlays:
             for key, value in overlay.items():
                 if key not in entries:
-                    raise ValueError(f"the policy has no entry {key}")
+                    raise ValueError(f"the policy has no entry {key}" + (f": {RETIRED[key]}" if key in RETIRED else ""))
                 old = entries[key]
                 new = Prompt(value) if isinstance(old, Prompt) and isinstance(value, str) else value
                 new = float(new) if type(old) is float and type(new) is int else new

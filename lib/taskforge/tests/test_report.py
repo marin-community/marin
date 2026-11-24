@@ -31,7 +31,7 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import Completion, Usage
 from taskforge.model.proposal import TaskProposal
-from taskforge.model.review import Abandon, Incomplete
+from taskforge.model.review import Abandon, Cause, Incomplete, TrialResult, ValidationResult
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import load_policy
@@ -128,6 +128,29 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
     assert "event_gap=InferenceRequest n=2 p50_seconds=5.000 p90_seconds=10.000" in lines
     assert "event_gap=WriteFile n=1 p50_seconds=3.000 p90_seconds=3.000" in lines
     assert "terminal=accepted count=1" in await report(str(tmp_path), 1)
+
+
+async def test_report_counts_each_bought_solver_trial_once_by_outcome(tmp_path: Path, proposal: TaskProposal) -> None:
+    """A confirmation record repeats its round's trials, which were bought once."""
+    solved, cut = TrialResult(0, GradeResult(Outcome.GRADED, 1.0)), TrialResult(1, None, Cause.GENERATION_LIMIT)
+    round_ = ValidationResult("d", (solved, cut), (), ())
+    added = (TrialResult(2, GradeResult(Outcome.GRADED, 0.0)), TrialResult(3, None, Cause.HELD, "refused"))
+    record = ValidationResult("d", (solved, cut, *added), (), (), confirms=0)
+    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
+    sink.claim(None)
+    await sink.local.write((Record(1, time.time(), StageCompleted(Stage.REVIEW, "", "Done")),))
+    workpiece = Workpiece("w", proposal, evidence=(round_, record), terminal=Terminal.ACCEPTED)
+    await sink.finish(Status(terminal=Terminal.ACCEPTED), workpiece)
+    lines = await report(str(tmp_path / "root"))
+    counted = [line for line in lines if line.startswith("solver_trial_outcomes ")]
+    assert counted == [
+        "solver_trial_outcomes scope=terminal_records outcome=graded count=2",
+        "solver_trial_outcomes scope=terminal_records outcome=generation_limit count=1",
+        "solver_trial_outcomes scope=terminal_records outcome=time_limit count=0",
+        "solver_trial_outcomes scope=terminal_records outcome=budget_exhausted count=0",
+        "solver_trial_outcomes scope=terminal_records outcome=faulted count=0",
+        "solver_trial_outcomes scope=terminal_records outcome=unscored count=1",
+    ]
 
 
 class Profile:

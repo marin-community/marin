@@ -316,10 +316,12 @@ async def test_a_generation_limited_slot_replays_with_its_transcript_beside_an_i
     assert not cold.executed and kept(rebuilt_log, 0).conversations[0].messages == PROMPT
 
 
-# Regression: an answer cut at its length limit is still graded; when its grader failed for
-# infrastructure (here the host judge's incomplete completion), the exemption above replayed the failure forever.
+# Regression: an answer cut at its length limit is still graded; when its grader failed for infrastructure (here the
+# host judge's incomplete completion), the exemption above replayed the failure forever, and retrying it bought the
+# slot again so a replacement that finished erased the limit. A limit is a settled loss whatever its grade: it
+# replays, with its failed grade kept for inspection.
 @pytest.mark.parametrize("resume", [False, True])
-async def test_a_length_stopped_answer_whose_grader_failed_is_graded_again(resume: bool) -> None:
+async def test_a_length_stopped_answer_whose_grader_failed_is_a_settled_loss_that_replays(resume: bool) -> None:
     answered = ConversationRecord((*PROMPT, {"role": "assistant", "content": "12"}), (), (), (), None)
     infra = GradeResult(
         Outcome.INFRA_ERROR, None, "judge returned an incomplete completion", failure=GradingFailure.EXECUTION
@@ -328,12 +330,12 @@ async def test_a_length_stopped_answer_whose_grader_failed_is_graded_again(resum
     ctx, log = context(Slots(results={0: failed}))
     (first,) = await solver_batch(ctx, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT)
     await ctx.drain()
-    healthy = Slots()
-    resumed, _ = context(healthy, log.records, resume=resume)
+    cold = Slots(failures={0: AssertionError("slot 0 ran again")})
+    resumed, _ = context(cold, log.records, resume=resume)
     (second,) = await solver_batch(resumed, SPEC, "validation", 0, (), 0, 1, concurrency=1, heartbeat=HEARTBEAT)
     await resumed.drain()
-    assert first.cause is Cause.GENERATION_LIMIT and healthy.executed == ["arithmetic:0:0"]
-    assert second.cause is None and second.grade is not None and second.grade.reward == 1.0
+    assert first.cause is Cause.GENERATION_LIMIT and first.grade == infra and not cold.executed
+    assert second == first
 
 
 def refused_at_length() -> RolloutInterrupted:

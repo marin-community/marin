@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a workpiece's journal (format 13; its layout is in the README) under one fenced writer.
+"""Publish a workpiece's journal (format 14; its layout is in the README) under one fenced writer.
 
 Immutable chunks and workpieces, named by their SHA-256, precede the head that names them. The head is claimed and
 advanced only by compare-and-swap on the version this writer observed, so of two writers at most one proceeds.
@@ -33,11 +33,16 @@ from taskforge.effects.log import JsonlSink, Owners, Record, Sink, Status
 from taskforge.model.workpiece import WORKPIECE, Workpiece
 from taskforge.stages.classify import commitments
 
-JOURNAL_FORMAT = 13
-"""Format 13 commits each visit a continuing review decided on (``stage.completed``'s ``committed``) and names each
-solver trial's row (``receipt``), so a later launch reuses that evidence. Every format-8 to format-13 root decodes
-for the usage report, but this writer claims only format 13: a format-12 root would decide again on re-observed
-evidence.
+JOURNAL_FORMAT = 14
+"""Format 14 records a solver generation still running at ``solver.time_limit`` as stopped at the time limit (stop
+reason and cause ``time_limit``), which a
+format-13 reader cannot decode; at 14 it refuses the root as another format. Format 13 recorded such a generation as a
+generation limit. Every format-8 to format-13 row decodes at 14, so the usage report reads them, but this writer claims
+only format-14 roots: an earlier root's recorded trials and slot identities were bought under other clocks and
+recording rules.
+Format 13 commits each visit a continuing review decided on (``stage.completed``'s ``committed``) and names each
+solver trial's row (``receipt``), so a later launch reuses that evidence. A format-13 writer claimed no format-12 root:
+it would decide again on re-observed evidence.
 Format 12 words two author requests otherwise: a final revision's request ends with its ordinal (``This is final
 revision N of M.``), and a too-easy placement's line no longer calls the round the one hardening attempt. Its rows
 decode as format 11's, but a format-12 writer claimed no format-11 root: a resumed format-11 author would send
@@ -73,7 +78,7 @@ submission named by digest; format 4 hydrated each trial without a detail and re
 Format 4 records adversary findings as a defect direction with observed and deserved grades; format 3 recorded an
 expected reward band, which cannot establish a deserved reward. Format 3 links sandbox rows to their environment
 owners; format 2 replayed them by content, without owners."""
-READABLE = frozenset({8, 9, 10, 11, 12, JOURNAL_FORMAT})
+READABLE = frozenset({8, 9, 10, 11, 12, 13, JOURNAL_FORMAT})
 """The head formats whose rows this code decodes, for the usage report; a writer claims only ``JOURNAL_FORMAT``."""
 FORMAT_1 = frozenset({"events.jsonl", "events.jsonl.parts", "status.json", "workpiece.json"})
 """Format 1 named events by module path and wrote these objects beside its stream; any one marks its root."""

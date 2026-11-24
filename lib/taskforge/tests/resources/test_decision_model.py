@@ -17,9 +17,11 @@ from iris.client.client import IrisContext, iris_ctx_scope
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeWeb
 from lib.taskforge.tests.resources.inference_fakes import LoopTime, ScriptedProvider, segment
+from lib.taskforge.tests.resources.test_judge import labels
 from rolloutengine.models import LENGTH_STOP_REASON, GradedRollout, TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.decision_model import DecisionModelRequest
+from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import DECISION_LEVELS, DECISION_QUESTION, DecisionModelGrader
 
@@ -29,7 +31,7 @@ from taskforge.effects.issues import DecisionModelUnavailable, Hold
 from taskforge.effects.log import EventLog, JsonlSink, Record
 from taskforge.llm.client import Progress, Segment
 from taskforge.llm.glm_provider import FixedEndpoint, GlmEndpoint, Pool
-from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings
+from taskforge.lowering import IN_PROCESS_GRADER_TIMEOUT, InvalidTaskSpec, lower_with_settings, lowering_settings
 from taskforge.model.content_hash import digest
 from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import FinishReason
@@ -52,7 +54,7 @@ from taskforge.resources.decision_model import (
 from taskforge.resources.grading import GradeCandidate
 from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import AuthorReference, author_reference, system_prompt, uses_decision_model
-from taskforge.stages.classify import grade_cause, replaced_refusals, replayable_grade
+from taskforge.stages.classify import grade_cause, replaced_refusals, replayable_grade, trial_cause
 from taskforge.stages.exits import Validated
 from taskforge.stages.validate import solver_batch, validate
 from taskforge.wiring import (
@@ -454,12 +456,22 @@ async def test_the_author_schema_offers_the_decision_model_kind_only_where_one_i
             {"decision_model.request_timeout": float("inf"), "decision_model.backoff_initial": -1.0},
             "decision_model.request_timeout, decision_model.backoff_initial must be positive and finite",
         ),
-        ({"decision_model.unavailable_wait": 4200.0}, "unavailable_wait must end before solver.turn_timeout"),
     ],
 )
 def test_decision_model_settings_are_checked_at_wiring(overlay: Mapping[str, object], error: str) -> None:
     with pytest.raises(ValueError, match=error):
         decision_model_policy(overlaid().overlaid(overlay))
+
+
+# Regression: both model graders took the solver's multi-hour turn wall as their verifier deadline.
+@pytest.mark.parametrize("time_limit", [1800.0, 12000.0])
+def test_a_model_grader_has_its_own_deadline_whatever_the_solver_time_limit(time_limit: float) -> None:
+    solver = {"solver.time_limit": time_limit, "solver.attempt_timeout": 2 * time_limit, "judge.model": "glm-5.3"}
+    policy = overlaid().overlaid(solver)
+    judged = arithmetic_task(grader=verifyit_package(labels()).grader)
+    judge = lower_with_settings(judged, lowering_settings(policy), {})
+    assert decision_spec(policy).limits.verifier_timeout == IN_PROCESS_GRADER_TIMEOUT + 900  # the read's own wait
+    assert judge.limits.verifier_timeout == 3600 + 600  # the judge call's availability window and a stall
 
 
 def test_a_missing_decision_model_setting_fails_at_wiring_naming_it() -> None:
@@ -774,20 +786,17 @@ async def length_stopped(
 
 
 # Regression: an answer cut at its length limit is still graded, and an off-scale level is a grader
-# infrastructure error; the cutoff's replay exemption then replayed it forever, so a resume after recovery made no
-# solver call and no read and republished the hold. The explicit resume reads the checkpointed generation again and
-# generates nothing.
-async def test_an_off_scale_level_on_a_length_stopped_answer_is_read_again_once_the_model_recovers(
-    tmp_path: Path,
-) -> None:
+# infrastructure error; the cutoff's replay exemption then replayed it forever. The limit decides the trial whatever
+# its grade, so the explicit resume replays it and reads nothing.
+async def test_an_off_scale_level_on_a_length_stopped_answer_is_a_settled_loss_that_replays(tmp_path: Path) -> None:
     sink = JsonlSink(str(tmp_path / "events.jsonl"))
     failed, _ = await length_stopped(FakeReader(levels={"12": 7}), sink)
     assert isinstance(failed, GradedRollout) and failed.rollout.stop_reason == LENGTH_STOP_REASON
     assert grade_cause(failed.grade) is Cause.GRADER_INFRA
     healthy = FakeReader()
-    graded, solved = await length_stopped(healthy, sink, local_records(sink), resume=True)
-    assert isinstance(graded, GradedRollout) and graded.grade.reward == 1.0 and grade_cause(graded.grade) is None
-    assert healthy.reads == [request("12")] and solved == 0
+    replayed, solved = await length_stopped(healthy, sink, local_records(sink), resume=True)
+    assert (replayed, solved, healthy.reads) == (failed, 0, [])
+    assert trial_cause(failed, arithmetic_task(grader=GRADER)) is Cause.GENERATION_LIMIT
 
 
 async def test_a_503_on_a_length_stopped_answer_leaves_no_slot_and_an_unflagged_launch_reads_it(

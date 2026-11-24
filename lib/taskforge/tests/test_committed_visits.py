@@ -4,6 +4,7 @@
 """Committed validation visits through ``driver.one``: a cold launch re-enters a visit a continuing review decided on
 with its stored evidence and buys nothing inside it, while the open frontier executes."""
 
+import asyncio
 import hashlib
 import json
 import math
@@ -15,7 +16,8 @@ from pathlib import Path
 from typing import Any, cast, override
 
 import pytest
-from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference
+from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference, FakeWeb
+from lib.taskforge.tests.resources.inference_fakes import ScriptedProvider
 from lib.taskforge.tests.stage_fakes import CandidateEngine, transcript
 from lib.taskforge.tests.test_end_to_end import (
     CONFIRMING,
@@ -32,9 +34,16 @@ from lib.taskforge.tests.test_end_to_end import (
     unexpected_runtime,
 )
 from lib.taskforge.tests.test_solver_batch import rejected
-from rolloutengine.models import GradedRollout, Model, Rollout, RolloutInterrupted, RolloutOperation, TaskRolloutSpec
+from rolloutengine.models import (
+    GradedRollout,
+    Model,
+    Rollout,
+    RolloutInterrupted,
+    RolloutOperation,
+    TaskRolloutSpec,
+)
 from shellbox.machine import MachineOutputLimitExceeded
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 
 from taskforge import driver
 from taskforge.checkpoint import HEAD
@@ -49,16 +58,26 @@ from taskforge.llm.glm_provider import EndpointSource
 from taskforge.llm.policy import GLM_5_3, LLMPolicy, ModelProfile
 from taskforge.model.content_hash import digest
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
-from taskforge.model.review import VALIDATION_RESULT, EvidenceKind, Incomplete, MissingEvidence
+from taskforge.model.review import (
+    VALIDATION_RESULT,
+    Accept,
+    Cause,
+    EvidenceKind,
+    Incomplete,
+    MissingEvidence,
+    Retry,
+    TrialOutcome,
+)
 from taskforge.model.stage import Exit
 from taskforge.model.workpiece import Conversation, Terminal, Workpiece
 from taskforge.policy import Policy
+from taskforge.report import trial_outcomes
 from taskforge.resources.bundle import Resources
 from taskforge.resources.grading import GradingResource
 from taskforge.resources.inference import InferenceClient
 from taskforge.resources.rollouts import Engine, SolverRollout
 from taskforge.stages.rules import default_review
-from taskforge.wiring import build_config
+from taskforge.wiring import build_config, build_resources
 
 RUN_WORKPIECE = driver.run_workpiece
 
@@ -66,6 +85,7 @@ type Slot = tuple[int, int]
 """A solver slot by (trial, attempt)."""
 
 K = SHIPPED_K
+ROLES = ("author", "solver", "adversary")
 AUTHOR = tuple(completion for completion in script() if completion.tool_calls[0].name != "grade")
 """The author turns without a grade call, so the first grade the grader gives is a control's."""
 REVISION = (*AUTHOR[:2], call("submit", {"notes": "revised", "declined": []}, "submit"))
@@ -79,7 +99,7 @@ def even(trial: int, attempt: int) -> GradeResult:
 class Paid(Engine):
     """Grades each slot with ``grade``; ``runs`` is every paid execution, in order. An ``outage`` slot meets a
     decision-model outage while graded, an ``exhausted`` slot its output budget, a ``refused`` slot a model-server
-    refusal."""
+    refusal and a ``limited`` slot's generation ``solver.time_limit`` (then it is graded)."""
 
     def __init__(
         self,
@@ -88,8 +108,10 @@ class Paid(Engine):
         outage: Iterable[Slot] = (),
         exhausted: Iterable[Slot] = (),
         refused: Iterable[Slot] = (),
+        limited: Iterable[Slot] = (),
     ) -> None:
         self.grade, self.outage, self.exhausted, self.refused = grade, set(outage), set(exhausted), set(refused)
+        self.limited = set(limited)
         self.runs: list[Slot] = []
 
     @override
@@ -106,7 +128,8 @@ class Paid(Engine):
         if slot in self.refused:
             raise rejected()
         said = (transcript(f"trial {trial} attempt {attempt} answers 12"),)
-        return GradedRollout(Rollout(run_id, said, "stop"), self.grade(trial, attempt))
+        stop = "time_limit" if slot in self.limited else "stop"
+        return GradedRollout(Rollout(run_id, said, stop), self.grade(trial, attempt))
 
 
 @dataclass(slots=True)
@@ -175,7 +198,11 @@ class Driver:
         settings: Mapping[str, object] = {},
         profiles: Mapping[str, ModelProfile] = {},
         configure: Callable[[TaskforgeConfig], TaskforgeConfig] = lambda config: config,
+        cut: int | None = None,
+        wired: bool = False,
     ) -> int:
+        """One launch; ``cut`` cancels it as it enters its stage of that index, as a killed process stops, and
+        ``wired`` keys its solver slots as the public wiring keys them under this launch's policy."""
         overlay = {"proposals.environments": ["container"], **CONFIRMING, **settings}
         Path(self.args.policy).write_text(json.dumps(overlay))
 
@@ -183,7 +210,12 @@ class Driver:
         async def runtime(
             policy: Policy, _source: EndpointSource, _key: str, **_wiring: object
         ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
-            yield configure(build_config(policy, {}, profiles)), attempt.bundle
+            bundle = attempt.bundle
+            if wired:
+                providers = {role: ScriptedProvider((), policy.setting(f"{role}.model", str)) for role in ROLES}
+                key = build_resources(policy, providers, {}, FakeWeb({}, {})).rollouts.config_digest
+                bundle = replace(bundle, rollouts=replace(bundle.rollouts, config_digest=key))
+            yield configure(build_config(policy, {}, profiles)), bundle
 
         seen: list[str] = []
         self.entries.append(seen)
@@ -191,6 +223,8 @@ class Driver:
 
         async def run_workpiece(*args: Any, reached: Callable[[Workpiece], None], **kwargs: Any) -> Workpiece:
             def entered(wp: Workpiece) -> None:
+                if len(seen) == cut:
+                    raise asyncio.CancelledError
                 seen.append(digest(wp))
                 reached(wp)
 
@@ -583,3 +617,166 @@ async def test_explicit_resume_retries_only_refusals_in_the_open_confirmation(la
     assert wp.evidence[0].solver[2] == baseline
     assert sorted(resumed.solver.runs) == [(3, 1), (4, 1)]
     assert (scopes(launches.rows()[rows:], "validate"), resumed.grader.calls, resumed.round_reviews) == (0, 0, 0)
+
+
+RETRYING = {"solver.k": 3, "budget.max_validation_retries": 1, "budget.max_modify_rounds": 0}
+"""Three trials, no missing one tolerated, one validation retry and no modification round."""
+
+
+def confirmed(attempt: int, placed: int = 3) -> list[Slot]:
+    """Every confirmation slot of ``attempt`` after three validation trials, ``placed`` of them in the base."""
+    return [(trial, attempt) for trial in range(3, 3 + 3 + K - placed)]
+
+
+def graded(*ungraded: Slot, invalid: Iterable[Slot] = ()) -> Callable[[int, int], GradeResult]:
+    """``even``, except that each ``ungraded`` slot has no grade and each ``invalid`` one reports an invalid task."""
+    invalid = set(invalid)
+
+    def grade(trial: int, attempt: int) -> GradeResult:
+        if (trial, attempt) in ungraded:
+            return GradeResult(Outcome.UNAVAILABLE, None)
+        return GradeResult(Outcome.INVALID_TASK, None) if (trial, attempt) in invalid else even(trial, attempt)
+
+    return grade
+
+
+CUTS = pytest.mark.parametrize(
+    "cut", [None, 0, 1, 2, 3, 4], ids=lambda cut: "two launches" if cut is None else f"killed at stage {cut}"
+)
+"""No launch between, or one killed as it enters a stage: its author, round 0's validation or review, the retry's
+validation, or the retry's review once the retry's slots are bought."""
+
+
+@CUTS
+async def test_a_retried_round_keeps_its_consumed_slots_and_its_replacement_fault(
+    launches: Driver, cut: int | None
+) -> None:
+    """Round 0's slots 1 and 2 were ungraded, so its review retried. In the retry, slot 1 reported an invalid task and
+    slot 2 then met a decision-model outage. Every later launch keeps round 0's slots historical though their grader
+    would now answer, reuses the invalid task, finishes slot 2 once and abandons. A launch killed at any stage boundary
+    on the way (``cut``) changes neither what is bought nor the decision."""
+    first = launch(Paid(graded((1, 0), (2, 0), invalid={(1, 1)}), outage={(2, 1)}))
+    assert await launches.run(first, RETRYING) == driver.DEFERRED
+    assert kinds(published_workpiece(launches.root))[:1] == ["retry"]
+    assert sorted(first.solver.runs) == [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]
+    bought: list[Slot] = []
+    if cut is not None:
+        killed = launch(Paid(graded(invalid={(1, 1)})))
+        with pytest.raises(asyncio.CancelledError):
+            await launches.run(killed, RETRYING, cut=cut)
+        bought = killed.solver.runs
+    last = launch(Paid(graded(invalid={(1, 1)})))
+    assert await launches.run(last, RETRYING) == 0
+    wp = published_workpiece(launches.root)
+    assert kinds(wp) == ["retry", "abandon"] and wp.terminal is Terminal.ABANDONED
+    assert [t.cause for t in wp.evidence[1].solver] == [None, Cause.INVALID_TASK, None]
+    assert (bought, last.solver.runs) == (([(2, 1)], []) if cut == 4 else ([], [(2, 1)]))
+    assert last.grader.calls == 0
+
+
+@CUTS
+async def test_an_unreviewed_replacement_stays_open_for_every_later_launch(launches: Driver, cut: int | None) -> None:
+    """Round 0's slot 1 was ungraded, so its review retried; in the retry slot 1 was ungraded again and slot 2 met a
+    decision-model outage, and no review used either. Later launches whose grader answers buy both once and accept,
+    however a launch between them was killed."""
+    first = launch(Paid(graded((1, 0), (1, 1)), outage={(2, 1)}))
+    assert await launches.run(first, RETRYING) == driver.DEFERRED
+    assert sorted(first.solver.runs) == [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]
+    bought: list[Slot] = []
+    if cut is not None:
+        killed = launch(Paid())
+        with pytest.raises(asyncio.CancelledError):
+            await launches.run(killed, RETRYING, cut=cut)
+        bought = sorted(killed.solver.runs)
+    last = launch(Paid())
+    assert await launches.run(last, RETRYING) == 0
+    wp = published_workpiece(launches.root)
+    assert kinds(wp) == ["retry", "accept", "accept"] and wp.terminal is Terminal.ACCEPTED
+    assert (bought, sorted(last.solver.runs)) == (
+        ([(1, 1), (2, 1)], confirmed(2)) if cut == 4 else ([], [(1, 1), (2, 1), *confirmed(2)])
+    )
+    assert [t.cause for t in wp.evidence[0].solver] == [None, Cause.NO_GRADE, None]
+
+
+@pytest.mark.parametrize("stage", ["validation", "confirmation"])
+@pytest.mark.parametrize(
+    "grade", [GradeResult(Outcome.GRADED, 1.0), GradeResult(Outcome.INFRA_ERROR, None, failure=GradingFailure.TIMEOUT)]
+)
+async def test_a_time_limited_trial_is_a_typed_failed_trial_no_later_launch_buys_again(
+    launches: Driver, stage: str, grade: GradeResult
+) -> None:
+    """Slot 1's generation ran out ``solver.time_limit``: it counts unsolved whatever its grade says, a grader
+    infrastructure failure on its partial output included, with its own outcome. Neither the review nor a later
+    launch buys it again, whether the launch that bought it deferred before its visit was reviewed or after."""
+
+    def scored(trial: int, attempt: int) -> GradeResult:
+        return grade if (trial, attempt) == (1, 0) else even(trial, attempt)
+
+    outage = {(2, 0) if stage == "validation" else (3, 1)}
+    first = launch(Paid(scored, limited={(1, 0)}, outage=outage))
+    assert await launches.run(first, RETRYING) == driver.DEFERRED
+    last = launch(Paid())
+    assert await launches.run(last, RETRYING) == 0
+    wp = published_workpiece(launches.root)
+    assert kinds(wp) == ["accept", "accept"] and wp.terminal is Terminal.ACCEPTED
+    trial = wp.evidence[0].solver[1]
+    assert (trial.cause, trial.outcome, trial.grade) == (Cause.TIME_LIMIT, TrialOutcome.TIME_LIMIT, grade)
+    assert first.solver.runs.count((1, 0)) == 1 and (1, 0) not in last.solver.runs
+    assert sorted(last.solver.runs) == sorted({*outage, *confirmed(1)} - finished(first))
+    assert isinstance(accepted := wp.decisions[-1], Accept)
+    assert "Counted unsolved without a gradable answer: 1 time_limit" in accepted.reasons
+    assert "Confirmation: 4 of 8 trials solved: in_band" in accepted.reasons
+    assert trial_outcomes(wp) == {TrialOutcome.GRADED: 7, TrialOutcome.TIME_LIMIT: 1}  # each slot once
+
+
+async def test_a_retry_beside_a_time_limited_trial_records_the_missing_grade_as_its_cause(launches: Driver) -> None:
+    """Slot 0 ran out ``solver.time_limit`` and slot 1 has no grade: the retry is for the missing grade, and the journal
+    says so. A limit is an unsolved trial, never a retry's cause, even when it comes first."""
+    first = launch(Paid(graded((1, 0)), limited={(0, 0)}))
+    assert await launches.run(first, RETRYING) == 0
+    wp = published_workpiece(launches.root)
+    assert wp.decisions[0] == Retry(Cause.NO_GRADE, 1) and kinds(wp) == ["retry", "accept", "accept"]
+    assert wp.evidence[0].solver[0].outcome is TrialOutcome.TIME_LIMIT
+
+
+async def test_a_changed_time_limit_is_another_plan_and_the_old_limit_returns_to_its_visits(launches: Driver) -> None:
+    """The solver's replay identity carries ``solver.time_limit``: under another limit round 0 is bought again, and
+    back at the first limit it is reused, with only the first plan's open confirmation slots bought."""
+    plans = [launch(Paid(outage={(3, 1)})), launch(Paid(outage={(3, 1)})), launch(Paid())]
+    for plan, limit in zip(plans[:2], (4200.0, 3600.0), strict=True):
+        assert await launches.run(plan, {**RETRYING, "solver.time_limit": limit}, wired=True) == driver.DEFERRED
+    assert await launches.run(plans[2], {**RETRYING, "solver.time_limit": 4200.0}, wired=True) == 0
+    assert published_workpiece(launches.root).terminal is Terminal.ACCEPTED
+    other, back = plans[1].solver.runs, plans[2].solver.runs
+    assert [slot for slot in other if slot[1] == 0] == [(0, 0), (1, 0), (2, 0)]
+    assert sorted(back) == sorted(set(confirmed(1)) - finished(plans[0]))
+    commits = [r.event.committed for r in launches.rows() if isinstance(r.event, StageCompleted) and r.event.committed]
+    assert len({c.visit for c in commits}) == len(commits) == 2  # round 0 under each limit, each once
+
+
+async def test_explicit_resume_rereads_the_live_grade_and_keeps_the_paid_fault(launches: Driver) -> None:
+    """Round 0's slot 0 was refused, inside the allowance of two, and slots 1 and 2 were ungraded, so its
+    review retried. The retry's slot 1 reported an invalid task and slot 2's grader failed for infrastructure, a manual
+    hold. An unflagged launch adds nothing; ``--resume-held`` buys only slot 2 again, keeps round 0's refusal and the
+    invalid task, and abandons."""
+    settings = {**RETRYING, "budget.max_missing_trials": 2}
+    infra = GradeResult(Outcome.INFRA_ERROR, None, failure=GradingFailure.TIMEOUT)
+
+    def grade(trial: int, attempt: int) -> GradeResult:
+        return infra if (trial, attempt) == (2, 1) else graded((1, 0), (2, 0), invalid={(1, 1)})(trial, attempt)
+
+    first = launch(Paid(grade, refused={(0, 0)}))
+    assert await launches.run(first, settings) == 0
+    held = published_workpiece(launches.root)
+    assert held.terminal is Terminal.HELD and kinds(held) == ["retry", "incomplete"]
+    rows = len(launches.rows())
+    skipped = launch(Paid())
+    assert await launches.run(skipped, settings) == 0
+    assert len(launches.rows()) == rows and skipped.solver.runs == []
+    launches.args.resume_held = True
+    resumed = launch(Paid(graded(invalid={(1, 1)})))
+    assert await launches.run(resumed, settings) == 0
+    wp = published_workpiece(launches.root)
+    assert kinds(wp) == ["retry", "abandon"] and wp.terminal is Terminal.ABANDONED
+    assert resumed.solver.runs == [(2, 1)] and resumed.grader.calls == 0
+    assert wp.evidence[0].solver[0].cause is Cause.HELD and wp.evidence[1].solver[1].cause is Cause.INVALID_TASK

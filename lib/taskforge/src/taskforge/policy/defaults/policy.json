@@ -20,7 +20,7 @@
   "author.packages": [],
   "author.workdir": "/workspace",
   "solver.attempt_timeout": 8400.0,
-  "solver.turn_timeout": 4200.0,
+  "solver.time_limit": 4200.0,
   "solver.tool_timeout": 120.0,
   "solver.command_timeout": 30.0,
   "solver.cleanup_timeout": 60.0,
