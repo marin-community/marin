@@ -426,6 +426,15 @@ async def test_a_malformed_boundary_receipt_leaves_the_held_head_byte_identical(
     await refuses_the_damaged_root(launches, lines, at, row, r"trial \d+'s receipt names no resolution of its slot")
 
 
+@pytest.mark.parametrize("entry", ["{", "{}"])
+async def test_an_undecodable_boundary_entry_leaves_the_held_head_byte_identical(launches: Driver, entry: str) -> None:
+    assert await launches.run(launch(Paid(outage={(2, 1)}))) == driver.DEFERRED
+    lines = published_events(launches.root).splitlines(keepends=True)
+    [(at, row, _)] = boundary_entries(lines)
+    row["event"]["payload"]["entry"] = entry
+    await refuses_the_damaged_root(launches, lines, at, row, "Cannot decode the event stream")
+
+
 def diagnosed(trial: int, attempt: int) -> GradeResult:
     """Round 0 is too easy; later rounds solve half. Diagnostics in nonalphabetic order, as a grader may build them."""
     reward = 1.0 if attempt == 0 else float(trial % 2 == 0)

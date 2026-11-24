@@ -203,6 +203,9 @@ class StageBoundary(Event[None]):
     following: Stage
     entry: str
 
+    def __post_init__(self) -> None:
+        ENTRY.validate_json(self.entry)  # an entry that is no workpiece fails as its row decodes: a corrupt journal
+
     @property
     def workpiece(self) -> Workpiece:
         return ENTRY.validate_json(self.entry)[0]
