@@ -252,7 +252,7 @@ async def launch(path: Path, profile: str, calls: list[str]) -> None:
     await ctx.drain()
 
 
-# Review 2026-11-21: a bare request row discarded the cached result for its request digest under
+# Regression: a bare request row discarded the cached result for its request digest under
 # every fingerprint. Cold runs under profiles A, then B, then A paid three times; the third replays A's result.
 async def test_a_result_under_one_fingerprint_survives_a_run_under_another(tmp_path: Path) -> None:
     calls: list[str] = []
@@ -261,7 +261,7 @@ async def test_a_result_under_one_fingerprint_survives_a_run_under_another(tmp_p
     assert calls == ["A", "B"]
 
 
-# Review 2026-11-21: a replay's durable prefix ending between its request row and its replayed
+# Regression: a replay's durable prefix ending between its request row and its replayed
 # resolution discarded the paid result, and the next process paid again. No cut of a normal replay costs a call.
 @pytest.mark.parametrize("rows", [2, 3, 4], ids=["before-request", "after-request", "after-resolution"])
 async def test_no_durable_prefix_of_a_replay_costs_a_paid_call(tmp_path: Path, rows: int) -> None:
@@ -274,7 +274,7 @@ async def test_no_durable_prefix_of_a_replay_costs_a_paid_call(tmp_path: Path, r
     assert calls == ["A"]
 
 
-# Review 2026-11-21: an invalidation names one result exactly, resource fingerprint included.
+# Regression: an invalidation names one result exactly, resource fingerprint included.
 async def test_an_invalidation_for_one_fingerprint_leaves_another_fingerprints_result(tmp_path: Path) -> None:
     sink, request = JsonlSink(str(tmp_path / "journal.jsonl")), Timed(5)
     x, y = Paid("X", []).fingerprint(), Paid("Y", []).fingerprint()
@@ -315,7 +315,7 @@ def markers(log: EventLog) -> int:
     return sum(isinstance(record.event, Invalidated) for record in log.records)
 
 
-# Review 2026-11-21: one key recorded a success and then a refusal (two concurrent emits).
+# Regression: one key recorded a success and then a refusal (two concurrent emits).
 # An ordinary reload replays the latest, the refusal; an explicit one replayed the older success with no call and no
 # marker. The latest result per key is what the operator's selection applies to.
 async def test_an_explicit_resume_replaces_the_latest_result_and_never_replays_an_older_one(tmp_path: Path) -> None:
@@ -329,7 +329,7 @@ async def test_an_explicit_resume_replaces_the_latest_result_and_never_replays_a
     assert (paid, markers(log), log.lookup(request, (fingerprint,))) == ([3.0], 1, 3.0)
 
 
-# Review 2026-11-21: explicit resume, outage, explicit resume, outage wrote two markers
+# Regression: explicit resume, outage, explicit resume, outage wrote two markers
 # for one refusal. A refusal already invalidated is not invalidated again, and the eventual replacement pays once.
 async def test_one_refusal_gets_one_marker_across_explicit_resumes_cut_short_by_outages(tmp_path: Path) -> None:
     journal, paid = tmp_path / "journal.jsonl", list[float]()
@@ -341,7 +341,7 @@ async def test_one_refusal_gets_one_marker_across_explicit_resumes_cut_short_by_
     assert (paid, markers(log)) == ([REFUSED, 3.0], 1)
 
 
-# Review 2026-11-21: a marker recorded live left its result readable in the live log and
+# Regression: a marker recorded live left its result readable in the live log and
 # removed it on cold reload. One fold serves both: the live log and a cold rebuild of its journal agree.
 @pytest.mark.parametrize("tail", ["marker", "marker-then-result"])
 async def test_the_live_log_and_a_cold_rebuild_of_its_journal_agree_after_a_marker(tmp_path: Path, tail: str) -> None:

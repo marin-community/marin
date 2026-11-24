@@ -227,7 +227,7 @@ async def test_missing_file_is_tool_feedback_without_retry(operation: str, failu
     assert machine.calls == 1
 
 
-# Review 2026-11-20: a corrupt directory-transfer archive reached the model as a handled file error, unrecorded.
+# Regression: a corrupt directory-transfer archive reached the model as a handled file error, unrecorded.
 @pytest.mark.parametrize("failure", [tarfile.ReadError("not a gzip file"), AbsoluteLinkError(TarInfo("/etc/passwd"))])
 async def test_an_archive_the_backend_cannot_unpack_restarts_the_stage(failure: tarfile.TarError) -> None:
     machine = MemoryMachine()
@@ -380,7 +380,7 @@ def fast_refusal_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
 
 
-# Review 2026-11-20: a lost Iris reply after the exec ran made the handler run the command again and succeed.
+# Regression: a lost Iris reply after the exec ran made the handler run the command again and succeed.
 # Follow-up 1: so did a capture or cleanup RPC that failed before it was sent, and a cleanup failure after a lost
 # reply replaced the primary failure. Follow-up 2: a lost exec stream whose diagnostic status lookup was refused
 # retried in place, and one with a healthy status escaped raw. Follow-up 3: the WebSocket setup-failure text after
@@ -422,7 +422,7 @@ async def test_command_runs_once_whichever_iris_rpc_fails(
     assert sum(isinstance(event, Retrying) for event in events) == (outcome == "retried")
 
 
-# Review 2026-11-20 (follow-up 3): a missing `wc` or an OOM-killed sandbox during capture restarted on a fresh
+# Regression: a missing `wc` or an OOM-killed sandbox during capture restarted on a fresh
 # sandbox, three appends before the hold; each held after one at 47749c2e21.
 @pytest.mark.parametrize("cause", [GuestHelperFailed, MachineResourceExhausted])
 async def test_capture_failure_with_a_known_cause_holds_after_one_run(tmp_path: Path, cause: type[Exception]) -> None:
@@ -507,7 +507,7 @@ async def _write(env: Env, count: int, notify: Callable[[Event[None]], None]) ->
         await write_files(WriteFiles(FILES[:count]), env, notify=notify)
 
 
-# Review 2026-11-21 (follow-up 4): a lost upgrade reply for the first upload chunk retried the write in the same
+# Regression: a lost upgrade reply for the first upload chunk retried the write in the same
 # sandbox, and the original append landed after the retry truncated the file: `File written` with 14 bytes on disk
 # for a 7-byte write. Two-file hydration corrupted its first file the same way.
 @pytest.mark.parametrize("count", [1, 2], ids=["write", "hydrate-2"])
@@ -587,7 +587,7 @@ async def test_host_staging_failure_holds_with_its_cause(monkeypatch: pytest.Mon
     assert not isinstance(caught.value, OSError) and machine.calls == 0
 
 
-# Review 2026-11-20 (follow-up 1): a directory read was archived and extracted, then held as host I/O; writes
+# Regression: a directory read was archived and extracted, then held as host I/O; writes
 # through a link cycle, to a dangling link whose target parent is missing, or with an overlong name escaped raw.
 async def test_ordinary_iris_path_mistakes_are_tool_feedback_before_any_transfer(tmp_path: Path) -> None:
     (tmp_path / "directory").mkdir()
@@ -612,7 +612,7 @@ async def test_ordinary_iris_path_mistakes_are_tool_feedback_before_any_transfer
         assert len(controller.scripts) == 1
 
 
-# Review 2026-11-20 (follow-up 1): a missing `wc` became a bug hold, and a missing `dirname` looped forever.
+# Regression: a missing `wc` became a bug hold, and a missing `dirname` looped forever.
 @pytest.mark.parametrize(
     "helper,operation,expected",
     [
@@ -644,7 +644,7 @@ async def test_broken_guest_helpers_hold_with_their_cause_in_one_bounded_probe(
         assert isinstance(caught.value.__cause__, GuestHelperFailed)
 
 
-# Review 2026-11-21: Taskforge's own hydration archive is not the caller's file; a guest that
+# Regression: Taskforge's own hydration archive is not the caller's file; a guest that
 # cannot unpack it holds with the helper's cause instead of failing as a bug, and leaves no scratch behind.
 async def test_hydration_archive_the_guest_cannot_unpack_holds_with_its_cause(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

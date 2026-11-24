@@ -109,7 +109,7 @@ def tool(text: str) -> Completion:
 
 RETRY = {"max_completion_tokens": 16, "incomplete_retry_tokens": 64}
 NO_TEXT = "judge completion is incomplete or has no text"
-# Review 2026-11-21: the judge callback read every finish but stop as truncation. Each case's judge replies, and the
+# Regression: the judge callback read every finish but stop as truncation. Each case's judge replies, and the
 # status, reward, judge calls and error the HTTP transport shim (9eb1a96371) produced from them; N5_FINISHES journals
 # those calls, answering with the name.
 FINISHES: dict[str, tuple[JudgeSpec, tuple[Completion, ...], tuple[Outcome, float | None, int, str | None]]] = {
@@ -244,7 +244,7 @@ def grading_thread_exits(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Eve
     return exited, raised
 
 
-# Review 2026-11-21: holding the grading thread before or during submission let a cancelled, drained grade issue or
+# Regression: holding the grading thread before or during submission let a cancelled, drained grade issue or
 # record a judge sample afterwards. The thread may still be unwinding when the grade returns; it adds nothing then.
 @pytest.mark.parametrize("hold", ["submission", "publication", "registration", "provider-cleanup"])
 async def test_a_cancelled_grade_returns_with_its_journal_final_and_starts_no_later_sample(
@@ -312,7 +312,7 @@ def judge_provider(provider: ScriptedProvider) -> InferenceClient:
     return GlmInference(ModelClient(provider, GLM_5_3, RetryPolicy(0.1, 0.001, 0.001, 1.0), role="judge"), "judge")
 
 
-# Review 2026-11-21: a provider that had parsed its segment, swallowed the grade's cancellation in cleanup
+# Regression: a provider that had parsed its segment, swallowed the grade's cancellation in cleanup
 # and returned it after a second cancellation released the caller journalled a late Resolved; a regrade then scored 0.5.
 async def test_a_judge_segment_returned_after_the_grade_is_cancelled_twice_is_never_journalled(
     monkeypatch: pytest.MonkeyPatch,
@@ -361,7 +361,7 @@ async def test_a_judge_segment_returned_after_the_grade_is_cancelled_twice_is_ne
     assert graded == [(0.0, 2), (0.0, 2)]
 
 
-# Review 2026-11-21: waiting for the grading thread at the verifier deadline turned a grade timeout
+# Regression: waiting for the grading thread at the verifier deadline turned a grade timeout
 # into an attempt failure and left the sample running. The HTTP transport shim (9eb1a96371) raised this Restart from
 # this grade.
 async def test_a_verifier_deadline_during_a_judge_sample_is_the_n5_grade_timeout_and_cancels_the_sample(
@@ -423,7 +423,7 @@ async def test_a_judge_reply_truncated_at_its_only_budget_is_an_incomplete_infra
 
 @pytest.mark.parametrize("rubric", ["reference", "checklist", "labels", "responses"])
 async def test_host_judge_records_inference_and_replays_without_provider(rubric: str) -> None:
-    # Full S 20261108: judge endpoint/model omissions held 11 authored tasks.
+    # Regression: judge endpoint and model omissions held authored tasks.
     judged = rubric in {"labels", "responses"}
     judge = JudgeSpec(
         rubric="labels" if judged else rubric,
@@ -480,7 +480,7 @@ async def test_judge_finishes_recorded_at_n5_replay_their_n5_grades_with_zero_ca
     assert sum(event.replayed for event in judge_inference(log)) == sum(calls for _, _, calls, _ in expected)
 
 
-# Review 2026-11-21: the callback field made TaskRolloutSpec.model_json_schema() raise PydanticInvalidForJsonSchema.
+# Regression: the callback field made TaskRolloutSpec.model_json_schema() raise PydanticInvalidForJsonSchema.
 def test_a_judged_rollout_spec_has_a_json_schema_and_never_serializes_its_callback() -> None:
     def judge(request: JudgeRequest) -> JudgeCompletion:
         return JudgeCompletion("PASS", "stop")
@@ -545,7 +545,7 @@ async def judged(
     return reward, len(solver.bodies), len(host_judge.bodies), log.records
 
 
-# Review 2026-11-21: under a judge capped at three tokens, a grade and a rollout replayed 1.0 with zero calls.
+# Regression: under a judge capped at three tokens, a grade and a rollout replayed 1.0 with zero calls.
 @pytest.mark.parametrize("rollout", [False, True], ids=["grade", "rollout"])
 @pytest.mark.parametrize(
     ("recorded", "replayed"),
@@ -562,7 +562,7 @@ async def test_an_outer_result_replays_only_under_the_judge_profile_that_shaped_
     assert (reward, (solver_calls, judge_calls)) == (clean, calls)
 
 
-# Review 2026-11-21: a judge provider reporting another model, under the same policy and profile,
+# Regression: a judge provider reporting another model, under the same policy and profile,
 # replayed a grade and a rollout of 1.0 with zero calls where a clean run scored 0.0.
 @pytest.mark.parametrize("role", ["author", "solver", "adversary", "judge"])
 def test_a_provider_serving_another_model_than_its_role_declares_is_refused(role: str) -> None:
@@ -581,7 +581,7 @@ ANSWER = replace(
 )
 
 
-# Review 2026-11-21: a context refusal recorded inside the shared inference resource cached the
+# Regression: a context refusal recorded inside the shared inference resource cached the
 # judge's refusal, so after the provider recovered the same grade made no call and raised again.
 @pytest.mark.parametrize("injected", [True, False], ids=["injected client", "provider"])
 async def test_a_judge_context_refusal_is_asked_again_once_the_provider_recovers(injected: bool) -> None:
@@ -634,7 +634,7 @@ class Falsey:
         return await self.engine.run_task(spec, model, run_id=run_id)
 
 
-# Review 2026-11-21: wrapping each engine as ``fresh and JudgeEngine(fresh, ...)`` kept a fresh engine that tests
+# Regression: wrapping each engine as ``fresh and JudgeEngine(fresh, ...)`` kept a fresh engine that tests
 # false unwrapped, and grading called it directly: a fresh grade the installed judge passes scored 0.0 with no judge
 # row. A false fresh engine is dropped, and the fresh grade runs on the wrapped engine.
 async def test_a_fresh_engine_that_tests_false_still_grades_through_the_installed_judge() -> None:
@@ -667,7 +667,7 @@ class Rebuilt(RolloutResource):
         return await super().run(event)
 
 
-# Review 2026-11-21: with no judge and no decision model, installation still rebuilt the rollout resource around its
+# Regression: with no judge and no decision model, installation still rebuilt the rollout resource around its
 # engine, so an injected subclass with its own constructor raised TypeError before any handler was registered.
 async def test_an_injected_rollout_resource_is_installed_as_given_when_no_engine_is_wrapped() -> None:
     ctx = Context(log=EventLog())

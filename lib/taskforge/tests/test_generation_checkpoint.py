@@ -290,7 +290,7 @@ class RejectedAfterATurn(Engine):
         raise RolloutInterrupted(metered(10, 5), RolloutOperation.MODEL) from rejected
 
 
-# Review 2026-11-21: the report suppressed every slot result whose key had a checkpoint anywhere in the journal, so a
+# Regression: the report suppressed every slot result whose key had a checkpoint anywhere in the journal, so a
 # refused slot that had paid for a shell turn lost its charge once its replacement checkpointed: 10/5 instead of 20/10.
 async def test_a_paid_refusal_before_its_replacements_checkpoint_keeps_its_charge(
     tmp_path: Path, proposal: TaskProposal
@@ -307,7 +307,7 @@ async def test_a_paid_refusal_before_its_replacements_checkpoint_keeps_its_charg
     )
 
 
-# Review 2026-11-21: a format-8 root's off-scale slot result predates any checkpoint, yet the replacement's checkpoint
+# Regression: a format-8 root's off-scale slot result predates any checkpoint, yet the replacement's checkpoint
 # suppressed it; and a window opening between a checkpoint and its regrade must not charge the regrade. The rows
 # before format 10 name no payer and charge as unattributed; the regrade names one and is still not charged.
 @pytest.mark.parametrize("since_hours, charged", [(None, (20, 10)), (1.0, (0, 0))], ids=["all time", "after the gen"])
@@ -362,7 +362,7 @@ def test_a_grading_outage_defers_and_a_fresh_process_grades_the_generations_with
     assert second["confirmation"] == "tokens role=confirmation prompt=50 cached=0 completion=25"
 
 
-# Review 2026-11-21: a gateway refusing a resumed read (HTTP 400), or answering it with all-zero probabilities or
+# Regression: a gateway refusing a resumed read (HTTP 400), or answering it with all-zero probabilities or
 # without a level's probability, or with one too large for a float, escaped its slot as a bug, cancelled the read of a
 # sibling slot's fresh answer, failed the child, and so made recovery buy that answer again: six solvers, not five.
 @pytest.mark.parametrize(

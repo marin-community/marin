@@ -37,7 +37,7 @@ def finish(call_id: str) -> Completion:
     return Completion("", (ToolCall(call_id, "finish", json.dumps({"reason": "done"})),), FinishReason.TOOL_CALLS)
 
 
-# Review 2026-11-21: with the payer inserted as the fourth positional field, ``Visit(scope, owner, machine, files)``
+# Regression: with the payer inserted as the fourth positional field, ``Visit(scope, owner, machine, files)``
 # took the files callback as its payer: the machine-less visit skipped hydration, paid for a model call and could not
 # journal it; ``Visit(scope, owner, machine)`` failed to construct.
 async def test_a_role_without_a_machine_runs_its_session_and_opens_no_sandbox(tmp_path: Path) -> None:
@@ -99,7 +99,7 @@ class Loud(ValidatedTool[NoArgs]):
 
 
 async def test_a_machine_less_session_gets_every_reply_clipped_and_never_a_spill() -> None:
-    """Review 2026-11-21: the loop's own unknown-tool diagnostic spilled a reply to a file a
+    """Regression: the loop's own unknown-tool diagnostic spilled a reply to a file a
     machine-less reviewer could never read. Every reply, tool output and loop diagnostic alike, is clipped instead."""
     log = EventLog()
     ctx = Context(log=log)
@@ -133,7 +133,7 @@ class FourArguments(Harness):
 
 @pytest.mark.parametrize("machine", [None, EnvironmentRequirements()], ids=["machine-less", "machine-backed"])
 async def test_an_injected_four_argument_harness_runs_unchanged(machine: EnvironmentRequirements | None) -> None:
-    """Review 2026-11-21: the role runner passed ``spill=`` to every harness, so one written
+    """Regression: the role runner passed ``spill=`` to every harness, so one written
     against the four-argument protocol raised before it ran, after a machine-backed visit had taken its sandbox. The
     runner configures only its own harness per visit."""
     ctx = Context(log=EventLog())
@@ -161,7 +161,7 @@ class Constructed(AgenticHarness):
 
 @pytest.mark.parametrize("machine", [None, EnvironmentRequirements()], ids=["machine-less", "machine-backed"])
 async def test_an_injected_stock_harness_subclass_runs_unchanged(machine: EnvironmentRequirements | None) -> None:
-    """Review 2026-11-21: configuring every ``AgenticHarness`` per visit rebuilt an injected subclass
+    """Regression: configuring every ``AgenticHarness`` per visit rebuilt an injected subclass
     through ``dataclasses.replace``, which called its own constructor with the stock fields and raised. Only the exact
     stock class is configured."""
     ctx = Context(log=EventLog())

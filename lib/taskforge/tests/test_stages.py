@@ -163,7 +163,7 @@ def unavailable_reference(_workpiece: Workpiece, _policy: Policy) -> tuple[TaskR
     raise Hold("reference data unavailable")
 
 
-# Review 2026-11-21: the role runner prepared the caller's files and the opening before it opened the machine and scope,
+# Regression: the role runner prepared the caller's files and the opening before it opened the machine and scope,
 # so a renderer hold created no machine and journalled nothing, and a prompt failure lost the recorded hydration. Before
 # the role runner (d510505b69) both failures journal these rows and close the one machine.
 @pytest.mark.parametrize(
@@ -193,7 +193,7 @@ async def test_an_author_visit_failing_before_its_first_model_call_journals_and_
     assert isinstance(bundle.envs, Environments) and [env.closed for env in bundle.envs.created] == [True]
 
 
-# Review 2026-11-21: the adversary rendered its opening before entering its visit, so a prompt key error created no
+# Regression: the adversary rendered its opening before entering its visit, so a prompt key error created no
 # machine and journalled nothing. Before the role runner (40d35b8bcc) it journals these rows and closes the one machine.
 async def test_an_adversary_visit_failing_before_its_first_model_call_journals_and_closes_its_machine(
     workpiece: Workpiece,
@@ -319,7 +319,7 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     assert bundle.envs.requested[0].docker_image == GRADER_BASE_IMAGE
 
 
-# Review 2026-11-20: a reported claim whose reproduction hit the output limit became an exhausted search, and
+# Regression: a reported claim whose reproduction hit the output limit became an exhausted search, and
 # review accepted. One of several parallel reproductions failing must not drop the others.
 @pytest.mark.parametrize("replies", [("13",), ("13", "9")])
 async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept(
@@ -348,7 +348,7 @@ async def test_inconclusive_claim_reproduction_keeps_the_claim_and_cannot_accept
     assert isinstance(default_review(restored, setup.band, setup.budget), Incomplete)
 
 
-# Review 2026-11-20 (follow-up 1): the adversary's grade tool hit the grading machine's output limit; validation
+# Regression: the adversary's grade tool hit the grading machine's output limit; validation
 # recorded an exhausted search with no findings and review accepted.
 async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_accept(workpiece: Workpiece) -> None:
     setup = config()
@@ -390,7 +390,7 @@ async def test_grading_machine_exhaustion_in_the_adversary_grade_tool_cannot_acc
     assert isinstance(default_review(replace(workpiece, evidence=(evidence,)), setup.band, setup.budget), Incomplete)
 
 
-# Review 2026-11-20 (follow-up 1): an infrastructure grade on one of two reproductions raised Hold at the adversary
+# Regression: an infrastructure grade on one of two reproductions raised Hold at the adversary
 # scope's exit, and the outer handler replaced the report with zero findings.
 async def test_observed_grader_outage_on_one_claim_keeps_both_claims_and_the_sibling_grade(
     workpiece: Workpiece,
@@ -420,7 +420,7 @@ async def test_observed_grader_outage_on_one_claim_keeps_both_claims_and_the_sib
 # "control" stands for every defect Modify (grader checks, adversary findings): revert keys on placement alone.
 
 
-# Pilots 20261106i / 20261107j: authored lowering errors held; individual workpiece IDs were not recorded.
+# Regression: authored lowering errors held the workpiece.
 @pytest.mark.parametrize("authored", [False, True])
 async def test_validate_returns_lowering_failure_without_starting_trials(workpiece: Workpiece, authored: bool) -> None:
     assert workpiece.submission is not None
@@ -499,7 +499,7 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
     await ctx.drain()
 
 
-# Pilot 20261106d S/d34.strategy.segmentation/21: base64 resources exhausted the prompt.
+# Regression: base64 resources exhausted the adversary prompt.
 async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     payload = b"large-payload" * 50000
@@ -705,8 +705,8 @@ def accepted(wp: Workpiece) -> Accept:
     return decision
 
 
-# One band-only round uses the shared modification budget, including a prior unrelated repair. Owner's ruling
-# (decisions-20261112): a task still out of band after it is accepted tagged; only a faulted revision restores.
+# One band-only round uses the shared modification budget, including a prior unrelated repair. A task still out of
+# band after it is accepted tagged; only a faulted revision restores.
 @pytest.mark.parametrize(
     "solved,controls_met,restored", [(2, True, False), (3, True, False), (0, True, False), (3, False, True)]
 )
@@ -730,7 +730,7 @@ def test_hardening_accepts_its_placement_or_restores_the_fallback_after_a_fault(
     )
 
 
-# Review 2026-11-21: two clean all-failed waves published ABANDONED after the easing round.
+# Regression: two clean all-failed waves published ABANDONED after the easing round.
 def test_two_clean_too_hard_waves_accept_the_revision_tagged_too_hard(workpiece: Workpiece) -> None:
     hard = workpiece.submission
     assert hard is not None
@@ -743,7 +743,7 @@ def test_two_clean_too_hard_waves_accept_the_revision_tagged_too_hard(workpiece:
     assert "accepted_with: too_hard" in decision.reasons
 
 
-# Review 2026-11-21: a clean too-hard revision of a too-easy task restored the too-easy one, changing what ships.
+# Regression: a clean too-hard revision of a too-easy task restored the too-easy one, changing what ships.
 def test_a_clean_revision_that_changes_placement_is_accepted_on_its_own_evidence(workpiece: Workpiece) -> None:
     easy = workpiece.submission
     assert easy is not None
@@ -767,12 +767,12 @@ def test_a_faulted_revision_restores_the_fallback_by_digest_with_its_band(workpi
     assert f"The revision has a fault; restored submission {hard.digest[:12]}" in decision.reasons
 
 
-# Review 2026-11-21: review bound the accepted digest, placement and tag through three separate choices.
+# Regression: review bound the accepted digest, placement and tag through three separate choices.
 def test_one_fallback_choice_binds_the_accepted_digest_to_its_band(workpiece: Workpiece) -> None:
     stored = workpiece.submission
     assert stored is not None
     current = revised(stored, "current")
-    # Owner's ruling (2026-11-13): a band change is never a regression; a clean too-easy revision of an in-band
+    # A band change is never a regression; a clean too-easy revision of an in-band
     # fallback is accepted as the revision, tagged, and only a fault restores the fallback (its rounds are spent).
     final = reviewed(
         replace(
@@ -823,7 +823,7 @@ def test_the_coordinator_refuses_a_restore_whose_digest_or_band_disagrees(workpi
     assert kept.fallback == Fallback(submission, BandOutcome.TOO_EASY, len(same.evidence) - 1)
 
 
-# Review 2026-11-21: the exhausted-budget acceptance dropped the missing-slot denominator of its Modify.
+# Regression: the exhausted-budget acceptance dropped the missing-slot denominator of its Modify.
 def test_an_acceptance_at_the_exhausted_budget_keeps_the_missing_slot_count(workpiece: Workpiece) -> None:
     result = replace(evidence(3), solver=(*evidence(3).solver[:2], TrialResult(2, None, Cause.HELD, "refused")))
     final = reviewed(replace(workpiece, round=2, evidence=(result,)), {"budget.max_missing_trials": 1})
@@ -853,7 +853,7 @@ def test_a_solver_slot_without_a_score_holds_by_policy_and_is_never_read_as_a_ze
     assert "1 of 3 solver trials have no score; placed over 2" in placed.findings
 
 
-# Review 2026-11-21: one solved, one held and one timed-out slot under the zero-missing default chose Retry twice,
+# Regression: one solved, one held and one timed-out slot under the zero-missing default chose Retry twice,
 # buying every slot three times before the hold.
 def test_holds_beyond_the_missing_allowance_take_precedence_over_a_review_retry(workpiece: Workpiece) -> None:
     solver = (
@@ -889,7 +889,7 @@ def test_review_budget_precedence(workpiece: Workpiece, exhausted: bool) -> None
         assert isinstance(final.decisions[-1], Retry) and final.terminal is None
 
 
-# Pilot 20261106i S/d23.welfare_assessment/03: authored OverflowError was held as infrastructure.
+# Regression: an authored OverflowError was held as infrastructure.
 @pytest.mark.parametrize(
     "failure,cause",
     [
@@ -939,7 +939,7 @@ def test_grader_failure_classification_and_repair(workpiece: Workpiece, failure:
     )
 
 
-# Pilot 20261108k T: generation_limit was held; the incident report did not identify its workpiece.
+# Regression: a solver's generation_limit was held.
 @pytest.mark.parametrize("grade", [None, GradeResult(Outcome.GRADED, 1)])
 def test_generation_limit_is_failed_solver_evidence(workpiece: Workpiece, grade: GradeResult | None) -> None:
     result = replace(evidence(), solver=(TrialResult(0, grade, Cause.GENERATION_LIMIT), evidence().solver[0]))
@@ -988,7 +988,7 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
 
 
-# full-s-20261108/S at f929478063: window exhaustion after 20 turns held otherwise reviewable tasks.
+# Regression: window exhaustion after 20 turns held otherwise reviewable tasks.
 # An exhausted search may be accepted; its note says the budget ran out, on an Accept and never a Modify.
 @pytest.mark.parametrize("overflow", ["estimate", "provider"])
 @pytest.mark.parametrize("verdict", [Accept, Modify, Retry])

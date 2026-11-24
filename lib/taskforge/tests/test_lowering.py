@@ -134,8 +134,7 @@ def test_shellsim_binding_omits_host_cpu_allocation() -> None:
     assert spec.task_machine is not None and spec.task_machine.cpus is None
 
 
-# Full S 20261108 d01.discrete.graph-analysis/06 (also cardinality-analysis/04 and optimization.formulation/04):
-# a missing judge reference must return author feedback during parsing and programmatic preflight.
+# A missing judge reference must return author feedback during parsing and programmatic preflight.
 @pytest.mark.parametrize("defect", ["shell", "final_action", "reference", "blank_reference", "checklist"])
 async def test_authored_interface_errors_return_tool_feedback(defect: str) -> None:
     task = arithmetic_task(
