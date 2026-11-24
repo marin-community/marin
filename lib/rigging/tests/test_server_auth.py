@@ -19,7 +19,6 @@ from rigging.server_auth import (
     _extract_cookie,
     _verified_identity,
     get_verified_identity,
-    get_verified_user,
     is_trusted_loopback,
     require_identity,
     resolve_auth,
@@ -66,7 +65,7 @@ def test_policy_interceptor_passes_valid_token(interceptor):
     captured_user = []
 
     def handler(req, ctx):
-        captured_user.append(get_verified_user())
+        captured_user.append(get_verified_identity().user_id)
         return "ok"
 
     result = interceptor.intercept_unary_sync(handler, "request", ctx)
@@ -79,7 +78,7 @@ def test_policy_interceptor_accepts_session_cookie(interceptor):
     captured_user = []
 
     def handler(req, ctx):
-        captured_user.append(get_verified_user())
+        captured_user.append(get_verified_identity().user_id)
         return "ok"
 
     result = interceptor.intercept_unary_sync(handler, "request", ctx)
@@ -97,7 +96,7 @@ def test_policy_interceptor_prefers_bearer_over_cookie(interceptor):
     captured_user = []
 
     def handler(req, ctx):
-        captured_user.append(get_verified_user())
+        captured_user.append(get_verified_identity().user_id)
         return "ok"
 
     interceptor.intercept_unary_sync(handler, "request", ctx)
@@ -131,14 +130,13 @@ def test_policy_interceptor_cleans_up_context_on_handler_error(interceptor):
     ctx = _make_ctx({"authorization": "Bearer valid-token-alice"})
 
     def failing_handler(req, ctx):
-        assert get_verified_user() == "alice"
+        assert get_verified_identity().user_id == "alice"
         raise RuntimeError("handler failed")
 
     with pytest.raises(RuntimeError, match="handler failed"):
         interceptor.intercept_unary_sync(failing_handler, "request", ctx)
 
-    # Verified user should be cleaned up after handler exits
-    assert get_verified_user() is None
+    assert get_verified_identity() is None
 
 
 # --- IAP signed-header assertion -> implicit read-only dashboard identity -----
@@ -415,7 +413,7 @@ def test_different_users_get_different_identities(interceptor):
     users = []
 
     def capture_handler(req, ctx):
-        users.append(get_verified_user())
+        users.append(get_verified_identity().user_id)
         return "ok"
 
     ctx_alice = _make_ctx({"authorization": "Bearer valid-token-alice"})
