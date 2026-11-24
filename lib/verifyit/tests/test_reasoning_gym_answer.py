@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 from decimal import Decimal
 
 import pytest
@@ -435,3 +436,41 @@ def test_dataset_construction_failure_is_infrastructure(tests_dir, workspace, mo
 def test_markdown_answer_section_preserves_the_scorers_exact_answer_contract(tests_dir, workspace, reply, reward):
     answer(workspace, reply)
     assert grade(tests_dir, workspace).reward == reward
+
+
+REPLY_THAT_SETS_AN_ENVIRONMENT_VARIABLE = "__import__('os').environ.__setitem__('REASONING_GYM_REPLY_RAN', 'yes')"
+# Each task's scorer passes text to ``eval`` or ``sympy.parse_expr``; the reward is what it gives an unparsable reply.
+EVALUATING_SCORERS = [
+    ("binary_matrix", 0.0),
+    ("countdown", 0.01),
+    ("intermediate_integration", 0.0),
+    ("n_queens", 0.0),
+    ("polynomial_multiplication", 0.0),
+    ("simple_integration", 0.0),
+    ("spiral_matrix", 0.0),
+    ("string_insertion", 0.0),
+]
+
+
+@pytest.mark.parametrize(("dataset", "unparsable_reward"), EVALUATING_SCORERS)
+def test_reply_written_as_code_never_runs_in_a_scorer_that_evaluates_text(dataset, unparsable_reward, monkeypatch):
+    monkeypatch.setenv("REASONING_GYM_REPLY_RAN", "no")
+    entry = reasoning_gym.create_dataset(dataset, size=1, seed=7)[0]
+    spec = ReasoningGymSpec(dataset=dataset)
+    reply = REPLY_THAT_SETS_AN_ENVIRONMENT_VARIABLE
+    candidate = grade_reasoning_gym.grade_reasoning_gym_candidate(spec, entry, reply)
+    script = grade_reasoning_gym.score_reasoning_gym_answer(dataset, entry, reply)
+    assert os.environ["REASONING_GYM_REPLY_RAN"] == "no"
+    assert (candidate.reward, script) == (unparsable_reward, unparsable_reward)
+
+
+@pytest.mark.parametrize("dataset", [dataset for dataset, _ in EVALUATING_SCORERS])
+def test_answer_of_a_scorer_that_evaluates_text_scores_one(dataset):
+    entry = reasoning_gym.create_dataset(dataset, size=1, seed=7)[0]
+    assert grade_reasoning_gym.score_reasoning_gym_answer(dataset, entry, entry["answer"]) == 1.0
+
+
+def test_n_queens_board_written_as_a_python_list_keeps_partial_credit():
+    entry = reasoning_gym.create_dataset("n_queens", size=1, seed=7)[0]
+    board = [row.split() for row in entry["answer"].split("\n")]
+    assert grade_reasoning_gym.score_reasoning_gym_answer("n_queens", entry, repr(board)) == 0.5

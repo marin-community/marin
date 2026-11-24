@@ -267,3 +267,257 @@ def apps_grade(python: Sequence[str], evaluator: Path, problem: dict) -> list:
 def test_patched_apps_evaluator_grades_fixture(name: str):
     problem = APPS_PROBLEMS[name]
     assert apps_grade((sys.executable,), APPS_EVALUATOR, problem) == problem["grade"]
+
+
+LIVECODEBENCH = ScorerClosure(shipped(SKYRL, "livecodebench.py"), ("numpy", "pandas"))
+
+LIVECODEBENCH_CHECK = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import livecodebench
+tests = json.loads(livecodebench.normalize_lcb_ground_truth(json.loads(sys.argv[2])))
+bound = json.loads(sys.argv[3])
+limits = None if bound is None else livecodebench.VerifierLimits(total_timeout_seconds=bound)
+print(json.dumps(livecodebench.compute_score(sys.stdin.read(), tests, limits=limits)[1]))
+"""
+
+STDIN_ADD = [
+    {"input": "1 2\n", "output": "3\n", "testtype": "stdin"},
+    {"input": "40 2\n", "output": "42\n", "testtype": "stdin"},
+]
+FUNCTIONAL_ADD = [
+    {"input": [1, 2], "output": 3, "testtype": "functional", "fn_name": "add"},
+    {"input": [40, 2], "output": 42, "testtype": "functional", "fn_name": "add"},
+]
+FUNCTIONAL_RANGE = [
+    {"input": [3], "output": [0, 1, 2], "testtype": "functional", "fn_name": "first"},
+    {"input": [1], "output": [0], "testtype": "functional", "fn_name": "first"},
+]
+
+READS_EXPECTED_OUTPUT = """import sys
+
+frame = sys._getframe()
+while frame is not None and "gt_out" not in frame.f_locals:
+    frame = frame.f_back
+print(frame.f_locals["gt_out"] if frame is not None else "", end="")"""
+"""Finds the evaluator's local holding the expected output of the running test and prints it."""
+
+READS_TEST_CASES = """import sys
+
+data = sys.stdin.read()
+frame = sys._getframe()
+while frame is not None:
+    for value in frame.f_locals.values():
+        if isinstance(value, dict) and "outputs" in value and data in value.get("inputs", ()):
+            print(value["outputs"][value["inputs"].index(data)], end="")
+            sys.exit()
+    frame = frame.f_back"""
+"""Finds any local dict of test cases on the stack and prints the output stored for its own input."""
+
+REPORTS_ITS_VERDICT = """import gc, os
+from multiprocessing.connection import Connection
+
+for item in gc.get_objects():
+    if isinstance(item, Connection) and item.writable:
+        item.send(([True], {}))
+        os._exit(0)"""
+"""Sends a passing verdict over the verifier child's pipe and exits before any comparison."""
+
+STALLS_MID_MESSAGE = """import gc, os, signal, time
+from multiprocessing.connection import Connection
+
+signal.signal(signal.SIGALRM, signal.SIG_IGN)
+for item in gc.get_objects():
+    if isinstance(item, Connection) and item.writable:
+        os.write(item.fileno(), bytes(1))
+        time.sleep(600)"""
+"""Writes the first byte of a message to the verifier child's pipe, then stalls with the per-test alarm ignored."""
+
+EQUAL_TO_EVERYTHING = """class _Any:
+    def __eq__(self, other):
+        return True
+
+class Solution:
+    def add(self, a, b):
+        return _Any()"""
+
+INT_EQUAL_TO_EVERYTHING = """class _Int(int):
+    def __eq__(self, other):
+        return True
+
+class Solution:
+    def add(self, a, b):
+        return _Int(0)"""
+
+
+def livecodebench_reward(
+    tmp_path: Path, cases: list[dict], program: str, total_timeout_seconds: float | None = None
+) -> float:
+    LIVECODEBENCH.skip_if_unavailable()
+    tests = LIVECODEBENCH.stage(tmp_path)
+    result = subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-c",
+            LIVECODEBENCH_CHECK,
+            str(tests),
+            json.dumps(cases),
+            json.dumps(total_timeout_seconds),
+        ),
+        input=f"```python\n{program}\n```",
+        capture_output=True,
+        text=True,
+        timeout=None if total_timeout_seconds is None else total_timeout_seconds + 60,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout.splitlines()[-1])
+
+
+@pytest.mark.parametrize(
+    ("cases", "program", "reward"),
+    [
+        (STDIN_ADD, "a, b = map(int, input().split())\nprint(a + b)", 1.0),
+        (STDIN_ADD, READS_EXPECTED_OUTPUT, 0.0),
+        (STDIN_ADD, READS_TEST_CASES, 0.0),
+        (STDIN_ADD, REPORTS_ITS_VERDICT, 0.0),
+        (FUNCTIONAL_ADD, "class Solution:\n    def add(self, a, b):\n        return a + b", 1.0),
+        (FUNCTIONAL_ADD, EQUAL_TO_EVERYTHING, 0.0),
+        (FUNCTIONAL_ADD, INT_EQUAL_TO_EVERYTHING, 0.0),
+    ],
+    ids=[
+        "stdin_solves",
+        "stdin_reads_expected_output",
+        "stdin_reads_test_cases",
+        "stdin_reports_its_verdict",
+        "call_solves",
+        "call_returns_object_equal_to_everything",
+        "call_returns_int_equal_to_everything",
+    ],
+)
+def test_livecodebench_program_cannot_read_expected_outputs_or_decide_comparisons(
+    cases: list[dict], program: str, reward: float, tmp_path: Path
+):
+    assert livecodebench_reward(tmp_path, cases, program) == reward
+
+
+def test_livecodebench_program_that_stalls_mid_message_fails_at_the_deadline(tmp_path: Path):
+    assert livecodebench_reward(tmp_path, STDIN_ADD, STALLS_MID_MESSAGE, total_timeout_seconds=10.0) == 0.0
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        "def first(n):\n    return tuple(range(n))",
+        "import numpy as np\n\ndef first(n):\n    return list(np.arange(n))",
+    ],
+    ids=["tuple_for_list", "list_of_numpy_integers"],
+)
+def test_livecodebench_return_value_compares_as_the_value_the_program_returned(program: str, tmp_path: Path):
+    assert livecodebench_reward(tmp_path, FUNCTIONAL_RANGE, program) == 1.0
+
+
+ULTRA_CODE = ScorerClosure(
+    {
+        **ULTRA_BASE,
+        **shipped(ULTRA, f"{ULTRA_ENVS}/code_gen.py"),
+        "skyrl_gym/envs/lcb/livecodebench.py": SKYRL / "livecodebench.py",
+    },
+    LIVECODEBENCH.requires,
+)
+"""What the Ultra code grade script ships: ``code_gen`` imports the one vendored LiveCodeBench evaluator."""
+
+ULTRA_CODE_CHECK = """
+import json, sys, time, tracemalloc
+sys.path.insert(0, sys.argv[1])
+from skyrl_gym.envs.nemotron_ultra.code_gen import grade_code
+tracemalloc.start()
+cpu_start = time.process_time()
+reward, detail = grade_code(sys.stdin.read(), {"verifier_metadata": {"unit_tests": json.loads(sys.argv[2])}})
+cpu_seconds = time.process_time() - cpu_start
+peak_bytes = tracemalloc.get_traced_memory()[1]
+print(json.dumps([reward, detail["result"], detail["test_results"], peak_bytes, cpu_seconds], default=str))
+"""
+"""Grades the reply on stdin with Ultra's ``grade_code`` and prints the result with the peak memory and CPU time it
+used in the grading process; values JSON cannot hold print as text, as in ``code_grade.py``."""
+
+PRINTS_64_MIB = 'print("x" * (64 << 20))'
+"""A stdin program whose output is 64 MiB, for tests that expect a few bytes."""
+
+WRITES_COLLIDING_DICT = """import gc, json, os, struct
+from multiprocessing.connection import Connection
+
+P = (1 << 61) - 1
+# The fractions (1 + 2jP) / 2 all have one hash, and comparing two of them runs Python code.
+pairs = [[["fraction", 1 + 2 * j * P, 2], 0] for j in range(24000)]
+frame = json.dumps(["value", ["dict", pairs], 0], separators=(",", ":")).encode()
+
+class Solution:
+    def add(self, a, b):
+        for item in gc.get_objects():
+            if isinstance(item, Connection) and item.writable:
+                data = struct.pack("!Q", len(frame)) + frame
+                while data:
+                    data = data[os.write(item.fileno(), data):]
+        return a + b"""
+"""Writes its own result to the verifier child's pipe: a dict whose 24,000 keys share one hash, in just under 1 MiB."""
+
+NUMPY_FRAME_ITEMS = 8000
+FUNCTIONAL_ZEROS = [
+    {"input": [NUMPY_FRAME_ITEMS], "output": [0] * NUMPY_FRAME_ITEMS, "testtype": "functional", "fn_name": "zeros"}
+]
+
+WRITES_NUMPY_ARRAY = f"""import gc, json, os, struct
+from multiprocessing.connection import Connection
+
+frame = json.dumps(["value", ["numpy", "float64", [[0]] * {NUMPY_FRAME_ITEMS}], 0], separators=(",", ":")).encode()
+
+def zeros(n):
+    for item in gc.get_objects():
+        if isinstance(item, Connection) and item.writable:
+            data = struct.pack("!Q", len(frame)) + frame
+            while data:
+                data = data[os.write(item.fileno(), data):]
+    return [0] * n"""
+"""Writes its own result to the verifier child's pipe: a NumPy float64 form holding a list of one-item lists, which
+the NumPy constructor would build into an (n, 1) array, in 32 KB."""
+
+
+def ultra_code_grade(tmp_path: Path, cases: list[dict], program: str) -> tuple[float, str, list, int, float]:
+    ULTRA_CODE.skip_if_unavailable()
+    tests = ULTRA_CODE.stage(tmp_path)
+    result = subprocess.run(
+        (sys.executable, "-I", "-c", ULTRA_CODE_CHECK, str(tests), json.dumps(cases)),
+        input=f"```python\n{program}\n```",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    reward, outcome, test_results, peak_bytes, cpu_seconds = json.loads(result.stdout.splitlines()[-1])
+    return reward, outcome, test_results, peak_bytes, cpu_seconds
+
+
+def test_ultra_code_grade_scores_a_program_without_the_tested_function_zero(tmp_path: Path):
+    program = "class Solution:\n    def solve(self, a, b):\n        return a + b"
+    assert ultra_code_grade(tmp_path, FUNCTIONAL_ADD, program)[:3] == (0.0, "failed_tests", [-4])
+
+
+def test_ultra_code_grade_fails_an_oversized_output_without_reading_it(tmp_path: Path):
+    reward, outcome, test_results, peak_bytes, _ = ultra_code_grade(tmp_path, STDIN_ADD, PRINTS_64_MIB)
+    assert (reward, outcome, test_results) == (0.0, "failed_tests", [-2])
+    # The grading process reads the 64 MiB result in 1 MiB pieces and drops it.
+    assert peak_bytes < 16 << 20
+
+
+def test_ultra_code_grade_fails_a_dict_with_colliding_keys_without_building_it(tmp_path: Path):
+    reward, outcome, test_results, _, cpu_seconds = ultra_code_grade(tmp_path, FUNCTIONAL_ADD, WRITES_COLLIDING_DICT)
+    assert (reward, outcome, test_results) == (0.0, "failed_tests", [False])
+    # Building the dict would take about 24,000 ** 2 / 2 key comparisons in the grading process.
+    assert cpu_seconds < 10
+
+
+def test_ultra_code_grade_fails_a_numpy_frame_holding_a_list_without_broadcasting(tmp_path: Path):
+    reward, outcome, test_results, peak_bytes, _ = ultra_code_grade(tmp_path, FUNCTIONAL_ZEROS, WRITES_NUMPY_ARRAY)
+    assert (reward, outcome, test_results) == (0.0, "failed_tests", [False])
+    # An (n, 1) array compared with the n expected items would allocate n * n = 64 MB in the grading process.
+    assert peak_bytes < 16 << 20
