@@ -198,7 +198,7 @@ class _ProvenanceTrace:
     model_path: str | None
     model_source_identity: str | None
     resume_path: str | None
-    model_version_step: int
+    model_version_step: int | None
     sampling: dict[str, Any]
     reward_shaping_schema_version: int | None
 
@@ -208,7 +208,7 @@ class TrajectoryRecord:
     schema_version: int
     record_id: str
     run_id: str
-    global_step: int
+    global_step: int | None
     phase: str
     trajectory: _TrajectoryIdentity
     prompt: _PromptTrace
@@ -395,8 +395,11 @@ def build_trajectory_records(
     verifier_tests = output.get("verifier_tests")
     if verifier_tests is not None and len(verifier_tests) != len(output["response_ids"]):
         raise ValueError("verifier tests must have one entry per trajectory row")
-    # A request's step names the policy version being trained, which has completed one fewer update.
-    model_version_step = max(0, metadata.global_step - 1)
+    if metadata.global_step is None and metadata.training_phase != "eval":
+        raise ValueError("Training retention requires an optimizer step")
+    model_version_step = (
+        config.model_checkpoint_step if metadata.global_step is None else max(0, metadata.global_step - 1)
+    )
     prompts = input_batch.public_prompts
     rows = input_batch.metadata
 
@@ -590,7 +593,7 @@ def _add_archive_to_ledger(ledger: _RetentionLedger, path: str, payload: bytes) 
 def _sample_score(
     run_id: str,
     phase: str,
-    global_step: int,
+    global_step: int | None,
     instance_id: str,
     repetition_id: int,
 ) -> int:
@@ -611,7 +614,7 @@ def _serialized_sample_score(value: Mapping[str, Any]) -> int:
     return _sample_score(
         str(value["run_id"]),
         str(value["phase"]),
-        int(value["global_step"]),
+        None if value["global_step"] is None else int(value["global_step"]),
         str(trajectory["instance_id"]),
         int(trajectory["repetition_id"]),
     )
@@ -636,6 +639,11 @@ def _is_mandatory(
     )
 
 
+def _fraction_selected(score: int, phase: str, config: TrajectoryRetentionConfig) -> bool:
+    fraction = config.eval_sample_fraction if phase == "eval" else None
+    return score / (1 << 256) < (config.sample_fraction if fraction is None else fraction)
+
+
 def _orphan_reasons(value: Mapping[str, Any], config: TrajectoryRetentionConfig) -> tuple[str, ...]:
     reward = value["reward"]
     response = value["response"]
@@ -650,7 +658,7 @@ def _orphan_reasons(value: Mapping[str, Any], config: TrajectoryRetentionConfig)
     if mandatory:
         return (_SELECTION_MANDATORY,)
     score = _serialized_sample_score(value)
-    if score / (1 << 256) < config.sample_fraction:
+    if _fraction_selected(score, value["phase"], config):
         return (_SELECTION_FRACTION,)
     return ()
 
@@ -1051,7 +1059,7 @@ class TrajectorySink:
             return _Selection((_SELECTION_MANDATORY,))
 
         score = self._sample_score(record)
-        if score / (1 << 256) < self.config.sample_fraction:
+        if _fraction_selected(score, record.phase, self.config):
             reasons.append(_SELECTION_FRACTION)
 
         displaced_id = None
@@ -1105,7 +1113,7 @@ class TrajectorySink:
             f"schema_v{record.schema_version}",
             _ARCHIVE_DIRECTORY,
             f"phase={record.phase}",
-            f"step={record.global_step:08d}",
+            "step=eval_only" if record.global_step is None else f"step={record.global_step:08d}",
             f"{digest}.zip",
         )
 

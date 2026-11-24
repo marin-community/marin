@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from fray.types import ANY_REGION, CpuConfig, JobStatus, ResourceConfig, create_environment
 from iris.resources.state import JobState
 from levanter.model_cache import DEFAULT_COMPLETE_MARKER
-from marin.evaluation.runner import _inference_session
+from marin.evaluation.runner import _inference_session, _prepare_all, _RoleStartupError
 from marin.inference.config import (
     IrisConfig,
     RemoteInferenceConfig,
@@ -220,16 +220,37 @@ def test_prepare_failure_never_reserves_accelerators(serving, monkeypatch, failu
         assert exc_info.value.jobs == ()
 
 
-def test_prepare_timeout_is_not_retried_as_a_serving_readiness_timeout(serving):
+def test_prepare_timeout_fails_its_role_without_a_retry(serving):
     serving.timeout_prepare = True
     config = _config(REVISION)
     config = replace(config, iris=replace(config.iris, max_retries_failure=1))
-    with ExitStack() as stack, pytest.raises(RemoteInferenceStartupError) as caught:
-        _inference_session(stack, config)
-    assert caught.value.phase is InferenceStartupPhase.PREPARATION
-    assert isinstance(caught.value.__cause__.__cause__, TimeoutError)
+    with pytest.raises(_RoleStartupError) as caught:
+        _prepare_all({"judge": config})
+    assert caught.value.role == "judge"
+    assert caught.value.error.phase is InferenceStartupPhase.PREPARATION
     assert serving.events == ["prepare", "prepare stopped"]
     assert len(serving.requests) == 1
+
+
+def test_warm_candidate_serves_only_after_cold_judge_is_prepared(serving):
+    _seed("org/candidate", REVISION)
+    serving.downloads.clear()
+    serving.worker_prefix = os.environ["MARIN_PREFIX"]
+    warm = _config(REVISION)
+    warm = replace(
+        warm, iris=replace(warm.iris, worker_resources=replace(warm.iris.worker_resources, target_cluster=None))
+    )
+    cold = replace(_config(REVISION), model=ServedModelConfig(weights="org/judge", revision=REVISION))
+
+    prepared = _prepare_all({"inference": warm, "judge": cold})
+    with ExitStack() as stack:
+        _inference_session(stack, prepared["inference"])
+        _inference_session(stack, prepared["judge"])
+
+    assert serving.events == ["prepare", "gpu", "gpu"]
+    assert len(serving.requests) == 1
+    assert [download[0] for download in serving.downloads] == ["org/judge"]
+    assert [served.model.model_id for served in serving.served] == ["org/candidate", "org/judge"]
 
 
 @pytest.mark.parametrize(
@@ -269,7 +290,7 @@ def test_root_unpinned_accelerator_does_not_submit_a_prepare_job(serving, monkey
         else ResourceConfig.with_tpu("v4-8")
     )
     config = replace(config, iris=replace(config.iris, worker_resources=resources))
-    iris_module._prepared_inference_config(config)
+    iris_module.prepare_inference(config)
     assert serving.requests == []
     assert serving.downloads == []
 

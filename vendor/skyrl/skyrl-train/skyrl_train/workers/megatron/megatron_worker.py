@@ -14,14 +14,13 @@ import torch.distributed
 from huggingface_hub import snapshot_download
 from loguru import logger
 from megatron.bridge import AutoBridge
-from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
+from megatron.core.optimizer import DistributedOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
 from megatron.core.transformer.enums import AttnBackend
 from omegaconf import OmegaConf
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.distributed.dispatch import MeshRank
-from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
 from skyrl_train.distributed.megatron.megatron_utils import (
     get_model_config,
@@ -47,12 +46,8 @@ from skyrl_train.training_batch import (
 from skyrl_train.utils.metrics import policy_progress_metrics, policy_training_metrics
 from skyrl_train.utils.profiler import Profiler
 from skyrl_train.utils.progress import tqdm
-from skyrl_train.utils.utils import (
-    get_physical_gpu_id,
-    moe_router_replay_requested,
-    str_to_torch_dtype,
-    update_model_config,
-)
+from skyrl_train.utils.utils import get_physical_gpu_id, str_to_torch_dtype, update_model_config
+from skyrl_train.config.driver_validation import moe_router_replay_requested
 from skyrl_train.weight_sync.expert_block.sender import ExpertBlockSender
 from skyrl_train.weight_sync.weight_extractor import validate_weight_sync_mode
 from skyrl_train.workers.grug_validation import GrugValidationSnapshot
@@ -66,7 +61,6 @@ from skyrl_train.workers.megatron.router_replay_install import install_megatron_
 from skyrl_train.workers.megatron.output_projection_layout import install_dpo_batch_major_output_projection
 from skyrl_train.workers.megatron.weight_extractor import BucketedMegatronWeightExtractor, mapping_hf_names
 from skyrl_train.workers.worker import (
-    CriticWorkerBase,
     PolicyWorkerBase,
     RefWorkerBase,
     log_r3_resident_set,
@@ -76,6 +70,7 @@ from transformers import AutoConfig, AutoTokenizer
 
 from marinskyrl.hugging_face_retry import load_hugging_face_with_retry
 from marinskyrl.runtime_options import WeightSyncTransport
+from skyrl_train.training_batch import TrainingInputBatch
 
 
 class _MegatronInitMode(StrEnum):
@@ -143,9 +138,7 @@ class MegatronWorker:
         # in the selected profile. This observation does not establish a cuDNN defect.
         flash_attn = flash_attn or (bf16 and getattr(hf_config, "model_type", None) == GRUG_MOE_MODEL_TYPE)
         transformer_config_kwargs = OmegaConf.to_container(transformer_config_kwargs, resolve=True)
-        transformer_config_kwargs["attention_backend"] = (
-            AttnBackend.flash if flash_attn else AttnBackend.auto
-        )
+        transformer_config_kwargs["attention_backend"] = AttnBackend.flash if flash_attn else AttnBackend.auto
 
         if not self.cfg.trainer.gradient_checkpointing:
             for key in ("recompute_granularity", "recompute_method", "recompute_num_layers"):
@@ -206,6 +199,26 @@ class MegatronWorker:
                 self.remote_hf_state.store.close()
         install_dpo_batch_major_output_projection(model, self.provider, self.cfg.trainer.algorithm.policy_loss_type)
         return model
+
+    def _forward_loaded_logprobs(self, data: TrainingInputBatch) -> torch.Tensor:
+        """Give every pipeline stage the last stage's response logprobs."""
+        scores = self.forward(data)["output"]
+        if self.mesh_rank.pp_size == 1:
+            return scores
+        shape = (data.batch_size, data.metadata["response_length"])
+        device = self.strategy.collective_device()
+        if mpu.is_pipeline_last_stage(ignore_virtual=True):
+            scores = scores.to(device)
+            if scores.dtype != torch.float32 or tuple(scores.shape) != shape:
+                raise ValueError("worker pipeline forward requires float32 response scores with the global width")
+        else:
+            scores = torch.empty(shape, dtype=torch.float32, device=device)
+        torch.distributed.broadcast(
+            scores,
+            src=mpu.get_pipeline_model_parallel_last_rank(),
+            group=mpu.get_pipeline_model_parallel_group(),
+        )
+        return scores.cpu()
 
     def forward(self, data, *, probe_micro_batch_size: int | None = None):
         """
@@ -871,23 +884,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         torch.cuda.empty_cache()
         torch.distributed.barrier()
 
-    def grug_optimizer_route_snapshot(self):
-        """Return this rank and the optimizer route for each named parameter."""
-        if str(self.cfg.trainer.policy.optimizer_config.optimizer).lower() != "muonh":
-            raise ValueError("Optimizer route snapshot requires Grug MuonH")
-        names = {id(parameter): name for chunk in self.actor_module for name, parameter in chunk.named_parameters()}
-        optimizers = (
-            self.optimizer.chained_optimizers if isinstance(self.optimizer, ChainedOptimizer) else [self.optimizer]
-        )
-        routes = {}
-        for wrapped in optimizers:
-            default_route = "grug_muonh" if isinstance(wrapped.optimizer, MegatronGrugMuonH) else "adam"
-            for index, group in enumerate(wrapped.optimizer.param_groups):
-                route = group.get("optimizer", default_route)
-                for parameter in (*wrapped.float16_groups[index], *wrapped.fp32_from_fp32_groups[index]):
-                    routes[names[id(parameter)]] = route
-        return {"rank": torch.distributed.get_rank(), "routes": routes}
-
     def grug_validation_snapshot(self, names=()):
         """Return the calling rank and requested Grug weights in HF layout, gathered on rank 0.
 
@@ -935,10 +931,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             attention_backend=str(self.provider.attention_backend),
             weights=weights,
         )
-
-    def get_weight_statistics(self):
-        """Compute lightweight statistics for model weights"""
-        raise NotImplementedError()
 
     def _set_pad_token_id(self, pad_token_id):
         # this already gets set in the init_model method
@@ -1030,20 +1022,10 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
         )
         self._maybe_install_router_replay("ref")
 
-    def get_weight_statistics(self):
-        """Compute lightweight statistics for model weights"""
-        raise NotImplementedError()
-
     def _set_pad_token_id(self, pad_token_id):
         # this already gets set in the init_model method
         pass
 
 
-class MegatronCriticWorkerBase(MegatronWorker, CriticWorkerBase):
-    def __init__(self, **kwargs):
-        raise NotImplementedError()
-
-
 PolicyWorker = ray.remote(num_gpus=1)(MegatronPolicyWorkerBase)
 RefWorker = ray.remote(num_gpus=1)(MegatronRefWorkerBase)
-CriticWorker = ray.remote(num_gpus=1)(MegatronCriticWorkerBase)

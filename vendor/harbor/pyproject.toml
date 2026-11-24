@@ -7,6 +7,8 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "marin-rigging",
+    "marin-shellbox",
     "pydantic>=2.11.7",
     "shortuuid>=1.0.13",
     "typer>=0.16.0",
@@ -37,13 +39,12 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona,sotopia]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,daytona,sotopia]", "gcsfs", "s3fs", "pydantic-settings"]
 qemu = ["marin-shellbox[qemu]"]
 shellsim = ["marin-shellbox[shellsim]"]
-sotopia = ["harbor[archive,telemetry]", "numpy", "scipy", "scikit-learn"]
+sotopia = ["harbor[archive]", "numpy", "scipy", "scikit-learn"]
 analysis = ["claude-agent-sdk>=0.1.17"]
 archive = ["marin-finestore"]
-telemetry = ["marin-rigging"]
 datasets = ["datasets>=4.4.1"]
 daytona = ["marin-shellbox[daytona]"]
 all = ["harbor[analysis,runtime,qemu,shellsim,datasets,tinker]"]
@@ -72,7 +73,12 @@ constraint-dependencies = ["nltk>=3.10.4", "oauthlib>=4.0.1", "soupsieve>=4.0.0"
 exclude-dependencies = ["litellm"]
 default-groups = []
 # Local Rigging uses its development version while published FineStore pins a release floor.
-override-dependencies = ["marin-rigging"]
+override-dependencies = [
+    "marin-rigging",
+    # Torch pins an older NCCL; 2.32.6 fixes NVLSTree buffer corruption.
+    # https://github.com/NVIDIA/nccl/issues/2625
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
+]
 
 [tool.uv.build-backend]
 module-name = ["harbor", "harbor_config"]

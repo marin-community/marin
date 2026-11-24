@@ -91,6 +91,30 @@ def test_top_level_import_reaches_transitive_dependents(tmp_path: Path) -> None:
     assert "zephyr" not in scopes_in(matrix), "a lazy import must not propagate"
 
 
+def test_taskforge_source_change_selects_external_importers_and_its_dedicated_suite(tmp_path: Path) -> None:
+    write(tmp_path, "lib/taskforge/src/taskforge/__init__.py")
+    write(tmp_path, "lib/taskforge/src/taskforge/events.py", "class Event: pass\n")
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/driver.py", "from taskforge.events import Event\n")
+    write(tmp_path, "lib/iris/tests/test_driver.py", "from iris import driver\n")
+
+    selection = select_changed_tests(["lib/taskforge/src/taskforge/events.py"], tmp_path)
+
+    assert leg_paths(selection.matrix, "iris") == ["lib/iris/tests/test_driver.py"]
+    assert "taskforge-unit" in selection.suites
+
+
+@pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
+def test_taskforge_source_change_runs_affected_taskforge_tests_locally_and_in_ci(
+    tmp_path: Path, select_tests: Callable[..., SelectionResult]
+) -> None:
+    write(tmp_path, "lib/taskforge/src/taskforge/__init__.py")
+    write(tmp_path, "lib/taskforge/src/taskforge/events.py", "class Event: pass\n")
+    write(tmp_path, "lib/taskforge/tests/test_events.py", "from taskforge.events import Event\n")
+    selection = select_tests(["lib/taskforge/src/taskforge/events.py"], tmp_path)
+    assert leg_paths(selection.matrix, "taskforge") == ["lib/taskforge/tests/test_events.py"]
+
+
 def test_selection_is_empty_when_nothing_depends_on_the_change(tmp_path: Path) -> None:
     _workspace(tmp_path)
     write(tmp_path, "lib/rigging/src/rigging/unused.py", "X = 1\n")
@@ -136,11 +160,36 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
 @pytest.mark.parametrize(
-    "changed_file",
-    ["experiments/moe/test_optimizer.py", "experiments/moe/optimizer.py", "lib/levanter/src/levanter/optim.py"],
+    "changed_file,expected",
+    [
+        (path, ["experiments/moe/test_optimizer.py"])
+        for path in (
+            "experiments/moe/test_optimizer.py",
+            "experiments/moe/optimizer.py",
+            "lib/levanter/src/levanter/optim.py",
+        )
+    ]
+    + [
+        (
+            path,
+            [
+                "experiments/post_training/curriculum_rl/test_launch.py",
+                "experiments/post_training/rl_tests/test_rl.py",
+                "experiments/post_training/rl_tests/test_rl_gate.py",
+                "tests/rl/test_skyrl.py",
+            ],
+        )
+        for path in ("vendor/skyrl/cloud/iris/launch_config.py",)
+    ]
+    + [
+        (
+            "vendor/skyrl/marinskyrl/checkpoint_paths.py",
+            ["experiments/post_training/rl_tests/test_rl.py", "tests/rl/test_skyrl.py"],
+        )
+    ],
 )
 def test_experiment_tests_run_for_test_and_dependency_changes(
-    tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str
+    tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str, expected: list[str]
 ) -> None:
     write(tmp_path, "lib/levanter/src/levanter/optim.py", "RATE = 1\n")
     write(tmp_path, "experiments/moe/optimizer.py", "from levanter.optim import RATE\n")
@@ -152,9 +201,19 @@ def test_experiment_tests_run_for_test_and_dependency_changes(
     write(tmp_path, "experiments/moe/test_unrelated.py", "def test_other():\n    assert True\n")
     write(tmp_path, "tests/test_unrelated.py", "def test_other():\n    assert True\n")
 
+    write(tmp_path, "experiments/post_training/rl_tests/test_rl.py", "def test_native_config():\n    pass\n")
+    write(
+        tmp_path,
+        "experiments/post_training/rl_tests/test_rl_gate.py",
+        "def test_native_protocol():\n    pass\n",
+    )
+    write(
+        tmp_path, "experiments/post_training/curriculum_rl/test_launch.py", "def test_native_allocation():\n    pass\n"
+    )
+    write(tmp_path, "tests/rl/test_skyrl.py", "def test_stored_record_boundary():\n    pass\n")
     selection = select_tests([changed_file], tmp_path)
 
-    assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py"]
+    assert leg_paths(selection.matrix, "marin") == expected
 
 
 @pytest.mark.parametrize(
@@ -389,11 +448,17 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
-def test_skyrl_changes_select_the_launch_census(tmp_path: Path) -> None:
+def test_skyrl_changes_select_native_launch_and_snowball_owners(tmp_path: Path) -> None:
     census = "tests/rl/test_rl_launch_documents.py"
-    write(tmp_path, census, "def test_launch(): pass\n")
-    for changed in ("vendor/skyrl/uv.lock", "lib/skyrlrecipe/src/skyrlrecipe/recipe.py"):
-        assert leg_paths(select_matrix([changed], tmp_path), "marin") == [census]
+    runner = "experiments/post_training/rl_tests/test_rl.py"
+    for path in (census, runner):
+        write(tmp_path, path, "def test_launch(): pass\n")
+    for changed in (
+        "vendor/skyrl/uv.lock",
+        "lib/skyrlrecipe/src/skyrlrecipe/recipe.py",
+        "vendor/skyrl/skyrl-train/skyrl_train/callbacks/builtin.py",
+    ):
+        assert sorted(leg_paths(select_matrix([changed], tmp_path), "marin")) == [runner, census]
 
 
 @pytest.mark.parametrize(
@@ -453,11 +518,12 @@ def test_skyrl_changes_select_the_launch_census(tmp_path: Path) -> None:
         ),
         ("vendor/harbor/src/harbor/job.py", ["harbor-unit", "skyrl-wheel"]),
         ("vendor/harbor/uv.lock", ["harbor-unit", "skyrl-wheel"]),
-        ("lib/finestore/src/finestore/table.py", ["harbor-unit", "skyrl-wheel"]),
+        ("lib/finestore/src/finestore/table.py", ["harbor-unit", "skyrl-wheel", "taskforge-unit"]),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
         ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
         ("vendor/skyrl/uv.lock", ["skyrl-wheel"]),
+        ("lib/taskforge/src/taskforge/unimported.py", ["taskforge-unit"]),
     ],
 )
 def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
@@ -485,15 +551,6 @@ def test_harbor_acquisition_changes_select_isolated_runtime(tmp_path: Path, path
     selection = select_changed_tests([path], tmp_path)
 
     assert "harbor-unit" in selection.suites
-
-
-@pytest.mark.parametrize(
-    "path", ["experiments/post_training/capability_driven_envs/generate_tasks.py", "experiments/post_training/glm.py"]
-)
-def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Path, path: str) -> None:
-    selection = select_changed_tests([path], tmp_path)
-
-    assert "taskforge-unit" in selection.suites
 
 
 @pytest.mark.parametrize(

@@ -361,7 +361,8 @@ migrations. Archival hides an application while preserving its schema and revisi
 Apps default to private. Use `release --mode public` or `apps mode UUID public`
 only for data and trusted GET handlers intended for the internet. Public apps
 use `https://public.applets.marina.oa.dev`; that service admits only GET and HEAD
-and exposes no SQL, publication, MCP or named-app routes. Marina cannot prove that
+and exposes no SQL, publication, MCP or named-app routes. It also serves the
+public hostnames in [Named app hosts](#named-app-hosts). Marina cannot prove that
 a GET handler is free of side effects.
 
 ## Named app hosts
@@ -398,9 +399,25 @@ do not change DNS. Unbinding retains a disabled hostname record that returns 404
 so the hostname cannot expose Marina's control routes. Marina's canonical, shared
 app, public app, and legacy app hosts cannot be rebound through this API.
 
+Pulumi's `marin-marina:public_applet_domains` lists the hostnames that it maps to
+the public applet reader instead of the authenticated service. Bind them with the
+same commands. A public hostname serves its bound app without sign-in, with the same
+GET and HEAD routes as the app's `https://public.applets.marina.oa.dev` URL. The reader
+checks the app's stored mode on each request. If the bound app is private or archived,
+or the hostname has no binding, the hostname returns 404. Thus `apps mode UUID private`
+stops public service through the hostname without a deployment. The hostname does not
+fall back to the authenticated service. To serve a private app on that hostname, move
+the hostname to `applet_domains`. Domain mappings ignore changes to their route, so
+remove the hostname in one deployment and add it to the other list in the next.
+The mapping's Pulumi name includes its service, so a move in one deployment fails
+with a duplicate domain mapping instead of keeping the old route. A hostname cannot
+be in both lists.
+
 Pulumi passes the provisioned hostname list as `MARINA_APPLET_DOMAINS`, without
-app UUIDs. A listed hostname returns 404 until it has an enabled database
-binding. Other hosts bypass the registry lookup. Binding an unprovisioned
+app UUIDs. The authenticated service receives both lists so that operators can bind
+public hostnames; the public reader receives only `public_applet_domains`. A listed
+hostname returns 404 until it has an enabled database binding. Other hosts bypass the
+registry lookup. Binding an unprovisioned
 hostname is rejected; unbinding an unknown binding returns 404.
 
 The deployment migration imports the existing Filer binding once, before the

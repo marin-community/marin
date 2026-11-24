@@ -33,8 +33,10 @@ flowchart TD
 ## Task and runtime specs
 
 `TaskSpec` contains the task definition: public context, tools, output paths, answer type, answer format, grader, environment requirements, resources, source, tags, and labels.
-Its `environment_requirements` includes capabilities, an optional digest-pinned Docker image, workdir, setup commands, environment variables, and named tool-provider contracts.
-A `ScriptGrader`, or a `VerifyitGrader` with an environment, declares separate requirements in `grader.environment`.
+Its `environment_requirements` includes capabilities, an optional digest-pinned Docker image or Docker build context, workdir, setup commands, environment variables, and named tool-provider contracts.
+A `ScriptGrader`, or a `VerifyitGrader` with a placement, names the machine it grades in with `grader.placement`.
+`AgentMachine` grades in the task machine after the harness returns.
+`GraderMachine` grades in a fresh verifier machine built from its own `environment`; its `collect` commands and `artifacts` carry agent state into that machine.
 
 `TaskRolloutSpec` keeps the task definition unchanged and adds the choices that run it:
 
@@ -65,8 +67,9 @@ Harness options, such as the shell tool's name and command timeout, belong to th
 register one harness for each configuration, and select it with `TaskRolloutSpec.harness`.
 A machine selection of `None` supplies no machine.
 Answer-only tasks can omit the task machine.
-A grader with an environment requires a `verifier_machine` selection, except a judge, which grades on the host.
+A `GraderMachine` grader requires a `verifier_machine` selection, except a judge, which grades on the host.
 Every other grader requires `verifier_machine=None`.
+An `AgentMachine` grader requires a task machine.
 Each attempt creates a fresh verifier machine from that selection.
 
 SkyRL accepts Parquet rows with a `task_spec` JSON column. Its dataset loader turns
@@ -77,8 +80,10 @@ message runs under the assistant-prefix harness. The `structure-closure` tasks o
 curation [task-selection artifact](task-curation.md#final-task-selection) end this way.
 Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
 `default_harness`, which defaults to Shellbox.
+A task that needs a machine uses `task_machine_by_dataset[task.source.dataset]`, or else
+`task_machine_by_command_semantics` for its command semantics; without either, it fails validation.
 Image graders use the configured image verifier backend; package
-graders use the configured local verifier. The inventory artifact contains the
+graders use the configured local verifier. The task-selection artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
 rewrite the task Parquet.
 
@@ -90,6 +95,13 @@ The selected factory applies network and hardware settings. Memory is advisory o
 preparation omits that allocation because bubblewrap cannot enforce it.
 
 An environment with `docker_image` uses that prebuilt image. The reference must contain a SHA-256 digest.
+An environment with `docker_build` is built online: RolloutEngine writes the build context to a temporary
+directory and gives the backend a `shellbox.image.DockerfileSource`, which the backend builds when it creates the
+machine. The directory exists only while the spec is checked and the machine is created. Docker, Daytona and QEMU
+build Dockerfiles; Daytona also rejects a Dockerfile with `ADD` when it checks the spec. A backend that cannot build,
+such as Local or ShellSim, rejects the spec with `UnsupportedMachineSpec` before any machine starts. Like a
+registry image, a built image starts in its own `WORKDIR` unless the environment names a working directory.
+`FROM` images and downloads during the build are as reproducible as the Dockerfile makes them.
 An environment with `packages_lock` and no image requires a `LocalMachineFactory`.
 TaskCompendium downloads the lock and the `environment.json` and `files.tar` stored beside it, if any,
 then builds a managed CPython environment with the locked packages, verifyit, and the placed files.
@@ -115,6 +127,21 @@ Machine setup commands run as trusted root before task operations.
 When the execution user is set, the task machine runs an execution-user probe after root setup and before model inference.
 An explicit command user overrides that default.
 The verifier machine uses its own configured default user.
+
+Original Harbor trials run each `setup_commands` entry as root with `sh`, after
+environment staging and before agent installation. An entry's nonzero exit status
+fails the trial; output stays separate from model traces, and setup uses the
+configured installed-agent `setup_timeout` while counting toward the whole
+trial's time limit.
+For these trials, the Harbor task package defines the image, environment variables
+and agent user. TaskSpec may add `setup_commands` and their setup-only
+`working_directory`; other TaskSpec machine-environment overrides are rejected.
+
+## SkyRL reply text
+
+SkyRL reply text (`responses`, assistant content) never includes a trailing EOS or turn
+terminator, even with `skip_special_tokens=False`. `response_ids` keep every sampled
+token, including the terminator.
 
 ## Harnesses
 
@@ -172,8 +199,8 @@ and token limits:
   exact prompt `token_ids`. It returns the model's turn. A later `start` starts another conversation, for
   example after the harness makes its history shorter or changes its tools. The rollout keeps each
   conversation as a `ConversationRecord`, and the task machine does not reset.
-- `reply(observations, *, token_ids=None)` sends new messages after the model's last message and returns the
-  next turn. `token_ids` pins the exact tokens of the next prompt.
+- `reply(observations, *, token_ids=None, options=None)` sends new messages after the model's last message
+  and returns the next turn. `token_ids` pins the exact tokens of the next prompt. `options` can update output caps.
 - `record(*, observations=(), data=None, metrics=None)` adds to the step of the last turn, between model
   requests: final observations that the model never receives, the harness's data, and metrics. A turn with
   recorded observations takes no `reply`.
@@ -207,16 +234,19 @@ The session applies these rules:
 ### Cleanup
 
 `HarnessContext.cleanup.push(name, close)` registers a coroutine function that closes a resource of the
-harness, for example a tool session. The closes run after grading, in reverse order, before the machines
-close. Each close has `RolloutLimits.cleanup_timeout`. A failure becomes a cleanup error and does not change
-the record or the grade.
+harness, for example a tool session or the agent itself. These closes run in reverse order when the harness
+ends, before output capture and grading, as Harbor cancels its agent before it verifies.
+`HarnessContext.cleanup.push_after_grading(name, close)` registers a close that runs after grading, before the
+machines close, for state that the grader may check: Terminus ends its tmux session there, because ending it
+kills the services the agent started in its terminal. Each close has `RolloutLimits.cleanup_timeout`. A failure
+becomes a cleanup error and does not change the record or the grade.
 
 ### Run a harness alone
 
 `harness_rollout(harness, task, model, *, limits, machine=None, trace=TraceMode.EXACT_TOKENS, events=NO_EVENTS,
 run_id=None)` from `rolloutengine.recorder` runs one harness on one task with one model, without the engine. It
 starts no machine and does not grade. The turn limits and `total_turn_timeout` apply. The harness's closes run
-at the end, and `Rollout.metrics["cleanup_error_count"]` counts the closes that failed. An attempt that fails
+at the end, the closes registered with `push` first, and `Rollout.metrics["cleanup_error_count"]` counts the closes that failed. An attempt that fails
 raises `RolloutInterrupted` with the rollout so far.
 
 `task_machine(task, factory, runtime, *, cleanup_timeout)` from `rolloutengine.machines` starts a machine for a
@@ -271,15 +301,23 @@ engine = RolloutEngine(machine_factories, {"agent": AgentHarness(run_agent)})
 `complete` obeys these rules:
 
 - A prompt that extends the last prompt with the model's message, under the same options, is a `reply`. Its
-  `token_ids`, if any, pin the next request. Any other prompt starts a new conversation.
+  `token_ids`, if any, pin the next request. After a turn that finishes within its token limit, a prompt
+  without pinned tokens can also reply with equivalent messages and updated output caps (`max_tokens`,
+  `max_completion_tokens`, or `max_output_tokens`). Message comparison accepts empty optional text fields
+  and reserialized tool argument JSON.
+  Other prompts start a new conversation.
 - The agent can call `complete` from other tasks, such as HTTP handlers. One model request can be open at a
   time: a call that needs the model while another call waits for it raises `RuntimeError`.
+- The session does not reply to a turn cut by its output limit. `AgentHarness(agent, length_stop=...)` decides what
+  a prompt that extends such a turn does: `LengthStopPolicy.END`, the default, ends the attempt with stop reason
+  `length`; `LengthStopPolicy.NEW_CONVERSATION` starts a new conversation with the prompt's full history.
 - The last prompt again, for example after the HTTP client lost the response, gets the same turn without a new
   generation. A call that is cancelled while the model generates loses that generation, and a retry generates
   again.
-- When the attempt ends, each call waits until the cleanup, after grading. Thus a waiting agent does not change
-  the task machine during grading. The cleanup then cancels the agent, and the waiting calls in tasks that the
-  agent does not await, such as HTTP handlers, raise `RolloutEnded`.
+- When the attempt ends, each call waits until the cleanup, which runs before grading. The cleanup cancels the
+  agent, so that it sends no further commands while the task machine is graded. Processes it left running on
+  the machine keep running until the machines close. Waiting calls in tasks that the agent does not await,
+  such as HTTP handlers, then raise `RolloutEnded`.
 - When it is cancelled, the agent must release its own subprocesses and network resources and stop within
   `cleanup_timeout`. An agent that does not stop in that time is a cleanup error, and the machines close.
 - An agent that fails while the attempt runs ends only its own attempt: `run_task` raises
@@ -288,6 +326,103 @@ engine = RolloutEngine(machine_factories, {"agent": AgentHarness(run_agent)})
 - `check` rejects a task that declares tools other than a shell binding: final tools, the
   `submit_answer` tool of an `AnswerCall` task, other interaction tools, and tool providers. The agent harness
   does not give these tools to the agent. An agent that serves them needs its own harness, whose `run` can call this harness's `run`.
+
+### Terminus-2
+
+`terminus_harness(options)` from `rolloutengine.agents.terminus.agent` returns an `AgentHarness` that runs
+Harbor's Terminus-2 agent on the task machine. The task context must be one user instruction. The agent keeps
+Harbor's prompts, JSON and XML response formats, tmux keystroke handling, 10,000-byte terminal output limit,
+completion confirmation, and summarization near the context limit or after a context rejection. Its requests go
+through `complete`, so the rollout records each one, including the summarization requests; all of them count
+toward `max_turns`. After a reply cut by its output limit, the agent asks again in a new conversation.
+
+```python
+from rolloutengine.agents.terminus.agent import TerminusOptions, TerminusParser, terminus_harness
+
+options = TerminusOptions(
+    parser=TerminusParser.JSON, max_input_tokens=32768, max_output_tokens=8192, served_max_model_len=32768
+)
+engine = RolloutEngine(machine_factories, {"terminus-2": terminus_harness(options)})
+```
+
+`TerminusOptions` holds Harbor's settings: `max_input_tokens` and `max_output_tokens` are Harbor's `model_info`
+limits, and each main request asks for `max_output_tokens`. The context limit is `max_input_tokens`, or the
+served `max_model_len` less 8 tokens when that is smaller. Harbor counts prompt tokens with the server's
+`/tokenize` route; the lifted agent counts the chat through its last answered prompt with the prompt tokens that
+the model reported, and estimates the messages after it at three characters per token. Serve it with
+`ChatModel` under `TraceMode.MESSAGES`, so that context-length rejections reach the agent.
+
+### Pi
+
+`pi_harness(options, tokenize)` from `rolloutengine.agents.pi.agent` runs Harbor's installed Pi agent in the task
+machine. The task image provides Pi, Node.js and `python3`; with `PiOptions.version` set, setup fails unless the
+image's `pi --version` matches. The task context must be one user instruction. The agent keeps Harbor's provider
+and compaction configuration, its context-budget extension, its command line and its endpoint staging. Pi's output
+goes to `/logs/agent/pi.txt` in the task machine.
+
+Pi calls the model through a relay at `http://127.0.0.1:8788/v1` inside the task machine. Shellbox's HTTP service
+carries each request over the machine's process pipes to the host, where the relay answers it with the harness's
+`complete`. Daytona, Docker and local machines therefore need no network route to the evaluation worker, and
+the policy model's credentials stay on the host; Pi sends the key `EMPTY`. The rollout records
+each chat request, including Pi's compaction requests. A streaming request gets the whole answer as one buffered
+event stream. Before each request, Pi's context-budget extension counts the prompt with the relay's `/tokenize`
+route, which calls `tokenize` on the host. `VllmTokenizer` tokenizes with the vLLM server behind a `ChatModel`
+client:
+
+```python
+from rolloutengine.agents.model_relay import VllmTokenizer
+from rolloutengine.agents.pi.agent import PiOptions, PiThinkingFormat, pi_harness
+
+options = PiOptions(
+    model="served-model",
+    thinking_format=PiThinkingFormat.CHAT_TEMPLATE,
+    max_input_tokens=32768,
+    max_output_tokens=16384,
+    version="0.87.0",
+)
+engine = RolloutEngine(machine_factories, {"pi": pi_harness(options, VllmTokenizer(client, "served-model"))})
+```
+
+The relay moves request fields that are not OpenAI chat parameters, such as `chat_template_kwargs`, into
+`extra_body`. Serve it with `ChatModel` under `TraceMode.MESSAGES`, so that context-length rejections reach Pi as
+`context_length_exceeded` errors. When Pi exits with an error, including its context-length failure, the agent
+ends normally and the engine grades the attempt, as Harbor runs its verifier after a failed agent; an attempt
+without a completed turn gets no grade. A signal kill fails the attempt. When the relay answered a `/tokenize`
+request with a 502 response because `tokenize` failed, Pi's error exit fails the attempt with the tokenizer's
+error, which an evaluation retries. The harness accepts the task's `mcp:v1` tool providers, the MCP servers that Harbor's
+importer lowers from `task.toml`, and configures Pi's MCP extension for them.
+
+### mini-swe-agent
+
+`mini_swe_harness(options, tokenize)` from `rolloutengine.agents.mini_swe.agent` returns an `AgentHarness` that
+runs mini-swe-agent 2.1.0 as Harbor configures it: `DefaultAgent` with mini-swe-agent's `mini.yaml`, native tool
+calls with one `bash` tool, and no cost or step limit. The task context must be one user instruction. The loop runs
+on the host; the task machine runs the commands. The agent keeps mini-swe-agent's prompts, its observation template,
+which keeps the first and last 5,000 characters of a long output, and its format-error prompt, which answers a
+reply without a valid `bash` call; that reply leaves the history. Each command runs in a fresh `/bin/sh` subshell
+with stderr in stdout, a 30-second timeout and `mini.yaml`'s environment, such as `PAGER=cat`. A command whose first
+output line is `COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`, with exit status 0, ends the agent, and the engine grades
+the task machine.
+
+```python
+from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat, MiniSweOptions, mini_swe_harness
+from rolloutengine.agents.model_relay import VllmTokenizer
+
+options = MiniSweOptions(max_input_tokens=32768, max_output_tokens=8192, model_format=MiniSweModelFormat.OPENAI)
+engine = RolloutEngine(
+    machine_factories, {"mini-swe-agent": mini_swe_harness(options, VllmTokenizer(client, "served-model"))}
+)
+```
+
+Before each request, the agent counts the prompt with `tokenize`, the server's `/tokenize` route, as Harbor's
+context-limited model does, and asks for at most `max_output_tokens` and the context left: the smaller of
+`max_input_tokens` and the served `max_model_len`, less the prompt. When no reply fits, or the server rejects the
+request as too long, the agent ends normally and the engine grades the attempt. The history keeps each reply as the
+server sent it, including its `reasoning`; `MiniSweModelFormat.K2_HORIZON` also gives every assistant message a
+`reasoning` field, empty when the reply had none, as K2-Horizon's chat template requires. Serve it with `ChatModel`
+under `TraceMode.MESSAGES`. The port departs from Harbor where mini-swe-agent would crash on a reply: a `bash` call
+whose arguments are not an object, or whose `command` is not a string, gets the format-error prompt. Commands run
+with the machine's default environment and working directory, without the variables of Harbor's installed agent.
 
 ### Shell harness
 
@@ -416,14 +551,24 @@ Capture runs inside the verifier deadline, as part of the final grading phase.
 A capture failure or expired deadline raises `RolloutInterrupted` with operation `grade`.
 A record interrupted before capture, during startup, during the harness, or at an attempt deadline that expires before capture completes, has empty `outputs`.
 A record interrupted after capture, by a grading failure, a model failure, or an attempt deadline that expires during grading, retains `outputs`.
-Attempts that end before the first model response are not graded and have empty `outputs`.
+An attempt can end before the first model response without failing: at a limit, or when an `AgentHarness` agent
+returns after the model rejected a request for its context. The engine grades the work such an attempt left on
+the machine, with an empty assistant reply as the conversation. A task whose answer is the conversation gets an
+unavailable grade instead, and its record has empty `outputs`.
 
 ## Grader files
 
-When the grader has an environment, and it is not a judge, the engine stages grading inputs on the verifier machine after the harness ends.
+When the grader has a `GraderMachine` placement, and it is not a judge, the engine stages grading inputs on the verifier machine after the harness ends.
 The verifier machine receives verifier resources under `/tests`, `resources.all`, `resources.worker`, captured `output_paths`, and the extracted answer.
-A `ScriptGrader`'s collect commands run as root on the task machine, then its artifacts are copied from the task machine.
+The placement's collect commands run as root on the task machine, then its artifacts are copied from the task machine.
 Collect commands and artifacts require a task machine.
+
+When the grader has an `AgentMachine` placement, the engine grades in the task machine after the harness returns,
+as Harbor's shared verifier does. As root, it empties `/logs/verifier` and installs the verifier resources under
+`/tests`, the verifyit specification, the conversation and the extracted answer. The grader then runs with the task
+machine's default user and network policy, and reads every file and change the agent left, not only `output_paths`.
+Resources the harness pushed for cleanup, such as tool sessions and the agent itself, close before grading;
+those pushed with `push_after_grading`, such as the agent's terminal, close after it.
 Artifacts specify a source, target, kind, exclusions, and missing-file policy.
 Directory exclusions use `tar --exclude` on the task machine.
 Artifact inspection and archive creation use the task machine's default command user.
@@ -442,23 +587,28 @@ Archive command failures, archive timeouts, and provider or host I/O failures re
 
 `RolloutEngine(machine_factories, harnesses, observer=observer)` reports progress while an attempt runs.
 The observer implements `async def on_event(self, event: RolloutEvent) -> None`.
-A `RolloutEvent` carries the attempt's `run_id`, the task's `task_id`, and a `payload`.
+A `RolloutEvent` carries the attempt's `run_id`, the task's `task_id`, its `index`, its `emitted_at`, and a
+`payload`. `index` is the event's position in the attempt, counted when the engine emits it, so a missing index
+is an event that the observer did not receive. The last events of an attempt can be lost without a gap, so the
+events are complete when `AttemptEnded` is among them and every lower index is present. `emitted_at` is the
+wall-clock time of the emit in seconds since the epoch, because delivery is later.
 `run_task(spec, model, run_id=...)` sets the run ID. Without one, each attempt gets a new random ID, so the events
-of repeated attempts of a task stay apart. `Rollout.run_id` returns the ID, so a caller can match a rollout with
-its events.
+of repeated attempts of a task stay apart. `(run_id, index)` identifies an event and `index` starts at 0 in each
+attempt, so a caller that sets the run ID must give each `run_task` call a new one, also when it retries the same
+task. `Rollout.run_id` returns the ID, so a caller can match a rollout with its events.
 Each payload is a frozen dataclass from `rolloutengine.models` whose `type` field is a `RolloutEventType`, so a payload serialized with `dataclasses.asdict` keeps its type.
 Durations are wall-clock seconds.
 
 | Payload | Emitted | Fields |
 | --- | --- | --- |
-| `AttemptStarted` | After validation, before machine acquisition | |
+| `AttemptStarted` | After validation, before machine acquisition | `harness`; `trace`, which tells whether the attempt's token counts are checked; and the `dataset` of the task's source |
 | `MachineReady` | After task-machine setup; not emitted without a task machine | `duration` |
 | `ConversationStarted` | When the session records the first request of a conversation: the model answered or failed, or the harness ended | the request's `messages` and `options`; `duration` from the start of the harness, or from the last model turn, to the request |
 | `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, assistant `message`, `stop_reason`, prompt and response token counts (as reported and unchecked under `TraceMode.MESSAGES`), `usage`, `ModelTurn.metadata`, `duration` |
 | `ToolCallCompleted` | By a harness, per tool call that returns an observation | `call_id`, `name`, `observation_bytes`, `done`, `duration` |
 | `TransitionCompleted` | When the session records what followed a turn: the harness's next request, a refusal at a limit, or the end of the harness | `turn_index`, `done`, `observations`; `duration` from the turn to the next request or the end |
 | `Graded` | After grading returns | `status`, `reward`, `error`, `failure`, `duration` of output capture and grading |
-| `AttemptEnded` | After cleanup, when `run_task()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` and its `error`; `duration` of the whole attempt |
+| `AttemptEnded` | After cleanup, when `run_task()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` and its `error`; `duration` of the whole attempt; `turns` and `total_tokens` |
 
 The engine's events carry the conversations: `ConversationStarted` the first request of each conversation,
 then for each turn `ModelTurnCompleted` the assistant message and `TransitionCompleted` the observations, so an
@@ -519,8 +669,8 @@ Final grading receives the conversation through the last response, without its o
 
 `RolloutInterrupted` retains the failed operation, served token evidence, and original exception cause.
 Its `rollout` field contains the retained record. Its `operation` field identifies the failed operation:
-`prepare` when the harness failed or returned before its first model turn, and `advance` after one. A limit that
-stops the attempt before its first turn is not a failure. `harness_rollout` raises
+`prepare` when the harness failed or returned before its first model turn, and `advance` after one. A limit, or a
+context rejection that the agent handles by returning, ends the attempt before its first turn without a failure. `harness_rollout` raises
 `RolloutInterrupted`. `run_task` raises its subclass `GradedRolloutInterrupted`, whose `grade` field contains the
 grade of the completed turns, or an unavailable grade when the attempt stopped before grading.
 Startup failures retain an empty record.
@@ -554,16 +704,17 @@ The engine grades by grader kind:
 
 | Grader | Grading |
 | --- | --- |
-| `VerifyitGrader` without an environment | `taskcompendium.grading.grade_answer` on the host, in a worker thread |
-| `VerifyitGrader` with an environment | `taskcompendium.runtime.grading.grade_in_sandbox` runs the verifyit command on the verifier machine |
+| `VerifyitGrader` without a placement | `taskcompendium.grading.grade_answer` on the host, in a worker thread |
+| `VerifyitGrader` with a `GraderMachine` placement | `taskcompendium.runtime.grading.grade_in_sandbox` runs the verifyit command on the verifier machine |
 | `VerifyitGrader` with a judge mode (`JudgeSpec`) | `taskcompendium.grading.grade_remote_judge_answer` on the host, in a worker thread, through the judge service |
-| `ScriptGrader` | `grade_in_sandbox` runs the grader command on the verifier machine |
+| `ScriptGrader` with a `GraderMachine` placement | `grade_in_sandbox` runs the grader command on the verifier machine |
+| `ScriptGrader` or `VerifyitGrader` with an `AgentMachine` placement | `taskcompendium.runtime.grading.grade_in_agent_machine` runs the grader on the task machine |
 | `NoGrader` | `GradeResult(Outcome.UNAVAILABLE, None, reason)` |
 
-A judge grades on the host even when its grader declares an environment, so it uses no verifier machine. It calls
+A judge grades on the host even when its grader declares a placement, so it uses no verifier machine. It calls
 the service of `TaskRolloutSpec.judge_connection`, or else of `VERIFYIT_JUDGE_BASE_URL` with the key in
-`VERIFYIT_JUDGE_API_KEY`. The judge model is `JudgeSpec.model`, or else `VERIFYIT_JUDGE_MODEL`. The judge reads only
-the conversation. Each judge request has `JudgeSpec.request_timeout`, 120 s by default, and for every rubric except
+`VERIFYIT_JUDGE_API_KEY`. The judge model is `JudgeSpec.model`, or else `VERIFYIT_JUDGE_MODEL`. The judge reads the
+conversation's answer, or for a `file` answer the captured file's text. Each judge request has `JudgeSpec.request_timeout`, 120 s by default, and for every rubric except
 labels the OpenAI client retries a failed request up to two times. The verifier deadline stops only the engine's
 wait: the judge call continues in its worker thread until it ends
 ([#10246](https://github.com/marin-community/marin/issues/10246)). `check` rejects a judge task with a verifier
@@ -576,10 +727,10 @@ The task's answer format extracts text, number, JSON, and final-action submissio
 A malformed submission receives `Outcome.SUBMISSION_FAILURE` with reward 0.
 File submissions use captured workspace files.
 The engine does not capture state, so `check` rejects a graded `state` task for every harness.
-A `VerifyitGrader` with an environment cannot grade a `native_action` answer.
+A `VerifyitGrader` with a placement cannot grade a `native_action` answer.
 
-A `ScriptGrader` declares a command, collect commands, artifacts, an answer path, a conversation path, and a reward source.
-The verifier machine receives the extracted answer at `answer_path`.
+A `ScriptGrader` declares a command, a placement, an answer path, a conversation path, and a reward source.
+The grading machine receives the extracted answer at `answer_path`.
 It receives the conversation as OpenAI-style chat-message JSON at `conversation_path`, by default `/tests/conversation.json`.
 The verifier deadline controls the full grading phase.
 
@@ -647,6 +798,9 @@ This includes a response that the server's tool parser reports as tool calls; vL
 `ChatModel` with a `context_window` also reports `length` for a `tool_calls` response whose prompt and completion tokens fill that window.
 The shell harness does not execute tool calls from a `length` response.
 
+SkyRL's model client replaces a lone surrogate in tool-call arguments with U+FFFD, because the tokenizer cannot
+encode a lone surrogate in the next turn. Response token IDs do not change.
+
 ## Trace modes
 
 `TaskRolloutSpec.trace` selects the evidence that the engine records.
@@ -676,6 +830,8 @@ the task holds the work. A task with `NoGrader` gets an unavailable grade. An `A
 `trace=TraceMode.MESSAGES`. Prompt options replace its `max_tokens` and its `extra_body` keys; `max_tokens=None`
 sends no output limit. Its `context_window`, when set, turns a `tool_calls` response that fills the window into a
 `length` stop. It sets `model`, `messages`, `stream`, and `n` itself. A response without `usage` is a model failure.
+A 400 response that reports an exceeded context length raises `ContextRejected`, so a harness that recovers from
+context rejections receives `ContextWindowExceeded`; other harnesses fail with the original `BadRequestError`.
 
 ```python
 engine = RolloutEngine({}, {"agent": ShellHarness(command_timeout=None, tools={"lookup/v1": lookup})})
@@ -727,6 +883,12 @@ uv run --package marin-rolloutengine --frozen --group test pytest lib/rollouteng
 ```
 
 CPU tests use ShellSim and model or HTTP fixtures. A live GPU run and a real container backend require separate validation.
+
+Agent harness tests replay recorded transcripts with `rolloutengine.test_support`. `ReplayEndpoint` answers each
+model request with the next recorded response, `ReplayMachine` answers each machine command with the next recorded
+result, and `replay_rollout` runs a harness against both. A test compares the requests and commands that the
+harness sent with the recorded ones. The Terminus-2, Pi and mini-swe-agent transcripts under
+`lib/rolloutengine/tests/fixtures/` record Harbor's agents; each file names its Harbor revision in `recorded_from`.
 
 The local curation-to-rollout check runs QUICK conversion, reloads TaskSpecs from Parquet,
 and grades scripted correct and incorrect answers in bubblewrap:

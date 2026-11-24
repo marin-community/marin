@@ -7,3 +7,12 @@ config:
     oa.dev: 169959d6aafcbfd77764b8efafa3a509
   marin-marina:applet_domains:
     - filer.marina.oa.dev
+  # Hosts served by the unauthenticated public reader. Each serves its bound app only while
+  # the app's mode is public; otherwise it returns 404.
+  marin-marina:public_applet_domains:
+    - atlas.oa.dev
+  # Marina user IDs (the `user` value from /api/marina/me) that may register named apps and
+  # bind applet hosts. An empty list disables host management through the API.
+  marin-marina:applet_operators:
+    - ben.feuer@openathena.ai
+    - romain.yon@openathena.ai

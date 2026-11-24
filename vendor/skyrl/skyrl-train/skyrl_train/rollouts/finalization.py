@@ -8,9 +8,6 @@ from skyrl_train.metric_names import (
     TIS_ALIGNMENT_ALERT_METRIC,
     TIS_ALIGNMENT_FAIL_COUNT_METRIC,
     TIS_EXACT_MATCH_FRACTION_METRIC,
-    TIS_LCS_FALLBACK_ALERT_METRIC,
-    TIS_LCS_FALLBACK_FRACTION_METRIC,
-    TIS_LCS_FALLBACK_MESSAGES_METRIC,
     TIS_UNALIGNED_FRACTION_METRIC,
 )
 from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
@@ -125,11 +122,8 @@ def add_alignment_metrics(output: TrajectoryBatch) -> None:
         {
             TIS_ALIGNED_TOKENS_METRIC: float(aligned_tokens),
             TIS_EXACT_MATCH_FRACTION_METRIC: 1.0 if aligned_tokens else 0.0,
-            TIS_LCS_FALLBACK_FRACTION_METRIC: 0.0,
             TIS_UNALIGNED_FRACTION_METRIC: 0.0,
             TIS_ALIGNMENT_FAIL_COUNT_METRIC: 0.0,
-            TIS_LCS_FALLBACK_MESSAGES_METRIC: 0.0,
-            TIS_LCS_FALLBACK_ALERT_METRIC: 0.0,
             TIS_ALIGNMENT_ALERT_METRIC: 0.0,
         }
     )

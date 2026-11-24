@@ -135,13 +135,13 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin \
 
 `--selection RECIPE.json` appends a terminal `ArtifactStep` to a FULL campaign.
 The implementation is
-[`inventory.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/inventory.py).
+[`selection.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/selection.py).
 It depends on the recipe's admitted source artifacts and a list of pinned heldout
 inputs. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
-For the current task-to-training recipe, see the [quick RL loop](../recipes/quick-rl-loop.md).
+For the current task-to-training recipe, see the [Snowball RL experiments](../recipes/rl-experiments.md).
 
 The recipe contains an explicit source allowlist and family quotas. For example,
 this small recipe selects 100 calendar tasks from two admitted sources:
@@ -203,10 +203,13 @@ These files have a `task_spec` JSON column. `summary.json` records the recipe,
 source paths, eligible/overlap/duplicate/selected counts, evaluation IDs and
 grader-kind counts for each file.
 
-`task_manifest.parquet` records every heldout task's `task_id`, `family`,
-`aaii_category`, `agentic` flag, `grader_kind` and `upstream_pass_rate` (NVIDIA's
-eight-sample rate where available). The evaluation sample is a subset of this
-complete heldout manifest. Historical Nemotron panel tasks use the package
+Every training row carries `family`, `aai_category`, `source`, `topic` and
+`difficulty` beside `task_spec`; unknown tags are `untagged`.
+`task_manifest.parquet` uses the shared `finestore.rl.strata.SelectionTaskRow`
+schema for the complete training and heldout pool: task digest, strata, active
+membership, grader metadata and measured difficulty. `summary.json` stores the
+versioned `SelectionDefinition` with its pool and active files. Historical
+upstream pass rates remain measured difficulty values; they are not inferred tags. Historical Nemotron panel tasks use the package
 environment from an admitted task in their matching training component; their
 private grader resources and command stay attached to each task. The historical
 structural heldout tasks use the shared closure converter. SkyRL chooses rollout
@@ -261,8 +264,14 @@ To change the panel:
    greedy evaluation must score at least 99% of tasks with zero grading errors.
 
 The artifact contains `full_validation.parquet` (all tasks), `validation.parquet`
-(fast subset), `task_manifest.parquet` (family, category, grader kind, source,
-license and difficulty per task) and `summary.json`.
+(active subset), `task_manifest.parquet` (the same typed strata and task digests,
+reference-model measurements, membership and retirement reason) and `summary.json`.
+Each version retains its parent's complete TaskSpec pool and adds new tasks;
+retirement changes active membership. The definition records its parent and the
+explicit difficulty bands. Active sampling uses proportional joint source, topic
+and difficulty cells inside the fixed family quotas, with largest remainders and
+seeded ties. Tasks measured as saturated for every declared reference model are
+retired; missing reference evidence does not establish saturation.
 
 ### Rebuild a Snowball training selection
 
@@ -280,6 +289,25 @@ any recipe change takes a new version.
 
 Run the driver with an admitted `--corpus`, `--selection RECIPE.json` and
 `--run`. Use a separate `--artifact-root` for an independent rebuild.
+
+### Train on a Snowball selection
+
+To change the Snowball training tasks, copy `recipes/snowball-100k.json` under a new
+name or version and run a FULL [campaign](#run-a-campaign) with `--selection` set to
+that recipe. Repeat `--source` for each recipe source, using its invocation name from
+[`runnable_sources()`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py):
+recipe ID `MarinSkyRL:eurus2_code` is `--source eurus2_code`. To select again from a
+finished campaign, pass its `corpus.json` with `--corpus` as shown in
+[Final task selection](#final-task-selection). Check the source and family counts in
+`summary.json` before training.
+
+Train with `rl --preset data-short --tasks NAME@VERSION`, then data-medium
+(see [Snowball RL experiments](../recipes/rl-experiments.md#change-one-input)). The launcher
+reads `rl-data/task-selection/NAME/VERSION` under `s3://marin-us-east-02a/marin`, the
+driver's default `--artifact-root`. It refuses selections that contain AI-judged tasks,
+and data presets require the default selection's heldout input. Snowball presets do not
+evaluate the selection's `validation.parquet`; held-out comparisons use the
+[EvalLite](../recipes/rl-experiments.md#tasks-and-evaluation).
 
 ## Dataset-owned invocation
 
@@ -542,11 +570,14 @@ identity; lock-backed worker environments retain their existing identities.
 
 A task's grader is one of three kinds:
 
-- `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
-  in process; with `environment=required_grader_environment(context)` it grades
-  in a fresh machine of the grader's environment. A `judge` grades on the host,
-  through its judge service, also when it declares an environment.
-- `ScriptGrader` runs a command in a fresh machine of the grader's environment. Archived
+- `VerifyitGrader` names a stock verifyit mode. Without a placement it grades
+  in process; with
+  `placement=GraderMachine(environment=required_grader_environment(context))` it
+  grades in a fresh machine of the grader's environment. A `judge` grades on the
+  host, through its judge service, also when it declares a placement.
+- `ScriptGrader` runs a command in the machine its placement selects: a fresh
+  machine of the grader's environment (`GraderMachine`), or the agent's machine
+  after the agent finishes (`AgentMachine`). Archived
   TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
   to a file (`FileReward`).
 - `NoGrader` records a source evaluator this repository cannot run, with the
@@ -873,8 +904,9 @@ self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
 placed file at its declared path, runs graders with the declared `env`, and
 concurrent graders on one host build it once.
 Image grading requires `--image-backend gvisor` or `--image-backend daytona`.
-The gVisor launcher uses the enclosing Iris job's controller, or `--controller-url`
-outside a job, to create sandbox jobs. Daytona creates remote sandboxes through its API.
+The gvisor backend (Iris SANDBOX jobs) uses the enclosing Iris job's controller, or
+`--controller-url` outside a job, to create sandbox jobs. Daytona creates remote
+sandboxes through its API.
 Neither path requires a Docker daemon in the Zephyr worker. Without an image backend,
 controls can still use package locks through Local or explicit simulator requirements
 through ShellSim. Programmatic callers pass grading machines through `RecipeSettings.machines`.

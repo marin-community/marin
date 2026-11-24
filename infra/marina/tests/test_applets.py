@@ -20,7 +20,7 @@ from click.testing import CliRunner
 from marina.applets import AppletManifest, AppletNotFound, AppletStore, applet_role, package_applet, read_applet_package
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
-from marina.db import UrlDatabase, grant_read
+from marina.db import UrlDatabase, grant_read_on_connection
 from marina.releases import require_current_main
 from marina.server import MarinaConfig, MarinaSurface, create_app
 from marina.table_load import read_table, table_statements
@@ -559,7 +559,7 @@ def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, d
         connection.execute(text("CREATE SCHEMA shared_read"))
         connection.execute(text("CREATE TABLE shared_read.values (value INTEGER)"))
         connection.execute(text("INSERT INTO shared_read.values VALUES (17)"))
-    grant_read(store.engine, "shared_read", APPLET_READER_ROLE)
+        grant_read_on_connection(connection, "shared_read", APPLET_READER_ROLE)
     shared = client.post(
         f"/a/{applet_id}/query",
         json={"sql": "SELECT value FROM shared_read.values", "parameters": {}},
@@ -762,6 +762,28 @@ def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database
     assert updated.status_code == 201
     assert updated.json()["mode"] == "public"
 
+    for suffix in ("", "app.js", "api/problems", "api/identity"):
+        for method in ("GET", "HEAD"):
+            assert public_client.request(method, f"{revision_path}{suffix}").status_code == 404
+    assert public_client.get(f"/a/{applet_id}/v/2/").status_code == 200
+    assert public_client.get(f"/a/{applet_id}/v/2/api/problems").status_code == 200
+    assert public_client.get(f"/a/{applet_id}/api/problems").status_code == 200
+    assert publisher.get(revision_path).status_code == 200
+    assert publisher.get(f"{revision_path}api/problems").status_code == 200
+
+    # The selected revision, rather than the greatest published number, controls
+    # public access after a rollback too.
+    assert (
+        publisher.put(f"/api/marina/applets/{applet_id}/current", json={"version": 1, "base_version": 2}).status_code
+        == 200
+    )
+    assert public_client.get(revision_path).status_code == 200
+    assert public_client.get(f"/a/{applet_id}/v/2/api/problems").status_code == 404
+    assert (
+        publisher.put(f"/api/marina/applets/{applet_id}/current", json={"version": 2, "base_version": 1}).status_code
+        == 200
+    )
+
     revoked = publisher.put(
         f"/api/marina/applets/{applet_id}/mode",
         json={"mode": "private", "base_version": 2},
@@ -816,6 +838,63 @@ def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, da
     assert publisher.delete(f"/api/marina/applets/{applet_id}").status_code == 204
     assert named.get("/").status_code == 404
     assert named.get("/v/1/").status_code == 404
+
+
+def test_public_named_host_serves_its_app_only_while_the_app_is_public(tmp_path: Path, database_url: str) -> None:
+    publisher, store = applet_client_and_store(tmp_path, database_url)
+    published = publisher.post("/api/marina/applets", content=package_applet(DEMO_APPLET)).json()
+    applet_id = published["id"]
+    store.bind_host("atlas.example", uuid.UUID(applet_id))
+    public_config = MarinaConfig(
+        data_root=str(tmp_path / "data"),
+        iap_audience=None,
+        database=store.database,
+        public_applet_origin="https://public.applets.example",
+        surface=MarinaSurface.PUBLIC_APPLETS,
+        applet_domains=frozenset({"atlas.example", "unbound.example"}),
+    )
+    reader = TestClient(create_app(public_config), base_url="https://atlas.example", client=("10.0.0.7", 40000))
+    shared_path = f"https://public.applets.example/a/{applet_id}/v/1/"
+    named_paths = ("/", "/v/1/", "/v/1/app.js", "/v/1/api/problems")
+
+    assert published["mode"] == "private"
+    for path in named_paths:
+        assert reader.get(path).status_code == 404
+
+    publisher.put(f"/api/marina/applets/{applet_id}/mode", json={"mode": "public", "base_version": 1})
+    root = reader.get("/", follow_redirects=False)
+    assert root.status_code == 307
+    assert root.headers["location"] == "/v/1/"
+    for named, shared in (("/v/1/", shared_path), ("/v/1/app.js", f"{shared_path}app.js")):
+        named_response = reader.get(named)
+        shared_response = reader.get(shared)
+        assert named_response.status_code == 200
+        assert named_response.content == shared_response.content
+        assert named_response.headers["cache-control"] == shared_response.headers["cache-control"]
+        assert named_response.headers["content-security-policy"] == shared_response.headers["content-security-policy"]
+    assert reader.get("/v/1/api/identity").json() == {"user": None}
+    assert reader.post("/v/1/query", json={"sql": "SELECT 1"}).status_code == 404
+    assert reader.post("/v/1/api/problems").status_code == 404
+    assert reader.get(f"/a/{applet_id}/v/1/").status_code == 404
+    assert reader.get("https://unbound.example/").status_code == 404
+    assert reader.get(f"https://unbound.example/a/{applet_id}/v/1/").status_code == 404
+
+    assert (
+        publisher.post(
+            f"/api/marina/applets/{applet_id}", params={"base_version": 1}, content=package_applet(DEMO_APPLET)
+        ).status_code
+        == 201
+    )
+    for suffix in ("", "app.js", "api/problems"):
+        assert reader.get(f"/v/1/{suffix}").status_code == 404
+        assert reader.get(f"/v/2/{suffix}").status_code == 200
+    assert reader.get("/", follow_redirects=False).headers["location"] == "/v/2/"
+
+    publisher.put(f"/api/marina/applets/{applet_id}/mode", json={"mode": "private", "base_version": 2})
+    for path in named_paths:
+        assert reader.get(path).status_code == 404
+    # The public origin itself also stops serving the app; the binding alone grants nothing.
+    assert reader.get(shared_path).status_code == 404
 
 
 @pytest.mark.parametrize(

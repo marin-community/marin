@@ -30,7 +30,9 @@ from marin.inference.types import InferenceBackendState
 
 POLICY = "marin-10197"
 MIN_SCORED_FRACTION = 0.9
-POLICY_JUDGED_PROTOCOLS = frozenset({("financebench", "evalchemy"), ("olympiadbench", "evalchemy")})
+POLICY_JUDGED_PROTOCOLS = frozenset(
+    {("financebench", "evalchemy"), ("olympiadbench", "evalchemy"), ("bixbench", "pi"), ("bixbench", "pi-32k")}
+)
 
 
 @dataclass(frozen=True)

@@ -14,7 +14,6 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from evalrecords.lm_eval_samples import (
-    evalchemy_result_committed,
     export_lm_eval_samples,
     preserved_sample_sources,
     rebuild_lm_eval_samples,
@@ -241,7 +240,6 @@ def test_native_summary_reads_direct_evalchemy_result_table(tmp_path):
 
     summary = summarize_native_eval_samples(root, tasks=(EvalTaskConfig("gsm8k", 0),))
 
-    assert evalchemy_result_committed(root, "gsm8k_0shot")
     assert summary.samples == 1
     assert summary.coverage == {
         "gsm8k_0shot": TaskCoverage(
@@ -1355,7 +1353,8 @@ def test_migration_cli_reads_archived_legacy_shards(tmp_path):
     assert result.exit_code == 0, result.output
     assert archive_sample_count(results) == 1
     assert legacy_file.exists()
-    summary = json.loads(result.output.splitlines()[-1])
+    # Log records go to stderr, which CliRunner interleaves into `output`; the summary is the last stdout line.
+    summary = json.loads(result.stdout.splitlines()[-1])
     assert summary["migrated_runs"] == 1
     assert summary["skipped_runs"] == 1
 

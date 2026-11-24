@@ -25,6 +25,7 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 | `use-echo` | Searching prior work and maintaining shared knowledge or incident records | Repository procedures belong in `OPS.md` or `docs/`; search alone does not require a write |
 | `echo-log` | Reading and appending the shared agent work log, one entry per milestone | Search, wiki notes, and incident records belong to `use-echo`; an entry links evidence and does not replace the PR, issue, or report |
 | `research-engineering` | Iterative design and data exploration, experiments, runnable research branches, notebooks, and promotion into Marin | Background research uses experiment records; domain skills own execution and `manage-pr` owns contribution PRs |
+| `press-office` | Editorial triage of landed logbook index records and closed experiment issues for Research Notes | Research engineering owns the evidence record. Publication is a separate editorial decision. |
 | `curate-experiments` | Report-index curation and explicitly requested archive tags and issue breadcrumbs | Archival does not authorize deleting experiment files; scheduled issue summaries use an assigned procedure |
 
 ## Operations and measurement
@@ -56,10 +57,11 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 |---|---|---|
 | `refresh-fork` | External fork refresh and validated adoption | Fork-specific references govern source promotion and release |
 | `add-dataset` | Dataset registration with verified schema and content mapping | Uses existing dataset builders; general graph design belongs to `write-pipeline` |
-| `add-eval` | Curated non-agentic benchmarks: source pins, prompts, scorers, protocols, and validation through a reference comparison and smoke run | Harbor agentic benchmarks use Harbor configs; judge audits belong to `audit-grader` |
+| `add-eval` | Curated non-agentic benchmarks, including source pins, prompts, scorers, protocols, reference comparisons, and smoke runs | Follow the [evaluation task reference](../references/evaluation-tasks.md) for curated agent benchmarks. Judge audits belong to `audit-grader`. |
 | `add-pallas-kernel` | Kernel implementation, reference parity, and requested tuning | Uses profiling evidence; does not own production deployment |
 | `change-grug` | Grug variants and promotion into the base template | Launch-only operation and hero cutovers have separate workflows |
 | `launch-rl` | RL artifact recipe, role geometry, validation, and submission | Iris owns execution mechanics; hero management owns production lifecycle |
+| `run-rl` | Choosing, running, and reading RL runner presets and their gate verdicts | New RL launch files and role geometry belong to `launch-rl`; Iris owns job operations |
 | `write-pipeline` | General artifact graph construction and work/workflow placement | Dataset registration and RL recipes use their domain skills |
 | `upload-hf-model` | Model-weight publication with required model-card and license content | Dataset uploads and Hub downloads are outside its scope |
 

@@ -467,8 +467,11 @@ def _moe_mlp_local_sonic(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    combine_in_fp32: bool = False,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     """Local raw-Sonic path: JAX grouped GEMMs plus Sonic Triton gather/combine."""
+    if combine_in_fp32:
+        raise ValueError("combine_in_fp32 is unsupported by sonic")
     token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
         _prepare_moe_dispatch_indices_with_assignment_ids(
             selected_experts,

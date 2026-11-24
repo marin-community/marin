@@ -30,10 +30,11 @@ from taskcompendium.convert.answers import (
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
-    DockerBuildContext,
     EnvironmentRequirements,
+    GraderMachine,
     NoGrader,
     ResourceGroups,
+    ScriptGrader,
     Source,
     TaskSpec,
 )
@@ -160,24 +161,6 @@ def test_graders_without_offline_grading_have_unsupported_controls():
     assert [check.status for check in report.checks] == [CheckStatus.UNSUPPORTED]
 
 
-@pytest.mark.parametrize("role", ["actor", "grader"])
-def test_controls_reject_unresolved_build_before_machine_selection_or_oracle_fallback(role):
-    task = file_task()
-    build = EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS,
-        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),)),
-    )
-    if role == "actor":
-        task = task.model_copy(update={"environment_requirements": build})
-    else:
-        task = task.model_copy(update={"grader": task.grader.model_copy(update={"environment": build})})
-    # No machine provider is supplied: unresolved recipes must be rejected before
-    # providers are required, and must never use the grader image for an oracle.
-    suite = control_suite(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), None)
-    with pytest.raises(UnsupportedMachineSpec):
-        suite.run(task)
-
-
 @pytest.mark.parametrize(
     "task,golden",
     [
@@ -215,6 +198,15 @@ def test_empty_control_runs_the_script_grader_on_an_empty_answer_file(script, st
     # The second grader rewards only an empty /app/answer.txt, so its defect shows the grader ran on one.
     images = RecordingImages()
     task = script_graded(answer_task(), script)
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader)
+    assert isinstance(grader.placement, GraderMachine)
+    environment = grader.placement.environment.model_copy(
+        update={"setup_commands": ("test -f /app/answer.txt && test ! -s /app/answer.txt",)}
+    )
+    task = task.model_copy(
+        update={"grader": grader.model_copy(update={"placement": GraderMachine(environment=environment)})}
+    )
     assert checks(task, Controls(), FixtureGradingMachines(images)) == {"empty": status}
     assert [machine.image for machine in images.created] == [GRADER_IMAGE]
 
@@ -295,8 +287,10 @@ def test_local_oracle_and_grader_setup_run_without_changing_host_user(local_mach
             ),
             "grader": task.grader.model_copy(
                 update={
-                    "environment": environment.model_copy(
-                        update={"working_directory": "/app", "setup_commands": ("test -f /data/expected.txt",)}
+                    "placement": GraderMachine(
+                        environment=environment.model_copy(
+                            update={"working_directory": "/app", "setup_commands": ("test -f /data/expected.txt",)}
+                        )
                     )
                 }
             ),

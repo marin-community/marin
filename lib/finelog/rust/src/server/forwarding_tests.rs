@@ -1647,6 +1647,64 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_declared_cluster_column_forwards_own_and_unnamed_rows() {
+    // The Iris controller's iris.controller_db__* rows declare `cluster`, so registration
+    // keeps it as the origin column. A row named for the forwarding cluster, or left
+    // empty, reaches the hub under that name; a row naming another cluster is taken as
+    // already relayed and passed by for good.
+    let fx = Fixture::new("declared_cluster").await;
+    let namespace = "iris.controller_db__jobs";
+    let schema = Schema::new(
+        vec![
+            Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, false),
+            Column::new("root_job_id", ColumnType::COLUMN_TYPE_STRING, false),
+        ],
+        "root_job_id",
+    );
+    fx.source
+        .register_table(namespace, schema, StoragePolicy::default())
+        .unwrap();
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("cluster", DataType::Utf8, false),
+            Field::new("root_job_id", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec!["", "other-cluster", SOURCE_CLUSTER])),
+            Arc::new(StringArray::from(vec!["/u/empty", "/u/other", "/u/own"])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
+    fx.source
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    fx.forward_from_start(namespace).await;
+    fx.drain(PRIV_A, namespace).await;
+
+    assert_eq!(
+        hub_column(fx.target_store(), namespace, "root_job_id").await,
+        vec![Some("/u/empty".to_string()), Some("/u/own".to_string())],
+        "the row naming another cluster never reaches the hub"
+    );
+    assert_eq!(
+        hub_column(fx.target_store(), namespace, "cluster").await,
+        vec![
+            Some(SOURCE_CLUSTER.to_string()),
+            Some(SOURCE_CLUSTER.to_string())
+        ],
+    );
+    assert_eq!(
+        fx.cursor(namespace),
+        Some(fx.tip(namespace)),
+        "the cursor moves past the skipped row"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn schema_evolution_is_registered_before_forwarding_new_rows() {
     let fx = Fixture::new("schema-evolution").await;
     write_id_rows(&fx.source, "events", 1).await;
@@ -2165,5 +2223,68 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
         .await,
         250,
         "a hub migration under live forwarding must not duplicate or drop rows"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sender_without_catalog_bounds_forwards_to_a_hub_that_has_them() {
+    // A staged deploy upgrades servers one at a time, so a sender's schema may lack
+    // a `catalog_bounds` flag the hub already has. Its registration must neither
+    // conflict nor turn the hub's flag off.
+    let fx = Fixture::new("catalog-bounds-skew").await;
+    let namespace = "iris.bounded";
+    let schema = |catalog_bounds: bool| {
+        let ts = Column::new("ts", ColumnType::COLUMN_TYPE_INT64, false);
+        let ts = if catalog_bounds {
+            ts.with_catalog_bounds()
+        } else {
+            ts
+        };
+        Schema::new(
+            vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false), ts],
+            "id",
+        )
+    };
+    fx.target_store()
+        .register_table(namespace, schema(true), StoragePolicy::default())
+        .unwrap();
+    fx.source
+        .register_table(namespace, schema(false), StoragePolicy::default())
+        .unwrap();
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&arrow_schema),
+        vec![
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            Arc::new(arrow::array::Int64Array::from(vec![10, 20, 30])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
+    fx.source
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    fx.forward_from_start(namespace).await;
+    fx.drain(PRIV_A, namespace).await;
+
+    assert_eq!(
+        scalar_i64(fx.target_store(), "SELECT count(*) FROM \"iris.bounded\"").await,
+        3
+    );
+    assert!(
+        fx.target_store()
+            .get_table_schema(namespace)
+            .unwrap()
+            .column("ts")
+            .unwrap()
+            .index
+            .catalog_bounds,
+        "the sender's registration must not turn the hub's catalog bounds off"
     );
 }

@@ -66,6 +66,7 @@ dependencies = [
 [project.optional-dependencies]
 cpu = [
     "accelerate>=1.14,<2",
+    "harbor",
     "peft>=0.19",
     "tensordict",
     "torch==2.11.0",
@@ -183,6 +184,9 @@ no-build-isolation-package = [
     "transformer-engine-torch",
 ]
 override-dependencies = [
+    # Torch pins older NCCL builds; 2.32.6 fixes NVLSTree buffer corruption.
+    # https://github.com/NVIDIA/nccl/issues/2625
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
     # Use Rigging from this checkout; its static 0.2.0 label is below
     # Taskcompendium's and Finestore's published version floors.
     "marin-rigging[secrets,prometheus]",

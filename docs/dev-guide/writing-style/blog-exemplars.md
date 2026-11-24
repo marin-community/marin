@@ -1,0 +1,25 @@
+# Marin blog exemplars
+
+Choose a post by the job the article needs to do for the reader. The list
+covers research and engineering posts in the Marin archive and three public
+Open Athena articles checked into the Marin site source. It excludes position
+pieces and announcements. The Open Athena links are the public originals for
+the three newer posts.
+
+| Post | What it covers | What to borrow |
+| --- | --- | --- |
+| [Architecture Decisions for Marin 535B-A23B](https://openathena.ai/blog/marin-535b-architecture/) | Architecture, hardware and deadline constraints, sizing, scaling ladder, and component decisions. | **Architecture decision record.** Show the chosen design first, then connect each consequential choice to a constraint, experiment, or judgment call. |
+| [Scaling Marin’s Open LLM Pre-Training](https://openathena.ai/blog/scaling-marins-open-llm-pre-training/) | An edited meetup talk that uses the live loss curve to connect Delphi, Iris, expert parallelism, and data curation. | **Cross-project technical overview.** Use one running example to orient readers and show how several subsystems contribute. |
+| [Post-Training in the Open](https://openathena.ai/blog/post-training-in-the-open/) | Snowball’s release, checkpoint lineage, and evaluations against its peers. | **Model milestone or checkpoint selection.** Draw the lineage and explain the comparisons behind the release decision. |
+| [Expert parallelism at hero scale](https://marin.community/blog/2026/09/29/expert-parallelism/) | FSDP’s limits, data movement under expert parallelism, and the throughput and assignment-drop tradeoffs of successive communication kernels. | **Parallelism or kernel implementation.** Diagram what moves where, explain the bottleneck, and chart the tradeoff across alternatives. |
+| [Curating 25 Trillion Tokens for LLM Pretraining](https://marin.community/blog/2026/09/11/marin-data-pipeline-overview/) | Datakit’s path from raw sources through deduplication, decontamination, topic and quality buckets, and mixture experiments. | **Pipeline walkthrough.** Follow the data across stages and show how its volume or composition changes. |
+| [MarinDNA and Evo 2 on variant effect prediction](https://marin.community/blog/2026/08/03/marin-dna/) | Cross-domain model research that explains a specialized evaluation and bounds the comparison to the benchmark. | **Research for a neighboring audience.** Explain the unfamiliar evaluation before showing the comparison, and keep the headline tied to the measured task. |
+| [Cluster Scheduling with Iris](https://marin.community/blog/2026/06/25/cluster-scheduling-with-iris/) | Heterogeneous compute, Ray’s limits for Marin, Iris’s scheduling design, migration through Fray, and TPU utilization after rollout. | **Infrastructure replacement or rollout.** Start with the workload constraint, show the interface and migration path, then show the fleet metric that changed. |
+| [Improving our LLM Pretraining Efficiency](https://marin.community/blog/2026/06/03/pretraining-speedup/) | The dense-to-MoE baseline transition, individual ablations, and the combined recipe. | **Efficiency or ablation report.** Define theoretical and realized speedups, identify the baseline for each change, and plot the combined result separately. |
+| [Async RL from Scratch on TPUs](https://marin.community/blog/2026/05/21/async-rl-from-scratch/) | A synchronous baseline, asynchronous actor and trainer execution, and the debugging and experiments that followed. | **Concurrency redesign or debugging narrative.** Show the before-and-after execution schedule and explain how the team distinguished plausible explanations. |
+| [Scaling Laws That Extrapolate 300× Past the Fit](https://marin.community/blog/2026/05/11/delphi/) | Delphi’s scaling recipe, a failed first attempt, and forecasts tested on held-out runs beyond the fit. | **Scaling law or forecast.** Mark fit and held-out points clearly, show where the first model failed, and explain what changed before extrapolating again. |
+| [Mixture of Experts Quantile Balancing](https://marin.community/blog/2026/04/10/quantile-balancing/) | Expert underuse, earlier balancing methods, and how quantile balancing changes routing and training curves. | **One-mechanism explainer.** Give readers a small example of the failure mode before showing the method and its measured behavior. |
+| [Marin 32B Retrospective](https://marin.community/blog/2025/10/28/marin-32b-retro/) | The 8B recipe’s transfer to 32B, a loss-instability episode, recovery attempts, QK-Norm, and midtraining. | **Training incident and recovery.** Use the timeline to show what each attempted fix established and why the eventual change was made. |
+| [Marin 8B Retrospective](https://marin.community/blog/2025/05/19/marin-8b-retro/) | Run history with data, optimizer, and schedule changes, cooldowns, and final evaluations. | **End-to-end run retrospective.** Give readers a phase map and explain the decisions that changed the trajectory. |
+
+[Marin blog archive](https://marin.community/blog/) · [Site source](https://github.com/marin-community/marin-community.github.io/tree/main/_posts)

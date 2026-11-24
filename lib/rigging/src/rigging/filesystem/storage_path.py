@@ -134,14 +134,18 @@ class StoragePath:
             raise ValueError(f"cannot join non-relative path {relative!r} onto {self}")
         return dataclasses.replace(self, segments=self.segments + _key_segments(relative))
 
+    def is_relative_to(self, base: "StoragePath") -> bool:
+        """Return whether this path is under ``base``, including ``base`` itself."""
+        same_root = (self.scheme, self.netloc, self.rooted) == (base.scheme, base.netloc, base.rooted)
+        return same_root and self.segments[: len(base.segments)] == base.segments
+
     def relative_to(self, base: "StoragePath") -> str:
         """The ``/``-joined segments of this path under ``base``.
 
         Structural containment — compares parsed segments, not string prefixes, so a
         doubled separator on either side cannot fork the answer.
         """
-        same_root = (self.scheme, self.netloc, self.rooted) == (base.scheme, base.netloc, base.rooted)
-        if not same_root or self.segments[: len(base.segments)] != base.segments:
+        if not self.is_relative_to(base):
             raise ValueError(f"{self} is not under {base}")
         return "/".join(self.segments[len(base.segments) :])
 

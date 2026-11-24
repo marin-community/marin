@@ -23,6 +23,8 @@ import contextlib
 import json
 import math
 import os
+import time
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
@@ -31,11 +33,20 @@ from loguru import logger
 from shellbox.backends.daytona.machine import DaytonaImageBuild
 from omegaconf import DictConfig, OmegaConf
 
+from skyrl_train.evaluation_profiles import (
+    DEFAULT_EVALUATION_STEPS,
+    validate_evaluation_schedule,
+    EvaluationProfile,
+    evaluation_profile_due,
+    resolve_evaluation_profiles,
+    additional_evaluation_metrics,
+)
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
 from skyrl_train.inline_harbor_client import collect_harbor
+from skyrl_train.telemetry import TelemetryConfig, iris_resources
 from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.inference_engines.vllm.stats import VLLM_NUM_ENGINES_METRIC, IntervalReadMode
@@ -187,12 +198,6 @@ class DistillationTokenBudgetCallback(TrainerCallback):
 
 
 @dataclass(frozen=True)
-class EvaluationSamplingConfig:
-    sampling_params: Dict[str, Any] | None = None
-    n_samples_per_prompt: int | None = None
-
-
-@dataclass(frozen=True)
 class EvaluationStopConfig:
     minimum: float | None = None
     min_improvement: float | None = None
@@ -293,9 +298,26 @@ class BestCheckpointCallback(TrainerCallback):
             "save_after_fraction": self.save_after_fraction,
         }
         io.makedirs(root, exist_ok=True)
-        io.write_bytes_atomic(best_path, json.dumps(payload).encode())
+        encoded = json.dumps(payload).encode()
+        io.write_bytes_atomic(best_path, encoded)
+        export_root = trainer.cfg.trainer.export_path
+        io.makedirs(export_root, exist_ok=True)
+        io.write_bytes_atomic(join_resource_path(export_root, BEST_CHECKPOINT_FILENAME), encoded)
         self.best_score = score
         return control
+
+
+def _harbor_telemetry_config() -> dict[str, str] | None:
+    config = TelemetryConfig.from_environment()
+    job_id = iris_resources().get("job_id")
+    if not (config.endpoint and config.run_id and config.execution_uid and job_id):
+        return None
+    return {
+        "endpoint": config.endpoint,
+        "root_run_uid": config.run_id,
+        "execution_uid": config.execution_uid,
+        "serving_job_id": job_id,
+    }
 
 
 @register_callback("harbor_evaluation")
@@ -304,45 +326,72 @@ class HarborEvaluationCallback(TrainerCallback):
 
     error_behavior = CallbackErrorBehavior.RAISE
 
-    def __init__(self, *, cohorts: list[dict], timeout: float, minimum_coverage: float, daytona_api_key_env: str):
+    def __init__(
+        self,
+        *,
+        cohorts: list[dict],
+        timeout: float,
+        minimum_coverage: float,
+        daytona_api_key_env: str,
+        minimum_native_coverage: float,
+    ):
         self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
-        # Per-sandbox declarative builds are limited to standalone evals for now; reject them
-        # before the trainer acquires resources.
         for cohort in self.cohorts:
             kwargs = cohort["job"].get("environment", {}).get("kwargs", {})
-            if kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT) != DaytonaImageBuild.SNAPSHOT:
-                raise ValueError(f"Harbor validation cohort {cohort['name']} requires Daytona snapshot image builds")
+            # Reject unknown image build modes before the trainer allocates GPUs.
+            DaytonaImageBuild(kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT))
         self.timeout = timeout
         self.minimum_coverage = minimum_coverage
+        self.minimum_native_coverage = minimum_native_coverage
         self.daytona_api_key_env = daytona_api_key_env
 
-    async def collect_evaluation(self, state, *, trainer, pool):
-        client = trainer.inference_engine_client
-        if not client.enable_http_endpoint:
-            raise ValueError("Harbor validation requires generator.enable_http_endpoint")
+    def _evaluation_cohorts(
+        self, step: int, export_path: str, *, model_name: str, api_base: str
+    ) -> list[dict]:
         cohorts = deepcopy(self.cohorts)
         for cohort in cohorts:
             job = cohort["job"]
-            job["job_name"] = f"step-{state.global_step}-{cohort['name']}"
-            job["jobs_dir"] = join_resource_path(trainer.cfg.trainer.export_path, "inline_harbor")
+            job["job_name"] = f"step-{step}-{cohort['name']}"
+            job["jobs_dir"] = join_resource_path(export_path, "inline_harbor")
             for agent in job["agents"]:
-                agent["model_name"] = f"openai/{trainer.cfg.trainer.export_path}/step-{state.global_step}"
-                agent["model_alias"] = f"openai/{client.model_name}"
-                agent.setdefault("kwargs", {})["api_base"] = (
-                    f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1"
-                )
+                agent["model_name"] = f"openai/{export_path}/step-{step}"
+                agent["model_alias"] = f"openai/{model_name}"
+                agent.setdefault("kwargs", {})["api_base"] = api_base
+        return cohorts
+
+    async def collect_evaluation(self, state, *, trainer, pool):
+        started_at = time.perf_counter()
+        client = trainer.inference_engine_client
+        if not client.enable_http_endpoint:
+            raise ValueError("Harbor validation requires generator.enable_http_endpoint")
+        cohorts = self._evaluation_cohorts(
+            state.global_step,
+            trainer.cfg.trainer.export_path,
+            model_name=client.model_name,
+            api_base=f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1",
+        )
         environment = os.environ.copy()
         environment["DAYTONA_API_KEY"] = environment[self.daytona_api_key_env]
         environment["OPENAI_API_KEY"] = "unused-local-inference"
+        if telemetry := _harbor_telemetry_config():
+            for cohort in cohorts:
+                cohort["job"]["telemetry"] = telemetry
         async with asyncio.timeout(self.timeout):
             results = await collect_harbor(cohorts, pool, environment)
-        return {f"eval/harbor/{name}/{key}": value for name, result in results.items() for key, value in result.items()}
+        metrics = {
+            f"eval/harbor/{name}/{key}": value
+            for name, result in results.items()
+            for key, value in result.items()
+        }
+        metrics["eval/harbor/wall_seconds"] = time.perf_counter() - started_at
+        return metrics
 
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
         attempted = metrics["eval/all/num_attempted"]
         scored = metrics["eval/all/num_scored"]
         reward_sum = metrics["eval/all/avg_verifier_score"] * scored if scored else 0.0
-        metrics["eval/selection_eligible"] = 1.0
+        # The counts cover the primary evaluation until Harbor results are added below.
+        metrics["eval/selection_eligible"] = float(scored >= self.minimum_native_coverage * attempted)
         for cohort in self.cohorts:
             name = cohort["name"]
             prefix = f"eval/harbor/{name}/"
@@ -368,9 +417,13 @@ class EvaluationCallback(TrainerCallback):
 
     Args:
         eval_steps: Evaluate every N completed steps; non-positive values disable evaluation.
-        eval_on_train_end: Evaluate the final policy.
+        eval_on_train_end: Evaluate the final policy. A final profile also requests this evaluation.
         eval_before_train: Evaluate the initial policy.
-        additional_evaluations: Named sampling overrides passed to the trainer's evaluator.
+        additional_evaluations: Named sampling, sample count, dataset and schedule overrides.
+            The schedule is every_evaluation or final (the configured last update only).
+            A final profile at an off-periodic last update evaluates the primary dataset too.
+            Resuming at the last update reruns final evaluation. It requires a primary evaluation
+            dataset, and does not run after an early stop.
         metric_groups: Output metric names mapped to source metrics whose mean is reported.
         stop_when: Metrics mapped to minimum scores or gains over the initial evaluation.
     """
@@ -379,43 +432,39 @@ class EvaluationCallback(TrainerCallback):
 
     def __init__(
         self,
-        eval_steps: int = 5,
+        eval_steps: int = DEFAULT_EVALUATION_STEPS,
         eval_on_train_end: bool = True,
         eval_before_train: bool = True,
-        additional_evaluations: Dict[str, Dict[str, Any]] | None = None,
+        additional_evaluations: Dict[str, EvaluationProfile] | None = None,
         metric_groups: Dict[str, List[str]] | None = None,
         stop_when: Dict[str, Dict[str, float]] | None = None,
     ):
         self.eval_steps = eval_steps
         self.eval_on_train_end = eval_on_train_end
         self.eval_before_train = eval_before_train
-        self.additional_evaluations = {
-            name: EvaluationSamplingConfig(**parameters) for name, parameters in (additional_evaluations or {}).items()
-        }
+        self.additional_evaluations = additional_evaluations or {}
         self.metric_groups = metric_groups or {}
         self.stop_when = {name: EvaluationStopConfig(**value) for name, value in (stop_when or {}).items()}
         self._initial_values: Dict[str, float] = {}
         self._initial_step: int | None = None
-        if any(not name.isidentifier() for name in self.additional_evaluations):
-            raise ValueError("additional evaluation names must be identifiers")
         if any(not keys for keys in self.metric_groups.values()):
             raise ValueError("evaluation metric groups must be nonempty")
 
     async def collect_evaluation(self, state, *, trainer, pool):
         metrics = {}
 
-        async def collect(name, parameters):
+        async def collect(name, profile):
             additional = await trainer.eval(
                 val_set_name=name,
-                sampling_params=parameters.sampling_params,
-                n_samples_per_prompt=parameters.n_samples_per_prompt,
+                profile=profile,
                 evaluation_pool=pool,
             )
-            metrics.update({key.replace("eval/", f"eval/{name}/", 1): value for key, value in additional.items()})
+            metrics.update(additional_evaluation_metrics(additional, name))
 
         async with asyncio.TaskGroup() as tasks:
-            for name, parameters in self.additional_evaluations.items():
-                tasks.create_task(collect(name, parameters))
+            for name, profile in self.additional_evaluations.items():
+                if evaluation_profile_due(profile, step=state.global_step, last_step=state.is_last_step):
+                    tasks.create_task(collect(name, profile))
         return metrics
 
     async def on_evaluate_async(
@@ -471,7 +520,12 @@ class EvaluationCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.eval_on_train_end and self.eval_steps > 0:
+        final_due = any(
+            profile.schedule == "final"
+            and evaluation_profile_due(profile, step=state.global_step, last_step=state.is_last_step)
+            for profile in self.additional_evaluations.values()
+        )
+        if (self.eval_on_train_end and self.eval_steps > 0) or final_due:
             control.should_evaluate = True
         return control
 
@@ -999,7 +1053,19 @@ class InferenceStatsCallback(TrainerCallback):
                 logger.warning(f"InferenceStatsCallback: {type(sink).__name__} failed", exc_info=True)
 
 
-def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
+def _add_inference_stats_callback(cfg: DictConfig, callbacks: List[TrainerCallback]) -> None:
+    interval = getattr(cfg.generator, "inference_stats_interval", 1)
+    if (
+        cfg.generator.backend == "vllm"
+        and interval > 0
+        and not any(isinstance(callback, InferenceStatsCallback) for callback in callbacks)
+    ):
+        callbacks.append(InferenceStatsCallback(log_every_steps=interval))
+
+
+def create_default_callbacks(
+    cfg: DictConfig, *, evaluation_profiles: Mapping[str, EvaluationProfile] | None = None
+) -> List[TrainerCallback]:
     """
     Create the default set of callbacks based on trainer configuration.
 
@@ -1034,7 +1100,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     # Check for new-style explicit callback configuration
     if has_explicit_callbacks(cfg):
         logger.info("Using explicit callback configuration from YAML")
-        callbacks = create_callbacks_from_config(cfg)
+        callbacks = create_callbacks_from_config(cfg, evaluation_profiles=evaluation_profiles)
         token_budget = _configured_distillation_token_budget(cfg)
         configured_budget_callbacks = [
             callback for callback in callbacks if isinstance(callback, DistillationTokenBudgetCallback)
@@ -1054,6 +1120,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
             callbacks.append(LoggingCallback())
         if cfg.trainer.get("mismatch_probe", {}).get("enabled", False):
             callbacks.append(MismatchProbeCallback(cfg))
+        _add_inference_stats_callback(cfg, callbacks)
         return callbacks
 
     # Fall back to legacy interval-based configuration
@@ -1111,18 +1178,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
             )
         )
 
-    # Inference stats callback (enabled when using the vLLM backend). This combines
-    # engine and HTTP bridge stats without relying on Ray log-to-driver forwarding.
-    generator_backend = getattr(cfg.generator, "backend", None)
-    inference_stats_interval = getattr(cfg.generator, "inference_stats_interval", 1)
-    if generator_backend == "vllm" and inference_stats_interval > 0:
-        callbacks.append(
-            InferenceStatsCallback(
-                log_every_steps=inference_stats_interval,
-                log_to_console=True,
-                log_to_tracker=True,
-            )
-        )
+    _add_inference_stats_callback(cfg, callbacks)
 
     token_budget = _configured_distillation_token_budget(cfg)
     if token_budget is not None:
@@ -1220,7 +1276,9 @@ def create_callback_from_config(callback_config: Dict[str, Any]) -> TrainerCallb
         raise ValueError(f"Invalid parameters for callback '{callback_type}': {e}") from e
 
 
-def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
+def create_callbacks_from_config(
+    cfg: DictConfig, *, evaluation_profiles: Mapping[str, EvaluationProfile] | None = None
+) -> List[TrainerCallback]:
     """
     Create callbacks from explicit YAML configuration.
 
@@ -1245,6 +1303,8 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
     if callbacks_config is None:
         return []
 
+    profiles = resolve_evaluation_profiles(cfg) if evaluation_profiles is None else evaluation_profiles
+    validate_evaluation_schedule(cfg, profiles)
     callbacks = []
     for callback_config in callbacks_config:
         # Convert OmegaConf to dict if needed
@@ -1254,6 +1314,10 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
             config_dict = callback_config
 
         try:
+            if config_dict.get("type") == "evaluation":
+                config_dict["additional_evaluations"] = {
+                    name: profiles[name] for name in config_dict.get("additional_evaluations") or {}
+                }
             callback = create_callback_from_config(config_dict)
             callbacks.append(callback)
             logger.debug(f"Created callback: {callback.__class__.__name__}")
@@ -1262,8 +1326,3 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
             raise
 
     return callbacks
-
-
-def get_available_callback_types() -> List[str]:
-    """Get list of available callback type names for YAML configs."""
-    return list(CALLBACK_REGISTRY.keys())

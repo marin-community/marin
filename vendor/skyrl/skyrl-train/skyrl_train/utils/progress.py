@@ -42,8 +42,9 @@ import asyncio
 import sys
 import threading
 import time
-from dataclasses import dataclass
 from typing import Any, Iterable, Optional
+
+from skyrl_train.config.progress import ProgressSettings
 
 from tqdm import tqdm as _std_tqdm
 from tqdm.asyncio import tqdm as _std_atqdm
@@ -54,28 +55,13 @@ except Exception:  # pragma: no cover - defensive
     _loguru_logger = None
 
 
-@dataclass(frozen=True)
-class _ProgressSettings:
-    mode: str
-    min_interval_seconds: float
-    heartbeat_seconds: float
-    percent_step: float
-    count_step: float
-
-
-_SETTINGS: _ProgressSettings | None = None
+_SETTINGS: ProgressSettings | None = None
 
 
 def configure_progress(config) -> None:
     """Install process-local progress settings from ``trainer.progress``."""
     global _SETTINGS
-    _SETTINGS = _ProgressSettings(
-        mode=str(config.mode),
-        min_interval_seconds=float(config.min_interval_seconds),
-        heartbeat_seconds=float(config.heartbeat_seconds),
-        percent_step=float(config.percent_step),
-        count_step=float(config.count_step),
-    )
+    _SETTINGS = ProgressSettings.from_config(config)
 
 
 def _use_real_tqdm() -> bool:
