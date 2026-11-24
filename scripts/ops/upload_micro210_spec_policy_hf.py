@@ -3,19 +3,21 @@
 
 """Publish the spec-complete Micro210 policy and private prepared table to pinned HF tags."""
 
+import argparse
+import hashlib
 import json
 import tempfile
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
 from huggingface_hub import HfApi, create_repo
-from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.micro210_policy import (
     POLICY_REPO,
     PREPARED_REPO,
-    SPEC_POLICY_REFERENCE,
+    SPEC_POLICY_REVISION,
 )
 from experiments.evaluation.micro210_spec_grading import driver_sha256
 from scripts.ops.upload_micro210_policy_hf import prepare_hf_token, publish_version, read_and_verify
@@ -48,7 +50,7 @@ tags: [evaluation, reinforcement-learning]
 
 # Micro210 prepared task inputs
 
-The `2026.11.23-together` tag contains 440 prepared attempts derived from the pinned
+The `2026.11.23-together` tag contains the sealed prepared attempts derived from the pinned
 Micro210 selection. Every script-graded row embeds its grading library, driver, and
 provenance; TruthfulQA choices have recorded per-task seeds. The dataset remains private
 because it re-hosts restricted benchmark items, including GPQA-Diamond. See
@@ -57,62 +59,66 @@ because it re-hosts restricted benchmark items, including GPQA-Diamond. See
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--policy", type=Path, required=True, help="The emitted policy.json")
+    parser.add_argument("--prepared", type=Path, required=True, help="The emitted rollouts.parquet")
+    parser.add_argument("--environment", type=Path, required=True, help="The emitted environment.json")
+    arguments = parser.parse_args()
     prepare_hf_token()
     api = HfApi()
     identity = api.whoami()
     if not any(org.get("name") == "open-athena" for org in identity.get("orgs", [])):
         raise SystemExit("HF identity is not an open-athena member; refusing to publish")
-    raw = read_and_verify(SPEC_POLICY_REFERENCE.uri, SPEC_POLICY_REFERENCE.sha256, SPEC_POLICY_REFERENCE.byte_size)
+    raw = arguments.policy.read_bytes()
     policy = json.loads(raw)
-    if policy["policy_version"] != SPEC_POLICY_REFERENCE.revision:
+    if policy["policy_version"] != SPEC_POLICY_REVISION:
         raise ValueError("Staged policy version differs from its pin")
     if policy["grader_embed"]["driver_sha256"] != driver_sha256():
         raise ValueError("Staged policy driver digest differs from the committed driver")
-    environment = read_and_verify(
-        str(StoragePath(policy["prepared_inputs_uri"]) / "environment.json"), policy["task_environment_sha256"]
-    )
-    if len(json.loads(environment)["tasks"]) != 440:
-        raise ValueError("Staged environment manifest does not carry 440 tasks")
-    prepared_uri = str(StoragePath(policy["prepared_inputs_uri"]) / "rollouts.parquet")
-    prepared = read_and_verify(prepared_uri, policy["prepared_rollouts_sha256"])
+    prepared_bytes = arguments.prepared.read_bytes()
+    if hashlib.sha256(prepared_bytes).hexdigest() != policy["prepared_rollouts_sha256"]:
+        raise ValueError("The prepared table does not match the policy's digest")
+    environment = json.loads(arguments.environment.read_text())
+    if hashlib.sha256(arguments.environment.read_bytes()).hexdigest() != policy["task_environment_sha256"]:
+        raise ValueError("The environment manifest does not match the policy's digest")
+    if len(environment["tasks"]) != pq.read_metadata(pa.BufferReader(prepared_bytes)).num_rows:
+        raise ValueError("The environment manifest does not cover every prepared row")
     with tempfile.TemporaryDirectory() as temporary:
         prepared_path = Path(temporary) / "rollouts.parquet"
-        prepared_path.write_bytes(prepared)
-        if pq.read_metadata(prepared_path).num_rows != 440:
-            raise ValueError("Staged Micro210 table must contain 440 attempts")
+        prepared_path.write_bytes(prepared_bytes)
         create_repo(POLICY_REPO, repo_type="dataset", private=False, exist_ok=True)
         create_repo(PREPARED_REPO, repo_type="dataset", private=True, exist_ok=True)
         policy_commit = publish_version(
             api,
             POLICY_REPO,
-            SPEC_POLICY_REFERENCE.revision,
-            f"Publish Micro210 policy {SPEC_POLICY_REFERENCE.revision}",
+            SPEC_POLICY_REVISION,
+            f"Publish Micro210 policy {SPEC_POLICY_REVISION}",
             POLICY_CARD,
             raw,
             "policy.json",
-            SPEC_POLICY_REFERENCE.sha256,
-            SPEC_POLICY_REFERENCE.byte_size,
+            hashlib.sha256(raw).hexdigest(),
+            len(raw),
         )
         prepared_commit = publish_version(
             api,
             PREPARED_REPO,
-            SPEC_POLICY_REFERENCE.revision,
-            f"Publish Micro210 prepared tasks {SPEC_POLICY_REFERENCE.revision}",
+            SPEC_POLICY_REVISION,
+            f"Publish Micro210 prepared tasks {SPEC_POLICY_REVISION}",
             PREPARED_CARD,
             str(prepared_path),
             "rollouts.parquet",
             policy["prepared_rollouts_sha256"],
-            len(prepared),
+            len(prepared_bytes),
         )
     read_and_verify(
         f"hf://datasets/{POLICY_REPO}@{policy_commit}/policy.json",
-        SPEC_POLICY_REFERENCE.sha256,
-        SPEC_POLICY_REFERENCE.byte_size,
+        hashlib.sha256(raw).hexdigest(),
+        len(raw),
     )
     read_and_verify(
         f"hf://datasets/{PREPARED_REPO}@{prepared_commit}/rollouts.parquet",
         policy["prepared_rollouts_sha256"],
-        len(prepared),
+        len(prepared_bytes),
     )
     public = requests.get(
         f"https://huggingface.co/datasets/{POLICY_REPO}/resolve/{policy_commit}/policy.json", timeout=120

@@ -156,6 +156,12 @@ def main() -> None:
     parser.add_argument("--source-rollouts", type=Path, required=True)
     parser.add_argument("--source-policy", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--prepared-table",
+        type=Path,
+        help="Use this already-built (e.g. sealed) table instead of transforming the source",
+    )
+    parser.add_argument("--task-changes", type=Path, help="task-swaps.json; recorded in the policy provenance")
     parser.add_argument("--emit-policy", action="store_true", help="Emit policy.json; requires --gate-receipt")
     parser.add_argument("--gate-receipt", type=Path, help="Oracle/NoP gate receipt for the built table")
     parser.add_argument(
@@ -168,8 +174,15 @@ def main() -> None:
     old_policy = verify_source(arguments.source_rollouts, arguments.source_policy)
     library = GraderLibrary()
     arguments.output.mkdir(parents=True, exist_ok=True)
-    prepared = arguments.output / "rollouts.parquet"
-    counts = transform_table(arguments.source_rollouts, prepared, library)
+    if arguments.prepared_table is None:
+        prepared = arguments.output / "rollouts.parquet"
+        counts = transform_table(arguments.source_rollouts, prepared, library)
+    else:
+        # The seal path: the table was already built (and gated) from this source; adopt it.
+        prepared = arguments.prepared_table
+        counts = reject_fixed_choice_positions(pq.read_table(prepared).to_pylist())
+        if missing := EXPECTED_CHOICE_BENCHMARKS - counts.keys():
+            raise ValueError(f"Micro210 choice audit missed benchmark(s): {sorted(missing)}")
     digest = sha256(prepared)
     location = str(StoragePath(PREPARED_ROOT) / SPEC_POLICY_VERSION / digest)
     rows = pq.read_table(prepared, columns=["task_id", "task_spec", "task_rollout_spec", "repetition_index"]).to_pylist()
@@ -212,6 +225,9 @@ def main() -> None:
         },
         grader_embed=grader_embed_block(library),
     )
+    if arguments.task_changes is not None:
+        # The seal's removals and swaps ride inside the policy, covered by its hash.
+        policy["task_changes"] = json.loads(arguments.task_changes.read_text())
     policy_path = arguments.output / "policy.json"
     policy_path.write_text(json.dumps(policy, indent=2))
     print(f"policy: {sha256(policy_path)} ({policy_path.stat().st_size} bytes)")
