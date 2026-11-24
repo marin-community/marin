@@ -594,8 +594,8 @@ def quiesce_survival_scenario(factory: LocalMachineFactory, quiesce: tuple[str, 
                     "/bin/sh",
                     "-c",
                     "pid=$(cat /app/stray-pid)\n"
-                    "if [ -d \"/proc/$pid\" ]; then\n"
-                    "  line=$(cat \"/proc/$pid/stat\")\n"
+                    'if [ -d "/proc/$pid" ]; then\n'
+                    '  line=$(cat "/proc/$pid/stat")\n'
                     "  state=${line##*) }\n"
                     "  case ${state%% *} in Z*) exit 0;; *) exit 7;; esac\n"
                     "fi",
