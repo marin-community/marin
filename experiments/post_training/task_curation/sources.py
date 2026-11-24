@@ -125,6 +125,13 @@ OUT_OF_REGION_PENDING_IDS = frozenset(
     }
 )
 
+R41_PENDING_SOURCE_IDS = OUT_OF_REGION_PENDING_IDS | {
+    # The 2026-11-24 freeze ruling: R40's source set is frozen at the cut — sources
+    # admitted or imported after it route to R41 through the standing mechanism.
+    "FACET-Terminal:FACET-Terminal/FACET-Terminal-Tasks-6k",
+    "FWeindel:validated-tasks/endless",
+}
+
 PENDING_MEASUREMENT_SOURCES = (
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *lean_proofs.sources(),
@@ -135,12 +142,14 @@ PENDING_MEASUREMENT_SOURCES = (
     # registry receipts bind without entering the served declarations.
     *tasktrove_identity_repair.repaired_sources(),
     *(source for source in tasktrove_judged.sources() if source.info.id in OUT_OF_REGION_PENDING_IDS),
+    *facet_terminal.sources(),
+    *endless.cohort_source(),
 )
 
 
 def configured_sources() -> list[RlDataSource]:
     """Return source populations registered for Atlas evidence binding."""
-    return [
+    sources = [
         *litecoder.sources(),
         *terminalworld.sources(),
         *mcp_atlas_easy.sources(),
@@ -198,6 +207,7 @@ def configured_sources() -> list[RlDataSource]:
         *prime_multiswe.sources(),
         *prime_swe.sources(),
     ]
+    return [source for source in sources if source.info.id not in R41_PENDING_SOURCE_IDS]
 
 
 def retained_binding(source: RlDataSource, receipt: RetainedReleaseReceipt) -> RlDataSource:
@@ -272,8 +282,12 @@ def all_sources() -> dict[str, RlDataSource]:
     originals = sources_before_oracle_filtration()
     sources = dict(originals)
     for source_id, receipt in receipts.items():
+        if source_id not in sources:
+            continue  # the R40 freeze routes sources admitted after the cut to R41
         sources[source_id] = bind_oracle_filtered_release(sources[source_id], receipt)
     for source_id, receipt in admitted.items():
+        if source_id not in sources:
+            continue  # the R40 freeze routes sources admitted after the cut to R41
         sources[source_id] = bind_oracle_admitted_release(sources[source_id], receipt)
     sources = {source_id: crosscode_python_repair.bind_source(source) for source_id, source in sources.items()}
     samples, full_content = sample_qc_receipts(), full_content_result_bindings()
