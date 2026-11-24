@@ -18,10 +18,11 @@ import os
 import tarfile
 import time
 from collections.abc import Mapping
-from contextlib import AsyncExitStack
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
@@ -74,7 +75,7 @@ JUDGE_SPEC_PATH = "/tests/judge.toml"
 JUDGE_RELAY_PORT = 8790
 JUDGE_RELAY_URL = f"http://127.0.0.1:{JUDGE_RELAY_PORT}/v1"
 JUDGE_RELAY_KEY = "machine-local-judge-relay"
-JUDGE_RELAY_ROUTES = {"/v1/chat/completions": "/chat/completions", "/v1/responses": "/responses"}
+JUDGE_RELAY_ROUTES = MappingProxyType({"/v1/chat/completions": "/chat/completions", "/v1/responses": "/responses"})
 JUDGE_RELAY_REQUEST_TIMEOUT = 120
 STATE_PATH = "/app/state.json"
 STAGING_ARCHIVE = "/tmp/taskcompendium-grading.tar"
@@ -582,6 +583,19 @@ def _grading_env(
     return env
 
 
+def _relay_script_judge(machine: Machine, connection: JudgeConnection | None) -> AbstractAsyncContextManager[None]:
+    if connection is None:
+        return nullcontext()
+    return forward_http_posts(
+        machine,
+        port=JUDGE_RELAY_PORT,
+        upstream=connection.base_url,
+        routes=JUDGE_RELAY_ROUTES,
+        headers={"Authorization": f"Bearer {connection.api_key}", "Content-Type": "application/json"},
+        timeout=JUDGE_RELAY_REQUEST_TIMEOUT,
+    )
+
+
 async def grade_in_agent_machine(
     task: TaskSpec,
     attempt: GradingAttempt,
@@ -733,23 +747,9 @@ async def _grade_staged(
                     prepared = replace(prepared, workdir=grading.workspace)
                 prepared = replace(prepared, env={**prepared.env, **_grading_env(grading, attempt, guest_connection)})
                 machine = await factory.create(prepared)
-            setup_seconds = time.monotonic() - setup_started
             try:
-                async with AsyncExitStack() as services:
-                    if relay_connection is not None:
-                        await services.enter_async_context(
-                            forward_http_posts(
-                                machine,
-                                port=JUDGE_RELAY_PORT,
-                                upstream=relay_connection.base_url,
-                                routes=JUDGE_RELAY_ROUTES,
-                                headers={
-                                    "Authorization": f"Bearer {relay_connection.api_key}",
-                                    "Content-Type": "application/json",
-                                },
-                                timeout=JUDGE_RELAY_REQUEST_TIMEOUT,
-                            )
-                        )
+                async with _relay_script_judge(machine, relay_connection):
+                    setup_seconds = time.monotonic() - setup_started
                     result = await _grade_on(
                         machine,
                         archive_path,

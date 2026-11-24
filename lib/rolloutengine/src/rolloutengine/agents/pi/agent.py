@@ -35,6 +35,7 @@ from rolloutengine.models import ContextRecovery, RolloutLimits
 
 logger = logging.getLogger(__name__)
 
+PI_HARNESS = "pi"
 PROVIDER = "hosted_vllm"
 """Pi's provider name for the policy model, Harbor's name for a hosted vLLM endpoint."""
 RELAY_PORT = 8788

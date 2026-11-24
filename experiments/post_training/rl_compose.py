@@ -48,6 +48,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.declared import EvaluationProfile
@@ -479,7 +480,7 @@ def _training_selection(selection: ArtifactStep, summary: dict, authored: dict) 
     spec_path = "environment.task_sessions.task_spec"
     harness = get_path(authored, f"{spec_path}.harness_by_dataset.{SWESMITH_DATASET}")
     machine = get_path(authored, f"{spec_path}.task_machine_by_dataset.{SWESMITH_DATASET}")
-    if harness != "pi" or machine is MISSING:
+    if harness != PI_HARNESS or machine is MISSING:
         raise click.BadParameter("SWESmith training requires the Pi harness and a task machine")
     return native_swesmith_selection(selection)
 

@@ -6,6 +6,7 @@
 from dataclasses import replace
 from fractions import Fraction
 
+from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.machine import Backend, CommandSemantics, NetworkPolicy
 from skyrlrecipe import RecipePatch, sections
@@ -32,14 +33,14 @@ _AGENTIC_RECIPE = RecipePatch(
         task_sessions={
             "daytona": {"api_key_env": _DAYTONA_RL_KEY},
             "agent_harnesses": {
-                "pi": {
+                PI_HARNESS: {
                     "version": SWESMITH_PI_VERSION,
                     "thinking": "high",
                     "thinking_format": "chat-template",
                     "setup_timeout": 360,
                 },
             },
-            "task_spec": {"harness_by_dataset": {SWESMITH_DATASET: "pi"}},
+            "task_spec": {"harness_by_dataset": {SWESMITH_DATASET: PI_HARNESS}},
         }
     ),
     trajectory_runner=sections.TrajectoryRunner(max_concurrent_training_machine_tasks=_TRAINING_MACHINE_SLOTS),
