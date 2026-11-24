@@ -48,7 +48,6 @@ from experiments.evaluation.micro210_replacements import (
 )
 from scripts.ops.verify_micro210_spec_gate import (
     _docker,
-    _docker_dns_mounts,
     _docker_network,
     grade_family_a_row,
     grade_family_b_row,
@@ -312,7 +311,6 @@ def _push_tb2_image(candidate: CandidateRow) -> str:
                 "linux/amd64",
                 "--network",
                 _docker_network(),
-                *_docker_dns_mounts(),
                 "-t",
                 tag,
                 str(context),
