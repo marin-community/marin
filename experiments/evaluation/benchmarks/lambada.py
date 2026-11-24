@@ -23,7 +23,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
-from experiments.evaluation.prompt_compilation import LIKELIHOOD_CONTEXT_REVISION
+from experiments.evaluation.prompt_compilation import likelihood_protocol_version
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -54,7 +54,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
             ),
             protocol=EvaluationProtocol(
                 benchmark="lambada_openai",
-                version="2026.11.02-" + LIKELIHOOD_CONTEXT_REVISION,
+                version=likelihood_protocol_version("2026.11.02"),
                 operation=OperationKind.CONTINUATION_LIKELIHOOD,
                 sampling=None,
                 trials=TrialPolicy(count=1, seed=None),

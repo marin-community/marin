@@ -6,7 +6,6 @@
 from dataclasses import dataclass
 
 import pytest
-
 from marin.evaluation.task_worker import context_bos_token_id
 
 
