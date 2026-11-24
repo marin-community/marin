@@ -64,6 +64,7 @@ from rigging.timing import Duration
 
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    LMCACHE_RAM_GIB_FLAG,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
@@ -103,6 +104,7 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_source": "--vllm-source",
     "vllm_release": "--vllm-release",
     "session_router": "--session-router",
+    "lmcache_ram_gib": LMCACHE_RAM_GIB_FLAG,
     "data_parallel_size": "--data-parallel-size",
     "vllm_args": "--vllm-arg",
     "vllm_metrics_config": "--vllm-metrics-config",
@@ -159,6 +161,8 @@ def _resolve_serving_plan(
         raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
     if vllm.router is not None and (gpu is None or backend != "vllm"):
         raise click.ClickException("--session-router requires --gpu with the vLLM backend")
+    if vllm.lmcache_ram_gib is not None and (gpu is None or backend != "vllm"):
+        raise click.ClickException("--lmcache-ram-gib requires --gpu with the vLLM backend")
     if gpu is not None:
         if not in_checkout:
             raise click.ClickException(
@@ -424,6 +428,12 @@ def _wait_and_report_endpoint(
 )
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
 @click.option(
+    LMCACHE_RAM_GIB_FLAG,
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="GiB per Iris task for a RAM cache shared by its local vLLM workers; include it in --memory.",
+)
+@click.option(
     "--vllm-release",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     default=None,
@@ -529,6 +539,7 @@ def main(
     tensor_parallel_size: int | None,
     data_parallel_size: int | None,
     session_router: bool,
+    lmcache_ram_gib: float | None,
     vllm_release: Path | None,
     dtype: str,
     cache_ttl_days: int,
@@ -590,6 +601,7 @@ def main(
         cuda_vllm_version=vllm_version,
         vllm_source=vllm_source_enum,
         vllm=VllmEngineConfig(
+            lmcache_ram_gib=lmcache_ram_gib,
             max_num_batched_tokens=max_num_batched_tokens,
             # The in-job vLLM boot budget must cover the same window the client waits, so raising
             # --wait-timeout for a slow-booting model actually takes effect.

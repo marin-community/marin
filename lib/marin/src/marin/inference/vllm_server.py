@@ -188,8 +188,8 @@ class PreinstalledVllm:
     into a ``--task-image``. It is not a workspace dependency.
     """
 
-    def command(self) -> list[str]:
-        return [shutil.which("vllm") or "vllm"]
+    def command(self, *, executable: str = "vllm") -> list[str]:
+        return [shutil.which(executable) or executable]
 
     def env(self) -> dict[str, str]:
         return {}
@@ -269,7 +269,7 @@ class IsolatedCudaVllm:
             executable="vllm",
         )
 
-    def command(self) -> list[str]:
+    def command(self, *, executable: str | None = None) -> list[str]:
         install = self._install()
         command = [
             "uvx",
@@ -293,8 +293,8 @@ class IsolatedCudaVllm:
                 "python",
                 "-c",
                 _CUDA_NVCC_BOOTSTRAP,
-                install.executable,
-                *install.executable_args,
+                executable or install.executable,
+                *(install.executable_args if executable is None else ()),
             )
         )
         return command
@@ -839,6 +839,7 @@ class VllmEnvironment:
         router: VllmRouterConfig | None = None,
         router_port: int | None = None,
         wait_for_ready: bool = True,
+        check_dependencies: Callable[[], None] = lambda: None,
     ) -> None:
         validate_vllm_mode_env()
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
@@ -857,6 +858,7 @@ class VllmEnvironment:
         self.router: RunningVllmRouter | None = None
         self._router_context = contextlib.ExitStack()
         self._ready_on_enter = wait_for_ready
+        self._check_dependencies = check_dependencies
 
         self.vllm_server: VllmServerHandle | None = None
         self.model_id: str | None = None
@@ -874,7 +876,7 @@ class VllmEnvironment:
             )
             try:
                 self._start_process()
-            except Exception:
+            except BaseException:
                 self._report_failure_and_close("Failed to start vLLM environment")
                 raise
             if self._ready_on_enter:
@@ -915,6 +917,7 @@ class VllmEnvironment:
                 command=command,
                 timeout_seconds=self.timeout_seconds,
                 poll_interval_seconds=poll_interval_seconds,
+                check_dependencies=self._check_dependencies,
             )
             handle.compilation_cache.publish()
             self.vllm_server = _configure_vllm_telemetry(
@@ -936,7 +939,7 @@ class VllmEnvironment:
                         check_dependencies=self.check_alive,
                     )
                 )
-        except Exception:
+        except BaseException:
             self._report_failure_and_close("Failed to make vLLM environment ready")
             raise
 
@@ -1020,6 +1023,7 @@ class VllmEnvironment:
         return _native_logs(self.vllm_server.log_dir)
 
     def check_alive(self) -> None:
+        self._check_dependencies()
         if self.vllm_server is None:
             raise RuntimeError("vLLM server is not running in this environment.")
         if self.router is not None:
@@ -1159,11 +1163,13 @@ def _wait_for_vllm_server(
     command: list[str],
     timeout_seconds: float,
     poll_interval_seconds: float = 5,
+    check_dependencies: Callable[[], None] = lambda: None,
 ) -> None:
     process = handle.process
     assert handle.log_pump is not None
 
-    def _check_process_alive() -> None:
+    def _check_startup_health() -> None:
+        check_dependencies()
         # A distributed loader worker can report this fault while the API parent stays alive and
         # waits forever for the other ranks. Fail the task from the complete local logs so Iris
         # can retry it without waiting for the parent to exit or the readiness timeout to expire.
@@ -1195,7 +1201,7 @@ def _wait_for_vllm_server(
         handle.server_url,
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
-        check_alive=_check_process_alive,
+        check_alive=_check_startup_health,
     )
 
 

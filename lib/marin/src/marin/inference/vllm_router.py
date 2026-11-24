@@ -10,7 +10,7 @@ import signal
 import socket
 import subprocess
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,9 +27,20 @@ _ROUTER_PROBE_TIMEOUT = 5
 
 
 def available_port(host: str) -> int:
-    with socket.socket() as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])
+    return available_ports(host, 1)[0]
+
+
+def available_ports(host: str, count: int, *, exclude: Collection[int] = ()) -> list[int]:
+    """Choose distinct free ports while keeping earlier choices bound."""
+    with contextlib.ExitStack() as stack:
+        ports: list[int] = []
+        while len(ports) < count:
+            sock = stack.enter_context(socket.socket())
+            sock.bind((host, 0))
+            port = int(sock.getsockname()[1])
+            if port not in exclude:
+                ports.append(port)
+        return ports
 
 
 @dataclass(frozen=True)
@@ -96,7 +107,7 @@ def vllm_router(
         # Router metrics are separate from vLLM worker metrics. Avoid the upstream
         # fixed default port so simultaneous local services cannot collide.
         "--prometheus-port",
-        str(available_port(host)),
+        str(available_ports(host, 1, exclude=(port,))[0]),
         "--prometheus-host",
         host,
         "--log-dir",

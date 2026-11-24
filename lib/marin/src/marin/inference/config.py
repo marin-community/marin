@@ -8,6 +8,7 @@ Accelerator-heavy serving implementations translate them inside worker jobs.
 """
 
 import json
+import math
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -25,6 +26,7 @@ WORKER_PYTHON_VERSION = "3.12"
 # Stock CUDA vLLM runs in an isolated uv-tool environment and does not
 # participate in Marin's workspace dependency resolution.
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
+LMCACHE_RAM_GIB_FLAG = "--lmcache-ram-gib"
 VLLM_METRIC_PREFIX = "vllm:"
 VLLM_DATA_PARALLEL_SIZE_FLAGS = ("--data-parallel-size", "--data_parallel_size", "-dp")
 VLLM_TOPOLOGY_ALIASES = {
@@ -370,6 +372,8 @@ class VllmEngineConfig:
     extra_metric_families: frozenset[str] = frozenset()
     speculative: SpeculativeServingConfig | None = None
     router: VllmRouterConfig | None = None
+    lmcache_ram_gib: float | None = None
+    """GiB in one task-local RAM cache, shared by its CUDA workers; None disables it."""
 
     def __post_init__(self) -> None:
         if self.startup_timeout_seconds <= 0:
@@ -384,6 +388,11 @@ class VllmEngineConfig:
             raise ValueError("a vLLM release pin requires the Marin CUDA fork")
         if self.router is not None and self.launcher is VllmLauncherType.TPU:
             raise ValueError("session routing is supported by CUDA vLLM")
+        if self.lmcache_ram_gib is not None:
+            if not math.isfinite(self.lmcache_ram_gib) or self.lmcache_ram_gib <= 0:
+                raise ValueError("lmcache_ram_gib must be positive and finite")
+            if self.launcher is VllmLauncherType.TPU:
+                raise ValueError("RAM LMCache is supported by CUDA vLLM")
         extra_metric_families = _normalize_vllm_metric_families(
             self.extra_metric_families,
             source="VllmEngineConfig.extra_metric_families",
