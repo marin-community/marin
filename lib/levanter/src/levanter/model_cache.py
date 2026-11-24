@@ -158,9 +158,9 @@ def cache_hf_model(
 ) -> str:
     """Mirror HuggingFace repo *model_id* to *cache_path* once under a distributed lock.
 
-    The easy path over :func:`cache_to_prefix`: streams the repo into the cache
-    one file at a time (see :func:`_stream_hf_snapshot`), excluding the cache
-    completion marker, so the snapshot never has to fit on local disk. An incomplete
+    The easy path over :func:`cache_to_prefix`: streams the repo's files into the cache
+    concurrently through bounded buffers (see :func:`_stream_hf_snapshot`), excluding the
+    cache completion marker, so the snapshot never has to fit on local disk. An incomplete
     prefix is checked against source file sizes and resumed under the same lock.
     The caller chooses ``cache_path``; use :func:`resolve_cached_model_path` when a branch
     or tag must be resolved and included in the cache identity. Returns ``cache_path``.
