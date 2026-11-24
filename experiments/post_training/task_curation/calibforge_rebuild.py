@@ -419,7 +419,13 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
         raise DeferredRebuild("requires_explicit_output_workspace")
     setup_script = (environment.get("setup") or {}).get("command", "").split()[-1].rsplit("/", 1)[-1]
 
-    verifier = tuple(inline_resource(path, files[path]) for path in sorted(files) if path.startswith("tests/"))
+    # Verifier resources stage under the /tests grader root (runtime grading stages
+    # resources.verifier at f"/tests/{path}"), so a native archive's tests/ prefix must
+    # not repeat: "tests/test.sh" would land at /tests/tests/test.sh and the grader's
+    # "bash /tests/test.sh" would exit 127 with the file missing.
+    verifier = tuple(
+        inline_resource(path.removeprefix("tests/"), files[path]) for path in sorted(files) if path.startswith("tests/")
+    )
     setup = tuple(
         inline_resource(path, files[path]).model_copy(update={"mode": "0755" if files[path].startswith(b"#!") else None})
         for path in sorted(files)
@@ -448,7 +454,9 @@ def lowered_task_spec(task_id: str, task_binary: bytes) -> dict:
             ),
             reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),)),
         ),
-        source=Source(dataset="smartie-calibforge-rebuilt", revision="1", row=task_id, importer_revision="1"),
+        # importer_revision 2: the verifier-resource repair (paths are /tests-relative;
+        # revision 1 shipped tests/ doubled under the /tests staging root).
+        source=Source(dataset="smartie-calibforge-rebuilt", revision="1", row=task_id, importer_revision="2"),
         resources=ResourceGroups(verifier=verifier, all=setup),
     )
     return {

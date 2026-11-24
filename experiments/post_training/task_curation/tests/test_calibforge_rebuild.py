@@ -8,6 +8,8 @@ import io
 import tarfile
 
 import pytest
+from taskcompendium.models import TaskSpec
+from taskcompendium.runtime.staging import resource_files
 
 from experiments.post_training.task_curation.calibforge_rebuild import (
     DeferredRebuild,
@@ -99,4 +101,12 @@ def test_lowered_spec_separates_public_fixtures_and_private_verifier_resources()
     assert task["environment_requirements"]["command_semantics"] == "linux_process"
     staged = {resource["path"] for resource in task["resources"]["all"]}
     assert staged == {"setup_files/calibforge-fixtures.tar.gz", "setup_files/calibforge-initialize.sh"}
-    assert {resource["path"] for resource in task["resources"]["verifier"]} == {"tests/test.sh", "tests/test_outputs.py"}
+    assert {resource["path"] for resource in task["resources"]["verifier"]} == {"test.sh", "test_outputs.py"}
+
+
+def test_verifier_resources_stage_where_the_grader_reads_them():
+    """The graded script path must exist after staging; missing it is the exit-127 failure."""
+    rebuilt = rebuild_task(native_task("FROM ubuntu:24.04\nWORKDIR /app\n"))
+    spec = TaskSpec.model_validate(lowered_task_spec("fixture", rebuilt.task_binary)["task"])
+    staged = {file.path for file in resource_files(spec.resources.verifier, "/tests")}
+    assert spec.grader.argv[1] in staged
