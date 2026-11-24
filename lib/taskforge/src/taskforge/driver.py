@@ -1,7 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One subprocess and durable replay log per proposal."""
+"""Run Taskforge proposals: ``run`` a shard, each proposal in its own ``one`` process; ``report`` an output root.
+
+``one`` exits 0 once it publishes a head or skips the proposal; 3 when another writer owns the root; 4 when the root
+has another journal format (migrate it, or rebuild at a fresh output prefix); 5 when the root's journal is corrupt; 75
+when the workpiece is held until the decision model answers again; with ``--probe``, 10 when its own decision-model
+reader's last outcome was a valid answer; and 1 on any other failure. ``run`` consumes a probe's 10 silently,
+releasing what it parked; it prints an OUTCOME line for every other nonzero child (a 10 from any child but the probe
+is a failure) and fails when any child exited other than 0, 3 or 75.
+"""
 
 import argparse
 import asyncio
@@ -312,9 +320,8 @@ def exit_code(error: Exception) -> int | None:
     return None
 
 
-def main() -> None:
-    configure_logging()
-    parser = argparse.ArgumentParser(description=__doc__)
+def cli() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
     summary = commands.add_parser("report")
     summary.add_argument("output_root")
@@ -325,15 +332,24 @@ def main() -> None:
         command.add_argument("--output", required=True)
         command.add_argument("--policy", required=True)
         command.add_argument("--work-dir", default="forge-work")
-        command.add_argument("--resume-held", action="store_true", help="Explicitly resume published held workpieces")
+        command.add_argument(
+            "--resume-held",
+            action="store_true",
+            help="Also resume published held workpieces; one held only for the decision model resumes without it",
+        )
         if name == "run":
             command.add_argument("--concurrency", type=int, required=True)
             command.add_argument("--buckets", type=int, default=4096)
             command.add_argument("--bucket-range", type=lambda value: tuple(map(int, value.split(":"))))
             command.add_argument("--ranks", type=lambda value: tuple(map(int, value.split(","))), default=())
         else:
-            command.add_argument("--probe", action="store_true", help="Exit ANSWERED after a fresh decision-model read")
-    args = parser.parse_args()
+            command.add_argument("--probe", action="store_true", help="Exit 10 after a fresh decision-model answer")
+    return parser
+
+
+def main() -> None:
+    configure_logging()
+    args = cli().parse_args()
     if args.command == "report":
         configure_coreweave_s3()
         print("\n".join(asyncio.run(report(args.output_root, args.since_hours))))

@@ -24,7 +24,7 @@ This file covers how to run it.
 | `src/taskforge/coordinator.py` | author → validate → review, decisions and budgets, bounded stage replay |
 | `src/taskforge/driver.py` | CLI: runs a shard of proposals, publishes to S3, resumes |
 | `src/taskforge/wiring.py` | builds resources and config from the policy for a host |
-| `experiments/taskforge/run_taskforge.py` | submits one Iris driver job per shard |
+| `experiments/post_training/capability_driven_envs/` | our launcher: one Iris driver job per bucket range |
 
 ## The workflow
 
@@ -39,9 +39,10 @@ default adds none). Only the author sees them; a file reaches solvers or graders
 
 ## Running on the cluster
 
-Everything runs as Iris jobs on `cw-rno2a`. The entry point is the launcher, which submits one
-driver job per shard; each driver works through its share of the proposals with `--concurrency`
-workpieces in flight, one shellbox Iris sandbox per machine.
+The pipeline runs as Iris jobs. Each `taskforge.driver run` job works through its share of the proposals
+with `--concurrency` workpieces in flight, one shellbox Iris sandbox per machine. The capability-driven runs
+submit their drivers with the launcher in
+[`experiments/post_training/capability_driven_envs`](../../experiments/post_training/capability_driven_envs/README.md).
 
 ### Credentials
 
@@ -74,30 +75,12 @@ command line; the driver reads them from Iris secret files.
 
 ### Launch
 
-From the repository root (`uv` needs the workspace `pyproject.toml`):
-
-```bash
-export CW_KEY_ID=... CW_KEY_SECRET=... GLM_API_KEY=... PARALLEL_API_KEY=...
-export GLM_RELAY_JOB=/<user>/<relay-job>
-ROOT=s3://marin-us-east-02a/marin/forge/pilot-<date>
-uv run --frozen fsutil cp policy.json $ROOT/policy.json
-uv run --frozen experiments/taskforge/run_taskforge.py \
-  --proposals s3://marin-us-east-02a/marin/taskforge/acceptance-measure/20261103/sample.json \
-  --ranks "$(seq -s, 0 31 | sed 's/,$//')" \
-  --output $ROOT/out --policy $ROOT/policy.json --job-prefix forge-pilot-<date> \
-  --drivers 7 --concurrency 4 --cpu 8 --memory 32GB --disk 100GB
-```
-
-Each proposal maps to `int(sha256(str(proposal_key)), 16) % 4096`; drivers process their
-half-open `--bucket-range a:b` in manifest order. The launcher splits buckets evenly
-across `--drivers N`; `--driver-range a:b` launches only those driver indices. To replace
-drivers 24–31 of a 32-driver fleet with 16 drivers, cancel them, then launch with
-`--drivers 64 --driver-range 48:64` and a new job prefix. This covers the same 3072:4096
-bucket span without changing the other drivers, output paths, or resume behavior.
-Keep `--buckets 4096` fixed across relaunches. The launcher passes `--max-retries 3`,
-`--sync-package marin-taskforge`, pins the build-parallelism variables to `--cpu`, and leaves jobs
-preemptible; a preempted driver resumes from its published checkpoints. Job names are
-`/<user>/<prefix>-<driver-index>`.
+The launcher's README has the command. Each proposal maps to `int(sha256(str(proposal_key)), 16) % --buckets`
+(4096), whatever prefix holds its capability directory; a driver processes its half-open `--bucket-range a:b` in manifest order.
+Keep `--buckets` fixed across relaunches, so that replacing some drivers with more or fewer covering the same
+span changes no other driver, output path, or resume behaviour. A preempted driver resumes from its published
+checkpoints. `uv run --frozen python -m taskforge.driver --help` lists the exit codes of a `one` child and when `run`
+fails.
 
 The driver prints every policy value it resolves next to the declared one (`POLICY key
 declared=… resolved=…`) and the model each role uses (`MODEL role=author model=… endpoint=…`).
