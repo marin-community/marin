@@ -102,13 +102,10 @@ def _step_rows(reader: ReadView) -> Iterator[StepRecord]:
 def _source_fingerprints(reader: ReadView) -> dict[str, str]:
     fingerprints = {}
     for table in _SOURCE_TABLES:
+        version = reader.table_content_version(table)
         source = {
-            "metadata_path": reader.table_metadata_path(table),
-            # Appends and rebuilt tables get fresh row commits; compaction
-            # preserves them even when sealing rewrites the physical shards.
-            "row_commit_upper_bound": max(
-                (shard.row_commit_upper_bound for shard in reader.list_shards(table)), default=0
-            ),
+            "metadata_path": version.metadata_path,
+            "row_commit_upper_bound": version.row_commit_upper_bound,
         }
         fingerprints[table] = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
     return fingerprints

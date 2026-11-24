@@ -61,8 +61,9 @@ replacement shards in Arrow batches up to the transaction's byte budget. An
 unbounded transaction uses the store buffer budget for replacement batches.
 A single row may exceed the budget. The replacement publishes with the other
 transaction writes. Pass `store.transaction(base=view)` to use the snapshot
-that supplied the input rows. The commit checks that the output table and
-its named dependencies still match that snapshot.
+that supplied the input rows. The commit checks for content changes to the
+output table and its named dependencies. Physical compaction can proceed
+while the replacement is staged.
 
 A drop or replacement advances the table's incarnation. Append handles
 registered under an earlier incarnation fail with `CommitConflict`. A new

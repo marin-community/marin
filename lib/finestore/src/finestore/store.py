@@ -45,8 +45,8 @@ from finestore.layout import (
     SealMarker,
     Shard,
     SystemColumns,
+    TableContentVersion,
     TableMetadata,
-    TableVersion,
     blob_table_metadata,
     build_uri,
 )
@@ -384,7 +384,7 @@ class DataStore:
         self,
         rows: dict[str, list[ArrowRow]],
         staged: dict[str, TableAddition],
-        expected_tables: dict[str, TableVersion],
+        expected_contents: dict[str, TableContentVersion],
     ) -> CommitToken:
         with self._commit_lock:
             additions = dict(staged)
@@ -401,7 +401,7 @@ class DataStore:
                     return self._commits.commit(CommitDelta())
                 return snapshot.token
             return self._commits.commit(
-                replace(_addition_delta(additions), reset_tables=frozenset(staged), expected_tables=expected_tables)
+                replace(_addition_delta(additions), reset_tables=frozenset(staged), expected_contents=expected_contents)
             )
 
     def compact(self, table: str, *, generation: int | None = None) -> CompactionResult:
@@ -633,7 +633,7 @@ class Transaction:
         self._base = store.read_view() if base is None else base
         self._rows: dict[str, list[ArrowRow]] = {}
         self._staged: dict[str, TableAddition] = {}
-        self._expected_tables: dict[str, TableVersion] = {}
+        self._expected_contents: dict[str, TableContentVersion] = {}
         self._objects: dict[str, bytes] = {}
         self._max_bytes = max_bytes
         self._buffer_bytes = 0
@@ -675,7 +675,8 @@ class Transaction:
         """Stage a full table replacement in Arrow batches.
 
         The replacement and other transaction writes publish together. The replaced
-        table and its dependencies must still match the transaction's base view.
+        table and its dependencies must retain the contents of the base view.
+        Compaction can rewrite their files while staging proceeds.
         Each batch uses the transaction's byte budget, or the store's for an
         unbounded transaction. A single row can exceed the budget.
         """
@@ -683,15 +684,15 @@ class Transaction:
             raise RuntimeError("transaction is closed")
         if name in self._rows or name in self._staged:
             raise ValueError(f"transaction already contains writes for table {name!r}")
-        version = self._base.table_version(name)
+        version = self._base.table_content_version(name)
         writer = self._store._table_writer(
             name, metadata=metadata, schema=schema, incarnation=version.incarnation, start_seq=0
         )
         batch_limit = self._store._max_buffer_bytes if self._max_bytes is None else self._max_bytes
         shards = tuple(writer._stage_shards(rows, max_bytes=batch_limit))
         self._staged[name] = TableAddition(writer.metadata_path, shards, writer.incarnation)
-        self._expected_tables[name] = version
-        self._expected_tables.update((table, self._base.table_version(table)) for table in depends_on)
+        self._expected_contents[name] = version
+        self._expected_contents.update((table, self._base.table_content_version(table)) for table in depends_on)
 
     def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
         """Buffer one named byte object and return its ``finestore://`` URI."""
@@ -718,7 +719,7 @@ class Transaction:
             if self.token is None:
                 raise RuntimeError("transaction closed without committing")
             return self.token
-        self.token = self._store._commit_transaction(self._rows, self._staged, self._expected_tables)
+        self.token = self._store._commit_transaction(self._rows, self._staged, self._expected_contents)
         self._closed = True
         return self.token
 

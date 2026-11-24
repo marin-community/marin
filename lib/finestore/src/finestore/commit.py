@@ -30,6 +30,7 @@ from finestore.layout import (
     ManifestTable,
     SealMarker,
     Shard,
+    TableContentVersion,
     TableMetadata,
     TableVersion,
 )
@@ -95,6 +96,7 @@ class CommitDelta:
     metadata_updates: dict[str, str] = field(default_factory=dict)
     reset_tables: frozenset[str] = frozenset()
     expected_tables: dict[str, TableVersion] = field(default_factory=dict)
+    expected_contents: dict[str, TableContentVersion] = field(default_factory=dict)
     expected_incarnations: dict[str, int] | None = None
     required_features: frozenset[str] = frozenset()
     seal_update: SealMarker | ClearSeal | None = None
@@ -217,6 +219,16 @@ def _check_preconditions(base: Manifest, delta: CommitDelta) -> None:
         raise CommitConflict("a table was dropped or replaced during sealing")
     for name, expected in delta.expected_tables.items():
         if base.table_version(name) != expected:
+            raise CommitConflict(f"table {name!r} changed since the expected snapshot")
+    for name, expected_content in delta.expected_contents.items():
+        current = base.table_content_version(name)
+        # Compaction can tighten a legacy upper bound. Appends always advance it.
+        if (
+            current.incarnation != expected_content.incarnation
+            or current.metadata_path != expected_content.metadata_path
+            or current.history_floor != expected_content.history_floor
+            or current.row_commit_upper_bound > expected_content.row_commit_upper_bound
+        ):
             raise CommitConflict(f"table {name!r} changed since the expected snapshot")
 
 

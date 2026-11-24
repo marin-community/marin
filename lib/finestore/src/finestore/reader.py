@@ -38,6 +38,7 @@ from finestore.layout import (
     SealMarker,
     Shard,
     SystemColumns,
+    TableContentVersion,
     TableMetadata,
     TableVersion,
     parse_uri,
@@ -943,6 +944,10 @@ class ReadView(_ReadOperations):
     def table_version(self, table: str) -> TableVersion:
         """Capture the table state for a conditional drop or replacement."""
         return self._snapshot.manifest.table_version(table)
+
+    def table_content_version(self, table: str) -> TableContentVersion:
+        """Capture table contents for a guard that permits compaction."""
+        return self._snapshot.manifest.table_content_version(table)
 
     def schema_version(self, table: str) -> int | None:
         """Return the table schema version, or ``None`` when it has no active shards."""

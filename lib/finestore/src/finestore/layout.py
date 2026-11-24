@@ -224,6 +224,16 @@ class TableVersion:
     shard_paths: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class TableContentVersion:
+    """The schema and row version used to detect logical table changes."""
+
+    incarnation: int
+    metadata_path: str | None
+    row_commit_upper_bound: int
+    history_floor: int
+
+
 class Manifest(_FormatModel):
     """One immutable, complete archive snapshot."""
 
@@ -248,6 +258,17 @@ class Manifest(_FormatModel):
             incarnation=self.table_incarnations.get(name, INITIAL_TABLE_INCARNATION),
             metadata_path=table.metadata_path if table is not None else None,
             shard_paths=tuple(shard.path for shard in table.shards) if table is not None else (),
+        )
+
+    def table_content_version(self, name: str) -> TableContentVersion:
+        table = self.tables.get(name)
+        shards = () if table is None else table.shards
+        upper_bound = max((shard.row_commit_upper_bound for shard in shards), default=0)
+        return TableContentVersion(
+            incarnation=self.table_incarnations.get(name, INITIAL_TABLE_INCARNATION),
+            metadata_path=table.metadata_path if table is not None else None,
+            row_commit_upper_bound=upper_bound if upper_bound > self.cache_history_floor else 0,
+            history_floor=self.cache_history_floor,
         )
 
 

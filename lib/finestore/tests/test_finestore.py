@@ -302,6 +302,31 @@ def test_table_replacement_publishes_all_staged_shards_with_transaction_objects(
         assert pinned.read_blob("completion") == b"old"
 
 
+def test_table_replacement_rebases_over_source_and_target_compaction(archive_root):
+    with DataStore.open(archive_root, flush_interval=3600) as store:
+        store.table("derived", primary_key=("id",)).append({"id": 0})
+        store.table("source", primary_key=("id",)).append({"id": 1})
+        store.flush()
+        before = store.read_view()
+
+        with store.transaction(base=before) as transaction:
+            transaction.replace_table(
+                "derived",
+                ({"id": row["id"]} for row in before.iter_rows("source")),
+                metadata=TableMetadata(primary_key=("id",)),
+                depends_on=("source",),
+            )
+            compact_table(archive_root, "source")
+            compact_table(archive_root, "derived")
+            compacted = store.read_view()
+            for name in ("source", "derived"):
+                assert compacted.list_shards(name) != before.list_shards(name)
+
+        current = store.read_view()
+        assert current.list_shards("source") == compacted.list_shards("source")
+        assert current.keys("derived") == {(1,)}
+
+
 def test_table_replacement_rejects_a_concurrent_source_append(archive_root):
     with DataStore.open(archive_root, flush_interval=3600) as store:
         store.table("derived", primary_key=("id",)).append({"id": 0})
