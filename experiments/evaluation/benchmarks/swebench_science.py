@@ -16,7 +16,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from shellbox.machine import NetworkPolicy
-from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, EpisodeLimits, MiniSweAgent, PiAgent
+from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, EpisodeLimits, PiAgent
 from taskcompendium.importers.harbor.package import (
     AGENT_CAPABILITIES,
     INSTRUCTION,
@@ -51,7 +51,6 @@ from taskcompendium.pipeline.models import IntendedUse, RawRow
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.benchmarks.harbor import (
     EPISODE_LABEL,
-    MAX_OUTPUT_TOKENS,
     MODEL_TURN_TIMEOUT,
     PI_MAX_OUTPUT_TOKENS,
     harbor_item,
@@ -95,7 +94,7 @@ def _offline_image(env: dict) -> str:
     return re.sub(r":[^/:@]+(?=@)", "", env["docker_image"])
 
 
-def lower_science_package(directory: Path, row: RawRow, *, agent_install: str | None = None) -> TaskSpec:
+def lower_science_package(directory: Path, row: RawRow) -> TaskSpec:
     """Build a TaskSpec directly from a pinned SWE-bench Science release package."""
     config = tomllib.loads((directory / "task.toml").read_text())
     agent, verifier = config["agent"], config["verifier"]
@@ -108,8 +107,7 @@ def lower_science_package(directory: Path, row: RawRow, *, agent_install: str | 
         raise ValueError("SWE-bench Science requires the native no-network protocol")
 
     solver = LoweredSource(_offline_image(solver_env), None, solver_env["workdir"])
-    if agent_install is not None:
-        solver = extend_source(solver, agent_install)
+    solver = extend_source(solver, pi_install(PI))
     hook = (directory / "pre_artifacts.sh").read_text()
     command = f"cd {shlex.quote(solver_env['workdir'])} && sh -c {shlex.quote(hook)}"
     episode = EpisodeInputs(
@@ -168,22 +166,19 @@ def lower_science_package(directory: Path, row: RawRow, *, agent_install: str | 
     )
 
 
-def convert(row: RawRow, _context: ConversionContext, *, agent_install: str | None) -> TaskSpec:
+def convert(row: RawRow, _context: ConversionContext) -> TaskSpec:
     with TemporaryDirectory(prefix="swe-science-") as root:
         package = Path(root) / row.data["name"]
         extract_package(row.data["archive"], package)
-        return lower_science_package(package, row, agent_install=agent_install)
+        return lower_science_package(package, row)
 
 
-def science_source(
-    benchmark: str, task_ids: tuple[str, ...], harness: PiAgent | MiniSweAgent
-) -> RlDataSource[EvaluationCorpusRecipe]:
-    pi = isinstance(harness, PiAgent)
-    protocol_name = "pi-xhigh" if pi else "mini-swe-agent"
+def science_source(benchmark: str, task_ids: tuple[str, ...]) -> RlDataSource[EvaluationCorpusRecipe]:
+    protocol_name = "pi-xhigh"
     name = f"{benchmark}-{protocol_name}"
     episode = AgentEpisode(
-        harness=harness,
-        max_input_tokens=65536 if pi else None,
+        harness=PI,
+        max_input_tokens=65536,
         limits=EpisodeLimits(
             max_turns=None,
             max_total_tokens=None,
@@ -200,7 +195,7 @@ def science_source(
         source=HarborRepoSource(
             DATASET, REVISION, read=package_rows, root="tasks", packages=frozenset(f"task_{key}" for key in task_ids)
         ),
-        convert=partial(convert, agent_install=pi_install(harness) if isinstance(harness, PiAgent) else None),
+        convert=convert,
     )
     return RlDataSource(
         info=SourceInfo(
@@ -218,7 +213,7 @@ def science_source(
                 benchmark,
                 VERSION,
                 len(task_ids),
-                max_output_tokens=PI_MAX_OUTPUT_TOKENS if pi else MAX_OUTPUT_TOKENS,
+                max_output_tokens=PI_MAX_OUTPUT_TOKENS,
                 requires_judge=False,
                 trials=1,
             ),
@@ -232,9 +227,8 @@ def science_source(
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
-        science_source(BENCHMARK, TASK_IDS, PI),
-        science_source(BENCHMARK, TASK_IDS, MiniSweAgent()),
-        science_source(f"{BENCHMARK}-hosted114", HOSTED_TASK_IDS, PI),
+        science_source(BENCHMARK, TASK_IDS),
+        science_source(f"{BENCHMARK}-hosted114", HOSTED_TASK_IDS),
     ]
 
 

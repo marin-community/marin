@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.importers.harbor.dockerfile import dockerfile_images
 from taskcompendium.models import GraderMachine, MissingArtifactPolicy, ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
@@ -50,7 +51,13 @@ def test_science_corpus_sets_solver_disk_and_keeps_the_verifier_image(science_pa
     [source] = swebench_science.benchmarks()[0].resolve("pi-xhigh")
     task = source.config.recipe.convert(row, ConversionContext({}, None))
     assert isinstance(task, TaskSpec)
-    assert task.environment_requirements.docker_build is not None
+    build = task.environment_requirements.docker_build
+    assert build is not None
+    dockerfile = next(file for file in build.files if file.path == "Dockerfile")
+    manifest = tomllib.loads((science_package / "task.toml").read_text())
+    assert dockerfile_images(base64.b64decode(dockerfile.source.content_base64).decode()) == (
+        manifest["environment"]["docker_image"].replace(":v0.1.0@", "@"),
+    )
     assert isinstance(task.grader, ScriptGrader) and isinstance(task.grader.placement, GraderMachine)
     assert task.grader.placement.environment.docker_build is None
     episode = source.config.item_builder(task).episode
@@ -62,7 +69,6 @@ def test_native_verifier_entrypoint_and_hidden_tests_remain_image_owned(science_
     task = lower_science_package(science_package, ROW)
     config = tomllib.loads((science_package / "task.toml").read_text())
     assert task.context.events[0].content == (science_package / "instruction.md").read_text()
-    assert task.environment_requirements.docker_image == config["environment"]["docker_image"].replace(":v0.1.0@", "@")
     assert "network" not in task.environment_requirements.capabilities
     assert not task.resources.worker
     assert not task.resources.oracle
