@@ -61,6 +61,7 @@ from harbor.models.trial.result import TrialResult
 from harbor.registry.client import RegistryClientFactory
 from harbor.archive import open_archive
 from harbor.telemetry.observer import (
+    TelemetryRuntime,
     bind_telemetry,
     record_job_terminal,
     shutdown_telemetry,
@@ -705,20 +706,10 @@ class Job:
 
     @staticmethod
     def _is_resume_retryable_result(trial_result: TrialResult) -> bool:
-        """True if this on-disk trial result should be RE-RUN on a fresh resume.
+        """Return whether a saved trial needs another attempt on resume.
 
-        Results without confirmed teardown and final timestamps are incomplete
-        regardless of their score or exception type. Confirmed results use the shared
-        :func:`harbor_config.errors.is_resume_retryable` taxonomy. Kept separate
-        from :meth:`_is_cancelled_result`, which drives cancelled-specific
-        progress bookkeeping (``n_cancelled_trials``); this predicate is only
-        the resume-level "re-run vs keep" decision and defaults to include BOTH
-        CancelledError and SandboxBuildFailedError.
-
-        Also re-runs legacy ``BadRequestError`` results whose payload is the
-        exact context-budget-exhausted signal (see
-        :data:`_BAD_REQUEST_MAX_TOKENS_ZERO_SIGNAL`) — those predate
-        :class:`ContextManagementInfrastructureError` but are the same failure.
+        Incomplete teardown, retryable failures, and historical zero-budget
+        BadRequestError results need a fresh attempt.
         """
         if trial_result.completion is None or trial_result.finished_at is None:
             return True
@@ -1078,21 +1069,12 @@ class Job:
             job_uid=self._id,
             job_name=self.config.job_name,
         )
-        if telemetry is not None:
-            hook = trial_hook(telemetry)
-            for event in TrialEvent:
-                self._trial_queue.add_hook(event, hook)
-        archive = open_archive(self.config.archive, trials_dir=self.job_dir)
-        if archive is not None:
-            self._trial_queue.add_hook(TrialEvent.END, archive.on_trial_end)
         try:
-            with bind_telemetry(telemetry):
-                result = await self._run_job()
-                # Rebuild canonical archive rows from the selected final results,
-                # including resumed trials; native retry attempts stay preserved.
-                if archive is not None:
-                    await archive.finalize(result.trial_results)
-                    await asyncio.to_thread(archive.seal)
+            if telemetry is not None:
+                hook = trial_hook(telemetry)
+                for event in TrialEvent:
+                    self._trial_queue.add_hook(event, hook)
+            result = await self._run_job_with_archive(telemetry)
         except BaseException as error:
             record_job_terminal(telemetry, error)
             raise
@@ -1100,9 +1082,36 @@ class Job:
             record_job_terminal(telemetry)
             return result
         finally:
+            release = asyncio.create_task(
+                asyncio.to_thread(shutdown_telemetry, telemetry)
+            )
+            cancellation: asyncio.CancelledError | None = None
+            while not release.done():
+                try:
+                    await asyncio.shield(release)
+                except asyncio.CancelledError as error:
+                    cancellation = error
+            release.result()
+            if cancellation is not None:
+                raise cancellation
+
+    async def _run_job_with_archive(
+        self, telemetry: TelemetryRuntime | None
+    ) -> JobResult:
+        archive = open_archive(self.config.archive, trials_dir=self.job_dir)
+        try:
+            if archive is not None:
+                self._trial_queue.add_hook(TrialEvent.END, archive.on_trial_end)
+            with bind_telemetry(telemetry):
+                result = await self._run_job()
+                # Canonical archive rows use the selected results, including resumed trials.
+                if archive is not None:
+                    await archive.finalize(result.trial_results)
+                    await asyncio.to_thread(archive.seal)
+            return result
+        finally:
             if archive is not None:
                 await asyncio.to_thread(archive.close)
-            await asyncio.to_thread(shutdown_telemetry, telemetry)
 
     async def _run_job(self) -> JobResult:
         try:
