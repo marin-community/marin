@@ -410,9 +410,18 @@ provenance URL, and `license_receipt` references the stage-0 license resolution
 that ingest and admission rest on (`RlDataSource.require_license` fails closed
 on it). The `deprecated` tag marks a
 source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
-the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
-visible in the Atlas with its evidence, but it is never admitted to selection and
-its measured Daytona and oracle evidence remains visible even without a pipeline.
+the deprecation reason. A source without a `pipeline` is `Inventory` unless it
+carries the `atlas-admitted` tag: `Atlas-admitted` records the Atlas's admission
+of a source whose import path on main is still pending. An Atlas-admitted record
+declares its pinned release, its stage-0 license receipt (resolved under its
+declared `intended_use`) and its restriction tier in
+`datasets/atlas_admissions.py`; the receipts live beside it in
+`datasets/atlas_license_receipts.json`. The Atlas's canonical and retained
+prebuilt readers and the remaining receipt bindings land with the ingestion
+PRs; until then an Atlas-admitted source is never treated as runnable here.
+An `Inventory` source stays visible in the Atlas with its evidence, but it is
+never admitted to selection; its measured Daytona and oracle evidence remains
+visible even without a pipeline.
 
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects
@@ -1045,30 +1054,4 @@ grader as unsupported on Daytona, independently of the task machine's image.
 A mixed deployment may run the agent on Daytona and the grader locally, but
 that does not qualify both machine slots for Daytona. CalibForge declares an
 image for its grader.
-
-## Method tags and dataset variants
-
-Store method tags on pinned dataset variants, registered in
-`experiments/post_training/task_curation/datasets/method_variants.json`. The
-loader (`method_variants.py`) validates each registered variant against its own
-producer receipts: an SFT variant must carry a completed Datakit preparation
-receipt whose bytes hash-match the registered reference, and a converted variant
-must carry the producer's own `ConversionReceipt`, re-read from storage, with a
-matching parent and output. Variants are separate pinned records with their own
-receipts and lineage; keep parent and child variants separate.
-
-Two independent variants of one source are two records under one `source_id`: a
-filtered child declares its conversion lineage back to the environment variant,
-and an SFT variant declares its preparation receipt. Neither inherits the
-other's tag. A curriculum entry selects one variant explicitly (`name@variant`),
-so one entry can sample the filtered child while another samples the SFT
-conversion of the same source.
-
-The Atlas Method column shows the union over a source's variants; Evidence lists
-each variant and its receipt. A source without a completed Datakit SFT receipt
-shows RL only. Do not infer SFT qualification from mix membership. RL-to-SFT
-conversion is its own workflow: the prompt/response reformatting creates a new
-child and row lineage from pinned existing responses, and the conversion receipt
-grants no method tag. Prepare and register the child with Datakit before
-assigning SFT.
 

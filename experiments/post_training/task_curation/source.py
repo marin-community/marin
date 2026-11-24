@@ -122,6 +122,8 @@ class SourceReference:
 
 
 EXCLUDED_TAG = "excluded"
+ATLAS_ADMITTED_TAG = "atlas-admitted"
+"""The Atlas admits this source; the import path that would run it on main is still pending."""
 """The source tag that keeps a declared source out of admission."""
 
 
@@ -163,6 +165,12 @@ class SourceInfo:
     """
     current_release: DatasetRelease | None = None
     """The exact release consumed for training, separately from upstream provenance."""
+    intended_use: IntendedUse | None = None
+    """The declared use of a source recorded without its registered converter.
+
+    Configured sources resolve their use from the converter instead; a source
+    that declares it in both places is refused.
+    """
     upstream_url: str | None = None
     """Upstream provenance URL, including for repaired releases."""
     license_receipt: LicenseReceipt | None = None
@@ -246,10 +254,14 @@ class RlDataSource[ConfigT: CatalogConfig]:
 
     @property
     def intended_use(self) -> SourceUse:
-        """Resolve population policy from the registered converter."""
-        if self.config is None:
+        """Resolve population policy from the registered converter, or the record's declared use."""
+        if self.config is not None and self.info.intended_use is not None:
+            raise ValueError(f"Source {self.info.id} declares its use twice")
+        if self.config is not None:
+            return SourceUse(self.config.intended_use.value)
+        if self.info.intended_use is None:
             raise ValueError(f"No registered conversion Use: {self.info.id}")
-        return SourceUse(self.config.intended_use.value)
+        return SourceUse(self.info.intended_use.value)
 
     @property
     def name(self) -> str:
@@ -344,7 +356,11 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
                 (label for tag, label in (("deprecated", "Deprecated"), (EXCLUDED_TAG, "Excluded")) if tag in tags),
-                "Inventory" if pipeline is None else "Available",
+                (
+                    "Available"
+                    if pipeline is not None
+                    else ("Atlas-admitted" if ATLAS_ADMITTED_TAG in tags else "Inventory")
+                ),
             ),
             pipeline=invocation,
             independent_qc=info.independent_qc,

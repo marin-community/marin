@@ -360,26 +360,6 @@ def sources() -> list[RlDataSource]:
         RlDataSource(
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
-                id="TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
-                upstream_dataset="laion__exp_rpt_crosscodeeval-python-v2",
-                upstream_name="laion/exp_rpt_crosscodeeval-python-v2",
-                subset=None,
-                build_path="Task Trove",
-                origin=SourceOrigin.TASKTROVE,
-                family="code-completion",
-                tags=("agentic", "multi-turn", EXCLUDED_TAG),
-                count=500,
-                notes="0.25 for any non-empty output; instruction discloses the tiers.",
-                dataset=TASKTROVE_INPUT,
-                daytona_snapshot_count=1,
-                daytona_count_basis=(
-                    "production snapshot_identity over the pinned INPUT archive payloads; task.toml environment config"
-                ),
-            )
-        ),
-        RlDataSource(
-            info=SourceInfo(
-                data_restriction=DataRestriction.OPEN,
                 id="TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2",
                 upstream_dataset="laion__exp_rpt_crosscodeeval-typescript-v2",
                 upstream_name="laion/exp_rpt_crosscodeeval-typescript-v2",
