@@ -81,6 +81,15 @@ class Workpiece:
         if self.proposal is None and self.submission is None:
             raise ValueError(f"Workpiece {self.id} needs a proposal or an existing task")
 
+    @property
+    def modify_rounds(self) -> int:
+        """The review modify rounds charged against ``budget.max_modify_rounds``.
+
+        A source task's first modify only opens its first author session, after review measured the task as
+        its source wrote it, so it is not charged: a source task gets as many author sessions as a proposal.
+        """
+        return self.round - 1 if self.proposal is None and self.round > 0 else self.round
+
     def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":
         return replace(self, **changes)
 

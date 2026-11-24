@@ -47,8 +47,10 @@ def after_validation(wp: Workpiece) -> Stage:
 
 def decided(wp: Workpiece, result: Decided, *, budget: Budget, policy: Policy) -> Workpiece:
     decision = result.decision
-    if isinstance(decision, Modify) and wp.round >= budget.max_modify_rounds:
-        decision = Abandon((f"budget.max_modify_rounds exhausted after {wp.round} modify rounds", *decision.findings))
+    if isinstance(decision, Modify) and wp.modify_rounds >= budget.max_modify_rounds:
+        decision = Abandon(
+            (f"budget.max_modify_rounds exhausted after {wp.modify_rounds} modify rounds", *decision.findings)
+        )
     wp = wp.with_(decisions=(*wp.decisions, decision))
     match decision:
         case Accept():

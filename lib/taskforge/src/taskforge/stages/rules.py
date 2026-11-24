@@ -70,7 +70,7 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
             if revert:
                 reasons += ("Hardening regressed; reverted to the previously validated submission", *decision.findings)
             return Accept(BandOutcome.TOO_EASY, (*reasons, *exhausted_notes(result)), revert=revert)
-        if decision.placement is BandOutcome.TOO_EASY and workpiece.round >= budget.max_modify_rounds:
+        if decision.placement is BandOutcome.TOO_EASY and workpiece.modify_rounds >= budget.max_modify_rounds:
             reasons = ("accepted_with: too_easy", "Shared modification budget exhausted", *exhausted_notes(result))
             return Accept(BandOutcome.TOO_EASY, reasons)
     return decision
@@ -122,17 +122,18 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
         for finding in trial.findings
         if finding.met or CAUSE_DECISIONS.get(finding.cause) is Modify
     )
-    if findings:
-        return Modify(findings)
     solved = sum(
         passed(trial.grade)
         for trial in result.solver
         if trial.grade is not None and trial.cause is not Cause.GENERATION_LIMIT
     )
     place = band.place(solved / len(result.solver))
+    finding = f"{solved} of {len(result.solver)} trials solved: {place}"
+    if findings:
+        # A source task's first author also needs the solve rate its review measured, not only the missing controls.
+        return Modify((*findings, finding) if NO_CONTROLS in findings else findings)
     if place is BandOutcome.IN_BAND and place in band.accepted:
         return Accept(place, exhausted_notes(result))
-    finding = f"{solved} of {len(result.solver)} trials solved: {place}"
     if place is BandOutcome.TOO_EASY:
         finding += (
             ". Make the task harder while preserving correct controls and grading. This is the one hardening attempt."

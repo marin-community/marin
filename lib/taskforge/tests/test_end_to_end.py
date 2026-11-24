@@ -34,7 +34,7 @@ from taskforge.model.llm import Completion, FinishReason, ToolCall
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Abandon, Accept, BandRules, Budget, Cause, Decision, Incomplete, Modify, Retry
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy
 from taskforge.resources.bundle import Resources
 from taskforge.resources.clock import Clock
@@ -194,6 +194,24 @@ async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
         "budget.max_modify_rounds exhausted after 1 modify rounds",
         f"Revise {wp.evidence[-1].task_digest} for band {settings.band.low}-{settings.band.high}",
     )
+
+
+async def test_source_task_gets_as_many_author_sessions_as_a_proposal(proposal: TaskProposal) -> None:
+    settings = replace(config("S"), review=needs_revision)
+    source = Workpiece("source", submission=Submission(arithmetic_task(), (), "source task"))
+    runs = {}
+    for name, seed, first in (
+        ("proposal", Workpiece(proposal.header.id, proposal), Stage.AUTHOR),
+        ("source", source, Stage.VALIDATE),
+    ):
+        log = EventLog()
+        bundle = resources(Envs(), (*script("S"), *script("S")))
+        wp = await run_workpiece(seed, replace(settings, initial_stage=first), bundle, log, install=install)
+        stages = [record.event.stage for record in log.records if isinstance(record.event, StageCompleted)]
+        runs[name] = (wp.terminal, stages.count(Stage.AUTHOR), wp.decisions[-1])
+    assert runs["proposal"][:2] == runs["source"][:2] == (Terminal.ABANDONED, 2)
+    final = runs["source"][2]
+    assert isinstance(final, Abandon) and final.reasons[0] == "budget.max_modify_rounds exhausted after 1 modify rounds"
 
 
 async def test_validation_retry_budget_holds_without_restarting_author(proposal: TaskProposal) -> None:
@@ -726,13 +744,15 @@ async def test_lost_upload_reply_never_reads_back_a_doubled_write(
     assert len(envs.created) == 2 and (envs.created[1] / "proof.txt").read_bytes() == b"proof"
 
 
+@pytest.mark.parametrize("arm", ("S", "T"))
 async def test_driver_repairs_source_task_without_proposal(
-    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arm: str
 ) -> None:
     source = tmp_path / "arithmetic.task.json"
     source.write_text(arithmetic_task().model_dump_json())
     driver_args.proposals = str(source)
-    bundle = resources(Envs(), script("S"))
+    driver_args.arm = arm
+    bundle = resources(Envs(), script(arm))
 
     @asynccontextmanager
     async def fake_runtime(
@@ -748,15 +768,18 @@ async def test_driver_repairs_source_task_without_proposal(
     assert wp.terminal == Terminal.ACCEPTED
     assert wp.proposal is None
     first, second = wp.decisions
-    assert isinstance(first, Modify) and first.findings == (NO_CONTROLS,)
+    # SolverEngine solves even-numbered trials, so the source task measures 1 of 2 before any author touches it.
+    intake = (NO_CONTROLS, "1 of 2 trials solved: in_band")
+    assert isinstance(first, Modify) and first.findings == intake
     assert isinstance(second, Accept)
     assert wp.submission is not None and wp.submission.controls
     records = await JsonlSink(str(destination / "events.jsonl")).read()
     stages = [record.event.stage for record in records if isinstance(record.event, StageCompleted)]
-    assert stages == ["validate", "review", "author", "validate", "review"]
+    authoring = ["author", "validate"] if arm == "S" else ["author", "validate", "author", "validate"]
+    assert stages == ["validate", "review", *authoring, "review"]
     assert isinstance(bundle.inference, FakeInference) and isinstance(bundle.envs, Envs)
     opening = bundle.inference.requests[0].messages[1].content
-    assert opening == config("S").policy.prompt("author.repair").render(kind="review", detail=NO_CONTROLS)
+    assert opening == config(arm).policy.prompt("author.repair").render(kind="review", detail="\n".join(intake))
     assert not any(
         path.name == "proposal.json" for env in bundle.envs.created for path in env.files
     ), "a source task has no proposal to hydrate"
