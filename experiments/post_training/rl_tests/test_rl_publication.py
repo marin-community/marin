@@ -569,8 +569,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     summary = json.loads(summary_path.read_text())
     summary["selection_strata"]["version"] = "2026.11.24.1"
     write_json(summary_path, summary)
-    fresh_preset = replace(preset, held_out_tasks=new_binding)
-    fresh_pin = replace(pin, commit="next-main", replicates=2)
+    fresh_preset = replace(preset, revision="2026.11.24.1", held_out_tasks=new_binding)
+    fresh_pin = replace(pin, commit="next-main", revision=fresh_preset.revision, replicates=2)
     fresh_table = preset_table(fresh_preset)
     fresh_table = replace(fresh_table, control_pins={**fresh_table.control_pins, preset.name: fresh_pin})
     monkeypatch.setattr(snowball_model, "SNOWBALL", fresh_table)

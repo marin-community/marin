@@ -287,12 +287,12 @@ must match its recorded inputs. The report states why a comparison is INVALID or
 The gate compares candidates and controls with the same preset revision, evaluation request and
 held-out task set. The preset revision includes the evaluation selection.
 
-A link report compares consecutive control cohorts on task digests that every run scored.
-Evaluation requests must match, and the shared set must cover at least 90% of each run's tasks
-overall and in each family. The report names both selections, counts the shared tasks and shows
-scores on tasks unique to the new cohort. It uses the newest run's strata labels and calibrates
-the control spread on the shared set. Gain per GPU-hour is available when evaluation task counts
-match and the shared set includes the initial scores.
+A link report compares consecutive control cohorts on task digests present in every run.
+Evaluation requests must match, and the shared set must cover at least 90% of each previous
+control run's tasks overall and in each family. The report names both selections, counts the shared
+tasks and shows scores on tasks unique to the new cohort. It uses the newest run's strata labels
+and calibrates the control spread on the shared set. Gain per GPU-hour is available when evaluation
+task counts match and the shared set includes the initial scores.
 
 Guard tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, where `k` is the number of
 guards and `sd` is the controls' sample standard deviation. A worse change beyond tolerance fails the guard.
@@ -324,9 +324,8 @@ entry points run on CPU and report which cohorts have a changed revision or, for
 takes a training set at launch, a changed training-set digest. The workflow serializes runs and
 checks the current head once per run. Each check uses the latest defaults on main when it starts.
 
-The refresh driver can collect changed cohorts, keep every completed replicate, run leave-one-out,
-link each cohort to its previous pin, and propose one draft with the new pins. The workflow runs
-in dry-run mode. Live collection requires a decision on code-only changes, the pin PR merge
+The planner only produces a dry-run plan. The cohort-link report is available for stored runs.
+Live collection and pin proposals require a decision on code-only changes, the pin PR merge
 policy and the bot account.
 
 ## Change a preset's default

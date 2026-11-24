@@ -346,7 +346,7 @@ def _require_shared_overlap(
     return coverage
 
 
-def _unshared_score(
+def _unshared_comparison(
     name: str,
     runs: Sequence[RunMeasurements],
     extra: Sequence[set[str]],
@@ -391,7 +391,7 @@ def _align_evaluation(
     shared = set.intersection(*sets)
     coverage = _require_shared_overlap(name, shared, labels[n_runs:])
     baseline = set.union(*sets[n_runs:])
-    extra = _unshared_score(name, cohort[:n_runs], [tasks - baseline for tasks in sets[:n_runs]])
+    extra = _unshared_comparison(name, cohort[:n_runs], [tasks - baseline for tasks in sets[:n_runs]])
     strata = labels[newest]
     aligned = [
         (

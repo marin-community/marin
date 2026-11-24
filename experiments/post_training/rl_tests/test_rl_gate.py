@@ -844,7 +844,7 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
     ),
 )
 def test_control_link_scores_shared_evaluation(
-    recorded_runs, preset_table, monkeypatch, case, replaced, extra, shared, reason
+    recorded_runs, preset_table, monkeypatch, tmp_path, case, replaced, extra, shared, reason
 ):
     cache_native_compositions(monkeypatch)
     preset = replace(
@@ -915,8 +915,10 @@ def test_control_link_scores_shared_evaluation(
     table = replace(table, control_pins={**table.control_pins, preset.name: fresh})
     monkeypatch.setattr(snowball_model, "SNOWBALL", table)
     changed_ids = {f"task-{index}" for index in (*replaced, *range(count, count + extra))}
+    fresh_roots = []
     for index in range(fresh.replicates):
         candidate = recorded_runs(preset.name, gate.control_name(preset.name, fresh.commit, index, table=table))
+        fresh_roots.append(candidate)
         if changed_ids and reason is None:
             export = str(candidate / "exports")
             rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/", step=preset.updates)
@@ -948,6 +950,18 @@ def test_control_link_scores_shared_evaluation(
     family_mean = results["eval_lite/family_mean"]
     assert family_mean["tasks"] == shared and family_mean["run"] == pytest.approx(0.5)
     assert family_mean["control"] == pytest.approx(0.49525 if case == "relabeled-family" else 0.495)
+    if case == "different-content":
+        assert family_mean["sd"] == pytest.approx(0.01 / math.sqrt(2))
+        gate_report = gate._write_gate(
+            preset,
+            (str(fresh_roots[0]),),
+            tuple(map(str, baseline_roots)),
+            replace(previous, revision=fresh.revision),
+            RunInputs(preset_name=preset.name),
+            str(tmp_path / "candidate-gate"),
+        )
+        assert gate_report.verdict == "invalid"
+        assert gate_report.reason == "evaluation protocol or held-out TaskSpec content differs"
     if changed_ids:
         unshared = results["eval_lite/unshared/mean"]
         assert (unshared["role"], unshared["tasks"], unshared["run"]) == ("reported", len(changed_ids), 1.0)
