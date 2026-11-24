@@ -459,7 +459,7 @@ _PRESETS = (
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
         gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
-        budget="24-27 min; about 17 H100-h",
+        budget="20m12s and 13.5 H100-h in the four-proposal comparison",
     ),
     _snowball(
         evaluations=(),
