@@ -17,6 +17,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     EnvironmentRequirements,
     FileReward,
+    GraderMachine,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
@@ -62,7 +63,7 @@ def source_package(
     grader = ScriptGrader(
         argv=("python3", "-m", "source_grader.fewshot", scorer),
         cwd="/tests",
-        environment=environment,
+        placement=GraderMachine(environment=environment),
         judge=judge,
         empty_output=EmptyOutputPolicy.GRADE,
         answer_path="/app/answer.txt",
