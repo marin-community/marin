@@ -410,7 +410,18 @@ def census_input_rows(declarations: list[DeclarationPin], sources: dict[str, Any
             continue
         source = sources[declaration.source_id]
         binding = source.info.actor_census_input
-        population = population_for_census(binding.evidence_url, declaration.source_id)
+        try:
+            population = population_for_census(binding.evidence_url, declaration.source_id)
+        except ValueError as error:
+            # A staged source whose census evidence is not an artifact record yet (an
+            # intake lane mid-flight) cannot feed a census job: record it for the report
+            # instead of failing the whole plan over another lane's pending intake.
+            unrunnable.append(
+                f"derived-contract census: {declaration.source_id} census evidence does not resolve "
+                f"({type(error).__name__}: {error}); stage its population and census it before the "
+                "projections can run"
+            )
+            continue
         row = {"population": population.model_dump(mode="json"), "input": binding.model_dump(mode="json")}
         try:
             DerivedContractCensusInput.model_validate(row)
