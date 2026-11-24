@@ -117,7 +117,7 @@ def _run_rl(
     metadata = os.environ.get(RUN_INDEX_ENV)
     index = _SUBMITTED_INDEX.validate_json(metadata).get(config.run_id) if metadata is not None else None
     if issue is not None or index is not None:
-        issue = rl_publication.lineage_issue(config.output.export_root, issue, reserve=True)
+        issue = rl_publication.reserve_issue(config.output.export_root, issue)
         write_attempt(
             config.output.export_root,
             AttemptRecord(
@@ -413,7 +413,7 @@ def _branch_pr_number(provenance: Provenance) -> int | None:
         return None
 
 
-def run_index(
+def run_index_identity(
     launch: dict, preset: presets.Preset, table: presets.ModelPresets, provenance: Provenance, *, user: str
 ) -> RunIndexIdentity:
     """Name a composed launch by the gate's normalized comparison configuration."""
@@ -761,7 +761,9 @@ def command(
                 if issue is not None:
                     _validate_launch_issue(run, preset, issue)
                 context.meta["rl_training_type"] = validated["runtime"]["training_type"]
-                context.meta["rl_index"] = run_index(validated, preset, table, provenance, user=username_segment())
+                context.meta["rl_index"] = run_index_identity(
+                    validated, preset, table, provenance, user=username_segment()
+                )
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
         if preset.gated and not control:
             pin = rl_gate.control_pin(preset, table=table, check_revision=False)

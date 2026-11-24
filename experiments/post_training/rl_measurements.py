@@ -72,7 +72,11 @@ def lineage_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float |
         record = entry.record
         if record.config is None:
             return None
-        hours = native_gpu_hours(record, read_recorded_launch(record))
+        try:
+            allocation = read_recorded_launch(record)
+        except InvalidComparison:
+            return None
+        hours = native_gpu_hours(record, allocation)
         if hours is None:
             return None
         total += hours

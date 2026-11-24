@@ -96,6 +96,7 @@ class AttemptRecord(BaseModel):
     result: LaunchResult | None = None
     issue: int | None = None
     index: RunIndexIdentity | None = None
+    interruption: Literal["coordinator_terminated"] | None = None
     elapsed_excluding_eval_seconds: Annotated[FiniteFloat, Field(ge=0)] | None = None
 
     @property

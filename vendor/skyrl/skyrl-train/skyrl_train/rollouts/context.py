@@ -123,6 +123,12 @@ def start_rollout_buffer(config: RolloutBufferConfig) -> ActorHandle:
     return ray.remote(RolloutBuffer).options(num_cpus=0, scheduling_strategy=node).remote(config)
 
 
+@dataclass(frozen=True)
+class _GraderReportTarget:
+    directory: str
+    attempt_id: str
+
+
 class TrainingContext:
     """The prompt loader, the rollout buffer, and the rollout tasks in flight between them.
 
@@ -148,7 +154,7 @@ class TrainingContext:
         payloads: PayloadStore,
         *,
         rollout_spans: bool,
-        grader_report: tuple[str, str] | None = None,
+        grader_report: _GraderReportTarget | None = None,
     ):
         self.loader = loader
         self.config = config
@@ -224,7 +230,9 @@ class TrainingContext:
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
             grader_report=(
-                (str(config.trainer.grader_report_dir), str(config.runtime.attempt_id)) if report_graders else None
+                _GraderReportTarget(str(config.trainer.grader_report_dir), str(config.runtime.attempt_id))
+                if report_graders
+                else None
             ),
         )
 
@@ -253,11 +261,10 @@ class TrainingContext:
             logger.warning("Grader summary unavailable: {}", type(error).__name__)
             return
         if summary["subsets"]:
-            path, attempt_id = self._grader_report
             await asyncio.to_thread(
                 write_grader_report,
-                path,
-                attempt_id,
+                self._grader_report.directory,
+                self._grader_report.attempt_id,
                 {"training": summary["subsets"], "training_tasks": summary["tasks"]},
             )
 

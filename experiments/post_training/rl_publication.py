@@ -11,7 +11,6 @@ import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlencode
 
 import click
@@ -24,7 +23,14 @@ from finestore.rl.rl_progress import (
     GateResult,
     GraderReport,
 )
-from finestore.rl.run_records import AttemptRecord, attempt_lineage, read_attempt_metrics, read_attempts, write_attempt
+from finestore.rl.run_records import (
+    AttemptRecord,
+    attempt_lineage,
+    read_attempt,
+    read_attempt_metrics,
+    read_attempts,
+    write_attempt,
+)
 from marin.execution.artifact import read_record
 from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
@@ -34,7 +40,7 @@ from marin.rl.skyrl_records import (
     recorded_launch,
 )
 from pydantic import BaseModel, Field, ValidationError
-from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
+from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -197,7 +203,7 @@ def build_record(
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
     evaldash_run_ids: tuple[str, ...] | None = None,
-    unfinished_status: Literal["running", "failed"] | None = None,
+    running: bool = False,
     gate_failure: bool = False,
 ) -> AttemptSummary:
     """Build a progress row from stored native outputs without live lookups."""
@@ -217,15 +223,16 @@ def build_record(
     tracking = attempt_tracking(attempt, launch)
     started, finished = result.started_at, result.finished_at
     index = attempt.index
-    terminal = result.state.is_terminal and unfinished_status != "running"
-    if not terminal and unfinished_status is None:
+    terminal = result.state.is_terminal and not running
+    interrupted = attempt.interruption is not None and not terminal and not running
+    if not (terminal or running or interrupted):
         raise ValueError("A progress record requires a terminal native attempt")
     measured = (
         _terminal_measurements(run_output, preset, attempt, launch, evidence) if terminal else _TerminalMeasurements()
     )
     failed = list(measured.failed_facts)
-    if unfinished_status == "failed":
-        failed.append("native_attempt")
+    if interrupted:
+        failed.append("coordinator_interrupted")
     if gate_failure:
         failed.append("required_gate_report")
     if not provenance and index is None and terminal:
@@ -283,31 +290,33 @@ class IssueConflict(ValueError):
     """The native output already has a different assigned issue."""
 
 
-def lineage_issue(export_root: str, issue: int | None, *, reserve: bool = False) -> int | None:
-    """Read the run's issue and optionally reserve it against concurrent writers."""
+def _check_issue(export_root: str, requested: int | None, reservation: VersionedBytes | None) -> int | None:
     issues = {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
-    assignment = conditional_object(str(StoragePath(export_root) / "issue.json"))
-
-    def include_assignment() -> bool:
-        current = assignment.read()
-        if current is None:
-            return False
-        issues.add(int(current.data))
-        return True
-
-    reserved = include_assignment()
-    if issue is not None:
-        issues.add(issue)
+    if reservation is not None:
+        issues.add(int(reservation.data))
+    if requested is not None:
+        issues.add(requested)
     if len(issues) > 1:
         raise IssueConflict(f"Run has conflicting lineage issues {sorted(issues)} at {export_root}")
-    assigned = next(iter(issues), None)
-    if assigned is not None and reserve and not reserved:
+    return next(iter(issues), None)
+
+
+def lineage_issue(export_root: str, requested: int | None) -> int | None:
+    """Read the run's issue and verify a proposed value against stored assignments."""
+    assignment = conditional_object(str(StoragePath(export_root) / "issue.json"))
+    return _check_issue(export_root, requested, assignment.read())
+
+
+def reserve_issue(export_root: str, requested: int | None) -> int | None:
+    """Reserve the lineage issue once for all writers to the native output."""
+    assignment = conditional_object(str(StoragePath(export_root) / "issue.json"))
+    reservation = assignment.read()
+    assigned = _check_issue(export_root, requested, reservation)
+    if assigned is not None and reservation is None:
         try:
             assignment.write(str(assigned).encode(), expected_version=None)
         except ConditionalWriteError:
-            include_assignment()
-            if len(issues) > 1:
-                raise IssueConflict(f"Run has conflicting lineage issues {sorted(issues)} at {export_root}") from None
+            return _check_issue(export_root, assigned, assignment.read())
     return assigned
 
 
@@ -336,9 +345,7 @@ def publish_running(
             key = (attempt.index_run_id, attempt.attempt_id)
             if key in published:
                 continue
-            url = publish_result(
-                build_record(path, preset, table=table, attempt=attempt, unfinished_status="running"), service_url
-            )
+            url = publish_result(build_record(path, preset, table=table, attempt=attempt, running=True), service_url)
             published.add(key)
             click.echo(f"RL progress {url}")
     except Exception as error:
@@ -349,20 +356,26 @@ def publish_running(
 class _OutputAttempts:
     current: str | None
     records: dict[str, AttemptRecord]
-    interrupted: set[str]
 
 
 def _publication_attempts(path: str, failed_coordinator: str | None) -> _OutputAttempts:
     current, attempts = read_stored_skyrl_attempts(path)
-    interrupted = set()
     if failed_coordinator is not None:
         for key, record in _coordinator_attempts(path, failed_coordinator).items():
-            if not record.native.result.state.is_terminal:
-                interrupted.add(key)
-            attempts.setdefault(key, record)
+            record = attempts.get(key, record)
+            if not record.native.result.state.is_terminal and record.interruption is None:
+                export_root = recorded_launch(record).export_root
+                write_attempt(
+                    export_root,
+                    AttemptRecord(run_id=record.run_id, attempt_id=key, interruption="coordinator_terminated"),
+                )
+                record = read_attempt(export_root, key) or record.model_copy(
+                    update={"interruption": "coordinator_terminated"}
+                )
+            attempts[key] = record
             if current is None:
                 current = key
-    return _OutputAttempts(current, attempts, interrupted)
+    return _OutputAttempts(current, attempts)
 
 
 def _read_publication_gate(
@@ -374,11 +387,11 @@ def _read_publication_gate(
     return report
 
 
-def _link_issue(receipt: AttemptRecord, issue: int) -> AttemptRecord:
+def _link_issue(receipt: AttemptRecord, issue: int) -> int | None:
     export_root = recorded_launch(receipt).export_root
-    assigned = lineage_issue(export_root, issue, reserve=True)
+    assigned = reserve_issue(export_root, issue)
     write_attempt(export_root, AttemptRecord(run_id=receipt.run_id, attempt_id=receipt.attempt_id, issue=assigned))
-    return receipt.model_copy(update={"issue": assigned})
+    return assigned
 
 
 def publish_runs(
@@ -426,11 +439,7 @@ def publish_runs(
             result.unserved_records.append((path, attempt_id))
             result.errors.append(f"No stored native receipt at {path} for {attempt_id}")
         for selected_id, receipt in selected.items():
-            if (
-                attempt_id is None
-                and not receipt.native.result.state.is_terminal
-                and selected_id not in snapshot.interrupted
-            ):
+            if attempt_id is None and not receipt.native.result.state.is_terminal and receipt.interruption is None:
                 continue
             destination = (receipt.index_run_id, selected_id)
             try:
@@ -445,8 +454,6 @@ def publish_runs(
                     raise ValueError(
                         report_error or "Gate report missing for this attempt; repeat the original command with --wait"
                     )
-                if issue is not None:
-                    receipt = _link_issue(receipt, issue)
                 record = build_record(
                     path,
                     preset,
@@ -455,9 +462,10 @@ def publish_runs(
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     evaldash_run_ids=evaldash_run_ids,
-                    unfinished_status="failed" if selected_id in snapshot.interrupted else None,
                     gate_failure=missing_gate,
                 )
+                if issue is not None:
+                    record = record.model_copy(update={"issue": _link_issue(receipt, issue)})
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if selected_id == current_id:

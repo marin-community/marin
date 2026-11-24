@@ -478,7 +478,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
         index_sources.append(str(source))
     provenance = replace(Provenance.capture(), branch=None)
     first_id, repeated_id, changed_id = (
-        snowball.run_index(config, learning, table, provenance, user="test-user").run_id
+        snowball.run_index_identity(config, learning, table, provenance, user="test-user").run_id
         for config in gate.compose_configs(index_sources)
     )
     assert first_id == repeated_id and first_id != changed_id
@@ -826,10 +826,11 @@ def test_submission_exit_codes_and_publication_retries(
         assert cached["issue"] == 73
 
 
-@pytest.mark.parametrize("early_failure", [False, True])
+@pytest.mark.parametrize("outcome", ["succeeded", "native-failure", "interrupted"])
 def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
-    preset_table, recorded_runs, monkeypatch, early_failure
+    preset_table, recorded_runs, monkeypatch, outcome
 ):
+    early_failure = outcome != "succeeded"
     table = snowball_model.SNOWBALL
     preset = replace(table.by_name["train-long"].with_updates(2), checkpoint_every=None, evaluations=())
     table = preset_table(preset)
@@ -844,7 +845,16 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
     publications = []
-    fake_publication(monkeypatch, publications.append, "https://progress.test")
+    unavailable = outcome == "interrupted"
+
+    def publish(record):
+        nonlocal unavailable
+        if record.attempt_id == "native-indexed" and record.status == "failed" and unavailable:
+            unavailable = False
+            raise RuntimeError("Marina unavailable during the terminal write")
+        publications.append(record)
+
+    fake_publication(monkeypatch, publish, "https://progress.test")
     followers = []
     monkeypatch.setattr(
         snowball,
@@ -880,7 +890,11 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
                 index=index,
                 metrics_started_at=None if early_failure else receipt["result"]["started_at"],
                 elapsed_excluding_eval_seconds=None if early_failure else 123.0,
-                result=LaunchResult(state="failed", iris_job_id="/test-user/unschedulable") if early_failure else None,
+                result=(
+                    LaunchResult(state="failed", iris_job_id="/test-user/unschedulable")
+                    if outcome == "native-failure"
+                    else None
+                ),
             ),
         )
         return SimpleNamespace(job_id=job)
@@ -909,6 +923,11 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         line.strip().removeprefix("run: ") for line in reversed(result.output.splitlines()) if "grafana.oa.dev" in line
     )
     [follower] = followers
+    saved_attempt = ["--preset", preset.name, "--run-output", str(source), "--attempt", "native-indexed"]
+    if outcome == "interrupted":
+        still_prepared = CliRunner().invoke(snowball.rl_publication.command(table), [*saved_attempt, "--issue", "73"])
+        assert still_prepared.exit_code == 1 and "requires a terminal native attempt" in still_prepared.output
+        assert read_attempt(str(source / "exports"), "native-indexed").issue is None
 
     @click.command()
     def follow():
@@ -916,6 +935,13 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
 
     result = CliRunner().invoke(follow)
     assert result.exit_code == int(early_failure), (result.output, result.exception)
+    if outcome == "interrupted":
+        assert "Marina unavailable during the terminal write" in result.output
+        interrupted = read_attempt(str(source / "exports"), "native-indexed")
+        assert interrupted.result is None and interrupted.interruption == "coordinator_terminated"
+        replayed = CliRunner().invoke(snowball.rl_publication.command(table), saved_attempt)
+        assert replayed.exit_code == 0, (replayed.output, replayed.exception)
+        assert publications[-1].failed_facts == ["coordinator_interrupted"]
     assert [row.attempt_id for row in publications if row.status == "running"] == ["native-indexed"]
     running, terminal = [row for row in publications if row.attempt_id == "native-indexed"]
     assert running.status == "running" and terminal.status == ("failed" if early_failure else "succeeded")
@@ -925,9 +951,8 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     assert terminal.gate_result is None
     assert terminal.elapsed_excluding_eval_seconds == (None if early_failure else 123.0)
     assert terminal.artifact_uri == str(source)
-    if early_failure:
-        arguments = ["--preset", preset.name, "--run-output", str(source), "--attempt", "native-indexed"]
-        result = CliRunner().invoke(snowball.rl_publication.command(table), arguments)
+    if outcome == "native-failure":
+        result = CliRunner().invoke(snowball.rl_publication.command(table), saved_attempt)
         assert result.exit_code == 0, (result.output, result.exception)
         assert publications[-1].status == "failed"
 

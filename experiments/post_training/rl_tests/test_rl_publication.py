@@ -7,6 +7,8 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Barrier
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import click
@@ -62,6 +64,7 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
         ("versioned-missing-evaluation", None, None, ["evaluation_records_available"]),
         ("checkpoint-lineage", 2, 7200, []),
         ("lineage-unknown-grandparent", None, None, []),
+        ("lineage-unknown-allocation", 2, 7200, []),
         (
             "untracked-native",
             None,
@@ -121,10 +124,13 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     if case in {
         "checkpoint-lineage",
         "lineage-unknown-grandparent",
+        "lineage-unknown-allocation",
         "negative-duration",
     }:
         ancestor = deepcopy(receipt)
         ancestor["config"]["run"]["attempt_id"] = "ancestor"
+        if case == "lineage-unknown-allocation":
+            ancestor["config"]["iris"]["allocation"].pop("gpus_per_node")
         ancestor["result"].update(
             state="failed",
             started_at="2026-11-06T16:40:00+00:00",
@@ -203,7 +209,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert row["timing_scope"] == "checkpoint_lineage_native_jobs"
     assert row["status"] == ("failed" if expected_facts else "succeeded"), (row["failed_facts"], row["evidence"])
     assert row["failed_facts"] == expected_facts, (row["failed_facts"], row["evidence"])
-    if case in {"checkpoint-lineage", "lineage-unknown-grandparent"}:
+    if case in {"checkpoint-lineage", "lineage-unknown-grandparent", "lineage-unknown-allocation"}:
         assert lineage_gpu_hours(attempt, recorded_launch(attempt)) == (80.0 if case == "checkpoint-lineage" else None)
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
@@ -222,12 +228,25 @@ def test_control_publication_rejects_ungated_presets(monkeypatch, capsys):
     assert "Choose a dashboard preset with controls" in capsys.readouterr().err
 
 
-def test_one_issue_is_reserved_when_publishers_disagree(tmp_path):
+def test_one_issue_is_reserved_when_publishers_disagree(tmp_path, monkeypatch):
     export_root = str(tmp_path / "exports")
+    conditional_object = publication.conditional_object
+    rendezvous = Barrier(2, timeout=10)
+
+    def concurrent_object(path):
+        object_store = conditional_object(path)
+
+        def write(data, *, expected_version):
+            rendezvous.wait()
+            return object_store.write(data, expected_version=expected_version)
+
+        return SimpleNamespace(read=object_store.read, write=write)
+
+    monkeypatch.setattr(publication, "conditional_object", concurrent_object)
 
     def claim(issue):
         try:
-            return publication.lineage_issue(export_root, issue, reserve=True)
+            return publication.reserve_issue(export_root, issue)
         except publication.IssueConflict:
             return None
 

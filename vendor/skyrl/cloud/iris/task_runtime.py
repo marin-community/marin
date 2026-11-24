@@ -2335,7 +2335,10 @@ def main() -> None:
         if attempt is not None:
             run_id = attempt.index_run_id
     except Exception as error:
-        _log(f"[telemetry] attempt index unavailable ({type(error).__name__})")
+        _log(
+            f"[telemetry] index unavailable for attempt {launch_config.run.attempt_id} "
+            f"({type(error).__name__}); using native run ID"
+        )
     export_telemetry_environment(run_id, args.training_type, launch_config.run.get("model"))
     # Ensure the NCCL flight-recorder dump dir exists on THIS node BEFORE any torch/NCCL
     # init, so a collective-timeout FR dump actually writes. See ensure_fr_dump_dir.
