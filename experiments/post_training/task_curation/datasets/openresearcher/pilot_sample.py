@@ -89,7 +89,8 @@ def build_pilot_sample(config: PilotSampleConfig) -> PilotSample:
     decisions = StoragePath(config.v12_decisions_uri)
     if file_sha256(decisions) != config.v12_decisions_sha256:
         raise ValueError("Decisions parquet digest differs before sampling")
-    rows = [{"id": row["id"], **json.loads(row["decision_json"])} for row in pq.read_table(decisions).to_pylist()]
+    with decisions.open("rb") as reader:
+        rows = [{"id": row["id"], **json.loads(row["decision_json"])} for row in pq.read_table(reader).to_pylist()]
     if len(rows) != EXPECTED_INPUT_QUESTIONS:
         raise ValueError("Decisions parquet covers a different question population")
     kept = sorted(row["id"] for row in rows if row["keep"] and row["reason"] == "pass")
@@ -105,7 +106,9 @@ def build_pilot_sample(config: PilotSampleConfig) -> PilotSample:
     questions = StoragePath(pool.path) / "questions.parquet"
     if file_sha256(questions) != pool.tasks_parquet_sha256:
         raise ValueError("Question pool changed before pilot sampling")
-    selected = [row for row in pq.read_table(questions).to_pylist() if row["id"] in sample_ids]
+    with questions.open("rb") as reader:
+        pool_rows = pq.read_table(reader).to_pylist()
+    selected = [row for row in pool_rows if row["id"] in sample_ids]
     if sorted(row["id"] for row in selected) != sorted(sample_ids):
         raise ValueError("Sampled question ids are not covered exactly once by the pool")
     output = StoragePath(config.output_path)
@@ -198,3 +201,7 @@ def main() -> None:
             return
         result = run(step)[0]
         StoragePath(args.output).write_text(result.model_dump_json(indent=2))
+
+
+if __name__ == "__main__":
+    main()

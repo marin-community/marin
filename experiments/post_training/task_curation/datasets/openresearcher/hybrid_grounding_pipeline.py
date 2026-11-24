@@ -231,14 +231,16 @@ def load_questions(config: HybridGroundingConfig, index: HybridIndex) -> list[di
         questions = StoragePath(pool.path) / "questions.parquet"
         if file_sha256(questions) != pool.tasks_parquet_sha256:
             raise ValueError("Question pool changed before grounding")
-        return pq.read_table(questions).to_pylist()
+        with questions.open("rb") as reader:
+            return pq.read_table(reader).to_pylist()
     if config.question_kind != "pilot_sample":
         raise ValueError(f"Unsupported question receipt kind: {config.question_kind}")
     sample = PilotSample.model_validate_json(document)
     questions = StoragePath(sample.path) / "questions.parquet"
     if file_sha256(questions) != sample.questions_parquet_sha256:
         raise ValueError("Pilot question parquet changed before grounding")
-    rows = pq.read_table(questions).to_pylist()
+    with questions.open("rb") as reader:
+        rows = pq.read_table(reader).to_pylist()
     expected = set(sample.drop_sample_ids) | set(sample.kept_sample_ids)
     if {row["id"] for row in rows} != expected or len(rows) != len(expected):
         raise ValueError("Pilot questions differ from the sealed selection")
@@ -427,3 +429,7 @@ def main() -> None:
             return
         result = run(step)[0]
         StoragePath(args.output).write_text(result.model_dump_json(indent=2))
+
+
+if __name__ == "__main__":
+    main()

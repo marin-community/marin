@@ -246,3 +246,7 @@ def main() -> None:
             return
         result = run(step)[0]
         StoragePath(args.output).write_text(result.model_dump_json(indent=2))
+
+
+if __name__ == "__main__":
+    main()
