@@ -63,6 +63,31 @@ DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # or working directory becomes a failed command (127 or 126 for the program) rather than an exception.
 RUN_SCRIPT = 'cd "$1" || exit; shift; exec "$@"'
 LAUNCH_SOURCE = Path(launch.__file__).read_text()
+KEEPER_PAYLOAD = """\
+read -r ready && [ "$ready" = shellbox-ready ] || exit 1
+command -v sleep >/dev/null || { echo "The machine's keeper needs sleep" >&2; exit 1; }
+while :
+do
+    sleep 2147483647 &
+    keeper=$!
+    wait "$keeper" 2>/dev/null
+    while kill -0 "$keeper" 2>/dev/null
+    do
+        sleep 1
+        wait "$keeper" 2>/dev/null
+    done
+done
+"""
+"""The guest PID namespace's init, which ``--as-pid-1`` makes PID 1.
+
+The init owns the machine's lifecycle and reaps its orphans. Guest processes
+whose parents exit reparent to PID 1, so only the init can collect them, and
+guest code observes a dead daemon through ``kill -0`` and ``/proc`` just as it
+does on the Docker backend's ``--init``. The init also keeps the sleeper
+``sleep 2147483647`` running: grading quiesces spare the machine's PID 1 and
+spare exactly that argv, and an init that would exit when the sleeper dies
+would close the machine mid-grading.
+"""
 NPROC_HEADROOM = 256
 """Tasks a command may add beyond the host's task count when it starts; RLIMIT_NPROC counts all of a user's tasks."""
 FILE_SIZE_LIMIT = 1 << 30
@@ -233,10 +258,12 @@ def _sandbox_argv(
 
     The system directories are read-only, or, with ``layers``, overlaid by the machine's layer of each.
     The program runs without capabilities; as root, bwrap needs no user namespace for its own.
-    ``--as-pid-1`` makes the program itself the guest PID namespace's init instead of a
-    re-exec'd bwrap: the machine's lifecycle keeper must be PID 1, because shared grading
-    quiesces kill every process outside their ancestry except PID 1, and a keeper below
-    PID 1 dies with them, closing the machine mid-grading.
+    ``--as-pid-1`` makes the payload itself the guest PID namespace's init: the machine's
+    lifecycle keeper must be PID 1, because shared grading quiesces kill every process
+    outside their ancestry except PID 1, and a keeper below PID 1 dies with them, closing
+    the machine mid-grading. The payload (``KEEPER_PAYLOAD``) keeps the sleeper
+    ``sleep 2147483647`` running as its child, for graders that spare machines by that
+    exact argv, and reaps the guest's orphaned processes, which reparent to PID 1.
     """
     argv = [str(bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try"]
     if network == NetworkPolicy.DENY:
@@ -605,10 +632,7 @@ class LocalMachine:
                 self._environment["PATH"],
                 "/bin/sh",
                 "-c",
-                # The sleeper becomes the guest PID namespace's PID 1 (--as-pid-1),
-                # so quiesces that spare PID 1 spare the machine's lifecycle. Keep
-                # the payload argv stable: graders spare it by this exact argv too.
-                'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
+                KEEPER_PAYLOAD,
             ]
             prefix = () if peer is None else peer._network_namespaces
             config = {
