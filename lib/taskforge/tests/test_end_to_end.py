@@ -856,6 +856,6 @@ async def test_run_launches_past_a_malformed_source_task_and_reports_it(
         return SimpleNamespace(wait=lambda: 0, poll=lambda: 0)
 
     monkeypatch.setattr(driver.subprocess, "Popen", launch)
-    with pytest.raises(RuntimeError, match="broken.task.json"):
+    with pytest.raises(RuntimeError, match=re.escape("broken.task.json")):
         await driver.run(driver_args)
     assert sorted(launched) == ["good.task.json", "slot-3.proposal.json"]
