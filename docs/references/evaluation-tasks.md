@@ -266,13 +266,22 @@ process exit. Shellbox provides the sandbox and bounds the whole grader command.
 
 ### SWE-bench Science
 
-`swebench-science` runs the upstream unrestricted 96-task selection with
-mini-swe-agent 2.1.0, one attempt per task and concurrency one. It is not in a
-default suite. The source is
-[OpenMOSS-Team/SWE-bench-Science at 99740829](https://huggingface.co/datasets/OpenMOSS-Team/SWE-bench-Science/tree/997408298e8e4d09978b1120b95c4540d1a71bcb).
-Release tooling and metadata are MIT licensed; task materials retain their
-upstream licenses. The 23 tasks requiring the release's restricted-license
-opt-in are excluded.
+The curated catalog exposes two selections from the
+[pinned SWE-bench Science release](https://huggingface.co/datasets/OpenMOSS-Team/SWE-bench-Science/tree/997408298e8e4d09978b1120b95c4540d1a71bcb).
+`swebench-science` runs the upstream unrestricted 96.
+`swebench-science-hosted114` adds the 18 reviewed opt-in packages. Tasks 019,
+026, 035, 101 and 102 remain outside the hosted selection. Release tooling
+and metadata are MIT licensed. Individual task materials retain their upstream licenses.
+
+Both named evaluations use Pi 0.87.0 with explicit `xhigh`, one attempt per
+task, up to 16 concurrent attempts, a 65,536-token context cap and a
+16,384-token reply cap. The served model must support Pi's thinking format.
+Its context and generation settings can lower these limits. The pinned `qwen3.8-27b-pi-xhigh` model preset provides the
+65,536-token window and requests top-level `reasoning_effort=xhigh` alongside
+Pi's chat-template thinking switch.
+The 96-task benchmark also exposes the `mini-swe-agent` protocol with its
+8,192-token reply limit. Pi is installed when building the solver image
+from the release digest using the shared Harbor Pi installation recipe.
 
 The adapter preserves each instruction and both digest-pinned images. It
 translates Pier's `pre_artifacts.sh` into a collect command, then transfers
@@ -284,29 +293,24 @@ patch, rebuilds and invokes the grader. The numeric `reward` field is read
 from the original JSON report without interpreting nested diagnostics as
 metrics.
 
-The released tasks request two CPUs, 8 GiB RAM and 20 GiB storage per machine.
-Marin requests 10 GiB disk for the solver to fit the Daytona sandbox quota. The curated runner currently uses a fresh
-local Shellbox verifier on its remote evaluator worker (eight CPUs, 12 GiB RAM,
-64 GiB disk), without per-verifier resource limits. The Qwen3.6-35B-A3B
-and Nemotron 3.5 Super VL 120B-A12B validation runs used Daytona for both
-machines with two CPUs, 8 GiB RAM, and 10 GiB disk each. Both runs graded
-all 96 tasks with a 32,768-token context.
-The native agent and verifier deadlines are preserved; the attempt backstop is
-three hours. Both machines deny external networking; model requests stay on
-the host. The protocol caps replies at 8,192 tokens and uses the served
-context window. These harness and token settings, and the 96-task selection,
-must accompany reported scores: the website's 119-task leaderboard uses
-several different harnesses and is not a direct reference score.
+The release requests two CPUs, 8 GiB RAM and 20 GiB storage. The adapter
+requests 10 GiB solver storage on Daytona. The curated runner uses a fresh
+local Shellbox verifier on the remote evaluator worker. The validation runs
+used separate Daytona solver and verifier machines. The package deadlines
+are preserved and the attempt backstop is three hours. Both machines deny
+external networking. Model requests run through the host.
+
+Smoke-test the launch plan with:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b --evals swebench-science --limit 1 --dry-run
+  --model qwen3.8-27b-pi-xhigh --evals swebench-science --limit 1 --dry-run
 ```
 
-Remove `--dry-run` only for an authorized run. Preparation downloads task
-packages automatically; no manual dataset directory or grader image build is
-required. Native reference patches are not released, so a positive oracle
-comparison requires an independently verified candidate patch.
+Report the selection, harness, effective token budgets and verifier backend.
+The [benchmark adoption issue](https://github.com/marin-community/marin/issues/12108)
+records native-grader controls, model runs and comparisons with the authors'
+119-task leaderboard on matching task IDs.
 
 ## Published corpus and raw results
 

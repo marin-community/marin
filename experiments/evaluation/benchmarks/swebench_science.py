@@ -1,24 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SWE-bench Science's default-96 release, with native isolated grading and mini-swe-agent.
+"""SWE-bench Science with native isolated grading.
 
 Release tooling and metadata are MIT licensed. Task sources retain their upstream licenses;
-the selection excludes every task gated by the release's restricted-license policy.
+the default selection follows the release's unrestricted manifest.
 """
 
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from taskcompendium.evaluation.spec import AgentEpisode, EpisodeLimits, EvaluationItem, MiniSweAgent
+from taskcompendium.evaluation.spec import AgentEpisode, EpisodeLimits, MiniSweAgent, PiAgent
+from taskcompendium.importers.harbor.package import JobSettings
 from taskcompendium.importers.harbor.science import lower_science_package
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import IntendedUse, RawRow
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
-from experiments.evaluation.benchmarks.harbor import EPISODE_LABEL, harbor_item, harbor_protocol
+from experiments.evaluation.benchmarks.harbor import (
+    EPISODE_LABEL,
+    MAX_OUTPUT_TOKENS,
+    PI_MAX_OUTPUT_TOKENS,
+    harbor_item,
+    harbor_protocol,
+    pi_install,
+)
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.harbor_packages import extract_package, package_rows
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HarborRepoSource
@@ -26,10 +34,9 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 DATASET = "OpenMOSS-Team/SWE-bench-Science"
 REVISION = "997408298e8e4d09978b1120b95c4540d1a71bcb"
-VERSION = "2026.11.23.1"
+VERSION = "2026.11.24.1"
 BENCHMARK = "swebench-science"
-# Exact selections/default-96.json in the pinned release. The other 23 tasks
-# require upstream's explicit restricted-license opt-in and are not selected.
+# Exact selections/default-96.json in the pinned release.
 TASK_IDS = tuple(
     """
     001 002 004 005 006 007 008 009 010 011 012 013 014 015 016 017 018 022 024 025
@@ -40,28 +47,29 @@ TASK_IDS = tuple(
     """.split()
 )
 
+# The hosted selection adds these reviewed packages to the upstream default.
+HOSTED_TASK_IDS = (*TASK_IDS, *"003 020 021 023 032 057 066 074 075 082 083 084 085 096 097 098 100 118".split())
+PI = PiAgent(version="0.87.0", thinking="xhigh", setup_timeout=360)
 
-def convert(row: RawRow, _context: ConversionContext) -> TaskSpec:
+
+def convert(row: RawRow, _context: ConversionContext, *, job: JobSettings) -> TaskSpec:
     with TemporaryDirectory(prefix="swe-science-row-") as temporary:
         directory = Path(temporary) / row.data["name"]
         extract_package(row.data["archive"], directory)
-        lowered = lower_science_package(directory, task_id=row.id, source=row.source)
+        lowered = lower_science_package(directory, task_id=row.id, source=row.source, job=job)
     return lowered.task.model_copy(
         update={"labels": {**lowered.task.labels, EPISODE_LABEL: lowered.episode.model_dump_json()}, "tags": ("eval",)}
     )
 
 
-def science_item(task: TaskSpec, *, agent: AgentEpisode) -> EvaluationItem:
-    """Use the 10 GiB solver disk validated for the unrestricted cohort on Daytona."""
-    item = harbor_item(task, agent=agent)
-    assert item.episode is not None
-    episode = item.episode.model_copy(update={"storage_mb": 10 * 1024})
-    return item.model_copy(update={"episode": episode})
-
-
-def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
+def science_source(
+    benchmark: str, task_ids: tuple[str, ...], harness: PiAgent | MiniSweAgent
+) -> RlDataSource[EvaluationCorpusRecipe]:
+    pi = isinstance(harness, PiAgent)
+    protocol_name = "pi-xhigh" if pi else "mini-swe-agent"
+    job = JobSettings(storage_mb=10240, agent_install=pi_install(harness) if isinstance(harness, PiAgent) else None)
     agent = AgentEpisode(
-        harness=MiniSweAgent(),
+        harness=harness,
         limits=EpisodeLimits(
             max_turns=None,
             max_total_tokens=None,
@@ -70,34 +78,47 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             verifier_timeout=None,
             attempt_timeout=10800,
         ),
-        max_input_tokens=None,
+        max_input_tokens=65536 if pi else None,
     )
     recipe = CurationRecipe(
-        name=BENCHMARK,
+        name=f"{benchmark}-{protocol_name}",
         source=HarborRepoSource(
-            DATASET, REVISION, read=package_rows, root="tasks", packages=frozenset(f"task_{key}" for key in TASK_IDS)
+            DATASET, REVISION, read=package_rows, root="tasks", packages=frozenset(f"task_{key}" for key in task_ids)
         ),
-        convert=convert,
+        convert=partial(convert, job=job),
         version=VERSION,
         intended_use=IntendedUse.EVAL,
     )
-    protocol = harbor_protocol(BENCHMARK, VERSION, len(TASK_IDS), max_output_tokens=8192, requires_judge=False, trials=1)
+    protocol = harbor_protocol(
+        benchmark,
+        VERSION,
+        len(task_ids),
+        max_output_tokens=PI_MAX_OUTPUT_TOKENS if pi else MAX_OUTPUT_TOKENS,
+        requires_judge=False,
+        trials=1,
+    )
+    return RlDataSource(
+        info=SourceInfo(
+            id=f"Harbor:{benchmark}",
+            title=f"SWE-bench Science ({len(task_ids)} tasks)",
+            origin="Harbor",
+            family="agentic",
+            tags=("eval", "science", "agentic", "multi-turn", "benchmark"),
+            count=len(task_ids),
+            task_format=TaskFormat.HARBOR,
+        ),
+        config=EvaluationCorpusRecipe(
+            recipe, protocol, partial(harbor_item, agent=agent), protocol_name=protocol_name, agent=agent
+        ),
+        pipeline=prepare_evaluation,
+    )
+
+
+def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
-        RlDataSource(
-            info=SourceInfo(
-                id="Harbor:swebench-science",
-                title="SWE-bench Science, unrestricted 96",
-                origin="Harbor",
-                family="agentic",
-                tags=("eval", "science", "agentic", "multi-turn", "benchmark"),
-                count=len(TASK_IDS),
-                task_format=TaskFormat.HARBOR,
-            ),
-            config=EvaluationCorpusRecipe(
-                recipe, protocol, partial(science_item, agent=agent), protocol_name="mini-swe-agent", agent=agent
-            ),
-            pipeline=prepare_evaluation,
-        )
+        science_source(BENCHMARK, TASK_IDS, PI),
+        science_source(BENCHMARK, TASK_IDS, MiniSweAgent()),
+        science_source(f"{BENCHMARK}-hosted114", HOSTED_TASK_IDS, PI),
     ]
 
 

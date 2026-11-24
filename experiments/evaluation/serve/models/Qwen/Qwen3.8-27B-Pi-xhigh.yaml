@@ -1,0 +1,21 @@
+name: qwen3.8-27b-pi-xhigh
+location: Qwen/Qwen3.8-27B
+revision: 37561816e66b5b9153b1b64c10968c18c1e6f4a0
+tokenizer_revision: 37561816e66b5b9153b1b64c10968c18c1e6f4a0
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
+serve:
+  tensor_parallel_size: 2
+  data_parallel_size: 2
+  max_model_len: 65536
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  tool_call_parser: qwen3_coder
+  reasoning_parser: qwen3
+  vllm_extra_args:
+    - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    thinking_format: qwen-chat-template
+    extra_body: '{"reasoning_effort":"xhigh"}'

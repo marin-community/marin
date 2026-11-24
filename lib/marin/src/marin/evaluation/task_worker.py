@@ -65,7 +65,7 @@ backs off between retries, and the session's model-turn timeout bounds them all.
 # parsing, tools or options change, so its runs get new identities instead of resuming older episodes.
 # tests/evaluation/test_harness_revisions.py pins each revision to a digest of its harness's sources.
 EPISODE_HARNESS_REVISIONS: Mapping[str, str] = MappingProxyType(
-    {"shell": "2026.11.21.1", "terminus-2": "2026.11.21.1", "pi": "2026.11.21.1", "mini-swe-agent": "2026.11.21.1"}
+    {"shell": "2026.11.21.1", "terminus-2": "2026.11.21.1", "pi": "2026.11.24.1", "mini-swe-agent": "2026.11.21.1"}
 )
 
 

@@ -27,7 +27,9 @@ from taskcompendium.models import (
 PATCH = "/logs/artifacts/model.patch"
 
 
-def lower_science_package(directory: Path, *, task_id: str, source: Source) -> HarborTask:
+def lower_science_package(
+    directory: Path, *, task_id: str, source: Source, job: JobSettings = JobSettings()
+) -> HarborTask:
     """Convert a Pier 1.3 science package to a Harbor task with isolated patch grading."""
     config = tomllib.loads((directory / "task.toml").read_text())
     verifier = config["verifier"]
@@ -53,9 +55,7 @@ def lower_science_package(directory: Path, *, task_id: str, source: Source) -> H
         config["schema_version"] = "1.2"
         verifier["collect"] = [{"command": command, "timeout_sec": 300.0}]
         (prepared / "task.toml").write_text(tomlkit.dumps(config))
-        lowered = lower_package(
-            prepared, task_id=task_id, source=source, rule=PackageTests(), image_digests={}, job=JobSettings()
-        )
+        lowered = lower_package(prepared, task_id=task_id, source=source, rule=PackageTests(), image_digests={}, job=job)
     grader = lowered.task.grader
     assert isinstance(grader, ScriptGrader)
     assert isinstance(grader.placement, GraderMachine)

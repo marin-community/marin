@@ -186,9 +186,18 @@ evaluations:
         image_build: declarative
   swebench-science:
     benchmark: swebench-science
-    protocol: mini-swe-agent
+    protocol: pi-xhigh
     run:
-      concurrency: 1
+      concurrency: 16
+      max_tokens: 16384
+      task_machine:
+        image_build: declarative
+  swebench-science-hosted114:
+    benchmark: swebench-science-hosted114
+    protocol: pi-xhigh
+    run:
+      concurrency: 16
+      max_tokens: 16384
       task_machine:
         image_build: declarative
   gaia:

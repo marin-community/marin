@@ -17,7 +17,7 @@ from shellbox.machine import NetworkPolicy
 from taskcompendium.evaluation.corpus import evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, PiAgent, TerminusAgent
 from taskcompendium.importers.harbor.package import JobSettings
-from taskcompendium.models import AgentMachine, ScriptGrader, Source, TaskSpec, VerifyitGrader
+from taskcompendium.models import AgentMachine, GraderMachine, ScriptGrader, Source, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
 
@@ -141,9 +141,15 @@ def test_science_corpus_uses_the_validated_daytona_solver_resources():
         ),
         {"name": fixture.name, "archive": package_archive(fixture)},
     )
-    [source] = swebench_science.sources()
+    [source] = swebench_science.benchmarks()[0].resolve("pi-xhigh")
     task = source.config.recipe.convert(row, ConversionContext({}, None))
     assert isinstance(task, TaskSpec)
+    build = task.environment_requirements.docker_build
+    assert build is not None
+    dockerfile = base64.b64decode(build.files[0].source.content_base64).decode()
+    assert pi_install(swebench_science.PI) in dockerfile
+    assert isinstance(task.grader, ScriptGrader) and isinstance(task.grader.placement, GraderMachine)
+    assert task.grader.placement.environment.docker_build is None
     episode = source.config.item_builder(task).episode
     assert episode is not None
     assert (episode.cpus, episode.memory_mb, episode.storage_mb) == (2, 8192, 10240)

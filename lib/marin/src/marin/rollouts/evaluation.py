@@ -347,7 +347,7 @@ async def episode_turn(request: ModelRequest, *, model: Model, options: Mapping[
     """
     extra_body = {**request.options.get("extra_body", {}), **options["extra_body"]}
     merged = {**request.options, **options, "extra_body": extra_body}
-    if (requested := request.options.get("max_tokens")) is not None:
+    if "max_tokens" in options and (requested := request.options.get("max_tokens")) is not None:
         merged["max_tokens"] = min(requested, options["max_tokens"])
     return await model(dataclasses.replace(request, options=merged))
 
@@ -566,11 +566,14 @@ async def _score_rollout(
         # Pi and mini-swe-agent send their own sampling and output limit, and Pi its thinking switch, as they do
         # under Harbor. Other agents also send the model's agent request body, as Harbor's agents do.
         agent_options = {**options, "extra_body": {**options["extra_body"], **config.agent_extra_body}}
-        policy_model = (
-            model
-            if isinstance(operation.harness, PiAgent | MiniSweAgent)
-            else partial(episode_turn, model=model, options=agent_options)
-        )
+        if isinstance(operation.harness, PiAgent | MiniSweAgent):
+            policy_model = model
+            # Some Pi providers require a top-level effort alongside Pi's chat-template thinking switch.
+            if isinstance(operation.harness, PiAgent) and "reasoning_effort" in config.agent_extra_body:
+                effort = operation.harness.thinking or config.agent_extra_body["reasoning_effort"]
+                policy_model = partial(episode_turn, model=model, options={"extra_body": {"reasoning_effort": effort}})
+        else:
+            policy_model = partial(episode_turn, model=model, options=agent_options)
     else:
         assert isinstance(operation, ChatGeneration | TextGeneration)
         engine = RolloutEngine(machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)})
