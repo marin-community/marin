@@ -280,12 +280,13 @@ def plan_qc_browse(
             "dry_run": dry_run,
             "sql_writes": 0,
         }
-        evidence = {"mode": mode, "panels": len(panels)}
+        plan_document = None
         if plan_ref is not None:
-            proof["plan_ref"] = {"uri": plan_ref.uri, "sha256": plan_ref.sha256}
-            evidence["plan"] = proof["plan_ref"]
+            plan_document = {"uri": plan_ref.uri, "sha256": plan_ref.sha256}
+            proof["plan_ref"] = plan_document
         else:
             proof["selected_pointer_changed"] = False
+        evidence = {"mode": mode, "panels": len(panels), **({"plan": plan_document} if plan_document else {})}
         alerts.stage_finished(inputs.release_id, "qc_browse_plan", evidence, alert_feeds)
         return proof
     except Exception as error:
@@ -427,6 +428,7 @@ def _read_plan(plan_ref_or_plan: ArtifactRef | dict) -> dict:
     """Digest-verify a sealed plan reference, or accept the plan document directly."""
     reference = _plan_reference(plan_ref_or_plan)
     if reference is None:
+        assert isinstance(plan_ref_or_plan, dict)
         return plan_ref_or_plan
     payload = StoragePath(reference["uri"]).read_bytes()
     if hashlib.sha256(payload).hexdigest() != reference["sha256"]:

@@ -63,9 +63,12 @@ uv run marina apps versions UUID --json
 uv run marina release my-app --base-version CURRENT_VERSION --json
 ```
 
-Add `--allow-dirty` to release branch or uncommitted source to the selected
-server. This bypasses the Git checks and omits verified source metadata, so
-`release-status` reports `unrecorded` from a clean checkout. Use `--local` for a disposable preview.
+Add `--release-branch <name>` to release a clean checkout whose commit the remote
+branch already contains — the integration-branch path, with the branch recorded in
+the release metadata. Add `--allow-dirty` to release branch or uncommitted source
+to the selected server. This bypasses the Git checks and omits verified source
+metadata, so `release-status` reports `unrecorded` from a clean checkout; it
+cannot combine with `--release-branch`. Use `--local` for a disposable preview.
 
 The first release uses `--base-version 0`. Each later release requires the inspected
 current revision. Release builds from empty output, validates Python imports, runs
