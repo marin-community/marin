@@ -3,7 +3,7 @@
 
 """Typed declarations of Marin's eval policy: which candidates run which evaluations, with which exceptions.
 
-Candidates wrap model catalog entries and evaluations hold launcher evaluation definitions.
+Candidates wrap model catalog entries and evaluations hold benchmark catalog selections.
 """
 
 from collections import Counter
@@ -11,8 +11,6 @@ from dataclasses import dataclass
 
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import ModelConfig
-
-from experiments.evaluation.evals import EvaluationDefinition, HarborDefinition
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -37,12 +35,12 @@ class PolicyCandidate:
 
 @dataclass(frozen=True, kw_only=True)
 class PolicyEvaluation:
-    """One evaluation definition and the settings the policy runs it with.
+    """One catalog selection and the settings the policy runs it with.
 
     The policy owns ``max_output`` and ``seed``, so a selection may not set them in its run overrides.
     """
 
-    definition: EvaluationDefinition
+    definition: EvaluationSelection
     context: int
     max_output: int | None
     """None leaves output limited only by the context and the benchmark protocol."""
@@ -50,12 +48,8 @@ class PolicyEvaluation:
     """A base seed for every trial; None leaves sampling seeds to the benchmark protocol."""
 
     def __post_init__(self) -> None:
-        if isinstance(self.definition, EvaluationSelection) and (
-            self.definition.run.max_tokens is not None or self.definition.run.seed is not None
-        ):
+        if self.definition.run.max_tokens is not None or self.definition.run.seed is not None:
             raise ValueError(f"{self.name}: set max_output and seed on the policy evaluation, not the selection")
-        if isinstance(self.definition, HarborDefinition) and self.seed is not None:
-            raise ValueError(f"{self.name}: Harbor runs take no seed")
 
     @property
     def name(self) -> str:

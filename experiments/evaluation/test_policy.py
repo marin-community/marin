@@ -2,13 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import ModelConfig
 
-from experiments.evaluation.evals import HarborDefinition
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve
 from experiments.evaluation.policy.schema import (
     EvalPolicy,
@@ -25,7 +23,7 @@ CONTEXT = 50_000
 PLAIN = PolicyEvaluation(definition=EvaluationSelection(benchmark="plain"), context=CONTEXT, max_output=None, seed=None)
 SEEDED = PolicyEvaluation(definition=EvaluationSelection(benchmark="seeded"), context=CONTEXT, max_output=None, seed=7)
 LONG = PolicyEvaluation(
-    definition=HarborDefinition(name="long", config_path=Path("long.yaml")),
+    definition=EvaluationSelection(benchmark="long"),
     context=100_000,
     max_output=30_000,
     seed=None,

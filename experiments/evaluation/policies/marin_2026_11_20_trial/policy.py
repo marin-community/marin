@@ -9,12 +9,16 @@ Benchmarks own their prompts, thinking mode, repeats, output caps and metrics; t
 them and the context, output limit and seed each runs with. README.md lists the differences from October.
 """
 
-from pathlib import Path
+from evalrecords.records import (
+    EvaluationOverrides,
+    EvaluationSelection,
+    PromptFormat,
+    TaskImageBuild,
+    TaskMachineSettings,
+)
 
-import yaml
-from evalrecords.records import EvaluationSelection, PromptFormat
-
-from experiments.evaluation.evals import EVALS, HarborDefinition
+from experiments.evaluation.benchmarks.agentic import CAMPAIGN_MAX_INPUT_TOKENS, LONG_MAX_INPUT_TOKENS
+from experiments.evaluation.evals import EVALS
 from experiments.evaluation.models import models
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
 
@@ -25,8 +29,9 @@ VERSION = "marin-2026-11-20-trial"
 SERVED_CONTEXT = 73_728
 # October's seed for the sampled benchmarks it seeded.
 OCTOBER_SEED = 42
-
-_HARBOR_DIR = Path(__file__).with_name("harbor")
+# Daytona machines that build each task image without creating a snapshot, for the benchmarks whose
+# images would together exceed the account's snapshot quota.
+DECLARATIVE_BUILDS = TaskMachineSettings(image_build=TaskImageBuild.DECLARATIVE)
 
 _CATALOG = models()
 GLIMMER = PolicyCandidate(model=_CATALOG["muse-glimmer-30b"], max_context=131_072)
@@ -55,17 +60,26 @@ def _judged(name: str, *, seed: int | None = None) -> PolicyEvaluation:
     return PolicyEvaluation(definition=EVALS[name], context=SERVED_CONTEXT, max_output=None, seed=seed)
 
 
-def _harbor(name: str) -> PolicyEvaluation:
-    """A Harbor config of this policy, whose agent ``model_info`` states its context and output limit."""
-    definition = HarborDefinition(name=name, config_path=_HARBOR_DIR / f"{name}.yaml")
-    (agent,) = yaml.safe_load(definition.config_path.read_text())["agents"]
-    model_info = agent["kwargs"]["model_info"]
-    return PolicyEvaluation(
-        definition=definition,
-        context=model_info["max_input_tokens"],
-        max_output=model_info["max_output_tokens"],
-        seed=None,
+def _agent(
+    benchmark: str,
+    *,
+    label: str,
+    protocol: str,
+    context: int,
+    concurrency: int,
+    task_machine: TaskMachineSettings | None = None,
+) -> PolicyEvaluation:
+    """An agent benchmark as October's campaign ran it.
+
+    ``context`` is the protocol's agent input limit; the protocol owns the per-reply limit.
+    """
+    selection = EvaluationSelection(
+        benchmark=benchmark,
+        label=label,
+        protocol=protocol,
+        run=EvaluationOverrides(concurrency=concurrency, task_machine=task_machine),
     )
+    return PolicyEvaluation(definition=selection, context=context, max_output=None, seed=None)
 
 
 EVALUATIONS: tuple[PolicyEvaluation, ...] = (
@@ -91,17 +105,38 @@ EVALUATIONS: tuple[PolicyEvaluation, ...] = (
     _taskspec("triviaqa", prompt_format=PromptFormat.CHAT, label="triviaqa"),
     _taskspec("truthfulqa"),
     _taskspec("winogrande"),
-    # Agentic benchmarks on vendored Harbor.
-    _harbor("tb2-recovery"),
-    _harbor("ot-tblite-recovery"),
-    _harbor("swebench-verified"),
-    _harbor("ds-1000"),
+    # Agent benchmarks, under the names and with the concurrency of October's Harbor runs.
+    _agent(
+        "terminal-bench-2.1",
+        label="tb2-recovery",
+        protocol="campaign-2026-09-25",
+        context=LONG_MAX_INPUT_TOKENS,
+        concurrency=16,
+        task_machine=DECLARATIVE_BUILDS,
+    ),
+    _agent(
+        "ot-tblite",
+        label="ot-tblite-recovery",
+        protocol="campaign-2026-09-25",
+        context=CAMPAIGN_MAX_INPUT_TOKENS,
+        concurrency=16,
+        task_machine=DECLARATIVE_BUILDS,
+    ),
+    _agent(
+        "swebench-verified",
+        label="swebench-verified",
+        protocol="mini-swe-agent",
+        context=CAMPAIGN_MAX_INPUT_TOKENS,
+        concurrency=16,
+        task_machine=DECLARATIVE_BUILDS,
+    ),
+    _agent("ds-1000", label="ds-1000-local", protocol="terminus-2", context=CAMPAIGN_MAX_INPUT_TOKENS, concurrency=32),
+    _agent("bfcl-parity", label="bfclparity-pi", protocol="pi", context=CAMPAIGN_MAX_INPUT_TOKENS, concurrency=32),
 )
 
-# Not declared, because they do not run on main:
-# - τ³-bench and SOTOPIA-hard: vendored Harbor no longer has their agents (the ACP relay and the
-#   SOTOPIA agent).
-# - BixBench and BFCL with Pi: Harbor now requires Pi tasks to declare a prepared image with Pi
-#   installed (environment/shellbox-images.json), and their registry tasks install Pi at runtime.
+# Not declared:
+# - τ³-bench and SOTOPIA-hard: their Harbor agents were removed from main.
+# - BixBench: its package grader asks a MiniMax-M3 judge, which October served beside the candidate;
+#   the policy has no way yet to declare a co-hosted judge.
 
 POLICY = EvalPolicy(version=VERSION, candidates=(GLIMMER, NEMOTRON, QWEN), in_distribution=EVALUATIONS)

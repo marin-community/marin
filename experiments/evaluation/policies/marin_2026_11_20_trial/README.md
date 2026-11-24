@@ -4,8 +4,9 @@ A trial policy for exercising the policy launcher, not a released policy. It is 
 that `main` can run. October ran from Marin commit `75a5690b` (2026-10-16) through the
 [unlabeled campaign](../../campaigns/eval-campaign-09-25-unlabeled/README.md): single-turn
 benchmarks on vendored Evalchemy, agentic ones on an external Harbor fork. This policy runs
-single-turn benchmarks as TaskSpec entries of the [benchmark catalog](../../catalog.py) and
-agentic ones on vendored Harbor. [`policy.py`](policy.py) declares it; print it with
+both as TaskSpec entries of the [benchmark catalog](../../catalog.py); the agentic ones are the
+campaign's curated protocols in [`benchmarks/agentic.py`](../../benchmarks/agentic.py), which pin
+the same Harbor packages, agents and limits. [`policy.py`](policy.py) declares it; print it with
 
 ```bash
 uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20-trial
@@ -24,12 +25,12 @@ reasoning and `qwen3_coder` tool parsers.
 
 ## Differences from October
 
-Not run, because they do not run on `main`:
+Not run:
 
 | Benchmark | Reason |
 | --- | --- |
 | τ³-bench, SOTOPIA-hard | [#11080](https://github.com/marin-community/marin/pull/11080) removed their Harbor agents (ACP relay, SOTOPIA agent). |
-| BixBench, BFCL (Pi) | Harbor requires Pi tasks to declare a prepared image with Pi installed (`environment/shellbox-images.json`, [#10628](https://github.com/marin-community/marin/pull/10628)); the registry tasks install Pi at runtime. |
+| BixBench (Pi) | Its package grader asks a MiniMax-M3 judge that October served beside the candidate; a policy cannot yet declare a co-hosted judge. |
 
 Run, with a known difference:
 
@@ -39,12 +40,11 @@ Run, with a known difference:
 | FinanceBench | no output cap | protocol cap 4,096 tokens |
 | NUPA | no output cap | protocol cap 256 tokens |
 | OlympiadBench | no output cap | protocol cap 32,768 tokens |
-| TB2, OT-TBLite | external Harbor fork | vendored Harbor; retry list adds the sandbox errors classified since October |
-| All Harbor benchmarks | Daytona snapshots | declarative Daytona image builds, which create no snapshots |
-| SWE-bench Verified, DS-1000 | registry at `016dd78` | registry at `38742b0` |
-| OT-TBLite | registry version `2.0` | same; the version maps every task to [OpenThoughts-TBLite](https://github.com/open-thoughts/OpenThoughts-TBLite) commit `f075e46`, but the mapping itself is not pinned |
+| Agentic benchmarks | external Harbor fork | curated TaskSpec corpora, with prebuilt and Dockerfile base images pinned by digest, run by Marin's rollout engine ([#11664](https://github.com/marin-community/marin/pull/11664)) |
+| TB2, OT-TBLite, SWE-bench Verified | Daytona snapshots | declarative Daytona image builds, which create no snapshots |
+| SWE-bench Verified, DS-1000 | packages of registry `016dd78` | packages of registry `38742b0` |
 
 The same as October: the 20 single-turn selections (thinking mode, repeats, few-shot count,
 MRCR and MMLU-Pro windows), seed 42 on AIME24 and OlympiadBench, and the Together
-`openai/gpt-oss-120b` judge for FinanceBench and OlympiadBench. Harbor agent budgets match the
-October campaign files.
+`openai/gpt-oss-120b` judge for FinanceBench and OlympiadBench. Agent input and reply limits,
+trials and concurrency match the October campaign files.

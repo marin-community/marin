@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import click
-import yaml
 from evalrecords.records import EvaluationSelection, PromptFormat
 from marin.evaluation.model_config import ModelConfig
 
@@ -54,7 +53,8 @@ def selection_dataset(selection: EvaluationSelection, model: ModelConfig) -> Eva
     return config
 
 
-def _taskspec_row(item: ResolvedPolicyEvaluation, selection: EvaluationSelection) -> _Row:
+def _row(item: ResolvedPolicyEvaluation) -> _Row:
+    selection = item.evaluation.definition
     config = selection_dataset(selection, item.candidate.model)
     protocol = config.protocol
     sampling = protocol.sampling
@@ -64,7 +64,8 @@ def _taskspec_row(item: ResolvedPolicyEvaluation, selection: EvaluationSelection
         context=str(item.context),
         output=str(item.max_output or "-"),
         seed=str(item.seed) if item.seed is not None else "protocol",
-        runs_as=f"{selection.benchmark}/{config.protocol_name} {protocol.operation.value}",
+        runs_as=f"{selection.benchmark}/{config.protocol_name} {protocol.operation.value}"
+        + (f" {config.agent.harness.kind}" if config.agent is not None else ""),
         think=_thinking(sampling.chat_template_kwargs) if sampling is not None else "-",
         trials=str(protocol.trials.count),
         cap=str(sampling.max_tokens) if sampling is not None and sampling.max_tokens is not None else "-",
@@ -73,30 +74,9 @@ def _taskspec_row(item: ResolvedPolicyEvaluation, selection: EvaluationSelection
     )
 
 
-def _harbor_row(item: ResolvedPolicyEvaluation) -> _Row:
-    config = yaml.safe_load(item.evaluation.definition.config_path.read_text())
-    (agent,) = config["agents"]
-    (dataset,) = config["datasets"]
-    revision = dataset.get("ref") or dataset.get("version") or "unversioned"
-    return _Row(
-        evaluation=item.evaluation.name,
-        context=str(item.context),
-        output=str(item.max_output),
-        seed="n/a",
-        runs_as=f"harbor {dataset['name']}@{revision} {agent['name']}",
-        trials=str(config.get("n_attempts", 1)),
-    )
-
-
 def policy_rows(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[_Row, ...]:
     """One row per evaluation the candidate runs, with its resolved settings and benchmark-owned facts."""
-    rows = []
-    for item in resolve(policy, candidate):
-        definition = item.evaluation.definition
-        rows.append(
-            _taskspec_row(item, definition) if isinstance(definition, EvaluationSelection) else _harbor_row(item)
-        )
-    return tuple(rows)
+    return tuple(_row(item) for item in resolve(policy, candidate))
 
 
 def _print_table(rows: tuple[_Row, ...]) -> None:
