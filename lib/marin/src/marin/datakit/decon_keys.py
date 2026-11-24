@@ -521,15 +521,14 @@ def long_record_pairs(
     overlap: int = PIECE_OVERLAP,
 ) -> list[Candidate]:
     """``record_pairs`` for a long record: each of its ``readings`` (JSON escapes read on the whole record, as for a
-    short record) is cut into ``pieces``, and each piece is scanned as that reading. One pair per item, the one with
-    the longest excerpt (a hit near a piece's edge has its context cut there and whole in the next piece)."""
-    found: dict[str, Candidate] = {}
+    short record) is cut into ``pieces``, and each piece is scanned as that reading. Every distinct excerpt is a
+    pair, so a later exact copy is scored even when an earlier piece holds an edited one; a hit near a piece's edge
+    also gives a pair with its context cut, which the record's best score makes harmless."""
+    found: dict[tuple[str, str], Candidate] = {}
     for reading in readings(text):
         for piece in pieces(reading, size, overlap, width):
             for pair in _pairs(record_id, [Reading(piece, width)], len(text), table, locators):
-                best = found.get(pair.item)
-                if best is None or len(pair.right) > len(best.right):
-                    found[pair.item] = pair
+                found.setdefault((pair.item, pair.right), pair)
     return list(found.values())
 
 

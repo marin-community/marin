@@ -122,10 +122,13 @@ def main() -> None:
     args = parser.parse_args()
     files = measure_shards(args.sources, args.input_root, args.seed, args.per_source)
     StoragePath(prefix_join(args.output, "shards.json")).write_text(json.dumps({"measure": files}))
+    # pairs.py reads the keys of the sample from this output.
+    keys_path = prefix_join(args.keys, KEYS_FILENAME)
+    StoragePath(prefix_join(args.output, KEYS_FILENAME)).write_bytes(StoragePath(keys_path).read_bytes())
     logger.info("measure: %d shards", len(files))
     resources = ResourceConfig(cpu=1, ram=args.ram)
     context = ZephyrContext(name="decon-measure-keys", resources=resources, max_workers=len(files))
-    scan = make_measure(prefix_join(args.keys, KEYS_FILENAME), args.output, args.width)
+    scan = make_measure(keys_path, args.output, args.width)
     outcome = context.execute(Dataset.from_list(files).map_shard(scan), map_task_resources=resources)
     logger.info("measure done: %d shards", len(outcome.results))
 

@@ -485,7 +485,7 @@ def _make_scan(locators_path: str, pairs_dir: str, stats_dir: str, width: int):
                 yield json.loads(done.read_text())
                 continue
             table, locators = _index(locators_path)
-            stats = {"records": 0, "chars": 0, "candidate_records": 0, "pairs": 0, "long_records": 0}
+            stats = {"file": name, "records": 0, "chars": 0, "candidate_records": 0, "pairs": 0, "long_records": 0}
             found: list[Candidate] = []
             for record in load_file(InputFileSpec(path=path, columns=["id", "text"])):
                 text = str(record.get("text") or "")
@@ -611,6 +611,11 @@ def decon_source(
     files = parquet_files(normalized.main_output_dir, "**/*.parquet")
     if not files:
         raise FileNotFoundError(f"no .parquet files under {normalized.main_output_dir}")
+    names = [os.path.basename(path) for path in files]
+    if len(set(names)) != len(names):
+        raise ValueError(
+            f"the shards under {normalized.main_output_dir} must have distinct file names; the outputs use them"
+        )
     pairs_dir = prefix_join(output_path, "scan/pairs")
     stats_dir = prefix_join(output_path, "scan/stats")
     scores_dir = prefix_join(output_path, "scores")
@@ -639,6 +644,13 @@ def decon_source(
             Dataset.from_list(groups).map_shard(_make_score(scorer, keys.items_dir, scores_dir, score_workers.device)),
             map_task_resources=score_workers.resources,
         )
+    unscored = [
+        stats["file"]
+        for stats in scan.results
+        if stats["pairs"] and not StoragePath(prefix_join(scores_dir, stats["file"])).exists()
+    ]
+    if unscored:
+        raise RuntimeError(f"{len(unscored)} scanned shards with pairs have no scores, such as {unscored[:5]}")
     marked = context.execute(
         Dataset.from_list(files).map_shard(_make_mark(scores_dir, output_path, cutoff, flagged_sample_size, files)),
         map_task_resources=worker_resources,

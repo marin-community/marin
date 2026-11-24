@@ -358,9 +358,20 @@ def test_a_long_record_keeps_the_whole_excerpt_of_a_hit_near_a_piece_edge():
     text = filler[:11_000] + copy + filler[: 30_000 - 11_000]
     whole = record_pairs("r", text, table, locators)
     pieced = long_record_pairs("r", text, table, locators, size=12_000, overlap=4_600)
-    assert [p.item for p in pieced] == ["item-0"]
-    assert pieced[0].right == whole[0].right
-    assert pieced[0].record_chars == len(text)
+    assert {p.item for p in pieced} == {"item-0"}
+    assert whole[0].right in [p.right for p in pieced]
+    assert all(p.record_chars == len(text) for p in pieced)
+
+
+def test_a_long_record_scores_a_later_exact_copy_after_an_edited_one():
+    table, locators = _index(*LONG)
+    question, choices = LONG
+    edited = f"{question} A) a red fox B) a slow turtle C) a tall giraffe"
+    exact = f"{question} A) {choices[0]} B) {choices[1]} C) {choices[2]}"
+    filler = "lorem ipsum dolor sit amet. " * 1000
+    text = filler[:3_000] + edited + filler[:20_000] + exact + filler[:3_000]
+    pieced = long_record_pairs("r", text, table, locators, size=12_000, overlap=4_600)
+    assert any(choices[0] in p.right for p in pieced)
 
 
 def test_key_choice_takes_the_rarest_window_and_a_second_one_that_does_not_overlap():
