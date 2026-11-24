@@ -14,3 +14,4 @@ config:
   # bind applet hosts. An empty list disables host management through the API.
   marin-marina:applet_operators:
     - ben.feuer@openathena.ai
+    - romain.yon@openathena.ai
