@@ -26,8 +26,8 @@ from taskcompendium.pipeline.models import RawRow
 
 LETTERS = ("A", "B")
 CHAT_PROMPT = (
-    "Answer the following multiple choice question. The last line of your response should be in the format "
-    "'Answer: $LETTER' (without quotes), where LETTER is A or B.\n\n{question}\n\nA) {a}\nB) {b}"
+    "Answer the following multiple choice question. The last line of your response should be exactly "
+    "'Answer: A' or 'Answer: B' (without quotes).\n\n{question}\n\nA) {a}\nB) {b}"
 )
 
 

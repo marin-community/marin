@@ -40,7 +40,7 @@ TRUTHFULQA_SOURCE = UrlSource(
     SourceFormat.CSV,
 )
 TRUTHFULQA_BINARY_POPULATION = 790
-VERSION = "2026.11.24.1"
+VERSION = "2026.11.24.2"
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
