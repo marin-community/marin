@@ -3050,6 +3050,8 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 test = [
+    { name = "marin-finelog", editable = "../../lib/finelog" },
+    { name = "marin-finelog-server", specifier = ">=0.2.0.dev0" },
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "../../lib/shellbox" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "../../lib/taskcompendium" },
     { name = "pytest", specifier = ">=8.3" },
