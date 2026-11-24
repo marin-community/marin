@@ -475,11 +475,13 @@ there as recoverable. `iris.jax.compile_cache` uses `/cache/xla` for XLA's
 per-fusion autotune results on GPU tasks, because XLA opens that directory from
 C++ and cannot read an object-store URL. Iris warms one local leader per node
 from a FineStore file-set snapshot and has global rank 0 publish newly created
-files in bounded transactions. The remote root is keyed by the launch tree hash
-under 30-day temporary storage; a storage failure starts cold and does not block
-JAX initialization. JAX's own compilation cache stays on object storage under
-the Marin prefix: JAX writes it only from process 0, so a node-local copy would
-leave every other node permanently cold.
+files in bounded transactions when autotuning is enabled. With
+`--xla_gpu_autotune_level=0`, rank 0 fetches the snapshot without starting an
+uploader, so old files on the host cannot be published as new results. The remote
+root is keyed by the launch tree hash under 30-day temporary storage; a storage
+failure starts cold and does not block JAX initialization. JAX's own compilation
+cache stays on object storage under the Marin prefix: JAX writes it only from
+process 0, so a node-local copy would leave every other node permanently cold.
 
 ### Controller state
 

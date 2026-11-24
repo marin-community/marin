@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 _XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
+_XLA_AUTOTUNE_LEVEL_FLAG = "--xla_gpu_autotune_level"
 # Object-store home for the per-build FineStore file set.
 _XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_TTL_DAYS = 30
@@ -110,9 +111,16 @@ def _enable_xla_autotune_cache() -> None:
     # Off a real launch the published provenance is absent and the cache stays local.
     if os.environ.get(LAUNCH_PROVENANCE_ENV):
         role = _autotune_cache_role()
-        if role is _AutotuneCacheRole.UPLOADER:
+        autotune_level = None
+        for flag in xla_flags.split():
+            name, _, value = flag.partition("=")
+            if name == _XLA_AUTOTUNE_LEVEL_FLAG:
+                autotune_level = value
+        # Level 0 still reads cached entries; the uploader would also publish
+        # unrelated files left in this persistent directory by earlier jobs.
+        if role is _AutotuneCacheRole.UPLOADER and autotune_level != "0":
             sync_file_set_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
-        elif role is _AutotuneCacheRole.FETCHER:
+        elif role is not _AutotuneCacheRole.NONE:
             fetch_file_set_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
 
 

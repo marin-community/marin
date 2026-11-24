@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 import rigging.timing as timing
+from finestore.fileset import FineStoreDirectory, fetch_file_set
 
 pytest.importorskip("jax")
 
@@ -483,6 +484,40 @@ def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path
 
     autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
     assert calls == [(jax_cache_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
+
+
+def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path) -> None:
+    root = str(tmp_path / "remote")
+    seed = tmp_path / "seed"
+    writer = FineStoreDirectory(root, str(seed), flush_interval=3600)
+    (seed / "cached.textproto").write_bytes(b"tuned")
+    writer.close()
+
+    mirrors: list[FineStoreDirectory] = []
+
+    def start_mirror(root: str, local: str) -> FineStoreDirectory:
+        mirror = FineStoreDirectory(root, local, flush_interval=3600)
+        mirrors.append(mirror)
+        return mirror
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+        autotune_dir = scratch_cache_dir / "xla" / "per-fusion-autotune"
+        autotune_dir.mkdir(parents=True)
+        (autotune_dir / "leftover.textproto").write_bytes(b"old")
+        with (
+            patch.object(jax_cache_module, "_file_set_cache_root", return_value=root),
+            patch.object(jax_cache_module, "FineStoreDirectory", side_effect=start_mirror),
+            patch("iris.jax.compile_cache.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+        for mirror in mirrors:
+            mirror.close()
+
+        assert (autotune_dir / "cached.textproto").read_bytes() == b"tuned"
+
+    assert fetch_file_set(root, str(tmp_path / "reloaded")) == {"cached.textproto"}
 
 
 def test_non_primary_task_fetches_without_uploading_autotune_cache(tmp_path) -> None:
