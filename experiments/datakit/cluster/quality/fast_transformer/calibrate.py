@@ -21,6 +21,11 @@ layout of :class:`Calibration`.
 
 ``train.py`` runs :func:`calibrate_model` right after training, so this CLI is for
 recalibrating an existing model dir.
+
+Knot validation: ``np.interp`` assumes increasing ``xk`` and returns silently wrong
+values otherwise, so every :class:`Curve` is checked at construction and every curve
+of a loaded file is checked before any scoring, and the fitter anchors its floor and
+ceiling knots so they cannot land inside the cutpoints.
 """
 
 import argparse
@@ -42,14 +47,50 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LABELS = "s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet"
 YK = [0.0, *BUCKET_EDGES, 1.0]  # the interior IS BUCKET_EDGES, so the two can't drift
+ANCHOR_MARGIN = 1e-6
+
+
+def validate_knots(xk, yk, name: str = "curve") -> None:
+    """A curve ``np.interp`` can be trusted with: one-dimensional, at least two knots, as many ``yk`` as
+    ``xk``, finite, ``xk`` strictly increasing and ``yk`` non-decreasing.  Names the curve and the knots otherwise."""
+    x = np.asarray(xk, dtype=np.float64)
+    y = np.asarray(yk, dtype=np.float64)
+    if x.ndim != 1 or y.ndim != 1:
+        raise ValueError(
+            f"calibration curve {name!r}: xk and yk must be one-dimensional, got shapes {x.shape} and {y.shape}"
+        )
+    if len(x) != len(y) or len(x) < 2:
+        raise ValueError(f"calibration curve {name!r}: need len(xk) == len(yk) >= 2, got {len(x)} xk and {len(y)} yk")
+    if not (np.all(np.isfinite(x)) and np.all(np.isfinite(y))):
+        raise ValueError(f"calibration curve {name!r}: knots must be finite, got xk={x.tolist()} yk={y.tolist()}")
+    bad = np.flatnonzero(np.diff(x) <= 0)
+    if bad.size:
+        i = int(bad[0])
+        raise ValueError(
+            f"calibration curve {name!r}: xk must be strictly increasing (np.interp assumes it); "
+            f"xk[{i}]={x[i]:.6g} >= xk[{i + 1}]={x[i + 1]:.6g} in xk={[round(v, 6) for v in x.tolist()]}"
+        )
+    bad = np.flatnonzero(np.diff(y) < 0)
+    if bad.size:
+        i = int(bad[0])
+        raise ValueError(
+            f"calibration curve {name!r}: yk must be non-decreasing; "
+            f"yk[{i}]={y[i]:.6g} > yk[{i + 1}]={y[i + 1]:.6g} in yk={y.tolist()}"
+        )
 
 
 @dataclass(frozen=True)
 class Curve:
-    """A monotonic piecewise-linear remap of the raw score, applied with ``np.interp``."""
+    """A monotonic piecewise-linear remap of the raw score, applied with ``np.interp``.
+
+    Validated at construction (:func:`validate_knots`).
+    """
 
     xk: list[float]
     yk: list[float]
+
+    def __post_init__(self) -> None:
+        validate_knots(self.xk, self.yk)
 
     def __call__(self, raw: np.ndarray) -> np.ndarray:
         return np.interp(raw, self.xk, self.yk)
@@ -69,10 +110,16 @@ class Calibration:
 
     @classmethod
     def from_json(cls, data: dict) -> "Calibration":
-        """Parse a calibration file: the global ``{xk, yk}`` or the per-type ``{default, types}`` layout."""
+        """Parse a calibration file: the global ``{xk, yk}`` or the per-type ``{default, types}`` layout.
+
+        Every curve is validated here, before any scoring, and a defect names its curve.
+        """
         if "types" not in data:
-            return cls(default=Curve(**data))
-        return cls(default=Curve(**data["default"]), types={name: Curve(**c) for name, c in data["types"].items()})
+            return cls(default=_curve(data, "default"))
+        return cls(
+            default=_curve(data["default"], "default"),
+            types={name: _curve(c, name) for name, c in data["types"].items()},
+        )
 
     def to_json(self) -> dict:
         """The layout :meth:`from_json` reads; a global calibration writes the bare curve."""
@@ -96,8 +143,16 @@ class Calibration:
         return out
 
 
+def _curve(data: dict, name: str) -> Curve:
+    """Build one curve of a file, naming it in the error when its knots are invalid."""
+    try:
+        return Curve(**data)
+    except ValueError as error:
+        raise ValueError(str(error).replace("calibration curve 'curve'", f"calibration curve {name!r}", 1)) from None
+
+
 def load_calibration(model_dir: str, calib_file: str = MODEL_CALIB) -> Calibration:
-    """Read the calibration file under ``model_dir``."""
+    """Read the calibration file under ``model_dir``; its curves are validated before it is returned."""
     with (StoragePath(model_dir) / calib_file).open("r") as fh:
         return Calibration.from_json(json.loads(fh.read()))
 
@@ -116,10 +171,38 @@ def fit_cutpoints(raw: np.ndarray, levels: np.ndarray) -> tuple[dict[int, float]
     return med, [float(c) for c in np.maximum.accumulate(cuts)]
 
 
+def anchored_knots(raw: np.ndarray, cuts: list[float]) -> list[float]:
+    """The curve's ``xk``: a floor anchor below both the smallest raw score and the first cutpoint, the
+    cutpoints, and a ceiling anchor above both the largest raw score and the last cutpoint.
+
+    Anchoring to the raw extremes alone (the original rule) puts the floor *inside* the cutpoints whenever
+    the scores being anchored do not reach below the first cutpoint -- the case when shared cutpoints are
+    anchored per content type on that type's own raw range.  Equal cutpoints (``np.maximum.accumulate``
+    ties) are spread by ``ANCHOR_MARGIN`` so the knots stay strictly increasing.
+    """
+    floor = min(float(raw.min()), cuts[0]) - ANCHOR_MARGIN
+    ceiling = max(float(raw.max()), cuts[-1]) + ANCHOR_MARGIN
+    knots = [floor]
+    for cut in cuts:
+        knots.append(max(cut, knots[-1] + ANCHOR_MARGIN))
+    knots.append(max(ceiling, knots[-1] + ANCHOR_MARGIN))
+    validate_knots(knots, YK, "fitted")
+    return knots
+
+
 def fit_calibration(raw: np.ndarray, levels: np.ndarray) -> Calibration:
     """A global calibration whose curve maps the per-level cutpoints onto :data:`BUCKET_EDGES`."""
-    _, cuts = fit_cutpoints(raw, levels)
-    xk = [float(raw.min()) - 1e-6, *cuts, float(raw.max()) + 1e-6]
+    med, cuts = fit_cutpoints(raw, levels)
+    xk = anchored_knots(raw, cuts)
+    logger.info(
+        "calibration fit: medians %s cutpoints %s anchors [%.6g, %.6g] (raw range [%.6g, %.6g])",
+        {k: round(v, 5) for k, v in med.items()},
+        [round(c, 5) for c in cuts],
+        xk[0],
+        xk[-1],
+        float(raw.min()),
+        float(raw.max()),
+    )
     return Calibration(default=Curve(xk=xk, yk=YK))
 
 
