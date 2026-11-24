@@ -38,7 +38,7 @@ from experiments.evaluation.benchmark import fixed_benchmarks
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.cli import cli
 from experiments.evaluation.curated import load_evaluations
-from experiments.evaluation.evals import DAYTONA_SECRET_ENV, resolve_evaluations
+from experiments.evaluation.evals import DAYTONA_SECRET_ENV, HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
 
@@ -156,6 +156,39 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     assert config.verifier_env_keys == ()
     assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {"judge_access": "runtime"}
     assert batch.judge.api_model == "qwen3-0.6b"
+
+
+def test_judge_deadline_change_preserves_launch_identity_and_saved_results(tmp_path, harbor_task_workspace):
+    policy = harbor_task_workspace / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "local"},
+                "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
+                "datasets": [{"path": "dataset"}],
+            }
+        )
+    )
+    judge = models()["qwen3-0.6b"]
+    spec = replace(
+        _pipeline_spec(tmp_path),
+        evals=(HarborDefinition(policy.stem, policy),),
+        judge_model=judge,
+        judge_accelerator="H100x1",
+        cache_key=None,
+        run_id="judge-resume",
+    )
+    before = prepare_evaluation_batch(spec)
+    identity = replace(before.evaluations[0].identity, output_dir=str(tmp_path / "saved-results"))
+    record_path = Path(_record(before, identity, RunStatus.INFRA_FAILED, "interrupted", {}, {}, {}))
+    record = json.loads(record_path.read_text())
+    record["judge"]["model"]["config"].pop("evaluation_request_timeout", None)
+    record_path.write_text(json.dumps(record))
+
+    after = prepare_evaluation_batch(replace(spec, judge_model=replace(judge, evaluation_request_timeout=21600)))
+
+    assert after.evaluations[0].identity.run_id == identity.run_id
+    assert after.evaluations[0].identity.output_dir == identity.output_dir
 
 
 @pytest.mark.parametrize("dry_run", [True, False])

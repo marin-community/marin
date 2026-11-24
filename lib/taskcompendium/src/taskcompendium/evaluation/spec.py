@@ -244,7 +244,7 @@ class ContextPolicy(EvaluationModel):
     """Resolve a generation budget and admit prompts using the run's tokenizer."""
 
     output_fit: OutputFit = OutputFit.SHRINK
-    overflow: Literal["exclude", "error"] = "exclude"
+    overflow: Literal["exclude", "error"] = Field(default="exclude", exclude_if=lambda value: value == "exclude")
     context_reserve: int = Field(default=64, ge=0)
     output_budget: OutputBudget | None = None
     prefix_probe: PrefixProbe | None = None

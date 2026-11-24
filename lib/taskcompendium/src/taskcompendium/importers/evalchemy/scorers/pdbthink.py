@@ -30,7 +30,7 @@ def grade_pdbthink(config: dict, response: str) -> Reward:
     correct = bool(outcome["score"].get("correct")) and not tool_call
     metrics = {"macro_accuracy": float(correct), "micro_accuracy": float(correct), "score": score}
     return scored(
-        score,
+        float(correct),
         metrics=metrics,
         metric_weights={"macro_accuracy": config["family_weight"]},
         pdbthink_row={

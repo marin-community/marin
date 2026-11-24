@@ -246,7 +246,7 @@ class ModelConfigRef(BaseModel):
     generation: ModelGenerationConfig
     agent: ModelAgentConfig
     evaluation_num_concurrent: int | None = None
-    evaluation_request_timeout: float | None = None
+    evaluation_request_timeout: float | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class ModelRef(BaseModel):

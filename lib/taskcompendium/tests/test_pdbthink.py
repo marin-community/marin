@@ -77,8 +77,8 @@ def test_source_parser_and_provider_signals_determine_score(
     config = {**source_row, "answer_schema": schema, "gold_answer": gold}
     response = completion_text({"content": text, **message_extra}, termination, "provider_response")
     result = grade_pdbthink(config, response)
-    assert result.reward == pytest.approx(expected)
-    assert result.detail["metrics"]["score"] == result.reward
+    assert result.reward == float(expected == 1)
+    assert result.detail["metrics"]["score"] == pytest.approx(expected)
     assert result.detail["metrics"]["macro_accuracy"] == float(expected == 1)
     assert result.detail["pdbthink_row"]["truncated"] == (termination == "length")
 
