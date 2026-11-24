@@ -36,7 +36,7 @@ import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
@@ -109,7 +109,7 @@ from .results_db import (
 logger = logging.getLogger(__name__)
 
 CATALOG_CHECK_INTERVAL = 10.0
-DEFAULT_RUNS_LIMIT = 200
+DEFAULT_LEGACY_LIST_LIMIT = 200
 MAX_RUNS_LIMIT = 1000
 DEFAULT_CATALOG_LIMIT = 50
 DEFAULT_MODEL_CATALOG_LIMIT = 24
@@ -487,29 +487,6 @@ class RecordStore:
             else None
         )
 
-    def fetch_runs(
-        self,
-        *,
-        model: str | None = None,
-        eval_name: str | None = None,
-        user: str | None = None,
-        status: str | None = None,
-        group: str | None = None,
-        version: str | None = None,
-        accelerator: str | None = None,
-        limit: int = DEFAULT_RUNS_LIMIT,
-    ) -> list[RunRow]:
-        filters = CatalogFilters(
-            model=model,
-            eval_name=eval_name,
-            user=user,
-            status=status,
-            group=group,
-            version=version,
-            accelerator=accelerator,
-        )
-        return self.catalog_runs(filters, 0, limit).rows
-
     def catalog_runs(self, filters: CatalogFilters, offset: int, limit: int) -> CatalogPage[RunRow]:
         records, total = self._snapshot().catalog.run_page(filters, offset, limit)
         return CatalogPage([record_to_row(record) for record in records], total, limit)
@@ -518,6 +495,14 @@ class RecordStore:
         launches = self._snapshot().catalog.matching_launches(filters)
         rows = [launch.row() for launch in launches[offset : offset + limit]]
         return CatalogPage(rows, len(launches), limit)
+
+    def launches_with_members(self, filters: CatalogFilters, limit: int) -> list[dict]:
+        """Include eval members and their headline scores for the array-based groups API."""
+        launches = self._snapshot().catalog.matching_launches(filters)
+        return [
+            {**launch.row(), "evals": [_group_member(run.record) for run in reversed(launch.members)]}
+            for launch in launches[:limit]
+        ]
 
     def catalog_facets(self) -> dict:
         return {"run_facets": self._snapshot().catalog.facets()}
@@ -557,37 +542,6 @@ class RecordStore:
         metadata = self._snapshot().meta()
         metadata["archived_models"] = sorted(self.archived_models())
         return metadata
-
-    def groups(
-        self,
-        *,
-        model: str | None = None,
-        user: str | None = None,
-        eval_name: str | None = None,
-        status: str | None = None,
-        version: str | None = None,
-        accelerator: str | None = None,
-        limit: int = DEFAULT_RUNS_LIMIT,
-    ) -> list[dict]:
-        """Runs collapsed into launches (one per ``group_id``), newest first.
-
-        Each launch carries its model, version label, description, and a per-eval member list (with
-        each member's headline score) so the runs view can show one row per launch and expand it to
-        the individual evals it ran.
-        """
-        filters = CatalogFilters(
-            model=model or None,
-            user=user or None,
-            eval_name=eval_name,
-            status=status,
-            version=version,
-            accelerator=accelerator,
-        )
-        launches = self._snapshot().catalog.matching_launches(filters)
-        return [
-            {**launch.row(), "evals": [_group_member(run.record) for run in reversed(launch.members)]}
-            for launch in launches[:limit]
-        ]
 
     def history(self, model: str, task: str) -> list[dict]:
         """Every run's headline score for one ``(model, eval)`` over time, oldest first.
@@ -1014,8 +968,8 @@ class BadRequest(ValueError):
     """A query parameter the server will not guess at, surfaced to the caller as a 400."""
 
 
-def _parse_limit(raw: str | None) -> int:
-    return _parse_int(raw, default=DEFAULT_RUNS_LIMIT, low=1, high=MAX_RUNS_LIMIT)
+def _catalog_limit(raw: str | None, default: int) -> int:
+    return _parse_int(raw, default=default, low=1, high=MAX_RUNS_LIMIT)
 
 
 def _parse_int(raw: str | None, *, default: int, low: int, high: int) -> int:
@@ -1163,7 +1117,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         else:
             return JSONResponse({"error": "view must be launches or runs"}, status_code=400)
         offset = _parse_int(params.get("offset"), default=0, low=0, high=sys.maxsize)
-        limit = _parse_int(params.get("limit"), default=DEFAULT_CATALOG_LIMIT, low=1, high=MAX_RUNS_LIMIT)
+        limit = _catalog_limit(params.get("limit"), DEFAULT_CATALOG_LIMIT)
         page = await asyncio.to_thread(query, CatalogFilters.from_query(params), offset, limit)
         return JSONResponse(asdict(page))
 
@@ -1175,7 +1129,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
     async def api_catalog_models(request: Request) -> JSONResponse:
         params = request.query_params
         offset = _parse_int(params.get("offset"), default=0, low=0, high=sys.maxsize)
-        limit = _parse_int(params.get("limit"), default=DEFAULT_MODEL_CATALOG_LIMIT, low=1, high=MAX_RUNS_LIMIT)
+        limit = _catalog_limit(params.get("limit"), DEFAULT_MODEL_CATALOG_LIMIT)
         page = await asyncio.to_thread(
             store.catalog_models,
             params.get("q", "").strip().casefold(),
@@ -1189,18 +1143,10 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
     @router.get("/runs")
     async def api_runs(request: Request) -> JSONResponse:
         params = request.query_params
-        rows = await asyncio.to_thread(
-            store.fetch_runs,
-            model=params.get("model") or None,
-            eval_name=params.get("eval") or None,
-            user=params.get("user") or None,
-            status=params.get("status") or None,
-            group=params.get("group") or None,
-            version=params.get("version") or None,
-            accelerator=params.get("accelerator") or None,
-            limit=_parse_limit(params.get("limit")),
-        )
-        return JSONResponse(rows)
+        filters = replace(CatalogFilters.from_query(params), query="")
+        limit = _catalog_limit(params.get("limit"), DEFAULT_LEGACY_LIST_LIMIT)
+        page = await asyncio.to_thread(store.catalog_runs, filters, 0, limit)
+        return JSONResponse(page.rows)
 
     @router.get(
         "/runs/{run_id}",
@@ -1351,16 +1297,9 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
     @router.get("/groups")
     async def api_groups(request: Request) -> JSONResponse:
         params = request.query_params
-        groups = await asyncio.to_thread(
-            store.groups,
-            model=params.get("model") or None,
-            user=params.get("user") or None,
-            eval_name=params.get("eval") or None,
-            status=params.get("status") or None,
-            version=params.get("version") or None,
-            accelerator=params.get("accelerator") or None,
-            limit=_parse_limit(params.get("limit")),
-        )
+        filters = replace(CatalogFilters.from_query(params), query="", group=None)
+        limit = _catalog_limit(params.get("limit"), DEFAULT_LEGACY_LIST_LIMIT)
+        groups = await asyncio.to_thread(store.launches_with_members, filters, limit)
         return JSONResponse(groups)
 
     return router

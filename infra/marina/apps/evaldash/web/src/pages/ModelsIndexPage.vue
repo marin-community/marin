@@ -1,38 +1,21 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import ModelName from '@/components/shared/ModelName.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
-import { useApi } from '@/composables/useApi'
-import { CATALOG_SEARCH_DELAY, useCatalogQuery } from '@/composables/useCatalogQuery'
+import { useCatalogPage, useCatalogQuery } from '@/composables/useCatalogQuery'
 import { onViewRefresh } from '@/composables/useRefresh'
-import type { ModelCatalogPage } from '@/types/api'
+import type { ModelCatalogRow } from '@/types/api'
 import { formatTimestamp } from '@/utils/formatting'
 import { ALL_COHORTS, UNVERSIONED_COHORT } from '@/utils/panel'
 
 const numberFormat = new Intl.NumberFormat()
 
-const { queryValue, pushQuery, replaceQuery, offset, changePage, pagination } = useCatalogQuery()
+const { queryValue, offset, query, search, submitSearch, pushQuery, changePage } = useCatalogQuery()
 
-const query = computed(() => queryValue('q'))
 const cohort = computed(() => queryValue('cohort'))
 const cohortLabel = computed(() => cohort.value === UNVERSIONED_COHORT ? 'Unversioned' : cohort.value)
 const showArchived = computed(() => queryValue('include_archived') === '1')
-
-const search = ref(query.value)
-function submitSearch() {
-  const value = search.value.trim()
-  if (value !== query.value) void replaceQuery({ q: value, offset: '' })
-}
-
-watch(query, (value) => {
-  if (value !== search.value.trim()) search.value = value
-})
-watch(search, (value, _, onCleanup) => {
-  if (value.trim() === query.value) return
-  const timer = window.setTimeout(submitSearch, CATALOG_SEARCH_DELAY)
-  onCleanup(() => window.clearTimeout(timer))
-})
 
 const catalogPath = computed(() => {
   const params = new URLSearchParams()
@@ -42,13 +25,9 @@ const catalogPath = computed(() => {
   params.set('offset', String(offset.value))
   return `api/catalog/models?${params}`
 })
-const { data, loading, error, refresh } = useApi<ModelCatalogPage>(() => catalogPath.value)
-watch(catalogPath, () => {
-  data.value = null
-  void refresh()
-}, { immediate: true })
+const { data, loading, error, refresh, limit, hasNext, showPagination } =
+  useCatalogPage<ModelCatalogRow>(() => catalogPath.value, offset)
 onViewRefresh(refresh)
-const { limit, hasNext, showPagination } = pagination(data)
 const resultLabel = computed(() => {
   if (!data.value) return error.value ? '' : 'Loading models…'
   if (!data.value.rows.length) return 'No models match.'
@@ -138,8 +117,8 @@ const resultLabel = computed(() => {
               </div>
               <time :datetime="row.latest_run.created_at">{{ formatTimestamp(row.latest_run.created_at) }}</time>
             </td>
-            <td role="cell" class="numeric">{{ numberFormat.format(row.run_count) }} <span class="mobile-unit">runs</span></td>
-            <td role="cell" class="numeric">{{ numberFormat.format(row.benchmark_count) }} <span class="mobile-unit">distinct evals</span></td>
+            <td role="cell">{{ numberFormat.format(row.run_count) }} <span class="mobile-unit">runs</span></td>
+            <td role="cell">{{ numberFormat.format(row.benchmark_count) }} <span class="mobile-unit">distinct evals</span></td>
           </tr>
         </tbody>
       </table>
@@ -174,9 +153,6 @@ h1 {
   border-bottom: 1px solid var(--c-surface-border);
   color: var(--c-text-secondary);
   font-size: 0.8125rem;
-}
-
-.directory-controls {
   gap: 0.75rem;
 }
 
@@ -188,7 +164,7 @@ h1 {
   width: 100%;
   min-height: 2.5rem;
   padding: 0.4rem 0.65rem;
-  border: 1px solid var(--c-surface-border);
+  border: 1px solid var(--c-control-border);
   border-radius: 0.45rem;
   background: var(--c-surface);
   color: var(--c-text);
@@ -213,7 +189,7 @@ h1 {
   min-height: 2rem;
   max-width: 100%;
   padding: 0.25rem 0.625rem;
-  border: 1px solid var(--c-surface-border);
+  border: 1px solid var(--c-control-border);
   border-radius: 0.4rem;
   color: var(--c-text-secondary);
   font-size: 0.8125rem;
@@ -295,10 +271,6 @@ h1 {
   color: var(--c-text-secondary);
   font-size: 0.75rem;
   font-weight: 400;
-}
-
-.numeric {
-  font-variant-numeric: tabular-nums;
 }
 
 .mobile-unit {

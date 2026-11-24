@@ -51,7 +51,7 @@ Completed steps and older records are checked once per 24 hours after their firs
 across the first day. The record body is reread only when its version or step state changes. A missing
 object must be absent on two successful checks before its source is removed. A
 failed prefix listing leaves that prefix's last committed rows untouched, and an invalid rewrite keeps
-the last valid record while surfacing the error under **More → Diagnostics**. Failures in a serving instance's
+the last valid record while surfacing the error under **Diagnostics**. Failures in a serving instance's
 generation check or the scheduled reconciliation pass remain visible there until a later check or
 pass succeeds.
 
@@ -114,8 +114,7 @@ coverage** opens the matrix with benchmark selection, rank, archives and
 optional aggregates. Saved root URLs with panel selections still open it.
 
 **Models** is a directory of evaluation activity. A model opens its history
-and recorded runs. **More** contains Playground reports from the serving
-dashboard and Diagnostics for ingestion status and rescans.
+and recorded runs. **Reports** opens Playground reports from the serving dashboard. **Diagnostics** shows ingestion status and offers rescans.
 
 Playground reports are the model-feedback reports that the marin-serve dashboard's Report issue
 button saves, one immutable JSON object per report under `{prefix}/{YYYY-MM-DD}/{id}.json` in
@@ -166,6 +165,11 @@ The kernel is the only access gate; there is no application auth. Handlers read 
 ## API
 
 The kernel mounts these under `/evaldash/api/`.
+
+`/catalog` returns paged launch or run rows with the match count and effective page size. For a
+launch's individual runs, use `/catalog?view=runs&group=<group_id>`. The existing `/runs` and
+`/groups` collections return arrays. The `/groups` array includes each launch's members and their
+headline scores.
 
 ```
 GET  /catalog?view=launches|runs&q=&offset=&limit=&model=&eval=&user=&status=&version=&accelerator=&group=   paged summary rows and total matches
@@ -379,7 +383,7 @@ EVALDASH_STORE=local RECORDS_PREFIXES="$preview_records" \
 # -> http://127.0.0.1:8080/evaldash/
 ```
 
-Open **More → Diagnostics → Rescan** to reload the records. **Runs** shows the fixture launches. To inspect real
+Open **Diagnostics → Rescan** to reload the records. **Runs** shows the fixture launches. To inspect real
 runs, point `RECORDS_PREFIXES` at a local copy of their run directories. Keep dev storage
 local to avoid production writes. After edits, stop the preview with Ctrl-C and
 rerun the `release --local` command to build and install the new package.

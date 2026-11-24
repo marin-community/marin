@@ -74,3 +74,29 @@ def test_model_index_recovers_from_a_catalog_failure(journey: Journey) -> None:
         "console Failed to load resource: the server responded with a status of 503",
     )
     journey.refusals[:] = [failure for failure in journey.refusals if not failure.startswith(expected)]
+
+
+def test_compare_retries_model_choices_with_the_editor_closed(journey: Journey) -> None:
+    page = journey.page
+    page.route(f"**{COMPARE_MODELS_API}?**", lambda route: route.fulfill(status=503), times=1)
+    journey.visit("/compare?cohort=2026.07.20&models=snowball,tootsie-8b")
+    editor = page.get_by_role("button", name="Edit models", exact=True)
+    controls_id = editor.get_attribute("aria-controls")
+    controls = page.locator(f"#{controls_id}")
+    retry = page.get_by_role("button", name="Retry model choices", exact=True)
+    expect(retry).to_be_visible()
+    expect(editor).to_have_attribute("aria-expanded", "false")
+    expect(controls).to_be_hidden()
+
+    retry.click()
+    expect(page.get_by_role("region", name="Benchmark index", exact=True)).to_be_visible()
+    expect(retry).to_be_hidden()
+    expect(controls).to_be_hidden()
+    editor.click()
+    expect(controls.get_by_role("button", name="Remove snowball", exact=True)).to_be_visible()
+
+    expected = (
+        f"503 {COMPARE_MODELS_API}?cohort=2026.07.20",
+        "console Failed to load resource: the server responded with a status of 503",
+    )
+    journey.refusals[:] = [failure for failure in journey.refusals if not failure.startswith(expected)]

@@ -251,9 +251,9 @@ function coverageNote(cell: PanelCell): string {
             >
             <span class="ml-auto font-mono text-[13px] font-semibold tabular-nums text-right">
               <template v-if="run.headline">
-                {{ formatScore(run.headline.value) }}
+                {{ formatScore(run.headline) }}
                 <span class="block text-[10px] text-text-muted font-normal leading-none">
-                  {{ formatInterval(run.headline.low, run.headline.high) }}
+                  {{ formatInterval(run.headline) }}
                 </span>
               </template>
               <span v-else class="text-text-muted">—</span>

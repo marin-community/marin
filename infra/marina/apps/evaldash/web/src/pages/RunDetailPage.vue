@@ -179,10 +179,10 @@ async function copyPath() {
             <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Grade</div>
             <template v-if="data.headline">
               <div class="text-3xl font-semibold tabular-nums leading-none mt-1">
-                {{ formatScore(data.headline.value) }}<span class="text-lg text-text-muted">%</span>
+                {{ formatScore(data.headline) }}
               </div>
               <div class="text-xs font-mono text-text-muted mt-1">
-                95% {{ formatInterval(data.headline.low, data.headline.high) }}
+                95% {{ formatInterval(data.headline) }}
               </div>
               <div class="text-xs font-mono text-text-muted truncate max-w-[16rem]" :title="data.headline.metric">
                 {{ data.headline.metric }} · {{ scoredItemsLabel(data.headline) }}

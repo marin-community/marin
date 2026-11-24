@@ -12,7 +12,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
+import { formatDelta, formatInterval, formatScore, formatTimestamp, isPercentMetric } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
 import { UNVERSIONED_COHORT, cellCoverageLabel, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
 import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
@@ -28,6 +28,7 @@ import {
   type PanelRow,
 } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import CohortNotice from '@/components/shared/CohortNotice.vue'
 import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import SearchSelect from '@/components/shared/SearchSelect.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
@@ -371,11 +372,11 @@ function pickVariant(column: FamilyColumn, variant: string) {
 
 // Δ best is per benchmark, where a difference between two measurements of the same thing is defined.
 // There is no cross-benchmark Δ.
-function deltaBest(row: PanelRow, task: string): number | null {
+function deltaBest(row: PanelRow, task: string): string | null {
   const cell = row.cells[task]
   const leader = best.value[task]
   if (!cell || !leader || leader.model === row.model) return null
-  return cell.value - leader.value
+  return formatDelta(cell.value - leader.value, cell) + (isPercentMetric(cell) ? ' pp' : '')
 }
 
 const MODEL_PAGE_SIZE = 20
@@ -437,7 +438,7 @@ function cellTitle(cell: PanelCell): string {
     ...(cell.repeat_aggregation?.coverage_basis === 'item_lower_bound'
       ? [`at least ${cell.n_scored} items scored`]
       : []),
-    `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
+    `95% ${formatInterval(cell)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
     `cohort ${cell.version ?? UNVERSIONED_COHORT}${cell.eval_runtime ? ` · ${cell.eval_runtime}` : ''}`,
@@ -476,7 +477,7 @@ function goToModel(model: string) {
       <RouterLink :to="{ path: '/benchmarks', query: { cohort } }" class="text-sm text-accent hover:underline">← Benchmarks</RouterLink>
       <h1 class="mt-2">Fleet coverage</h1>
       <p class="mt-1 text-sm text-text-secondary">Rank models across the selected benchmarks, or open one benchmark for its scores and source runs.</p>
-      <p v-if="comparabilityWarning" class="text-sm text-text-secondary mt-2">{{ comparabilityWarning }}</p>
+      <CohortNotice v-if="comparabilityWarning" class="mt-2" :message="comparabilityWarning" />
     </div>
 
     <div class="panel-controls flex flex-wrap items-end gap-3 mb-3">
@@ -668,7 +669,7 @@ function goToModel(model: string) {
                     v-if="best[column.task]"
                     class="block font-normal normal-case font-mono text-[10px]"
                     style="color: var(--c-best)"
-                    >▲ {{ formatScore(best[column.task].value) }}</span
+                    >▲ {{ formatScore(best[column.task]) }}</span
                   >
                 </th>
                 <th
@@ -700,7 +701,7 @@ function goToModel(model: string) {
                   {{ meanRanks.get(row.model)?.toFixed(3) ?? '—' }}
                 </td>
                 <td v-if="aggregatePolicy" class="text-center">
-                  <template v-if="row.aggregate">{{ formatScore(row.aggregate.value) }}<small class="block">{{ formatInterval(row.aggregate.low, row.aggregate.high) }}</small></template>
+                  <template v-if="row.aggregate">{{ formatScore(row.aggregate) }}<small class="block">{{ formatInterval(row.aggregate) }}</small></template>
                   <span v-else>Incomplete</span>
                 </td>
                 <td v-for="{ task } in pageColumns" :key="task" class="p-1 text-center align-middle">
@@ -716,11 +717,11 @@ function goToModel(model: string) {
                     @click="openHistory(row.model, task)"
                   >
                     <span class="tabular-nums font-mono font-medium">
-                      {{ formatScore(cellFor(row, task)!.value)
+                      {{ formatScore(cellFor(row, task)!)
                       }}<span v-if="isSuspect(cellFor(row, task)!)" class="text-status-warning">*</span>
                     </span>
                     <span class="block text-[10px] text-text-muted tabular-nums font-mono leading-none">
-                      {{ formatInterval(cellFor(row, task)!.low, cellFor(row, task)!.high) }}
+                      {{ formatInterval(cellFor(row, task)!) }}
                     </span>
                     <span
                       v-if="isPartialCoverage(cellFor(row, task)!)"
@@ -730,7 +731,7 @@ function goToModel(model: string) {
                     <span
                       v-else-if="deltaBest(row, task) !== null"
                       class="block text-[9px] font-mono leading-none text-text-muted"
-                      >{{ formatDelta(deltaBest(row, task)) }}</span
+                      >{{ deltaBest(row, task) }}</span
                     >
                   </button>
                   <button

@@ -3,28 +3,24 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import BenchmarkFocus from '@/components/comparison/BenchmarkFocus.vue'
 import BenchmarkOverview from '@/components/comparison/BenchmarkOverview.vue'
+import { benchmarkPage, orderBenchmarks, type BenchmarkScope } from '@/components/comparison/benchmarkIndex'
+import { useComparisonData } from '@/components/comparison/useComparisonData'
+import CohortNotice from '@/components/shared/CohortNotice.vue'
 import ModelName from '@/components/shared/ModelName.vue'
 import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import SearchSelect from '@/components/shared/SearchSelect.vue'
-import { useApi } from '@/composables/useApi'
-import { useCatalogQuery } from '@/composables/useCatalogQuery'
-import { onViewRefresh } from '@/composables/useRefresh'
+import { useRouteQuery } from '@/composables/useRouteQuery'
 import { FACETS, MAX_COMPARE } from '@/constants'
-import type { Comparison, ComparisonRow, Meta } from '@/types/api'
-import { formatMeasurement, formatMeasurementInterval } from '@/utils/formatting'
+import { formatInterval, formatScore } from '@/utils/formatting'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cohortWarning } from '@/utils/panel'
 
-const PAGE_SIZE = 12
 const MODEL_OPTION_LIMIT = 12
 const SELECTION_PARAMS = [
   'benchmarks', 'cohort', 'complete', 'min_coverage', 'min_benchmark_coverage', 'include_flagged', ...FACETS,
 ] as const
 
-type ComparisonModels = Pick<Meta, 'models' | 'default_cohort' | 'verified_cohorts' | 'versions'>
-type RowScope = 'all' | 'shared'
-
 const route = useRoute()
-const { location, pushQuery, replaceQuery } = useCatalogQuery()
+const { location, pushQuery, replaceQuery } = useRouteQuery()
 
 function param(key: string): string {
   const value = route.query[key]
@@ -44,12 +40,11 @@ const selectionQuery = computed(() => {
   }
   return params.toString()
 })
-const {
-  data: catalog,
-  loading: catalogLoading,
-  error: catalogError,
-  refresh: refreshCatalog,
-} = useApi<ComparisonModels>(() => `api/comparison-models?${selectionQuery.value}`)
+const desiredModels = computed(() => names('models'))
+const { choices, results, selected, remaining, excluded, comparing } = useComparisonData(selectionQuery, desiredModels)
+const { data: catalog, loading: catalogLoading, error: catalogError, refresh: refreshCatalog } = choices
+const { data: comparison, loading: comparisonLoading, error: comparisonError, refresh: refreshComparison } = results
+
 const cohortOptions = computed(() => [...new Set([
   ALL_COHORTS,
   ...[...(catalog.value?.versions ?? [])].reverse(),
@@ -66,36 +61,8 @@ function cohortLabel(value: string) {
   return value
 }
 
-const desiredModels = computed(() => names('models'))
-const modelSet = computed(() => new Set(catalog.value?.models ?? []))
-const selected = computed(() => desiredModels.value.filter((model) => modelSet.value.has(model)).slice(0, MAX_COMPARE))
-const remaining = computed(() => (catalog.value?.models ?? []).filter((model) => !selected.value.includes(model)))
-const excludedModels = computed(() => desiredModels.value.filter((model) => !modelSet.value.has(model)))
-const comparisonPath = computed(() => selected.value.length < 2
-  ? ''
-  : `api/compare?${selectionQuery.value}&models=${encodeURIComponent(selected.value.join(','))}`,
-)
-const {
-  data: comparison,
-  loading: comparisonLoading,
-  error: comparisonError,
-  refresh: refreshComparison,
-} = useApi<Comparison>(() => comparisonPath.value)
-
-watch(selectionQuery, () => {
-  catalog.value = null
-  void refreshCatalog()
-}, { immediate: true })
-watch(comparisonPath, (path) => {
-  comparison.value = null
-  if (path) void refreshComparison()
-})
 watch(() => catalog.value?.default_cohort, (value) => {
   if (value && !param('cohort')) void replaceQuery({ cohort: value })
-})
-onViewRefresh(() => {
-  void refreshCatalog()
-  if (comparisonPath.value) void refreshComparison()
 })
 
 function updateModels(models: string[]) {
@@ -109,34 +76,12 @@ function addModel(model: string) {
   }
 }
 
-function modelCoverage(row: ComparisonRow): number {
-  return Object.keys(row.cells).length
-}
-
-const rows = computed(() => [...(comparison.value?.rows ?? [])].sort((a, b) =>
-  modelCoverage(b) - modelCoverage(a) || a.benchmark.localeCompare(b.benchmark),
-))
-const sharedRows = computed(() => rows.value.filter((row) => row.shared))
-const scope = computed<RowScope>(() => {
-  const requested = param('show')
-  if (requested === 'shared' || requested === 'all') return requested
-  return sharedRows.value.length ? 'shared' : 'all'
-})
+const ordered = computed(() => orderBenchmarks(comparison.value?.rows ?? []))
 const benchmarkSearch = computed(() => param('benchmarkSearch'))
-const terms = computed(() => benchmarkSearch.value.toLowerCase().trim().split(/\s+/).filter(Boolean))
-const filteredRows = computed(() => (scope.value === 'shared' ? sharedRows.value : rows.value).filter((row) => {
-  const label = row.benchmark.toLowerCase()
-  return terms.value.every((term) => label.includes(term))
-}))
-const pageCount = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / PAGE_SIZE)))
-const page = computed(() => Math.min(Math.max(1, Number.parseInt(param('bpage'), 10) || 1), pageCount.value))
-const offset = computed(() => (page.value - 1) * PAGE_SIZE)
-const pageRows = computed(() => filteredRows.value.slice(offset.value, offset.value + PAGE_SIZE))
 const focusName = computed(() => param('focus'))
-const focusedRow = computed(() => focusName.value
-  ? rows.value.find((row) => row.benchmark === focusName.value)
-  : pageRows.value[0],
-)
+const index = computed(() => benchmarkPage(ordered.value, {
+  scope: param('show'), search: benchmarkSearch.value, page: param('bpage'), focus: focusName.value,
+}))
 const benchmarkIndex = ref<HTMLElement | null>(null)
 const benchmarkDetail = ref<HTMLElement | null>(null)
 
@@ -161,8 +106,8 @@ watch(focusName, async (next, previous) => {
   source?.scrollIntoView({ block: 'nearest' })
 })
 
-function setScope(show: RowScope) {
-  if (show !== scope.value) void pushQuery({ show, bpage: '' })
+function setScope(show: BenchmarkScope) {
+  if (show !== index.value.scope) void pushQuery({ show, bpage: '' })
 }
 
 function setPage(next: number) {
@@ -215,7 +160,11 @@ const ranking = computed(() => selected.value
           >Clear benchmark scope</button>
         </div>
       </div>
-      <div v-show="editorOpen || catalogError" id="comparison-model-editor" class="selection-controls">
+      <div v-if="catalogError" class="selection-controls comparison-message" role="alert">
+        <p>Couldn’t load model choices. {{ catalogError }}</p>
+        <button type="button" @click="refreshCatalog">Retry model choices</button>
+      </div>
+      <div v-show="editorOpen" id="comparison-model-editor" class="selection-controls">
         <div class="picker-column">
           <div class="selected-models" aria-label="Selected models" role="group">
             <button
@@ -230,13 +179,9 @@ const ranking = computed(() => selected.value
               <span aria-hidden="true">×</span>
             </button>
           </div>
-          <div v-if="catalogError" class="comparison-message" role="alert">
-            <p>Couldn’t load model choices. {{ catalogError }}</p>
-            <button type="button" @click="refreshCatalog">Retry model choices</button>
-          </div>
-          <p v-else-if="catalogLoading && !catalog" class="comparison-message" role="status">Loading model choices…</p>
+          <p v-if="catalogLoading && !catalog" class="comparison-message" role="status">Loading model choices…</p>
           <SearchSelect
-            v-else-if="selected.length < MAX_COMPARE && remaining.length"
+            v-else-if="!catalogError && selected.length < MAX_COMPARE && remaining.length"
             label="Add model"
             placeholder="Search models…"
             :options="remaining"
@@ -249,27 +194,27 @@ const ranking = computed(() => selected.value
           <p v-else-if="selected.length === MAX_COMPARE" class="comparison-message">
             {{ MAX_COMPARE }} models selected. Remove one to add another.
           </p>
-          <p v-else-if="!selected.length" class="comparison-message">No eligible models in this selection.</p>
+          <p v-else-if="catalog && !selected.length" class="comparison-message">No eligible models in this selection.</p>
           <button v-if="desiredModels.length" type="button" class="text-link" @click="updateModels([])">Clear models</button>
-          <details v-if="catalog && excludedModels.length" class="excluded-models">
-            <summary>{{ excludedModels.length }} {{ excludedModels.length === 1 ? 'model unavailable' : 'models unavailable' }} in this selection</summary>
+          <details v-if="catalog && excluded.length" class="excluded-models">
+            <summary>{{ excluded.length }} {{ excluded.length === 1 ? 'model unavailable' : 'models unavailable' }} in this selection</summary>
             <ul>
-              <li v-for="model in excludedModels" :key="model"><ModelName :model="model" /></li>
+              <li v-for="model in excluded" :key="model"><ModelName :model="model" /></li>
             </ul>
           </details>
         </div>
       </div>
-      <p v-if="warning" class="selection-warning" role="note" aria-label="Cohort warning">{{ warning }}</p>
+      <CohortNotice v-if="warning" :message="warning" />
     </div>
 
     <div class="comparison-results">
-      <div v-if="comparisonPath && comparisonError" class="result-state" role="alert">
+      <div v-if="comparing && comparisonError" class="result-state" role="alert">
         <p>Couldn’t load benchmark results. {{ comparisonError }}</p>
         <button type="button" @click="refreshComparison">Retry results</button>
       </div>
-      <div v-else-if="catalog && selected.length < 2" class="result-state">Pick at least two models to compare.</div>
-      <div v-else-if="comparisonPath && !comparison" class="result-state" role="status">Loading benchmark results…</div>
-      <template v-else-if="comparison && comparisonPath">
+      <div v-else-if="catalog && !comparing" class="result-state">Pick at least two models to compare.</div>
+      <div v-else-if="comparing && !comparison" class="result-state" role="status">Loading benchmark results…</div>
+      <template v-else-if="comparison && comparing">
         <div class="benchmark-workspace" :class="{ 'benchmark-open': focusName }" :aria-busy="comparisonLoading">
           <section ref="benchmarkIndex" class="benchmark-index" aria-label="Benchmark index">
             <div class="index-controls">
@@ -284,33 +229,33 @@ const ranking = computed(() => selected.value
                 />
               </label>
               <div class="scope-switch" role="group" aria-label="Benchmark coverage">
-                <button type="button" :aria-pressed="scope === 'shared'" aria-label="Shared only" @click="setScope('shared')">
-                  Shared only <span>{{ sharedRows.length }}</span>
+                <button type="button" :aria-pressed="index.scope === 'shared'" aria-label="Shared only" @click="setScope('shared')">
+                  Shared only <span>{{ index.sharedCount }}</span>
                 </button>
-                <button type="button" :aria-pressed="scope === 'all'" aria-label="All recorded" @click="setScope('all')">
-                  All recorded <span>{{ rows.length }}</span>
+                <button type="button" :aria-pressed="index.scope === 'all'" aria-label="All recorded" @click="setScope('all')">
+                  All recorded <span>{{ index.allCount }}</span>
                 </button>
               </div>
             </div>
-            <p v-if="rows.length && !sharedRows.length" class="index-note">No setting has scores for every selected model.</p>
+            <p v-if="index.allCount && !index.sharedCount" class="index-note">No setting has scores for every selected model.</p>
             <BenchmarkOverview
-              v-if="pageRows.length"
-              :rows="pageRows"
+              v-if="index.rows.length"
+              :rows="index.rows"
               :models="selected"
-              :active="focusedRow?.benchmark"
+              :active="index.focused?.benchmark"
               :location="benchmarkLocation"
             />
-            <p v-else class="index-note">{{ !rows.length ? 'No results in this selection.' : 'No settings match.' }}</p>
+            <p v-else class="index-note">{{ index.allCount ? 'No settings match.' : 'No results in this selection.' }}</p>
             <div class="results-range">
               <p role="status">
-                <template v-if="pageRows.length">
-                  {{ offset + 1 }}–{{ offset + pageRows.length }} of {{ filteredRows.length }} {{ filteredRows.length === 1 ? 'setting' : 'settings' }}
+                <template v-if="index.rows.length">
+                  {{ index.offset + 1 }}–{{ index.offset + index.rows.length }} of {{ index.total }} {{ index.total === 1 ? 'setting' : 'settings' }}
                 </template>
                 <template v-else>0 settings</template>
               </p>
-              <nav v-if="pageCount > 1" class="compare-pagination" aria-label="Benchmark result pages">
-                <button type="button" aria-label="Previous" :disabled="page === 1" @click="setPage(page - 1)">‹</button>
-                <button type="button" aria-label="Next" :disabled="page === pageCount" @click="setPage(page + 1)">›</button>
+              <nav v-if="index.pageCount > 1" class="compare-pagination" aria-label="Benchmark result pages">
+                <button type="button" aria-label="Previous" :disabled="index.page === 1" @click="setPage(index.page - 1)">‹</button>
+                <button type="button" aria-label="Next" :disabled="index.page === index.pageCount" @click="setPage(index.page + 1)">›</button>
               </nav>
             </div>
           </section>
@@ -319,18 +264,18 @@ const ranking = computed(() => selected.value
             <RouterLink v-if="focusName" :to="location({ focus: '' })" class="back-link">
               <span aria-hidden="true">←</span> Back to benchmarks
             </RouterLink>
-            <BenchmarkFocus v-if="focusedRow" :key="focusedRow.benchmark" :row="focusedRow" :models="selected" />
+            <BenchmarkFocus v-if="index.focused" :key="index.focused.benchmark" :row="index.focused" :models="selected" />
             <div v-else class="result-state">{{ focusName ? 'No results for this setting in the current selection.' : 'Choose a benchmark setting to see its scores.' }}</div>
           </div>
         </div>
 
         <details v-if="ranking.length" class="comparison-notes">
           <summary>Shared-benchmark aggregate</summary>
-          <p>Unweighted mean over {{ sharedRows.length }} shared benchmark settings, ranked by the lower bound of the 95% interval.</p>
+          <p>Unweighted mean over {{ index.sharedCount }} shared benchmark settings, ranked by the lower bound of the 95% interval.</p>
           <ol>
             <li v-for="{ model, aggregate } in ranking" :key="model">
               <ModelName :model="model" />
-              <span class="tabular-nums">{{ formatMeasurement(aggregate.value, false) }} <span class="text-text-secondary">({{ formatMeasurementInterval(aggregate.low, aggregate.high, false) }})</span></span>
+              <span class="tabular-nums">{{ formatScore(aggregate) }} <span class="text-text-secondary">({{ formatInterval(aggregate) }})</span></span>
             </li>
           </ol>
         </details>
@@ -488,15 +433,6 @@ h1 {
 .back-link:hover {
   text-decoration: underline;
   text-underline-offset: 0.16em;
-}
-
-.selection-warning {
-  padding: 0.3rem 0.75rem;
-  border-top: 1px solid var(--c-status-warning-border);
-  border-radius: 0 0 0.75rem 0.75rem;
-  color: var(--c-status-warning);
-  background: var(--c-status-warning-bg);
-  font-size: 0.74rem;
 }
 
 .excluded-models,

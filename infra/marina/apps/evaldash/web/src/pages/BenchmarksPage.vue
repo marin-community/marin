@@ -2,12 +2,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import SearchSelect from '@/components/shared/SearchSelect.vue'
+import CohortNotice from '@/components/shared/CohortNotice.vue'
 import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { isSmokeEval, MAX_COMPARE } from '@/constants'
 import type { Meta, Panel } from '@/types/api'
-import { formatMeasurement, formatMeasurementInterval, isPercentMetric } from '@/utils/formatting'
+import { formatInterval, formatScore } from '@/utils/formatting'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, cohortWarning, scoredItemsLabel } from '@/utils/panel'
 import { compareCells } from '@/utils/ranking'
 
@@ -40,15 +41,24 @@ function toggleSuite(name: string) {
 const selected = ref<string[]>([])
 const params = computed(() => new URLSearchParams({ benchmarks: benchmark.value, cohort: cohort.value }))
 const { data, error, loading, refresh } = useApi<Panel>(() => 'api/panel?' + params.value)
+const choices = useApi<Pick<Meta, 'models'>>(() => 'api/comparison-models?' + params.value)
+const eligibleModels = computed(() => new Set(choices.data.value?.models ?? []))
 const ready = computed(() => options.value.includes(benchmark.value))
+function loadBenchmark() {
+  if (!ready.value) return
+  void refresh()
+  void choices.refresh()
+}
 watch([benchmark, cohort, ready], () => {
   selected.value = []
-  if (ready.value) refresh()
+  data.value = null
+  choices.data.value = null
+  loadBenchmark()
 }, { immediate: true })
 onMounted(fetchMeta)
 onViewRefresh(() => {
-  fetchMeta()
-  if (ready.value) refresh()
+  void fetchMeta()
+  loadBenchmark()
 })
 
 const warning = computed(() => meta.value && cohortWarning(cohort.value, meta.value))
@@ -76,7 +86,7 @@ const gaps = computed(() => (data.value?.rows ?? [])
     const gap = row.missing[benchmark.value]
     return gap ? [{ model: row.model, gap }] : []
   }))
-const selectedModels = computed(() => selected.value.filter(model => results.value.some(result => result.model === model && result.cell.value !== 0)))
+const selectedModels = computed(() => selected.value.filter(model => eligibleModels.value.has(model)))
 </script>
 
 <template>
@@ -85,7 +95,7 @@ const selectedModels = computed(() => selected.value.filter(model => results.val
     <header class="workspace-heading">
       <div>
         <h1>{{ benchmark || 'Benchmarks' }}</h1>
-        <p v-if="benchmark && data && ready && !loading" class="setting-meta">
+        <p v-if="benchmark && data && ready" class="setting-meta">
           {{ results.length }} scored {{ results.length === 1 ? 'model' : 'models' }}<template v-if="metrics"> · {{ metrics }}</template>
         </p>
       </div>
@@ -100,11 +110,14 @@ const selectedModels = computed(() => selected.value.filter(model => results.val
     <div v-if="!benchmark" class="selectors">
       <SearchSelect label="Benchmark" :max-options="12" :options="options" :model-value="benchmark" @update:model-value="choose('benchmark', $event)" />
     </div>
-    <p v-if="benchmark && warning" class="settings-note">{{ warning }}</p>
-    <p v-if="metaError || error" role="alert">{{ metaError || error }}</p>
-    <p v-else-if="!meta || (ready && loading)" role="status">Loading results…</p>
-    <p v-else-if="!options.length">No benchmarks have been recorded.</p>
-    <div v-else-if="!benchmark" class="benchmark-directory">
+    <CohortNotice v-if="benchmark && warning" :message="warning" class="mt-2" />
+    <p v-if="metaError || (ready && error)" role="alert" class="flex items-center gap-2">
+      {{ metaError || error }}
+      <button type="button" class="text-accent underline" @click="metaError ? fetchMeta() : refresh()">Retry</button>
+    </p>
+    <p v-if="(!meta && !metaError) || (ready && loading && !data)" role="status">Loading results…</p>
+    <p v-else-if="meta && !options.length">No benchmarks have been recorded.</p>
+    <div v-else-if="meta && !benchmark" class="benchmark-directory">
       <h2>Browse by suite</h2>
       <p class="directory-count">{{ options.length }} recorded settings</p>
       <section v-for="suite in suiteNames" :key="suite.name" class="directory-section">
@@ -121,8 +134,11 @@ const selectedModels = computed(() => selected.value.filter(model => results.val
         </div>
       </section>
     </div>
-    <p v-else-if="!ready">Unknown benchmark. Open the benchmark directory to choose a recorded setting.</p>
+    <p v-else-if="meta && benchmark && !ready">Unknown benchmark. Open the benchmark directory to choose a recorded setting.</p>
     <template v-else-if="data">
+      <p v-if="choices.error.value" role="alert" class="text-sm">
+        Couldn’t load model choices. <button @click="choices.refresh">Retry model choices</button>
+      </p>
       <div class="results-toolbar">
         <RouterLink v-if="selectedModels.length >= 2" class="compare-action" :to="{ name: 'compare', query: { benchmarks: benchmark, cohort, models: selectedModels.join(',') } }">
           Compare {{ selectedModels.length }} models
@@ -130,11 +146,11 @@ const selectedModels = computed(() => selected.value.filter(model => results.val
         <span v-else-if="results.length > 1" class="text-sm text-text-secondary">Select 2–{{ MAX_COMPARE }} models to compare</span>
         <div v-if="results.length > pageSize || modelFilter" class="model-tools">
           <input v-model="modelFilter" type="search" aria-label="Find model" placeholder="Find a model…" />
-        <div>
-          <button aria-label="Previous models" :disabled="page === 0" @click="page--">‹</button>
-          <span>{{ matching.length ? page * pageSize + 1 : 0 }}–{{ page * pageSize + visible.length }} of {{ matching.length }} models</span>
-          <button aria-label="Next models" :disabled="(page + 1) * pageSize >= matching.length" @click="page++">›</button>
-        </div>
+          <div>
+            <button aria-label="Previous models" :disabled="page === 0" @click="page--">‹</button>
+            <span>{{ matching.length ? page * pageSize + 1 : 0 }}–{{ page * pageSize + visible.length }} of {{ matching.length }} models</span>
+            <button aria-label="Next models" :disabled="(page + 1) * pageSize >= matching.length" @click="page++">›</button>
+          </div>
         </div>
       </div>
       <div v-if="visible.length" class="results-scroll">
@@ -145,15 +161,18 @@ const selectedModels = computed(() => selected.value.filter(model => results.val
               <th scope="row">
                 <div class="flex items-center gap-3">
                   <input type="checkbox" v-model="selected" :value="model" :aria-label="'Compare ' + model"
-                    :disabled="cell.value === 0 || (selectedModels.length >= MAX_COMPARE && !selected.includes(model))" />
+                    :disabled="!eligibleModels.has(model) || (selectedModels.length >= MAX_COMPARE && !selected.includes(model))" />
                   <RouterLink :to="{ name: 'model', params: { model }, query: { cohort } }">{{ model }}</RouterLink>
                 </div>
+                <small v-if="choices.data.value && !eligibleModels.has(model)" class="font-normal">
+                  Comparison requires an admitted non-zero score in this selection.
+                </small>
               </th>
               <td data-label="Score" class="font-semibold">
-                {{ formatMeasurement(cell.value, isPercentMetric(cell)) }}{{ isPercentMetric(cell) ? '%' : '' }}
-                <small class="mobile-interval">95% CI {{ formatMeasurementInterval(cell.low, cell.high, isPercentMetric(cell)) }}</small>
+                {{ formatScore(cell) }}
+                <small class="mobile-interval">95% CI {{ formatInterval(cell) }}</small>
               </td>
-              <td data-label="95% interval" :title="cell.interval_kind">{{ formatMeasurementInterval(cell.low, cell.high, isPercentMetric(cell)) }}</td>
+              <td data-label="95% interval" :title="cell.interval_kind">{{ formatInterval(cell) }}</td>
               <td data-label="Graded items">{{ scoredItemsLabel(cell) }}<small>{{ cellCoverageLabel(cell) || 'Coverage unknown' }}</small></td>
               <td data-label="Cohort">{{ cell.version || UNVERSIONED_COHORT }}</td>
               <td class="source-cell">
@@ -204,7 +223,6 @@ const selectedModels = computed(() => selected.value.filter(model => results.val
 a { color: var(--c-accent); }
 a:hover { text-decoration: underline; }
 .selectors { display: grid; grid-template-columns: minmax(14rem, 28rem) minmax(14rem, 20rem); gap: 1rem; }
-.settings-note { margin-top: .9rem; color: var(--c-text-secondary); border-left: 3px solid var(--c-status-warning); padding: .2rem .7rem; font-size: .84rem; }
 .results-toolbar { gap: .4rem 1rem; margin: .65rem 0; }
 h2 { overflow-wrap: anywhere; font-size: 1.3rem; font-weight: 650; }
 td small { color: var(--c-text-secondary); font-size: .8rem; }

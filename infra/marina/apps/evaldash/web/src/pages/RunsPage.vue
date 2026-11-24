@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import LaunchActivity from '@/components/runs/LaunchActivity.vue'
 import RunCatalogTable from '@/components/runs/RunCatalogTable.vue'
 import ModelName from '@/components/shared/ModelName.vue'
 import SearchSelect from '@/components/shared/SearchSelect.vue'
 import { useApi } from '@/composables/useApi'
-import { CATALOG_SEARCH_DELAY, useCatalogQuery } from '@/composables/useCatalogQuery'
+import { useCatalogPage, useCatalogQuery } from '@/composables/useCatalogQuery'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { MIXED_LAUNCH_STATUS, type CatalogFacets, type CatalogPage, type LaunchRow, type RunRow } from '@/types/api'
+import { MIXED_LAUNCH_STATUS, type CatalogFacets, type LaunchRow, type RunRow } from '@/types/api'
 
 const FACETS = [
   { key: 'model', label: 'Model', searchable: true },
@@ -20,7 +20,7 @@ const FACETS = [
 
 type View = 'launches' | 'runs'
 
-const { queryValue, pushQuery, replaceQuery, offset, changePage, pagination } = useCatalogQuery()
+const { queryValue, offset, query, search, submitSearch, pushQuery, changePage } = useCatalogQuery()
 
 const group = computed(() => queryValue('group'))
 const view = computed<View>(() => queryValue('view') === 'runs' || group.value ? 'runs' : 'launches')
@@ -30,29 +30,6 @@ const pluralUnit = computed(() => view.value === 'launches' ? 'launches' : 'runs
 function setView(value: View) {
   if (value === view.value) return
   void pushQuery({ view: value, group: '', offset: '' })
-}
-
-const query = computed(() => queryValue('q'))
-const search = ref(query.value)
-let searchTimer: number | undefined
-
-watch([query, group], ([value, nextGroup], [, previousGroup]) => {
-  if (nextGroup === previousGroup && value === search.value.trim()) return
-  window.clearTimeout(searchTimer)
-  search.value = value
-})
-onUnmounted(() => window.clearTimeout(searchTimer))
-
-function submitSearch() {
-  window.clearTimeout(searchTimer)
-  const value = search.value.trim()
-  if (value !== query.value) void replaceQuery({ q: value, offset: '' })
-}
-
-function setSearch(event: Event) {
-  search.value = (event.target as HTMLInputElement).value
-  window.clearTimeout(searchTimer)
-  searchTimer = window.setTimeout(submitSearch, CATALOG_SEARCH_DELAY)
 }
 
 const filtersOpen = ref(false)
@@ -82,8 +59,6 @@ function clearFilters() {
 }
 
 function resetSearch() {
-  window.clearTimeout(searchTimer)
-  search.value = ''
   void pushQuery({
     ...Object.fromEntries(FACETS.map(({ key }) => [key, ''])),
     q: '',
@@ -130,17 +105,13 @@ const catalogPath = computed(() => {
   for (const { key, value } of activeFacets.value) params.set(key, value)
   return `api/catalog?${params}`
 })
-const { data: catalog, error, loading, refresh } = useApi<CatalogPage>(() => catalogPath.value)
-watch(catalogPath, () => {
-  catalog.value = null
-  void refresh()
-}, { immediate: true })
+const { data: catalog, error, loading, refresh, limit, hasNext, showPagination } =
+  useCatalogPage<LaunchRow | RunRow>(() => catalogPath.value, offset)
 onViewRefresh(() => {
   void refresh()
   if (filtersOpen.value && !facetsLoading.value) void refreshFacets()
 })
 
-const { limit, hasNext, showPagination } = pagination(catalog)
 const total = computed(() => catalog.value?.total ?? 0)
 const launchRows = computed(() =>
   (catalog.value?.rows ?? []).filter((row): row is LaunchRow => !('run_id' in row)),
@@ -176,10 +147,9 @@ const resultLabel = computed(() => {
             <input
               id="search-runs"
               type="search"
-              :value="search"
+              v-model="search"
               autocomplete="off"
               placeholder="Search runs"
-              @input="setSearch"
             />
           </form>
           <button
@@ -381,7 +351,7 @@ h1 {
   min-height: 2.5rem;
   padding: 0.4rem 0.625rem 0.4rem 2.15rem;
   background: var(--c-surface);
-  border: 1px solid var(--c-surface-border);
+  border: 1px solid var(--c-control-border);
   border-radius: 0.45rem;
   color: var(--c-text);
   font-size: 0.875rem;
@@ -399,7 +369,7 @@ h1 {
   gap: 0.375rem;
   min-height: 2rem;
   padding: 0.25rem 0.625rem;
-  border: 1px solid var(--c-surface-border);
+  border: 1px solid var(--c-control-border);
   border-radius: 0.4rem;
   background: var(--c-surface);
   color: var(--c-text-secondary);
@@ -482,7 +452,7 @@ h1 {
   min-width: 0;
   padding: 0.25rem 0.5rem;
   background: var(--c-surface);
-  border: 1px solid var(--c-surface-border);
+  border: 1px solid var(--c-control-border);
   border-radius: 0.25rem;
   color: var(--c-text);
   font-size: 0.875rem;

@@ -93,7 +93,7 @@ function toggle() {
         :value="open ? query : modelValue"
         :placeholder="placeholder ?? `Search ${label.toLowerCase()}…`"
         :title="modelValue || undefined"
-        class="w-full rounded border border-surface-border bg-surface pl-2 pr-16 py-1 text-sm"
+        class="w-full rounded border border-[var(--c-control-border)] bg-surface pl-2 pr-16 py-1 text-sm"
         @focus="startSearch"
         @click="!open && startSearch()"
         @input="search"

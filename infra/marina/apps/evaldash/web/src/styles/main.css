@@ -6,12 +6,16 @@
 @config '../../tailwind.config.ts';
 
 :root {
-  --c-page:                 #F3F0E9;
-  --c-surface:              #FCFBF8;
-  --c-surface-raised:       #F0ECE3;
-  --c-surface-sunken:       #E9E4D9;
-  --c-surface-border:       #E3DED2;
-  --c-surface-border-subtle:#EDE9DF;
+  --c-page:                 #F4F5F6;
+  --c-surface:              #FFFFFF;
+  --c-surface-raised:       #F1F3F5;
+  --c-surface-sunken:       #E8ECEF;
+  --c-surface-border:       #D1D6DA;
+  --c-surface-border-subtle:#E7EBEE;
+
+  --c-control-border:       #7E8993;
+  --c-plot-grid:            #BAC3CC;
+  --c-plot-track:           #E8ECEF;
 
   --c-text:                 #191B1E;
   --c-text-secondary:       #565B63;
@@ -26,8 +30,8 @@
   --c-status-success-bg:     #E4F3E4;
   --c-status-success-border: #B7E0B7;
 
-  --c-status-warning:        #C2601F;
-  --c-status-warning-bg:     #FBEDE3;
+  --c-status-warning:        #994811;
+  --c-status-warning-bg:     #FFF5E6;
   --c-status-warning-border: #F0C4A8;
 
   --c-status-danger:         #C1272C;
@@ -37,7 +41,7 @@
   /* score magnitude ramp (blue 100->700, dataviz-validated) */
   --c-score-1:#CDE2FB; --c-score-2:#9EC5F4; --c-score-3:#6DA7EC; --c-score-4:#3987E5;
   --c-score-5:#256ABF; --c-score-6:#184F95; --c-score-7:#0D366B;
-  --c-best:  #B4783B;
+  --c-best:  #895122;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -48,6 +52,10 @@
     --c-surface-sunken:       #0E1116;
     --c-surface-border:       #262A33;
     --c-surface-border-subtle:#1D212A;
+
+    --c-control-border:       #687789;
+    --c-plot-grid:            #586779;
+    --c-plot-track:           #475469;
 
     --c-text:                 #E7E9ED;
     --c-text-secondary:       #A0A5AE;
@@ -78,6 +86,7 @@
 
 /* The shell's bar is drawn from the kit's tokens, so point those at this app's chrome. */
 :root {
+  --mono: "Noto Sans Mono Variable", ui-monospace, monospace;
   --ink: var(--c-text);
   --paper: var(--c-page);
   --panel: var(--c-surface);
@@ -86,6 +95,9 @@
   --mark: var(--c-accent);
   --warn: var(--c-status-danger);
 }
+
+/* Marina draws native form controls with --edge. Tables and panels keep their quieter dividers. */
+:where(input, textarea, select, button) { --edge: var(--c-control-border); }
 
 body { background: var(--c-page); }
 
@@ -104,12 +116,12 @@ body { background: var(--c-page); }
   overflow-wrap: anywhere;
 }
 .sample-reading { max-width: 78ch; }
-.review-page :is(button, a, select, input, summary):focus-visible, .tools-menu summary:focus-visible {
+.review-page :is(button, a, select, input, summary):focus-visible {
   outline: 2px solid var(--c-accent);
   outline-offset: 2px;
 }
 #app .marina-bar { font-family: "Noto Sans Variable", system-ui, sans-serif; }
-#app .marina-app-nav { overflow: visible; align-items: stretch; gap: clamp(.7rem, 2.3vw, 2rem); }
+#app .marina-app-nav { overflow-x: auto; align-items: stretch; gap: clamp(.7rem, 2.3vw, 2rem); }
 #app .marina-app-nav, #app .marina-title-row {
   box-sizing: border-box;
   max-width: 90rem;
@@ -126,17 +138,22 @@ body { background: var(--c-page); }
 #app .marina-app-nav > a[aria-current="page"] {
   color: var(--c-accent); border-color: currentColor; box-shadow: none;
 }
-.tools-menu { margin-left: auto; position: relative; align-self: center; font-size: .875rem; }
-.tools-menu summary { cursor: pointer; color: var(--c-text-secondary); padding-block: .6rem; }
-.tools-menu > div {
-  position: absolute; right: 0; z-index: 35; min-width: 12rem; padding: .35rem;
-  background: var(--c-surface); border: 1px solid var(--c-surface-border); border-radius: .4rem;
-  box-shadow: 0 .5rem 1.5rem #1018281a;
+#app .marina-app-nav > .diagnostics-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .4rem;
+  margin-left: auto;
 }
-.tools-menu a { display: block; padding: .55rem .7rem; color: var(--c-accent); }
-.tools-menu a:hover { background: var(--c-accent-subtle); }
+@media (max-width: 47.99rem) {
+  #app .marina-app-nav { gap: clamp(.45rem, 2.4vw, .9rem); }
+  .diagnostics-link span { display: none; }
+  #app .marina-app-nav > .diagnostics-link { min-width: 1.75rem; }
+}
 @media (max-width: 23rem) {
-  #app .marina-app-nav { gap: .55rem; padding-inline: .65rem; }
+  #app .marina-app-nav { justify-content: space-between; gap: .2rem; padding-inline: .35rem; }
+  #app .marina-app-nav > a { font-size: .8rem; }
+  #app .marina-app-nav > .diagnostics-link { min-width: 1.3rem; margin-left: 0; }
 }
 
 @media (min-width: 48rem) {

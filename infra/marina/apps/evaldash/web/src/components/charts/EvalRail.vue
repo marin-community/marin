@@ -60,7 +60,7 @@ const gauges = computed<Gauge[]>(() =>
     const gap = props.missing?.[task] ?? null
     const best = props.best[task]
     const bestLine = best
-      ? { label: 'fleet best', value: `${formatScore(best.value)}·${best.model}`, tone: 'best' as const }
+      ? { label: 'fleet best', value: `${formatScore(best)}·${best.model}`, tone: 'best' as const }
       : { label: 'fleet best', value: '—', tone: 'muted' as const }
 
     if (!cell) {
@@ -94,8 +94,8 @@ const gauges = computed<Gauge[]>(() =>
       content: {
         title: task,
         lines: [
-          { label: props.model, value: formatScore(cell.value) },
-          { label: '95% interval', value: formatInterval(cell.low, cell.high) },
+          { label: props.model, value: formatScore(cell) },
+          { label: '95% interval', value: formatInterval(cell) },
           { label: 'metric', value: `${cell.metric} · ${scoredItemsLabel(cell)}`, tone: 'muted' },
           { label: 'coverage', value: coverage || 'not reported', tone: 'muted' },
           isBest
@@ -184,7 +184,7 @@ function sparkLine(points: HistoryPoint[]): string {
       <template v-if="size === 'lg'">
         <div class="font-mono text-lg font-semibold" :class="{ 'text-text-muted': g.kind !== 'score' }">
           <template v-if="g.kind === 'score' && g.cell">
-            {{ formatScore(g.cell.value) }}<span class="block text-[10px] font-normal text-text-muted">{{ formatInterval(g.cell.low, g.cell.high) }}</span>
+            {{ formatScore(g.cell) }}<span class="block text-[10px] font-normal text-text-muted">{{ formatInterval(g.cell) }}</span>
           </template>
           <template v-else>—</template>
         </div>

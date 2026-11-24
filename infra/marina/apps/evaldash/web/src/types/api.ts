@@ -635,18 +635,8 @@ export interface ReviewResponse {
   summary: ReviewSummary | null
 }
 
-// One eval within a launch (a serve group), with its headline score.
-export interface GroupMember {
-  run_id: string
-  eval_name: string
-  status: string
-  step_status: string | null
-  created_at: string
-  headline: PanelCell | null
-}
-
-// A launch: all evals run against one model by one serve group, newest first (/api/groups).
-export interface LaunchGroup {
+// One serve group's summary from the paged catalog.
+export interface LaunchRow {
   group_id: string
   model_name: string
   version: string | null
@@ -657,10 +647,7 @@ export interface LaunchGroup {
   status: RunStatus | typeof MIXED_LAUNCH_STATUS | 'running' | 'step_failed'
   n_evals: number
   n_succeeded: number
-  evals: GroupMember[]
 }
-
-export type LaunchRow = Omit<LaunchGroup, 'evals'>
 
 export interface CatalogPage<Row = LaunchRow | RunRow> {
   rows: Row[]

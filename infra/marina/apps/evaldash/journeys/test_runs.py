@@ -19,16 +19,11 @@ def test_launch_opens_its_runs_and_exposes_the_grade(journey: Journey) -> None:
     journey.widths("launches", widths=(390,))
 
     navigation = page.get_by_role("navigation", name="This app", exact=True)
-    more = navigation.get_by_text("More", exact=True)
-    more.press("Enter")
-    reports = navigation.get_by_role("link", name="Playground reports", exact=True)
+    reports = navigation.get_by_role("link", name="Reports", exact=True)
     diagnostics = navigation.get_by_role("link", name="Diagnostics", exact=True)
     expect(reports).to_have_attribute("href", "/evaldash/reports")
     expect(diagnostics).to_have_attribute("href", "/evaldash/debug")
     expect(diagnostics).to_be_visible()
-    more.press("Escape")
-    expect(diagnostics).to_be_hidden()
-    expect(more).to_be_focused()
 
     launch.get_by_role("link", name="Nightly baseline sweep", exact=True).click()
     expect(page.get_by_role("button", name="All runs", exact=True)).to_have_attribute("aria-pressed", "true")
@@ -38,7 +33,10 @@ def test_launch_opens_its_runs_and_exposes_the_grade(journey: Journey) -> None:
 
     page.get_by_role("link", name="aime", exact=True).click()
     expect(page.get_by_role("heading", name="snowball-2026.07.20-aime", exact=True)).to_be_visible()
-    journey.sees(re.compile(r"\b33\.3\s*%")).sees("attempted 10 of 10").sees("graded 9 of 10")
+    grade = page.get_by_text("Grade", exact=True).locator("xpath=..")
+    expect(grade.get_by_text("0.333", exact=True)).to_be_visible()
+    expect(grade).to_contain_text("attempted 10 of 10")
+    expect(grade).to_contain_text("graded 9 of 10")
     expect(page.get_by_role("row").filter(has_text="AgentTimeoutError")).to_contain_text("1")
     journey.shoot("run-results")
 
@@ -69,3 +67,27 @@ def test_run_search_finds_older_failures_and_restores_filters(journey: Journey) 
     search.fill("")
     search.press("Enter")
     expect(page).not_to_have_url(re.compile(r"[?&]q="))
+
+
+def test_run_search_draft_preserves_pagination_history(journey: Journey) -> None:
+    page = journey.page
+    page.clock.install(time="2026-07-20T12:00:00Z")
+    journey.visit("/runs?view=runs&q=snowball&limit=1")
+    page.get_by_role("button", name=re.compile("Next")).click()
+    expect(page).to_have_url(re.compile(r"[?&]offset=1(?:&|$)"))
+
+    page.clock.pause_at("2026-07-20T12:01:00Z")
+    search = page.get_by_role("searchbox", name="Search runs")
+    search.fill("unsubmitted draft")
+    page.go_back()
+    expect(page).not_to_have_url(re.compile(r"[?&]offset="))
+    page.clock.run_for(1000)
+    expect(search).to_have_value("snowball")
+    expect(page).to_have_url(re.compile(r"[?&]q=snowball(?:&|$)"))
+
+    page.go_forward()
+    expect(page).to_have_url(re.compile(r"[?&]offset=1(?:&|$)"))
+    search.fill("tootsie")
+    page.get_by_role("button", name="Launches", exact=True).click()
+    expect(page).to_have_url(re.compile(r"[?&]q=tootsie(?:&|$)"))
+    expect(page).not_to_have_url(re.compile(r"[?&]offset="))

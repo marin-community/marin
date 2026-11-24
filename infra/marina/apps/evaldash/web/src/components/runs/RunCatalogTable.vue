@@ -30,7 +30,7 @@ defineProps<{
             <RouterLink class="record-title record-link" :to="{ name: 'run', params: { runId: row.run_id } }" :title="row.run_id">
               {{ row.eval_name || row.run_id }}
             </RouterLink>
-            <ModelName v-if="row.model_name" :model="row.model_name" class="record-model" />
+            <ModelName v-if="row.model_name" :model="row.model_name" />
           </div>
         </th>
         <td role="cell">
@@ -150,10 +150,6 @@ tbody tr:focus-within {
 .record-title {
   font-size: 0.875rem;
   font-weight: 650;
-}
-
-.record-model {
-  min-width: 0;
 }
 
 .record-environment span + span::before {

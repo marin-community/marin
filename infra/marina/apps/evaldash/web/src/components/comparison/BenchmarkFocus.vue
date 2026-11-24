@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import ModelName from '@/components/shared/ModelName.vue'
 import { INTERVAL_KIND, type ComparisonRow } from '@/types/api'
-import { formatMeasurement, formatMeasurementInterval, formatTimestamp, isPercentMetric } from '@/utils/formatting'
+import { formatDelta, formatInterval, formatScore, formatTimestamp, isPercentMetric } from '@/utils/formatting'
 import { cellCoverageLabel, scoredItemsLabel, UNVERSIONED_COHORT } from '@/utils/panel'
 import ModelScoreSymbol from './ModelScoreSymbol.vue'
 import { sharedMetric } from './benchmarkMetric'
@@ -33,33 +33,31 @@ const axis = computed(() => {
 const reference = computed(() => commonMetric.value && cells.value.length > 1 ? props.row.leader : null)
 const models = computed(() => props.models.map((model, index) => {
   const cell = props.row.cells[model]
-  const usePercent = cell && isPercentMetric(cell)
   return {
     model,
     index,
     cell,
-    score: cell ? formatMeasurement(cell.value, usePercent) + (usePercent ? '%' : '') : '',
-    interval: cell ? formatMeasurementInterval(cell.low, cell.high, usePercent) : '',
-    gap: gap(model),
+    score: cell ? formatScore(cell) : '',
+    interval: cell ? formatInterval(cell) : '',
   }
 }))
+const evidence = computed(() => models.value.flatMap(({ model, cell }) =>
+  cell ? [{ model, cell, difference: reference.value ? gap(model) : null }] : [],
+))
 
 function position(value: number) {
   return `${100 * (value - range.value.low) / (range.value.high - range.value.low)}%`
 }
 
-function signed(value: number) {
-  return `${value > 0 ? '+' : ''}${formatMeasurement(value, percent.value)}`
-}
-
 function gap(model: string) {
   const interval = props.row.differences[model]
   if (!interval) return null
+  const cell = props.row.cells[model]
   const low = -interval.high
   const high = -interval.low
   return {
-    estimate: signed(props.row.cells[model].value - props.row.cells[props.row.leader].value),
-    interval: `${signed(low)} to ${signed(high)}`,
+    estimate: formatDelta(cell.value - props.row.cells[props.row.leader].value, cell),
+    interval: `${formatDelta(low, cell)} to ${formatDelta(high, cell)}`,
     evidence: low > 0 || high < 0 ? 'Interval excludes zero' : 'Includes zero',
   }
 }
@@ -117,32 +115,30 @@ function gap(model: string) {
       </ul>
     </figure>
 
-    <section v-if="cells.length" class="focus-evidence" aria-label="Sources and differences">
+    <section v-if="evidence.length" class="focus-evidence" aria-label="Sources and differences">
       <h3>Sources and differences</h3>
       <ul>
-        <li v-for="{ model, cell, gap } in models.filter((entry) => entry.cell)" :key="model" class="evidence-row">
+        <li v-for="{ model, cell, difference } in evidence" :key="model" class="evidence-row">
           <ModelName class="focus-model-name" :model="model" />
-          <template v-if="cell">
-            <div>
-              <p>
-                <RouterLink
-                  :to="{ name: 'run', params: { runId: cell.run_id } }"
-                  :title="`Open source run ${cell.run_id}`"
-                  class="score-link"
-                >View run <span aria-hidden="true">→</span></RouterLink>
-                <span class="source-cohort">{{ cell.version ?? UNVERSIONED_COHORT }}</span>
-              </p>
-              <p>{{ formatTimestamp(cell.created_at) }}</p>
-              <p>{{ scoredItemsLabel(cell) }} scored · {{ cellCoverageLabel(cell) || 'Coverage unreported' }}</p>
-              <p v-if="cell.interval_kind === INTERVAL_KIND.SAMPLING_ONLY">Sampling-only interval</p>
-            </div>
-            <p v-if="reference === model">Difference reference</p>
-            <div v-else-if="reference && gap">
-              <p><strong>{{ gap.estimate }}{{ percent ? ' pp' : '' }}</strong> vs reference</p>
-              <p>95% difference interval {{ gap.interval }}{{ percent ? ' pp' : '' }}</p>
-              <p>{{ gap.evidence }}</p>
-            </div>
-          </template>
+          <div>
+            <p>
+              <RouterLink
+                :to="{ name: 'run', params: { runId: cell.run_id } }"
+                :title="`Open source run ${cell.run_id}`"
+                class="score-link"
+              >View run <span aria-hidden="true">→</span></RouterLink>
+              <span class="source-cohort">{{ cell.version ?? UNVERSIONED_COHORT }}</span>
+            </p>
+            <p>{{ formatTimestamp(cell.created_at) }}</p>
+            <p>{{ scoredItemsLabel(cell) }} scored · {{ cellCoverageLabel(cell) || 'Coverage unreported' }}</p>
+            <p v-if="cell.interval_kind === INTERVAL_KIND.SAMPLING_ONLY">Sampling-only interval</p>
+          </div>
+          <p v-if="reference === model">Difference reference</p>
+          <div v-else-if="difference">
+            <p><strong>{{ difference.estimate }}{{ percent ? ' pp' : '' }}</strong> vs reference</p>
+            <p>95% difference interval {{ difference.interval }}{{ percent ? ' pp' : '' }}</p>
+            <p>{{ difference.evidence }}</p>
+          </div>
         </li>
       </ul>
       <details v-if="reference">
@@ -272,7 +268,7 @@ function gap(model: string) {
   grid-column: 1 / -1;
   grid-row: 2;
   min-height: 0.75rem;
-  background: var(--c-surface-sunken);
+  background: var(--c-plot-track);
   border-radius: 0.15rem;
 }
 

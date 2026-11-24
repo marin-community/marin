@@ -13,6 +13,7 @@ from collections.abc import Iterator
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
+from evaldash.catalog import CatalogFilters
 from evalrecords.eval_measurements import measurement_from_record
 from evalrecords.records import EvalRunRecord, RunStatus, list_records, write_record
 from marina.apps import RegisteredApi
@@ -146,7 +147,7 @@ def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):
     assert qwen["cells"]["mmlu"]["value"] == pytest.approx(0.719)
 
 
-def test_running_step_does_not_publish_its_recorded_score(store, tmp_path):
+def test_running_step_does_not_publish_its_recorded_score(client, store, tmp_path):
     records = list_records(str(tmp_path))
     newest = max(
         (record for record in records if record.model.name == "qwen3-8b" and record.evaluation.name == "mmlu"),
@@ -162,7 +163,8 @@ def test_running_step_does_not_publish_its_recorded_score(store, tmp_path):
     detail = store.model_detail("qwen3-8b")
     assert detail is not None
     assert all(point["run_id"] != newest.run_id for point in detail["history"]["mmlu"])
-    run = next(row for row in store.fetch_runs() if row["run_id"] == newest.run_id)
+    (run,) = client.get("/catalog", params={"view": "runs", "q": newest.run_id, "status": "running"}).json()["rows"]
+    assert run["run_id"] == newest.run_id
     assert run["status"] == "running"
 
 
@@ -195,8 +197,8 @@ def test_agentic_cell_carries_its_coverage_and_a_wider_interval(store):
     assert aime["high"] - aime["low"] >= 0.1
 
 
-def test_groups_roll_up_mixed_launch_status(store):
-    groups = {group["group_id"]: group for group in store.groups()}
+def test_launch_catalog_rolls_up_mixed_launch_status(client):
+    groups = {group["group_id"]: group for group in client.get("/catalog").json()["rows"]}
     # tootsie-8b's launch has a success, an eval failure, and an infra failure -> mixed.
     assert groups["tootsie-8b-2026.07.20"]["status"] == "mixed"
     assert groups["snowball-2026.07.20"]["status"] == "succeeded"
@@ -219,13 +221,12 @@ def test_launch_catalog_does_not_invent_evaluator_failure(client, store, tmp_pat
     assert launch["n_evals"] == 2
 
 
-def test_fetch_runs_filters_and_get_record_round_trip(store):
-    tootsie = store.fetch_runs(model="tootsie-8b")
-    assert {row["status"] for row in tootsie} == {"succeeded", "failed", "infra_failed"}
-    record = store.get_record("snowball-2026.07.20-mmlu")
-    assert record is not None
-    # The record serializes the evaluation field under its ``eval`` wire alias.
-    assert record["eval"]["name"] == "mmlu"
+def test_legacy_run_listing_returns_filtered_array(client):
+    rows = client.get(
+        "/runs",
+        params={"model": "tootsie-8b", "group": "tootsie-8b-2026.07.20", "status": "infra_failed", "limit": 1},
+    ).json()
+    assert [row["run_id"] for row in rows] == ["tootsie-8b-2026.07.20-aime"]
 
 
 def test_ungraded_sample_does_not_count_as_incorrect_answer(store):
@@ -303,7 +304,7 @@ def test_api_surface_over_fixtures(client):
     assert set(panel["benchmarks"]) >= {"mmlu", "arc-challenge", "gsm8k-0shot"}
     assert panel["request"]["min_coverage"] == pytest.approx(0.9)
 
-    runs = client.get("/runs?limit=100").json()
+    runs = client.get("/catalog", params={"view": "runs", "limit": 100}).json()["rows"]
     assert len(runs) == 21
     # Rows carry version (from the record jsonb) so the client can facet on it.
     assert any(row["version"] == "2026.07.20" for row in runs)
@@ -311,6 +312,7 @@ def test_api_surface_over_fixtures(client):
 
     detail = client.get("/runs/snowball-2026.07.20-mmlu").json()
     assert detail["status"] == "succeeded"
+    assert detail["eval"]["name"] == "mmlu"
     # The detail endpoint attaches the rolled-up headline grade and the captured timing window.
     assert detail["headline"]["metric"] == "accuracy"
     assert detail["headline"]["value"] == pytest.approx(0.741)
@@ -480,7 +482,7 @@ def test_memory_store_deduplicates_migrated_runs_with_canonical_precedence(tmp_p
     store = evaldash_app.MemoryRecordStore()
     store.refresh(list_records(str(canonical)) + list_records(str(legacy)))
 
-    assert len(store.fetch_runs()) == 1
+    assert store.catalog_runs(CatalogFilters(), offset=0, limit=1).total == 1
     stored = store.get_record(record.run_id)
     assert stored is not None
     assert stored["description"] == "canonical"
@@ -493,30 +495,31 @@ def test_api_jobs_degrade_without_a_cluster(client):
     assert all(role["reachable"] is False for role in jobs["roles"])
 
 
-@pytest.mark.parametrize("endpoint", ["/runs", "/groups"])
-def test_run_filters_find_older_models_before_limiting(client, endpoint):
-    newest = client.get(endpoint, params={"limit": 1}).json()
+@pytest.mark.parametrize("view", ["runs", "launches"])
+def test_catalog_filters_find_older_models_before_limiting(client, view):
+    base = {"view": view, "limit": 1}
+    newest = client.get("/catalog", params=base).json()["rows"]
     assert newest[0]["model_name"] != "snowball"
     rows = client.get(
-        endpoint,
+        "/catalog",
         params={
+            **base,
             "model": "snowball",
             "eval": "mmlu",
             "version": "2026.07.20",
             "status": "succeeded",
             "accelerator": "v6e-8",
-            "limit": 1,
         },
-    ).json()
+    ).json()["rows"]
     assert len(rows) == 1
     assert rows[0]["model_name"] == "snowball"
     assert rows[0]["version"] == "2026.07.20"
-    assert client.get(endpoint, params={"accelerator": "not-present"}).json() == []
-    assert client.get(endpoint, params={"version": "not-present"}).json() == []
-    assert client.get(endpoint, params={"eval": "not-present"}).json() == []
+    assert client.get("/catalog", params={**base, "accelerator": "not-present"}).json()["rows"] == []
+    assert client.get("/catalog", params={**base, "version": "not-present"}).json()["rows"] == []
+    assert client.get("/catalog", params={**base, "eval": "not-present"}).json()["rows"] == []
 
 
-def test_launch_eval_filter_preserves_siblings_and_rollup(client):
+def test_legacy_group_listing_preserves_siblings_and_rollup(client):
     rows = client.get("/groups", params={"model": "tootsie-8b", "eval": "mmlu", "status": "mixed"}).json()
     assert len(rows) == 1
     assert rows[0]["status"] == "mixed"
@@ -526,11 +529,11 @@ def test_launch_eval_filter_preserves_siblings_and_rollup(client):
 
 
 def test_run_filter_options_include_catalog_outside_recent_window(client):
-    recent = client.get("/runs", params={"limit": 1}).json()
-    facets = client.get("/meta").json()["run_facets"]
+    recent = client.get("/catalog", params={"view": "runs", "limit": 1}).json()["rows"]
+    facets = client.get("/catalog/facets").json()["run_facets"]
     assert "snowball" in facets["model"]
     assert "snowball" != recent[0]["model_name"]
-    all_runs = client.get("/runs", params={"limit": 1000}).json()
+    all_runs = client.get("/catalog", params={"view": "runs", "limit": 1000}).json()["rows"]
     assert set(facets["eval"]) == {row["eval_name"] for row in all_runs}
     assert set(facets["version"]) == {row["version"] for row in all_runs if row["version"]}
 

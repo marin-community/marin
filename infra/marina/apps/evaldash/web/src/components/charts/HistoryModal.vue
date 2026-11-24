@@ -33,13 +33,8 @@ function onKey(e: KeyboardEvent) {
 onMounted(() => window.addEventListener('keydown', onKey))
 onUnmounted(() => window.removeEventListener('keydown', onKey))
 
-interface Point {
+interface Point extends Pick<HistoryPoint, 'value' | 'low' | 'high' | 'metric_kind' | 'run_id' | 'git_sha'> {
   t: Date
-  value: number
-  low: number
-  high: number
-  run_id: string
-  git_sha: string
 }
 
 const points = computed<Point[]>(() =>
@@ -50,6 +45,7 @@ const points = computed<Point[]>(() =>
       value: p.value,
       low: p.low,
       high: p.high,
+      metric_kind: p.metric_kind,
       run_id: p.run_id,
       git_sha: p.git_sha,
     })),
@@ -77,7 +73,7 @@ const options = computed<Record<string, unknown>>(() => ({
       y: 'value',
       fill: 'currentColor',
       r: 3.5,
-      title: (d: Point) => `${d.run_id}\n${shortSha(d.git_sha)}\n${formatScore(d.value)} (${formatInterval(d.low, d.high)})`,
+      title: (d: Point) => `${d.run_id}\n${shortSha(d.git_sha)}\n${formatScore(d)} (${formatInterval(d)})`,
     }),
     Plot.ruleY([0], { stroke: 'currentColor', strokeOpacity: 0.15 }),
   ],
@@ -159,8 +155,8 @@ function coverageNote(point: HistoryPoint): string {
                     {{ coverageNote(p) }}
                   </td>
                   <td class="px-2 py-1.5 text-right tabular-nums font-mono whitespace-nowrap">
-                    {{ formatScore(p.value) }}
-                    <span class="block text-[10px] text-text-muted leading-none">{{ formatInterval(p.low, p.high) }}</span>
+                    {{ formatScore(p) }}
+                    <span class="block text-[10px] text-text-muted leading-none">{{ formatInterval(p) }}</span>
                   </td>
                 </tr>
               </tbody>

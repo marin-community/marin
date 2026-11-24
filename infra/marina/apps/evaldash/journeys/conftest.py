@@ -19,6 +19,7 @@ from marina.journeys import Kernel
 
 APP = "evaldash"
 SCALE_COHORT = "fixture-scale"
+CATALOG_RELOAD_TIMEOUT = 30.0
 
 
 def _ingest_fixture_records(database: DatabaseSpec, prefix: str) -> None:
@@ -92,7 +93,7 @@ def _scale_records(base: EvalRunRecord, prefix: str) -> Iterator[EvalRunRecord]:
 
 
 def _reload_catalog(kernel: Kernel) -> None:
-    response = httpx.post(f"{kernel.origin}/{APP}/api/refresh")
+    response = httpx.post(f"{kernel.origin}/{APP}/api/refresh", timeout=CATALOG_RELOAD_TIMEOUT)
     # The local endpoint reloads its serving snapshot without a scheduled ingestion job.
     assert response.is_success or response.status_code == 503, response.text
 

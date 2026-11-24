@@ -7,6 +7,7 @@ aggregates, and head-to-head difference intervals."""
 
 import pytest
 from evaldash.app import MemoryRecordStore
+from evaldash.catalog import CatalogFilters
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
 from evalrecords.eval_policy import EVALCHEMY_COMMIT
 from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
@@ -963,7 +964,8 @@ def test_panel_groups_tau_context_override_with_other_evals_despite_archived_con
     assert len(panel["rows"]) == 1
     assert panel["rows"][0]["model"] == "grug"
     assert set(panel["rows"][0]["cells"]) == {"math500", "tau3-pi"}
-    assert {row["eval_name"] for row in store.fetch_runs(model="grug")} == {"math500", "tau3-pi"}
+    runs = store.catalog_runs(CatalogFilters(model="grug"), offset=0, limit=10).rows
+    assert {row["eval_name"] for row in runs} == {"math500", "tau3-pi"}
     saved = store.get_record(records[1].run_id)
     assert saved is not None
     assert saved["model"]["config"]["serve"]["max_model_len"] == 131072

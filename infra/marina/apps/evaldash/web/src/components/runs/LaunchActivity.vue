@@ -19,6 +19,7 @@ interface LaunchEntry {
   row: LaunchRow
   description: string
   time: string
+  membership: string
   suffix?: string
 }
 
@@ -27,17 +28,18 @@ const MINIMUM_ID_SUFFIX = 4
 function distinguishMatchingEntries(entries: LaunchEntry[]) {
   const byAppearance = new Map<string, LaunchEntry[]>()
   for (const entry of entries) {
-    const { row, description, time } = entry
+    const { row, description, time, membership } = entry
     const title = description || row.model_name || row.version || row.group_id
-    const key = JSON.stringify([title, row.model_name, row.version, row.user_name, row.accelerator, time, row.status, runCount(row)])
-    const matches = byAppearance.get(key) ?? []
-    if (!byAppearance.has(key)) byAppearance.set(key, matches)
-    matches.push(entry)
+    const key = JSON.stringify([title, row.model_name, row.version, row.user_name, row.accelerator, time, row.status, membership])
+    const matches = byAppearance.get(key)
+    if (matches) matches.push(entry)
+    else byAppearance.set(key, [entry])
   }
   for (const matches of byAppearance.values()) {
-    if (matches.length < 2) continue
+    const ids = [...new Set(matches.map(({ row }) => row.group_id))]
+    if (ids.length < 2) continue
     let length = MINIMUM_ID_SUFFIX
-    while (new Set(matches.map(({ row }) => row.group_id.slice(-length))).size < matches.length) length++
+    while (new Set(ids.map(id => id.slice(-length))).size < ids.length) length++
     for (const entry of matches) entry.suffix = entry.row.group_id.slice(-length)
   }
 }
@@ -48,9 +50,15 @@ const dateGroups = computed(() => {
     const date = new Date(row.created_at)
     const valid = !Number.isNaN(date.getTime())
     const day = valid ? dayFormat.format(date) : 'Date unavailable'
-    const items = groups.get(day) ?? []
-    if (!groups.has(day)) groups.set(day, items)
-    items.push({ row, description: row.description?.trim() ?? '', time: valid ? timeFormat.format(date) : '' })
+    const entry = {
+      row,
+      description: row.description?.trim() ?? '',
+      time: valid ? timeFormat.format(date) : '',
+      membership: runCount(row),
+    }
+    const items = groups.get(day)
+    if (items) items.push(entry)
+    else groups.set(day, [entry])
   }
   return Array.from(groups, ([day, items]) => {
     distinguishMatchingEntries(items)
@@ -75,7 +83,7 @@ function runCount(row: LaunchRow) {
     >
       <h2 :id="`launch-day-${dayIndex}`" class="launch-day">{{ day }}</h2>
       <ol class="launch-list" role="list" :aria-labelledby="`launch-day-${dayIndex}`">
-        <li v-for="({ row, description, time, suffix }, rowIndex) in items" :key="row.group_id" class="launch-entry">
+        <li v-for="({ row, description, time, membership, suffix }, rowIndex) in items" :key="row.group_id" class="launch-entry">
           <RouterLink
             :to="launchLocation(row.group_id)"
             class="launch-link"
@@ -102,7 +110,7 @@ function runCount(row: LaunchRow) {
             </div>
             <div class="launch-outcome">
               <StatusChip :status="row.status" />
-              <span>{{ runCount(row) }}</span>
+              <span>{{ membership }}</span>
             </div>
             <span class="launch-arrow" aria-hidden="true">→</span>
           </RouterLink>

@@ -19,8 +19,7 @@ export function cohortWarning(cohort: string, meta: Pick<Meta, 'verified_cohorts
 
 // The fleet best on one benchmark and the model that holds it — the rail caret and the panel column
 // marker. The panel sorts by the score. Compare orders by the interval lower bound.
-export interface BestCell {
-  value: number
+export interface BestCell extends Pick<PanelCell, 'value' | 'metric_kind'> {
   model: string
 }
 
@@ -41,7 +40,7 @@ export function fleetBest(rows: PanelRow[], benchmarks: string[]): Record<string
       const cell = row.cells[benchmark]
       if (cell && (best === null || compareCells(cell, best.cell) < 0)) best = { cell, model: row.model }
     }
-    if (best) out[benchmark] = { value: best.cell.value, model: best.model }
+    if (best) out[benchmark] = { value: best.cell.value, metric_kind: best.cell.metric_kind, model: best.model }
   }
   return out
 }

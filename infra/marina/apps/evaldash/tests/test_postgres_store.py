@@ -13,6 +13,7 @@ import pytest
 import sqlalchemy
 from evaldash import app as evaldash_app
 from evaldash import fixtures, ingest, results_db
+from evaldash.catalog import CatalogFilters
 from evaldash.db_migrations import apply_migrations
 from evaldash.metrics import record_headline
 from evaldash.playground_reports import fetch_report_summaries
@@ -334,14 +335,14 @@ def test_step_completion_updates_a_cataloged_run_without_rewriting_its_record(tm
 
     asyncio.run(ingestor.run_once())
     assert _stored(store, record.run_id)["step_status"] == STATUS_RUNNING
-    assert store.fetch_runs()[0]["status"] == "running"
+    assert store.catalog_runs(CatalogFilters(), offset=0, limit=1).rows[0]["status"] == "running"
 
     status_path.write_text(STATUS_SUCCESS)
     state = next(iter(results_db.source_states(engine, str(prefix)).values()))
     clock.now = state.next_verify_at.replace(tzinfo=UTC) + timedelta(seconds=1)
     asyncio.run(ingestor.run_once())
     assert _stored(store, record.run_id)["step_status"] == STATUS_SUCCESS
-    assert store.fetch_runs()[0]["status"] == record.status.value
+    assert store.catalog_runs(CatalogFilters(), offset=0, limit=1).rows[0]["status"] == record.status.value
 
 
 def test_reconciler_promotes_duplicate_only_after_two_successful_absences(tmp_path):
