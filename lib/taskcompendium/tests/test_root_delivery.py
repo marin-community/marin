@@ -130,6 +130,69 @@ def test_quiesce_kills_strays_inside_its_own_pid_namespace(tmp_path):
 
 
 @pytest.mark.manual
+@pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="process quiesce requires Linux root")
+@pytest.mark.skipif(shutil.which("unshare") is None, reason="PID namespace isolation requires unshare")
+def test_quiesce_spares_the_machine_keeper_sleeper(tmp_path):
+    # The local sandbox's PID 1 is bwrap and its keeper payload `sleep
+    # 2147483647` is PID 2: a quiesce that killed it closed the machine
+    # mid-grading (facet_v2's unscored attempts). Both quiesce variants must
+    # kill strays while sparing that exact sleeper argv.
+    script_path = tmp_path / "shell-quiesce.sh"
+    script_path.write_text(root_delivery.SHELL_QUIESCE_SCRIPT)
+    marker = tmp_path / "stray.txt"
+    driver = (
+        "import pathlib, subprocess, sys, time\n"
+        "marker = pathlib.Path(sys.argv[1])\n"
+        "keeper = subprocess.Popen(['sleep', '2147483647'])\n"
+        "stray = subprocess.Popen([sys.executable, '-c',\n"
+        "    \"import pathlib, time, sys\\npathlib.Path(sys.argv[1]).write_text('alive')\\n"
+        'while pathlib.Path(sys.argv[1]).exists(): time.sleep(0.05)",\n'
+        "    str(marker)])\n"
+        "deadline = time.monotonic() + 10\n"
+        "while not marker.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.05)\n"
+        "assert marker.exists(), 'stray never started'\n"
+        "shell = subprocess.run(['bash', '-c', pathlib.Path(sys.argv[3]).read_text()],\n"
+        "    capture_output=True, text=True, timeout=60)\n"
+        "assert shell.returncode == 0, shell.stderr[-2000:]\n"
+        "assert keeper.poll() is None, 'the shell quiesce killed the keeper sleeper'\n"
+        "python_quiesce = subprocess.run([sys.executable, '-I', '-c', sys.argv[2]],\n"
+        "    capture_output=True, text=True, timeout=60)\n"
+        "assert python_quiesce.returncode == 0, python_quiesce.stderr[-2000:]\n"
+        "assert keeper.poll() is None, 'the python quiesce killed the keeper sleeper'\n"
+        "marker.unlink()\n"
+        "assert stray.wait(timeout=30) != 0, 'the stray survived quiesce'\n"
+        "print('keeper-spared')\n"
+    )
+    result = subprocess.run(
+        [
+            "unshare",
+            "--pid",
+            "--fork",
+            "--mount-proc",
+            sys.executable,
+            "-I",
+            "-c",
+            driver,
+            str(marker),
+            QUIESCE_PROGRAM,
+            str(script_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert "keeper-spared" in result.stdout, result.stderr[-2000:]
+
+
+def test_quiesce_scripts_embed_the_keeper_sleeper_sentinel() -> None:
+    """Both quiesce variants carry the exact keeper argv they must spare."""
+    args = root_delivery.SANDBOX_KEEPER_SLEEP_ARGS
+    assert repr(args) in root_delivery.QUIESCE_PROGRAM
+    assert " ".join(args) in root_delivery.SHELL_QUIESCE_SCRIPT
+
+
+@pytest.mark.manual
 @pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="delivery requires Linux root")
 def test_delivery_commands_recreate_and_run_the_original_verifier(tmp_path):
     # The delivery writes into the production /tests path; the fixture entry

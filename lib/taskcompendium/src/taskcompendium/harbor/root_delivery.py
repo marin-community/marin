@@ -71,7 +71,12 @@ class DeliveredVerifier:
 
 
 def quiesce_command() -> VerifierCommand:
-    """Kill every process outside this exec's own ancestry, as the original root."""
+    """Kill every process outside this exec's own ancestry, as the original root.
+
+    The machine's own lifecycle sleeper (``SANDBOX_KEEPER_SLEEP_ARGS``) is
+    spared alongside PID 1: on the local tier it is the sandbox's PID 2 and
+    killing it closes the machine mid-grading.
+    """
     return VerifierCommand(
         argv=(
             "python3",
@@ -153,44 +158,66 @@ def delivery_commands(
     return (VerifierCommand(argv=("bash", "-c", script), cwd=cwd),)
 
 
-QUIESCE_PROGRAM = """import os, signal
-mine = set()
-pid = os.getpid()
-while pid > 1:
-    mine.add(pid)
-    try:
-        with open(f"/proc/{pid}/stat") as stream:
-            fields = stream.read().rsplit(") ", 1)[1].split()
-        pid = int(fields[1])
-    except (OSError, IndexError, ValueError):
-        break
-killed = []
-for entry in os.scandir("/proc"):
-    if not entry.name.isdecimal():
-        continue
-    victim = int(entry.name)
-    if victim in mine or victim == 1:
-        continue
-    try:
-        with open(f"/proc/{victim}/stat") as stream:
-            fields = stream.read().rsplit(") ", 1)[1].split()
-        state = fields[0]
-    except (OSError, IndexError, ValueError):
-        continue
-    if state.startswith("Z"):
-        continue
-    try:
-        os.kill(victim, signal.SIGKILL)
-        killed.append(victim)
-    except ProcessLookupError:
-        continue
-    except OSError as error:
-        # A failed kill means the victim may survive: the quiesce cannot be
-        # guaranteed, so the advisory must fail instead of passing silently.
-        print(f"quiesce kill failed for {victim}: {error}", file=sys.stderr)
-        raise
-print(len(killed))
+SANDBOX_KEEPER_SLEEP_ARGS = ("sleep", "2147483647")
+"""The machine keeper's payload argv: shellbox's local sandbox runs
+``exec sleep 2147483647`` under bubblewrap to hold the machine open.
+
+On the LOCAL tier the sandbox's PID 1 is bwrap itself and this sleeper is PID 2,
+so a quiesce that spares only PID 1 kills the keeper: bwrap exits 137, the
+machine closes, and the attempt dies as ``Machine is closed`` mid-grading
+(facet_v2's 6,122+ unscored attempts, 2026-11-24). Both quiesce variants
+therefore spare exactly this argv. A task that reused the same argv would
+merely survive one quiesce: the machine is torn down right after grading, so
+the residual risk is bounded and tiny.
 """
+
+QUIESCE_PROGRAM = (
+    "import os, signal\n"
+    "KEEPER_SLEEP_ARGS = " + repr(SANDBOX_KEEPER_SLEEP_ARGS) + "\n"
+    "mine = set()\n"
+    "pid = os.getpid()\n"
+    "while pid > 1:\n"
+    "    mine.add(pid)\n"
+    "    try:\n"
+    "        with open(f\"/proc/{pid}/stat\") as stream:\n"
+    "            fields = stream.read().rsplit(\") \", 1)[1].split()\n"
+    "        pid = int(fields[1])\n"
+    "    except (OSError, IndexError, ValueError):\n"
+    "        break\n"
+    "killed = []\n"
+    "for entry in os.scandir(\"/proc\"):\n"
+    "    if not entry.name.isdecimal():\n"
+    "        continue\n"
+    "    victim = int(entry.name)\n"
+    "    if victim in mine or victim == 1:\n"
+    "        continue\n"
+    "    try:\n"
+    "        with open(f\"/proc/{victim}/stat\") as stream:\n"
+    "            fields = stream.read().rsplit(\") \", 1)[1].split()\n"
+    "        state = fields[0]\n"
+    "    except (OSError, IndexError, ValueError):\n"
+    "        continue\n"
+    "    if state.startswith(\"Z\"):\n"
+    "        continue\n"
+    "    try:\n"
+    "        with open(f\"/proc/{victim}/cmdline\", \"rb\") as stream:\n"
+    "            argv = stream.read().split(b\"\\x00\")\n"
+    "    except OSError:\n"
+    "        argv = []\n"
+    "    if tuple(argv[: len(KEEPER_SLEEP_ARGS)]) == KEEPER_SLEEP_ARGS:\n"
+    "        continue\n"
+    "    try:\n"
+    "        os.kill(victim, signal.SIGKILL)\n"
+    "        killed.append(victim)\n"
+    "    except ProcessLookupError:\n"
+    "        continue\n"
+    "    except OSError as error:\n"
+    "        # A failed kill means the victim may survive: the quiesce cannot be\n"
+    "        # guaranteed, so the advisory must fail instead of passing silently.\n"
+    "        print(f\"quiesce kill failed for {victim}: {error}\", file=sys.stderr)\n"
+    "        raise\n"
+    "print(len(killed))\n"
+)
 
 
 # Multi-SWE delivery: the original compressed capture archive (exact modes and
@@ -357,6 +384,13 @@ for entry in /proc/[0-9]*; do
   line=$(cat "/proc/$victim/stat" 2>/dev/null) || continue
   rest=${line##*) }
   case ${rest%% *} in Z*) continue;; esac
+  # The machine keeper's payload (see SANDBOX_KEEPER_SLEEP_ARGS): the local
+  # sandbox runs `exec sleep 2147483647` as the init's child, so killing it
+  # closes the machine mid-grading.
+  args=$(tr '\\0' '\\n' < "/proc/$victim/cmdline" 2>/dev/null || true)
+  if [ "$args" = "$(printf '%s\\n%s' sleep 2147483647)" ]; then
+    continue
+  fi
   if kill -9 "$victim" 2>/dev/null; then
     killed=$((killed + 1))
   elif [ ! -d "/proc/$victim" ]; then
@@ -374,8 +408,9 @@ def shell_quiesce_command() -> VerifierCommand:
     """Quiesce with pure shell for images that ship no guest interpreter.
 
     Same ancestry semantics as :func:`quiesce_command`: every process outside
-    the exec's own ancestry is killed (PID 1, the exec's own tree and zombies
-    spared), and a failed kill fails the command instead of silently passing.
+    the exec's own ancestry is killed (PID 1, the machine keeper's sleeper, the
+    exec's own tree and zombies spared), and a failed kill fails the command
+    instead of silently passing.
     """
     return VerifierCommand(argv=("bash", "-c", SHELL_QUIESCE_SCRIPT), cwd="/")
 
