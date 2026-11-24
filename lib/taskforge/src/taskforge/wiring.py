@@ -25,14 +25,12 @@ from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import EnvironmentRequirements
 
-from taskforge.arms import transitions
 from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import Hold
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.tools import adversary_tools, standard_tools
-from taskforge.harness.tools.validate import ValidateTool
 from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.wire import model_turn
@@ -222,10 +220,9 @@ def prompt_limit(policy: Policy, role: str = "author") -> int:
     return policy.setting(f"{role}.context_tokens", int)
 
 
-def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactory]) -> TaskforgeConfig:
+def build_config(policy: Policy, factories: Mapping[str, MachineFactory]) -> TaskforgeConfig:
     settings = lowering_settings(policy)
     sampling = policy_sampling(policy)
-    gate = partial(submit_gate, settings=settings, factories=factories)
     author = AgenticHarness(
         prompt_limit(policy),
         sampling,
@@ -250,20 +247,13 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
             policy=policy,
             factories=factories,
             settings=settings,
-            gate=gate,
-        )
-    }
-    if arm == "T":
-        tools["author"] = {
-            **tools["author"],
-            "validate": ValidateTool(gate, task_path, controls_path),
-        }
-    tools.update(
-        {
+            gate=partial(submit_gate, settings=settings, factories=factories),
+        ),
+        **{
             name: adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings)
             for name in adversaries
-        }
-    )
+        },
+    }
     budget = Budget(
         policy.setting("budget.max_modify_rounds", int), policy.setting("budget.max_validation_retries", int)
     )
@@ -284,7 +274,6 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         default_review,
         band,
         budget,
-        transitions(arm, budget, policy),
     )
 
 
@@ -301,7 +290,7 @@ def provider_policy(policy: Policy) -> Policy:
 
 @asynccontextmanager
 async def runtime(
-    policy: Policy, arm: str, source: EndpointSource, parallel_api_key: str
+    policy: Policy, source: EndpointSource, parallel_api_key: str
 ) -> AsyncIterator[tuple[TaskforgeConfig, Resources]]:
     policy = provider_policy(policy)
     declared = load_policy(DEFAULTS_DIR)
@@ -357,4 +346,4 @@ async def runtime(
         http = await owned.enter_async_context(
             httpx.AsyncClient(base_url="https://api.parallel.ai/v1/", headers=headers, timeout=60)
         )
-        yield build_config(policy, arm, factories), build_resources(policy, clients, factories, ParallelWeb(http))
+        yield build_config(policy, factories), build_resources(policy, clients, factories, ParallelWeb(http))

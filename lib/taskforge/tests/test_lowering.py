@@ -29,7 +29,6 @@ from taskforge.effects.context import Context
 from taskforge.effects.log import EventLog
 from taskforge.harness.protocol import ToolResult
 from taskforge.harness.tools.submit import SubmitTool
-from taskforge.harness.tools.validate import ValidateTool
 from taskforge.lowering import (
     GRADING_MACHINE,
     InvalidTaskSpec,
@@ -129,13 +128,10 @@ def test_shellsim_binding_omits_host_cpu_allocation() -> None:
     assert spec.task_machine is not None and spec.task_machine.cpus is None
 
 
-@pytest.mark.parametrize("tool_type", [SubmitTool, ValidateTool])
 # Full S 20261108 d01.discrete.graph-analysis/06 (also cardinality-analysis/04 and optimization.formulation/04):
 # a missing judge reference must return author feedback during parsing and programmatic preflight.
 @pytest.mark.parametrize("defect", ["shell", "final_action", "reference", "blank_reference", "checklist"])
-async def test_authored_interface_errors_return_tool_feedback(
-    tool_type: type[SubmitTool] | type[ValidateTool], defect: str
-) -> None:
+async def test_authored_interface_errors_return_tool_feedback(defect: str) -> None:
     task = arithmetic_task(
         answer_format=FinalAction(normal_submission=PlainText()), grader=NoGrader(reason="interface preflight")
     )
@@ -176,7 +172,7 @@ async def test_authored_interface_errors_return_tool_feedback(
 
     ctx = Context(log=EventLog())
     ctx.handle(ReadFile, read)
-    tool = tool_type(partial(submit_gate, settings=settings, factories=factories), "/task.json", "/controls.json")
+    tool = SubmitTool(partial(submit_gate, settings=settings, factories=factories), "/task.json", "/controls.json")
     result = await tool(ctx, {})
     assert isinstance(result, ToolResult) and message in result.content
     await ctx.drain()

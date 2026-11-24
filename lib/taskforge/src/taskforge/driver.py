@@ -32,6 +32,7 @@ from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
 from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
+from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
 from taskforge.stages.classify import replayable_grade
 from taskforge.wiring import endpoint_source, install, runtime
@@ -111,7 +112,7 @@ async def recover(workdir: Path, destination: str) -> Status | None:
 
 
 def run_policy(path: str) -> tuple[Policy, Policy]:
-    declared = load_policy(Path(__file__).parent / "policy" / "defaults")
+    declared = load_policy(DEFAULTS_DIR)
     with open_url(path, "rt") as source:
         return declared, declared.overlaid(parse_overlay(source.read()))
 
@@ -159,7 +160,7 @@ async def one(args: argparse.Namespace) -> None:
                 policy.setting("author.model", str),
                 policy.setting("provider.pool", str),
             )
-            async with runtime(policy, args.arm, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
+            async with runtime(policy, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
                 wp = await run_workpiece(proposal, config, resources, log, install=install)
     except* (Hold, Restart, Transient, LogFailure) as error:
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
@@ -215,7 +216,7 @@ async def run(args: argparse.Namespace) -> None:
                 command = [sys.executable, "-u", "-m", "taskforge.driver", "one", "--proposals", path]
                 command += [
                     item
-                    for name in ("arm", "output", "policy", "work_dir")
+                    for name in ("output", "policy", "work_dir")
                     for item in (f"--{name.replace('_', '-')}", getattr(args, name))
                 ]
                 if args.resume_held:
@@ -250,7 +251,6 @@ def main() -> None:
     for name in ("run", "one"):
         command = commands.add_parser(name)
         command.add_argument("--proposals", required=True)
-        command.add_argument("--arm", choices=("S", "T"), required=True)
         command.add_argument("--output", required=True)
         command.add_argument("--policy", required=True)
         command.add_argument("--work-dir", default="forge-work")

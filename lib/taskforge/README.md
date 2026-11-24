@@ -15,28 +15,21 @@ This file covers how to run it.
 |---|---|
 | `src/taskforge/effects/` | effect types, the event log, replay, observers, `Hold`/`Restart`/`Transient` |
 | `src/taskforge/resources/` | executors: inference (per-role waiting backend), environments, grading, rollouts, the round-owned verifier machine |
-| `src/taskforge/harness/` | the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `validate`, `report`, `finish`, web) |
+| `src/taskforge/harness/` | the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `report`, `finish`, web) |
 | `src/taskforge/stages/` | `author`, `validate`, `review`; the review rules; prompt summaries |
 | `src/taskforge/model/` | frozen data: proposal, workpiece, task spec, verdicts, decisions |
 | `src/taskforge/llm/` | the GLM transport kept from the previous Taskforge: client, policy, wire helpers |
 | `src/taskforge/policy/` | the policy record: `defaults/policy.json` and `defaults/prompts/<role>/*.md` |
 | `src/taskforge/lowering.py` | `TaskSpec` → `TaskRolloutSpec` for the host; the only place that chooses machines |
-| `src/taskforge/arms.py` | the S and T transition tables |
-| `src/taskforge/coordinator.py` | stage → exit → edge loop, budgets, bounded stage replay |
+| `src/taskforge/coordinator.py` | author → validate → review, decisions and budgets, bounded stage replay |
 | `src/taskforge/driver.py` | CLI: runs a shard of proposals, publishes to S3, resumes |
 | `src/taskforge/wiring.py` | builds resources and config from the policy for a host |
 | `experiments/taskforge/run_taskforge.py` | submits one Iris driver job per shard |
 
-## The two arms
+## The workflow
 
-Both arms run the same stages; they differ in one transition table.
-
-- **S, separate sessions.** author → submit → validate → review. On *modify*, a new author
-  conversation starts, seeded with the findings and the previous submission's files.
-- **T, validate as a tool.** The author's tool set gains `validate`. Calling it suspends the
-  session, runs the validate stage, and returns a compact summary as the tool's reply; the full
-  result is written to `.validation/<n>.json` in the workspace. Submit then goes through review
-  as in S.
+author → submit → validate → review. On *modify*, a new author conversation starts, seeded with the
+findings and the previous submission's files; on *retry*, the same submission is validated again.
 
 On every author entry, including revision rounds, the workspace holds the proposal, the previous
 submission's `task.json`, `controls.json` and resources, and any validation results. A caller can add
@@ -86,14 +79,11 @@ export CW_KEY_ID=... CW_KEY_SECRET=... GLM_API_KEY=... PARALLEL_API_KEY=...
 export GLM_RELAY_JOB=/<user>/<relay-job>
 ROOT=s3://marin-us-east-02a/marin/forge/pilot-<date>
 uv run --frozen fsutil cp policy.json $ROOT/policy.json
-for arm in S T; do
-  uv run --frozen experiments/taskforge/run_taskforge.py \
-    --proposals s3://marin-us-east-02a/marin/taskforge/acceptance-measure/20261103/sample.json \
-    --ranks "$(seq -s, 0 31 | sed 's/,$//')" --arm $arm \
-    --output $ROOT/$arm --policy $ROOT/policy.json \
-    --job-prefix forge-pilot-<date>-$(echo $arm | tr A-Z a-z) \
-    --drivers 7 --concurrency 4 --cpu 8 --memory 32GB --disk 100GB
-done
+uv run --frozen experiments/taskforge/run_taskforge.py \
+  --proposals s3://marin-us-east-02a/marin/taskforge/acceptance-measure/20261103/sample.json \
+  --ranks "$(seq -s, 0 31 | sed 's/,$//')" \
+  --output $ROOT/out --policy $ROOT/policy.json --job-prefix forge-pilot-<date> \
+  --drivers 7 --concurrency 4 --cpu 8 --memory 32GB --disk 100GB
 ```
 
 Each proposal maps to `int(sha256(str(proposal_key)), 16) % 4096`; drivers process their
@@ -117,8 +107,8 @@ Read those lines first when a run looks wrong.
 the sandbox child jobs, so watch drivers by name:
 
 ```bash
-uv run --frozen iris --cluster=marin job describe /<user>/forge-pilot-<date>-s-0 | grep '^State:'
-uv run --frozen iris --cluster=marin job logs /<user>/forge-pilot-<date>-s-0 --max-lines 400
+uv run --frozen iris --cluster=marin job describe /<user>/forge-pilot-<date>-0 | grep '^State:'
+uv run --frozen iris --cluster=marin job logs /<user>/forge-pilot-<date>-0 --max-lines 400
 ```
 
 Sandboxes are child jobs named `/<user>/<driver>/shellbox-<id>`; `job describe` on one shows
@@ -199,10 +189,11 @@ payloads (they are in the workdir).
 
 ## Environments
 
-Lowering accepts three task environments: none (the solver answers in the conversation),
-ShellSim, and the one pinned python container (`GRADER_BASE_IMAGE`). Any other image is refused
-at the author's `validate`/`submit` with a message naming the fix. The author and adversary
-always work in the pinned container with the task's resources hydrated.
+A task runs with no machine (the solver answers in the conversation), on ShellSim, or, when it
+names a `docker_image`, on an Iris gVisor machine. The grader's environment is restricted: its
+image must be the one pinned python container (`GRADER_BASE_IMAGE`) or null for ShellSim, and the
+author's `submit` refuses any other grader image with a message naming the fix. The author and
+adversary always work in the pinned container with the task's resources hydrated.
 
 ## Running locally
 
@@ -213,7 +204,7 @@ uv run --frozen --package marin-taskforge --group test pytest lib/taskforge/test
 cd lib/taskforge && uv run --frozen pyrefly check
 ```
 
-`tests/test_end_to_end.py` drives both arms through fakes (inference, environments, grading);
+`tests/test_end_to_end.py` drives the workflow through fakes (inference, environments, grading);
 `tests/resources/` covers each executor. Any change that touches the sandbox backend must also
 run on `cw-rno2a` before it is relaunched into a pilot: the fakes have passed while the real
 backend failed three times.

@@ -39,7 +39,7 @@ async def main(mode: str, directory: Path) -> None:
     else:
         backend, log = Backend((provider_completion(),)), driver_log(await sink.read(), resume=mode == "resume")
     live = replace(resources(Envs(), ()), inference=GlmInference(backend, "provider"))
-    wp = await run_workpiece(sample_proposal(), config("S"), live, log, install=install)
+    wp = await run_workpiece(sample_proposal(), config(), live, log, install=install)
     (stop,) = wp.decisions
     assert isinstance(stop, Abandon)
     print(f"{mode}: {wp.terminal}, {stop.reasons}, {len(backend.calls)} provider call(s)")

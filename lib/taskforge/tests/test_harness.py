@@ -42,7 +42,6 @@ from taskforge.harness.tools.finish import FinishTool
 from taskforge.harness.tools.grade import GradeTool
 from taskforge.harness.tools.shell import ShellTool
 from taskforge.harness.tools.submit import SubmitTool
-from taskforge.harness.tools.validate import ValidateRequest, ValidateTool
 from taskforge.harness.tools.web import WebFetchTool, WebSearchTool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
@@ -380,7 +379,7 @@ async def test_reasoning_only_length_retries_unchanged_conversation_and_replays(
     assert replay_client.requests == []
 
 
-@pytest.mark.parametrize("name", ["grade", "submit", "validate"])
+@pytest.mark.parametrize("name", ["grade", "submit"])
 async def test_candidate_files_without_task_machine_return_feedback(name: str) -> None:
     ctx = Context(log=EventLog())
     environment(ctx)
@@ -393,12 +392,10 @@ async def test_candidate_files_without_task_machine_return_feedback(name: str) -
     tools: dict[str, Tool[object]] = {
         "grade": GradeTool("/workspace/task.json", {}, settings),
         "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
-        "validate": ValidateTool(accept, "/workspace/task.json", "/workspace/controls.json"),
     }
     args: dict[str, dict[str, object]] = {
         "grade": {"reply": "12", "files": ["/workspace/answer"]},
         "submit": {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"},
-        "validate": {},
     }
     # No grading executor: malformed author data must never reach the executor backstop.
     result = await tools[name](ctx, args[name])
@@ -597,33 +594,30 @@ async def test_web_rejections_distinguish_author_errors_from_service_errors(stat
             assert str(status) in await web.fetch("bad")
 
 
-@pytest.mark.parametrize("name", ["submit", "validate"])
-async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(tmp_path: Path, name: str) -> None:
+async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(tmp_path: Path) -> None:
     sink = JsonlSink(str(tmp_path / "draft.jsonl"))
     log = EventLog(sink=sink)
     ctx = Context(log=log)
     env = environment(ctx)
     await ctx.emit(RunCommand("task", 30))
     await ctx.emit(RunCommand("controls", 30))
-    tool_type = SubmitTool if name == "submit" else ValidateTool
-    rejected = await tool_type(
+    rejected = await SubmitTool(
         lambda _: ("Missing negative controls",), "/workspace/task.json", "/workspace/controls.json"
     )(ctx, {})
     assert rejected == ToolResult("Missing negative controls")
     mixed = Completion(
-        "", (*call(name, {}, "a").tool_calls, *call("shell", {"command": "task", "timeout": 1000}, "b").tool_calls)
+        "", (*call("submit", {}, "a").tool_calls, *call("shell", {"command": "task", "timeout": 1000}, "b").tool_calls)
     )
-    client = FakeInference((mixed, call(name, {}, "c")))
-    tools = {name: tool_type(accept, "/workspace/task.json", "/workspace/controls.json"), "shell": ShellTool(30, 120)}
+    client = FakeInference((mixed, call("submit", {}, "c")))
+    tools = {
+        "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
+        "shell": ShellTool(30, 120),
+    }
     harness, initial = AgenticHarness(262144, LLMPolicy(), "continue", 20000), Conversation((), ())
     result = await harness.run(ctx, initial, client, tools)
     await ctx.drain()
     assert any(isinstance(record.event, RunCommand) and record.event.timeout == 120 for record in log.records)
-    if name == "submit":
-        assert isinstance(result, Submitted) and result.submission.task == arithmetic_task()
-    else:
-        assert isinstance(result, Returned) and isinstance(result.payload, ValidateRequest)
-        assert result.payload.submission.task == arithmetic_task()
+    assert isinstance(result, Submitted) and result.submission.task == arithmetic_task()
     replies = [message for message in client.requests[1].conversation if message.role == "tool"]
     assert [message.tool_call_id for message in replies] == ["a", "b"] and "called alone" in replies[0].content
     assert result.session.messages[-1].tool_calls[0].id == "c" and result.session.messages[-1].reasoning == "plan"

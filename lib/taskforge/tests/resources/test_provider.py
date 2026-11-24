@@ -108,7 +108,7 @@ async def test_endpoint_request_body_has_no_client_output_allowance(monkeypatch:
     assert "max_tokens" not in bodies[0] and "max_completion_tokens" not in bodies[0]
     policy = load_policy(Path(__file__).parents[2] / "src/taskforge/policy/defaults")
     monkeypatch.setattr(wiring, "get_job_info", lambda: SimpleNamespace(controller_address="http://unused"))
-    async with wiring.runtime(policy, "S", source, "fake") as (_, resources):
+    async with wiring.runtime(policy, source, "fake") as (_, resources):
         for role in ("author", "solver", "adversary"):
             await resources.inference_for(role).complete(request())
         assert resources.inference_for("author") is resources.inference
