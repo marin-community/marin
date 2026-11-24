@@ -126,6 +126,11 @@ class ThreadLog:
             tracked.posted_at = now
             tracked.expires_at = now + self._ttl
 
+    def refresh(self, key: str) -> None:
+        tracked = self._threads.get(key)
+        if tracked is not None:
+            tracked.expires_at = time.monotonic() + self._ttl
+
     def mark_firing(self, key: str) -> None:
         tracked = self._threads.get(key)
         if tracked is not None:
@@ -170,7 +175,9 @@ class SlackAnnouncer:
         if tracked is None or tracked.delivery_failed:
             return
         tracked.delivery_failed = True
-        await self.post(client, f"No Loom triage session opened for this alert: {error}", thread=tracked.thread)
+        posted = await self.post(client, f"No Loom triage session opened for this alert: {error}", thread=tracked.thread)
+        if posted is None:
+            tracked.delivery_failed = False
 
     async def announce(
         self,
@@ -194,6 +201,7 @@ class SlackAnnouncer:
             # A failed Loom delivery makes Grafana retry the same webhook for
             # longer than the quiet period. Those retries are not new alerts.
             if tracked.delivery_failed:
+                self._threads.refresh(thread_key)
                 return tracked.thread
             # Grafana retries a failed webhook within seconds, and re-notifies an
             # unresolved alert on its repeat_interval. Both land here; only the

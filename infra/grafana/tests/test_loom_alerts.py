@@ -416,7 +416,7 @@ def test_loom_failure_retries_keep_one_thread_reply_until_delivery_recovers(monk
     slack = FakeSlack()
     client = client_for(slack, loom_status=status)
 
-    for minute in (0, 1, 20, 40):
+    for minute in (0, 1, 20, 40, 5 * 60, 10 * 60):
         clock[0] = minute * 60
         with pytest.raises(LoomAlertDeliveryError):
             asyncio.run(client.submit(alert_payload()))
@@ -427,16 +427,36 @@ def test_loom_failure_retries_keep_one_thread_reply_until_delivery_recovers(monk
     assert "No Loom triage session opened" in failure_reply
 
     status[0] = None
-    clock[0] = 41 * 60
+    clock[0] = 10 * 60 * 60 + 60
     asyncio.run(client.submit(alert_payload()))
     assert len(slack.reply_texts) == 2
     assert "https://loom.example.com/s/session-1" in slack.reply_texts[-1]
 
     status[0] = 503
-    clock[0] = 42 * 60
+    clock[0] += 60
     with pytest.raises(LoomAlertDeliveryError):
         asyncio.run(client.submit(alert_payload()))
     assert slack.reply_texts.count(failure_reply) == 2
+
+
+def test_failed_slack_notice_is_retried_while_loom_delivery_fails():
+    status: list[int | None] = [None]
+    slack = FakeSlack()
+    client = client_for(slack, loom_status=status)
+    asyncio.run(client.submit(alert_payload()))
+
+    status[0] = 503
+    slack.ok = False
+    with pytest.raises(LoomAlertDeliveryError):
+        asyncio.run(client.submit(alert_payload()))
+    failed_notice = slack.reply_texts[-1]
+
+    slack.ok = True
+    with pytest.raises(LoomAlertDeliveryError):
+        asyncio.run(client.submit(alert_payload()))
+
+    assert len(slack.roots) == 1
+    assert slack.reply_texts.count(failed_notice) == 2
 
 
 def test_a_slack_failure_still_opens_the_triage_session():
