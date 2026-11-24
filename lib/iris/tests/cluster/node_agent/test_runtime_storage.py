@@ -84,9 +84,17 @@ def test_configure_redirects_logs_and_preserves_backup_and_permissions(tmp_path,
     assert backups[0].read_text() == source
 
 
-def test_configure_refuses_to_place_runtime_logs_on_host_root(tmp_path):
+@pytest.mark.parametrize(
+    "source",
+    [
+        LOGGING_CONFIG,
+        LOGGING_CONFIG.replace("log_path =", "#log_path ="),
+        LOGGING_CONFIG.replace("debug-log =", "#debug-log ="),
+    ],
+    ids=["both-paths", "debug-log-only", "log-path-only"],
+)
+def test_configure_refuses_to_place_runtime_logs_on_host_root(tmp_path, source):
     config = tmp_path / "runsc.toml"
-    source = LOGGING_CONFIG
     config.write_text(source)
     nvme = tmp_path / "unmounted-nvme"
     nvme.mkdir()
