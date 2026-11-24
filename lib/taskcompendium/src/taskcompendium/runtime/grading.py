@@ -18,13 +18,15 @@ import os
 import tarfile
 import time
 from collections.abc import Mapping
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
-from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
+from shellbox.http_service import forward_http_posts
+from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import Spec, render_spec
 
@@ -69,6 +71,11 @@ SPEC_PATH = "/tests/verifier.toml"
 VERDICT_DIRECTORY = "/logs/verifier"
 VERDICT_PATH = f"{VERDICT_DIRECTORY}/verdict.json"
 JUDGE_SPEC_PATH = "/tests/judge.toml"
+JUDGE_RELAY_PORT = 8790
+JUDGE_RELAY_URL = f"http://127.0.0.1:{JUDGE_RELAY_PORT}/v1"
+JUDGE_RELAY_KEY = "machine-local-judge-relay"
+JUDGE_RELAY_ROUTES = {"/v1/chat/completions": "/chat/completions", "/v1/responses": "/responses"}
+JUDGE_RELAY_REQUEST_TIMEOUT = 120
 STATE_PATH = "/app/state.json"
 STAGING_ARCHIVE = "/tmp/taskcompendium-grading.tar"
 DIAGNOSTIC_OUTPUT_BYTES = 16_384
@@ -698,6 +705,18 @@ async def _grade_staged(
             write_archive(archive_path, files, [])
             submission_archive = root / "submission.tar"
             write_archive(submission_archive, submissions, downloaded)
+            relay_connection = (
+                judge_connection
+                if factory.backend is Backend.DAYTONA
+                and isinstance(grading.grader, ScriptGrader)
+                and grading.grader.judge is not None
+                else None
+            )
+            guest_connection = (
+                replace(relay_connection, base_url=JUDGE_RELAY_URL, api_key=JUDGE_RELAY_KEY)
+                if relay_connection is not None
+                else judge_connection
+            )
             setup_started = time.monotonic()
             async with asyncio.timeout(machine_spec.startup_timeout):
                 prepared = await asyncio.to_thread(
@@ -712,19 +731,34 @@ async def _grade_staged(
                 # A grader without a workspace starts where its environment does.
                 if environment.working_directory is None and grading.workspace is not None:
                     prepared = replace(prepared, workdir=grading.workspace)
-                prepared = replace(prepared, env={**prepared.env, **_grading_env(grading, attempt, judge_connection)})
+                prepared = replace(prepared, env={**prepared.env, **_grading_env(grading, attempt, guest_connection)})
                 machine = await factory.create(prepared)
             setup_seconds = time.monotonic() - setup_started
             try:
-                result = await _grade_on(
-                    machine,
-                    archive_path,
-                    submission_archive,
-                    environment,
-                    grading,
-                    preparation_timeout=machine_spec.startup_timeout,
-                    user=setup_user(factory.backend),
-                )
+                async with AsyncExitStack() as services:
+                    if relay_connection is not None:
+                        await services.enter_async_context(
+                            forward_http_posts(
+                                machine,
+                                port=JUDGE_RELAY_PORT,
+                                upstream=relay_connection.base_url,
+                                routes=JUDGE_RELAY_ROUTES,
+                                headers={
+                                    "Authorization": f"Bearer {relay_connection.api_key}",
+                                    "Content-Type": "application/json",
+                                },
+                                timeout=JUDGE_RELAY_REQUEST_TIMEOUT,
+                            )
+                        )
+                    result = await _grade_on(
+                        machine,
+                        archive_path,
+                        submission_archive,
+                        environment,
+                        grading,
+                        preparation_timeout=machine_spec.startup_timeout,
+                        user=setup_user(factory.backend),
+                    )
                 return replace(result, verifier_setup_seconds=setup_seconds + result.verifier_setup_seconds)
             finally:
                 await machine.close()

@@ -233,6 +233,14 @@ class _OwnedMachine:
 
 
 @dataclass(frozen=True)
+class _OwnedProcessMachine(_OwnedMachine):
+    machine: ProcessMachine
+
+    async def open_process(self, command: Command) -> ProcessSession:
+        return await self.machine.open_process(command)
+
+
+@dataclass(frozen=True)
 class _AttemptMachineFactory:
     """Create grading machines under the attempt's startup deadline, user, and cleanup."""
 
@@ -252,8 +260,11 @@ class _AttemptMachineFactory:
     async def create(self, spec: MachineSpec) -> Machine:
         async with asyncio.timeout(self.runtime.startup_timeout):
             if self.verifier is not None:
-                return _OwnedMachine(await self.verifier(spec))
-            machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
+                machine = await self.verifier(spec)
+            else:
+                machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
+        if isinstance(machine, ProcessMachine):
+            return _OwnedProcessMachine(machine)
         return _OwnedMachine(machine)
 
 
