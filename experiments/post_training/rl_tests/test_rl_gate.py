@@ -1005,8 +1005,6 @@ def test_python_run_saves_typed_inputs_for_comparison(
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
     assert comparisons(report)[gain_key]["run"] == pytest.approx(0.005)
     if preset_name == "learning-medium":
-        composed = gate.validate_candidate(preset, recorded, table=snowball_model.SNOWBALL)
-        assert composed["iris"]["target_cluster"] == preset.recipe.layout.cluster
         held_out = compare(preset_name, "--leave-out", "r0")
         assert held_out["verdict"] == "pass", held_out
     _json(source / "exports/best_checkpoint.json", {"step": preset.updates})

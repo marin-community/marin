@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Adoption: registering pre-existing data as a managed ``name@version``.
+"""Adoption of pre-existing data as ``name@version`` handles.
 
 Consumers resolve an adopted artifact to its existing source. Registered adoption records the
 alias at its canonical address. Read-only adoption verifies the source.
