@@ -62,6 +62,9 @@ def validate_megatron_config(cfg: DictConfig):
             raise ValueError("Synthetic trainer sizing currently requires regular PPO")
         if not 0 <= profile.minimum_headroom_fraction < 1:
             raise ValueError("memory_profile.minimum_headroom_fraction must be in [0,1)")
+        trained = cfg.trainer.algorithm.get("max_seq_len")
+        if trained is not None and trained > profile.max_sequence_length:
+            raise ValueError("Trainer sizing maximum is below the trained sequence bound trainer.algorithm.max_seq_len")
         if policy.megatron_config.get("moe_router_replay", False):
             raise ValueError("Synthetic trainer sizing requires native routing without rollout router replay")
         maximum = profile.max_sequence_length
