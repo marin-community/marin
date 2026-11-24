@@ -940,9 +940,7 @@ def _check_control_config(
     missing = {key for key in differences if key not in observed}
     if missing:
         groups = tuple(sorted(preset.recipe.config.to_skyrl().get("config_groups", {}).items()))
-        defaults = _schema_defaults(
-            str(recipe.REPO_ROOT / "vendor/skyrl"), Provenance.capture(recipe.REPO_ROOT).tree_hash, groups
-        )
+        defaults = _schema_defaults(Provenance.capture(recipe.REPO_ROOT).tree_hash, groups)
         for key in missing:
             value = get_path(defaults, key)
             if value is MISSING:

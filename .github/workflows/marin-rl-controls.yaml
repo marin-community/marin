@@ -1,4 +1,4 @@
-name: "Marin - Refresh RL controls"
+name: "Marin - Plan RL control refreshes"
 
 on:
   schedule:
@@ -24,7 +24,7 @@ concurrency:
   queue: max
 
 jobs:
-  refresh:
+  plan:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30

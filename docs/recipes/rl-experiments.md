@@ -297,9 +297,10 @@ JSON comparison rows have `objective`, `guard`, `requirement`, `reported` or `sl
 `run_inputs.json` records the requested settings and inputs for comparison; `run.config_changes` lists
 explicit settings and derived differences. Native elapsed time and allocated GPUs determine gain per GPU-hour.
 
-Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit, revision and
-replicate count. Data-medium shares learning-medium's pin. Before submission, the command composes the
-candidate on CPU and checks every control against current defaults. During comparison, candidate configuration
+Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit,
+revision, ordered replicate and retry pairs, and optional cluster. Data-medium shares learning-medium's pin.
+Before submission, the command composes the candidate on CPU and checks every control against current defaults.
+During comparison, candidate configuration
 must match its recorded inputs. The report states why a comparison is INVALID or an invariant fails.
 
 The gate compares candidates and controls with the same preset revision, evaluation request and
