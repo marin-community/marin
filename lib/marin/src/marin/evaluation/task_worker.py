@@ -64,6 +64,8 @@ backs off between retries, and the session's model-turn timeout bounds them all.
 EPISODE_HARNESS_REVISIONS: Mapping[str, str] = MappingProxyType(
     {"shell": "2026.11.21.1", "terminus-2": "2026.11.21.1", "pi": "2026.11.21.1", "mini-swe-agent": "2026.11.21.1"}
 )
+# These harnesses count prompt tokens with the policy server's vLLM ``/tokenize``, which external APIs lack.
+SERVER_TOKENIZER_HARNESSES = frozenset({"pi", "mini-swe-agent"})
 
 
 def _shell(_agent: EpisodeAgent, _budget: EpisodeBudget) -> Harness:

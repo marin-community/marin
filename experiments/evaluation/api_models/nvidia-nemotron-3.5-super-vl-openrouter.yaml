@@ -1,0 +1,16 @@
+# Nemotron 3.5 Super VL through OpenRouter, routed to the fastest provider, with reasoning on.
+# OpenRouter providers choose their own quantization and serving settings, so scores are not
+# comparable with runs of the Marin-served nvidia-nemotron-3.5-super-vl-120b-a12b-bf16.
+name: nvidia-nemotron-3.5-super-vl-openrouter
+provider: openrouter
+base_url: https://openrouter.ai/api/v1
+api_model: nvidia/nemotron-3.5-super-vl
+api_key:
+- env:OPENROUTER_API_KEY
+tokenizer: nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16
+tokenizer_revision: fb0ee0bc6b3f70342afd8d84cb80dbadbaa8a1fe  # gitleaks:allow (public HF commit)
+context_window: 131072
+generation:
+  extra_gen_kwargs:
+    provider: '{"sort": "throughput"}'
+    reasoning: '{"enabled": true}'

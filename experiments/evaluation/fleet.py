@@ -26,3 +26,6 @@ MARIN_EVAL_HARDWARE = HardwarePolicy(
         }
     ),
 )
+
+# API-model evaluations need no accelerator; their orchestrator runs where the controller does.
+API_EVALUATION_REGION = "us-central1"

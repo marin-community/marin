@@ -15,14 +15,14 @@ import logging
 from pathlib import Path
 
 import click
-from evalrecords.records import RECORD_FILE, TaskEvidence, TaskMachineBackend, read_record
+from evalrecords.records import RECORD_FILE, EvalRef, TaskEvidence, TaskMachineBackend, read_record
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
-from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.runner import EvaluationBatch, print_record, wait_and_report
+from marin.evaluation.model_config import ApiModelConfig, ModelConfig, load_api_model_config, load_model_config
+from marin.evaluation.runner import ApiCandidate, EvaluationBatch, ServedCandidate, print_record, wait_and_report
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
@@ -74,13 +74,20 @@ def _load_selected_model(
     return catalog[model_key]
 
 
-def resolve_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig:
-    """Resolve exactly one model registry key or catalog-schema file."""
-    if (model_key is None) == (config_path is None):
+def resolve_model_config(
+    model_key: str | None, config_path: Path | None, api_config_path: Path | None
+) -> ModelConfig | ApiModelConfig:
+    """Resolve exactly one model registry key, catalog-schema file, or API model file."""
+    if sum(selector is not None for selector in (model_key, config_path, api_config_path)) != 1:
         raise click.BadParameter(
-            "specify exactly one of --model or --model-config",
-            param_hint="--model/--model-config",
+            "specify exactly one of --model, --model-config or --api-model-config",
+            param_hint="--model/--model-config/--api-model-config",
         )
+    if api_config_path is not None:
+        try:
+            return load_api_model_config(api_config_path)
+        except Exception as exc:
+            raise click.BadParameter(str(exc), param_hint="--api-model-config") from exc
     return _load_selected_model(
         model_key,
         config_path,
@@ -110,58 +117,72 @@ def resolve_judge_model_config(model_key: str | None, config_path: Path | None) 
 
 def _require_coreweave_credentials(batch: EvaluationBatch) -> None:
     """Fail before submission when a CoreWeave target would reject the job for missing storage keys."""
-    if batch.accelerator.target_cluster is None:
+    if not isinstance(batch.candidate, ServedCandidate) or batch.candidate.accelerator.target_cluster is None:
         return
     missing = [name for name in COREWEAVE_SECRET_NAMES if not get_secret(name)]
     if missing:
         raise click.UsageError(
-            f"Target cluster {batch.accelerator.target_cluster} runs on CoreWeave, which requires your own "
+            f"Target cluster {batch.candidate.accelerator.target_cluster} runs on CoreWeave, which requires your own "
             f"object-storage credentials. Missing: {', '.join(missing)}. Export CW_KEY_ID and CW_KEY_SECRET "
             "(see lib/iris/docs/secrets.md), or launch on GCP TPU with --platform tpu."
         )
 
 
-def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
-    geometry = batch.accelerator.geometry
-    serving = geometry.label if geometry is not None else "worker-resolved"
-    serving = f"{serving} instances={batch.model.serve.instances}"
-    task_count = (geometry.task_count if geometry is not None else 1) * batch.model.serve.instances
-    click.echo(
-        f"model: {spec.model.name}  platform: {spec.platform.value}  "
-        f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
-        f"target_cluster={batch.accelerator.target_cluster or 'none'}  "
-        f"priority={priority_band_name(batch.priority_band)}  instances={batch.instances}  "
-        f"max_concurrent={batch.max_concurrent}"
-    )
-    if batch.judge is not None:
-        click.echo(
-            f"judge: {batch.judge.model.name}  location={batch.judge.model.location}  "
-            f"accel={batch.judge.accelerator.label}  "
-            f"region_or_cluster={batch.judge.accelerator.target_cluster or batch.judge.accelerator.region}"
+def _agent_context(eval_ref: EvalRef) -> str:
+    harbor = eval_ref.harbor
+    curated = eval_ref.curated
+    if harbor is not None:
+        return f"max_input_tokens={harbor.max_input_tokens}  max_output_tokens={harbor.max_output_tokens}  "
+    if curated is not None and curated.agent is not None:
+        assert curated.settings.task_machine is not None
+        return (
+            f"agent={curated.agent.harness}@{curated.agent.revision}  "
+            f"task_machine={curated.settings.task_machine.backend.value}  "
+            f"max_input_tokens={curated.agent.max_input_tokens}  "
+            f"max_output_tokens={curated.agent.max_output_tokens}  "
         )
+    return ""
+
+
+def _print_plan(batch: EvaluationBatch) -> None:
+    match batch.candidate:
+        case ApiCandidate(model=model):
+            click.echo(
+                f"model: {model.name}  provider={model.provider}  api_model={model.api_model}  "
+                f"context_window={model.context_window}  controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
+                f"priority={priority_band_name(batch.priority_band)}  max_concurrent={batch.max_concurrent}"
+            )
+            placement = f"provider={model.provider}  "
+        case ServedCandidate(model=model, accelerator=accelerator) as served:
+            geometry = accelerator.geometry
+            serving = geometry.label if geometry is not None else "worker-resolved"
+            serving = f"{serving} instances={model.serve.instances}"
+            task_count = (geometry.task_count if geometry is not None else 1) * model.serve.instances
+            click.echo(
+                f"model: {model.name}  platform: {accelerator.platform.value}  "
+                f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
+                f"target_cluster={accelerator.target_cluster or 'none'}  "
+                f"priority={priority_band_name(batch.priority_band)}  instances={served.instances}  "
+                f"max_concurrent={batch.max_concurrent}"
+            )
+            if served.judge is not None:
+                click.echo(
+                    f"judge: {served.judge.model.name}  location={served.judge.model.location}  "
+                    f"accel={served.judge.accelerator.label}  "
+                    f"region_or_cluster={served.judge.accelerator.target_cluster or served.judge.accelerator.region}"
+                )
+            placement = (
+                f"location={model.location}  "
+                f"backend={model.serve.backend.value}  accel={accelerator.label}  "
+                f"serve={serving} tasks={task_count} x {accelerator.label}  "
+                f"region_or_cluster={accelerator.target_cluster or accelerator.region}  "
+            )
     for evaluation in batch.evaluations:
         eval_ref = evaluation.identity.eval_ref
-        tasks = [task.name for task in eval_ref.tasks]
-        harbor = eval_ref.harbor
-        curated = eval_ref.curated
-        agent_context = ""
-        if harbor is not None:
-            agent_context = f"max_input_tokens={harbor.max_input_tokens}  max_output_tokens={harbor.max_output_tokens}  "
-        elif curated is not None and curated.agent is not None:
-            assert curated.settings.task_machine is not None
-            agent_context = (
-                f"agent={curated.agent.harness}@{curated.agent.revision}  "
-                f"task_machine={curated.settings.task_machine.backend.value}  "
-                f"max_input_tokens={curated.agent.max_input_tokens}  "
-                f"max_output_tokens={curated.agent.max_output_tokens}  "
-            )
         click.echo(
-            f"  eval={eval_ref.name}  location={batch.model.location}  "
-            f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
-            f"serve={serving} tasks={task_count} x {batch.accelerator.label}  "
-            f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
-            f"tasks={tasks}  "
-            f"{agent_context}"
+            f"  eval={eval_ref.name}  {placement}"
+            f"tasks={[task.name for task in eval_ref.tasks]}  "
+            f"{_agent_context(eval_ref)}"
             f"records={batch.records_prefix}  "
             f"results={evaluation.identity.output_dir}"
         )
@@ -173,12 +194,18 @@ def cli() -> None:
 
 
 @cli.command()
-@click.option("--model", default=None, help="Model registry key. Mutually exclusive with --model-config.")
+@click.option("--model", default=None, help="Model registry key. Mutually exclusive with the config options.")
 @click.option(
     "--model-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     default=None,
-    help="Model catalog YAML or JSON. Mutually exclusive with --model.",
+    help="Model catalog YAML or JSON. Mutually exclusive with --model and --api-model-config.",
+)
+@click.option(
+    "--api-model-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="YAML or JSON for a model an external OpenAI-compatible API serves; runs curated chat and agent benchmarks.",
 )
 @click.option("--judge-model", default=None, help="Optional hosted judge model registry key.")
 @click.option(
@@ -298,6 +325,7 @@ def cli() -> None:
 def launch(
     model: str | None,
     model_config: Path | None,
+    api_model_config: Path | None,
     judge_model: str | None,
     judge_model_config: Path | None,
     judge_accelerator: str | None,
@@ -325,9 +353,14 @@ def launch(
     priority: str | None,
 ) -> None:
     """Submit evaluations against a shared candidate endpoint for MODEL."""
-    selected_model = resolve_model_config(model, model_config)
+    selected_model = resolve_model_config(model, model_config, api_model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
-    resolved_platform = Platform(platform) if platform else default_platform(selected_model)
+    if platform is not None:
+        resolved_platform = Platform(platform)
+    elif isinstance(selected_model, ModelConfig):
+        resolved_platform = default_platform(selected_model)
+    else:
+        resolved_platform = None
     configured = [entry for path in evaluation_config for entry in load_evaluations(path)]
     if evaluation_config and evals_arg:
         names = {name.strip() for name in evals_arg.split(",") if name.strip()}
@@ -383,7 +416,7 @@ def launch(
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
     _require_coreweave_credentials(batch)
     if dry_run:
-        _print_plan(spec, batch)
+        _print_plan(batch)
         return
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         group = launch_group(batch, client)

@@ -31,6 +31,7 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome, InferenceUnavailable
 from marin.inference.iris import RemoteInferenceSession
+from marin.inference.session import InferenceSession
 from marin.inference.types import InferenceBackendState, RunningModel
 
 logger = logging.getLogger(__name__)
@@ -542,7 +543,7 @@ class HarborExecutor:
 
     def __call__(
         self,
-        session: RemoteInferenceSession,
+        session: InferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
         *,

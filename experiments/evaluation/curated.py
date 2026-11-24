@@ -25,7 +25,7 @@ from evalrecords.records import (
 )
 from huggingface_hub import HfApi
 from marin.evaluation.dataset_evaluator import pi_thinking_format, run_max_tokens
-from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_config import ApiModelConfig, EvaluatedModel, ModelConfig
 from marin.evaluation.task_worker import EPISODE_HARNESS_REVISIONS
 from marin.execution.lazy import ArtifactStep
 from rigging.secrets import is_secret_reference
@@ -59,6 +59,12 @@ def pinned_model(model: ModelConfig) -> ModelConfig:
     if revision is None and model.identity is None and "://" not in model.location:
         raise ValueError(f"No immutable model identity for {model.location}")
     return replace(model, revision=revision, tokenizer=tokenizer, tokenizer_revision=tokenizer_revision)
+
+
+def pinned_api_model(model: ApiModelConfig) -> ApiModelConfig:
+    """Freeze the tokenizer revision; the provider owns which weights it serves."""
+    revision = HfApi().model_info(model.tokenizer, revision=model.tokenizer_revision).sha
+    return replace(model, tokenizer_revision=revision)
 
 
 def load_evaluations(path: Path) -> tuple[EvaluationSelection, ...]:
@@ -136,13 +142,13 @@ def runs_agent(selection: ResolvedEvaluationSelection) -> bool:
 
 
 def agent_ref_for(
-    selection: ResolvedEvaluationSelection, model: ModelConfig, settings: CuratedSettings
+    selection: ResolvedEvaluationSelection, model: EvaluatedModel, settings: CuratedSettings
 ) -> CuratedAgentRef | None:
     """The harness and token budgets each attempt receives, resolved as the worker resolves them.
 
-    The agent context limit is the served window, capped by the protocol; each reply is capped by the
-    run budget and the protocol's sampling limit. Agent selections therefore require an explicit
-    ``serve.max_model_len``, which the worker checks against the running server.
+    The agent context limit is the model's context window, capped by the protocol; each reply is capped
+    by the run budget and the protocol's sampling limit. A served model's agent selections therefore
+    require an explicit ``serve.max_model_len``, which the worker checks against the running server.
     """
     plans = set()
     for source in selected_sources(selection):
@@ -161,7 +167,7 @@ def agent_ref_for(
         raise ValueError(f"No evaluation harness is registered for {harness.kind!r}: {selection.benchmark}")
     if isinstance(harness, PiAgent) and pi_thinking_format(model) is None:
         raise ValueError(f"{selection.benchmark} runs Pi; set agent.agent_kwargs.thinking_format for {model.name}")
-    window = model.serve.max_model_len
+    window = model.context_window
     if window is None:
         raise ValueError(f"{selection.benchmark} runs an agent; set serve.max_model_len, its context window")
     run = run_max_tokens(window, settings, model)
@@ -181,7 +187,7 @@ def corpus_key(step: ArtifactStep) -> str:
 def settings_for(
     selection: EvaluationSelection,
     protocol: ResolvedEvaluationSelection,
-    model: ModelConfig,
+    model: EvaluatedModel,
     limit: int | None,
     seed: int | None,
     default_seed: int | None,

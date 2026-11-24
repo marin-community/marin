@@ -50,6 +50,7 @@ from marin.evaluation.runner import (
     EvaluationIdentity,
     EvaluationOutcome,
     LaunchProvenance,
+    ServedCandidate,
 )
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -334,16 +335,23 @@ def _batch(config_path: Path, modes: list[tuple[str, str]], cluster: str) -> Eva
         version=None,
         description="Tournament-only Structure-Closure BFCL v6 validation; not eval-policy attestation",
         records_prefix=CW_RECORDS_PREFIX,
-        model=model,
-        accelerator=accelerator,
+        candidate=ServedCandidate(
+            model=model,
+            accelerator=accelerator,
+            capability_origin=_capability_origin(cluster),
+            api_model=canonical_served_name(model.name),
+            source_model_config=ModelConfigRef.model_validate(asdict(model)),
+        ),
         priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
-        capability_origin=_capability_origin(cluster),
-        api_model=canonical_served_name(model.name),
         evaluations=tuple(evaluations),
         provenance=LaunchProvenance(git_sha=_git_sha(), launch_host=socket.gethostname()),
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
-        source_model_config=ModelConfigRef.model_validate(asdict(model)),
     )
+
+
+def _served(batch: EvaluationBatch) -> ServedCandidate:
+    assert isinstance(batch.candidate, ServedCandidate)
+    return batch.candidate
 
 
 def main() -> None:
@@ -368,7 +376,8 @@ def main() -> None:
         configs = [CONFIG_DIR / f"{name}.yaml" for name in args.model]
     batches = [_batch(path, modes, args.cluster) for path in configs]
     for batch in batches:
-        print(f"{batch.model.location}: {len(batch.evaluations)} modes on {batch.accelerator.label} {args.cluster}")
+        served = _served(batch)
+        print(f"{served.model.location}: {len(batch.evaluations)} modes on {served.accelerator.label} {args.cluster}")
     if not args.submit:
         return
     if args.manifest is None:
@@ -382,8 +391,8 @@ def main() -> None:
                     json.dumps(
                         {
                             "submitted_at": datetime.now(UTC).isoformat(),
-                            "model": batch.model.location,
-                            "model_revision": batch.model.revision,
+                            "model": _served(batch).model.location,
+                            "model_revision": _served(batch).model.revision,
                             "group_id": submitted.group_id,
                             "job": str(submitted.job),
                             "evaluations": [asdict(evaluation) for evaluation in submitted.evaluations],

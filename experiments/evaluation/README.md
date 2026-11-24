@@ -27,6 +27,8 @@ Choose exactly one model source:
 
 - `--model <key>`: an entry in [the model catalog](serve/models/README.md).
 - `--model-config <path>`: a YAML or JSON file with the same schema.
+- `--api-model-config <path>`: a model an external OpenAI-compatible API serves; see
+  [API models](#api-models).
 
 Pass a suite name or comma-separated evaluation keys to `--evals`. Suites are
 `smoke`, `core`, `nlp`, `chat`, `math`, `code`, `econevals`, `econevals-o3`, `econevals-sampled`,
@@ -64,6 +66,27 @@ uv run python -m experiments.evaluation.cli launch \
 
 Use `launch --help` for all options. See the
 [evaluation guide](../../docs/tutorials/run-lm-evals.md) for more command examples.
+
+### API models
+
+An API model runs curated chat-generation and agent-episode benchmarks against a provider's
+endpoint, with no serving job or accelerator. Its file names the provider, the endpoint, the
+provider's model ID, ordered secret references for the key, a pinned Hugging Face tokenizer,
+and the context window the provider serves, since the API reports neither of the last two.
+[api_models/](api_models) holds checked-in examples.
+
+```bash
+OPENROUTER_API_KEY=... uv run python -m experiments.evaluation.cli launch \
+  --api-model-config experiments/evaluation/api_models/nvidia-nemotron-3.5-super-vl-openrouter.yaml \
+  --evals gsm8k-smoke --limit 20 --priority interactive
+```
+
+The launcher resolves the key at submission. Records keep the provider, endpoint and model ID,
+with platform `api` and the provider as the accelerator, and omit the key and its references.
+The launcher rejects Harbor, likelihood and text-completion benchmarks, agent harnesses that count
+tokens with vLLM's `/tokenize` (Pi and mini-swe-agent), and options that place a served model.
+A provider can change the weights or quantization behind a model ID, so compare API runs with
+each other and not with served runs of the same weights.
 
 ### Judges
 

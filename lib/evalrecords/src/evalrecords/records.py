@@ -40,6 +40,8 @@ DEFAULT_SCAN_PREFIXES = (
     LEGACY_CW_RECORDS_PREFIX,
 )
 RECORD_FILE = "record.json"
+API_PLATFORM = "api"
+"""The ``HardwareRef.platform`` and ``ModelRef.backend`` of a model an external API served."""
 _MAX_RECORD_READERS = 16
 DEFAULT_EVALUATION_CONCURRENCY = 64
 EVALCHEMY_INFRASTRUCTURE_ERROR = "EVALCHEMY_INFRASTRUCTURE_ERROR"
@@ -248,11 +250,28 @@ class ModelConfigRef(BaseModel):
     evaluation_num_concurrent: int | None = None
 
 
+class ApiModelRef(BaseModel):
+    """The configuration of a model an external OpenAI-compatible API served, without its credentials."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: str
+    base_url: str
+    api_model: str
+    tokenizer: str
+    tokenizer_revision: str | None
+    context_window: int
+    generation: ModelGenerationConfig
+    agent: ModelAgentConfig
+    evaluation_num_concurrent: int | None = None
+
+
 class ModelRef(BaseModel):
     """The evaluated model's identity and normalized launch-time model configuration.
 
-    ``config`` is optional in the wire schema. The shared launcher populates it with the complete
-    catalog-schema configuration for both registry and file-backed models.
+    The shared launcher populates ``config`` with the complete catalog-schema configuration of a
+    model it served, or ``api`` with the configuration of a model an external API served; the
+    latter has ``backend`` ``api`` and ``location`` set to the provider's model ID.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -262,6 +281,7 @@ class ModelRef(BaseModel):
     backend: str
     config: ModelConfigRef | None = None
     source_config: ModelConfigRef | None = Field(default=None, exclude_if=lambda value: value is None)
+    api: ApiModelRef | None = Field(default=None, exclude_if=lambda value: value is None)
     config_digest: str | None = None
 
 
@@ -573,7 +593,11 @@ class EvalRef(BaseModel):
 
 
 class HardwareRef(BaseModel):
-    """Serving allocation: ``task_count`` slices per instance, placed in a GCP region or CW cluster."""
+    """Serving allocation: ``task_count`` slices per instance, placed in a GCP region or CW cluster.
+
+    A model an external API served has platform ``api``, its provider as the accelerator, and no
+    region or cluster.
+    """
 
     model_config = ConfigDict(frozen=True)
 

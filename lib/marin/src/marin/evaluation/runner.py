@@ -18,7 +18,9 @@ from connectrpc.errors import ConnectError
 from evalrecords.eval_stats import DEFAULT_MIN_COVERAGE
 from evalrecords.model_identity import model_config_digest
 from evalrecords.records import (
+    API_PLATFORM,
     EVALCHEMY_INFRASTRUCTURE_ERROR,
+    ApiModelRef,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
@@ -48,7 +50,7 @@ from rigging.timing import retry_with_backoff
 from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, EVALUATION_REQUEST_TIMEOUT_SECONDS, env_vars_from_keys
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.inference_metrics import InferenceMetricWindow
-from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_config import ApiModelConfig, ModelConfig
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_runner import StepRunner, check_cache
 from marin.execution.step_spec import StepSpec
@@ -63,6 +65,8 @@ from marin.inference.iris import (
     prepare_inference,
     serve_inference,
 )
+from marin.inference.session import ApiInferenceSession, InferenceSession
+from marin.inference.types import OpenAIEndpoint, RunningModel
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
 logger = logging.getLogger(__name__)
@@ -73,6 +77,8 @@ _JUDGE_ROLE = "judge"
 _PREPARED_JUDGE_ROLE = "prepared-judge"
 _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
+CANDIDATE_API_KEY = "EVALUATION_CANDIDATE_API_KEY"
+"""The orchestrator variable that carries an API candidate's resolved key."""
 
 
 # Stop evaluator attempts before their HTTP retries exhaust during a model reload.
@@ -87,7 +93,7 @@ class InferenceBackendFinished(RuntimeError):
     """Inference ended permanently while an evaluator depended on it."""
 
 
-def inference_backend_state(sessions: tuple[RemoteInferenceSession, ...]) -> InferenceBackendState:
+def inference_backend_state(sessions: tuple[InferenceSession, ...]) -> InferenceBackendState:
     """Combine session states, prioritizing FINISHED over RECOVERING over READY."""
     states = tuple(session.backend_state() for session in sessions)
     if InferenceBackendState.FINISHED in states:
@@ -105,9 +111,7 @@ def check_inference_backend(state: InferenceBackendState) -> None:
         raise InferenceBackendFinished("inference backend finished while evaluation was running")
 
 
-def inference_attempt_state(
-    sessions: tuple[RemoteInferenceSession, ...], before: tuple[int, ...]
-) -> InferenceBackendState:
+def inference_attempt_state(sessions: tuple[InferenceSession, ...], before: tuple[int, ...]) -> InferenceBackendState:
     """Include preemptions that recovered between evaluator health polls."""
     state = inference_backend_state(sessions)
     if state is InferenceBackendState.READY and before != tuple(session.preemption_count() for session in sessions):
@@ -117,7 +121,7 @@ def inference_attempt_state(
 
 def run_with_inference_recovery[T](
     attempt: Callable[[int], T],
-    sessions: tuple[RemoteInferenceSession, ...],
+    sessions: tuple[InferenceSession, ...],
 ) -> T:
     """Wait for ready backends and retry attempts that raise InferenceUnavailable.
 
@@ -188,7 +192,7 @@ class EvalExecutor(Protocol):
 
     def __call__(
         self,
-        session: RemoteInferenceSession,
+        session: InferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
         *,
@@ -198,7 +202,10 @@ class EvalExecutor(Protocol):
 
 
 class EndpointRoute(StrEnum):
-    """DIRECT resolves the registered serving address; CAPABILITY preserves the session endpoint."""
+    """DIRECT resolves the registered serving address; CAPABILITY preserves the session endpoint.
+
+    An API candidate's endpoint is already direct, so its evaluations use CAPABILITY.
+    """
 
     DIRECT = "direct"
     CAPABILITY = "capability"
@@ -240,30 +247,47 @@ class HostedJudge:
 
 
 @dataclass(frozen=True)
+class ServedCandidate:
+    """A candidate the orchestrator serves on fleet accelerators, with any judge served beside it."""
+
+    model: ModelConfig
+    accelerator: AcceleratorChoice
+    capability_origin: str
+    api_model: str | None
+    instances: int = 1
+    judge: HostedJudge | None = None
+    # Judges an evaluation serves for itself. The batch only prepares their weights, alongside the
+    # candidate, so no evaluation downloads a judge while the candidate's accelerators are reserved.
+    prepared_judges: tuple[HostedJudge, ...] = ()
+    source_model_config: ModelConfigRef | None = None
+
+
+@dataclass(frozen=True)
+class ApiCandidate:
+    """A candidate an external API serves; the orchestrator reads its key from ``CANDIDATE_API_KEY``."""
+
+    model: ApiModelConfig
+
+
+type Candidate = ServedCandidate | ApiCandidate
+
+
+@dataclass(frozen=True)
 class EvaluationBatch:
     group_id: str
     user: str
     version: str | None
     description: str | None
     records_prefix: str
-    model: ModelConfig
-    accelerator: AcceleratorChoice
+    candidate: Candidate
     priority_band: int
-    capability_origin: str
-    api_model: str | None
     evaluations: tuple[Evaluation, ...]
     provenance: LaunchProvenance
     submission_cluster: str
     max_concurrent: int
-    instances: int = 1
-    judge: HostedJudge | None = None
-    # Judges an evaluation serves for itself. The batch only prepares their weights, alongside the
-    # candidate, so no evaluation downloads a judge while the candidate's accelerators are reserved.
-    prepared_judges: tuple[HostedJudge, ...] = ()
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
     egress_allow: tuple[str, ...] = ()
     """Egress rules the orchestrator job and its children need beyond the cluster allowlist."""
-    source_model_config: ModelConfigRef | None = None
     rl_attempt: RLAttemptRef | None = None
 
 
@@ -280,6 +304,48 @@ class SubmittedEvaluationBatch:
     records_prefix: str
     model_name: str
     evaluations: tuple[SubmittedEvaluation, ...]
+
+
+def api_model_ref(model: ApiModelConfig) -> ApiModelRef:
+    """The recorded configuration of an API model, without its key references."""
+    fields = asdict(model)
+    del fields["name"], fields["api_key"]
+    return ApiModelRef.model_validate(fields)
+
+
+def candidate_model_ref(candidate: Candidate) -> ModelRef:
+    """The evaluated model's record identity."""
+    match candidate:
+        case ServedCandidate(model=model):
+            config = ModelConfigRef.model_validate(asdict(model))
+            source = candidate.source_model_config or config
+            return ModelRef(
+                name=model.name,
+                location=model.location,
+                backend=model.serve.backend.value,
+                config=config,
+                source_config=source if source != config else None,
+                config_digest=model_config_digest(source),
+            )
+        case ApiCandidate(model=model):
+            api = api_model_ref(model)
+            return ModelRef(
+                name=model.name,
+                location=model.api_model,
+                backend=API_PLATFORM,
+                api=api,
+                config_digest=model_config_digest(api),
+            )
+
+
+def _hardware_ref(accelerator: AcceleratorChoice, *, task_count: int = 1, instances: int = 1) -> HardwareRef:
+    return HardwareRef(
+        task_count=task_count,
+        instances=instances,
+        platform=accelerator.platform.value,
+        accelerator=accelerator.label,
+        region_or_cluster=accelerator.target_cluster or accelerator.region or _UNCONSTRAINED,
+    )
 
 
 def _record(
@@ -299,15 +365,32 @@ def _record(
     evaluation = identity.eval_ref
     if tasks is not None:
         evaluation = evaluation.model_copy(update={"tasks": tasks})
-    if serving is None:
-        serve = batch.model.serve
-        serving = ServingParams(
-            tensor_parallel_size=serve.tensor_parallel_size,
-            data_parallel_size=serve.data_parallel_size,
-            pipeline_parallel_size=serve.pipeline_parallel_size,
-            task_count=serve.pipeline_parallel_size * serve.instances,
-            max_model_len=serve.max_model_len,
-        )
+    judge: HostedJudgeRef | None = None
+    match batch.candidate:
+        case ServedCandidate(model=model) as served:
+            if serving is None:
+                serve = model.serve
+                serving = ServingParams(
+                    tensor_parallel_size=serve.tensor_parallel_size,
+                    data_parallel_size=serve.data_parallel_size,
+                    pipeline_parallel_size=serve.pipeline_parallel_size,
+                    task_count=serve.pipeline_parallel_size * serve.instances,
+                    max_model_len=serve.max_model_len,
+                )
+            hardware = _hardware_ref(served.accelerator, task_count=serving.task_count, instances=served.instances)
+            if served.judge is not None:
+                judge = HostedJudgeRef(
+                    model=ModelRef(
+                        name=served.judge.model.name,
+                        location=served.judge.model.location,
+                        backend=served.judge.model.serve.backend.value,
+                        config=ModelConfigRef.model_validate(asdict(served.judge.model)),
+                    ),
+                    hardware=_hardware_ref(served.judge.accelerator),
+                )
+        case ApiCandidate(model=model):
+            serving = ServingParams(max_model_len=model.context_window)
+            hardware = HardwareRef(platform=API_PLATFORM, accelerator=model.provider, region_or_cluster=None)
     evalchemy = identity.eval_ref.evalchemy
     serving = serving.model_copy(
         update={
@@ -315,8 +398,6 @@ def _record(
             "extra": dict(evalchemy.extra_gen_kwargs) if evalchemy is not None else {},
         }
     )
-    model_config = ModelConfigRef.model_validate(asdict(batch.model))
-    source_model_config = batch.source_model_config or model_config
     record = EvalRunRecord(
         run_id=identity.run_id,
         group_id=batch.group_id,
@@ -325,41 +406,10 @@ def _record(
         version=batch.version,
         description=batch.description,
         rl_attempt=batch.rl_attempt,
-        model=ModelRef(
-            name=batch.model.name,
-            location=batch.model.location,
-            backend=batch.model.serve.backend.value,
-            config=model_config,
-            source_config=source_model_config if source_model_config != model_config else None,
-            config_digest=model_config_digest(source_model_config),
-        ),
-        judge=(
-            HostedJudgeRef(
-                model=ModelRef(
-                    name=batch.judge.model.name,
-                    location=batch.judge.model.location,
-                    backend=batch.judge.model.serve.backend.value,
-                    config=ModelConfigRef.model_validate(asdict(batch.judge.model)),
-                ),
-                hardware=HardwareRef(
-                    platform=batch.judge.accelerator.platform.value,
-                    accelerator=batch.judge.accelerator.label,
-                    region_or_cluster=(
-                        batch.judge.accelerator.target_cluster or batch.judge.accelerator.region or _UNCONSTRAINED
-                    ),
-                ),
-            )
-            if batch.judge is not None
-            else None
-        ),
+        model=candidate_model_ref(batch.candidate),
+        judge=judge,
         eval=evaluation,
-        hardware=HardwareRef(
-            task_count=serving.task_count,
-            instances=batch.instances,
-            platform=batch.accelerator.platform.value,
-            accelerator=batch.accelerator.label,
-            region_or_cluster=(batch.accelerator.target_cluster or batch.accelerator.region or _UNCONSTRAINED),
-        ),
+        hardware=hardware,
         status=status,
         serving=serving,
         inference_metrics=inference_metrics,
@@ -385,7 +435,7 @@ def _job_role(role: str, index: int) -> str:
     return role if index == 0 else f"{role}-{index}"
 
 
-def _session_job_ids(session: RemoteInferenceSession, role: str) -> dict[str, str]:
+def _session_job_ids(session: InferenceSession, role: str) -> dict[str, str]:
     return {_job_role(role, index): str(job.job_id) for index, job in enumerate(session.jobs)}
 
 
@@ -404,13 +454,13 @@ def job_diagnostics(handles: tuple[JobHandle, ...], role: str) -> tuple[dict[str
     return jobs, tails
 
 
-def _session_tails(session: RemoteInferenceSession, role: str) -> dict[str, tuple[str, ...]]:
+def _session_tails(session: InferenceSession, role: str) -> dict[str, tuple[str, ...]]:
     return {_job_role(role, index): _job_tail(handle) for index, handle in enumerate(session.jobs)}
 
 
 def run_evaluation(
     executor: EvalExecutor,
-    session: RemoteInferenceSession,
+    session: InferenceSession,
     output_dir: str,
     env_vars: Mapping[str, str],
     *,
@@ -418,12 +468,15 @@ def run_evaluation(
     judge: RemoteInferenceSession | None = None,
 ) -> EvaluationOutcome:
     """Retry evaluator attempts in the same output directory after inference outages."""
-    sessions = (session,) if judge is None else (session, judge)
+    sessions: tuple[InferenceSession, ...] = (session,) if judge is None else (session, judge)
 
     def attempt(_attempt_number: int) -> EvaluationOutcome:
         before = tuple(inference.preemption_count() for inference in sessions)
         backend_state = partial(inference_attempt_state, sessions, before)
-        execution_session = _local_endpoint_session(session) if endpoint_route is EndpointRoute.DIRECT else session
+        execution_session: InferenceSession = session
+        if endpoint_route is EndpointRoute.DIRECT:
+            assert isinstance(session, RemoteInferenceSession), "only a served session has a registered address"
+            execution_session = _local_endpoint_session(session)
         # Adapters stop child work before returning or raising EvaluationError.
         try:
             outcome = executor(execution_session, output_dir, env_vars, backend_state=backend_state, judge=judge)
@@ -445,7 +498,7 @@ def run_evaluation(
 def _run_one_evaluation(
     batch: EvaluationBatch,
     evaluation: Evaluation,
-    session: RemoteInferenceSession,
+    session: InferenceSession,
     orchestrator_job_id: str,
     env_vars: Mapping[str, str],
     judge: RemoteInferenceSession | None,
@@ -467,12 +520,13 @@ def _run_one_evaluation(
         session.check_alive()
         if judge is not None:
             judge.check_alive()
-        if session.metrics_url is not None and batch.max_concurrent == 1:
+        if isinstance(session, RemoteInferenceSession) and session.metrics_url is not None and batch.max_concurrent == 1:
+            assert isinstance(batch.candidate, ServedCandidate)
             try:
                 metric_session = _local_endpoint_session(session)
                 metric_window = InferenceMetricWindow.start(
                     metric_session,
-                    speculative=batch.model.serve.speculative is not None,
+                    speculative=batch.candidate.model.serve.speculative is not None,
                 )
             except Exception:
                 logger.warning(
@@ -565,7 +619,7 @@ def _run_one_evaluation(
             rollout_uri=evaluation.identity.output_dir,
             storage_format="finestore",
             artifact_uri=path,
-            model=batch.model.name,
+            model=batch.candidate.model.name,
             job_id=orchestrator_job_id,
             attributes={
                 "eval_name": evaluation.identity.eval_ref.name,
@@ -602,7 +656,7 @@ def run_evaluation_step(
     _output_path: str,
     *,
     batch: EvaluationBatch,
-    session: RemoteInferenceSession,
+    session: InferenceSession,
     judge: RemoteInferenceSession | None,
     orchestrator_job_id: str,
     evaluation_env: Mapping[str, str],
@@ -635,8 +689,24 @@ def run_evaluation_steps(
         **runtime_env,
         **env_vars_from_keys(tuple(batch.secret_env)),
     }
+    if isinstance(batch.candidate, ApiCandidate):
+        model = batch.candidate.model
+        endpoint = OpenAIEndpoint(
+            base_url=model.base_url, model=model.api_model, api_key=evaluation_env[CANDIDATE_API_KEY]
+        )
+        run(
+            partial(
+                run_evaluation_step,
+                batch=batch,
+                session=ApiInferenceSession(RunningModel(endpoint, tokenizer=model.tokenizer)),
+                judge=None,
+                orchestrator_job_id=orchestrator_job_id,
+                evaluation_env=evaluation_env,
+            )
+        )
+        return
     try:
-        prepared = _prepare_all(_inference_configs(batch, runtime_env))
+        prepared = _prepare_all(_inference_configs(batch.candidate, runtime_env, batch))
         with ExitStack() as stack:
             session, judge = _open_sessions(stack, prepared)
             run(
@@ -662,17 +732,19 @@ def run_evaluation_steps(
         )
 
 
-def _inference_configs(batch: EvaluationBatch, runtime_env: Mapping[str, str]) -> dict[str, RemoteInferenceConfig]:
+def _inference_configs(
+    candidate: ServedCandidate, runtime_env: Mapping[str, str], batch: EvaluationBatch
+) -> dict[str, RemoteInferenceConfig]:
     """Inference configs keyed by job role: the candidate, the hosted judge, and judges prepared for evaluations."""
     configs = {
         _INFERENCE_ROLE: inference_config_for_model(
-            batch.model,
-            batch.accelerator,
+            candidate.model,
+            candidate.accelerator,
             env_vars=runtime_env,
-            capability_origin=batch.capability_origin,
-            api_model=batch.api_model,
+            capability_origin=candidate.capability_origin,
+            api_model=candidate.api_model,
             priority=batch.priority_band,
-            instances=batch.instances,
+            instances=candidate.instances,
             request_timeout_seconds=max(
                 (
                     float(
@@ -687,16 +759,16 @@ def _inference_configs(batch: EvaluationBatch, runtime_env: Mapping[str, str]) -
             ),
         )
     }
-    if batch.judge is not None:
+    if candidate.judge is not None:
         configs[_JUDGE_ROLE] = inference_config_for_model(
-            batch.judge.model,
-            batch.judge.accelerator,
+            candidate.judge.model,
+            candidate.judge.accelerator,
             env_vars=runtime_env,
-            capability_origin=batch.capability_origin,
-            api_model=batch.judge.api_model,
+            capability_origin=candidate.capability_origin,
+            api_model=candidate.judge.api_model,
             priority=batch.priority_band,
         )
-    for index, judge in enumerate(batch.prepared_judges):
+    for index, judge in enumerate(candidate.prepared_judges):
         configs[f"{_PREPARED_JUDGE_ROLE}-{index}"] = inference_config_for_model(
             judge.model,
             judge.accelerator,

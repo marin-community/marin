@@ -21,7 +21,7 @@ from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
 from shellbox.machine import Backend, NetworkPolicy
 
 from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
-from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_config import EvaluatedModel
 from marin.evaluation.runner import (
     BACKEND_POLL_SECONDS,
     EvaluationError,
@@ -46,7 +46,8 @@ from marin.evaluation.task_worker import (
     worker_setup_script,
 )
 from marin.inference.iris import RemoteInferenceSession
-from marin.inference.types import InferenceBackendState
+from marin.inference.session import InferenceSession
+from marin.inference.types import InferenceBackendState, OpenAIEndpoint
 from marin.rollouts.evaluation import EvaluationRunConfig, ModelIdentity
 
 RUN_CLEANUP_TIMEOUT = 60
@@ -57,27 +58,24 @@ MINI_SWE_MODEL_FORMAT = "model_format"
 AGENT_EXTRA_BODY = "extra_body"
 
 
-def run_max_tokens(context: int, settings: CuratedSettings, model: ModelConfig) -> int:
+def run_max_tokens(context: int, settings: CuratedSettings, model: EvaluatedModel) -> int:
     """The run's reply budget under a served context window."""
     return min(settings.max_tokens or context, model.generation.max_gen_toks or context, context - 1)
 
 
-def pi_thinking_format(model: ModelConfig) -> PiThinkingFormat | None:
+def pi_thinking_format(model: EvaluatedModel) -> PiThinkingFormat | None:
     """How Pi switches this model's thinking, from the ``thinking_format`` agent argument."""
     value = model.agent.agent_kwargs.get(PI_THINKING_FORMAT)
     return None if value is None else PiThinkingFormat(value)
 
 
-def mini_swe_model_format(model: ModelConfig) -> MiniSweModelFormat:
+def mini_swe_model_format(model: EvaluatedModel) -> MiniSweModelFormat:
     """How mini-swe-agent formats this model's history, from the ``model_format`` agent argument, as in Harbor."""
     return MiniSweModelFormat(model.agent.agent_kwargs.get(MINI_SWE_MODEL_FORMAT, MiniSweModelFormat.OPENAI))
 
 
-def runtime_config(
-    model: ModelConfig, settings: CuratedSettings, session: RemoteInferenceSession
-) -> EvaluationRunConfig:
-    """Read the running server's context limit before admitting any evaluation rows."""
-    endpoint = session.model.endpoint
+def served_context_window(endpoint: OpenAIEndpoint) -> int:
+    """Read a vLLM server's context limit from its ``/models`` listing."""
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     with OpenAI(base_url=endpoint.base_url, api_key=endpoint.api_key or "local-endpoint") as client:
@@ -85,12 +83,19 @@ def runtime_config(
     context = (served.model_extra or {}).get("max_model_len")
     if not isinstance(context, int) or context < 2:
         raise ValueError(f"Server {endpoint.model} did not report a usable max_model_len")
+    return context
+
+
+def runtime_config(
+    model: EvaluatedModel, settings: CuratedSettings, endpoint: OpenAIEndpoint, context: int
+) -> EvaluationRunConfig:
+    """The worker's run configuration for ``endpoint``, which serves ``context`` tokens."""
     assert model.effective_tokenizer_revision is not None
     return EvaluationRunConfig(
         model=ModelIdentity(
             name=endpoint.model,
-            revision=model.revision or model.identity or model.location,
-            tokenizer=model.tokenizer or model.location,
+            revision=model.resolved_revision,
+            tokenizer=model.resolved_tokenizer,
             tokenizer_revision=model.effective_tokenizer_revision,
             context_window=context,
             serving={"max_model_len": str(context)},
@@ -144,17 +149,19 @@ class DatasetEvaluator:
     """Execute raw attempts; summary computation belongs to Evaldash."""
 
     datasets: tuple[str, ...]
-    model: ModelConfig
+    model: EvaluatedModel
     settings: CuratedSettings
     judge_endpoint: str | None = None
     agent: CuratedAgentRef | None = None
-    """The recorded agent plan, whose budgets assume the server runs ``serve.max_model_len``."""
+    """The recorded agent plan, whose budgets assume the endpoint serves ``model.context_window``."""
     task_secrets: tuple[str, ...] = ()
     """Launch variables that task machines read through ``${NAME}``; the worker receives them as secrets."""
+    stated_context_window: int | None = None
+    """The window an API model's configuration states; when unset, the served window is read from the server."""
 
     def __call__(
         self,
-        session: RemoteInferenceSession,
+        session: InferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
         *,
@@ -175,13 +182,16 @@ class DatasetEvaluator:
                     }
                 )
         secrets.update({name: env_vars[name] for name in self.task_secrets})
+        context = self.stated_context_window or served_context_window(endpoint)
         config = execution_config(
-            runtime_config(self.model, self.settings, session).model_copy(update={"task_secrets": self.task_secrets})
+            runtime_config(self.model, self.settings, endpoint, context).model_copy(
+                update={"task_secrets": self.task_secrets}
+            )
         )
-        if self.agent is not None and config.model.context_window != self.model.serve.max_model_len:
+        if self.agent is not None and config.model.context_window != self.model.context_window:
             raise ValueError(
                 f"Server context {config.model.context_window} differs from the planned agent window "
-                f"{self.model.serve.max_model_len}"
+                f"{self.model.context_window}"
             )
         if Backend.DAYTONA in machine_backends(config):
             secrets[DAYTONA_API_KEY] = env_vars[DAYTONA_API_KEY]
