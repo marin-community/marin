@@ -164,7 +164,7 @@ def test_plan_print_rejects_invalid_native_config(table, name, settings, version
     options = tuple(arg for setting in settings for arg in ("--set", setting))
     result = plan(table, name, *options, version=version)
     assert result.exit_code == 4, (result.output, result.exception)
-    issue = json.loads(result.output)
+    issue = json.loads(result.stdout)
     assert issue["verdict"] == "invalid"
     if error is not None:
         assert error in issue["reason"]
