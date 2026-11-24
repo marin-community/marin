@@ -71,6 +71,13 @@ class NativeMochiSftRun:
     receipt: dict
 
 
+@dataclass(frozen=True)
+class ResolvedMochiSft:
+    hero_reference: dict
+    prepared_data: dict
+    receipt: dict
+
+
 def run_mochi_sft(run: NativeMochiSftRun) -> None:
     """Run native hero SFT and record actual epoch coverage after permanent finalization."""
     root = StoragePath(run.output)
@@ -172,7 +179,8 @@ def bind_mochi_sft_config(
         id=None,
         group=spec.slug,
         replicate_path=output,
-        tags=["grug", "moe", "hero", "sft", "exp3-v5", "racks-2", "router-bias-frozen", "gb200"],
+        tags=[tag for tag in trainer["tracker"]["tags"] if tag not in {"full-ab-2026.09.29", "racks-11"}]
+        + ["exp3-v5", "racks-2"],
     )
     # Keep the hero's validation corpus separate from the sealed V5 training catalog and its reservations.
     old_data = baseline["data"]
@@ -201,7 +209,7 @@ def bind_mochi_sft_config(
     return config
 
 
-def resolve_mochi_sft(spec: MochiSftRound) -> tuple[dict, dict, dict]:
+def resolve_mochi_sft(spec: MochiSftRound) -> ResolvedMochiSft:
     """Check the release, regional initializer and native one-epoch capacities on CPU."""
     if spec.cluster != "cw-us-east-08a":
         raise ValueError("The Mochi V5 round must run in its data region on cw-us-east-08a")
@@ -260,7 +268,7 @@ def resolve_mochi_sft(spec: MochiSftRound) -> tuple[dict, dict, dict]:
     data = draccus.encode(prepared)
     receipt = {
         "schema": 1,
-        "status": "native_cpu_preflight_pass; not_submitted",
+        "status": "native_cpu_preflight_pass",
         "round": draccus.encode(spec),
         "epoch": recipe["sft_exposure"],
         "initializer_bytes": copied["total_bytes"],
@@ -279,15 +287,19 @@ def resolve_mochi_sft(spec: MochiSftRound) -> tuple[dict, dict, dict]:
             **{key: data[key] for key in ("train_weights", "mixture_block_size", "mixture_length")},
         },
     }
-    return reference, data, receipt
+    return ResolvedMochiSft(reference, data, receipt)
 
 
-def mochi_sft_step(spec: MochiSftRound, reference: dict, data: dict, receipt: dict) -> ArtifactStep:
+def mochi_sft_step(spec: MochiSftRound, resolved: ResolvedMochiSft) -> ArtifactStep:
     def build_config(context: StepContext) -> NativeMochiSftRun:
         config = bind_mochi_sft_config(
-            spec, reference, data, updates=receipt["epoch"]["updates"], output=context.output_path
+            spec,
+            resolved.hero_reference,
+            resolved.prepared_data,
+            updates=resolved.receipt["epoch"]["updates"],
+            output=context.output_path,
         )
-        return NativeMochiSftRun(context.output_path, config, receipt)
+        return NativeMochiSftRun(context.output_path, config, resolved.receipt)
 
     return ArtifactStep(
         name=spec.name,

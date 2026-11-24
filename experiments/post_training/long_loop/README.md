@@ -101,7 +101,10 @@ The LR schedule keeps the hero's zero warmup, linear 692-update tail and 0.1
 minimum ratio, with its endpoint rebound to the new epoch ceiling. The shared
 20-hour clock can end the epoch early. Actual source coverage and the permanent
 final checkpoint are recorded separately; an early stop does not claim a full
-epoch. Training reads no old hero training caches.
+epoch. A clock stop skips the forced final evaluation to preserve the checkpoint
+reserve; periodic evaluation stays enabled. Training reads no old hero training
+caches. Native resources exclude the faulty r136 NVLink domain and inherit the
+CPU coordinator's PRODUCTION priority.
 
 The preflight requires the hash-pinned seal, publisher, current native capacity
 receipt and completed regional initializer-copy inventory. It reads metadata,

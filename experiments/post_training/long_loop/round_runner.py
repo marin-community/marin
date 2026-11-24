@@ -1041,14 +1041,14 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
         os.environ.update(
             MARIN_PREFIX=round_spec.storage.output_prefix, MARIN_TEMP_PREFIX=round_spec.storage.temporary_prefix
         )
-        reference, data, receipt = resolve_mochi_sft(round_spec)
-        terminal = mochi_sft_step(round_spec, reference, data, receipt)
+        resolved = resolve_mochi_sft(round_spec)
+        resolved.receipt["source_revision"] = source_revision
+        terminal = mochi_sft_step(round_spec, resolved)
         context = StepContext.for_run(terminal.path(round_spec.storage.output_prefix), round_spec.storage.output_prefix)
         config = terminal.build_config(context)
         validation_output.mkdir(parents=True, exist_ok=True)
         (validation_output / "resolved-config.json").write_text(json.dumps(draccus.encode(config.config), indent=2))
-        receipt["source_revision"] = source_revision
-        (validation_output / "receipt.json").write_text(json.dumps(receipt, indent=2))
+        (validation_output / "receipt.json").write_text(json.dumps(resolved.receipt, indent=2))
         validate_graph(terminal, validation_output, round_spec.storage.output_prefix)
         return terminal
     if isinstance(round_spec, RecoveryRound):

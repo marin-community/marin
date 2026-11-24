@@ -480,7 +480,7 @@ def _runtime_env_config(
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
         trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            trainer=TrainerConfig(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,
         ),
         model=SimpleNamespace(moe_implementation=moe_implementation, remat_mode=remat_mode),
