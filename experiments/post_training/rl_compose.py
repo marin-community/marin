@@ -477,6 +477,16 @@ def run_spec(
 ) -> SkyRLSpec:
     """Build the complete default recipe with explicit candidate inputs and settings."""
     config = _training_config(preset, settings)
+    if config.environment.env_class != "preference_pair" or config.trainer.evaluation_runner != "training":
+        workers = config.trajectory_runner.rollout_workers
+        required_cpus = workers.num_workers * workers.cpus_per_worker
+        driver_cpus = preset.recipe.layout.host_cpu
+        if required_cpus > driver_cpus:
+            raise click.BadParameter(
+                f"trajectory_runner.rollout_workers requests {required_cpus} CPUs "
+                f"({workers.num_workers} workers x {workers.cpus_per_worker}); "
+                f"the driver task's Iris CPU request is {driver_cpus}."
+            )
     explicit = override_document(settings)
     authored = config.to_skyrl()
     batch_changes = {
