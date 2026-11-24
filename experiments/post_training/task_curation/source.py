@@ -220,10 +220,11 @@ class SourceInfo:
     license_receipt: LicenseReceipt | None = None
     independent_qc: IndependentQC | None = None
     daytona_snapshot_count: int | None = None
-    """Distinct environments the source's own task specs require, as measured.
+    """Named actor snapshots required by the measured provisioning path.
 
-    Each unique agent or grader image a run provisions is one Daytona snapshot.
-    ``None`` means the count was never taken; it is never inferred from a declaration.
+    Snapshot-backed provisioning counts distinct environment identities. An exact
+    declarative execution binding requires zero named snapshots and archives the
+    original image-identity census. ``None`` means the count was never taken.
     """
 
     daytona_count_basis: str | None = None
