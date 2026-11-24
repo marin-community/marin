@@ -291,7 +291,6 @@ def command_report(args: argparse.Namespace) -> int:
     for name, stats in bands.items():
         tokens = stats["completion_tokens"]
         stats["wall_tok_per_s"] = round(tokens / stats["wall_seconds"], 1) if stats["wall_seconds"] else 0.0
-        del stats["decode_seconds"]
         stats["solve_rate"] = (
             round(solve_by_band[name]["solved"] / solve_by_band[name]["tasks"], 3)
             if solve_by_band[name]["tasks"]
