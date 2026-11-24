@@ -30,6 +30,7 @@ URI_SCHEME = "finestore"
 CHUNKED_BLOBS_FEATURE = "chunked-blobs-v1"
 CACHE_HISTORY_FLOOR_FEATURE = "cache-history-floor-v1"
 TABLE_INCARNATIONS_FEATURE = "table-incarnations-v1"
+INITIAL_TABLE_INCARNATION = 0
 
 
 class SystemColumns(StrEnum):
@@ -244,7 +245,7 @@ class Manifest(_FormatModel):
     def table_version(self, name: str) -> TableVersion:
         table = self.tables.get(name)
         return TableVersion(
-            incarnation=self.table_incarnations.get(name, 0),
+            incarnation=self.table_incarnations.get(name, INITIAL_TABLE_INCARNATION),
             metadata_path=table.metadata_path if table is not None else None,
             shard_paths=tuple(shard.path for shard in table.shards) if table is not None else (),
         )

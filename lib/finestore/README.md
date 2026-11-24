@@ -57,11 +57,12 @@ used by an earlier operation such as a backup. If the table changes, the commit
 raises `CommitConflict`. A drop clears the seal when it removes an active table.
 
 `transaction.replace_table(name, rows, metadata=..., depends_on=...)` stages
-replacement shards in Arrow batches up to the store's buffer budget, except
-that a single row may exceed it. The replacement publishes with the other
+replacement shards in Arrow batches up to the transaction's byte budget. An
+unbounded transaction uses the store buffer budget for replacement batches.
+A single row may exceed the budget. The replacement publishes with the other
 transaction writes. Pass `store.transaction(base=view)` to use the snapshot
-that supplied the input rows. The commit checks that the output table and its
-named dependencies still match that snapshot.
+that supplied the input rows. The commit checks that the output table and
+its named dependencies still match that snapshot.
 
 A drop or replacement advances the table's incarnation. Append handles
 registered under an earlier incarnation fail with `CommitConflict`. A new

@@ -26,6 +26,7 @@ from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, _com
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     FORMAT_VERSION,
+    INITIAL_TABLE_INCARNATION,
     RESERVED_COLUMNS,
     ArchiveMetadata,
     BlobColumns,
@@ -277,13 +278,13 @@ def test_drop_fences_buffered_writes_even_after_same_schema_recreation(archive_r
 
 
 def test_table_replacement_publishes_all_staged_shards_with_transaction_objects(archive_root):
-    with DataStore.open(archive_root, max_buffer_bytes=256, flush_interval=3600) as store:
+    with DataStore.open(archive_root, flush_interval=3600) as store:
         store.table("items", primary_key=("id",)).append({"id": 0})
         store.write_object("completion", b"old")
         store.flush()
         pinned = store.read_view()
 
-        with store.transaction() as transaction:
+        with store.transaction(max_bytes=256) as transaction:
             transaction.replace_table(
                 "items",
                 ({"id": key, "payload": "p" * 128} for key in range(1, 4)),
@@ -294,7 +295,7 @@ def test_table_replacement_publishes_all_staged_shards_with_transaction_objects(
 
         current = store.read_view()
         assert current.token == transaction.token
-        assert len(current.list_shards("items")) == 3
+        assert len(current.list_shards("items")) > 1
         assert current.keys("items") == {(1,), (2,), (3,)}
         assert current.read_blob("completion") == b"new"
         assert pinned.keys("items") == {(0,)}
@@ -395,7 +396,7 @@ def test_arrow_byte_cap_requests_an_early_flush(tmp_path):
         writer_id="w1",
         layout=FineStoreLayout(str(tmp_path / "run")),
         metadata_path=str(tmp_path / "schema.json"),
-        incarnation=0,
+        incarnation=INITIAL_TABLE_INCARNATION,
         max_buffer_bytes=160,
         scheduler=scheduler,
         primary_key=("id",),

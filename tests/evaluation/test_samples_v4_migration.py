@@ -16,10 +16,10 @@ from finestore.reader import ReadView
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.samples_v4 import (
+    backup_and_drop_stale_samples,
+    backup_and_drop_table,
     copy_table,
     drop_table,
-    replace_stale_samples,
-    replace_table,
 )
 
 
@@ -59,7 +59,7 @@ def test_replacing_a_table_preserves_it_outside_the_run_first(tmp_path):
     _archive(results, [_generation("1"), _generation("2")])
     destination = tmp_path / "backup-v3"
 
-    replace_table(ReadView(str(results)), ARCHIVE_SAMPLES_TABLE, str(destination))
+    backup_and_drop_table(ReadView(str(results)), ARCHIVE_SAMPLES_TABLE, str(destination))
 
     assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE) is None
     assert (destination / "_schema.json").exists()
@@ -73,7 +73,7 @@ def test_a_preserved_table_still_holds_the_dropped_rows(tmp_path):
     _archive(results, [_generation("1"), _generation("2")])
     destination = tmp_path / "backup-v3"
 
-    replace_table(ReadView(str(results)), ARCHIVE_SAMPLES_TABLE, str(destination))
+    backup_and_drop_table(ReadView(str(results)), ARCHIVE_SAMPLES_TABLE, str(destination))
 
     preserved = pq.read_table(sorted(destination.rglob("*.parquet")))
     assert sorted(preserved["doc_id"].to_pylist()) == ["1", "2"]
@@ -87,7 +87,7 @@ def test_a_mismatched_existing_snapshot_aborts_before_drop(tmp_path):
     (destination / "_schema.json").write_text('{"sentinel": true}')
 
     with pytest.raises(ValueError, match="metadata backup"):
-        replace_table(ReadView(str(results)), ARCHIVE_SAMPLES_TABLE, str(destination))
+        backup_and_drop_table(ReadView(str(results)), ARCHIVE_SAMPLES_TABLE, str(destination))
 
     assert json.loads((destination / "_schema.json").read_text()) == {"sentinel": True}
     assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE) is not None
@@ -101,7 +101,7 @@ def test_replace_aborts_if_new_samples_are_outside_the_backup(tmp_path):
     _archive(results, [_generation("2")])
 
     with pytest.raises(CommitConflict):
-        replace_table(snapshot, ARCHIVE_SAMPLES_TABLE, str(destination))
+        backup_and_drop_table(snapshot, ARCHIVE_SAMPLES_TABLE, str(destination))
 
     backed_up = pq.read_table(list(destination.glob("*.parquet")))
     assert backed_up["doc_id"].to_pylist() == ["1"]
@@ -136,7 +136,7 @@ def test_replace_refuses_a_table_holding_samples_it_cannot_regenerate(tmp_path):
     _stamp_schema_version(results, 3)
 
     with pytest.raises(ValueError, match="agentic"):
-        replace_stale_samples(str(results))
+        backup_and_drop_stale_samples(str(results))
     assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE).num_rows == 1
 
 
@@ -144,5 +144,5 @@ def test_an_archive_already_at_the_current_contract_is_left_alone(tmp_path):
     results = tmp_path / "run" / "results"
     _archive(results, [_generation("1")])
 
-    assert replace_stale_samples(str(results)) is None
+    assert backup_and_drop_stale_samples(str(results)) is None
     assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE).num_rows == 1

@@ -76,7 +76,7 @@ def drop_table(reader: ReadView, table: str) -> int:
     return len(shards)
 
 
-def replace_table(reader: ReadView, table: str, destination: str) -> None:
+def backup_and_drop_table(reader: ReadView, table: str, destination: str) -> None:
     """Snapshot ``table`` to ``destination``, then drop it.
 
     The snapshot is complete and size-verified before the manifest removes the table, so a failure
@@ -86,7 +86,7 @@ def replace_table(reader: ReadView, table: str, destination: str) -> None:
     drop_table(reader, table)
 
 
-def preserve_and_replace_samples(reader: ReadView, stored_version: int) -> None:
+def backup_and_drop_samples(reader: ReadView, stored_version: int) -> None:
     """Snapshot one run's samples table to its 30-day prefix, keyed by the version being replaced."""
     destination = superseded_samples_prefix(reader.root, stored_version)
     logger.info(
@@ -96,11 +96,11 @@ def preserve_and_replace_samples(reader: ReadView, stored_version: int) -> None:
         SCHEMA_VERSION,
         destination,
     )
-    replace_table(reader, ARCHIVE_SAMPLES_TABLE, destination)
+    backup_and_drop_table(reader, ARCHIVE_SAMPLES_TABLE, destination)
 
 
-def replace_stale_samples(results_path: str) -> int | None:
-    """Replace a stale samples table so a caller can rewrite it; return the version replaced.
+def backup_and_drop_stale_samples(results_path: str) -> int | None:
+    """Back up and drop a stale samples table and return its schema version.
 
     ``None`` means the table was already current and nothing was touched. Refuses a table holding
     agentic samples, which come from Harbor and no lm-eval source can regenerate.
@@ -117,5 +117,5 @@ def replace_stale_samples(results_path: str) -> int | None:
                 f"{results_path} holds {agentic} agentic sample(s) that an lm-eval export cannot "
                 "regenerate; migrate the run with migrate_archive instead"
             )
-    preserve_and_replace_samples(reader, stored_version)
+    backup_and_drop_samples(reader, stored_version)
     return stored_version

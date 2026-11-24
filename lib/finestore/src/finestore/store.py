@@ -672,10 +672,12 @@ class Transaction:
         schema: pa.Schema | None = None,
         depends_on: Sequence[str] = (),
     ) -> None:
-        """Stage a full table replacement in bounded Arrow batches.
+        """Stage a full table replacement in Arrow batches.
 
         The replacement and other transaction writes publish together. The replaced
         table and its dependencies must still match the transaction's base view.
+        Each batch uses the transaction's byte budget, or the store's for an
+        unbounded transaction. A single row can exceed the budget.
         """
         if self._closed:
             raise RuntimeError("transaction is closed")
@@ -685,7 +687,8 @@ class Transaction:
         writer = self._store._table_writer(
             name, metadata=metadata, schema=schema, incarnation=version.incarnation, start_seq=0
         )
-        shards = tuple(writer._stage_shards(rows))
+        batch_limit = self._store._max_buffer_bytes if self._max_bytes is None else self._max_bytes
+        shards = tuple(writer._stage_shards(rows, max_bytes=batch_limit))
         self._staged[name] = TableAddition(writer.metadata_path, shards, writer.incarnation)
         self._expected_tables[name] = version
         self._expected_tables.update((table, self._base.table_version(table)) for table in depends_on)
@@ -844,13 +847,13 @@ class DataTable:
             self._pending = list(pending.rows) + self._pending
             self._pending_bytes += pending.nbytes
 
-    def _stage_shards(self, rows: Iterable[dict]) -> Iterator[Shard]:
+    def _stage_shards(self, rows: Iterable[dict], *, max_bytes: int) -> Iterator[Shard]:
         batch = []
         batch_bytes = 0
         for row in rows:
             (arrow_row,) = self._arrow_rows((row,))
             size = arrow_row.table.nbytes
-            if batch and batch_bytes + size > self._max_buffer_bytes:
+            if batch and batch_bytes + size > max_bytes:
                 yield self._write(PendingRows(tuple(self._stamp_arrow_rows(batch)), batch_bytes))
                 batch = []
                 batch_bytes = 0

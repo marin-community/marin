@@ -18,6 +18,7 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from finestore.layout import (
     CACHE_HISTORY_FLOOR_FEATURE,
     FORMAT_VERSION,
+    INITIAL_TABLE_INCARNATION,
     SUPPORTED_MANIFEST_FEATURES,
     TABLE_INCARNATIONS_FEATURE,
     ArchiveMetadata,
@@ -205,7 +206,7 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
     return ArchiveSnapshot(manifest=manifest, token=token)
 
 
-def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
+def _check_preconditions(base: Manifest, delta: CommitDelta) -> None:
     if delta.expected_epoch is not None and base.maintainer_epoch != delta.expected_epoch:
         raise CommitConflict(
             f"maintenance epoch is {base.maintainer_epoch}, commit was prepared under {delta.expected_epoch}"
@@ -218,6 +219,9 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
         if base.table_version(name) != expected:
             raise CommitConflict(f"table {name!r} changed since the expected snapshot")
 
+
+def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
+    _check_preconditions(base, delta)
     sequence = base.sequence + 1
     tables = dict(base.tables)
     incarnations = dict(base.table_incarnations)
@@ -226,7 +230,7 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
         incarnations[name] = sequence
 
     for name, addition in delta.additions.items():
-        if base.table_incarnations.get(name, 0) != addition.incarnation:
+        if base.table_incarnations.get(name, INITIAL_TABLE_INCARNATION) != addition.incarnation:
             raise CommitConflict(f"table {name!r} was dropped or replaced after the writer registered it")
         if not addition.shards:
             continue
