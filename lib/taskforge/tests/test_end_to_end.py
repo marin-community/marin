@@ -2424,8 +2424,8 @@ async def test_a_cancelled_run_keeps_its_last_stage_state_under_a_running_head(
     assert workpiece.round == 1 and workpiece.submission is not None and workpiece.submission.notes == "revised notes"
 
 
-# Regression: a failure persisting the final review (a full disk under the local spool) held the run from the
-# initial workpiece; the journal had Submitted, Validated and Decided, the snapshot no task and no evidence.
+# Regression: a failure persisting the final review held the run from the initial workpiece; the journal had
+# Submitted, Validated and Decided, but the snapshot had no task or evidence.
 async def test_a_recovered_storage_failure_publishes_the_last_workpiece_it_reached(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
