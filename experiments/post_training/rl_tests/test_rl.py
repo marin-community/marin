@@ -115,20 +115,22 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
 
 def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
     table = snowball_model.SNOWBALL
+    speed = table.by_name["speed-short"]
+    learning = table.by_name["learning-medium"]
     paths = []
-    for name in ("speed-short", "learning-medium"):
-        (step,) = snowball.build_experiment(table.by_name[name], table=table).runs
-        path = tmp_path / f"{name}.yaml"
+    for preset in (speed, learning):
+        (step,) = snowball.build_experiment(preset, table=table).runs
+        path = tmp_path / f"{preset.name}.yaml"
         path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
         paths.append(str(path))
 
     speed_config, learning_config = gate.compose_configs(paths)
-    for name, sources in (
-        ("speed-short", speed_config["inputs"]["evaluation_data"]["eval_lite"]),
-        ("learning-medium", learning_config["inputs"]["validation_data"]),
+    for preset, sources in (
+        (speed, speed_config["inputs"]["evaluation_data"]["eval_lite"]),
+        (learning, learning_config["inputs"]["validation_data"]),
     ):
         (source,) = sources
-        held_out = recipe.selection_artifact(table.by_name[name].held_out_tasks)
+        held_out = recipe.selection_artifact(preset.held_out_tasks)
         assert (source["uri"], source["relative_path"]) == (held_out.path(), FULL_VALIDATION_FILENAME)
 
     # Best-checkpoint selection consumes evaluation metrics before the export callback runs.
@@ -609,7 +611,7 @@ def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_
     assert callbacks.isdisjoint({"checkpoint", "best_checkpoint", "hf_model_save"})
 
     docs = (recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
-    section = docs.split("## Mochi inference on GB200\n", 1)[1]
+    section = docs.split("`mochi-inference.yaml`", 1)[1]
     fragment = yaml.safe_load(section.split("```yaml\n", 1)[1].split("```", 1)[0])
     assert merge_mappings(config["skyrl"], fragment) == config["skyrl"]
 
