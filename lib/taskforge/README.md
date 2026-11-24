@@ -105,7 +105,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 9); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 10); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -132,9 +132,10 @@ format 7 (no confirmation step: its acceptances end at the validation round and 
 resumed format-7 round would buy one its history lacks),
 fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 9` and reports the
-rest. Format 8 is the exception: every format-8 row means the same at format 9, so this reader resumes a format-8
-root and its claim writes 9. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 10` and reports the
+rest. Formats 8 and 9 are the exception: every format-8 or format-9 row means the same at format 10, so this reader
+resumes both and its claim writes 10. Format 10 adds a row's `billed` field, outside the event, naming the role that
+paid for a physical cached resolution; a format-9 reader refuses a format-10 root as another format. Format 9 adds the `rollouts.solver_generation` row (a solver generation awaiting its
 decision-model grade, below), which a format-8 reader cannot decode; at 9 that reader refuses the root as another
 format, untouched, instead of reporting it corrupt. Such roots are converted once by a separate migration, or rebuilt. Format 5 covers two writers that its
 header cannot tell apart: Taskforge before decision-model grading, whose readers cannot decode a `decision_model.read` row,
@@ -143,7 +144,7 @@ naming the refused slot result an operator-authorised replacement supersedes); a
 establish an operator's intent. Format 6 refuses both alike, and a reader from before decision-model grading refuses a format-6 root
 the same way instead of misreading its new rows. Before claiming, the reader
 validates every row and exits 5 (`CorruptJournal`) on any violation: strictly typed fields and at most
-one envelope field; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
+one envelope field; `billed` only on a plain row holding a resolution that was not replayed; an open row carries a scope entry, a request a sandbox (`env.*`) event, an outcome a
 resolution under re-executed sandbox fingerprints or a failure with an errno-name category, and no other
 row carries any of these, so cached results never enter an owner's history; references name an earlier
 open row or unanswered request of the same sandbox definition; and an answered request matches the
@@ -201,7 +202,7 @@ stage. A refusal of a slot's first read still restarts the stage, as before.
 
 Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear. A held
-format-8 or format-9 root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone; the
+format-8, format-9 or format-10 root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone; the
 author's system prompt embeds the pinned reference, so a wording-only change in TaskCompendium's schema does not
 affect it.
 Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and
@@ -268,10 +269,14 @@ Run `uv run --frozen python -m taskforge.driver report <output-root> [--since-ho
 with the storage credentials above. It reads each journal head and its chunks concurrently,
 then prints terminal/reason counts, accepted/hour over 1/6/24 hours, tokens by role,
 stage durations, and consecutive-event latency proxies. Replayed results do not add token
-spend or latency samples. Solver usage comes from recorded rollout steps; other roles follow
-their scopes. The confirmation step reports apart, once: its solver slots as `role=confirmation` and its final
-review as `role=final_review`, never also under `solver` or `solve_review`; a judge call during it is
-`role=judge`. An interrupted solver attempt's partial usage is not reported (no journalled result holds it). Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
+spend or latency samples. Solver usage comes from recorded rollout steps. Each physical model call and solver slot
+is charged to the role its row names as payer (`billed`), set by the visit, judge callback or stage scope that made
+it, so overlapping roles never take each other's calls. The confirmation step reports apart, once: its solver slots
+as `role=confirmation` and its final review as `role=final_review`, never also under `solver` or `solve_review`; a
+judge call during it is `role=judge`. A row that names no payer, written before format 10, and a call from a visit
+built without one (`Visit(..., bills=...)` is keyword-only) are charged to `role=unattributed`, a line printed only
+when some charged row falls there; total spend is unchanged. A grade that follows its recorded generation names its
+payer but is not charged again. An interrupted solver attempt's partial usage is not reported (no journalled result holds it). Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
 `--since-hours` includes workpieces active in that window and filters metric events by time;
 acceptance windows are clipped to it, with rates divided by the clipped duration. Acceptance
 uses the terminal decision timestamp, not file upload time. Empty roots and unreadable artifacts
@@ -362,7 +367,10 @@ The keys in `defaults/policy.json`, by group. Override any of them in the overla
   valid scores and generation limits are placed: a generation limit is an unsolved trial, and any other
   slot without a score is named (`confirmation_trials`) and excluded. The final review
   (`solve_review.final.*` prompts, with its own nudge) uses the same reviewer, evidence index, citation
-  checks and replay identity, is shown every earlier report with what became of each finding (the
+  checks and replay identity (the confirmation builds one index for its final review and its shipped-note check; its
+  sources are a read-only mapping and its version is computed once, so a `solve_review(report=...)` factory that
+  serializes the index converts `dict(evidence.sources)`, a `dict[str, Source]`, with the fields it needs:
+  `dataclasses.asdict` and a pydantic dump of `Evidence` refuse the read-only mapping), is shown every earlier report with what became of each finding (the
   author's response recorded against the review that gave it: revised, declined with its reason, stopped,
   a note, or not acted on; a revision a restore discarded says so), and sorts its new findings into `revise` and `note`. An account may blame a
   trial on an earlier finding without repeating it while that finding's quotes still occur in the trial. A

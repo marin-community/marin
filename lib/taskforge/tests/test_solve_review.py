@@ -427,7 +427,7 @@ async def test_an_earlier_reviewed_format_root_is_refused_before_claim_and_left_
     destination = plant(driver_args, b"", found)
     before = sorted((p, p.read_bytes()) for p in destination.rglob("*") if p.is_file())
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
-    with pytest.raises(LogFailure, match=f"has journal format {found}, not 9"):
+    with pytest.raises(LogFailure, match=f"has journal format {found}, not {checkpoint.JOURNAL_FORMAT}"):
         await driver.one(driver_args)
     assert sorted((p, p.read_bytes()) for p in destination.rglob("*") if p.is_file()) == before
 

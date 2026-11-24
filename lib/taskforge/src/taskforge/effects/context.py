@@ -11,7 +11,7 @@ from typing import Protocol, cast
 
 from taskforge.effects.events import HANDLED_FAILURE, Event, Fingerprint, Resolved, ScopeEntered, ScopeExited, failure
 from taskforge.effects.issues import Restart, Unreproducible
-from taskforge.effects.log import Attempt, EventLog, Missing, Opened, Record, cached
+from taskforge.effects.log import Attempt, Billing, EventLog, Missing, Opened, Record, cached
 
 type Executor = Callable[..., Awaitable[object]]
 type Observer[E: Event[object]] = Callable[[E], Awaitable[None]]
@@ -29,12 +29,13 @@ class _Handler:
 
 
 class _Scope:
-    def __init__(self) -> None:
+    def __init__(self, bills: Billing | None = None) -> None:
         self.handlers: tuple[_Handler, ...] = ()
         self.observers: tuple[tuple[type[Event[object]], Observer[Event[object]]], ...] = ()
         self.observed: list[asyncio.Future[None]] = []
         """Observer runs this scope's events started; their failures are the scope's issues."""
         self.attempt: Attempt | None = None
+        self.bills = bills
 
     def take(self) -> list[asyncio.Future[None]]:
         runs, self.observed = self.observed, []
@@ -136,7 +137,8 @@ class Context:
                 self._publish(invalidated, chain)  # as the replacement starts
             value = await handler.fn(event, *uses)
         result = cast(T, value)
-        self._publish(self._log.append(Resolved(event, fingerprints, result, replayed)), chain)
+        billed = None if replayed else next((scope.bills for scope in reversed(chain) if scope.bills), None)
+        self._publish(self._log.append(Resolved(event, fingerprints, result, replayed), billed=billed), chain)
         return result
 
     async def check(self) -> None:
@@ -144,11 +146,14 @@ class Context:
         await _join(self._chain.get()[-1].take)
 
     @asynccontextmanager
-    async def scope(self, name: str, opens: Opened | None = None) -> AsyncIterator[None]:
+    async def scope(
+        self, name: str, opens: Opened | None = None, *, bills: Billing | None = None
+    ) -> AsyncIterator[None]:
         """A task-local scope; with ``opens``, one physical attempt at that environment owner, whose clean exit before
         the owner's recorded history ends is ``Unreproducible``, and with a recorded outcome still unverified a
-        ``Restart``."""
-        owner = _Scope()
+        ``Restart``. With ``bills``, a physical cached resolution inside it, unless an inner scope bills another
+        role, records that role as its payer."""
+        owner = _Scope(bills)
         chain = (*self._chain.get(), owner)
         entered = self._log.append(ScopeEntered(name), opened=opens)
         owner.attempt = None if opens is None else self._log.attempt(entered.sequence)

@@ -23,6 +23,7 @@ from taskforge.config import TaskforgeConfig
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
 from taskforge.effects.issues import DecisionModelUnavailable, Hold, OutputBudgetExhausted, Restart, describe_exception
+from taskforge.effects.log import Billing
 from taskforge.harness.protocol import Returned, Stopped, StopReason
 from taskforge.harness.role import Answer, Files, Fresh, Visit, sitting
 from taskforge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
@@ -370,7 +371,8 @@ async def run_adversary(
             if (shown := observation(event.value, spec.task)) is not None:
                 graded[digest(event.request.candidate)] = shown
 
-    visit = Visit(f"adversary:{name}", owner, machine, files, {"report": ReportTool(spec.task, graded)})
+    tools = {"report": ReportTool(spec.task, graded)}
+    visit = Visit(f"adversary:{name}", owner, machine, files, tools, bills=Billing.ADVERSARY)
     async with sitting(ctx, config.adversary, visit, resources) as session:
         ctx.observe(Resolved, remember)
         brief = f"adversary.brief.{name}"  # without one, the name is the strategy, as wiring allows for {name} prompts
@@ -494,7 +496,7 @@ async def validate(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, 
     k = config.policy.setting("solver.k", int)
     if k < 1:
         raise ValueError("Validation needs at least one solver trial")
-    async with ctx.scope("validate"):
+    async with ctx.scope("validate", bills=Billing.SOLVER):
         ctx.observe(Resolved, grader_infra_unavailable)
         roster = config.policy.setting("adversary.roster", tuple)
         holds: list[BaseException] = []  # every sibling settles before a hold or an outage stops the workpiece
@@ -547,7 +549,7 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
     round_, policy, max_missing = workpiece.evidence[index], config.policy, config.budget.max_missing_trials
     spec = solver_spec(submission, config, resources)
     base = tuple(trial for trial in round_.solver if not missing(trial))
-    async with ctx.scope("confirm"):
+    async with ctx.scope("confirm", bills=Billing.CONFIRMATION):
         ctx.observe(Resolved, grader_infra_unavailable)
         recorded = {t.trial: ctx.recorded(SolverRollout(spec, t.trial, index)) for t in base}
         rollouts = {trial: rollout for trial, rollout in recorded.items() if rollout is not None}
@@ -573,15 +575,18 @@ async def confirm(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, r
         trials = (*base, *added)
         pairs = [(trial, rollouts.get(trial.trial)) for trial in trials]
         earlier = tuple(f for result in workpiece.evidence if result.review for f in earlier_findings(result.review))
+        sources = evidence(submission, pairs, policy.setting("tools.output_chars", int))
         final = ("solve_review.final", partial(FinalReportTool, earlier=earlier), earlier_reports(workpiece))
         probe = ValidationResult(submission.digest, trials, round_.controls, ())
         review = None  # as in validation, a record review would not decide on is not reviewed (``reviewed``)
         if not isinstance(assess(probe, config.band, len(trials)), Reject | Incomplete):
-            review = await solve_review(ctx, config, resources, workpiece.proposal, submission, pairs, *final)
+            review = await solve_review(
+                ctx, config, resources, workpiece.proposal, submission, pairs, *final, Billing.FINAL_REVIEW, sources
+            )
     noted = (
         *(f for d in workpiece.decisions if isinstance(d, Accept | Revise) for f in d.notes),
         *(() if review is None else (*review.notes, *review.findings)),
     )
-    notes = shipped_notes(evidence(submission, pairs, policy.setting("tools.output_chars", int)), noted)
+    notes = shipped_notes(sources, noted)
     result = ValidationResult(submission.digest, trials, round_.controls, (), review=review, confirms=index)
     return Validated(replace(result, notes=notes))

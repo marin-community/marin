@@ -13,7 +13,7 @@ from types import MappingProxyType
 from taskcompendium.models import EnvironmentRequirements
 
 from taskforge.effects.context import Context
-from taskforge.effects.log import Opened
+from taskforge.effects.log import Billing, Opened
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Harness, Tool
 from taskforge.lowering import host_requirements
@@ -77,13 +77,15 @@ def no_files() -> Files:
 @dataclass(frozen=True, slots=True)
 class Visit:
     """One sitting of a role: its scope, its sandbox owner and machine (``None``: no machine), the files hydrated
-    before its first model call, prepared inside the visit, and tools bound to this visit alone."""
+    before its first model call, prepared inside the visit, tools bound to this visit alone, and the role its paid
+    calls bill; a visit that names none bills them as unattributed, never to an enclosing stage."""
 
     scope: str
     owner: str
     machine: EnvironmentRequirements | None
     files: Callable[[], Files] = no_files
     tools: Mapping[str, Tool[object]] = field(default_factory=dict)
+    bills: Billing = field(default=Billing.UNATTRIBUTED, kw_only=True)
 
 
 def opened(opening: Opening, tools: Mapping[str, Tool[object]]) -> Conversation:
@@ -119,7 +121,8 @@ async def sitting(
     """
     env = None if visit.machine is None else await resources.envs.create(host_requirements(visit.machine))
     try:
-        async with ctx.scope(visit.scope, None if env is None else Opened(visit.owner, env.fingerprint().digest)):
+        owner = None if env is None else Opened(visit.owner, env.fingerprint().digest)
+        async with ctx.scope(visit.scope, owner, bills=visit.bills):
             files = visit.files()  # prepared in the visit, so its failure is journalled and its machine closed
             if env is None and files:
                 raise ValueError(f"{visit.scope} hydrates files but has no machine")

@@ -6,8 +6,8 @@
 ``record DIR``: the two validation answers are generated, then their grade meets a decision-model outage. ``resume DIR``
 relaunches the same root in a fresh process, unflagged, with the decision model back. Each prints one JSON line: the
 driver's exit code, the solver requests it dispatched, the candidates of the decision-model reads that answered, the
-published terminal and what it awaits; ``resume`` adds the published generation checkpoints and the report's solver
-and confirmation usage.
+published terminal and what it awaits; ``resume`` adds the published generation checkpoints, the payer of each paid
+slot result graded from one, and the report's solver and confirmation usage.
 
 The ``sibling-*`` modes run three validation slots two at a time. ``sibling-record`` checkpoints slots 0 and 1 in an
 outage. ``sibling-refused``, ``sibling-zero``, ``sibling-missing``, ``sibling-overflow`` and ``sibling-off-scale``
@@ -38,7 +38,7 @@ from taskcompendium.decision_model import DecisionModelRequest
 
 from taskforge import driver
 from taskforge.config import TaskforgeConfig
-from taskforge.effects.events import Resolved
+from taskforge.effects.events import Resolved, event_digest
 from taskforge.llm.glm_provider import EndpointSource
 from taskforge.model.proposal import TASK_PROPOSAL
 from taskforge.model.review import Incomplete
@@ -46,7 +46,7 @@ from taskforge.policy import Policy
 from taskforge.report import report
 from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import Ids
-from taskforge.resources.rollouts import SolverGeneration
+from taskforge.resources.rollouts import SolverGeneration, SolverRollout
 from taskforge.wiring import build_config, build_resources
 
 ANSWERS = ("twelve", "thirteen", "a dozen")
@@ -184,9 +184,20 @@ async def main(mode: str, directory: Path) -> None:
         outcome["reasons"] = list(last.reasons) if isinstance(last, Incomplete) else []
     if mode in ("resume", "sibling-recover"):
         rows = history(destination)
-        outcome["generations"] = sum(
-            isinstance(r.event, Resolved) and isinstance(r.event.request, SolverGeneration) for r in rows
-        )
+        generated = {
+            (event_digest(r.event.request.slot), r.event.fingerprints)
+            for r in rows
+            if isinstance(r.event, Resolved) and isinstance(r.event.request, SolverGeneration)
+        }
+        outcome["generations"] = len(generated)
+        outcome["graded"] = [
+            r.billed
+            for r in rows
+            if isinstance(r.event, Resolved)
+            and isinstance(r.event.request, SolverRollout)
+            and not r.event.replayed
+            and (event_digest(r.event.request), r.event.fingerprints) in generated
+        ]
         lines = await report(args.output)
         for role in ("solver", "confirmation"):
             outcome[role] = next(line for line in lines if line.startswith(f"tokens role={role} "))

@@ -6,22 +6,23 @@ decisions live Forge makes on them."""
 
 import asyncio
 import json
+import re
 import subprocess
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import override
 
 import pytest
 from lib.taskforge.tests.effect_fakes import local_records
 from lib.taskforge.tests.fake_resources import resources as stage_resources
 from lib.taskforge.tests.proposal_fakes import sample_proposal
-from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeInference
+from lib.taskforge.tests.resource_doubles import CleanReviewer, FakeCommand, FakeInference
 from lib.taskforge.tests.stage_fakes import transcript
-from lib.taskforge.tests.test_end_to_end import SETTINGS, Envs, call, resources, script
+from lib.taskforge.tests.test_end_to_end import SETTINGS, Envs, call, plant_root, resources, script
 from lib.taskforge.tests.test_solve_review import SUBMISSION, TRIALS, lowered, recorded_task
 from lib.taskforge.tests.test_solver_batch import rejected
 from pydantic import TypeAdapter
@@ -38,22 +39,30 @@ from rolloutengine.models import (
     TaskRolloutSpec,
     Transition,
 )
+from rolloutengine.test_support import arithmetic_task
+from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from verifyit.modes.grade_judge import JudgeMessage, JudgeRequest
+from verifyit.spec import JudgeSpec
 
-from taskforge.checkpoint import CheckpointSink
+import taskforge.harness.tools.evidence as evidence_tools_module
+import taskforge.stages.solve_review as review_stage
+from taskforge.checkpoint import JOURNAL_FORMAT, CheckpointSink, read_journal
 from taskforge.config import TaskforgeConfig
 from taskforge.coordinator import advance, apply_decision, run_workpiece
 from taskforge.effects.context import Context
-from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted
+from taskforge.effects.events import Fingerprint, ReplayPolicy, Resolved, ScopeEntered, ScopeExited, StageCompleted
 from taskforge.effects.issues import ContextExceeded, DecisionModelUnavailable
-from taskforge.effects.log import EventLog, JsonlSink, Record, Status
+from taskforge.effects.log import Billing, EventLog, JsonlSink, Record, Status, decode, fold
 from taskforge.harness.protocol import Stopped, StopReason, Submitted, ToolResult
 from taskforge.harness.tools.evidence import (
+    TRIAL,
     Evidence,
     FinalReportArgs,
     FinalReportTool,
     ReportArgs,
     ReportTool,
+    Source,
     evidence_tools,
 )
 from taskforge.llm.policy import LLMPolicy
@@ -92,7 +101,7 @@ from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import report
 from taskforge.resources.bundle import Resources
 from taskforge.resources.grading import GradeCandidate
-from taskforge.resources.inference import InferenceRequest
+from taskforge.resources.inference import InferenceClient, InferenceRequest
 from taskforge.resources.rollouts import Engine, SolverRollout
 from taskforge.stages.classify import grade_cause
 from taskforge.stages.rules import CONFIRMATION_REVISION_FAILED, default_review, tagged
@@ -521,20 +530,20 @@ async def test_confirmation_usage_is_reported_under_its_own_phase_once(tmp_path:
     review = Resolved(InferenceRequest((), tools, LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=11)))
     final = Resolved(InferenceRequest((), final_tools, LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=13)))
     events = (
-        ScopeEntered("workpiece"),
-        ScopeEntered("validate"),
-        Resolved(SolverRollout(spec, 0, 0), (), rollout),
-        review,
-        ScopeExited("validate", False),
-        ScopeEntered("confirm"),
-        Resolved(SolverRollout(spec, 0, 0), (), rollout, replayed=True),  # the round's trial, read again: no usage
-        Resolved(SolverRollout(spec, 1, 1), (), rollout),
-        Resolved(SolverRollout(spec, 2, 1), (), rollout),
-        final,
-        ScopeExited("confirm", False),
-        StageCompleted(Stage.REVIEW, "", "Decided", terminal=Terminal.ACCEPTED),
+        (ScopeEntered("workpiece"), None),
+        (ScopeEntered("validate"), None),
+        (Resolved(SolverRollout(spec, 0, 0), (), rollout), Billing.SOLVER),
+        (review, Billing.SOLVE_REVIEW),
+        (ScopeExited("validate", False), None),
+        (ScopeEntered("confirm"), None),
+        (Resolved(SolverRollout(spec, 0, 0), (), rollout, replayed=True), None),  # the round's trial read again
+        (Resolved(SolverRollout(spec, 1, 1), (), rollout), Billing.CONFIRMATION),
+        (Resolved(SolverRollout(spec, 2, 1), (), rollout), Billing.CONFIRMATION),
+        (final, Billing.FINAL_REVIEW),
+        (ScopeExited("confirm", False), None),
+        (StageCompleted(Stage.REVIEW, "", "Decided", terminal=Terminal.ACCEPTED), None),
     )
-    records = tuple(Record(i, time.time(), event) for i, event in enumerate(events, 1))
+    records = tuple(Record(i, time.time(), event, billed=payer) for i, (event, payer) in enumerate(events, 1))
     sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
     sink.claim(None)
     await sink.local.write(records)
@@ -1091,3 +1100,233 @@ def test_one_version_stores_no_groups_and_several_round_trip_outside_the_tool_sc
     merged = grouped(single, (single.citations, finding(2).citations))
     assert adapter.validate_json(adapter.dump_json(merged)) == merged
     assert "groups" not in json.dumps(TypeAdapter(FinalReportArgs).json_schema())
+
+
+JUDGED_TASK = arithmetic_task(grader=verifyit_package(JudgeSpec(references=("12",), exact_gate=False)).grader)
+BILLED = {"adversary.roster": ["false_accept"], "judge.model": "glm-5.3"}
+"""One adversary and a judged task beside the three validation and five confirmation solves."""
+
+
+class JudgedEnvs(Envs):
+    """The author's draft writes ``JUDGED_TASK``, whose grader asks the judge."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        draft, path = self.commands["write-draft"], PurePosixPath("/workspace/task.json")
+        self.commands["write-draft"] = FakeCommand(
+            draft.result, {**draft.writes, path: JUDGED_TASK.model_dump_json().encode()}
+        )
+
+
+class Replies(InferenceClient):
+    """``reply`` to every request, or ``inner``'s, each billed ``prompt`` prompt tokens. A request sets ``starts``,
+    waits for ``waits``, and sets ``sets`` once answered."""
+
+    def __init__(
+        self,
+        identity: str,
+        prompt: int,
+        reply: Completion | None = None,
+        inner: InferenceClient | None = None,
+        *,
+        starts: asyncio.Event | None = None,
+        waits: asyncio.Event | None = None,
+        sets: asyncio.Event | None = None,
+    ) -> None:
+        self.identity, self.prompt, self.reply, self.inner = identity, prompt, reply, inner
+        self.starts, self.waits, self.sets = starts, waits, sets
+        self.calls = 0
+
+    @override
+    def fingerprint(self) -> Fingerprint:
+        return Fingerprint("inference", self.identity, ReplayPolicy.CACHE)
+
+    @override
+    async def complete(self, request: InferenceRequest) -> Completion:
+        self.calls += 1
+        if self.starts is not None:
+            self.starts.set()
+        if self.waits is not None:
+            await self.waits.wait()
+        answer = self.reply if self.inner is None else await self.inner.complete(request)
+        assert answer is not None
+        if self.sets is not None:
+            self.sets.set()
+        return replace(answer, usage=Usage(prompt_tokens=self.prompt))
+
+
+class Reviews(Replies):
+    """The reviewer's client: the round review's call bills 113 prompt tokens and every later call, the final
+    review's, 991, so that charging one review's call to the other shows."""
+
+    def __init__(self) -> None:
+        super().__init__("reviewer", 113, inner=CleanReviewer())
+
+    @override
+    async def complete(self, request: InferenceRequest) -> Completion:
+        self.prompt = 991 if self.calls else 113
+        return await super().complete(request)
+
+
+class JudgedTrials(Trials):
+    """Each slot asks the judge once from a grading thread, as VerifyIt does, and its turn bills 7 prompt tokens."""
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        connection = spec.judge_connection
+        assert connection is not None
+        await asyncio.to_thread(connection.callback, JudgeRequest("judge", (JudgeMessage("user", f"{run_id}"),), 64, ""))
+        graded = await super().run_task(spec, model, run_id=run_id)
+        turn = ModelTurn({}, (), (), None, "stop", metadata={"usage": {"prompt_tokens": 7}})
+        steps = (RolloutStep(turn, Transition(True), 0, ()),)
+        said = tuple(replace(conversation, steps=steps) for conversation in graded.rollout.conversations)
+        return replace(graded, rollout=replace(graded.rollout, conversations=said))
+
+
+def billed_bundle(author: Sequence[Completion] = script()) -> Resources:
+    """Every role's client, each billing its own number of prompt tokens per call. The adversary answers once a judge
+    call is in flight, and the judge once the adversary has: the adversary's call completes inside an open judge
+    scope."""
+    live, asked, answered = resources(JudgedEnvs(), ()), asyncio.Event(), asyncio.Event()
+    roles = {
+        "solve_review": Reviews(),
+        "adversary": Replies("adversary", 100, call("report", {"findings": []}, "report"), waits=asked, sets=answered),
+        "judge": Replies("judge", 10000, Completion("PASS"), starts=asked, waits=answered),
+    }
+    author_client = Replies("author", 1, inner=FakeInference(author))
+    engine = JudgedTrials()
+    return replace(live, inference=author_client, rollouts=replace(live.rollouts, engine=engine), role_inference=roles)
+
+
+async def billed_root(
+    proposal: TaskProposal, directory: Path, live: Resources | None = None, root: Path | None = None
+) -> Path:
+    """Run ``live`` (by default ``billed_bundle()``) to a published root, ``root`` resumed or a new one under
+    ``directory``, as the driver publishes one."""
+    if root is None:
+        root = directory / "root"
+        root.mkdir(parents=True)
+    sink = CheckpointSink(directory / "work", str(root))
+    log = EventLog(sink=sink, replay_from=sink.claim(read_journal(str(root))))
+    async with sink.running():
+        wp = await run_workpiece(proposal, setup(**BILLED), live or billed_bundle(), log, install=install)
+    await sink.finish(fold(tuple(record.event for record in log.records)), wp)
+    return root
+
+
+CHARGED = {
+    "author": 4,
+    "solver": 21,
+    "adversary": 100,
+    "solve_review": 113,
+    "judge": 80000,
+    "confirmation": 35,
+    "final_review": 991,
+}
+"""``billed_bundle``'s prompt tokens by role: four author calls, three validation and five confirmation solves, one
+adversary call, one round and one final review call, and eight judge calls, one per solve."""
+FORMAT_9_ROOT = Path(__file__).parent / "fixtures" / "format9-judge-overlap-root.json.gz"
+"""``billed_root`` as the format-9 writer (9a3da6e3ef) published it: its rows name no payer."""
+
+
+def charged(lines: Sequence[str]) -> dict[str, int]:
+    """The prompt tokens each ``tokens role=`` line of a report charges."""
+    return {
+        found["role"]: int(found["prompt"])
+        for line in lines
+        if (found := re.match(r"tokens role=(?P<role>\w+) prompt=(?P<prompt>\d+) ", line))
+    }
+
+
+PAID = {
+    ("inference.request", "author"): 4,
+    ("grading.grade_candidate", "author"): 1,
+    ("rollouts.solver_rollout", "solver"): 3,
+    ("grading.grade_candidate", "solver"): 2,
+    ("inference.request", "adversary"): 1,
+    ("inference.request", "solve_review"): 1,
+    ("inference.request", "judge"): 8,
+    ("rollouts.solver_rollout", "confirmation"): 5,
+    ("inference.request", "final_review"): 1,
+}
+"""``billed_bundle``'s physical resolutions by kind and payer, sandbox commands and ids aside: they name none."""
+
+
+def payers(root: Path, replayed: bool) -> Counter[tuple[str, str | None]]:
+    """The payer of each resolution of ``root``'s journal that ``replayed`` or was paid, by request kind, sandbox
+    commands and ids aside."""
+    journal = read_journal(str(root))
+    assert journal is not None
+    return Counter(
+        (record.event.request.kind, record.billed)
+        for record in decode(journal.events())
+        if isinstance(record.event, Resolved)
+        and record.event.replayed is replayed
+        and not record.event.request.kind.startswith(("env.", "ids."))
+    )
+
+
+# Review 2026-11-21: the report guessed each call's role from the scopes open when it resolved, so an adversary call
+# that completed inside an open judge scope was charged to the judge: 80,100 judge and 0 adversary tokens here.
+async def test_every_role_is_charged_its_own_calls_when_their_scopes_overlap(
+    proposal: TaskProposal, tmp_path: Path
+) -> None:
+    root = await billed_root(proposal, tmp_path)
+    lines = await report(str(root))
+    assert charged(lines) == CHARGED
+    assert not [line for line in lines if line.startswith("tokens role=unattributed")]
+    assert payers(root, replayed=False) == PAID and not payers(root, replayed=True)
+    live = billed_bundle(())
+    await billed_root(proposal, tmp_path, live, root)
+    clients = [live.inference, *live.role_inference.values()]
+    assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
+    assert payers(root, replayed=False) == PAID  # the cold rerun paid for nothing
+    replayed = payers(root, replayed=True)  # eighteen resolutions, none naming a payer
+    assert sum(replayed.values()) == 18 and {payer for _, payer in replayed} == {None}
+
+
+async def test_a_format_9_root_charges_its_tokens_as_unattributed_and_replays_with_zero_calls(
+    proposal: TaskProposal, tmp_path: Path
+) -> None:
+    """Rows written before the payer was recorded name none, and their tokens are charged as unattributed; the root
+    resumes under the current reader, every request matching its recorded key."""
+    root = plant_root(tmp_path / "root", FORMAT_9_ROOT)
+    before = await report(str(root))
+    assert charged(before) == {**dict.fromkeys(CHARGED, 0), "unattributed": 82160}
+    journal = read_journal(str(root))
+    assert journal is not None and journal.head.format == 9
+    live = billed_bundle(())
+    await billed_root(proposal, tmp_path, live, root)
+    resumed = read_journal(str(root))
+    assert resumed is not None and resumed.head.format == JOURNAL_FORMAT and resumed.workpiece() == journal.workpiece()
+    clients = [live.inference, *live.role_inference.values()]
+    assert [client.calls for client in clients if isinstance(client, Replies)] == [0, 0, 0, 0]
+    assert isinstance(live.rollouts.engine, Trials) and not live.rollouts.engine.runs
+    after = await report(str(root))
+    assert charged(after) == charged(before)
+
+
+# Review 2026-11-21: a clean three-and-five confirmation built its evidence index three times (3, 8 and 8 trials) and
+# digested it six times (three times each for 3 and 8 trials).
+async def test_each_review_builds_its_evidence_index_and_digests_it_once(
+    proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built: list[int] = []
+    digested: list[int] = []
+
+    def trials(sources: Sequence[Source]) -> int:
+        return sum(source.name.startswith(TRIAL) for source in sources)
+
+    def build(sources: Mapping[str, Source], unpassed: frozenset[int], output_chars: int) -> Evidence:
+        built.append(trials(tuple(sources.values())))
+        return Evidence(sources, unpassed, output_chars)
+
+    def hashed(value: tuple[Source, ...]) -> str:
+        digested.append(trials(value))
+        return digest(value)
+
+    monkeypatch.setattr(review_stage, "Evidence", build)
+    monkeypatch.setattr(evidence_tools_module, "digest", hashed)
+    wp, _ = await run(proposal, Trials(), Reviewer())
+    assert wp.terminal is Terminal.ACCEPTED and kinds(wp) == ["accept", "accept"]
+    assert (built, digested) == ([3, 8], [3, 8])

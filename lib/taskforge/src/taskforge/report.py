@@ -14,13 +14,12 @@ from rigging.filesystem.factory import url_to_fs
 from taskforge.checkpoint import FORMAT_1, HEAD, read_journal
 from taskforge.effects.events import Resolved, ScopeEntered, ScopeExited, StageCompleted, event_digest
 from taskforge.effects.issues import UnsupportedFormat
-from taskforge.effects.log import decode
+from taskforge.effects.log import Billing, decode
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 from taskforge.resources.env import RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverGeneration, SolverRollout
-from taskforge.stages.solve_review import reviewing
 
 EVENT_GAPS = {RunCommand.kind: "RunCommand", WriteFile.kind: "WriteFile", InferenceRequest.kind: "InferenceRequest"}
 """The request kinds whose wall-clock gaps are reported, with the labels dashboards key on."""
@@ -106,14 +105,10 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                 elif isinstance(event, Resolved) and not event.replayed and stamp >= cutoff:
                     if label := EVENT_GAPS.get(event.request.kind):
                         durations[f"event_gap={label}"].append(max(0, stamp - previous))
+                    # A row from before format 10 names no payer, and its tokens are charged as unattributed.
+                    payer = record.billed or Billing.UNATTRIBUTED
                     if isinstance(event.request, InferenceRequest):
-                        adversary = any(v for k, v in scopes.items() if k.startswith("adversary:"))
-                        role = "judge" if scopes["judge"] else "adversary" if adversary else "author"
-                        # The reviewer runs beside the adversaries: its request names it by its own tools.
-                        role = "solve_review" if reviewing(event.request) else role
-                        # The confirmation step's reviewer is its final review; its judge calls stay the judge's.
-                        role = "final_review" if role == "solve_review" and scopes["confirm"] else role
-                        tokens[role].update(asdict(event.value.usage))
+                        tokens[payer].update(asdict(event.value.usage))
                     elif isinstance(event.request, SolverGeneration) or (
                         isinstance(event.request, SolverRollout)
                         and (event_digest(event.request), event.fingerprints) not in generated
@@ -121,7 +116,7 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
                         rollout = event.value if isinstance(event.request, SolverGeneration) else event.value.rollout
                         for conversation in rollout.conversations:
                             for step in conversation.steps:
-                                tokens["confirmation" if scopes["confirm"] else "solver"].update(
+                                tokens[payer].update(
                                     step.turn.metadata.get("usage", asdict(step.turn.usage) if step.turn.usage else {})
                                 )
                 previous = stamp
@@ -141,7 +136,7 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
         count = sum(max(cutoff, now - hours * 3600) <= stamp <= now for stamp in accepted)
         rate = count / min(hours, since_hours or hours)
         lines.append(f"accepted_per_hour window_hours={hours} count={count} rate={rate:.3f}")
-    for role in ("author", "solver", "adversary", "solve_review", "judge", "confirmation", "final_review"):
+    for role in [role for role in Billing if role is not Billing.UNATTRIBUTED or role in tokens]:  # where charged
         usage = " ".join(f"{name}={tokens[role][name + '_tokens']}" for name in ("prompt", "cached", "completion"))
         lines.append(f"tokens role={role} {usage}")
     for key in (

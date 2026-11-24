@@ -26,22 +26,20 @@ from taskforge.effects.events import (
     ScopeExited,
     StageCompleted,
 )
-from taskforge.effects.log import EventLog, Opened, Record, Status
-from taskforge.harness.tools.evidence import ReportTool, evidence_tools
+from taskforge.effects.log import Billing, EventLog, Opened, Record, Status
 from taskforge.llm.policy import LLMPolicy
 from taskforge.lowering import lower_with_settings, lowering_settings
 from taskforge.model.llm import Completion, Usage
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import Abandon, Incomplete
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import Submission, Terminal, Workpiece
+from taskforge.model.workpiece import Terminal, Workpiece
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.report import reason_class, report
 from taskforge.resources.env import CommandResult, RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverRollout
-from taskforge.stages.solve_review import evidence
 
 
 @pytest.mark.parametrize(
@@ -76,6 +74,7 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
     spec = lower_with_settings(arithmetic_task(), lowering_settings(load_policy(DEFAULTS_DIR)), {})
     sandbox = (Fingerprint(ENVIRONMENT, "definition", ReplayPolicy.REEXECUTE),)
     opened, attempts, answers = {3: Opened("author/0", "definition")}, {7: 3, 9: 3}, {8: 7, 10: 9}  # sandbox rows
+    billed = {4: Billing.AUTHOR, 12: Billing.ADVERSARY, 14: Billing.SOLVER}
     events: list[tuple[float, Event[object]]] = [
         (-2, ScopeEntered("judge")),  # An interrupted previous process left this scope open.
         (-1, ScopeEntered("workpiece")),
@@ -106,7 +105,7 @@ async def test_report_reads_journals_counts_usage_once_and_uses_decision_time(
         decisions = (Abandon(reasons),) if terminal is Terminal.ABANDONED else (Incomplete(reasons),)
         data = events if name == "accepted" else [(0, StageCompleted(Stage.REVIEW, "", "Done", terminal=terminal))]
         records = tuple(
-            Record(i, 1000000 - age + offset, event, opened.get(i), attempts.get(i), answers.get(i))
+            Record(i, 1000000 - age + offset, event, opened.get(i), attempts.get(i), answers.get(i), billed.get(i))
             for i, (offset, event) in enumerate(data, 1)
         )
         sink = CheckpointSink(tmp_path / "work", str(directory))
@@ -156,7 +155,7 @@ async def test_a_launch_under_a_profile_already_paid_adds_no_reported_tokens(
     for launch, profile in enumerate("ABA"):
         ctx = Context(log=EventLog(replay_from=history))
         ctx.handle(InferenceRequest, answer, Profile(profile))
-        async with ctx.scope("author"):
+        async with ctx.scope("author", bills=Billing.AUTHOR):
             await ctx.emit(request)
         await ctx.drain()
         history = ctx._log.records
@@ -218,70 +217,36 @@ async def test_a_root_in_another_journal_format_is_named_and_the_report_complete
     assert unsupported in lines
 
 
-@pytest.mark.parametrize("review_first", [False, True])
-async def test_concurrent_usage_is_attributed_to_the_role_whose_request_incurred_it(
-    tmp_path: Path, proposal: TaskProposal, review_first: bool
-) -> None:
-    """Review 2026-11-21: an adversary request resolved while the solve-review's scope was open was counted
-    as solve-review usage; a request's own tools name its role, whatever else is open."""
-    index = evidence(Submission(arithmetic_task(), (), ""), (), 4000)
-    tools = tuple(tool.schema for tool in evidence_tools(index, ReportTool).values())
-    review = Resolved(
-        InferenceRequest((), tools, LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=11, completion_tokens=3))
-    )
-    adversary = Resolved(
-        InferenceRequest((), (), LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=37, completion_tokens=5))
-    )
-    resolved = (review, adversary) if review_first else (adversary, review)
-    events = (
-        ScopeEntered("workpiece"),
-        ScopeEntered("adversary:a"),
-        ScopeEntered("solve_review"),
-        *resolved,
-        ScopeExited("solve_review", False),
-        ScopeExited("adversary:a", False),
-        StageCompleted(Stage.REVIEW, "", "Accepted", terminal=Terminal.ACCEPTED),
-    )
-    records = tuple(Record(i, time.time(), event) for i, event in enumerate(events, 1))
-    sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
-    sink.claim(None)
-    await sink.local.write(records)
-    await sink.finish(Status(terminal=Terminal.ACCEPTED), Workpiece("w", proposal, terminal=Terminal.ACCEPTED))
-    lines = await report(str(tmp_path / "root"))
-    assert "tokens role=adversary prompt=37 cached=0 completion=5" in lines
-    assert "tokens role=solve_review prompt=11 cached=0 completion=3" in lines
-
-
-async def test_a_judge_call_inside_the_confirmation_is_charged_to_the_judge(
+# Review 2026-11-21: while a judge call was in flight, an adversary call of 37 prompt tokens completed, then the judge's
+# of 11; the cold report charged 48 to the judge and none to the adversary.
+async def test_overlapping_scopes_charge_each_call_to_the_role_its_scope_bills(
     tmp_path: Path, proposal: TaskProposal
 ) -> None:
-    """Review 2026-11-21: a VerifyIt judge callback under the confirmation scope was reported as
-    final-review usage, though no final reviewer ran; the reviewer's own request there is the final review's."""
-    index = evidence(Submission(arithmetic_task(), (), ""), (), 4000)
-    tools = tuple(tool.schema for tool in evidence_tools(index, ReportTool).values())
-    judge = Resolved(
-        InferenceRequest((), (), LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=37, completion_tokens=5))
-    )
-    review = Resolved(
-        InferenceRequest((), tools, LLMPolicy()), (), Completion("", usage=Usage(prompt_tokens=11, completion_tokens=3))
-    )
-    events = (
-        ScopeEntered("workpiece"),
-        ScopeEntered("confirm"),
-        ScopeEntered("judge"),
-        judge,
-        ScopeExited("judge", False),
-        ScopeEntered("solve_review.final"),
-        review,
-        ScopeExited("solve_review.final", False),
-        ScopeExited("confirm", False),
-        StageCompleted(Stage.REVIEW, "", "Accepted", terminal=Terminal.ACCEPTED),
-    )
-    records = tuple(Record(i, time.time(), event) for i, event in enumerate(events, 1))
+    (tmp_path / "root").mkdir()
     sink = CheckpointSink(tmp_path / "work", str(tmp_path / "root"))
     sink.claim(None)
-    await sink.local.write(records)
-    await sink.finish(Status(terminal=Terminal.ACCEPTED), Workpiece("w", proposal, terminal=Terminal.ACCEPTED))
+    ctx = Context(log=EventLog(sink=sink))
+    judging, answered = asyncio.Event(), asyncio.Event()
+
+    async def answer(_event: InferenceRequest, profile: Profile) -> Completion:
+        if profile.name == "judge":
+            judging.set()
+            await answered.wait()
+            return Completion("", usage=Usage(prompt_tokens=11))
+        await judging.wait()
+        answered.set()
+        return Completion("", usage=Usage(prompt_tokens=37))
+
+    async def visit(name: str, bills: Billing) -> None:
+        async with ctx.scope(name, bills=bills):
+            ctx.handle(InferenceRequest, answer, Profile(bills))
+            await ctx.emit(InferenceRequest((), (), LLMPolicy()))
+
+    async with sink.running():
+        async with ctx.scope("workpiece"):
+            await asyncio.gather(visit("adversary:a", Billing.ADVERSARY), visit("judge", Billing.JUDGE))
+        await ctx.drain()
+    await sink.finish(Status(terminal=Terminal.HELD), Workpiece("w", proposal, terminal=Terminal.HELD))
     lines = await report(str(tmp_path / "root"))
-    assert "tokens role=judge prompt=37 cached=0 completion=5" in lines
-    assert "tokens role=final_review prompt=11 cached=0 completion=3" in lines
+    assert "tokens role=adversary prompt=37 cached=0 completion=0" in lines
+    assert "tokens role=judge prompt=11 cached=0 completion=0" in lines
