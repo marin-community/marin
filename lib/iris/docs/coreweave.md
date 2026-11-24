@@ -300,6 +300,14 @@ controller version deployed before their task pods are created.
 Child jobs inherit the parent's region by default, as worker-backed tasks
 already do. An explicit region or the ANY marker overrides this default.
 
+An NVLink-domain exclusion (`nvlink.domain` with a required NE constraint)
+becomes a required node-affinity `NotIn` on `ds.coreweave.com/nvlink.domain`.
+Kubernetes compares that value byte-exactly against Node labels, and CoreWeave
+writes them uppercase (`DH1-136-US-EAST-08A` on `cw-us-east-08a`): supply the
+spelling shown by `kubectl get nodes -L ds.coreweave.com/nvlink.domain`. Iris
+keeps that spelling on the wire; constraint matching inside Iris remains
+case-insensitive.
+
 TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
 same-cycle recomputation gate prevents two newly admitted Workloads from keeping
 the same hostname when only one has capacity. If capacity becomes unavailable

@@ -39,6 +39,7 @@ from enum import Enum, IntEnum, StrEnum
 from typing import Any, ClassVar
 
 from iris.cluster.config import ScaleGroupResources
+from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_NVLINK_DOMAIN
 from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
@@ -87,6 +88,14 @@ def get_device_variant(device: job_pb2.DeviceConfig) -> str | None:
     if device.HasField("tpu"):
         return device.tpu.variant if device.tpu.variant else None
     return None
+
+
+# Kubernetes compares node-affinity values byte-exactly against node labels, and
+# CoreWeave writes NVLink-domain labels uppercase (e.g. ``DH1-136-US-EAST-08A``).
+# Constraint values for these keys ARE label values: the wire carries the
+# supplied spelling (``Constraint.label_value``) while ``values`` stays
+# normalized (lowercase) for Iris-side matching.
+CASE_PRESERVED_LABEL_KEYS = frozenset({COSCHEDULE_NVLINK_DOMAIN})
 
 
 @dataclass(frozen=True)
@@ -201,6 +210,11 @@ class Constraint:
     and validated at construction; downstream code can always index into
     `values` without None checks.
 
+    For keys in CASE_PRESERVED_LABEL_KEYS the value is a Kubernetes label value
+    that node affinity compares byte-exactly, so `label_value` carries the
+    supplied spelling on the wire while `values` keeps the normalized form for
+    Iris-side matching.
+
     Prefer ``Constraint.create(...)`` in call sites — it accepts raw
     ``value=``/``values=`` scalars and wraps them in ``AttributeValue``
     automatically. The primary constructor is used by ``from_proto`` and
@@ -222,6 +236,8 @@ class Constraint:
     op: ConstraintOp
     values: tuple[AttributeValue, ...] = ()
     mode: int = job_pb2.CONSTRAINT_MODE_REQUIRED
+    # Case-preserved Kubernetes label value for keys in CASE_PRESERVED_LABEL_KEYS.
+    label_value: str | None = None
 
     def __post_init__(self) -> None:
         lo, hi = _CONSTRAINT_ARITY[self.op]
@@ -229,6 +245,13 @@ class Constraint:
         if n < lo or (hi is not None and n > hi):
             bound = str(hi) if hi is not None else "∞"
             raise ValueError(f"Constraint op {self.op.name} requires {lo}..{bound} values, got {n}")
+        if self.label_value is not None:
+            assert (
+                self.key in CASE_PRESERVED_LABEL_KEYS
+            ), f"label_value is only valid for keys {sorted(CASE_PRESERVED_LABEL_KEYS)}"
+            assert (
+                self.values and str(self.values[0].value) == self.label_value.lower()
+            ), "label_value must lowercase to the normalized constraint value"
 
     @property
     def is_soft(self) -> bool:
@@ -246,6 +269,8 @@ class Constraint:
                 proto.values.append(v.to_proto())
         elif self.values:
             proto.value.CopyFrom(self.values[0].to_proto())
+            if self.label_value is not None:
+                proto.value.string_value = self.label_value
         return proto
 
     @staticmethod
@@ -263,7 +288,10 @@ class Constraint:
             values = tuple(AttributeValue.from_proto(v) for v in proto.values)
         else:
             values = (AttributeValue.from_proto(proto.value),)
-        return Constraint(key=proto.key, op=op, values=values, mode=proto.mode)
+        label_value = None
+        if proto.key in CASE_PRESERVED_LABEL_KEYS and proto.value.HasField("string_value"):
+            label_value = proto.value.string_value.strip()
+        return Constraint(key=proto.key, op=op, values=values, mode=proto.mode, label_value=label_value)
 
     @classmethod
     def create(
@@ -282,7 +310,9 @@ class Constraint:
         - EXISTS/NOT_EXISTS: pass neither.
 
         Raw strings are normalized (stripped + lowercased) via
-        AttributeValue.__post_init__.
+        AttributeValue.__post_init__. For keys in CASE_PRESERVED_LABEL_KEYS
+        the stripped spelling is also retained in ``label_value`` so the wire
+        keeps the Kubernetes label case.
         """
         if op in (ConstraintOp.EXISTS, ConstraintOp.NOT_EXISTS):
             if value is not None or values is not None:
@@ -296,7 +326,8 @@ class Constraint:
             if value is None or values is not None:
                 raise ValueError(f"op={op.name} requires value=, not values=")
             tup = (AttributeValue(value),)
-        return cls(key=key, op=op, values=tup, mode=mode)
+        label_value = value.strip() if key in CASE_PRESERVED_LABEL_KEYS and isinstance(value, str) else None
+        return cls(key=key, op=op, values=tup, mode=mode, label_value=label_value)
 
 
 # ---------------------------------------------------------------------------

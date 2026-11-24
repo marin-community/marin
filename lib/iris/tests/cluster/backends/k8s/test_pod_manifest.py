@@ -15,11 +15,14 @@ from iris.cluster.backends.k8s.tasks import (
     PodConfig,
 )
 from iris.cluster.config import EgressAllowlistConfig, TaskOutputPolicy
+from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.egress import parse_egress_rules
 from iris.cluster.platforms.k8s.constants import EGRESS_LABEL, RDMA_RESOURCE
 from iris.cluster.platforms.k8s.coreweave_topology import (
+    COSCHEDULE_NVLINK_DOMAIN,
+    CW_LABEL_NVLINK_DOMAIN,
     NVL72_GPUS_PER_NODE,
     RACK_SIZE,
     SCHEDULABLE_RACK_NODES,
@@ -77,9 +80,11 @@ def _dispatch(
     config: PodConfig,
     *,
     regions: tuple[str, ...] = ("US-WEST-04A",),
+    k8s: InMemoryK8sService | None = None,
 ) -> tuple[list[TaskUpdate], dict[K8sResource, list[dict]]]:
     """Dispatch one request through the provider and snapshot its K8s effects."""
-    k8s = InMemoryK8sService(namespace=config.namespace)
+    if k8s is None:
+        k8s = InMemoryK8sService(namespace=config.namespace)
     provider = K8sTaskProvider(
         descriptor=k8s_backend_descriptor(advertised_attributes={"region": set(regions)}),
         kubectl=k8s,
@@ -713,8 +718,12 @@ def test_constraints_to_node_selector_pool():
 def test_nvlink_domain_exclusion_requires_node_affinity_with_pool_selector():
     request = make_run_req("/excluded-rack/0")
     add_eq_constraint(request, "pool", "gb200")
-    exclusion = request.constraints.add(key="nvlink.domain", op=job_pb2.CONSTRAINT_OP_NE)
-    exclusion.value.string_value = "dh1-r136-us-east-08a"
+    # Real submit path: Constraint.create keeps the Kubernetes label spelling on
+    # the wire, matching the uppercase `ds.coreweave.com/nvlink.domain` values
+    # observed on cw-us-east-08a Nodes (DH1-<rack>-US-EAST-08A).
+    request.constraints.append(
+        Constraint.create(key=COSCHEDULE_NVLINK_DOMAIN, op=ConstraintOp.NE, value="DH1-136-US-EAST-08A").to_proto()
+    )
 
     manifest = _build_pod_manifest(request, pod_config())
 
@@ -725,14 +734,35 @@ def test_nvlink_domain_exclusion_requires_node_affinity_with_pool_selector():
             {
                 "matchExpressions": [
                     {
-                        "key": "ds.coreweave.com/nvlink.domain",
+                        "key": CW_LABEL_NVLINK_DOMAIN,
                         "operator": "NotIn",
-                        "values": ["dh1-r136-us-east-08a"],
+                        "values": ["DH1-136-US-EAST-08A"],
                     }
                 ]
             }
         ]
     }
+
+
+def test_nvlink_domain_exclusion_keeps_the_task_off_the_excluded_rack_node():
+    """The exclusion must place the pod on a healthy rack, never the excluded one.
+
+    Node pools carry the real `ds.coreweave.com/nvlink.domain` spelling seen on
+    cw-us-east-08a: excluding rack 136 must keep the pod off every DH1-136 node.
+    """
+    k8s = InMemoryK8sService(namespace="iris")
+    k8s.add_node_pool("r136", labels={CW_LABEL_NVLINK_DOMAIN: "DH1-136-US-EAST-08A"})
+    k8s.add_node_pool("r137", labels={CW_LABEL_NVLINK_DOMAIN: "DH1-137-US-EAST-08A"})
+    request = make_run_req("/excluded-rack/0")
+    request.constraints.append(
+        Constraint.create(key=COSCHEDULE_NVLINK_DOMAIN, op=ConstraintOp.NE, value="DH1-136-US-EAST-08A").to_proto()
+    )
+
+    _, resources = _dispatch(request, pod_config(), regions=("US-EAST-08A",), k8s=k8s)
+
+    pods = resources[K8sResource.PODS]
+    assert len(pods) == 1
+    assert pods[0]["spec"]["nodeName"] == "r137-0"
 
 
 def test_region_constraint_does_not_become_node_selector():
