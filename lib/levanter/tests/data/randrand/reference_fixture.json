@@ -1,0 +1,15 @@
+{
+  "reference": "Native PyTorch 2.9 svd_lowrank, with shared Gaussian sketches supplied by patching only torch.randn during SVD",
+  "source_sha256": "15563c2a8dce3d9333ffa9082235ea6c68ff5a17b1bd4db27b710888ba187149",
+  "generator_sha256": "520f98686d0d91dd1907a78e8ddd113235f0ba56e68988c7ad3c4bdcbca9d214",
+  "fixture_sha256": "d16c5c2705129eff772358cdcbe4e04fce0ecb5ff08b766ab1ce43866f0586e4",
+  "steps": 125,
+  "cases": [
+    "correction=0.5",
+    "correction disabled",
+    "correction=0",
+    "correction=boost=5"
+  ],
+  "seed": 391,
+  "note": "Validation fixture only; no torch import is needed to run the JAX tests."
+}
