@@ -489,14 +489,14 @@ def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path
 def test_disabled_autotuning_fetches_without_publishing_host_leftovers(tmp_path) -> None:
     root = str(tmp_path / "remote")
     seed = tmp_path / "seed"
-    writer = FineStoreDirectory(root, str(seed), flush_interval=3600)
+    writer = FineStoreDirectory(root, str(seed))
     (seed / "cached.textproto").write_bytes(b"tuned")
     writer.close()
 
     mirrors: list[FineStoreDirectory] = []
 
     def start_mirror(root: str, local: str) -> FineStoreDirectory:
-        mirror = FineStoreDirectory(root, local, flush_interval=3600)
+        mirror = FineStoreDirectory(root, local)
         mirrors.append(mirror)
         return mirror
 
