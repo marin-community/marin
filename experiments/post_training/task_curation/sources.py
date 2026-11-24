@@ -14,6 +14,7 @@ from experiments.post_training.task_curation.datasets import (
     backfill_releases,
     campaign_releases,
     crosscode_python_repair,
+    facet_terminal,
     native_releases,
     nemo_structured,
     repair_releases,
@@ -27,6 +28,7 @@ from experiments.post_training.task_curation.datasets.consumer_decisions import 
 from experiments.post_training.task_curation.datasets.consumer_receipts import consumer_receipts
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
 from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
+from experiments.post_training.task_curation.datasets.endless import tasks as endless
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
 from experiments.post_training.task_curation.datasets.evalchemy import financebench as eval_financebench
 from experiments.post_training.task_curation.datasets.evalchemy import harness as eval_harness
@@ -38,9 +40,7 @@ from experiments.post_training.task_curation.datasets.evalchemy import mmlu as e
 from experiments.post_training.task_curation.datasets.evalchemy import nupa as eval_nupa
 from experiments.post_training.task_curation.datasets.evalchemy import reasoning as eval_reasoning
 from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
-from experiments.post_training.task_curation.datasets.endless import tasks as endless
 from experiments.post_training.task_curation.datasets.facet import tasks as facet
-from experiments.post_training.task_curation.datasets import facet_terminal
 from experiments.post_training.task_curation.datasets.fineenvs import tasks as fineenvs
 from experiments.post_training.task_curation.datasets.full_content_results import full_content_result_bindings
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
