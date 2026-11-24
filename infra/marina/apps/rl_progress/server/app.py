@@ -13,7 +13,17 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import ProgrammingError
 
-_RETAINED_FIELDS = ("issue", "gate", "gate_result", "model", "evaldash_run_ids", "grader_report")
+_RETAINED_FIELDS = (
+    "issue",
+    "gate",
+    "gate_result",
+    "model",
+    "grader_report",
+    "base_preset_revision",
+    "control_preset",
+    "evaluation_data_identity",
+    "evaluation_protocol_identity",
+)
 _RETAINED_VALUES = ", ".join(
     f"'{key}', COALESCE(NULLIF(EXCLUDED.record -> '{key}', 'null'::jsonb), rl_runs.record -> '{key}', 'null'::jsonb)"
     for key in _RETAINED_FIELDS
@@ -25,7 +35,22 @@ _UPSERT = text(
       SET record = CASE
         WHEN EXCLUDED.record ->> 'status' = 'running'
           AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record
-        ELSE EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES})
+        ELSE EXCLUDED.record || jsonb_build_object(
+          {_RETAINED_VALUES},
+          'evaldash_run_ids', (
+            SELECT jsonb_agg(link ORDER BY first_seen)
+            FROM (
+              SELECT link, min(position) AS first_seen
+              FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(rl_runs.record -> 'evaldash_run_ids') = 'array'
+                  THEN rl_runs.record -> 'evaldash_run_ids' ELSE '[]'::jsonb END
+                || COALESCE(NULLIF(EXCLUDED.record -> 'evaldash_run_ids', 'null'::jsonb), '[]'::jsonb)
+              ) WITH ORDINALITY AS links(link, position)
+              WHERE jsonb_typeof(link) = 'string' AND link <> '""'::jsonb
+              GROUP BY link
+            ) saved_links
+          )
+        )
       END
     RETURNING record"""
 )

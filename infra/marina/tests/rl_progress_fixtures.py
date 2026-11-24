@@ -35,6 +35,8 @@ def rl_progress_client(tmp_path, monkeypatch):
         )
 
         def request(origin, method, path, *, json_body=None, **kwargs):
+            if method == "GET" and path == "/evaldash/api/runs":
+                return []
             response = client.request(method, path, json=json_body)
             response.raise_for_status()
             return response.json()

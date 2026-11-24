@@ -316,6 +316,13 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     interrupted = {"once": True}
 
     def unavailable_readback(origin, method, path, *, json_body=None, **kwargs):
+        if method == "GET" and path == "/evaldash/api/runs":
+            run_id = kwargs["params"]["rl_run"]
+            return [
+                {"run_id": "linked-export", "rl_run_id": run_id, "rl_attempt_id": "native-0"},
+                {"run_id": "cached-export", "rl_run_id": run_id, "rl_attempt_id": "earlier-attempt"},
+                {"run_id": "other-run", "rl_run_id": "unrelated", "rl_attempt_id": "native-0"},
+            ]
         response = request(origin, method, path, json_body=json_body)
         if method == "POST" and path.endswith("/api/runs") and interrupted["once"]:
             interrupted["once"] = False
@@ -334,6 +341,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert len(first.served_records) == 1 and first.errors == ["Response unavailable after insert"]
     persisted = stored()
     assert set(persisted) == {"native-0", "native-1"} and persisted["native-0"]["issue"] == 73
+    assert persisted["native-0"]["evaldash_run_ids"] == ["linked-export"]
+    assert persisted["native-1"]["evaldash_run_ids"] is None
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
     relative_key = "eval_lite/aai_category/coding/mean"
     report, second_gate = saved_gate(("policy/entropy<=0", "policy/entropy>=0", f"{relative_key}>=control"))
@@ -348,6 +357,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
+    assert rows["native-0"]["evaldash_run_ids"] == ["linked-export"]
+    assert rows["native-0"]["evaluation_data_identity"].endswith("/full_validation.parquet")
     assert repeated.urls[str(sources[0])].endswith(f"#run=tests%2Fpublication-0-{preset.revision}&attempt=native-0")
 
     def wrong_returned_key(origin, method, path, *, json_body=None, **kwargs):
@@ -368,9 +379,12 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             row.model_dump(mode="json")
             for row in report.comparisons
             if row.role in ("objective", "guard", "requirement")
+            or (row.role == "slice" and "/family/" in row.metric and row.metric.endswith("/mean"))
         ],
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
+        "control_commit": pin.commit,
+        "control_revision": pin.revision,
     }
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
     assert {(item["metric"], item["role"]) for item in rows["native-0"]["gate_result"]["comparisons"]} == {
@@ -378,6 +392,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         ("eval_lite/family_mean/gain_per_gpu_hour", "objective"),
         ("policy/entropy", "guard"),
         (relative_key, "requirement"),
+        ("eval_lite/family/small/mean", "slice"),
+        ("eval_lite/family/large/mean", "slice"),
     }
 
     run_ids = ("eval-initial-policy", "eval-terminal-policy")
@@ -414,7 +430,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
         assert retained["issue"] == 73 + index
         assert read_stored_skyrl_attempts(str(sources[index]))[1][f"native-{index}"].issue == 73 + index
-        assert retained["evaldash_run_ids"] == list(run_ids)
+        assert retained["evaldash_run_ids"] == (["linked-export", *run_ids] if index == 0 else list(run_ids))
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (
             rows[f"native-{index}"]["status"],
@@ -476,7 +492,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert fresh.unserved_records == [] and fresh.errors == []
     assert fresh_report.run.attempt_ids == ("native-retry", "native-1")
     historical = stored()["native-0"]
-    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == list(run_ids)
+    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == ["linked-export", *run_ids]
     with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
         publication.publish_runs([str(sources[0])], preset, table=table, evaldash_run_ids=run_ids)
     with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
@@ -489,7 +505,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert linked.served_records == [(receipt["config"]["run"]["id"], "native-retry")] and not linked.errors
     linked_rows = stored()
     assert linked_rows["native-retry"]["evaldash_run_ids"] == ["eval-for-retry"]
-    assert linked_rows["native-0"]["evaldash_run_ids"] == list(run_ids)
+    assert linked_rows["native-0"]["evaldash_run_ids"] == ["linked-export", *run_ids]
     saved_evaluations = {}
     for root in sources:
         current_id, _ = read_stored_skyrl_attempts(str(root))

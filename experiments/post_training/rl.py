@@ -9,11 +9,13 @@ Use the selected model entry's compare command to compare existing results on CP
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from collections.abc import Callable, Sequence
@@ -431,6 +433,60 @@ def run_index_identity(
     )
 
 
+def _base_preset_revision(module: str, model: str, preset: str, source_revision: str) -> str | None:
+    root = recipe.REPO_ROOT
+    program = """
+import sys
+from importlib import import_module
+from experiments.post_training.rl_presets import ModelPresets
+
+module, model, preset = sys.argv[1:]
+revisions = {value.by_name[preset].revision for value in vars(import_module(module)).values()
+             if isinstance(value, ModelPresets) and value.model == model and preset in value.by_name}
+if len(revisions) == 1:
+    print(revisions.pop())
+"""
+    try:
+        base = git_output(["merge-base", source_revision, "origin/main"], cwd=root, timeout=4)
+        snapshot = subprocess.run(
+            [
+                "git",
+                "archive",
+                base,
+                "experiments/post_training",
+                "experiments/evaluation",
+                "pyproject.toml",
+                "infra/marina/apps/rl_progress/applet.toml",
+                "lib",
+            ],
+            cwd=root,
+            capture_output=True,
+            check=True,
+            timeout=8,
+        ).stdout
+        with tempfile.TemporaryDirectory(prefix="rl-main-base-") as directory:
+            path = Path(directory)
+            with tarfile.open(fileobj=io.BytesIO(snapshot)) as archive:
+                archive.extractall(path, filter="data")
+            result = subprocess.run(
+                [sys.executable, "-c", program, module, model, preset],
+                text=True,
+                capture_output=True,
+                check=True,
+                cwd=path,
+                env={
+                    "PATH": os.defpath,
+                    "PYTHONNOUSERSITE": "1",
+                    "PYTHONPATH": os.pathsep.join(str(source) for source in sorted(path.glob("lib/*/src"))),
+                },
+                timeout=30,
+            )
+            return result.stdout.strip() or None
+    except (OSError, RuntimeError, subprocess.SubprocessError, tarfile.TarError) as error:
+        logger.debug("Main preset revision unavailable for %s (%s)", preset, type(error).__name__)
+        return None
+
+
 class _PublicationWatch(BaseModel):
     job: str
     preset: str
@@ -560,7 +616,13 @@ def _submit_from_launcher(
     if not module:
         raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
     submitted_at = datetime.now(UTC).isoformat()
-    index = context.meta["rl_index"].model_copy(update={"submitted_at": submitted_at})
+    index: RunIndexIdentity = context.meta["rl_index"]
+    index = index.model_copy(
+        update={
+            "submitted_at": submitted_at,
+            "base_preset_revision": _base_preset_revision(module, index.model, index.preset, index.source_revision),
+        }
+    )
     runs = _from_handles(handles).runs
     indexed_runs = {
         step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id: index for step in runs

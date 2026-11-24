@@ -1,3 +1,5 @@
+import { showProgress } from './progress.js';
+
 const $ = (id) => document.getElementById(id);
 let runs = [];
 const selectedAttempts = new Map();
@@ -51,12 +53,15 @@ function showDetails(run) {
   for (const id of run.evaldash_run_ids ?? []) {
     links.append(element('a', `EvalDash ${id} ↗`, { href: `https://marina.oa.dev/evaldash/runs/${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener noreferrer' }));
   }
+  const evaluations = new URLSearchParams({ rl_run: run.run_id, rl_attempt: run.attempt_id, view: 'runs' });
+  links.append(element('a', 'All EvalDash evaluations of this attempt', { href: `https://marina.oa.dev/evaldash/runs?${evaluations}` }));
   if (run.has_grader_report) links.append(element('a', 'Grader stats', { href: './graders.html?' + route(run).slice(1) }));
   links.append(element('a', 'Link to this run', { href: route(run) }));
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
     ['Model', run.model], ['Preset', run.preset], ['Preset revision', run.preset_revision],
+    ['Base version', run.base_preset_revision], ['Evaluation set', run.evaluation_data_identity],
     ['User', run.user], ['Branch', run.branch], ['Uncommitted changes', run.dirty == null ? null : run.dirty ? 'Yes' : 'No'],
     ['PR', run.pr_number], ['Cluster', run.cluster], ['Issue', run.issue],
     ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
@@ -100,6 +105,17 @@ function render() {
   const model = $('model-filter').value;
   const matching = model ? runs.filter((run) => run.model === model) : runs;
   const groups = groupedRuns(matching), selected = visibleRuns(groups);
+  const preset = $('progress-preset'), previous = preset.value;
+  const choices = new Map(matching.filter((run) => run.model && run.preset && run.evaluations?.length)
+    .map((run) => [JSON.stringify([run.model, run.preset]), `${run.model} · ${run.preset}`]));
+  preset.replaceChildren(...[...choices].sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([value, label]) => element('option', label, { value })));
+  if (choices.has(previous)) preset.value = previous;
+  $('progress-panel').hidden = !choices.size;
+  const history = matching.filter((run) => JSON.stringify([run.model, run.preset]) === preset.value);
+  const reference = history.find((run) => run.control_preset && run.control_preset !== run.preset);
+  const controls = reference ? matching.filter((run) => run.model === reference.model && run.preset === reference.control_preset) : [];
+  showProgress($('progress-charts'), history, controls, route);
   $('count').textContent = `${selected.length} runs · ${matching.length} recorded attempts`;
   $('attempts').replaceChildren(...[...selected].sort((a, b) => attemptTime(b) - attemptTime(a)).map((run) => {
     const tr = element('tr');
@@ -118,6 +134,7 @@ function render() {
     const objectives = element('td'), constraints = element('td'), verdict = element('td');
     if (report) {
       for (const row of report.comparisons) {
+        if (row.role === 'slice') continue;
         const cell = row.role === 'objective' ? objectives : constraints;
         cell.append(element('p', comparison(row), { class: row.passes === false ? 'warning' : '' }));
       }
@@ -130,7 +147,9 @@ function render() {
       constraints.textContent = '—';
       verdict.textContent = '—';
     }
-    tr.append(name, element('td', run.model ?? 'Not recorded'), objectives, constraints, verdict);
+    const evalCount = (run.evaldash_run_ids ?? []).length;
+    tr.append(name, element('td', run.model ?? 'Not recorded'), objectives, constraints, verdict,
+      element('td', evalCount ? String(evalCount) : '—'));
     return tr;
   }));
 }
@@ -152,6 +171,7 @@ async function refresh() {
 }
 $('refresh').onclick = refresh;
 $('model-filter').onchange = render;
+$('progress-preset').onchange = render;
 function closeDetails() {
   if (location.hash.startsWith('#run=')) history.replaceState(null, '', location.pathname + location.search);
   $('run-detail').close();

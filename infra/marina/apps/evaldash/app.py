@@ -386,7 +386,21 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "error": record.error,
         "tasks": [task.name for task in record.evaluation.tasks],
         "jobs": dict(record.jobs),
+        "rl_run_id": record.rl_attempt.run_id if record.rl_attempt else None,
+        "rl_attempt_id": record.rl_attempt.attempt_id if record.rl_attempt else None,
+        "rl_step": record.rl_attempt.step if record.rl_attempt else None,
     }
+
+
+def _matches_rl_attempt(record: EvalRunRecord, run_id: str | None, attempt_id: str | None) -> bool:
+    if run_id is None and attempt_id is None:
+        return True
+    ref = record.rl_attempt
+    return (
+        ref is not None
+        and (run_id is None or ref.run_id == run_id)
+        and (attempt_id is None or ref.attempt_id == attempt_id)
+    )
 
 
 def _group_sibling_row(record: EvalRunRecord) -> dict:
@@ -473,10 +487,12 @@ class RecordStore:
         group: str | None = None,
         version: str | None = None,
         accelerator: str | None = None,
+        rl_run: str | None = None,
+        rl_attempt: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
         records, _by_id = self._snapshot()
-        rows = [record_to_row(record) for record in records]
+        rows = [record_to_row(record) for record in records if _matches_rl_attempt(record, rl_run, rl_attempt)]
         rows = [
             row
             for row in rows
@@ -527,6 +543,8 @@ class RecordStore:
         status: str | None = None,
         version: str | None = None,
         accelerator: str | None = None,
+        rl_run: str | None = None,
+        rl_attempt: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
         """Runs collapsed into launches (one per ``group_id``), newest first.
@@ -539,6 +557,8 @@ class RecordStore:
         by_group: dict[str, list[EvalRunRecord]] = {}
         for record in records:
             if (model and record.model.name != model) or (user and record.user != user):
+                continue
+            if not _matches_rl_attempt(record, rl_run, rl_attempt):
                 continue
             by_group.setdefault(record.group_id, []).append(record)
         groups: list[dict] = []
@@ -1157,6 +1177,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             group=params.get("group") or None,
             version=params.get("version") or None,
             accelerator=params.get("accelerator") or None,
+            rl_run=params.get("rl_run") or None,
+            rl_attempt=params.get("rl_attempt") or None,
             limit=_parse_limit(params.get("limit")),
         )
         return JSONResponse(rows)
@@ -1318,6 +1340,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             status=params.get("status") or None,
             version=params.get("version") or None,
             accelerator=params.get("accelerator") or None,
+            rl_run=params.get("rl_run") or None,
+            rl_attempt=params.get("rl_attempt") or None,
             limit=_parse_limit(params.get("limit")),
         )
         return JSONResponse(groups)

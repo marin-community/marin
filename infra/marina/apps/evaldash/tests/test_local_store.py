@@ -14,7 +14,7 @@ import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
 from evalrecords.eval_measurements import measurement_from_record
-from evalrecords.records import EvalRunRecord, list_records, write_record
+from evalrecords.records import EvalRunRecord, RLAttemptRef, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
 
@@ -266,6 +266,26 @@ def test_api_surface_over_fixtures(client):
     samples_page = client.get("/runs/snowball-2026.07.20-mmlu/samples", params={"task": "mmlu"}).json()
     assert samples_page["total"] == 5
     assert samples_page["primary_metric"] == "acc,none"
+
+
+def test_rl_attempt_filter_joins_the_exact_export_in_both_views(tmp_path, store, client):
+    records = list_records(str(tmp_path))
+    wanted, earlier, unlinked = records[:3]
+    ref = RLAttemptRef(run_id="rl/snowball", attempt_id="wanted", step=0)
+    store.refresh(
+        [
+            wanted.model_copy(update={"rl_attempt": ref}),
+            earlier.model_copy(update={"rl_attempt": ref.model_copy(update={"attempt_id": "earlier"})}),
+            unlinked,
+        ]
+    )
+    params = {"rl_run": ref.run_id, "rl_attempt": ref.attempt_id, "limit": 1}
+    [row] = client.get("/runs", params=params).json()
+    assert (row["run_id"], row["rl_step"]) == (wanted.run_id, 0)
+    [group] = client.get("/groups", params=params).json()
+    assert [member["run_id"] for member in group["evals"]] == [wanted.run_id]
+    assert client.get(f"/runs/{wanted.run_id}").json()["rl_attempt"] == ref.model_dump()
+    assert "rl_attempt" not in client.get(f"/runs/{unlinked.run_id}").json()
 
 
 def test_agent_operation_schema_requires_executable_inputs(registered_api: RegisteredApi):

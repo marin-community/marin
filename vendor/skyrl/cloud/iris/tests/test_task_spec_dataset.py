@@ -124,11 +124,14 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
             ),
         }
     )
-    inputs = _load(tmp_path, (image, prefix))
+    packed = text_task("packed-task", source="tasktrove://pack%2Fdataset/shared%2Fsource/category/task")
+    inputs = _load(tmp_path, (image, prefix, packed))
     assert [(item.metadata.task_id, item.metadata.subset_id) for item in inputs] == [
         ("image-task", "competitive-coding"),
         ("prefix-task", "structure-closure"),
+        ("packed-task", "pack/dataset/shared/source"),
     ]
+    assert inputs[2].metadata.evaluation_identity.strata.source == "pack/dataset/shared/source"
     loaded = [item.spec for item in inputs]
     assert is_shell_harness(loaded[0].harness)
     assert loaded[1].harness == ASSISTANT_PREFIX_HARNESS

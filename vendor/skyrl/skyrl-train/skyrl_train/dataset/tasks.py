@@ -8,6 +8,7 @@ from itertools import batched
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -47,10 +48,25 @@ TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=Fal
 PARQUET_BATCH_SIZE = 1024
 
 
+def _source_stratum(dataset: str, labels: Mapping[str, str]) -> str:
+    if dataset.startswith("tasktrove://"):
+        uri = urlsplit(dataset)
+        source = uri.path.lstrip("/").partition("/")[0]
+        if uri.netloc and source:
+            return f"{unquote(uri.netloc)}/{unquote(source)}"
+    return labels.get("subset_id") or dataset
+
+
 def task_evaluation_identity(task: dict, selection: SelectionManifest | None) -> TaskEvaluationIdentity:
     digest = canonical_sha256(task)
     if selection is None:
-        return TaskEvaluationIdentity(task_digest=digest, strata=TaskStrata(agentic="agentic" in task.get("tags", ())))
+        return TaskEvaluationIdentity(
+            task_digest=digest,
+            strata=TaskStrata(
+                source=_source_stratum(task["source"]["dataset"], task.get("labels", {})),
+                agentic="agentic" in task.get("tags", ()),
+            ),
+        )
     identity = selection.identity(task["id"])
     if identity.task_digest != digest:
         raise ValueError(f"evaluation task content differs from selection manifest: {task['id']}")
@@ -109,6 +125,12 @@ class TaskDataset(PromptDataset):
                 if ultra is not None and "blend" in ultra and "agent" in ultra
                 else ()
             )
+            stored_identity = extras.get(TASK_EVALUATION_IDENTITY)
+            identity = TaskEvaluationIdentity.model_validate_json(stored_identity) if stored_identity else None
+            subset = (
+                identity.strata.source if identity is not None
+                else _source_stratum(lowered.task.source.dataset, lowered.task.labels)
+            )
             inputs.append(
                 {
                     "uid": uid,
@@ -121,12 +143,8 @@ class TaskDataset(PromptDataset):
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
                             task_id=lowered.task.id,
-                            subset_id=lowered.task.labels.get("subset_id") or lowered.task.source.dataset,
-                            evaluation_identity=(
-                                TaskEvaluationIdentity.model_validate_json(extras[TASK_EVALUATION_IDENTITY])
-                                if extras.get(TASK_EVALUATION_IDENTITY) is not None
-                                else None
-                            ),
+                            subset_id=subset,
+                            evaluation_identity=identity,
                         ),
                         group_grader=task_group_grader(lowered),
                     ),

@@ -832,7 +832,8 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
 ):
     early_failure = outcome != "succeeded"
     table = snowball_model.SNOWBALL
-    preset = replace(table.by_name["train-long"].with_updates(2), checkpoint_every=None, evaluations=())
+    historical = table.by_name["train-long"]
+    preset = replace(historical.with_updates(2), revision="2026.01.02", checkpoint_every=None, evaluations=())
     table = preset_table(preset)
     built = snowball.build_experiment(preset, table=table)
     source = recorded_runs(preset.name, built.runs[0].name, inputs=built.inputs, attempt_id="native-old")
@@ -844,6 +845,15 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     client, job = fake_iris(monkeypatch, "index-coordinator")
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
+    git_output = snowball.git_output
+
+    def historical_source(args, cwd, **kwargs):
+        if args[0] == "merge-base":
+            assert args[-1] == "origin/main"
+            return "HEAD"
+        return git_output(args, cwd, **kwargs)
+
+    monkeypatch.setattr(snowball, "git_output", historical_source)
     publications = []
     unavailable = outcome == "interrupted"
 
@@ -917,7 +927,9 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     client.submit.side_effect = native_prepared
     client.job.return_value.state_only.side_effect = state
     arguments = ["--preset", preset.name, "--version", preset.revision, "--run"]
-    result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments), entry_module=__name__), arguments)
+    result = CliRunner().invoke(
+        snowball.command(table, argv=tuple(arguments), entry_module=snowball_model.__name__), arguments
+    )
     assert result.exit_code == 0, (result.output, result.exception)
     grafana_link = next(
         line.strip().removeprefix("run: ") for line in reversed(result.output.splitlines()) if "grafana.oa.dev" in line
@@ -946,6 +958,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     running, terminal = [row for row in publications if row.attempt_id == "native-indexed"]
     assert running.status == "running" and terminal.status == ("failed" if early_failure else "succeeded")
     assert running.run_id == terminal.run_id
+    assert running.base_preset_revision == terminal.base_preset_revision == historical.revision
     assert parse_qs(urlsplit(grafana_link).query)["var-run"] == [terminal.run_id]
     assert re.fullmatch(r"snowball-train-long-[^/]+-[0-9a-f]{8}", terminal.run_id)
     assert terminal.gate_result is None

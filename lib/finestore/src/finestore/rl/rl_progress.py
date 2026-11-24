@@ -86,6 +86,8 @@ class GateResult(BaseModel):
     reason: str | None
     attempt_ids: list[Identity]
     replicates: Annotated[StrictInt, Field(gt=0)]
+    control_commit: Identity | None = None
+    control_revision: Identity | None = None
 
 
 class GradingLatency(TypedDict):
@@ -139,6 +141,7 @@ class RunIndexIdentity(BaseModel):
     branch: str | None
     source_revision: Identity
     dirty: bool
+    base_preset_revision: Identity | None = None
     pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
     submitted_at: str | None = None
 
@@ -160,6 +163,10 @@ class AttemptSummary(BaseModel):
     model: Identity | None = None
     preset: Identity | None = None
     preset_revision: Identity | None = None
+    base_preset_revision: Identity | None = None
+    control_preset: Identity | None = None
+    evaluation_data_identity: Identity | None = None
+    evaluation_protocol_identity: Identity | None = None
     user: Identity | None = None
     branch: str | None = None
     dirty: bool | None = None

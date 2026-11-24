@@ -13,9 +13,19 @@ A run-only link (`#run=<run_id>`) selects its latest attempt. Add
 run URL; the Grafana link uses the recorded native execution window. The Model column can filter by
 the recorded model. The issue number links to GitHub, and the opt-out is shown in the attempt details.
 Linked EvalDash evaluations open the recorded run IDs. The detail view includes per-step family, AAII-category and difficulty means and scored/attempted answer counts.
+The attempt's EvalDash filter finds evaluations that enter the catalog after publication.
+Terminal publication looks up catalog records for the exact run and attempt.
+Re-publication adds newly discovered links to the existing row.
 The attempt details link to a grader report when one was published. It shows
 training and evaluation success rates and verifier coverage by task and subset,
 with failure counts and grading latency by subset.
+
+Preset progress shows each control set's global score on its own evaluation data.
+The comparable line uses shared-task differences from the saved control link reports.
+The line breaks where a link is unavailable or the protocol changes. The global series
+keeps each scored point and marks changes in evaluation data or protocol. Experiments
+with a recorded base revision appear with those controls. The plot shows the run's own
+score and a comparable point when the recorded gate supplies a matching difference.
 
 Malformed records are skipped individually and named in a visible note.
 
@@ -24,8 +34,8 @@ Malformed records are skipped individually and named in a visible note.
 The app's release migration creates its `rl_runs` table in the application schema.
 Each `(run_id, attempt_id)` identifies one updatable JSON record. The index groups native
 attempts of the same model, preset, user and composed comparison configuration. Repeat
-publication refreshes that attempt's record. Null model, issue, EvalDash links, gate, gate result and
-grader report fields preserve their stored values. A terminal record takes precedence over a
+publication refreshes that attempt's record. Null provenance fields, issue, gate, gate result and
+grader report fields preserve their stored values. EvalDash links accumulate by ID. A terminal record takes precedence over a
 running update for the same attempt.
 
 Native failures and failed training or evaluation invariants set `status: failed` and name `failed_facts`.

@@ -5,9 +5,13 @@
 
 from dataclasses import replace
 
+from evalrecords.records import RLAttemptRef
+from finestore.rl.run_records import read_attempt
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import SkyRLRun, resolve_skyrl_policy
+from marin.rl.skyrl_records import EXPORTS_SUBDIRECTORY
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.evals import EvaluationDefinition
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
@@ -30,6 +34,16 @@ def resolve_skyrl_model(ctx: StepContext, source: ArtifactStep[SkyRLRun], model:
     )
 
 
+def resolve_rl_attempt(ctx: StepContext, source: ArtifactStep[SkyRLRun]) -> RLAttemptRef | None:
+    """Identify the exact RL attempt and checkpoint evaluated by this step."""
+    run = ctx.resolved(source)
+    if run.run_id is None or run.attempt_id is None:
+        return None
+    record = read_attempt(prefix_join(ctx.artifact_path(source), EXPORTS_SUBDIRECTORY), run.attempt_id)
+    run_id = record.index_run_id if record is not None and record.run_id == run.run_id else run.run_id
+    return RLAttemptRef(run_id=run_id, attempt_id=run.attempt_id, step=run.global_step)
+
+
 def skyrl_eval_step(
     source: ArtifactStep[SkyRLRun],
     model: ModelConfig,
@@ -47,6 +61,7 @@ def skyrl_eval_step(
         version=version,
         deps=(source,),
         resolve_model=lambda ctx: resolve_skyrl_model(ctx, source, model),
+        resolve_rl_attempt=lambda ctx: resolve_rl_attempt(ctx, source),
         accelerator=accelerator,
         submission_cluster=submission_cluster,
         federated_cluster=federated_cluster,

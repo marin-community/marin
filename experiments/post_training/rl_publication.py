@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field, ValidationError
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
@@ -51,6 +52,7 @@ from experiments.post_training.rl_command import attempt_grafana_url
 from experiments.post_training.rl_measurements import (
     InvalidComparison,
     RunInputs,
+    evaluation_protocol,
     evaluation_status,
     read_run_inputs,
     training_invariants,
@@ -188,10 +190,30 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         effect=report.effect,
         reason=report.reason,
         invariants=list(report.invariants),
-        comparisons=list(report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT)),
+        comparisons=[
+            row
+            for row in report.comparisons
+            if row.role in (ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT)
+            or (row.role == ComparisonRole.SLICE and "/family/" in row.metric and row.metric.endswith("/mean"))
+        ],
         attempt_ids=list(report.run.attempt_ids),
         replicates=report.run.replicates,
+        control_commit=report.control.commit,
+        control_revision=report.control.revision,
     )
+
+
+def _evaluation_identities(launch: RecordedLaunch, evidence: list[str]) -> tuple[str | None, str | None]:
+    sources = [*launch.validation_data, *(source for group in launch.evaluation_data.values() for source in group)]
+    if not sources:
+        return None, None
+    data = "; ".join(sorted({f"{source.identity}/{source.relative_path}" for source in sources}))
+    try:
+        protocols = {name: evaluation_protocol(launch, name) for name in ("", *launch.evaluation_data)}
+    except InvalidComparison:
+        evidence.append("The stored evaluation protocol is unavailable.")
+        return data, None
+    return data, canonical_sha256(protocols)
 
 
 def build_record(
@@ -238,14 +260,19 @@ def build_record(
     if not provenance and index is None and terminal:
         evidence.append("Recorded source provenance is unavailable.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
+    evaluation_data, evaluation_protocol_id = _evaluation_identities(launch, evidence)
     return AttemptSummary(
         run_id=attempt.index_run_id,
         attempt_id=attempt_id,
         label=run_label(inputs),
         series=preset.name,
-        model=index.model if index is not None else launch.model_name,
+        model=index.model if index is not None else launch.model_name or table.model,
         preset=preset.name,
         preset_revision=index.preset_revision if index is not None else None,
+        base_preset_revision=index.base_preset_revision if index is not None else None,
+        control_preset=preset.control_preset if preset.gated else None,
+        evaluation_data_identity=evaluation_data,
+        evaluation_protocol_identity=evaluation_protocol_id,
         user=index.user if index is not None else None,
         branch=index.branch if index is not None else None,
         dirty=index.dirty if index is not None else None,
@@ -394,6 +421,35 @@ def _link_issue(receipt: AttemptRecord, issue: int) -> int | None:
     return assigned
 
 
+def _evaldash_links(summary: AttemptSummary, native_id: str, service_url: str | None) -> list[str]:
+    try:
+        from marina import client  # noqa: PLC0415
+
+        links = list(summary.evaldash_run_ids or ())
+        for run_id in dict.fromkeys((summary.run_id, native_id)):
+            rows = client.marina_request(
+                service_url or client.DEFAULT_MARINA_URL,
+                "GET",
+                "/evaldash/api/runs",
+                params={"rl_run": run_id, "rl_attempt": summary.attempt_id, "limit": 1000},
+                timeout=4,
+            )
+            if not isinstance(rows, list):
+                raise ValueError("EvalDash did not return a run list")
+            links.extend(
+                row["run_id"]
+                for row in rows
+                if isinstance(row, dict)
+                and row.get("rl_run_id") == run_id
+                and row.get("rl_attempt_id") == summary.attempt_id
+                and isinstance(row.get("run_id"), str)
+            )
+        return list(dict.fromkeys(links))
+    except (ImportError, OSError, ValueError, RuntimeError) as error:
+        logger.debug("EvalDash lookup unavailable for %s (%s)", summary.attempt_id, type(error).__name__)
+        return summary.evaldash_run_ids or []
+
+
 def publish_runs(
     outputs: Sequence[str],
     preset: presets.Preset,
@@ -466,6 +522,8 @@ def publish_runs(
                 )
                 if issue is not None:
                     record = record.model_copy(update={"issue": _link_issue(receipt, issue)})
+                if record.status == "succeeded" and (links := _evaldash_links(record, receipt.run_id, service_url)):
+                    record = record.model_copy(update={"evaldash_run_ids": links})
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if selected_id == current_id:
