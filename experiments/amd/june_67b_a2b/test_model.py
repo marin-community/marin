@@ -10,8 +10,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
-from levanter.grug.sharding import compact_grug_mesh
+from levanter.grug.sharding import Pembed_vocab, compact_grug_mesh
 from levanter.testing.devices import use_test_devices
 
 from experiments.amd.june_67b_a2b import model as amd
@@ -108,6 +109,36 @@ def test_amd_model_trains_like_june_from_the_same_parameters():
     ):
         g, want = np.asarray(g, np.float64), np.asarray(want, np.float64)
         assert np.linalg.norm(g - want) <= 1e-4 * max(np.linalg.norm(want), 1e-30), jax.tree_util.keystr(path)
+
+
+@pytest.mark.parametrize("model_axis", [1, 2])
+def test_embedding_lookup_gradient_is_the_scatter_add_and_repeats_bitwise(model_axis):
+    vocab, hidden = 64, 128
+    with use_test_devices(4):
+        mesh = compact_grug_mesh(expert_axis_size=2, model_axis_size=model_axis)
+    with use_test_devices(4), jax.set_mesh(mesh):
+        embed = jax.device_put(
+            jax.random.normal(jax.random.key(0), (vocab, hidden)), jax.NamedSharding(mesh, Pembed_vocab)
+        )
+        # Zipf-distributed ids, so most ids repeat within and across devices.
+        ids = (np.random.default_rng(0).zipf(1.3, size=(BATCH, 32)) % vocab).astype(np.int32)
+        tokens = jax.device_put(ids, jax.NamedSharding(mesh, P(june._BATCH_AXES, None)))
+        cotangent = jax.device_put(
+            jax.random.normal(jax.random.key(1), (BATCH, 32, hidden)), jax.NamedSharding(mesh, P(june._BATCH_AXES))
+        )
+
+        @jax.jit
+        def grads(embed, tokens, cotangent):
+            spec = P(june._BATCH_AXES)
+            ours = jax.vjp(lambda e: amd.embedding_lookup(e, tokens, spec), embed)[1](cotangent)[0]
+            scatter = jax.vjp(lambda e: e.at[tokens].get(out_sharding=spec), embed)[1](cotangent)[0]
+            return ours, scatter
+
+        first, scatter = grads(embed, tokens, cotangent)
+        second, _ = grads(embed, tokens, cotangent)
+
+    np.testing.assert_allclose(first, scatter, rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(first).view(np.uint32), np.asarray(second).view(np.uint32))
 
 
 @pytest.mark.parametrize(
