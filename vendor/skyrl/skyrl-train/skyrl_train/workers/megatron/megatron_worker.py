@@ -621,11 +621,14 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         )
 
     def profile_train_memory(self) -> dict:
-        """Exercise warm Adam at configured capacity before initial weight publication/rollouts."""
+        """Exercise the configured optimizer warm at capacity before initial weight publication/rollouts."""
         config = self.cfg.trainer.policy.megatron_config.memory_profile
         maximum = config.max_sequence_length
         if maximum > self.strategy.hf_config.max_position_embeddings:
             raise ValueError("Trainer sizing maximum exceeds the model's max_position_embeddings")
+        trained = self.cfg.trainer.algorithm.get("max_seq_len")
+        if trained is not None and trained > maximum:
+            raise ValueError("Trainer sizing maximum is below the trained sequence bound trainer.algorithm.max_seq_len")
         token_counts = sorted(set([*config.valid_token_counts, maximum]))
         device = torch.cuda.current_device()
         rng_state = MegatronStrategy.get_rng_state()
@@ -736,7 +739,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                 optimizer_parameters=master_shards,
                 cuda_devices=[device],
             ):
-                reports = warm_state_profile(token_counts, step=step, measure=measure)
+                warm_state_profile(token_counts, step=step, measure=measure)
         finally:
             for module, was_training in modes:
                 module.training = was_training

@@ -12,6 +12,7 @@ from skyrl_train.projected_softmax import projected_token_statistics
 @pytest.mark.parametrize("entropy_gradient", [False, True])
 @pytest.mark.parametrize("chunk_size", [1, 7, 64])
 def test_projected_statistics_match_full_projection(dtype, entropy_gradient, chunk_size):
+    temperature = 0.8
     generator = torch.Generator().manual_seed(42)
     hidden = torch.randn(19, 16, generator=generator, dtype=dtype).requires_grad_()
     weight = (torch.randn(37, 16, generator=generator, dtype=dtype) / 4).requires_grad_()
@@ -20,13 +21,13 @@ def test_projected_statistics_match_full_projection(dtype, entropy_gradient, chu
     if not entropy_gradient:
         coefficients[:, 1] = 0
     actual = projected_token_statistics(
-        hidden, weight, targets, chunk_size=chunk_size, temperature=0.8, entropy_gradient=entropy_gradient
+        hidden, weight, targets, chunk_size=chunk_size, temperature=temperature, entropy_gradient=entropy_gradient
     )
     actual_grads = torch.autograd.grad((actual * coefficients).sum(), (hidden, weight))
 
     ref_hidden = hidden.detach().clone().requires_grad_()
     ref_weight = weight.detach().clone().requires_grad_()
-    logits = F.linear(ref_hidden, ref_weight).div_(0.8).float()
+    logits = F.linear(ref_hidden, ref_weight).div_(temperature).float()
     log_softmax = logits.log_softmax(-1)
     reference = torch.stack(
         (log_softmax.gather(1, targets[:, None]).squeeze(1), -(log_softmax.exp() * log_softmax).sum(-1)), dim=1
@@ -87,9 +88,10 @@ class _AccumulatingProjection(torch.autograd.Function):
 
 def test_chunked_projection_preserves_fp32_main_grad_without_double_counting():
     torch.manual_seed(17)
+    initial_main_grad = 0.25
     hidden = torch.randn(17, 13, requires_grad=True)
     weight = torch.nn.Parameter(torch.randn(23, 13))
-    weight.main_grad = torch.full_like(weight, 0.25)
+    weight.main_grad = torch.full_like(weight, initial_main_grad)
     weight.grad_added_to_main_grad = False
     targets = torch.arange(17) % 23
     coefficients = torch.randn(17, 2)
@@ -109,6 +111,6 @@ def test_chunked_projection_preserves_fp32_main_grad_without_double_counting():
     lp = logits.log_softmax(-1)
     reference = torch.stack((lp.gather(1, targets[:, None]).squeeze(1), -(lp.exp() * lp).sum(-1)), -1)
     grad_logits = torch.autograd.grad((reference * coefficients).sum(), logits)[0]
-    expected = 0.25 + grad_logits.T @ hidden.detach()
+    expected = initial_main_grad + grad_logits.T @ hidden.detach()
     torch.testing.assert_close(weight.main_grad, expected, rtol=2e-6, atol=2e-6)
     assert weight.grad is None

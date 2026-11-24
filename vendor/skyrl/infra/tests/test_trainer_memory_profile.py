@@ -11,8 +11,9 @@ from skyrl_train.trainer_memory_profile import preserve_training_state, warm_sta
 @pytest.mark.parametrize("fails", [None, "warmup", "measured"])
 def test_sizing_restores_next_optimizer_update_and_rng(fails):
     torch.manual_seed(18)
+    learning_rate = 0.01
     model = torch.nn.Linear(3, 2)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
     initial_model = copy.deepcopy(model.state_dict())
     rng = torch.random.get_rng_state()
@@ -32,6 +33,7 @@ def test_sizing_restores_next_optimizer_update_and_rng(fails):
             raise RuntimeError("profile failed")
         return {"valid_tokens": tokens, "warm_optimizer": warm}
 
+    failed = False
     try:
         with preserve_training_state([model, optimizer, scheduler], optimizer_parameters=list(model.parameters()), cuda_devices=[]):
             reports = warm_state_profile([5, 9], step=step, measure=measure)
@@ -41,13 +43,15 @@ def test_sizing_restores_next_optimizer_update_and_rng(fails):
                 {"valid_tokens": 9, "warm_optimizer": True},
             ]
     except RuntimeError as error:
+        failed = True
         assert fails and str(error) == "profile failed"
+    assert failed == (fails is not None)
     step(7)
     actual = copy.deepcopy(model.state_dict())
 
     control = torch.nn.Linear(3, 2)
     control.load_state_dict(initial_model)
-    control_optimizer = torch.optim.Adam(control.parameters(), lr=0.01)
+    control_optimizer = torch.optim.Adam(control.parameters(), lr=learning_rate)
     torch.random.set_rng_state(rng)
     control(torch.randn(7, 3)).square().mean().backward()
     control_optimizer.step()

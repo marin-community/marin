@@ -57,7 +57,7 @@ def warm_state_profile(
     step: Callable[[int], None],
     measure: Callable[[int, Callable[[], None], bool], dict],
 ) -> list[dict]:
-    """Initialize Adam once, then measure an optimizer-inclusive step for each token count."""
+    """Initialize the optimizer once, then measure an optimizer-inclusive step for each token count."""
     if not valid_token_counts:
         raise ValueError("Trainer memory profile requires at least one token count")
     smallest = min(valid_token_counts)
