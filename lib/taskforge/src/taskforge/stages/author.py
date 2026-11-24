@@ -17,7 +17,7 @@ from taskforge.effects.log import Billing
 from taskforge.harness.protocol import Tool
 from taskforge.harness.role import Files, Fresh, Visit, sitting
 from taskforge.harness.tools.submit import RevisedSubmitTool, SubmitTool
-from taskforge.lowering import lowering_settings, requirements
+from taskforge.lowering import CALLBACK_JUDGE, lowering_settings, requirements
 from taskforge.model.controls import CONTROL, CONTROLS
 from taskforge.model.proposal import render
 from taskforge.model.review import VALIDATION_RESULT, Modify, Revise
@@ -44,6 +44,8 @@ async def author_reference(event: AuthorReference) -> str:
         grader = task["properties"]["grader"]
         del task["$defs"]["DecisionModelGrader"], grader["discriminator"]["mapping"]["decision_model"]
         grader["oneOf"].remove({"$ref": "#/$defs/DecisionModelGrader"})
+    for name in CALLBACK_JUDGE:  # fixed by the Taskforge judge
+        del task["$defs"]["JudgeSpec"]["properties"][name]
     return json.dumps({"TaskSpec": task, "Control": CONTROL.json_schema()}, sort_keys=True, separators=(",", ":"))
 
 

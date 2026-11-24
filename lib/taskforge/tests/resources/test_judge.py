@@ -3,11 +3,12 @@
 
 import asyncio
 import gzip
+import json
 import pickle
 import threading
 from collections.abc import Coroutine, Mapping, Sequence
 from concurrent.futures import Future
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -40,15 +41,17 @@ from taskforge.effects.log import EventLog, Record, decode
 from taskforge.llm.client import ContextExhausted, ModelClient, Progress, Segment
 from taskforge.llm.policy import GLM_5_3, ModelProfile, RetryPolicy
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings, requirements, rollout_engine
-from taskforge.model.controls import Candidate
+from taskforge.model.controls import Candidate, Control, ControlKind, RewardBand
 from taskforge.model.llm import Completion, FinishReason, Usage
+from taskforge.model.workpiece import Submission
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.grading import GradeCandidate, GradingResource
 from taskforge.resources.inference import GlmInference, InferenceClient, InferenceRequest
 from taskforge.resources.judge import JudgeEngine
 from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
-from taskforge.wiring import build_resources, install
+from taskforge.stages.author import AuthorReference, author_reference
+from taskforge.wiring import build_resources, install, submit_gate
 
 LABELS = {"PASS": 1.0, "FAIL": 0.0}
 TEMPLATE = "Reference: {reference}; candidate: {candidate}"
@@ -506,6 +509,26 @@ def test_disabled_and_script_judges_return_actionable_authored_rejection(script:
     policy = load_policy(DEFAULTS_DIR).overlaid({"judge.model": ""})
     with pytest.raises(InvalidTaskSpec, match="host VerifyitGrader" if script else "policy judge.model"):
         lower_with_settings(arithmetic_task(grader=grader), lowering_settings(policy), {})
+
+
+# Each judge field the author reference omits, and a value an author could still type for it.
+UNSHOWN = {"temperature": 0.7, "chat_template_kwargs": {"enable_thinking": "false"}}
+
+
+async def test_the_author_reference_omits_only_the_judge_fields_the_taskforge_judge_fixes() -> None:
+    shown = json.loads(await author_reference(AuthorReference(False)))["TaskSpec"]["$defs"]["JudgeSpec"]["properties"]
+    assert {"parse_attempts", "context_char_limit"} <= shown.keys()
+    assert {f.name for f in fields(JudgeSpec)} - shown.keys() == UNSHOWN.keys()
+
+
+@pytest.mark.parametrize("name", UNSHOWN)
+def test_a_task_setting_an_unshown_judge_field_is_returned_to_the_author_at_submit(name: str) -> None:
+    # Regression: the callback refused it only at grading, after a validation round, without naming the field.
+    task = arithmetic_task(grader=verifyit_package(labels(**{name: UNSHOWN[name]})).grader)
+    control = Control(Candidate("12"), RewardBand(Outcome.GRADED, 1, 1), ControlKind.POSITIVE)
+    settings = lowering_settings(load_policy(DEFAULTS_DIR).overlaid({"judge.model": "glm-5.3"}))
+    (message,) = submit_gate(Submission(task, (control,), ""), settings=settings, factories={})
+    assert message.startswith(f"Leave judge {name} unset: the Taskforge judge samples greedily")
 
 
 JUDGE_CAP = 3

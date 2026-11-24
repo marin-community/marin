@@ -243,7 +243,9 @@ re-executed on fresh machines, so a resumed author session takes minutes before 
 root read by the same revision, with the same effective inputs, resumes on its unfinished turns alone. The author's system prompt embeds the `TaskSpec` and control JSON schemas, generated from the installed
 TaskCompendium models at a root's first fresh author session and recorded as a `schema.author_reference` row
 (about 29 KB); every later author session of the root, in this launch or a resumed one, replays that text, so a
-wording-only change in TaskCompendium's schemas does not affect a root that recorded it. `wiring.install` binds
+wording-only change in TaskCompendium's schemas does not affect a root that recorded it. The schemas omit the judge spec's
+`temperature` and `chat_template_kwargs`: the Taskforge judge samples greedily and takes no chat template arguments,
+so the submit gate returns a task that sets either to the author. `wiring.install` binds
 this effect; a caller that passes `run_workpiece` its own installer must bind `AuthorReference` to
 `stages.author.author_reference` (or its own executor) to run the stock author stage.
 Each sandbox attempt opens a row naming its owner (stage, round, visit, role and roster occurrence) and

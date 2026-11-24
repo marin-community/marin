@@ -37,6 +37,9 @@ from taskforge.resources.sandbox.factories import (
 )
 
 SHELL_CAPABILITY = "shell"
+CALLBACK_JUDGE = {"temperature": 0.0, "chat_template_kwargs": {}}
+"""The judge fields the Taskforge judge fixes: it samples greedily and takes no chat template arguments, so the author
+reference omits them and an authored task must leave them unset."""
 TOOL_HARNESS = "tools"
 """The harness every Taskforge spec selects: a shell tool on the task machine, or a plain conversation without one."""
 
@@ -54,6 +57,11 @@ def check_authored(task: TaskSpec) -> None:
         judge = judge_spec(task.grader)
         if judge is not None:
             validate_judge_spec(judge)
+            if fixed := [name for name, value in CALLBACK_JUDGE.items() if getattr(judge, name) != value]:
+                raise InvalidTaskSpec(
+                    f"Leave judge {', '.join(fixed)} unset: the Taskforge judge samples greedily and takes no chat "
+                    "template arguments"
+                )
         resolve_shell_tool(task, DEFAULT_SHELL_TOOL)
         if task.answer_type in CONVERSATION_ANSWERS:
             require_submission_compatibility(task)
