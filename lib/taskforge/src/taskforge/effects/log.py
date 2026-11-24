@@ -7,7 +7,7 @@ import json
 import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from itertools import islice
 from pathlib import Path
@@ -32,6 +32,7 @@ from taskforge.effects.events import (
     StageCompleted,
     event_digest,
     json_value,
+    recorded_items,
 )
 from taskforge.effects.issues import LogFailure, Unreproducible
 from taskforge.model.stage import Stage
@@ -96,6 +97,13 @@ ROW = TypeAdapter(Row[dict[str, Any]])
 """A journal line, strictly typed; its event is decoded separately."""
 
 
+def physical(records: Sequence[Record], sequence: int, before: int) -> Resolved[object] | None:
+    """Row ``sequence`` when it precedes row ``before`` and is a physical resolution."""
+    if 0 < sequence < before and isinstance(row := records[sequence - 1].event, Resolved) and not row.replayed:
+        return row
+    return None
+
+
 def _sandbox(event: Event[object]) -> bool:
     return event.kind.startswith(f"{ENVIRONMENT}.")
 
@@ -139,13 +147,12 @@ def _encode(event: Event[object], sequence: int = 0, known: dict[str, int] | Non
     if known is not None:
         known.setdefault(key, sequence)
     payload = {
-        item.name: (
+        name: (
             {EVENT_TAG: _encode(value, sequence, known) if known is not None else {"ref": event_digest(value)}}
-            if isinstance(value := getattr(event, item.name), Event)
+            if isinstance(value, Event)
             else json_value(value)
         )
-        for item in fields(event)
-        if item.metadata.get("serialize", True)
+        for name, value in recorded_items(event)
     }
     return {"type": event.kind, "payload": payload}
 
@@ -366,10 +373,10 @@ class EventLog:
         self._replayable, self._replaces = replayable, replaces
         self._records = list(replay_from)
         self._pending: list[Record] = []
-        self._latest: dict[Key, Resolved[object]] = {}
-        """Each cached key's latest recorded resolution, unless an ``Invalidated`` row names it after that."""
+        self._latest: dict[Key, tuple[Resolved[object], int]] = {}
+        """Each key's latest resolution and original physical row; invalidation retires both."""
         for record in replay_from:
-            self._fold(record.event)
+            self._fold(record)
         self._owners = Owners(replay_from)
         self._attempts = attempts
         self._lock = asyncio.Lock()
@@ -398,7 +405,7 @@ class EventLog:
         record = Record(len(self._records) + 1, time.time(), event, opened, attempt, answers, billed)
         self._owners.add(record)
         self._records.append(record)
-        self._fold(event)
+        self._fold(record)
         if self._sink is not None:
             self._pending.append(record)
         return record
@@ -425,26 +432,42 @@ class EventLog:
                     await self._sleep(min(2**attempt, 30))
             raise LogFailure("Persistence requires at least one attempt")
 
-    def _fold(self, event: Event[object]) -> None:
+    def _fold(self, record: Record) -> None:
         """The one cache update, for history and live rows alike: per full key, the latest resolution replaces any
         earlier one, and an ``Invalidated`` row retires the resolution before it."""
+        event = record.event
         if isinstance(event, Invalidated):
             self._latest.pop((event_digest(event.request), event.fingerprints), None)
         elif isinstance(event, Resolved) and cached(event.fingerprints):
-            self._latest[event_digest(event.request), event.fingerprints] = event
+            key = (event_digest(event.request), event.fingerprints)
+            prior = self._latest.get(key) if event.replayed else None
+            self._latest[key] = (event, record.sequence if prior is None else prior[1])
+
+    def receipt(self, event: Event[object], fingerprints: tuple[Fingerprint, ...]) -> int | None:
+        """The row where ``event``'s latest result was bought; read right after its ``emit`` returns."""
+        latest = self._latest.get((event_digest(event), fingerprints))
+        return latest[1] if latest else None
+
+    def at(self, receipt: int, event: Event[object], fingerprints: tuple[Fingerprint, ...]) -> object:
+        """The result at row ``receipt``; any row but a physical resolution of ``event`` under ``fingerprints`` is
+        ``Unreproducible``."""
+        found = physical(self._records, receipt, len(self._records) + 1)
+        if found is None or (event_digest(found.request), found.fingerprints) != (event_digest(event), fingerprints):
+            raise Unreproducible(f"Row {receipt} is no physical resolution of {event.kind} under this run")
+        return found.value
 
     def lookup[T](self, event: Event[T], fingerprints: tuple[Fingerprint, ...]) -> T | Missing:
         """The cached result to replay for ``event``: its key's current resolution, unless this launch replaces it."""
         latest = self._latest.get((event_digest(event), fingerprints))
-        if latest is None or not self._replayable(latest) or self._replaces(latest):
+        if latest is None or not self._replayable(latest[0]) or self._replaces(latest[0]):
             return Missing()
-        return cast(T, latest.value)
+        return cast(T, latest[0].value)
 
     def invalidate(self, event: Event[object], fingerprints: tuple[Fingerprint, ...]) -> Record | None:
         """As ``event`` executes, the ``Invalidated`` row for its key's current resolution when this launch replaces
         it: one row per replaced result."""
         latest = self._latest.get((event_digest(event), fingerprints))
-        return None if latest is None or not self._replaces(latest) else self.append(Invalidated(event, fingerprints))
+        return None if latest is None or not self._replaces(latest[0]) else self.append(Invalidated(event, fingerprints))
 
     def attempt(self, sequence: int) -> Attempt:
         return self._owners.attempts[sequence]

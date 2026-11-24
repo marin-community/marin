@@ -120,10 +120,12 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
                     (workdir / "controls.json", CONTROLS.dump_json(submission.controls)),
                 )
             )
-        writes.extend(
-            (workdir / ".validation" / f"{index}.json", VALIDATION_RESULT.dump_json(evidence))
-            for index, evidence in enumerate(workpiece.evidence)
-        )
+        for index, evidence in enumerate(workpiece.evidence):
+            # Wire JSON writes a nonfinite reward as null; sorted keys keep the bytes independent of decode order.
+            wire = VALIDATION_RESULT.dump_json(evidence, exclude={"solver": {"__all__": {"receipt"}}})
+            writes.append(
+                (workdir / ".validation" / f"{index}.json", json.dumps(json.loads(wire), sort_keys=True).encode())
+            )
         writes.append((workdir / "proposal.json", proposal.encode()))
         return tuple(writes)
 

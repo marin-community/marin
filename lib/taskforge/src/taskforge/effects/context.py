@@ -110,6 +110,14 @@ class Context:
         value = self._log.lookup(event, self._handler(event)[2])
         return None if isinstance(value, Missing) else value
 
+    def receipt(self, event: Event[object]) -> int | None:
+        """Return the physical row of the event's latest resolution, if one exists."""
+        return self._log.receipt(event, self._handler(event)[2])
+
+    def recorded_at[T](self, receipt: int, event: Event[T]) -> T:
+        """Read a physical resolution at its row under the event's current fingerprints."""
+        return cast(T, self._log.at(receipt, event, self._handler(event)[2]))
+
     async def emit[T](self, event: Event[T]) -> T:
         chain = self._chain.get()
         handler, uses, fingerprints = self._handler(event)

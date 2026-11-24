@@ -108,7 +108,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 
 | path | contents |
 |---|---|
-| `journal.json` | the head: `format` (the JSON integer 12); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
+| `journal.json` | the head: `format` (the JSON integer 13); `writer`, the owning writer's random id; `chunks`, the chunk names in stream order; `size`, the bytes they hold; `status` (`stage`, `round`, `terminal`, which is `accepted`, `rejected`, `abandoned`, `held`, or `null` while running); `workpiece`, the terminal workpiece's object name or `null`; and `published_at`, the writer's clock at the swap |
 | `chunks/<sha256>.jsonl` | an immutable slice of the effect log (every request, result, tool call, retry, scope), ending at a line boundary and named by the SHA-256 of its bytes; published after 25 events or 60 s, whichever comes first |
 | `workpieces/<sha256>.json` | the immutable terminal workpiece (proposal, submission, evidence per round, decisions, terminal), named by the SHA-256 of its bytes; read it at `workpieces/<head.workpiece>` |
 
@@ -135,12 +135,13 @@ format 7 (no confirmation step: its acceptances end at the validation round and 
 resumed format-7 round would buy one its history lacks),
 fails with an error naming both formats and exits 4
 with the root untouched, before anything is claimed, whether the root is running, held or finished; `report`
-lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 12` and reports the
-rest. Formats 8 to 11 differ: their rows decode at format 12, so `report` reads them, but the driver refuses
+lists it as `skipped unsupported_format <root>/journal.json has journal format N, not 13` and reports the
+rest. Formats 8 to 12 differ: their rows decode at format 13, so `report` reads them, but the driver refuses
 to claim a running or held root of those formats, exiting 4 with its head untouched and naming the writer of its
 format or a fresh output prefix as the way on. Format 12 words two author requests otherwise: a final revision's
 request ends with its ordinal, and a too-easy placement's line no longer calls the round the one hardening attempt,
-so a resumed format-11 author would send requests its recorded calls did not. Formats 8 to 10 embedded a schema
+so a resumed format-11 author would send requests its recorded calls did not. Format 13 commits reviewed visits
+(above), which a format-12 root lacks, so its resumed rounds would decide again on re-observed evidence. Formats 8 to 10 embedded a schema
 reference in their author calls that this writer does not reproduce, so a resumed author would buy different
 answers that the recorded sandbox history then refuses. Format 11
 adds the `schema.author_reference` row (below), which a format-10 reader cannot decode; at 11 that reader refuses the
@@ -158,7 +159,10 @@ one envelope field; `billed` only on a plain row holding a resolution that was n
 resolution under re-executed sandbox fingerprints or a failure with an errno-name category, and no other
 row carries any of these, so cached results never enter an owner's history; references name an earlier
 open row or unanswered request of the same sandbox definition; and an answered request matches the
-request and outcome its owner already established at that position. A request left unanswered may differ
+request and outcome its owner already established at that position. A best-effort check for accidental corruption
+also requires each committed trial's receipt to name an earlier physical solver resolution of that trial's slot; a
+deliberately rewritten journal is out of scope, and reading a transcript at its receipt checks the full request again
+(a mismatch there holds the workpiece). A request left unanswered may differ
 from the recording, which is how a held divergence looks.
 A storage hiccup never costs paid model work; only an explicit refusal stops the writer
 (`checkpoint.is_transient_storage_error`). A refusal is an HTTP 4xx other than 408 and 429 (denied
@@ -209,6 +213,24 @@ non-finite sum, or all zero), is no outage: the reader raises a hold whose diagn
 capped at 300 characters and records no read, the solver batch lets every admitted slot settle and starts no
 further one, and the workpiece holds for a person (exit 0, as any held workpiece) instead of restarting the
 stage. A refusal of a slot's first read still restarts the stage, as before.
+
+A validation or confirmation visit that a continuing review decided on is committed: that review's `stage.completed`
+row carries the visit's identity (its stage, the workpiece it entered with and the run's compatibility digest) and its
+typed evidence, whose solver trials each name the journal row their result was bought at (`receipt`; none for a slot
+whose output budget ran out twice, the only case with no row; a slot-local refusal keeps its row). A later launch that enters the same visit takes
+that evidence and buys nothing inside it again: no solver, control, adversary or solve-review call, no stage duration
+sample, observer notification, sandbox reopen or decision-model answer; the pure review rule then decides again.
+The compatibility digest covers the whole policy, the band and budget, the adversary's and solve-review's effective
+sessions (sampling included), the rollout, grading and decision-model replay identities and the machine backends
+lowering may pick; a custom review rule or a role run by any harness but the exact stock loop has no stable identity,
+and such a run reuses no visit (logged once). Reuse identifies a role by its harness type, tool classes, settings and
+resource fingerprints, so a caller who assembles a harness by hand (its argument-repair callback, say) must keep that
+behaviour and the resource replay identity in step. A visit is reused only under the plan that committed it. An edit to the policy, even
+of an operational setting such as the solver heartbeat, is a different plan whose visits run afresh from the first
+one, and returning to an earlier plan returns to that plan's committed visits. A new plan's decisions follow its
+settings, so lowering `budget.max_missing_trials` below a round's missing slots turns that round into a hold.
+The author reads each round's evidence as `.validation/<n>.json` in ordinary JSON with sorted keys and without
+receipts (a nonfinite reward is `null`), so a cold launch hydrates the bytes the first one wrote.
 
 Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear. A held

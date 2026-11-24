@@ -583,12 +583,27 @@ async def test_an_outage_mid_wave_keeps_finished_siblings_and_resumes_paying_onl
 async def test_a_control_outage_admits_no_further_solver_slot_and_resumes_only_what_never_ran(
     proposal: TaskProposal,
 ) -> None:
-    clean, _, _ = await validated(proposal, FakeReader())
+    clean, _, cleaned = await validated(proposal, FakeReader())
     held, solved, history = await validated(proposal, FakeReader(down={"13"}), concurrency=1)
     assert isinstance(held, BaseExceptionGroup) and held.split(DecisionModelUnavailable)[1] is None
     assert solved == 1
-    resumed, solved, _ = await validated(proposal, FakeReader(), history, concurrency=1)
-    assert (resumed, solved) == (clean, 2)
+    resumed, solved, both = await validated(proposal, FakeReader(), history, concurrency=1)
+    assert isinstance(resumed, Validated) and isinstance(clean, Validated) and solved == 2
+    assert replace(resumed.result, solver=()) == replace(clean.result, solver=())
+    # Each history names its own rows; the evidence they hold is the same.
+    for result, records in ((clean.result, cleaned), (resumed.result, both)):
+        assert [trial.trial for trial in result.solver] == [0, 1, 2]
+        for trial in result.solver:
+            assert trial.receipt is not None
+            row = records[trial.receipt - 1].event
+            assert isinstance(row, Resolved) and not row.replayed
+            assert isinstance(request := row.request, SolverRollout) and (request.trial, request.attempt) == (
+                trial.trial,
+                0,
+            )
+    assert [replace(trial, receipt=None) for trial in resumed.result.solver] == [
+        replace(trial, receipt=None) for trial in clean.result.solver
+    ]
 
 
 async def test_an_outage_in_a_solver_slot_starts_no_waiting_slot_and_resumes_only_unfinished_slots(

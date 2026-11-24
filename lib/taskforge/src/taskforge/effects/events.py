@@ -11,6 +11,7 @@ the replay digest, so classes may move or be renamed freely. Changing a kind bre
 """
 
 import errno
+from collections.abc import Iterator
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from types import get_original_bases
@@ -28,6 +29,7 @@ from taskforge.model.content_hash import (
 from taskforge.model.content_hash import (
     json_value as json_value,
 )
+from taskforge.model.review import ValidationResult
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import Terminal
 
@@ -64,11 +66,7 @@ class Event(Generic[T_co]):
     _digest: str | None = field(default=None, init=False, repr=False, compare=False, metadata={"serialize": False})
 
     def identity(self) -> object:
-        return {
-            item.name: event_digest(value) if isinstance(value := getattr(self, item.name), Event) else value
-            for item in fields(self)
-            if item.metadata.get("serialize", True)
-        }
+        return {name: event_digest(value) if isinstance(value, Event) else value for name, value in recorded_items(self)}
 
     def __init_subclass__(cls) -> None:
         for base in get_original_bases(cls):
@@ -84,6 +82,16 @@ class Event(Generic[T_co]):
         if existing is not None and (fields is None or vars(existing).get("__dataclass_fields__") is not fields):
             raise TypeError(f"Event kind {kind!r} is declared by both {existing.__qualname__} and {cls.__qualname__}")
         EVENT_TYPES[kind] = cls
+
+
+def recorded_items(event: Event[object]) -> Iterator[tuple[str, object]]:
+    """Fields in both the journal and its replay identity; an ``absent_when_none`` field left at None is in neither, so
+    rows written before it existed keep both."""
+    for item in fields(event):
+        if item.metadata.get("serialize", True):
+            value = getattr(event, item.name)
+            if value is not None or not item.metadata.get("absent_when_none"):
+                yield item.name, value
 
 
 # Event registration is the sole module-state exception; logs never import classes.
@@ -172,6 +180,15 @@ class ScopeExited(Event[None]):
 
 
 @dataclass(frozen=True, slots=True)
+class Committed:
+    """The visit (``digest((stage, entry workpiece, compatibility))``) a continuing review decided on and its evidence;
+    a later launch entering it returns that evidence."""
+
+    visit: str
+    result: ValidationResult
+
+
+@dataclass(frozen=True, slots=True)
 class StageCompleted(Event[None]):
     kind = "stage.completed"
     stage: Stage | None
@@ -179,3 +196,4 @@ class StageCompleted(Event[None]):
     exit: str
     round: int = 0
     terminal: Terminal | None = None
+    committed: Committed | None = field(default=None, metadata={"absent_when_none": True})

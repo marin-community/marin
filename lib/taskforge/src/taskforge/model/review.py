@@ -316,6 +316,8 @@ class TrialResult:
     grade: GradeResult | None
     cause: Cause | None = None
     detail: Annotated[str, OMIT_EMPTY] = ""
+    receipt: Annotated[int | None, OMIT_NONE] = field(default=None, kw_only=True)
+    """The journal row of the physical resolution the result came from; None only when no row exists."""
 
 
 @dataclass(frozen=True, slots=True)

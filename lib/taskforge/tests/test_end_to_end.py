@@ -1219,6 +1219,54 @@ async def test_a_trickling_error_body_holds_the_workpiece_within_the_availabilit
     assert clock.waits == [1800.0] * 2 * STAGE_REPLAY_ATTEMPTS
 
 
+FORMAT_12_RETRY = Path(__file__).parent / "fixtures" / "format12-retry-accepted-root.json.gz"
+"""The whole root the format-12 writer published for an accepted run whose first control grade was
+unavailable: its same-round Retry stores the repeated ``stage.completed`` marker (row 61) as a digest reference."""
+FORMAT_12_REPORT = (
+    "workpieces=1 since_hours=all",
+    "terminal=running count=0",
+    "terminal=accepted count=1",
+    "terminal=rejected count=0",
+    "terminal=abandoned count=0",
+    "terminal=held count=0",
+    *(
+        f"tokens role={role} prompt=0 cached=0 completion=0"
+        for role in ("author", "solver", "adversary", "solve_review", "judge", "confirmation", "final_review")
+    ),
+    "stage=author n=1 p50_seconds=0.014 p90_seconds=0.014",
+    "stage=validate n=2 p50_seconds=0.002 p90_seconds=0.011",
+    "stage=review n=0 p50_seconds=n/a p90_seconds=n/a",
+    "stage=confirm n=0 p50_seconds=n/a p90_seconds=n/a",
+    "event_gap=RunCommand n=2 p50_seconds=0.000 p90_seconds=0.000",
+    "event_gap=WriteFile n=0 p50_seconds=n/a p90_seconds=n/a",
+    "event_gap=InferenceRequest n=4 p50_seconds=0.000 p90_seconds=0.000",
+)
+"""The format-12 report of ``FORMAT_12_RETRY``, its clock-relative acceptance rates aside."""
+
+
+# Regression: the format-13 reader hashed a marker without a commitment otherwise, so this root's digest reference
+# named no decoded event and the report failed on it.
+async def test_the_report_reads_a_format_12_root_whose_markers_repeat_as_its_own_report_does(tmp_path: Path) -> None:
+    root = plant_root(tmp_path / "out" / "retry", FORMAT_12_RETRY)
+    plant_root(tmp_path / "out" / "held", FORMAT_11_HELD)
+    alone = [line for line in await usage_report(str(root)) if not line.startswith("accepted_per_hour")]
+    together = [line for line in await usage_report(str(tmp_path / "out")) if not line.startswith("accepted_per_hour")]
+    assert tuple(alone) == FORMAT_12_REPORT
+    # The format-12 report of both roots: the format-11 author hold adds its hold and its author's samples.
+    assert together == [
+        "workpieces=2 since_hours=all",
+        *FORMAT_12_REPORT[1:5],
+        "terminal=held count=1",
+        "terminal=held reason=Hold count=1",
+        *FORMAT_12_REPORT[6:13],
+        "stage=author n=2 p50_seconds=0.011 p90_seconds=0.014",
+        *FORMAT_12_REPORT[14:17],
+        "event_gap=RunCommand n=4 p50_seconds=0.000 p90_seconds=0.000",
+        FORMAT_12_REPORT[18],
+        "event_gap=InferenceRequest n=7 p50_seconds=0.000 p90_seconds=0.000",
+    ]
+
+
 def serve(monkeypatch: pytest.MonkeyPatch, *attempts: Resources, workspace: WorkspaceHydration | None = None) -> None:
     """Each ``driver.one`` launch gets the next resources, and ``workspace`` when given."""
     remaining = iter(attempts)
@@ -2265,12 +2313,17 @@ FORMAT_11_HELD = Path(__file__).parent / "fixtures" / "format11-author-held-root
 author turns and their commands, after its author reference row."""
 
 
-@pytest.mark.parametrize("fixture,found", [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11)])
+FORMAT_12_HELD = Path(__file__).parent / "fixtures" / "format12-author-held-root.json.gz"
+"""The whole root the format-12 writer published for the held first launch of ``held_after_stamp``."""
+
+
+@pytest.mark.parametrize("fixture,found", [(FORMAT_10_HELD, 10), (FORMAT_11_HELD, 11), (FORMAT_12_HELD, 12)])
 async def test_a_held_earlier_format_root_is_refused_before_claim_and_the_report_still_reads_it(
     driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, fixture: Path, found: int
 ) -> None:
-    """A format-10 root's author calls embedded a reference this writer does not reproduce, and a format-11 root's
-    author requests were worded otherwise; the driver refuses either untouched and names the ways on."""
+    """A format-10 root's author calls embedded a reference this writer does not reproduce, a format-11 root's author
+    requests were worded otherwise, and a format-12 root committed no reviewed visit; the driver refuses each untouched
+    and names the ways on."""
     destination = plant_root(Path(driver_args.output) / driver.proposal_key(driver_args.proposals), fixture)
     before = tree(destination)
     monkeypatch.setattr(driver, "runtime", unexpected_runtime)
