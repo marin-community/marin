@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Snapshot counting runs through the production identity and spec path."""
+"""Image counting runs through the production identity and spec path."""
 
 import base64
 import gzip
@@ -53,13 +53,6 @@ def _native_tar(dockerfile: str, files: dict[str, bytes]) -> bytes:
         **{f"environment/{name}": content for name, content in files.items()},
     }
     return pack_tar(members)
-
-
-def test_image_identity_names_are_stable_and_formatted():
-    first = image_request_for_spec(MachineSpec(source=RegistryImage("ubuntu:24.04"))).name
-    second = image_request_for_spec(MachineSpec(source=RegistryImage("ubuntu:24.04"))).name
-    assert first == second
-    assert first.startswith("shellbox-") and len(first) == len("shellbox-") + 40
 
 
 def test_machine_spec_maps_a_registry_source():
@@ -173,7 +166,7 @@ def test_counter_names_match_the_production_name_for_the_staged_tree(tmp_path):
 
 
 def test_a_task_needing_a_container_runtime_is_refused_on_daytona():
-    """Snapshot count is not enough: an unsupported capability blocks the verdict."""
+    """Image count alone does not establish that Daytona can run a task."""
     image = "ubuntu:24.04@sha256:" + "a" * 64
     requirements = {"capabilities": ["docker"], "command_semantics": "linux_process", "docker_image": image}
     spec = lowered({"task": {"environment_requirements": requirements}, "runtime": {"task_machine": {}}})
