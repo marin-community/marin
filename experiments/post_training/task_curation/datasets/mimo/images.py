@@ -46,6 +46,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from iris.cluster.client.job_info import get_job_info
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import get_secret
 
@@ -541,6 +542,7 @@ def main() -> None:
     )
     release = {"repo": arguments.repo, "revision": arguments.revision}
     if arguments.recover_listing:
+        configure_coreweave_s3()
         token = get_secret("GHCR_PUSH_TOKEN") or os.environ.get("GHCR_PUSH_TOKEN", "")
         recover_provenance(output, arguments.package, token.strip(), job, release)
         return
