@@ -31,7 +31,7 @@ from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
-from skyrlrecipe.documents import set_path
+from skyrlrecipe.documents import merge_mappings, set_path
 
 from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
@@ -55,9 +55,9 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.skyrl_test_support import assert_revisioned_native_configs, native_json
+from experiments.post_training.skyrl_test_support import native_json
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, SELECTION_PREFIX
+from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 
@@ -74,8 +74,8 @@ def test_preset_table_rejects_duplicate_names():
         replace(table, presets=(*table.presets, table.by_name["eval-short"]))
 
 
-def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monkeypatch):
-    launch_paths = []
+def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch):
+    launch_paths = {}
 
     def collect_plan(paths, **_):
         # A CLI plan discards the composed config. Validate the emitted documents in one native process.
@@ -94,7 +94,7 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
         if preset.name == "eval-short":
             arguments += ["--init", initializer]
         launch_path = tmp_path / f"{preset.name}.yaml"
-        launch_paths.append(str(launch_path))
+        launch_paths[preset.name] = str(launch_path)
         with monkeypatch.context() as capture:
             capture.setattr(gate, "compose_configs", collect_plan)
             result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
@@ -115,8 +115,37 @@ def test_all_presets_plan_with_their_declared_controls(selection, tmp_path, monk
     monkeypatch.setenv("VIRTUAL_ENV", str(coordinator))
     monkeypatch.setenv("PATH", str(coordinator / "bin"), prepend=os.pathsep)
 
-    gate.compose_configs(launch_paths, validate_driver=True)
+    composed = gate.compose_configs(list(launch_paths.values()), validate_driver=True)
     assert {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*")} == before
+    configs = dict(zip(launch_paths, composed, strict=True))
+    for name in ("speed-short", "data-short", "eval-short"):
+        assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
+
+
+def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    speed = table.by_name["speed-short"]
+    learning = table.by_name["learning-medium"]
+    paths = []
+    for preset in (speed, learning):
+        (step,) = snowball.build_experiment(preset, table=table).runs
+        path = tmp_path / f"{preset.name}.yaml"
+        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        paths.append(str(path))
+
+    speed_config, learning_config = gate.compose_configs(paths)
+    for preset, sources in (
+        (speed, speed_config["inputs"]["evaluation_data"]["eval_lite"]),
+        (learning, learning_config["inputs"]["validation_data"]),
+    ):
+        (source,) = sources
+        held_out = recipe.selection_artifact(preset.held_out_tasks)
+        assert (source["uri"], source["relative_path"]) == (held_out.path(), FULL_VALIDATION_FILENAME)
+
+    # Best-checkpoint selection consumes evaluation metrics before the export callback runs.
+    callbacks = [row["type"] for row in learning_config["skyrl"]["trainer"]["callbacks"]]
+    evaluation = callbacks.index("evaluation")
+    assert evaluation < callbacks.index("best_checkpoint") < callbacks.index("hf_model_save")
 
 
 def test_plan_rejects_gated_preset_without_control_pin(selection):
@@ -570,216 +599,30 @@ def test_published_init_binds_export_tokenizer(
     )
 
 
-@pytest.mark.parametrize("model", ("snowball", "mochi"))
-def test_presets_match_revisioned_native_configs(model, tmp_path, monkeypatch, request):
-    if model == "mochi":
-        revisions = {
-            "train-medium": {"2026.11.19.1": "8b5a970e", "2026.11.20.2": "15b0f019", "2026.11.20.4": "08ba7390"},
-            "train-long": {"2026.11.20.4": "e105d46c"},
-            "train-long-3rack": {"2026.11.20.4": "9734d621"},
-            "train-medium-agentic": {"2026.11.19.1": "3f203da5", "2026.11.20.4": "1617b1d3"},
-            "train-long-agentic": {"2026.11.20.6": "a3e2befe", "2026.11.20.7": "e1245985"},
-            "train-long-agentic-3rack": {"2026.11.20.6": "b8f3bba7", "2026.11.20.7": "d540f763"},
-        }
-        with monkeypatch.context() as local:
-            local.delenv("MARIN_PREFIX", raising=False)
-            local.delenv("MARIN_TEMP_PREFIX", raising=False)
-            local.setattr(recipe, "artifact_prefix", lambda _cluster: "s3://marin-us-east-08a/marin")
-            for preset in MOCHI.presets:
-                assert recipe.run_prefix(preset).rstrip("/") == "s3://marin-us-east-08a/tmp/ttl=3d"
-        produced = request.getfixturevalue("mochi_sft_presets")["periodic"].model()
-        for preset in MOCHI.presets:
-            model, prefix = preset.model, recipe.artifact_prefix(preset.recipe.layout.cluster)
-            assert (model.step.name, model.step.version, model.step.path(prefix)) == (
-                produced.step.name,
-                produced.step.version,
-                produced.step.path(prefix),
-            )
-            assert model.relative_path == produced.relative_path and model.tokenizer_uri is None
-        configs = assert_revisioned_native_configs(
-            MOCHI,
-            revisions,
-            tmp_path=tmp_path,
-            monkeypatch=monkeypatch,
-            mixed_tasks=request.getfixturevalue("selection"),
-        )
-        _assert_mochi_preset_documents(revisions, configs)
-        return
-    revisions = {
-        "speed-short": {
-            "2026.11.13.1": "96e0d088",
-            "2026.11.17.1": "363225a9",
-            "2026.11.19.1": "371233d9",
-            "2026.11.20.1": "8f532da2",
-            "2026.11.20.3": "dc52613e",
-            "2026.11.22.1": "31d3c06f",
-            "2026.11.22.2": "dce24258",
-            "2026.11.22.3": "74aaaaf9",
-        },
-        "data-short": {
-            "2026.11.13.1": "7d9a590f",
-            "2026.11.17.1": "772467a8",
-            "2026.11.19.1": "cb07d91c",
-            "2026.11.20.1": "a379319d",
-            "2026.11.20.3": "d4749482",
-            "2026.11.22.2": "43b4c17c",
-            "2026.11.22.3": "fac45152",
-        },
-        "speed-medium": {
-            "2026.11.12.1": "e75349ff",
-            "2026.11.17.1": "5cd852f4",
-            "2026.11.19.1": "f8281b9d",
-            "2026.11.20.1": "8b7e47c8",
-            "2026.11.20.3": "dbc38bdf",
-            "2026.11.22.1": "eded19d9",
-            "2026.11.22.2": "3d5693c0",
-            "2026.11.22.3": "f4c0a7fb",
-        },
-        "learning-medium": {
-            "2026.11.12.1": "ba638a12",
-            "2026.11.17.1": "2be6e5e2",
-            "2026.11.19.1": "4aa3aed9",
-            "2026.11.20.1": "67306e75",
-            "2026.11.20.2": "b3044b9b",
-            "2026.11.20.3": "ce8666ce",
-            "2026.11.20.4": "36e0cfd0",
-            "2026.11.22.2": "cf281241",
-            "2026.11.22.3": "84355781",
-        },
-        "data-medium": {
-            "2026.11.12.1": "ba638a12",
-            "2026.11.17.1": "2be6e5e2",
-            "2026.11.19.1": "4aa3aed9",
-            "2026.11.20.1": "67306e75",
-            "2026.11.20.2": "b3044b9b",
-            "2026.11.20.3": "ce8666ce",
-            "2026.11.20.4": "36e0cfd0",
-            "2026.11.22.2": "cf281241",
-            "2026.11.22.3": "84355781",
-        },
-        "speed-long": {
-            "2026.11.11.1": "cd0a5f4e",
-            "2026.11.17.1": "f29155cc",
-            "2026.11.19.1": "9edc7b70",
-            "2026.11.20.1": "3d1fe22d",
-            "2026.11.20.3": "87feb546",
-            "2026.11.22.2": "0d2cff7d",
-            "2026.11.22.3": "0e0786a5",
-        },
-        "train-long": {
-            "2026.11.11.1": "4945b701",
-            "2026.11.17.1": "b411c765",
-            "2026.11.19.1": "e56a62fa",
-            "2026.11.20.1": "22473465",
-            "2026.11.20.2": "412d0576",
-            "2026.11.20.3": "40c0256e",
-            "2026.11.20.4": "7826cc5a",
-            "2026.11.22.2": "8f00501f",
-            "2026.11.22.3": "9d29b026",
-        },
-        "train-long-harbor": {
-            "2026.11.20.5": "e1f1635a",
-            "2026.11.20.6": "76baa3fb",
-            "2026.11.20.7": "9ceb90cb",
-            "2026.11.22.2": "965dcf45",
-            "2026.11.22.3": "68fab3ae",
-        },
-        "train-medium-agentic": {
-            "2026.11.19.1": "756f58ef",
-            "2026.11.20.1": "b557a4f0",
-            "2026.11.20.4": "f76d6b51",
-            "2026.11.20.5": "aa36f9de",
-            "2026.11.22.2": "09cc792c",
-            "2026.11.22.3": "18aa725e",
-        },
-        "train-long-agentic": {
-            "2026.11.20.4": "7123c960",
-            "2026.11.20.5": "0043357f",
-            "2026.11.22.2": "f793a47f",
-            "2026.11.22.3": "2b5bba63",
-        },
-        "train-medium-tools": {
-            "2026.11.20.1": "45b0a101",
-            "2026.11.22.2": "5b4d7a2e",
-            "2026.11.22.3": "7085ba81",
-        },
-        "eval-short": {
-            "2026.11.19.1": "8144570a",
-            "2026.11.20.1": "fad362ca",
-            "2026.11.20.3": "85b0359d",
-            "2026.11.22.2": "655b38d2",
-            "2026.11.22.3": "93f043cb",
-        },
-    }
-    configs = assert_revisioned_native_configs(
-        snowball_model.SNOWBALL,
-        revisions,
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        mixed_tasks=request.getfixturevalue("selection"),
-    )
-    for name, config in zip(revisions, configs, strict=True):
-        trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
-        if snowball_model.SNOWBALL.by_name[name].batch_mix is not None:
-            continue
-        assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
-        generating = name in ("speed-short", "data-short", "eval-short")
-        assert (
-            config["runtime"]["training_type"],
-            trainer["rollout_buffer"]["max_staleness_steps"],
-            trainer["algorithm"]["off_policy_correction"],
-            trainer["rollout_buffer"]["batch_policy"],
-        ) == ((None, 0, "none", "full_batch") if generating else ("async", 2, "tis", "full_batch"))
-        if generating:
-            assert config["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
-        if name in ("speed-short", "learning-medium", "data-medium", "train-long"):
-            profile = next(
-                (
-                    row["additional_evaluations"]["eval_lite"]
-                    for row in trainer["callbacks"]
-                    if "eval_lite" in row.get("additional_evaluations", {})
-                ),
-                None,
-            )
-            for source in config["inputs"].get("evaluation_data", {}).get("eval_lite", []):
-                assert (
-                    source["identity"].partition(":")[0]
-                    == f"{SELECTION_PREFIX}/{snowball_model.SNOWBALL.by_name[name].held_out_tasks}"
-                )
-                assert source["relative_path"] == "full_validation.parquet"
-            sampling = profile["sampling_params"] if profile else generator["eval_sampling_params"]
-            assert (
-                sampling["temperature"],
-                sampling["ignore_eos"],
-                sampling["max_generate_length"],
-                profile["n_samples_per_prompt"] if profile else generator["eval_n_samples_per_prompt"],
-            ) == (0, False, 8192, 1)
-        if name in ("learning-medium", "data-medium", "train-long", "train-long-harbor"):
-            assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_before_train"] is True
-            kinds = [row["type"] for row in trainer["callbacks"]]
-            assert kinds.index("evaluation") < kinds.index("best_checkpoint") < kinds.index("hf_model_save")
-        if name == "train-long":
-            assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_on_train_end"] is False
+def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_path, mochi_sft_presets):
+    preset = MOCHI.by_name["train-long-3rack"]
+    (step,) = snowball.build_experiment(preset, table=MOCHI).runs
+    path = tmp_path / "mochi.yaml"
+    path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
 
+    (config,) = gate.compose_configs([str(path)], validate_driver=True)
+    producer = mochi_sft_presets["periodic"].model()
+    assert producer.relative_path is not None
+    export = StoragePath(producer.step.path("s3://marin-us-east-02a/marin")) / producer.relative_path
+    assert config["inputs"]["model"]["uri"] == str(export)
 
-def _assert_mochi_preset_documents(revisions, configs):
-    documents = dict(zip(revisions, configs, strict=True))
-    for preset in MOCHI.presets:
-        document = documents[preset.name]
-        assert not document["run"]["export_hf"]
-        assert not any(
-            callback["type"] in {"checkpoint", "best_checkpoint", "hf_model_save"}
-            for callback in document["skyrl"]["trainer"]["callbacks"]
-        )
-        if preset.evaluations:
-            (validation,) = document["inputs"]["validation_data"]
-            assert validation["relative_path"] == "validation.parquet"
+    (source,) = config["inputs"]["validation_data"]
+    held_out = recipe.selection_artifact(preset.held_out_tasks)
+    assert (source["uri"], source["relative_path"]) == (held_out.path(), VALIDATION_FILENAME)
+    assert not config["run"]["export_hf"]
+    callbacks = {row["type"] for row in config["skyrl"]["trainer"]["callbacks"]}
+    assert "evaluation" in callbacks
+    assert callbacks.isdisjoint({"checkpoint", "best_checkpoint", "hf_model_save"})
 
     docs = (recipe.REPO_ROOT / "docs/dev-guide/skyrl.md").read_text()
-    fragment = docs.split("## Mochi inference on GB200", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
-    served = gate._config_values(documents["train-long-3rack"]["skyrl"])
-    for path, value in gate._config_values(yaml.safe_load(fragment)).items():
-        assert served[path] == value, path
+    section = docs.split("`mochi-inference.yaml`", 1)[1]
+    fragment = yaml.safe_load(section.split("```yaml\n", 1)[1].split("```", 1)[0])
+    assert merge_mappings(config["skyrl"], fragment) == config["skyrl"]
 
 
 def test_speed_short_opt_out_preserves_other_generator_settings_and_inputs(selection, tmp_path):

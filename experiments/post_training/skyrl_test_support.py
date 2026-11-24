@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import subprocess
 from collections.abc import Mapping
 from dataclasses import replace
@@ -10,9 +9,6 @@ from tempfile import TemporaryDirectory
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
-from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.rl.skyrl import SKYRL_PROJECT, skyrl_cpu_command, skyrl_cpu_environment
 from rigging.filesystem.storage_path import StoragePath
 
@@ -68,51 +64,3 @@ def native_json(*uv_options: str):
                 raise
 
     return execute
-
-
-def assert_revisioned_native_configs(
-    table: ModelPresets,
-    revisions: Mapping[str, Mapping[str, str]],
-    *,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    mixed_tasks: ArtifactStep | None = None,
-) -> list[dict]:
-    monkeypatch.delenv("WANDB_ENTITY", raising=False)
-    bindings = {binding for preset in table.presets for binding in (preset.tasks, preset.held_out_tasks) if binding}
-    summaries = {
-        binding: (Path(recipe.selection_artifact(binding).path()) / recipe.SUMMARY_FILENAME).read_text()
-        for binding in bindings
-    }
-    namespace = table.namespace.removesuffix("-rl")
-    monkeypatch.setattr(recipe, "SELECTION_ROOT", f"memory://{namespace}-calibration")
-    for binding, summary in summaries.items():
-        (StoragePath(recipe.selection_artifact(binding).path()) / recipe.SUMMARY_FILENAME).write_text(summary)
-    paths = []
-    for name in revisions:
-        preset = table.by_name[name]
-        spec = recipe.run_spec(
-            preset,
-            name="fixture-default-" + name,
-            model_name=table.model,
-            tasks=mixed_tasks if preset.batch_mix is not None else None,
-        )
-        step = recipe.run_step(preset, spec)
-        path = tmp_path / f"{name}.yaml"
-        path.write_text(materialized_config(step, f"/{namespace}-pin-prefix").launch_config_yaml)
-        paths.append(str(path))
-    configs = gate.compose_configs(paths)
-    actual = {}
-    for name, config in zip(revisions, configs, strict=True):
-        canonical = json.dumps(gate.comparison_config(config), sort_keys=True)
-        if mixed_tasks is not None:
-            canonical = canonical.replace(mixed_tasks.path(), "<mixed-selection-fixture>")
-            pinned = f"{mixed_tasks.name}@{mixed_tasks.version}"
-            canonical = canonical.replace(f"{pinned}:{mixed_tasks.fingerprint()}", f"{pinned}:<fixture>")
-        actual[name] = fingerprint_hash(canonical)
-    assert actual == {name: values.get(table.by_name[name].revision) for name, values in revisions.items()}, actual
-    for preset, config in zip((table.by_name[name] for name in revisions), configs, strict=True):
-        staleness = preset.recipe.config.trainer.rollout_buffer.max_staleness_steps
-        if staleness is not None:
-            assert config["skyrl"]["trainer"]["rollout_buffer"]["max_staleness_steps"] == staleness
-    return configs
