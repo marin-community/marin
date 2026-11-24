@@ -73,7 +73,7 @@ from taskforge.stages.author import author
 from taskforge.stages.classify import grade_cause, replayable_grade
 from taskforge.stages.exits import Decided, Validated
 from taskforge.stages.review import review
-from taskforge.stages.rules import default_review
+from taskforge.stages.rules import NO_CONTROLS, default_review
 from taskforge.stages.validate import adversary_result, claim_result, control_result, solver_result, validate
 from taskforge.wiring import build_config, install
 
@@ -181,7 +181,7 @@ SWE_IMAGE = "docker.io/swerebench/sweb.eval.x86_64.astropy_1776_astropy-12907@sh
 
 @pytest.mark.parametrize(
     "image,admitted,own",
-    [(SWE_IMAGE, [SWE_IMAGE], True), (SWE_IMAGE, [], False), (GRADER_BASE_IMAGE, [], True)],
+    [(SWE_IMAGE, [SWE_IMAGE], True), (SWE_IMAGE, [], False), (GRADER_BASE_IMAGE, [GRADER_BASE_IMAGE], True)],
     ids=["source-image", "unadmitted-image", "pinned-image"],
 )
 async def test_source_task_author_works_in_the_tasks_own_environment_when_admitted(
@@ -268,6 +268,30 @@ async def test_validate_returns_a_failing_environment_setup_to_the_author(workpi
     assert isinstance(decision, Modify) and any("git clone" in finding for finding in decision.findings)
 
 
+async def test_review_reports_no_solve_rate_for_a_source_task_whose_setup_failed(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    submission = replace(workpiece.submission, controls=())
+    source = Workpiece("source", submission=submission, source=submission)
+    ctx = Context(log=EventLog())
+    bundle = Resources(
+        Environments(),
+        FakeInference(()),
+        RolloutResource(SetupFails(), solver_model, "solver"),
+        GradingResource(SetupFails(), "grader"),
+        Clock(),
+        Ids(),
+        {},
+        FakeWeb({}, {}),
+    )
+    install(ctx, bundle)
+    result = (await validate(ctx, source, config(), bundle)).result
+    await ctx.drain()
+    decision = default_review(source.with_(evidence=(result,)), config().band, config().budget)
+    assert isinstance(decision, Modify) and NO_CONTROLS in decision.findings
+    # Every trial failed in setup, so none measured the task's difficulty.
+    assert not any("trials solved" in finding for finding in decision.findings)
+
+
 async def test_source_author_works_in_author_image_when_the_task_environment_will_not_start(
     workpiece: Workpiece,
 ) -> None:
@@ -299,6 +323,8 @@ async def test_source_author_works_in_author_image_when_the_task_environment_wil
     assert [requested.docker_image for requested in bundle.envs.requested] == [image, GRADER_BASE_IMAGE]
     assert harness.session is not None
     assert "exit=128" in harness.session.messages[-1].content
+    # On author.image the author is still told to keep the source's own image.
+    assert f"`{image}`" in harness.session.messages[0].content
 
 
 async def test_author_reference_describes_valid_wire_values_and_supported_environments(workpiece: Workpiece) -> None:

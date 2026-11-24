@@ -12,7 +12,7 @@ import os
 import subprocess
 import sys
 import traceback
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -33,9 +33,8 @@ from taskforge.lowering import check_candidates
 from taskforge.model.controls import CONTROLS, Control
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
-from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
-from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, parse_overlay
+from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.report import report
 from taskforge.resources.sandbox.factories import grading_environment
 from taskforge.stages.classify import replayable_grade
@@ -55,6 +54,8 @@ CONTROLS_SUFFIX = ".controls.json"
 """Beside a source task, optionally: the JSON list of ``Control`` values its source supplies, as an author's
 ``controls.json`` holds them."""
 SOURCE_TASK_NOTES = "source task"
+SOURCE_IMAGES = "sandbox.source_images"
+"""The policy key the driver sets from each source task's own images; an overlay may not set it."""
 
 
 def input_key(path: str) -> PurePosixPath:
@@ -137,7 +138,10 @@ async def recover(workdir: Path, destination: str) -> Status | None:
 def run_policy(path: str) -> tuple[Policy, Policy]:
     declared = load_policy(Path(__file__).parent / "policy" / "defaults")
     with open_url(path, "rt") as source:
-        return declared, declared.overlaid(parse_overlay(source.read()))
+        overlay = parse_overlay(source.read())
+    if SOURCE_IMAGES in overlay:
+        raise ValueError(f"{path} sets {SOURCE_IMAGES}, which the driver sets from each source task")
+    return declared, declared.overlaid(overlay)
 
 
 def eligible(proposal: TaskProposal, policy: Policy) -> bool:
@@ -185,14 +189,15 @@ def source_controls(task_path: str, task: TaskSpec) -> tuple[Control, ...]:
 def source_images(seed: Workpiece) -> tuple[str, ...]:
     """The container images a task from another source brings, for ``sandbox.source_images``; none for a proposal.
 
-    These are the task's and its grader's own images; the pinned image needs no admission.
+    These are the task's and its grader's own images, the pinned image included when the source uses it:
+    lowering admits exactly these for the task, so a revision cannot move it onto another image.
     """
     if seed.proposal is not None or seed.submission is None:
         return ()
     task = seed.submission.task
     grader = grading_environment(task)
     images = {task.environment_requirements.docker_image, None if grader is None else grader.docker_image}
-    return tuple(sorted(image for image in images if image not in (None, GRADER_BASE_IMAGE)))
+    return tuple(sorted(image for image in images if image is not None))
 
 
 def check_seed(published: Path, initial: Workpiece) -> None:
@@ -211,18 +216,13 @@ def check_seed(published: Path, initial: Workpiece) -> None:
         raise ValueError(f"{published} was published for another version of this input; use a new --output")
 
 
-def first_stage(seed: Workpiece) -> Stage:
-    """Validate a task from another source before any author revises it; author a proposal."""
-    return Stage.AUTHOR if seed.proposal is not None else Stage.VALIDATE
-
-
 async def one(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
     _, policy = run_policy(args.policy)
     initial = seed(args.proposals, policy)
     if initial is None:
         return
-    policy = policy.overlaid({"sandbox.source_images": list(source_images(initial))})
+    policy = policy.overlaid({SOURCE_IMAGES: list(source_images(initial))})
     identity = input_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
@@ -253,7 +253,6 @@ async def one(args: argparse.Namespace) -> None:
                 policy.setting("provider.pool", str),
             )
             async with runtime(policy, args.arm, source, get_secret("PARALLEL_API_KEY") or "") as (config, resources):
-                config = replace(config, initial_stage=first_stage(initial))
                 wp = await run_workpiece(initial, config, resources, log, install=install)
     except* (Hold, Restart, Transient, LogFailure) as error:
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))

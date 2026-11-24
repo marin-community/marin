@@ -136,8 +136,10 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
         for reason in trial.reasons
     )
     if findings:
-        # A source task's first author also needs the solve rate its review measured, not only the missing controls.
-        return Modify((*findings, finding) if NO_CONTROLS in findings else findings)
+        # A source task's first author also needs the solve rate its review measured, not only the missing
+        # controls; trials that failed as task defects measured nothing, so then there is no rate to report.
+        measured = not any(CAUSE_DECISIONS.get(trial.cause) is Modify for trial in result.solver)
+        return Modify((*findings, finding) if NO_CONTROLS in findings and measured else findings)
     if unstarted:
         # The setup failure that stopped an adversary normally fails the solver trials too; alone it is incomplete.
         return Incomplete(unstarted)

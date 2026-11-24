@@ -104,6 +104,9 @@ OTHER_IMAGE = "registry.example.com/other@sha256:" + "c" * 64
         ((SOURCE_IMAGE, SOURCE_GRADER_IMAGE), SOURCE_IMAGE, SOURCE_GRADER_IMAGE, None),
         ((SOURCE_IMAGE, SOURCE_GRADER_IMAGE), SOURCE_IMAGE, OTHER_IMAGE, "grader image"),
         ((SOURCE_IMAGE, SOURCE_GRADER_IMAGE), OTHER_IMAGE, SOURCE_GRADER_IMAGE, "task image"),
+        # The pinned image is admitted for a source task only when its source used it.
+        ((SOURCE_IMAGE,), SOURCE_IMAGE, GRADER_BASE_IMAGE, "grader image"),
+        ((SOURCE_IMAGE, GRADER_BASE_IMAGE), SOURCE_IMAGE, GRADER_BASE_IMAGE, None),
     ],
 )
 def test_source_images_admit_only_the_source_tasks_own_images(

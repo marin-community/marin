@@ -224,18 +224,21 @@ resources hydrated.
 A task from another source usually brings its own containers: a SWE-rebench task names the
 image that holds its repository and tests, and often a separate grader image. The driver admits
 exactly those images: it sets `sandbox.source_images` to the source task's own task and grader
-images (those other than the pinned one) before the workpiece runs, and Iris runs them like any
-other container, with no container nested inside another. Lowering then refuses any other task or
-grader image for that task, so the author can't move it onto an invented image. The images must
+images before the workpiece runs, and Iris runs them like any other container, with no container
+nested inside another. A policy overlay may not set that key. Lowering then refuses any other task
+or grader image for that task, the pinned image included unless the source used it, so a revision
+can't move the task onto another image. The images must
 already be built and pinned; Taskforge doesn't build images. The author of a task whose image is a
 source image works in that task's environment, setup commands and working directory included,
-instead of `author.image`, so it sees what the solver and grader see; its system prompt describes
-that machine and tells it to keep the source images. A generated task has no source images, so
+instead of `author.image`, with the task's files installed before its setup runs, so it sees what
+the solver and grader see. Its system prompt describes that machine and tells it to keep the source
+images, also when it falls back to `author.image`. A generated task has no source images, so
 nothing changes for generation runs.
 
 A task environment whose own setup commands fail is evidence about the task, not a machine fault to
 retry. Validation records each such trial and control as an invalid task, so review returns it to
-the author with the failing command and its output. The author of a source task whose environment
+the author with the failing command and its output, without a solve rate, since those trials
+measured nothing. The author of a source task whose environment
 won't start works in `author.image` instead, with the task's files hydrated, and its conversation
 says why.
 

@@ -18,7 +18,7 @@ from shellbox.backends.iris.machine import IrisMachineFactory
 from taskcompendium.models import GraderMachine, ScriptGrader, StdoutReward
 
 from taskforge import wiring
-from taskforge.driver import eligible, input_bucket, input_key, inputs, seed, source_images
+from taskforge.driver import eligible, input_bucket, input_key, inputs, run_policy, seed, source_images
 from taskforge.lowering import requirements
 from taskforge.model.proposal import Environment, TaskProposal, Verification
 from taskforge.policy import GRADER_BASE_IMAGE, load_policy
@@ -200,7 +200,7 @@ def test_source_images_are_the_source_tasks_own_task_and_grader_images(tmp_path:
         (
             "pinned",
             grader.model_copy(update={"placement": GraderMachine(environment=requirements(image=GRADER_BASE_IMAGE))}),
-            (task_image,),
+            (task_image, GRADER_BASE_IMAGE),
         ),
     ):
         path = tmp_path / f"{name}.task.json"
@@ -210,3 +210,10 @@ def test_source_images_are_the_source_tasks_own_task_and_grader_images(tmp_path:
         path.write_text(task.model_dump_json())
         workpiece = seed(str(path), policy)
         assert workpiece is not None and source_images(workpiece) == tuple(sorted(expected))
+
+
+def test_policy_overlay_may_not_set_the_driver_owned_source_images(tmp_path: Path) -> None:
+    overlay = tmp_path / "policy.json"
+    overlay.write_text(json.dumps({"sandbox.source_images": ["registry.example/any@sha256:" + "e" * 64]}))
+    with pytest.raises(ValueError, match=r"sets sandbox\.source_images"):
+        run_policy(str(overlay))

@@ -56,9 +56,10 @@ def system_prompt(policy: Policy, machine: EnvironmentRequirements) -> str:
     image = machine.docker_image
     workdir = policy.setting("author.workdir", str)
     sources = policy.setting("sandbox.source_images", tuple)
+    # Only a source task's run has source images; its author keeps them even on the author.image fallback.
     rule = (
         policy.prompt("author.source_image_rule").render(images=", ".join(f"`{source}`" for source in sources))
-        if image in sources
+        if sources
         else policy.prompt("author.image_rule").template
     )
     environment = (
@@ -118,15 +119,14 @@ def source_environment(workpiece: Workpiece, policy: Policy) -> EnvironmentRequi
     """The source task's own container environment for its author, or ``None`` for ``author.image``.
 
     A task from another source names the image its repository and tests live in, so the author works in
-    the same environment, setup included, that the solver and grader get, when that image is admitted:
-    the pinned image or one of ``sandbox.source_images``. A generated task's author always gets
-    ``author.image``.
+    the same environment, setup included, that the solver and grader get, when that image is one of the
+    source's own, ``sandbox.source_images``. A generated task's author always gets ``author.image``.
     """
     submission = workpiece.submission
     if workpiece.source is None or submission is None:
         return None
     environment = submission.task.environment_requirements
-    admitted = (GRADER_BASE_IMAGE, *policy.setting("sandbox.source_images", tuple))
+    admitted = policy.setting("sandbox.source_images", tuple)
     return host_requirements(environment) if environment.docker_image in admitted else None
 
 

@@ -45,10 +45,14 @@ async def run_workpiece(
     *,
     install: Callable[[Context, Resources], None],
 ) -> Workpiece:
-    """Run ``seed``, a new workpiece holding a proposal or an existing task, from ``config.initial_stage``."""
+    """Run ``seed``, a new workpiece holding a proposal or an existing task.
+
+    A proposal starts at the author. A task from another source starts at validation, so its first round
+    measures the task as its source wrote it, before any author revises it.
+    """
     ctx = Context(log=log)
     wp = seed
-    stage = config.initial_stage
+    stage = Stage.AUTHOR if seed.proposal is not None else Stage.VALIDATE
     config_digest = digest(config.policy)
     interrupted = False
     stage_attempts: dict[tuple[Stage, int], int] = {}

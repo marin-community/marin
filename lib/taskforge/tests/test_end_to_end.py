@@ -203,13 +203,10 @@ async def test_source_task_gets_as_many_author_sessions_as_a_proposal(proposal: 
     settings = replace(config("S"), review=needs_revision)
     source = Workpiece("source", submission=Submission(arithmetic_task(), (), "source task"))
     runs = {}
-    for name, seed, first in (
-        ("proposal", Workpiece(proposal.header.id, proposal), Stage.AUTHOR),
-        ("source", source, Stage.VALIDATE),
-    ):
+    for name, seed in (("proposal", Workpiece(proposal.header.id, proposal)), ("source", source)):
         log = EventLog()
         bundle = resources(Envs(), (*script("S"), *script("S")))
-        wp = await run_workpiece(seed, replace(settings, initial_stage=first), bundle, log, install=install)
+        wp = await run_workpiece(seed, settings, bundle, log, install=install)
         stages = [record.event.stage for record in log.records if isinstance(record.event, StageCompleted)]
         runs[name] = (wp.terminal, stages.count(Stage.AUTHOR), wp.decisions[-1])
     assert runs["proposal"][:2] == runs["source"][:2] == (Terminal.ABANDONED, 2)
