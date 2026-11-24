@@ -35,6 +35,7 @@ DEPENDENCIES = {
     "boxed_math": ("math.py", "amc.py", "minerva.py", "relations.py"),
     "amc": ("amc.py",),
     "olympiad": ("olympiad.py", "minerva.py", "relations.py"),
+    "frontierscience_research": ("frontierscience.py",),
     "facts_grounding": ("facts_grounding.py",),
     "gpqa": ("choices.py",),
     "mmlu_pro": ("choices.py",),

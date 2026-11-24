@@ -57,6 +57,11 @@ def score(scorer: str, config: dict[str, Any], response: str, judge: JudgeSpec |
         assert judge is not None, "A judged olympiad scorer requires --judge-spec"
         verdict = grade_judge_candidate(judge, answer)
         return Reward(verdict.reward, verdict.status, {**verdict.detail, "extracted": answer, "method": "llm_judge"})
+    if scorer == "frontierscience_research":
+        from .frontierscience import grade_research
+
+        assert judge is not None, "The FrontierScience Research scorer requires --judge-spec"
+        return grade_research(judge, response)
     if scorer == "facts_grounding":
         from verifyit.modes.grade_judge import judge_reply
 

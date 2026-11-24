@@ -16,7 +16,6 @@ from verifyit.reasoning_markup import REASONING_DELIMITERS
 from verifyit.spec import (
     RUBRIC_ANSWERS,
     RUBRIC_CHECKLIST,
-    RUBRIC_FRONTIERSCIENCE,
     RUBRIC_LABELS,
     RUBRIC_PAIRWISE,
     RUBRIC_REFERENCE,
@@ -83,7 +82,7 @@ def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
         raise InvalidTask("judge response_format must be a table")
     if spec.response_format and (spec.rubric != RUBRIC_LABELS or spec.api != "chat_completions"):
         raise InvalidTask("judge response_format requires the labels rubric over Chat Completions")
-    if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE, RUBRIC_ANSWERS, RUBRIC_FRONTIERSCIENCE) and (
+    if spec.rubric in (RUBRIC_LABELS, RUBRIC_PAIRWISE, RUBRIC_ANSWERS) and (
         not isinstance(spec.system_prompt, str)
         or not isinstance(spec.prompt_template, str)
         or not isinstance(spec.question, str)
@@ -98,11 +97,6 @@ def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
         raise InvalidTask("judge rubric 'checklist' needs non-empty criteria")
     if spec.rubric == RUBRIC_LABELS:
         _validate_label_spec(spec, references)
-    if spec.rubric == RUBRIC_FRONTIERSCIENCE:
-        if len(references) != 1 or len(spec.references) != 1:
-            raise InvalidTask("judge template requires one reference")
-        if not {"reference", "candidate"} <= _template_fields(spec, LABEL_FIELDS):
-            raise InvalidTask("judge template must include reference and candidate")
     if spec.rubric == RUBRIC_ANSWERS:
         _validate_answers_spec(spec, references)
     if spec.rubric == RUBRIC_PAIRWISE:

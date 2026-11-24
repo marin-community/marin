@@ -5,13 +5,15 @@
 
 from pathlib import Path
 
-from verifyit.spec import RUBRIC_FRONTIERSCIENCE, EmptyOutputPolicy, JudgeSpec
+from verifyit.spec import JudgeSpec
 
 from taskcompendium.convert.answers import answer_task, source_evidence
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationItem
-from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 
 # Appendix B, transcribed by bytedance/axion1_0 at 96ce1830d87399f20577790f405fe2407da34156.
@@ -39,11 +41,10 @@ def convert_olympiad(row: RawRow, _context: ConversionContext) -> TaskSpec:
     return task.model_copy(update={"tags": ("eval", "benchmark:frontierscience-olympiad")})
 
 
-def convert_research(row: RawRow, _context: ConversionContext) -> TaskSpec:
+def convert_research(row: RawRow, context: ConversionContext) -> TaskSpec:
     """Keep each released row and use its answer field as the private scoring rubric."""
     problem = row.data["problem"]
     spec = JudgeSpec(
-        rubric=RUBRIC_FRONTIERSCIENCE,
         question=problem,
         references=(row.data["answer"],),
         model=JUDGE_MODEL,
@@ -52,10 +53,20 @@ def convert_research(row: RawRow, _context: ConversionContext) -> TaskSpec:
         max_completion_tokens=32768,
         request_timeout=300,
         exact_gate=False,
-        # Pass blank finals to VerifyIt so the local grader records both Research metrics at zero.
-        empty_output=EmptyOutputPolicy.GRADE,
     )
-    task = answer_task(row, prompt=problem, spec=spec, evidence=row.data)
+    environment = required_grader_environment(context)
+    task = conversation_task(
+        row,
+        events=(TextMessage(role="user", content=problem),),
+        package=source_package(
+            "frontierscience_research",
+            {},
+            judge=spec,
+            environment=environment.model_copy(update={"capabilities": (*environment.capabilities, "network")}),
+            timeout=60 + max(spec.transport_budget, spec.request_timeout),
+        ),
+        evidence=row.data,
+    )
     return task.model_copy(update={"tags": ("eval", "benchmark:frontierscience-research")})
 
 

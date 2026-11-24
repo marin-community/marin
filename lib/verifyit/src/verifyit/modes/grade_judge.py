@@ -3,7 +3,7 @@
 
 """Mode judge: IFEval gate, exact gate, then an LLM judge.
 
-``reference`` ports the Nemotron open-QA harness: most correct responses match a
+Five rubrics. ``reference`` ports the Nemotron open-QA harness: most correct responses match a
 reference verbatim once normalized, so the exact gate answers them for free and only the survivors
 reach the model. ``checklist`` ports the rewardkit checklist graders: each criterion is a yes/no
 question put to the model on its own, and the reward is the fraction answered yes, as rewardkit's
@@ -11,7 +11,6 @@ default mean aggregation scored them. ``labels`` maps a configured final verdict
 explicit task score. ``pairwise`` ports Arena-Hard's two-game comparison against a baseline answer.
 ``answers`` follows Humanity's Last Exam's judge, extended to several results: one call returns a
 JSON verdict per reference, and the task scores 1 only when every one is correct.
-FrontierScience Research retains rubric points and passes at seven of ten.
 All rubrics can sit behind ``constraints``, deterministic IFEval checks that must all pass first.
 
 The judge is any OpenAI-compatible chat endpoint, configured through ``VERIFYIT_JUDGE_BASE_URL``,
@@ -32,7 +31,6 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict, TypeVar, cast
@@ -58,7 +56,6 @@ from verifyit.modes.grade_exact import grade_exact_candidate
 from verifyit.modes.ifeval import Check
 from verifyit.spec import (
     RUBRIC_ANSWERS,
-    RUBRIC_FRONTIERSCIENCE,
     RUBRIC_LABELS,
     RUBRIC_PAIRWISE,
     RUBRIC_REFERENCE,
@@ -198,14 +195,8 @@ def grade(
     context = _context(spec, tests_dir)
     candidate = read_output(spec, workspace)
     if candidate is None:
-        return _no_output(spec)
+        return scored(0.0, reason="no_output")
     return grade_judge_candidate(spec, candidate, context=context, runtime=runtime)
-
-
-def _no_output(spec: JudgeSpec) -> Reward:
-    if spec.rubric == RUBRIC_FRONTIERSCIENCE:
-        return scored(0.0, reason="no_output", metrics={"pass_rate": 0.0, "rubric_points": 0.0})
-    return scored(0.0, reason="no_output")
 
 
 @dataclass(frozen=True)
@@ -274,8 +265,8 @@ def grade_judge_candidate(
         raise InvalidTask("judge candidate must be text")
     for step in validated.candidate_steps:
         candidate = step(candidate)
-    if not candidate.strip() and (spec.rubric == RUBRIC_FRONTIERSCIENCE or policy is EmptyOutputPolicy.ZERO):
-        return _no_output(spec)
+    if policy is EmptyOutputPolicy.ZERO and not candidate.strip():
+        return scored(0.0, reason="no_output")
     context = context[: spec.context_char_limit]
     failed = [
         constraint.name for constraint, check in validated.checks if not _passes(check, candidate, constraint.params)
@@ -310,22 +301,6 @@ def grade_judge_candidate(
             return _judge_reference(spec, validated.references, candidate, client, model)
         if spec.rubric == RUBRIC_LABELS:
             return _judge_labels(spec, validated.references[0], context, candidate, client, model)
-        if spec.rubric == RUBRIC_FRONTIERSCIENCE:
-            fields = {
-                "question": spec.question,
-                "reference": validated.references[0],
-                "candidate": candidate,
-                "context": context,
-            }
-            answer, detail = _judged_answer(
-                spec,
-                client,
-                model,
-                _judge_messages(spec, fields),
-                attempt_detail={},
-                temperature=spec.sampling.temperature,
-            )
-            return _research_verdict(answer, detail)
         if spec.rubric == RUBRIC_PAIRWISE:
             return _judge_pairwise(spec, spec.references[0], candidate, client, model)
         if spec.rubric == RUBRIC_ANSWERS:
@@ -548,18 +523,6 @@ def _pairwise_verdict(reply: str, patterns: tuple[str, ...]) -> str | None:
         if matches:
             return matches[-1].strip("\n")
     return None
-
-
-def _research_verdict(answer: str, detail: dict[str, Any]) -> Reward:
-    lines = answer.strip().splitlines()
-    verdicts = [line.strip() for line in lines if line.strip().startswith("VERDICT:")]
-    if len(verdicts) != 1 or verdicts[0] != lines[-1].strip():
-        raise GradingInfraError("judge must end with a single Research verdict", **detail)
-    match = re.fullmatch(r"VERDICT: ([0-9]+(?:\.[0-9]+)?)", verdicts[0])
-    if not match or (points := Decimal(match[1])) > 10:
-        raise GradingInfraError("judge must return Research rubric points between 0 and 10", **detail)
-    passed = float(points >= 7)
-    return scored(passed, **detail, verdict=verdicts[0], metrics={"pass_rate": passed, "rubric_points": float(points)})
 
 
 def _label_completion(
