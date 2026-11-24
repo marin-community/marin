@@ -4,7 +4,8 @@
 """The whole-catalog run: stage 1 over every shard, stage 2 scores, and the removal list.
 
 ``locate``: one row per keyed item stream of ``keys.parquet``: its key-1 hash, the key window and its
-offset, and the item's question stream, so a scan can cut the excerpt around a hit.
+offset, and the item's question stream without its eval's shared prompt text, so a scan can cut the
+excerpt around the question (or, when the question is not found whole, around the key's first match).
 ``scan``: a Zephyr job over every shard of the sources (worker code in ``candidates.py``).
 Scores come from ``catalog_score.py`` (GPU), which writes ``scores/<shard>.parquet``.
 ``collect``: a record is removed when one of its pairs has a mean score at or above ``--cutoff``. Writes
@@ -20,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import pyarrow as pa
 from fray.types import ResourceConfig
-from marin.datakit.decon_keys import LOCATOR_COLUMNS, WINDOW, KeyStream, key_streams, text_stream
+from marin.datakit.decon_keys import LOCATOR_COLUMNS, WINDOW, KeyStream, key_streams, template_bounds, text_stream
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
@@ -40,6 +41,15 @@ from experiments.datakit.decontam.encoder.tables import (
 logger = logging.getLogger(__name__)
 
 
+def located_questions(questions: dict[str, str], evals: dict[str, str], width: int = WINDOW) -> dict[str, str]:
+    """Each item's question stream without the prefix and suffix that all of its eval's questions share (the
+    prompt text, such as "Question: ... Answer:"), so that the scan finds a copy written without that text."""
+    ids = list(questions)
+    streams = [text_stream(questions[item]) for item in ids]
+    bounds = template_bounds(streams, [evals[item] for item in ids], width)
+    return {item: stream[low:high] for item, stream, (low, high) in zip(ids, streams, bounds, strict=True)}
+
+
 def locate(stage1: str, items_root: str, output: str, width: int = WINDOW) -> None:
     keys = read_table(prefix_join(stage1, "keys.parquet"), ["id", "kind", "key1_hash", "key1_offset"]).to_pandas()
     keys = keys[keys["key1_hash"] != 0]
@@ -48,6 +58,7 @@ def locate(stage1: str, items_root: str, output: str, width: int = WINDOW) -> No
     for path in parquet_files(items_root):
         table = read_frame(path, ["id", "eval"])
         evals.update(zip(table["id"], table["eval"], strict=True))
+    question_of = located_questions({item: text.question for item, text in texts.items()}, evals, width)
     columns: dict[str, list] = {name: [] for name in LOCATOR_COLUMNS}
     for item, kind, key1_hash, offset in zip(
         keys["id"], keys["kind"], keys["key1_hash"], keys["key1_offset"], strict=True
@@ -61,7 +72,7 @@ def locate(stage1: str, items_root: str, output: str, width: int = WINDOW) -> No
             int(key1_hash),
             stream[offset : offset + width],
             int(offset),
-            text_stream(text.question),
+            question_of[item],
             len(text.question),
         )
         for name, value in zip(LOCATOR_COLUMNS, values, strict=True):

@@ -12,13 +12,16 @@ from marin.datakit.decon_keys import (
     WINDOW,
     KeyStream,
     Windows,
+    excerpt,
     item_stream,
     keys_table,
+    record_readings,
     text_stream,
     window_hashes,
 )
 
 from experiments.datakit.decontam.encoder import candidates, rarest_key
+from experiments.datakit.decontam.encoder.catalog import located_questions
 from experiments.datakit.decontam.encoder.items import lmh_item, shared_values
 from experiments.datakit.decontam.encoder.planted import holds_key, negative_forms, positive_forms
 from experiments.datakit.decontam.encoder.synthetic import context_pairs, generic_pairs
@@ -310,3 +313,25 @@ def test_a_scan_refuses_an_output_written_with_other_records(tmp_path):
     assert candidates.done_marker(str(marker), candidates.Records.SHORT)
     with pytest.raises(ValueError):
         candidates.done_marker(str(marker), candidates.Records.ALL)
+
+
+def test_an_excerpt_lands_on_the_exact_copy_after_a_changed_version_when_the_prompt_text_is_left_out():
+    stem = "Jan has three times the number of pets as Marcia. Marcia has two more pets than Cindy."
+    questions = {
+        "gsm8k-0": f"Question: {stem} If Cindy has four pets, how many total pets do the three have?\nAnswer:",
+        "gsm8k-1": "Question: Henry made two stops during his sixty mile bike trip, how far did he go?\nAnswer:",
+    }
+    question = located_questions(questions, {"gsm8k-0": "gsm8k", "gsm8k-1": "gsm8k"})["gsm8k-0"]
+    assert question == text_stream(f"{stem} If Cindy has four pets, how many total pets do the three have?")
+    changed = f"{stem} If Cindy has ten pets, how many pets does Jan have?"
+    record = (
+        f'test_a = "{changed}"\n'
+        + "x = 1\n" * 1000
+        + f'test_b = "{stem} If Cindy has four pets, how many total pets do the three have?"\n'
+    )
+    full = text_stream(questions["gsm8k-0"])
+    key, offset = full[8:28], 8
+    with_prompt, _, _ = excerpt(record_readings(record), len(questions["gsm8k-0"]), full, key, offset)
+    without, _, _ = excerpt(record_readings(record), len(questions["gsm8k-0"]), question, key, offset)
+    assert "four pets, how many total" not in with_prompt
+    assert "four pets, how many total" in without
