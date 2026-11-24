@@ -23,10 +23,14 @@ _ANY_VALID_OUTPUT = re.compile(
     r"|\b(several|multiple|many|more than one)\b[^.\n]{0,30}\b(answers?|solutions?|ways?|outputs?|results?)\b"
     r"[^.\n]{0,60}\b(any|either)\b"
     r"|\b(print|output|find|return)\s+any\s+(one\s+)?(of\s+(them|these)|valid|correct|possible|such|solution|answer)\b"
-    r"|\bany\s+(valid|correct)\s+(answer|solution|output|sequence|permutation|arrangement|assignment|construction)\b"
+    r"|(?P<any_object>\bany\s+(valid|correct)\s+(answer|solution|output|sequence|permutation|arrangement|assignment"
+    r"|construction)\b)"
     r"|\b(answers?|solutions?)\s+(is|are)\s+not\s+unique\b",
     re.IGNORECASE,
 )
+_EXISTENCE_BEFORE = re.compile(r"\b(if|whether|there\s+(is|are|exists?))\b[^.\n]*$", re.IGNORECASE)
+"""A condition or existence claim earlier in the sentence, which makes "any valid ..." a quantifier rather than a
+choice the reply makes ("Print YES if there is any valid solution, otherwise print NO")."""
 _ONE_ANSWER_CHOSEN = re.compile(
     r"\blexicographically\s+(smallest|minimal|minimum|least|largest|maximal|maximum|greatest|first|last)\b",
     re.IGNORECASE,
@@ -147,11 +151,10 @@ def _correctness(statement: str) -> _Correctness | None:
     """
     result = None
     for clause in _CORRECT_IF.finditer(statement):
-        if _NUMERIC_TOLERANCE.search(statement, clause.end(), clause.end() + _CORRECT_IF_WINDOW):
+        condition = _condition(statement, clause)
+        if _NUMERIC_TOLERANCE.search(condition):
             return _Correctness.TOLERANCE
-        if _REPLY_SUBJECT.search(statement, 0, clause.start()) and _ACCEPTED_VARIATION.search(
-            _condition(statement, clause)
-        ):
+        if _REPLY_SUBJECT.search(statement, 0, clause.start()) and _ACCEPTED_VARIATION.search(condition):
             result = _Correctness.CONDITION
     return result
 
@@ -160,9 +163,17 @@ def _is_interactive(statement: str) -> bool:
     return any(notice["negation"] is None for notice in _INTERACTIVE.finditer(statement))
 
 
+def _output_choice(statement: str) -> re.Match[str] | None:
+    """The first wording that lets the reply choose among several outputs, or None."""
+    for match in _ANY_VALID_OUTPUT.finditer(statement):
+        if not (match["any_object"] and _EXISTENCE_BEFORE.search(statement, 0, match.start())):
+            return match
+    return None
+
+
 def ungradable_statement(statement: str, mode: CodeTestMode) -> ImportRejection | None:
     """Reject a statement whose replies comparison with one stored output cannot grade, else return None."""
-    any_valid = _ANY_VALID_OUTPUT.search(statement)
+    any_valid = _output_choice(statement)
     correctness = _correctness(statement)
     if any_valid and not _ONE_ANSWER_CHOSEN.search(statement, any_valid.end(), any_valid.end() + 120):
         reason = "any_valid_output"

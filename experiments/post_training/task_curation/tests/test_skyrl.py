@@ -323,6 +323,12 @@ def eurus2_stdin_row(statement: str) -> dict:
             "is a proper prefix of b.",
             "any_valid_output",
         ),
+        ("Print the picture. It may not be unique. Any correct output will be accepted.", "any_valid_output"),
+        (
+            "Print the meetings. A solution exists for any valid input, and any correct output has at most 10^7 "
+            "characters.",
+            "any_valid_output",
+        ),
         ("Print the distance. It is considered correct if its absolute error is below 1e-6.", "float_tolerance"),
         ("Your answer is considered correct if |a - b| <= 10^{-6}, where b is the jury's answer.", "float_tolerance"),
         (
@@ -361,6 +367,9 @@ def test_eurus2_row_that_one_stored_output_cannot_check_is_rejected(statement, r
         "Solve it as you would solve the usual, non-interactive problem: read the whole input, then print the sum.",
         "A bracket sequence is considered correct if inserting '1' and '+' makes it an expression. Print YES or NO.",
         "Read n and print n*n. Your answer will be considered correct if it equals n*n.",
+        "Print YES if there is any valid solution, otherwise print NO.",
+        "Print a/b with two digits after the point. Your answer is considered correct if it equals a/b.\n\n"
+        "Example output: 0.50",
         "Complete the function solve() to read an integer and print its square.\n\n### Input\n\nOne integer n.",
     ],
 )
