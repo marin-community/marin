@@ -21,7 +21,7 @@ from unittest.mock import Mock
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.bundle import content_id
+from iris.cluster.bundle import WORKDIR_FILE_OFFLOAD_THRESHOLD, content_id
 from iris.cluster.config import (
     AuthConfig,
     IrisClusterConfig,
@@ -32,7 +32,7 @@ from iris.cluster.config import (
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
-from iris.cluster.controller.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD, peer_status
+from iris.cluster.controller.jobs import peer_status
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import ControllerServiceImpl

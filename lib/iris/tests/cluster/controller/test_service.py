@@ -15,7 +15,7 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fsspec.implementations.local import LocalFileSystem
-from iris.cluster.bundle import BundleStore
+from iris.cluster.bundle import WORKDIR_FILE_OFFLOAD_THRESHOLD, BundleStore
 from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,
@@ -178,7 +178,7 @@ def test_launch_job_failed_payload_upload_does_not_create_job(service, monkeypat
     if payload == "bundle":
         request.bundle_blob = b"bundle bytes"
     else:
-        request.entrypoint.workdir_files["payload"] = b"x" * (jobs_module.WORKDIR_FILE_OFFLOAD_THRESHOLD + 1)
+        request.entrypoint.workdir_files["payload"] = b"x" * (WORKDIR_FILE_OFFLOAD_THRESHOLD + 1)
 
     with monkeypatch.context() as patch:
         patch.setattr(LocalFileSystem, "pipe_file", fail_upload)

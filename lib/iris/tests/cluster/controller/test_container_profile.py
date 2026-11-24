@@ -161,6 +161,58 @@ def test_sandbox_rejects_workspace_bundle(service):
     assert "bundle" in str(exc.value.message)
 
 
+@pytest.mark.parametrize("egress", [job_pb2.EGRESS_POLICY_NONE, job_pb2.EGRESS_POLICY_INTERNET])
+@pytest.mark.parametrize("payload", ["bundle_blob", "bundle_id", "blob_ref", "large_workdir_file"])
+def test_kubernetes_rejects_workdir_payload_needing_controller_under_isolated_egress(service, egress, payload):
+    request = _launch("/alice/job", RESTRICTED, egress)
+    if payload == "bundle_blob":
+        request.bundle_blob = b"workspace"
+    elif payload == "bundle_id":
+        request.bundle_id = "stored-workspace"
+    elif payload == "blob_ref":
+        request.entrypoint.workdir_file_refs["config.json"] = "stored-file"
+    else:
+        request.entrypoint.workdir_files["config.json"] = b"x" * (11 * 1024)
+
+    with _k8s_backend(service, None):
+        with pytest.raises(ConnectError) as exc:
+            _as("user", "alice", service.launch_job, request, None)
+
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert job_pb2.EgressPolicy.Name(egress) in exc.value.message
+    assert "workdir" in exc.value.message.lower()
+    with pytest.raises(ConnectError) as missing:
+        _as(
+            "user",
+            "alice",
+            service.get_job_status,
+            controller_pb2.Controller.GetJobStatusRequest(job_id=request.name),
+            None,
+        )
+    assert missing.value.code == Code.NOT_FOUND
+
+
+@pytest.mark.parametrize("file_size", [2, 10 * 1024])
+def test_kubernetes_allows_inline_workdir_file_under_none_egress(service, file_size):
+    request = _launch("/alice/job", RESTRICTED, job_pb2.EGRESS_POLICY_NONE)
+    request.entrypoint.workdir_files["config.json"] = b"x" * file_size
+
+    with _k8s_backend(service, None):
+        response = _as("user", "alice", service.launch_job, request, None)
+
+    assert response.job_id == "/alice/job"
+
+
+def test_kubernetes_allows_workspace_bundle_with_cluster_egress(service):
+    request = _launch("/alice/job", RESTRICTED, job_pb2.EGRESS_POLICY_CLUSTER)
+    request.bundle_blob = b"workspace"
+
+    with _k8s_backend(service, None):
+        response = _as("user", "alice", service.launch_job, request, None)
+
+    assert response.job_id == "/alice/job"
+
+
 def test_unknown_profile_rejected(service):
     """A profile this controller does not know must not fall back to DEFAULT."""
     with pytest.raises(ConnectError) as exc:
