@@ -26,6 +26,7 @@ import json
 import logging
 import random
 import time
+from itertools import pairwise
 
 import httpx
 from iris.client.client import iris_ctx
@@ -74,7 +75,7 @@ _RESPONSE_SCHEMA = {
 
 def _sample_prompt_tokens(rng: random.Random) -> int:
     roll = rng.random() * 100
-    for (low_pct, low_tokens), (high_pct, high_tokens) in zip(_PROMPT_TOKEN_PCTS, _PROMPT_TOKEN_PCTS[1:]):
+    for (low_pct, low_tokens), (high_pct, high_tokens) in pairwise(_PROMPT_TOKEN_PCTS):
         if roll <= high_pct:
             fraction = (roll - low_pct) / (high_pct - low_pct) if high_pct > low_pct else 0.0
             return int(low_tokens + fraction * (high_tokens - low_tokens))
