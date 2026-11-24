@@ -135,10 +135,9 @@ def test_build_tasks_manifest_joins_census_to_ledger(tmp_path: Path) -> None:
             basis="ledger:pooled",
         )
     }
-    receipt = build_tasks_manifest(difficulty, [entry], str(tmp_path / "out"))
+    receipt = build_tasks_manifest(difficulty, [entry], str(tmp_path / "out"), max_unmeasured_per_band_source=0)
     assert receipt["rows"] == 1
     assert receipt["skipped"] == {
-        "no_ledger_task": 0,
         "no_grader": 0,
         "no_user_turn": 0,
         "spec_invalid": 0,
@@ -152,9 +151,55 @@ def test_build_tasks_manifest_joins_census_to_ledger(tmp_path: Path) -> None:
     assert row.census_task_sha256 == census_sha
     assert row.stripped_fields == ("integrity_contract",)
     assert row.domain == "source"
+    assert row.difficulty_basis == "ledger:pooled"
     assert Path(row.task_path).exists()
     reloaded = json.loads(Path(row.task_path).read_text())
     assert "integrity_contract" not in reloaded
+
+
+def test_build_tasks_manifest_falls_back_to_source_rates(tmp_path: Path) -> None:
+    """Unmeasured census tasks band on the source's pooled rate, capped per band."""
+    solved = make_task("What is 2 + 2? Answer with the number only.", "4", task_id="task-solved")
+    other = make_task("What is 3 + 3? Answer with the number only.", "6", task_id="task-unmeasured")
+    entry = _write_census_release(
+        tmp_path,
+        "2026.11.13.1",
+        [
+            {"id": "task-solved", "task_spec": solved.model_dump_json(), "task_sha256": "cc" * 32},
+            {"id": "task-unmeasured", "task_spec": other.model_dump_json(), "task_sha256": "dd" * 32},
+        ],
+    )
+    difficulty = {
+        ("org:source", SHA_A): TaskDifficulty(
+            source_id="org:source",
+            task_sha256=SHA_A,
+            task_id="task-solved",
+            solve_rate=1.0,
+            scored=3,
+            basis="ledger:pooled",
+        )
+    }
+    receipt = build_tasks_manifest(difficulty, [entry], str(tmp_path / "out"), max_unmeasured_per_band_source=1)
+    assert receipt["rows"] == 2
+    rows = manifest_rows(str(tmp_path / "out" / "tasks.jsonl"))
+    by_id = {row.task_id: row for row in rows}
+    assert by_id["task-solved"].difficulty_basis == "ledger:pooled"
+    unmeasured = by_id["task-unmeasured"]
+    assert unmeasured.difficulty_basis == "source:pooled"
+    assert unmeasured.task_sha256 == "dd" * 32, "unmeasured tasks carry the census digest"
+    # The cap binds: a second unmeasured task would be dropped.
+    third = make_task("What is 4 + 4? Answer with the number only.", "8", task_id="task-capped")
+    entry_capped = _write_census_release(
+        tmp_path,
+        "2026.11.13.2",
+        [
+            {"id": "task-solved", "task_spec": solved.model_dump_json(), "task_sha256": "cc" * 32},
+            {"id": "task-unmeasured", "task_spec": other.model_dump_json(), "task_sha256": "dd" * 32},
+            {"id": "task-capped", "task_spec": third.model_dump_json(), "task_sha256": "ee" * 32},
+        ],
+    )
+    receipt = build_tasks_manifest(difficulty, [entry_capped], str(tmp_path / "out2"), max_unmeasured_per_band_source=1)
+    assert receipt["rows"] == 2
 
 
 def test_build_tasks_manifest_counts_ungraded_tasks(tmp_path: Path) -> None:

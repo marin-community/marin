@@ -18,7 +18,7 @@ against the census releases without staging populations locally.
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
@@ -31,6 +31,7 @@ from taskcompendium.models import TaskSpec
 from taskforge.lowering import InvalidTaskSpec, lower_with_settings, lowering_settings
 from taskforge.policy import Policy
 
+from experiments.post_training.task_curation.balanced_reasoning.bands import Band, band_for
 from experiments.post_training.task_curation.balanced_reasoning.difficulty import (
     TaskDifficulty,
     url_protocol,
@@ -72,6 +73,8 @@ class ManifestRow:
     dataset_id: str | None
     census_release: str
     stripped_fields: tuple[str, ...]
+    difficulty_basis: str
+    """The difficulty basis the plan will band this task on."""
 
     def document(self) -> dict:
         return {
@@ -84,6 +87,7 @@ class ManifestRow:
             "dataset_id": self.dataset_id,
             "census_release": self.census_release,
             "stripped_fields": list(self.stripped_fields),
+            "difficulty_basis": self.difficulty_basis,
         }
 
 
@@ -165,6 +169,7 @@ def build_tasks_manifest(
     min_attempts: int = 1,
     policy: Policy | None = None,
     factories: Mapping[str, MachineFactory] | None = None,
+    max_unmeasured_per_band_source: int = 1500,
 ) -> dict:
     """Materialize census TaskSpecs for ledger-covered tasks and write the manifest bundle.
 
@@ -173,30 +178,55 @@ def build_tasks_manifest(
     a usable grader, without a user turn, without a lowering against the lane's machine
     factories (pass ``policy`` and ``factories`` from inside an Iris job to pre-check), or
     whose census release lacks their task_id are skipped and counted in the receipt.
+
+    The difficulty fallback ladder: tasks the ledger measured carry their per-task rate
+    (basis ``ledger:pooled`` or ``ledger:<solver>``); unmeasured census tasks band on their
+    source's pooled rate over the same evidence (basis ``source:pooled``), capped at
+    ``max_unmeasured_per_band_source`` rows per source and band so a single large population
+    cannot dominate the manifest.
     """
-    wanted_by_source: dict[str, dict[str, str]] = {}
-    for (source_id, task_sha256), difficulty in ledger_difficulty.items():
+    ledger_by_source: dict[str, dict[str, TaskDifficulty]] = {}
+    source_sums: dict[str, tuple[float, int]] = {}
+    for difficulty in ledger_difficulty.values():
         if difficulty.scored < min_attempts:
             continue
-        wanted_by_source.setdefault(source_id, {})[difficulty.task_id] = task_sha256
+        ledger_by_source.setdefault(difficulty.source_id, {})[difficulty.task_id] = difficulty
+        solved, scored = source_sums.get(difficulty.source_id, (0.0, 0))
+        source_sums[difficulty.source_id] = (
+            solved + difficulty.solve_rate * difficulty.scored,
+            scored + difficulty.scored,
+        )
+    source_rates = {
+        source_id: TaskDifficulty(
+            source_id=source_id,
+            task_sha256="",
+            task_id=source_id,
+            solve_rate=(solved / scored if scored else 0.0),
+            scored=scored,
+            basis="source:pooled",
+        )
+        for source_id, (solved, scored) in source_sums.items()
+    }
 
     filesystem = fsspec.filesystem(url_protocol(output_prefix))
     filesystem.makedirs(output_prefix, exist_ok=True)
     tasks_prefix = f"{output_prefix.rstrip('/')}/{TASKS_DIRECTORY}"
 
     rows: list[ManifestRow] = []
-    skipped = {"no_ledger_task": 0, "no_grader": 0, "no_user_turn": 0, "spec_invalid": 0, "not_lowerable": 0}
+    skipped = {"no_grader": 0, "no_user_turn": 0, "spec_invalid": 0, "not_lowerable": 0}
     for entry in entries:
-        wanted = wanted_by_source.get(entry.source_id)
-        if not wanted:
+        ledger_by_task = dict(ledger_by_source.get(entry.source_id, {}))
+        source_rate = source_rates.get(entry.source_id)
+        if not ledger_by_task and source_rate is None:
             continue
-        matched = _stream_matched_rows(entry, set(wanted))
-        for row in matched:
+        # The source-level fallback fills only the source's pooled band, up to the cap;
+        # measured tasks are never capped.
+        fallback_band = None if source_rate is None else band_for(source_rate.solve_rate)
+        emitted: dict[str, int] = {}
+        for row, difficulty in _stream_candidate_rows(
+            entry, ledger_by_task, source_rate, fallback_band, max_unmeasured_per_band_source, emitted
+        ):
             task_id = row["id"]
-            ledger_sha = wanted.get(task_id)
-            if ledger_sha is None:
-                skipped["no_ledger_task"] += 1
-                continue
             try:
                 task, stripped = validate_task_spec(row["task_spec"])
             except Exception as error:
@@ -224,16 +254,16 @@ def build_tasks_manifest(
                 ManifestRow(
                     task_id=task_id,
                     source_id=entry.source_id,
-                    task_sha256=ledger_sha,
+                    task_sha256=difficulty.task_sha256 or row["task_sha256"],
                     domain=domain_for(entry.source_id),
                     task_path=spec_path,
                     census_task_sha256=row["task_sha256"],
                     dataset_id=entry.dataset_id,
                     census_release=entry.release,
                     stripped_fields=stripped,
+                    difficulty_basis=difficulty.basis,
                 )
             )
-
     manifest_path = f"{output_prefix.rstrip('/')}/{MANIFEST_FILENAME}"
     payload = "\n".join(json.dumps(row.document(), sort_keys=True) for row in rows) + ("\n" if rows else "")
     with open_url(manifest_path, "wt") as sink:
@@ -249,30 +279,42 @@ def build_tasks_manifest(
     return receipt
 
 
-def _stream_matched_rows(entry: CensusEntry, wanted_ids: set[str]) -> list[dict[str, Any]]:
-    """Column-pruned two-pass read of one census parquet: ids first, then matched rows' bytes."""
-    if not wanted_ids:
-        return []
-    with open_url(entry.normalized_path, "rb") as source:
-        handle = pq.ParquetFile(source)
-        matched_ids: set[str] = set()
-        for batch in handle.iter_batches(batch_size=2048, columns=["id"]):
-            for value in batch.column("id").to_pylist():
-                if value in wanted_ids:
-                    matched_ids.add(value)
-        if not matched_ids:
-            return []
-    rows: list[dict[str, Any]] = []
+def _stream_candidate_rows(
+    entry: CensusEntry,
+    ledger_tasks: Mapping[str, TaskDifficulty],
+    source_rate: TaskDifficulty | None,
+    fallback_band: Band | None,
+    cap: int,
+    emitted: dict[str, int],
+) -> Iterator[tuple[dict[str, Any], TaskDifficulty]]:
+    """Yield ``(census_row, difficulty)`` for the tasks this source contributes.
+
+    Measured tasks (their ``id`` in the ledger tasks, keyed by ``task_id``) always yield with
+    their ledger difficulty. Unmeasured tasks yield under the source-level fallback until the
+    band's cap is reached; streaming stops early once nothing more can be emitted, so a large
+    population costs one bounded column-pruned scan.
+    """
+    if not ledger_tasks and source_rate is None:
+        return
+    measured_pending = set(ledger_tasks)
     with open_url(entry.normalized_path, "rb") as source:
         handle = pq.ParquetFile(source)
         for batch in handle.iter_batches(batch_size=512, columns=["id", "task_sha256", "task_spec"]):
             columns = batch.to_pydict()
-            for row_id, task_sha, spec_json in zip(
+            for row_id, census_sha, spec_json in zip(
                 columns["id"], columns["task_sha256"], columns["task_spec"], strict=True
             ):
-                if row_id in matched_ids:
-                    rows.append({"id": row_id, "task_sha256": task_sha, "task_spec": spec_json})
-    return rows
+                measured = ledger_tasks.get(row_id)
+                if measured is not None:
+                    measured_pending.discard(row_id)
+                    yield {"id": row_id, "task_sha256": census_sha, "task_spec": spec_json}, measured
+                    continue
+                if fallback_band is None or emitted.get(fallback_band.value, 0) >= cap:
+                    continue
+                emitted[fallback_band.value] = emitted.get(fallback_band.value, 0) + 1
+                yield {"id": row_id, "task_sha256": census_sha, "task_spec": spec_json}, source_rate
+            if not measured_pending and (fallback_band is None or emitted.get(fallback_band.value, 0) >= cap):
+                return
 
 
 def manifest_rows(path: str) -> list[ManifestRow]:
@@ -294,6 +336,7 @@ def manifest_rows(path: str) -> list[ManifestRow]:
                     dataset_id=row.get("dataset_id"),
                     census_release=row["census_release"],
                     stripped_fields=tuple(row.get("stripped_fields", ())),
+                    difficulty_basis=row.get("difficulty_basis", "unknown"),
                 )
             )
     return rows
