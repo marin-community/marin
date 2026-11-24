@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 import fsspec
-from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.task_curation.balanced_reasoning.bands import Band, band_for
