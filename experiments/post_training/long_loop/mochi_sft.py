@@ -23,7 +23,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import HeroThroughputResult, valid
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import GrugRunConfig, run_grug
 from experiments.post_training.long_loop.execution_policy import SFT_TRAINING_DURATION
-from experiments.post_training.long_loop.exp3_production import read_data_release
+from experiments.post_training.long_loop.exp3_production import native_sft_data, read_data_release
 from experiments.post_training.long_loop.run_spec import FilePin, StorageConfig, read_pin
 from experiments.post_training.long_loop.sft_epoch import SftStopping, bind_sft_stopping, step_exposure
 from experiments.post_training.long_loop.source_loss import prepared_supervision_data, source_loss_metadata
@@ -271,9 +271,7 @@ def resolve_mochi_sft(spec: MochiSftRound) -> ResolvedMochiSft:
         raise ValueError("Staged initializer metadata changed")
     if json.loads(metadata)["step"] != reference["config"]["trainer"]["special_tokens"]["start_step"]:
         raise ValueError("Initializer step differs from the hero SFT start")
-    data = copy.deepcopy(release.data)
-    for component in data["components"].values():
-        component["pack_lookahead_window"] = component.pop("packing_lookahead")
+    data = native_sft_data(release.data)
     recipe = {
         "data": data,
         "seq_len": reference["config"]["model"]["max_seq_len"],

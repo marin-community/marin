@@ -210,3 +210,14 @@ def test_production_checkpoints_obey_two_hours_and_select_the_forced_final_state
     restored = load_checkpoint({"model": jnp.asarray(0.0)}, selected["checkpoint"])
     assert restored["model"].item() == final_step
     assert load_checkpoint_metadata(selected["checkpoint"])["is_temporary"] is False
+
+
+def test_frozen_packing_field_constructs_native_dataset_without_changing_publication():
+    frozen = {"components": {"c4": {"cache_dir": "/cache/c4", "packing_lookahead": 128}}}
+    translated = exp3_production.native_sft_data(frozen)
+    native = draccus.decode(exp3_production.LmDataConfig, translated)
+    assert native.components["c4"].pack_lookahead_window == 128
+    assert frozen["components"]["c4"] == {"cache_dir": "/cache/c4", "packing_lookahead": 128}
+    translated["components"]["c4"]["unknown_packing_field"] = 4
+    with pytest.raises(draccus.utils.DecodingError, match="unknown_packing_field"):
+        draccus.decode(exp3_production.LmDataConfig, translated)

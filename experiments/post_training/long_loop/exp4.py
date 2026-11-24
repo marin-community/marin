@@ -64,23 +64,28 @@ QUALIFIED_V7 = StoragePin(
 )
 
 
-def verify_v7_admission(*, output: str, publication: str, qualified: str, native_check: str) -> None:
-    document = json.loads(QUALIFIED_V7.read())
+V7_EVIDENCE_NAMES = ("inventory", "native_consumer_receipt", "native_measurement_job")
+
+
+def verify_release_admission(
+    *, qualification: StoragePin, output: str, publication: str, qualified: str, native_check: str
+) -> None:
+    document = json.loads(qualification.read())
     publisher = StoragePin(**document["publisher_manifest"])
     if (
         publisher.uri != publication
-        or qualified != QUALIFIED_V7.uri
+        or qualified != qualification.uri
         or native_check != document["artifact_graph"]["uri"]
     ):
-        raise ValueError("V7 graph dependencies differ from the sealed qualification")
+        raise ValueError("SFT release graph dependencies differ from the sealed qualification")
     publisher.read()
     if document["training_ready"] is not True:
-        raise ValueError("V7 is not data-qualified")
+        raise ValueError("SFT release is not data-qualified")
     StoragePin(**{k: v for k, v in document["artifact_graph"].items() if k in {"uri", "sha256"}}).read()
     (StoragePath(output) / "admission.json").write_text(
         json.dumps(
             {
-                "qualification": {"uri": QUALIFIED_V7.uri, "sha256": QUALIFIED_V7.sha256},
+                "qualification": {"uri": qualification.uri, "sha256": qualification.sha256},
                 "training_ready": True,
                 "readiness_scope": document["readiness_scope"],
                 "gpu_training_approved_by_data_owner": document["gpu_training_approved"],
@@ -92,68 +97,62 @@ def verify_v7_admission(*, output: str, publication: str, qualified: str, native
     )
 
 
-def release_artifact(uri: str, sha256: str, *, require_ready: bool) -> tuple[DataRelease, ArtifactStep]:
-    """Reconstruct the published handle only after its record and members verify."""
-    raw = StoragePath(uri).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != sha256:
-        raise ValueError("V7 artifact record differs from the approved SHA256")
-    record = json.loads(raw)
-    configuration = record["config"]
-    manifest = StoragePin(record["source"], configuration["sha256"])
-    manifest.read()
-    document = json.loads(QUALIFIED_V7.read())
-    if document["publisher_manifest"] != {"uri": manifest.uri, "sha256": manifest.sha256}:
-        raise ValueError("Qualified V7 seal belongs to another publication")
-    geometry = document["geometry"]
-    if geometry != {
-        "updates": GEOMETRY.updates,
-        "global_batch": GEOMETRY.global_batch,
-        "sequence_length": GEOMETRY.sequence_length,
-        "seed": GEOMETRY.seed,
-        "packing_cap": GEOMETRY.packing_cap,
-        "lookahead": GEOMETRY.lookahead,
-    }:
-        raise ValueError("V7 changes the controlled SFT geometry")
+def release_artifact(
+    uri: str, sha256: str, *, qualification: StoragePin, evidence_names: tuple[str, ...], require_ready: bool
+) -> tuple[DataRelease, ArtifactStep]:
+    """Reconstruct the published handle after its seal, record and members verify."""
+    document = json.loads(qualification.read())
+    if document["schema_version"] != 1 or document["geometry"] != asdict(GEOMETRY):
+        raise ValueError("SFT release changes the controlled data geometry")
     if require_ready and document["training_ready"] is not True:
-        raise ValueError(f"V7 is not admitted for training: {document.get('readiness')}")
-    members = {name: StoragePin(**value) for name, value in configuration["members"].items()}
-    for name, pin in members.items():
-        if document["artifacts"][name] != {"uri": pin.uri, "sha256": pin.sha256}:
-            raise ValueError(f"V7 artifact member disagrees with its release: {name}")
+        raise ValueError("SFT release is not admitted for training")
+    members = {name: StoragePin(**pin) for name, pin in document["artifacts"].items()}
+    for pin in members.values():
+        pin.read()
+    evidence = {name: StoragePin(**document[name]) for name in ("publisher_manifest", *evidence_names)}
+    for pin in evidence.values():
         pin.read()
     data = json.loads(members["data.json"].read())
     if data["cache_catalog"] != members["cache_catalog.json"].uri:
-        raise ValueError("V7 data names another cache artifact")
+        raise ValueError("SFT release data names another cache artifact")
     if data["train_weights"] != json.loads(members["train_weights.json"].read()):
-        raise ValueError("V7 natural mixture weights differ from the pinned member")
+        raise ValueError("SFT release weights differ from the pinned member")
+    if data["num_validation_sequences"] != document["num_validation_sequences"]:
+        raise ValueError("SFT validation reservations differ from the qualified seal")
+    release = DataRelease(qualification, document["training_ready"], members, evidence, data, document)
+    raw = StoragePin(uri, sha256).read()
+    record = json.loads(raw)
+    configuration = record["config"]
+    document = release.document
+    if document["artifact_graph"] != {"uri": uri, "sha256": sha256}:
+        raise ValueError("Qualified seal belongs to another artifact record")
+    publisher = release.evidence["publisher_manifest"]
+    if configuration["sha256"] != publisher.sha256:
+        raise ValueError("Qualified seal belongs to another publication")
+    if configuration["members"] != {name: asdict(pin) for name, pin in release.artifacts.items()}:
+        raise ValueError("Published artifact members differ from the qualified seal")
     handle = ArtifactStep.adopt(record["name"], record["version"], record["source"], config=configuration)
     if handle.fingerprint() != record["fingerprint"]:
-        raise ValueError("Reconstructed V7 handle differs from its published identity")
-    if data["num_validation_sequences"] != document["num_validation_sequences"]:
-        raise ValueError("V7 validation reservations differ from the qualified seal")
-    evidence = {
-        key: StoragePin(**document[key]) for key in ("inventory", "native_consumer_receipt", "native_measurement_job")
-    }
-    for pin in evidence.values():
-        pin.read()
-    native = {key: value for key, value in document["artifact_graph"].items() if key in {"uri", "sha256"}}
-    StoragePin(**native).read()
-    qualified_handle = ArtifactStep.adopt(
-        "sft-mixes/exp3-v7/qualified-seal", "2026.11.18", QUALIFIED_V7.uri, config={"sha256": QUALIFIED_V7.sha256}
+        raise ValueError("Reconstructed release handle differs from its published identity")
+    name = record["name"].removesuffix("/release")
+    publication = ArtifactStep.adopt(
+        name + "/publisher-manifest", record["version"], publisher.uri, config={"sha256": publisher.sha256}
     )
-    native_handle = ArtifactStep.adopt(
-        "sft-mixes/exp3-v7/native-check-record", "2026.11.18", native["uri"], config={"sha256": native["sha256"]}
+    qualified = ArtifactStep.adopt(
+        name + "/qualified-seal", record["version"], qualification.uri, config={"sha256": qualification.sha256}
     )
+    native = ArtifactStep.adopt(name + "/native-check-record", record["version"], uri, config={"sha256": sha256})
     admission = apply(
-        "long-loop-exp4/v7-admission",
-        verify_v7_admission,
-        version="2026.11.18",
+        name + "/admission",
+        verify_release_admission,
+        version=record["version"],
+        qualification=qualification,
         output=OUT,
-        publication=handle,
-        qualified=qualified_handle,
-        native_check=native_handle,
+        publication=publication,
+        qualified=qualified,
+        native_check=native,
     )
-    return DataRelease(QUALIFIED_V7, document["training_ready"], members, evidence, data, document), admission
+    return release, admission
 
 
 def exp4_plan(release: DataRelease, source_revision: str, version: str, curriculum: RlCurriculum) -> dict:
@@ -241,7 +240,11 @@ def main(
     if get_job_info() is None:
         require_clean_revision(workspace, source_revision)
     release, handle = release_artifact(
-        sft_artifact_record, sft_artifact_record_sha256, require_ready=click.get_current_context().params["do_run"]
+        sft_artifact_record,
+        sft_artifact_record_sha256,
+        qualification=QUALIFIED_V7,
+        evidence_names=V7_EVIDENCE_NAMES,
+        require_ready=click.get_current_context().params["do_run"],
     )
     version = resolve_version("mochi-exp4", None)
     os.environ.update(MARIN_PREFIX=OUTPUT_PREFIX, MARIN_TEMP_PREFIX="s3://marin-us-east-08a/tmp")

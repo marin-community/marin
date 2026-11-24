@@ -123,6 +123,36 @@ Submission requires explicit user approval. After approval, run the same command
 with `--run` from an Iris CPU coordinator on 08a at PRODUCTION priority. Native
 Grug dispatches the 128 GB200 allocation; no separate GPU launcher or smoke is used.
 
+## Exp6
+
+[`rounds/exp6.yaml`](rounds/exp6.yaml) binds sealed V9 and the published Exp5 RL
+curriculum. SFT keeps Exp5's 256-H100 R1 mesh, precision and optimizer controls.
+Its full training epoch is 1,893 updates at batch 256 and context 262,144,
+with 56 reserved validation sequences excluded. It stops after that epoch or
+the shared 20-hour budget, whichever comes first. Actual exposure records
+whether the epoch finished.
+
+RL uses the 32-H100 TP1/PP2/CP4/EP16 trainer and 176 rollout H100s.
+The [trainer-only probe151](https://iris.oa.dev/#/job/%2Fbenfeuer%2Fmochi-exp6-muonh-memory-cp4-ep16-20261123-151)
+qualified warm memory headroom and two matched updates on Exp5 SFT527.
+The new model runs native memory sizing before rollouts.
+MuonH uses LR `1e-5`, Adam fallback LR `2.307692307692308e-6` and momentum
+offload; Adam optimizer offload is disabled. The curriculum derives its
+200-prompt holdout and 13/51 route quotas. The shared RL clock is 12 hours,
+followed by canonical Micro210 and archival. Best/final checkpoint retention
+and the permanent final SFT checkpoint follow the shared rules. Set `SOURCE_SHA` to the committed revision used for both
+preflight and submission.
+
+```bash
+uv run python -m experiments.post_training.long_loop.round_runner \
+  --round experiments/post_training/long_loop/rounds/exp6.yaml \
+  --version 2026.11.24.157 --through archive \
+  --source-revision "$SOURCE_SHA" --validation-output /tmp/exp6-preflight
+```
+
+Run that command without `--run` first. Submit the same pinned round with
+`--run` after the preceding round's canonical evaluation is sealed.
+
 ## Exp5 SFT release
 
 Exp5 setup reuses qualified V7, whose four science components already derive

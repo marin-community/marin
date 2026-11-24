@@ -1,0 +1,102 @@
+# Exp6: sealed V9, one full training epoch or the canonical20h cap.
+# SFT controls/mesh match Exp5. RL uses the qualified151 MuonH layout.
+schema: 1
+name: long-loop-exp6/round6
+version: 2026.11.24.157
+slug: mochi-exp6
+cluster: cw-rno2a
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp6
+  temporary_prefix: s3://marin-us-east-08a/tmp
+archive:
+  hf_upload_repo_prefix: open-athena/Snowball-LongLoop-Round6
+  evaldash_run_prefix: long-loop-round6
+data_release: v9-overthinking
+pools: exp5-prepared
+evaluation: frozen-micro210
+initializer: exp3-staged
+openresearcher_service:
+  dataset_id: open-athena/openresearcher-openresearcher-dataset-service-20261121-v1
+  dataset_revision: 0c4f39584d7f0121e97f6ad4f4761749add56fef
+  parquet_sha256: 346e892a7052d1f93ee31ae208100adccee06ff1918344efe2974fabc331226c
+  index_uri: s3://marin-rno2a/marin/rl-data/openresearcher/bm25-index/2026.11.15.1
+sft:
+  stopping:
+    type: mixture_epochs
+    count: 1
+  epoch_capacity:
+    path: s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp6/sft-epoch-capacity/2026.11.22.1/capacity.json
+    sha256: 921e740e961fb3c2c6ad3da1c3ed8b2bd0639f4a8621ab4d9c98b5e75f23b7b9
+  stage_guard:
+    h100_hour_limit: 5120
+    poll_interval: 30
+    stall_retries: 2
+  training_budget:
+    finalization_reserve: 40m
+    update_reserve: 10m
+  batch_size: 256
+  min_lr_ratio: 0.1
+  learning_rate: 5.0e-05
+  adam_learning_rate: 1.153846153846154e-05
+  warmup_steps: 30
+  lr_schedule: constant
+  wall_clock_cooldown_fraction: 0.15
+  mp: params=float32,compute=bfloat16,output=bfloat16
+  compiler_dumps: true
+  first_collective_call_timeout: 600
+  special_token_lr_multiplier: 5.656854249492381
+  expert_weight_sharding:
+    expert:
+    - expert
+    - context
+    hidden:
+    - data
+    intermediate: model
+  mesh:
+    axes:
+      context: 8
+      expert: 1
+      model: 1
+      replica: 1
+    batch_axis_name: batch
+    compute_mapping: &id001 {}
+    dcn_axes:
+      replica_dcn: 1
+      data: -1
+    param_mapping:
+      embed: data
+    shared_mapping: *id001
+  resources:
+    cpu: 64
+    ram: 1500GB
+    disk: 512GB
+    device:
+      variant: H100
+      kind: gpu
+      count: 8
+    preemptible: false
+    replicas: 32
+rl_recipe_patch:
+  path: experiments/post_training/long_loop/specs/exp6-rl.yaml
+  sha256: 96c4b99471cf9c2f9556b9831132c51d5d219a3afe5df38ab35692cf18af19cf
+rl_layout:
+  role_plan:
+    policy_num_nodes: 4
+    policy_num_gpus_per_node: 8
+    reference_num_nodes: null
+    colocate_all: false
+    train_batch_size: 64
+    policy_mini_batch_size: 64
+    micro_train_batch_size_per_gpu: 1
+    num_inference_engines: 22
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_data_parallel_size: 8
+    inference_engine_expert_parallel_size: 8
+    n_samples_per_prompt: 8
+  megatron:
+    tensor_model_parallel_size: 1
+    pipeline_model_parallel_size: 2
+    context_parallel_size: 4
+    expert_model_parallel_size: 16
+    expert_tensor_parallel_size: 1

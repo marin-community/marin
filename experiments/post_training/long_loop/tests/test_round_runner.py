@@ -24,7 +24,7 @@ from click.testing import CliRunner
 from fray.types import ResourceConfig
 from iris.rpc.proto_display import priority_band_value
 from levanter.training_budget import TrainingBudgetConfig
-from marin.execution.lazy import StepContext
+from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.cluster_config import StoreType
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from rigging.filesystem.storage_path import StoragePath
@@ -494,3 +494,71 @@ def test_round_retention_invariant_requires_the_sft_selection_binding():
         require_archive_binds_final_sft_checkpoint(resolved)
     resolved = {"archive": {"stage_files": {"sft": [{"path": "selected.json", "category": "config"}]}}}
     require_archive_binds_final_sft_checkpoint(resolved)
+
+
+@pytest.mark.parametrize("publication_source", ["manifest.json", "manifest"])
+def test_sealed_release_admits_published_member_bytes_independent_of_artifact_stem(
+    preview_release, tmp_path, publication_source
+):
+    document = json.loads(preview_release.read_text())
+    publisher = tmp_path / "manifest.json"
+    publisher.write_text('{"release":"fixture-v9"}')
+    publication_pin = exp4.StoragePin(str(publisher), hashlib.sha256(publisher.read_bytes()).hexdigest())
+    config = {"sha256": publication_pin.sha256, "members": document["artifacts"]}
+    source = str(tmp_path / publication_source)
+    handle = ArtifactStep.adopt("sft-mixes/fixture-v9/release", "2026.11.24", source, config=config)
+    record = tmp_path / "artifact.json"
+    record.write_text(
+        json.dumps(
+            {
+                "name": handle.name,
+                "version": handle.version,
+                "source": source,
+                "config": config,
+                "fingerprint": handle.fingerprint(),
+            }
+        )
+    )
+    record_sha = hashlib.sha256(record.read_bytes()).hexdigest()
+    native = tmp_path / "native.json"
+    native.write_text('{"complete":true}')
+    evidence = {"uri": str(native), "sha256": hashlib.sha256(native.read_bytes()).hexdigest()}
+    document.update(
+        training_ready=True,
+        readiness_scope="fixture qualified data",
+        publisher_manifest=dataclasses.asdict(publication_pin),
+        artifact_graph={"uri": str(record), "sha256": record_sha},
+        native_consumer_receipt=evidence,
+        native_measurement_job=evidence,
+    )
+    seal = tmp_path / "qualified.json"
+    seal.write_text(json.dumps(document))
+    pin = exp4.StoragePin(str(seal), hashlib.sha256(seal.read_bytes()).hexdigest())
+    release, admission = exp4.release_artifact(
+        str(record),
+        record_sha,
+        qualification=pin,
+        evidence_names=("native_consumer_receipt", "native_measurement_job"),
+        require_ready=True,
+    )
+    assert release.training_ready
+    assert release.pin == pin
+    assert release.artifacts == {name: exp4.StoragePin(**item) for name, item in document["artifacts"].items()}
+    assert {dep.adopt_source for dep in admission.deps} == {str(publisher), str(seal), str(record)}
+    output = tmp_path / "admission"
+    output.mkdir()
+    exp4.verify_release_admission(
+        qualification=pin, output=str(output), publication=str(publisher), qualified=str(seal), native_check=str(record)
+    )
+    assert json.loads((output / "admission.json").read_text())["qualification"] == dataclasses.asdict(pin)
+    document["publisher_manifest"]["uri"] = str(tmp_path / "another-release.json")
+    seal.write_text(json.dumps(document))
+    wrong_pin = exp4.StoragePin(str(seal), hashlib.sha256(seal.read_bytes()).hexdigest())
+    with pytest.raises(ValueError, match="graph dependencies differ"):
+        exp4.verify_release_admission(
+            qualification=wrong_pin,
+            output=str(output),
+            publication=str(publisher),
+            qualified=str(seal),
+            native_check=str(record),
+        )

@@ -23,6 +23,7 @@ import json
 import math
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
@@ -65,6 +66,7 @@ from experiments.post_training.long_loop.exp3_production import (
     INITIALIZER_RECEIPT,
     INITIALIZER_SHA256,
     REFERENCE_INPUTS,
+    StoragePin,
     baseline_files,
     production_plan,
 )
@@ -76,11 +78,14 @@ from experiments.post_training.long_loop.exp3_recipe import (
 )
 from experiments.post_training.long_loop.exp3_rl_restart import restart_recipe
 from experiments.post_training.long_loop.exp4 import (
+    QUALIFIED_V7,
     REFERENCE_SHA256,
     REFERENCE_URI,
+    V7_EVIDENCE_NAMES,
     release_artifact,
 )
 from experiments.post_training.long_loop.exp4_data import NEMOTRON_SOURCE, pool_steps
+from experiments.post_training.long_loop.exp5_data import pool_steps as exp5_pool_steps
 from experiments.post_training.long_loop.mochi_sft import (
     MochiSftRound,
     mochi_sft_step,
@@ -107,8 +112,6 @@ from experiments.post_training.task_curation.curriculum_manifest import curricul
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.exp4_curriculum import (
     SOURCE_ROUTES,
-    exp4_rl_curriculum,
-    exp4_validation_from_manifest,
 )
 from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.sft.launcher import SFTSpec
@@ -177,6 +180,12 @@ class RoundSft:
 
 
 @dataclass(frozen=True)
+class RoundRlLayout:
+    role_plan: SkyRLRolePlan
+    megatron: MegatronGeometry
+
+
+@dataclass(frozen=True)
 class RoundSpec:
     schema: int
     name: str
@@ -192,6 +201,7 @@ class RoundSpec:
     sft: RoundSft
     openresearcher_service: OpenResearcherService | None = None
     rl_recipe_patch: FilePin | None = None
+    rl_layout: RoundRlLayout | None = None
 
 
 @dataclass(frozen=True)
@@ -329,12 +339,15 @@ class RecoveryRound:
 class DataReleaseBinding:
     record: str
     record_sha256: str
+    qualification: StoragePin
+    evidence_names: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class PoolBinding:
     prefix: str
     version: str
+    producer: Callable[..., dict[str, ArtifactStep]]
 
 
 @dataclass(frozen=True)
@@ -350,6 +363,17 @@ DATA_RELEASES = {
             "artifact-graph/sft-mixes/exp3-v7/release/2026.11.18/.artifact.json"
         ),
         record_sha256="d4e3c7ebe798253d94d67588fc8b8f69211d25bad914d40cbbd7bc2ca7eed061",
+        qualification=QUALIFIED_V7,
+        evidence_names=V7_EVIDENCE_NAMES,
+    ),
+    "v9-overthinking": DataReleaseBinding(
+        record="s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.22-v9-overthinking/artifact-graph/sft-mixes/exp3-v9/release/2026.11.22/.artifact.json",
+        record_sha256="811471acd16af6a6d52b2ad2dae0ef597304615047f8c15e32ebda77297e838d",
+        qualification=StoragePin(
+            "s3://marin-us-east-08a/marin/users/benfeuer/exp3-data-mix/2026.11.22-v9-overthinking/release-v9/release-complete-v9.json",
+            "2a7d231a3b79cc722929c76f6c03441c9d7d475ad79b46284eb35b75fd01c898",
+        ),
+        evidence_names=("native_consumer_receipt", "native_measurement_job", "v9_transform_receipt", "supersedes"),
     ),
 }
 
@@ -357,6 +381,12 @@ POOLS = {
     "exp4-regional": PoolBinding(
         prefix="s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp4",
         version="2026.11.18.71",
+        producer=pool_steps,
+    ),
+    "exp5-prepared": PoolBinding(
+        prefix="s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp5",
+        version="2026.11.22.1",
+        producer=exp5_pool_steps,
     ),
 }
 
@@ -482,7 +512,7 @@ def recovery_round_graph(spec: RecoveryRound, *, through: str, source_revision: 
             raise ValueError(f"Recovery input completion changed: {label}")
         adopted[label] = ArtifactStep.adopt(f"{spec.name}/{suffix}", spec.version, pin["uri"], config=pin)
     binding = POOLS["exp4-regional"]
-    pools = exp4_round_pools(binding.prefix, binding.version)
+    pools = round_pools(binding)
     pinned = plan["datasets"]["pools"]
     if pinned["uri"] != pools.dataset["uri"] or pinned["composition"] != pools.dataset["composition"]:
         raise ValueError("Recovery data differs from the pinned plan's pools")
@@ -900,6 +930,36 @@ def round_plan(
         "config": recipe,
         "wall_clock_budget": dict(RL_TRAINING_BUDGET),
     }
+    if round_spec.rl_layout is not None:
+        layout = round_spec.rl_layout
+        resolved["rl"]["role_plan"] = dataclasses.asdict(layout.role_plan)
+        geometry = dataclasses.asdict(layout.megatron)
+        for role in ("policy", "ref"):
+            recipe["trainer"][role]["megatron_config"].update(geometry)
+        recipe["trainer"]["algorithm"].pop("tis_splice")
+        harbor = recipe["terminal_bench"]["harbor"]
+        harbor["daytona_image_build"] = harbor.pop("daytona_provisioning")
+        harbor["eval_daytona_image_build"] = harbor.pop("eval_daytona_provisioning")
+        recipe["extra_env"]["VERIFYIT_JUDGE_MODEL"] = "openai/gpt-oss-120b"
+        routes = pools.dataset["routes"]
+        buffer = recipe["trainer"]["rollout_buffer"]
+        buffer["consumed_route_quotas"] = consumed_route_quotas(
+            pools.curriculum, routes, layout.role_plan.train_batch_size
+        )
+        buffer["source_routes"] = routes
+        resolved["gpu_peaks"]["rl"] = layout.role_plan.num_nodes * layout.role_plan.policy_num_gpus_per_node
+        service = round_spec.openresearcher_service
+        if service is not None:
+            manifest = json.loads((StoragePath(pools.dataset["uri"]) / "manifest.json").read_bytes())
+            admission = manifest["openresearcher"]
+            for field in ("dataset_id", "dataset_revision", "parquet_sha256"):
+                if admission[field] != getattr(service, field):
+                    raise ValueError(f"OpenResearcher service {field} differs from the pools")
+            machines = service_recipe().to_skyrl()["environment"]["task_sessions"]["task_spec"][
+                "task_machine_by_dataset"
+            ]
+            recipe["environment"]["task_sessions"]["task_spec"]["task_machine_by_dataset"] = machines
+            resolved["rl"]["openresearcher_service"] = dataclasses.asdict(service)
     resolved["name"] = round_spec.name
     resolved["storage"]["output_prefix"] = round_spec.storage.output_prefix
     resolved["storage"]["temporary_prefix"] = round_spec.storage.temporary_prefix
@@ -940,22 +1000,22 @@ def round_plan(
     return resolved
 
 
-def exp4_round_pools(prefix: str, version: str) -> RoundPools:
+def round_pools(binding: PoolBinding) -> RoundPools:
     """The regional Exp4 pools bound for a round: the adopted artifact, its fixed curriculum, and its dataset record.
 
     The pool step drew the curriculum's holdout and recorded the split and the
     fixed curriculum's identity in its manifest; the curriculum reconstructed
     from that record must match it."""
-    producer = pool_steps(version, grader_environment=environment_artifact(GRADER_PACKAGES))["pools"]
-    path = producer.path(prefix)
+    producer = binding.producer(binding.version, grader_environment=environment_artifact(GRADER_PACKAGES))["pools"]
+    path = producer.path(binding.prefix)
     record_bytes = (StoragePath(path) / ".artifact.json").read_bytes()
     if json.loads(record_bytes)["fingerprint"] != producer.fingerprint():
         raise ValueError("Regional Exp4 pool producer differs")
     manifest_bytes = (StoragePath(path) / "manifest.json").read_bytes()
     manifest = json.loads(manifest_bytes)
-    curriculum = exp4_rl_curriculum(exp4_validation_from_manifest(manifest["validation"]))
-    if manifest["curriculum"] != curriculum.identity:
-        raise ValueError("Regional pool was prepared for another curriculum")
+    curriculum = curriculum_from_manifest(manifest)
+    if "training_ready" in manifest and manifest["training_ready"] is not True:
+        raise ValueError("Regional pools are not training-ready")
     pins = [
         {"uri": prefix_join(path, name), "sha256": sha256}
         for name, sha256 in {**manifest["files"], "manifest.json": hashlib.sha256(manifest_bytes).hexdigest()}.items()
@@ -1109,11 +1169,15 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
         return terminal
     binding = DATA_RELEASES[round_spec.data_release]
     release, handle = release_artifact(
-        binding.record, binding.record_sha256, require_ready=click.get_current_context().params["do_run"]
+        binding.record,
+        binding.record_sha256,
+        qualification=binding.qualification,
+        evidence_names=binding.evidence_names,
+        require_ready=click.get_current_context().params["do_run"],
     )
     version = resolve_version(round_spec.slug, round_spec.version)
     pool_binding = POOLS[round_spec.pools]
-    pools = exp4_round_pools(pool_binding.prefix, pool_binding.version)
+    pools = round_pools(pool_binding)
     resolved = round_plan(
         round_spec, release, source_revision, version, initial_eval_inputs=REFERENCE_INPUTS, pools=pools
     )
@@ -1135,6 +1199,7 @@ def main(round_path: Path, source_revision: str, validation_output: Path, throug
         data_artifacts=pools.artifacts,
         curriculum=pools.curriculum,
         sft_release=handle,
+        openresearcher_service=round_spec.openresearcher_service,
         sft_step_builder=partial(native_sft_step, spec_builder=partial(round_sft_spec, round_spec)),
     )
     validation_output.mkdir(parents=True, exist_ok=True)

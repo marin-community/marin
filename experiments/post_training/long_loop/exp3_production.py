@@ -173,6 +173,17 @@ def baseline_files() -> dict[str, bytes]:
     return members
 
 
+def native_sft_data(data: dict) -> dict:
+    """Translate the frozen publisher's packing field to the native dataset schema."""
+    data = copy.deepcopy(data)
+    for component in data["components"].values():
+        if "packing_lookahead" in component:
+            if "pack_lookahead_window" in component:
+                raise ValueError("SFT component declares both packing_lookahead and pack_lookahead_window")
+            component["pack_lookahead_window"] = component.pop("packing_lookahead")
+    return data
+
+
 def production_sft_recipe(release: DataRelease, *, initial_eval_inputs: str) -> dict:
     """Bind the approved full-context SFT controls independently of smoke scale."""
     mesh = MeshConfig(
@@ -212,7 +223,7 @@ def production_sft_recipe(release: DataRelease, *, initial_eval_inputs: str) -> 
         training_budget=TrainingBudgetConfig(SFT_TRAINING_DURATION, SFT_FINALIZATION_RESERVE, SFT_UPDATE_RESERVE),
     )
     reference_data = draccus.decode(
-        LmDataConfig, json.loads((StoragePath(initial_eval_inputs) / "c4-data.json").read_text())
+        LmDataConfig, native_sft_data(json.loads((StoragePath(initial_eval_inputs) / "c4-data.json").read_text()))
     )
     gate = InitialEvalMatchConfig(
         reference_data,
@@ -234,8 +245,8 @@ def production_sft_recipe(release: DataRelease, *, initial_eval_inputs: str) -> 
     return {
         "format": "sft_spec",
         "profile": "snowball_exp3",
-        "data": release.data,
-        "evaluation_data": release.data,
+        "data": native_sft_data(release.data),
+        "evaluation_data": native_sft_data(release.data),
         "trainer": draccus.encode(trainer),
         "model": model,
         "initializer_receipt": INITIALIZER_RECEIPT,

@@ -210,7 +210,13 @@ def main(
     for pin in INITIAL_EVAL_FILES:
         pin.read()
     binding = DATA_RELEASES[spec.data_release]
-    release, handle = release_artifact(binding.record, binding.record_sha256, require_ready=False)
+    release, handle = release_artifact(
+        binding.record,
+        binding.record_sha256,
+        qualification=binding.qualification,
+        evidence_names=binding.evidence_names,
+        require_ready=False,
+    )
     pools = exp5_round_pools()
     if stage != "sft" and spec.openresearcher_service is None:
         raise ValueError("Exp5 RL requires its qualified OpenResearcher service binding")
