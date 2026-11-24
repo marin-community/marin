@@ -113,7 +113,7 @@ def create_api(services):
                 ).scalar_one()
                 repaired = dict(stored)
                 for field in _RETAINED_FIELDS:
-                    if incoming[field] is None:
+                    if incoming.get(field) is None:
                         try:
                             json.dumps(repaired.get(field), allow_nan=False)
                         except ValueError:
@@ -123,7 +123,7 @@ def create_api(services):
                 except ValidationError as error:
                     invalid = {item["loc"][0] for item in error.errors() if item["loc"]}
                     for field in _RETAINED_FIELDS:
-                        if field in invalid and incoming[field] is None:
+                        if field in invalid and incoming.get(field) is None:
                             repaired[field] = None
                     summary = AttemptSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
                 normalized = summary.model_dump(mode="json")
