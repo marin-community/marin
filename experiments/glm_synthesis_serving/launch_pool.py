@@ -148,7 +148,6 @@ def main() -> None:
     )
     parser.add_argument(
         "--engine-arg",
-        "engine_args",
         action="append",
         default=None,
         help="Extra raw vLLM argument appended to the engine config (repeatable; variant benching).",
@@ -181,8 +180,8 @@ def main() -> None:
         if args.mtp < 1:
             raise SystemExit("--mtp must be positive")
         extra_args = ("--speculative-config", f'{{"method":"mtp","num_speculative_tokens":{args.mtp}}}')
-    if args.engine_args:
-        extra_args = (*extra_args, *args.engine_args)
+    if args.engine_arg:
+        extra_args = (*extra_args, *args.engine_arg)
     suffix = args.tag or uuid.uuid4().hex[:6]
     endpoint_name = args.endpoint_name
     workspace = find_project_root()
