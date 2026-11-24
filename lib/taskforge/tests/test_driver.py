@@ -17,6 +17,7 @@ from shellbox.backends.iris.machine import IrisMachineFactory
 
 from taskforge import wiring
 from taskforge.driver import cli, eligible, glm_source, inputs, proposal_bucket, proposal_key
+from taskforge.llm.policy import GLM_5_3, LLMPolicy
 from taskforge.model.proposal import Environment, TaskProposal, Verification
 from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
@@ -152,6 +153,15 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
     async with wiring.runtime(policy, source, "fake", controller_url="http://explicit") as (_, resources):
         explicit = resources.factories["gvisor"]
         assert isinstance(explicit, IrisMachineFactory) and explicit.controller_url == "http://explicit"
+
+
+async def test_an_injected_profile_is_not_the_stock_campaign() -> None:
+    """The driver resumes at a stage boundary only under ``CampaignWiring``; a caller's own author profile is not it."""
+    policy = load_policy(DEFAULTS_DIR)
+    source = wiring.endpoint_source("http://fake/v1", None, "fake", "glm-5.3", policy.setting("provider.pool", str))
+    profiles = {"author": replace(GLM_5_3, sampling=LLMPolicy(max_tokens=128))}
+    async with wiring.runtime(policy, source, "fake", profiles=profiles, controller_url="http://controller") as bindings:
+        assert not isinstance(bindings, wiring.CampaignWiring)
 
 
 @pytest.mark.parametrize("pool", ["high", "bulk"])
